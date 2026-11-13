@@ -10,7 +10,7 @@ untouched; the port adds a new machine type (MACHINE FLIPPER, CHIP ARM_CM).
 The full design, status and notes are in flipper/PORTING.md.
 
 
-WHAT WORKS (in QEMU; not yet tried on a real Flipper)
+WHAT WORKS (in QEMU and on a real Flipper Zero)
 
   - The kernel with TTY, clock, memory, system and SD-card (WINCHESTER)
     tasks, and the real MM and FS servers.
@@ -20,10 +20,11 @@ WHAT WORKS (in QEMU; not yet tried on a real Flipper)
     own memory; flash is read-only.
   - init, getty, login, the shell and about 80 standard commands (ls, cat,
     cp/mv/rm, ed, grep, sed, sort, tar, df, mkfs, ...).
-  - Console on the serial port (Flipper GPIO pins 13 TX / 14 RX, 115200 8N1;
-    QEMU: the terminal).
+  - Console on the Flipper's USB port (appears as /dev/ttyACM0 on the PC)
+    and on the serial pins 13 TX / 14 RX (115200 8N1); QEMU: the terminal.
+  - LCD boot messages, backlight, RGB LED, buttons.
 
-Planned: USB serial console, LCD terminal with an on-screen keyboard, and
+Planned: LCD terminal with an on-screen keyboard, and
 the Flipper hardware (GPIO, LED/vibro/speaker, infrared, Sub-GHz radio,
 NFC/RFID, iButton, Bluetooth LE) with a menu interface like the stock
 firmware.  See flipper/PORTING.md for the milestones.
@@ -61,7 +62,10 @@ INSTALLING ON THE FLIPPER
    the hardware combination LEFT + BACK + OK, then release BACK and LEFT.
    The stock firmware can always be restored with qFlipper's "Repair".
 
-3. Connect a 3.3 V serial adapter to pins 13/14 to see the console.
+3. Connect the Flipper by USB and open the serial port, e.g.
+     screen /dev/ttyACM0
+   Log in as root (no password).  Your user needs access to the port
+   (group dialout).
 
 
 LAYOUT

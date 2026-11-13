@@ -5,6 +5,14 @@ Goal: replace the Flipper Zero firmware with a native MINIX 2.0.0 kernel
 console when one is connected and an on-screen tty (LCD + d-pad keyboard)
 otherwise.
 
+## Hardware status (2026-11-13, real Flipper Zero)
+
+MINIX boots on the device: kernel, MM, FS, init, login and the shell run
+with the root file system on the microSD card (3.7 GB card detected), and
+the console is the USB serial port (`/dev/ttyACM0` on the host).  Verified:
+boot after DFU, 64 MHz clock, SysTick, LCD, backlight + RGB LED (LP5562 on
+I2C1), buttons, USB CDC, SD card over SPI, file writes + sync.
+
 ## Licensing
 
 - MINIX 2.0.0: `src/LICENSE` in this tree is the original 1997 Prentice-Hall
