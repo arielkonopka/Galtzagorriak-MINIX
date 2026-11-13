@@ -11,6 +11,7 @@
 #include "../proc.h"
 #include "armcpu.h"
 #include "hal.h"
+#include "fbcon.h"
 
 u32_t cpu_hz;
 int k_booted;			/* set by the first SVC, see mpx.S */
@@ -42,8 +43,18 @@ PUBLIC void cstart()
   __asm volatile ("msr basepri, %0" : : "r" (KERNEL_PRIO));
 
   hal_init();			/* clocks, debug UART, GPIO */
+  /* hal_init() starts a 1 ms SysTick, possibly at a priority BASEPRI does
+   * not mask; stop it at once - the clock task programs it later.  A tick
+   * now would enter the kernel with proc_ptr == NULL. */
+  SYST_CSR = 0;
+  SCB_ICSR = 1u << 25;		/* PENDSTCLR */
   cpu_hz = hal_cpu_hz();
-  SYST_CSR = 0;			/* the clock task programs SysTick */
+#ifdef BOARD_FLIPPER
+  hal_lcd_init();		/* also turns the backlight on */
+  fbcon_init();
+  fbcon_puts("MINIX 2.0.0\nkernel started\n");
+  fbcon_flush();
+#endif
 
   code_base = (phys_bytes) _stext;
   data_base = 0;		/* flat: kernel virtual == physical */

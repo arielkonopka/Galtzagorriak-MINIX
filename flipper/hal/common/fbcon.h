@@ -2,8 +2,7 @@
 #ifndef FBCON_H
 #define FBCON_H
 
-#include <stdint.h>
-#include "hal.h"
+#include "hal.h"		/* uint8_t etc., also without <stdint.h> */
 
 #define FBCON_COLS (LCD_W / 4)
 #define FBCON_ROWS (LCD_H / 6)

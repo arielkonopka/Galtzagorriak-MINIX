@@ -17,7 +17,7 @@ MB	:= $(BUILD)/minix
 MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -fno-strict-aliasing \
 	   -fno-tree-loop-distribute-patterns -ffunction-sections -fdata-sections \
-	   -nostdinc -I$(MROOT)/include -isystem $(GCCINC) -Ihal \
+	   -nostdinc -I$(MROOT)/include -isystem $(GCCINC) -Ihal -Ihal/common \
 	   -DMACHINE=FLIPPER $(filter -DBOARD_FLIPPER -DBOARD_QEMU,$(CFLAGS)) \
 	   -D_EM_WSIZE=4 -D_EM_PSIZE=4 -D_EM_LSIZE=4 -D__minix=1 \
 	   -Wall -Wno-parentheses -Wno-unused -Wno-implicit-int \

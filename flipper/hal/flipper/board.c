@@ -646,5 +646,7 @@ void hal_halt(int status)
 {
 	(void) status;
 	__disable_irq();
-	for (;;) __WFI();
+	/* Keep the USB console alive so a panic message still reaches the
+	 * host (polled: interrupts are off). */
+	for (;;) hal_usb_poll();
 }

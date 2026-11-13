@@ -12,6 +12,7 @@
 #include "../proc.h"
 #include "armcpu.h"
 #include "hal.h"
+#include "fbcon.h"
 
 #define CONS_IN_BYTES	256	/* serial input buffer (power of 2): pasted lines */
 
@@ -52,6 +53,10 @@ tty_t *tp;
 	put_irq_handler(usb_irq, usb_int);
 	enable_irq(usb_irq);
   }
+#ifdef BOARD_FLIPPER
+  fbcon_puts(usb_irq >= 0 ? "USB console up\n" : "no USB console\n");
+  fbcon_flush();
+#endif
 }
 
 
