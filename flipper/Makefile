@@ -24,7 +24,10 @@ LDFLAGS	:= $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections \
 LIBS	:= -lgcc
 
 ifeq ($(BOARD),flipper)
-CFLAGS	+= -DBOARD_FLIPPER -DSTM32WB55xx -Ivendor/cmsis_wb -Ivendor/cmsis_core
+CFLAGS	+= -DBOARD_FLIPPER -DSTM32WB55xx -Ivendor/cmsis_wb -Ivendor/cmsis_core \
+	   -Ivendor/libusb_stm32/inc -DUSBD_SOF_DISABLED
+BOARD_SRC := hal/flipper/usb.c vendor/libusb_stm32/src/usbd_core.c \
+	   vendor/libusb_stm32/src/usbd_stm32wb55_devfs.c
 else ifeq ($(BOARD),qemu)
 CFLAGS	+= -DBOARD_QEMU -DQEMU_DISK='"$(BUILD)/minix/disk.img"'
 else
@@ -33,7 +36,7 @@ endif
 
 # freestanding string routines used by the HAL
 HAL_SRC	:= hal/common/vectors.c hal/common/kprintf.c hal/common/fbcon.c \
-	   hal/common/string.c hal/$(BOARD)/board.c
+	   hal/common/string.c hal/$(BOARD)/board.c $(BOARD_SRC)
 SRC	:= $(HAL_SRC) $(PROG)/main.c
 OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 
@@ -46,6 +49,10 @@ all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+# Third-party code: build quietly, without our warning flags.
+$(BUILD)/vendor/%.o: vendor/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(filter-out -W%,$(CFLAGS)) -w -MMD -MP -c $< -o $@
 
 $(BUILD)/$(PROG).elf: $(OBJ) ld/$(BOARD).ld ld/sections.ld
 	$(CC) $(LDFLAGS) $(OBJ) $(LIBS) -o $@

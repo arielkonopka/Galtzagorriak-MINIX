@@ -52,6 +52,15 @@ void hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes */
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
 
+/* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
+ * hal_usb_poll() runs the USB stack and belongs in the USB interrupt. */
+int hal_usb_init(void);
+int hal_usb_irq(void);
+void hal_usb_poll(void);
+int hal_usb_connected(void);		/* host has the port open (DTR) */
+unsigned hal_usb_write(const void *buf, unsigned n);	/* bytes queued */
+int hal_usb_getc(void);			/* -1 if nothing received */
+
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
  * All return 0 on success, -1 on error. */

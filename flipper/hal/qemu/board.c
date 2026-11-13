@@ -199,3 +199,11 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 	if (disk_seek(sector, count) < 0) return -1;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }
+
+/* No USB in QEMU: the console stays on the UART. */
+int hal_usb_init(void) { return -1; }
+int hal_usb_irq(void) { return -1; }
+void hal_usb_poll(void) { }
+int hal_usb_connected(void) { return 0; }
+unsigned hal_usb_write(const void *buf, unsigned n) { (void) buf; return n; }
+int hal_usb_getc(void) { return -1; }

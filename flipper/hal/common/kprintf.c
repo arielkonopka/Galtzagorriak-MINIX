@@ -5,8 +5,11 @@
 
 void kputc(int c)
 {
-	if (c == '\n') hal_uart_putc('\r');
+	char ch = c;
+
+	if (c == '\n') kputc('\r');
 	hal_uart_putc(c);
+	hal_usb_write(&ch, 1);		/* also to the USB serial port */
 }
 
 static void pad(int n, int c)
