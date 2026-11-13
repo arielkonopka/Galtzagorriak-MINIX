@@ -5,6 +5,9 @@
  *	pkg list		list installed packages
  *	pkg info name		show a package's control file
  *	pkg files name		list the files a package installed
+ *	pkg get			receive packages over the console with ZMODEM
+ *				(rz) and install them; on the PC run
+ *				flipper/tools/flsend file.tar ...
  *
  * A package is a tar archive (name_version.tar, made on the PC with
  * flipper/tools/mkpkg.py) holding its files relative to / and a CONTROL
@@ -337,6 +340,36 @@ static int cat(const char *name, const char *ext)
 	return 0;
 }
 
+#define INCOMING TMPDIR "/incoming"
+
+static int get(void)
+{
+	char *argv[3], path[PATH_MAX];
+	DIR *d;
+	struct dirent *e;
+	size_t n;
+	int r = 0, count = 0;
+
+	mkdir(INCOMING, 0700);
+	printf("pkg: waiting for packages (ZMODEM); on the PC: flsend file.tar\n");
+	argv[0] = "/bin/rz"; argv[1] = "-b"; argv[2] = NULL;	/* binary */
+	fflush(stdout);
+	if (run(INCOMING, argv) != 0) fprintf(stderr, "pkg: rz failed\n");
+
+	if ((d = opendir(INCOMING)) == NULL) die("cannot read", INCOMING);
+	while ((e = readdir(d)) != NULL) {
+		n = strlen(e->d_name);
+		if (n < 5 || strcmp(e->d_name + n - 4, ".tar") != 0) continue;
+		sprintf(path, "%s/%s", INCOMING, e->d_name);
+		if (install(path) != 0) r = 1;
+		unlink(path);
+		count++;
+	}
+	closedir(d);
+	if (count == 0) { fprintf(stderr, "pkg: no packages received\n"); r = 1; }
+	return r;
+}
+
 int main(int argc, char **argv)
 {
 	struct stat st;
@@ -348,7 +381,8 @@ int main(int argc, char **argv)
 	if (argc == 2 && strcmp(argv[1], "list") == 0) return list_pkgs();
 	if (argc == 3 && strcmp(argv[1], "info") == 0) return cat(argv[2], "control");
 	if (argc == 3 && strcmp(argv[1], "files") == 0) return cat(argv[2], "list");
+	if (argc == 2 && strcmp(argv[1], "get") == 0) return get();
 	fprintf(stderr, "usage: pkg install file.tar | remove name | list | "
-			"info name | files name\n");
+			"info name | files name | get\n");
 	return 1;
 }

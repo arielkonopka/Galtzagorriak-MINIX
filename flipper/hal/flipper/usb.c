@@ -173,6 +173,7 @@ static struct usb_cdc_line_coding line = {
 };
 
 static volatile int configured, dtr, tx_busy, last_full;
+static volatile int rx_paused;		/* a packet waits in the endpoint */
 static uint8_t tx_ring[TX_RING], rx_ring[RX_RING];
 static volatile unsigned tx_head, tx_tail, rx_head, rx_tail;
 static int started;
@@ -221,12 +222,17 @@ static void cdc_rxtx(usbd_device *dev, uint8_t event, uint8_t ep)
 		tx_busy = 0;
 		tx_kick();
 	} else {
+		/* Flow control: with no room for a whole packet, leave it in
+		 * the endpoint.  The endpoint stays NAK and the host retries
+		 * until hal_usb_getc() has made room and fetched it. */
+		if (RX_RING - (rx_head - rx_tail) < DATA_SZ) {
+			rx_paused = 1;
+			return;
+		}
 		n = usbd_ep_read(dev, RXD_EP, pkt, DATA_SZ);
 		for (i = 0; i < n; i++) {
-			if (rx_head - rx_tail < RX_RING) {
-				rx_ring[rx_head % RX_RING] = pkt[i];
-				rx_head++;
-			}
+			rx_ring[rx_head % RX_RING] = pkt[i];
+			rx_head++;
 		}
 	}
 }
@@ -290,7 +296,7 @@ static usbd_respond cdc_setconf(usbd_device *dev, uint8_t cfg)
 {
 	switch (cfg) {
 	case 0:
-		configured = dtr = tx_busy = 0;
+		configured = dtr = tx_busy = rx_paused = 0;
 		usbd_ep_deconfig(dev, NTF_EP);
 		usbd_ep_deconfig(dev, TXD_EP);
 		usbd_ep_deconfig(dev, RXD_EP);
@@ -401,6 +407,10 @@ int hal_usb_getc(void)
 	if (rx_tail != rx_head) {
 		c = rx_ring[rx_tail % RX_RING];
 		rx_tail++;
+	}
+	if (rx_paused && RX_RING - (rx_head - rx_tail) >= DATA_SZ) {
+		rx_paused = 0;
+		cdc_rxtx(&udev, usbd_evt_eprx, RXD_EP);	/* fetch, re-arm */
 	}
 	irq_restore(s);
 	return c;

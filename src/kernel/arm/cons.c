@@ -28,6 +28,7 @@ FORWARD _PROTOTYPE( int cons_int, (int irq)				);
 FORWARD _PROTOTYPE( void out_char, (int c)				);
 FORWARD _PROTOTYPE( int usb_int, (int irq)				);
 FORWARD _PROTOTYPE( void usb_out, (char *buf, unsigned n)		);
+FORWARD _PROTOTYPE( int usb_fill, (void)				);
 
 /*===========================================================================*
  *				scr_init				     *
@@ -64,21 +65,32 @@ PRIVATE int usb_int(irq)
 int irq;
 {
 /* USB interrupt: run the USB stack, then collect received characters. */
-  int c, got = 0;
-
   hal_usb_poll();
-  while ((c = hal_usb_getc()) >= 0) {
-	if (ihead - itail < CONS_IN_BYTES) {
-		ibuf[ihead % CONS_IN_BYTES] = c;
-		ihead++;
-	}
-	got = 1;
-  }
-  if (got) {
+  if (usb_fill()) {
 	tty_table[0].tty_events = 1;
 	force_timeout();
   }
   return 1;
+}
+
+
+/*===========================================================================*
+ *				usb_fill				     *
+ *===========================================================================*/
+PRIVATE int usb_fill()
+{
+/* Move received USB characters into ibuf, but only as many as fit: the rest
+ * stays queued in the USB layer, which then holds the host off (flow
+ * control).  Returns true if anything is waiting in ibuf.
+ */
+  int c;
+
+  if (usb_irq < 0) return ihead != itail;
+  while (ihead - itail < CONS_IN_BYTES && (c = hal_usb_getc()) >= 0) {
+	ibuf[ihead % CONS_IN_BYTES] = c;
+	ihead++;
+  }
+  return ihead != itail;
 }
 
 
@@ -137,10 +149,19 @@ tty_t *tp;
 /* Hand buffered input characters to the line discipline. */
   char c;
 
-  while (itail != ihead) {
+  for (;;) {
+	if (itail == ihead) {
+		lock();
+		(void) usb_fill();	/* more may wait in the USB layer */
+		unlock();
+		if (itail == ihead) break;
+	}
 	c = ibuf[itail % CONS_IN_BYTES];
+	/* In raw mode a full input queue refuses the character; keep it
+	 * for the next read instead of dropping it (ZMODEM needs every
+	 * byte). */
+	if (in_process(tp, &c, 1) == 0) break;
 	itail++;
-	(void) in_process(tp, &c, 1);
   }
 }
 
