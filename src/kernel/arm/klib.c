@@ -13,6 +13,8 @@
 #include "hal.h"
 #include "fbcon.h"
 
+extern const unsigned char splash_fb[];	/* flipper/hal/common/splash.c */
+
 u32_t cpu_hz;
 int k_booted;			/* set by the first SVC, see mpx.S */
 
@@ -50,10 +52,10 @@ PUBLIC void cstart()
   SCB_ICSR = 1u << 25;		/* PENDSTCLR */
   cpu_hz = hal_cpu_hz();
 #ifdef BOARD_FLIPPER
+  /* Boot screen; it stays until the launcher takes over the display.
+   * Boot messages go to the console (USB) instead. */
   hal_lcd_init();		/* also turns the backlight on */
-  fbcon_init();
-  fbcon_puts("Galtzagorriak  (MINIX 2.0.0)\nkernel started\n");
-  fbcon_flush();
+  hal_lcd_flush(splash_fb);
 #endif
 
   code_base = (phys_bytes) _stext;

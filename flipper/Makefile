@@ -36,7 +36,8 @@ endif
 
 # freestanding string routines used by the HAL
 HAL_SRC	:= hal/common/vectors.c hal/common/kprintf.c hal/common/fbcon.c \
-	   hal/common/string.c hal/$(BOARD)/board.c $(BOARD_SRC)
+	   hal/common/string.c hal/common/splash.c hal/$(BOARD)/board.c \
+	   $(BOARD_SRC)
 SRC	:= $(HAL_SRC) $(PROG)/main.c
 OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 
