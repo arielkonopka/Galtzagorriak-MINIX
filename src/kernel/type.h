@@ -75,6 +75,39 @@ typedef _PROTOTYPE( int (*irq_handler_t), (int irq) );
 
 #endif /* (CHIP == INTEL) */
 
+#if (CHIP == ARM_CM)
+typedef u32_t reg_t;		/* machine register */
+typedef unsigned port_t;	/* unused, keeps shared prototypes happy */
+
+/* Register save area in the process table, see arm/mpx.S.  r4-r11 are
+ * saved by the kernel entry code; r0-r3, r12, lr, pc and xPSR are pushed by
+ * the CPU on exception entry and moved here, so that p_reg is the complete
+ * user context like on the PC.  Must match struct sigregs in
+ * <sys/sigcontext.h> and the offsets in arm/mpx.S. */
+struct stackframe_s {
+  reg_t r4;			/* first item: proc_ptr->p_reg points here */
+  reg_t r5;
+  reg_t r6;
+  reg_t r7;
+  reg_t r8;
+  reg_t r9;
+  reg_t r10;
+  reg_t r11;
+  reg_t retreg;			/* r0: system call result */
+  reg_t r1;
+  reg_t r2;
+  reg_t r3;
+  reg_t r12;
+  reg_t lr;
+  reg_t pc;
+  reg_t psw;			/* xPSR */
+  reg_t sp;			/* process stack pointer (PSP) */
+  reg_t control;		/* CONTROL: privilege of the process */
+};
+
+typedef _PROTOTYPE( int (*irq_handler_t), (int irq) );
+#endif /* (CHIP == ARM_CM) */
+
 #if (CHIP == M68000)
 typedef _PROTOTYPE( void (*dmaint_t), (void) );
 

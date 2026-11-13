@@ -30,7 +30,7 @@ FORWARD _PROTOTYPE( void sched, (void) );
 FORWARD _PROTOTYPE( void unready, (struct proc *rp) );
 FORWARD _PROTOTYPE( void pick_proc, (void) );
 
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
 FORWARD _PROTOTYPE( void cp_mess, (int src, struct proc *src_p, message *src_m,
 		struct proc *dst_p, message *dst_m) );
 #endif
@@ -40,7 +40,7 @@ FORWARD _PROTOTYPE( void cp_mess, (int src, struct proc *src_p, message *src_m,
 	cp_mess(s, (sp)->p_map[D].mem_phys, (vir_bytes)sm, (dp)->p_map[D].mem_phys, (vir_bytes)dm)
 #endif
 
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
 #define CopyMess(s,sp,sm,dp,dm) \
 	cp_mess(s,sp,sm,dp,dm)
 #endif
@@ -569,7 +569,7 @@ PUBLIC void unhold()
   while ( (rp = held_head) != NIL_PROC);
 }
 
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
 /*==========================================================================*
  *				cp_mess					    *
  *==========================================================================*/

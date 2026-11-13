@@ -367,7 +367,7 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
   rmp->mp_seg[S].mem_vir = rmp->mp_seg[D].mem_vir + data_clicks + gap_clicks;
   rmp->mp_seg[S].mem_len = stack_clicks;
 
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
 #if (SHADOWING == 0)
   rmp->mp_seg[T].mem_vir = 0;
   rmp->mp_seg[D].mem_vir = rmp->mp_seg[T].mem_len;

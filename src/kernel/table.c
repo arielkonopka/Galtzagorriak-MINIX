@@ -64,6 +64,10 @@
 #define	SCSI_STACK	(2 * SMALL_STACK * ENABLE_SCSI)
 #endif
 
+#if (MACHINE == FLIPPER)
+#define	SCSI_STACK	0
+#endif
+
 #define CDROM_STACK	(4 * SMALL_STACK * ENABLE_CDROM)
 #define AUDIO_STACK	(4 * SMALL_STACK * ENABLE_AUDIO)
 #define MIXER_STACK	(4 * SMALL_STACK * ENABLE_AUDIO)
@@ -84,6 +88,18 @@
 /* SCSI, CDROM and AUDIO may in the future have different choices like
  * WINCHESTER, but for now the choice is fixed.
  */
+#if (CHIP == ARM_CM)
+/* No printer or floppy hardware; the task numbers must still exist. */
+#undef	PRINTER_STACK
+#define	PRINTER_STACK	SMALL_STACK
+#undef	FLOP_STACK
+#define	FLOP_STACK	SMALL_STACK
+#define printer_task	nodev_task
+#define floppy_task	nodev_task
+#define winchester_task	nodev_task	/* until the SD card driver exists */
+_PROTOTYPE( void nodev_task, (void) );
+#endif
+
 #define scsi_task	aha_scsi_task
 #define cdrom_task	mcd_task
 #define audio_task	dsp_task

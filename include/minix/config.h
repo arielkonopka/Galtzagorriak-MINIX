@@ -14,7 +14,9 @@
 /*===========================================================================*
  *		This section contains user-settable parameters		     *
  *===========================================================================*/
+#ifndef MACHINE
 #define MACHINE       IBM_PC	/* Must be one of the names listed below */
+#endif
 
 #define IBM_PC             1	/* any  8088 or 80x86-based system */
 #define SUN_4             40	/* any Sun SPARC-based system */
@@ -22,10 +24,14 @@
 #define ATARI             60	/* ATARI ST/STe/TT (68000/68030) */
 #define AMIGA             61	/* Commodore Amiga (68000) */
 #define MACINTOSH         62	/* Apple Macintosh (68000) */
+#define FLIPPER           70	/* Flipper Zero (STM32WB55, Cortex-M4) */
 
 /* Word size in bytes (a constant equal to sizeof(int)). */
 #if __ACK__
 #define _WORD_SIZE	_EM_WSIZE
+#endif
+#if __GNUC__
+#define _WORD_SIZE	__SIZEOF_INT__
 #endif
 
 
@@ -37,7 +43,11 @@
 #define ROBUST             0	/* 0 for speed, 1 for robustness */
 
 /* Number of slots in the process table for user processes. */
+#if (MACHINE == FLIPPER)
+#define NR_PROCS          16	/* RAM is tight: ~212 KB in total */
+#else
 #define NR_PROCS          32
+#endif
 
 /* The buffer cache should be made as large as you can afford. */
 #if (MACHINE == IBM_PC && _WORD_SIZE == 2)
@@ -55,6 +65,11 @@
 #define NR_BUF_HASH	 512	/* size of buf hash table; MUST BE POWER OF 2*/
 #endif
 
+#if (MACHINE == FLIPPER)
+#define NR_BUFS           20	/* # blocks in the buffer cache */
+#define NR_BUF_HASH       32	/* size of buf hash table; MUST BE POWER OF 2*/
+#endif
+
 #if (MACHINE == ATARI)
 #define NR_BUFS		1536	/* # blocks in the buffer cache (<=1536) */
 #define NR_BUF_HASH	2048	/* size of buf hash table; MUST BE POWER OF 2*/
@@ -67,9 +82,20 @@
 				 * the end of bss and lowest stack address */
 
 /* Enable or disable the second level file system cache on the RAM disk. */
+#if (MACHINE == FLIPPER)
+#define ENABLE_CACHE2      0
+#else
 #define ENABLE_CACHE2      1
+#endif
 
 /* Include or exclude device drivers.  Set to 1 to include, 0 to exclude. */
+#if (MACHINE == FLIPPER)
+#define ENABLE_NETWORKING  0	/* no network hardware */
+#define ENABLE_SDCARD      1	/* microSD over SPI, the WINCHESTER task */
+#define ENABLE_MITSUMI_CDROM 0
+#define ENABLE_SB_AUDIO    0
+#define ENABLE_ADAPTEC_SCSI 0
+#else
 #define ENABLE_NETWORKING  0	/* enable TCP/IP code */
 #define ENABLE_AT_WINI     1	/* enable AT winchester driver */
 #define ENABLE_BIOS_WINI   1	/* enable BIOS winchester driver */
@@ -78,6 +104,7 @@
 #define ENABLE_ADAPTEC_SCSI 1	/* enable ADAPTEC SCSI driver */
 #define ENABLE_MITSUMI_CDROM 0	/* enable Mitsumi CD-ROM driver */
 #define ENABLE_SB_AUDIO    0	/* enable Soundblaster audio driver */
+#endif /* MACHINE == FLIPPER */
 
 /* DMA_SECTORS may be increased to speed up DMA based drivers. */
 #define DMA_SECTORS        1	/* DMA buffer size (must be >= 1) */
@@ -92,9 +119,15 @@
 /* NR_CONS, NR_RS_LINES, and NR_PTYS determine the number of terminals the
  * system can handle.
  */
+#if (MACHINE == FLIPPER)
+#define NR_CONS            1	/* serial (USART1/USB) + LCD console */
+#define	NR_RS_LINES	   0
+#define	NR_PTYS		   0
+#else
 #define NR_CONS            2	/* # system consoles (1 to 8) */
 #define	NR_RS_LINES	   2	/* # rs232 terminals (0, 1, or 2) */
 #define	NR_PTYS		   0	/* # pseudo terminals (0 to 64) */
+#endif
 
 #if (MACHINE == ATARI)
 /* The next define says if you have an ATARI ST or TT */
@@ -155,6 +188,7 @@
 #define INTEL             1	/* CHIP type for PC, XT, AT, 386 and clones */
 #define M68000            2	/* CHIP type for Atari, Amiga, Macintosh    */
 #define SPARC             3	/* CHIP type for SUN-4 (e.g. SPARCstation)  */
+#define ARM_CM            4	/* CHIP type for ARM Cortex-M (no MMU)      */
 
 /* Set the FP_FORMAT type based on the machine selected, either hw or sw    */
 #define FP_NONE		  0	/* no floating point support                */
@@ -175,6 +209,15 @@
 #define SHADOWING	  1
 #endif
 
+#if (MACHINE == FLIPPER)
+#define CHIP          ARM_CM
+#define SHADOWING	  1	/* no MMU: fork via shadowing, as on the ST */
+#define ENABLE_WINI	(ENABLE_SDCARD)
+#define ENABLE_SCSI	0
+#define ENABLE_CDROM	0
+#define ENABLE_AUDIO	0
+#endif
+
 #if (MACHINE == SUN_4) || (MACHINE == SUN_4_60)
 #define CHIP          SPARC
 #define FP_FORMAT   FP_IEEE
@@ -186,7 +229,9 @@
 #define FASTLOAD          1	/* use multiple block transfers to init ram */
 #endif
 
-#if (ATARI_TYPE == TT) /* and all other 68030's */
+#if (MACHINE == ATARI) && (ATARI_TYPE == TT) /* and all other 68030's */
+/* (Without the MACHINE test this was true on every non-Atari machine, since
+ * the undefined ATARI_TYPE and TT both evaluate to 0.) */
 #define FPP
 #undef SHADOWING
 #define SHADOWING 0

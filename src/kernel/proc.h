@@ -34,6 +34,12 @@ struct proc {
 #endif
 #endif /* (CHIP == M68000) */
 
+#if (CHIP == ARM_CM)
+  phys_clicks p_shadow;		/* set if shadowed process image */
+  int p_nflips;			/* statistics */
+  char p_physio;		/* cannot be (un)shadowed now if set */
+#endif /* (CHIP == ARM_CM) */
+
   reg_t *p_stguard;		/* stack guard word */
 
   int p_nr;			/* number of this process (for fast access) */
@@ -97,9 +103,17 @@ struct proc {
 #define proc_addr(n)      (pproc_addr + NR_TASKS)[(n)]
 #define cproc_addr(n)     (&(proc + NR_TASKS)[(n)])
 #define proc_number(p)    ((p)->p_nr)
+#if (CHIP == ARM_CM)
+/* Flat addressing: a virtual address is physical, unless the process image
+ * currently lives in its shadow copy (see arm/shadow.c). */
+#define proc_vir2phys(p, vir) \
+	((phys_bytes) (vir) + ((p)->p_shadow == 0 ? 0 : \
+	  ((phys_bytes) (p)->p_shadow - (p)->p_map[D].mem_phys) << CLICK_SHIFT))
+#else
 #define proc_vir2phys(p, vir) \
 			  (((phys_bytes)(p)->p_map[D].mem_phys << CLICK_SHIFT) \
 							+ (vir_bytes) (vir))
+#endif
 #if (SHADOWING == 1)
 #define isshadowp(p)      ((p)->p_shadow != 0)
 #endif

@@ -55,7 +55,7 @@
 			+ ENABLE_NETWORKING + 2 * ENABLE_AUDIO)
 
 /* Memory is allocated in clicks. */
-#if (CHIP == INTEL)
+#if (CHIP == INTEL) || (CHIP == ARM_CM)
 #define CLICK_SIZE       256	/* unit in which memory is allocated */
 #define CLICK_SHIFT        8	/* log2 of CLICK_SIZE */
 #endif

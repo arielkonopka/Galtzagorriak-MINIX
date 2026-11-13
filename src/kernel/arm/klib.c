@@ -1,0 +1,353 @@
+/* Machine dependent kernel support for ARM Cortex-M: what klib88.s,
+ * klib386.s, i8259.c, protect.c, start.c and exception.c do on the PC.
+ */
+#include "../kernel.h"
+#include <signal.h>
+#include <unistd.h>
+#include <minix/boot.h>
+#include <minix/callnr.h>
+#include <minix/com.h>
+#include "../proc.h"
+#include "armcpu.h"
+#include "hal.h"
+
+u32_t cpu_hz;
+int k_booted;			/* set by the first SVC, see mpx.S */
+
+PRIVATE u32_t kernel_stack[K_STACK_BYTES / sizeof(u32_t)]
+				__attribute__((aligned(8)));
+
+FORWARD _PROTOTYPE( void load_boot_images, (void) );
+
+/*===========================================================================*
+ *				cstart					     *
+ *===========================================================================*/
+PUBLIC void cstart()
+{
+/* Early machine setup, before main() does the portable initialization.
+ * Interrupts are masked with BASEPRI until the first process starts.
+ */
+  __asm volatile ("msr basepri, %0" : : "r" (KERNEL_PRIO));
+
+  hal_init();			/* clocks, debug UART, GPIO */
+  cpu_hz = hal_cpu_hz();
+  SYST_CSR = 0;			/* the clock task programs SysTick */
+
+  code_base = (phys_bytes) _stext;
+  data_base = 0;		/* flat: kernel virtual == physical */
+  k_reenter = 0;		/* main() -> restart() makes it -1 */
+  kernel_sp_top = (reg_t) &kernel_stack[sizeof kernel_stack / sizeof
+							kernel_stack[0]];
+
+  /* Trap divide by zero; fault handlers instead of escalation. */
+  SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;
+  SCB_SHCSR |= SHCSR_ENABLES;
+
+  load_boot_images();
+}
+
+
+/*===========================================================================*
+ *				load_boot_images			     *
+ *===========================================================================*/
+PRIVATE struct boot_image *boot_image[NR_BOOT_SERVERS];
+
+PRIVATE void load_boot_images()
+{
+/* Find the MM, FS and INIT images that follow the kernel in flash, copy
+ * their initialised data to RAM and clear their bss.
+ */
+  struct boot_image *bi;
+  phys_bytes p;
+  int i;
+
+  p = (phys_bytes) _boot_images;
+  for (i = 0; i < NR_BOOT_SERVERS; i++) {
+	bi = (struct boot_image *) p;
+	if (bi->magic != BOOT_IMAGE_MAGIC)
+		panic("boot image missing for server", i);
+	if ((bi->text_start & (CLICK_SIZE - 1)) != 0
+	    || (bi->data_start & (CLICK_SIZE - 1)) != 0)
+		panic("boot image not click aligned", i);
+	memcpy((void *) bi->data_start, (void *) bi->data_load, bi->data_size);
+	memset((char *) bi->data_start + bi->data_size, 0,
+					bi->bss_size + bi->stack_size);
+	boot_image[i] = bi;
+	p = bi->text_start + bi->text_size;
+	p = (p + CLICK_SIZE - 1) & ~(phys_bytes) (CLICK_SIZE - 1);
+  }
+}
+
+
+/*===========================================================================*
+ *				arm_proc_layout				     *
+ *===========================================================================*/
+PUBLIC void arm_proc_layout(rp, t)
+struct proc *rp;
+int t;
+{
+/* Set up the memory map, stack pointer, PSW and CONTROL of task or boot
+ * server t (called from main()).  Tasks share the kernel: text in flash,
+ * data/bss/stacks in RAM.  On this machine virtual addresses are physical
+ * addresses, so mem_vir == mem_phys for every segment.
+ */
+  struct boot_image *bi;
+  phys_clicks tbase, tlen, dbase, dlen;
+
+  if (t < 0) {
+	tbase = (phys_bytes) _stext >> CLICK_SHIFT;
+	tlen = (((phys_bytes) _etext + CLICK_SIZE - 1) >> CLICK_SHIFT) - tbase;
+	dbase = (phys_bytes) _ram_start >> CLICK_SHIFT;
+	dlen = (((phys_bytes) _ebss + CLICK_SIZE - 1) >> CLICK_SHIFT) - dbase;
+	rp->p_reg.control = INIT_TASK_CONTROL;
+  } else {
+	bi = boot_image[t];
+	tbase = bi->text_start >> CLICK_SHIFT;
+	tlen = (bi->text_size + CLICK_SIZE - 1) >> CLICK_SHIFT;
+	dbase = bi->data_start >> CLICK_SHIFT;
+	dlen = (bi->data_size + bi->bss_size + bi->stack_size
+					+ CLICK_SIZE - 1) >> CLICK_SHIFT;
+	rp->p_reg.pc = bi->entry;
+	/* Stack at the top of the data segment, one word left for crtso's
+	 * argc as on the PC. */
+	rp->p_reg.sp = ((dbase + dlen) << CLICK_SHIFT) - 2 * sizeof(reg_t);
+	rp->p_reg.control = INIT_CONTROL;
+	memcpy(rp->p_name, bi->name, sizeof bi->name);
+	rp->p_name[sizeof bi->name - 1] = 0;
+  }
+  rp->p_map[T].mem_phys = rp->p_map[T].mem_vir = tbase;
+  rp->p_map[T].mem_len = tlen;
+  rp->p_map[D].mem_phys = rp->p_map[D].mem_vir = dbase;
+  rp->p_map[D].mem_len = dlen;
+  /* The stack lives inside D: S is an empty segment at its end. */
+  rp->p_map[S].mem_phys = rp->p_map[S].mem_vir = dbase + dlen;
+  rp->p_map[S].mem_len = 0;
+  rp->p_reg.psw = INIT_PSW;
+}
+
+
+/*===========================================================================*
+ *				mem_init				     *
+ *===========================================================================*/
+PUBLIC void mem_init()
+{
+/* Free memory is everything in RAM above the last boot server. */
+  struct boot_image *bi = boot_image[NR_BOOT_SERVERS - 1];
+  phys_bytes lo, hi;
+
+  lo = bi->data_start + bi->data_size + bi->bss_size + bi->stack_size;
+  lo = (lo + CLICK_SIZE - 1) & ~(phys_bytes) (CLICK_SIZE - 1);
+  hi = (phys_bytes) _ram_end & ~(phys_bytes) (CLICK_SIZE - 1);
+  mem[0].base = lo >> CLICK_SHIFT;
+  mem[0].size = hi > lo ? (hi - lo) >> CLICK_SHIFT : 0;
+  mem[1].base = mem[1].size = 0;
+  tot_mem_size = ((phys_bytes) _ram_end - (phys_bytes) _ram_start)
+							>> CLICK_SHIFT;
+}
+
+
+/*===========================================================================*
+ *				Interrupt control			     *
+ *===========================================================================*/
+PUBLIC void intr_init(mine)
+int mine;
+{
+/* Set exception priorities so MINIX exceptions never nest (see mpx.S), and
+ * disable every device interrupt until a driver asks for it.
+ */
+  int i;
+
+  for (i = 0; i < NR_IRQ_VECTORS - 1; i++) {
+	NVIC_ICER(i >> 5) = 1u << (i & 31);
+	NVIC_IPR8(i) = KERNEL_PRIO;
+	irq_table[i] = 0;
+  }
+  irq_table[CLOCK_IRQ] = 0;
+  SCB_SHPR(EXC_SVCALL) = KERNEL_PRIO - 0x10;
+  SCB_SHPR(EXC_PENDSV) = KERNEL_PRIO;
+  SCB_SHPR(EXC_SYSTICK) = KERNEL_PRIO;
+  SCB_SHPR(EXC_MEMMANAGE) = 0;
+  SCB_SHPR(EXC_BUSFAULT) = 0;
+  SCB_SHPR(EXC_USAGEFAULT) = 0;
+}
+
+PUBLIC void put_irq_handler(irq, handler)
+int irq;
+irq_handler_t handler;
+{
+  if ((unsigned) irq >= NR_IRQ_VECTORS)
+	panic("invalid call to put_irq_handler", irq);
+  if (irq_table[irq] == handler) return;	/* extra initialization */
+  if (irq_table[irq] != 0)
+	panic("attempt to register second irq handler for irq", irq);
+  irq_table[irq] = handler;
+}
+
+PUBLIC void enable_irq(irq)
+unsigned irq;
+{
+  if (irq >= NR_IRQ_VECTORS - 1) return;	/* CLOCK_IRQ: SysTick */
+  NVIC_ISER(irq >> 5) = 1u << (irq & 31);
+}
+
+PUBLIC int disable_irq(irq)
+unsigned irq;
+{
+/* Disable an interrupt; return true if it was enabled. */
+  u32_t bit;
+  int was;
+
+  if (irq >= NR_IRQ_VECTORS - 1) return 0;
+  bit = 1u << (irq & 31);
+  was = (NVIC_ISER(irq >> 5) & bit) != 0;
+  NVIC_ICER(irq >> 5) = bit;
+  return was;
+}
+
+PUBLIC void irq_dispatch(exc)
+unsigned exc;
+{
+/* Called from mpx.S for SysTick and device interrupts.  As on the PC, a
+ * handler returning zero leaves its interrupt disabled.
+ */
+  int irq;
+  irq_handler_t handler;
+
+  irq = (exc == EXC_SYSTICK) ? CLOCK_IRQ : (int) exc - EXC_IRQ0;
+  if ((unsigned) irq >= NR_IRQ_VECTORS) return;
+  handler = irq_table[irq];
+  if (handler == 0) {
+	(void) disable_irq(irq);	/* spurious: shut it up */
+	return;
+  }
+  if ((*handler)(irq) == 0) (void) disable_irq(irq);
+}
+
+PUBLIC void lock()
+{
+  __asm volatile ("cpsid i" : : : "memory");
+}
+
+PUBLIC void unlock()
+{
+  __asm volatile ("cpsie i" : : : "memory");
+}
+
+
+/*===========================================================================*
+ *				phys_copy				     *
+ *===========================================================================*/
+PUBLIC void phys_copy(source, dest, count)
+phys_bytes source, dest, count;
+{
+/* Physical addresses are just addresses here. */
+  memcpy((void *) dest, (void *) source, (size_t) count);
+}
+
+
+/*===========================================================================*
+ *				idle_task				     *
+ *===========================================================================*/
+PUBLIC void idle_task()
+{
+  for (;;) __asm volatile ("wfi");
+}
+
+
+/*===========================================================================*
+ *				Faults					     *
+ *===========================================================================*/
+PRIVATE void fault_regs(cfsr, hfsr)
+u32_t cfsr, hfsr;
+{
+  printf("CFSR=%08lx HFSR=%08lx MMFAR=%08lx BFAR=%08lx\n",
+	(unsigned long) cfsr, (unsigned long) hfsr,
+	(unsigned long) SCB_MMFAR, (unsigned long) SCB_BFAR);
+}
+
+PUBLIC void arm_exception(exc)
+unsigned exc;
+{
+/* A process caused a fault.  Users get a signal, like exception.c does on
+ * the PC; a task or server faulting is fatal.
+ */
+  struct proc *rp = proc_ptr;
+  u32_t cfsr = SCB_CFSR, hfsr = SCB_HFSR;
+  int sig;
+
+  SCB_CFSR = cfsr;		/* write 1 to clear */
+  SCB_HFSR = hfsr;
+
+  if (cfsr & 0x02000000) sig = SIGFPE;		/* DIVBYZERO */
+  else if (cfsr & 0x000F0000) sig = SIGILL;	/* UNDEFINSTR..NOCP */
+  else if (cfsr & 0x01000000) sig = SIGBUS;	/* UNALIGNED */
+  else sig = SIGSEGV;
+
+  if (!isuserp(rp) || k_reenter != 0) {
+	printf("\n%s (exception %u) in %s, pc=%08lx lr=%08lx sp=%08lx\n",
+		sig == SIGSEGV ? "memory fault" : "fault", exc, rp->p_name,
+		(unsigned long) rp->p_reg.pc, (unsigned long) rp->p_reg.lr,
+		(unsigned long) rp->p_reg.sp);
+	fault_regs(cfsr, hfsr);
+	panic("exception in system code", proc_number(rp));
+  }
+  cause_sig(proc_number(rp), sig);
+}
+
+PUBLIC void kernel_fault_report(frame, exc)
+u32_t *frame;
+unsigned exc;
+{
+/* Fault in Handler mode (or before the first process ran): kernel bug. */
+  printf("\nKernel fault, exception %u: pc=%08lx lr=%08lx psr=%08lx\n",
+	exc, (unsigned long) frame[6], (unsigned long) frame[5],
+	(unsigned long) frame[7]);
+  printf("r0=%08lx r1=%08lx r2=%08lx r3=%08lx r12=%08lx\n",
+	(unsigned long) frame[0], (unsigned long) frame[1],
+	(unsigned long) frame[2], (unsigned long) frame[3],
+	(unsigned long) frame[4]);
+  fault_regs(SCB_CFSR, SCB_HFSR);
+  wreboot(RBT_PANIC);
+}
+
+
+/*===========================================================================*
+ *				wreboot					     *
+ *===========================================================================*/
+PUBLIC void wreboot(how)
+int how;
+{
+/* Halt or reboot.  There is no boot monitor to return to. */
+
+  lock();
+  clock_stop();
+  if (how == RBT_PANIC) printf("System halted after panic.\n");
+  else if (how == RBT_HALT) printf("System halted.\n");
+  if (how == RBT_REBOOT || how == RBT_RESET) {
+	SCB_AIRCR = AIRCR_VECTKEY | AIRCR_SYSRESETREQ;
+	for (;;) ;
+  }
+  hal_halt(how == RBT_PANIC ? 1 : 0);
+}
+
+
+/*===========================================================================*
+ *				k_getenv				     *
+ *===========================================================================*/
+PRIVATE char k_environ[] = "rootdev=0\0";	/* boot parameters */
+
+PUBLIC char *k_getenv(name)
+char *name;
+{
+  register char *namep;
+  register char *envp;
+
+  for (envp = k_environ; *envp != 0;) {
+	for (namep = name; *namep != 0 && *namep == *envp; namep++, envp++)
+		;
+	if (*namep == '\0' && *envp == '=') return(envp + 1);
+	while (*envp++ != 0)
+		;
+  }
+  return(NIL_PTR);
+}

@@ -66,6 +66,11 @@ extern struct segdesc_s gdt[];	/* global descriptor table for protected mode*/
 EXTERN _PROTOTYPE( void (*level0_func), (void) );
 #endif /* (CHIP == INTEL) */
 
+#if (CHIP == ARM_CM)
+EXTERN irq_handler_t irq_table[NR_IRQ_VECTORS];
+EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
+#endif
+
 #if (CHIP == M68000)
 /* Variables that are initialized elsewhere are just extern here. */
 extern int keypad;		/* Flag for keypad mode */

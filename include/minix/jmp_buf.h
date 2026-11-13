@@ -62,7 +62,7 @@
 #define JB_D3		18
 #define JB_D4		22
 #define JB_D5		26
-#define JB_D6		20
+#define JB_D6		30
 #define JB_D7		34
 #define JB_A0		38
 #define JB_A1		42
@@ -74,7 +74,29 @@
 #define JB_SP		66
 #define JB_PC		70
 #define JB_PSW		74
-#else /* !(CHIP == INTEL) && !(CHIP == M68000) */
+#elif (CHIP == ARM_CM)
+/* Same layout as struct sigcontext: flags, mask, then struct sigregs. */
+#define JB_FLAGS	 0
+#define JB_MASK		 4
+#define JB_R4		 8
+#define JB_R5		12
+#define JB_R6		16
+#define JB_R7		20
+#define JB_R8		24
+#define JB_R9		28
+#define JB_R10		32
+#define JB_R11		36
+#define JB_RETREG	40
+#define JB_R1		44
+#define JB_R2		48
+#define JB_R3		52
+#define JB_R12		56
+#define JB_LR		60
+#define JB_PC		64
+#define JB_PSW		68
+#define JB_SP		72
+#define JB_CONTROL	76
+#else /* !(CHIP == INTEL) && !(CHIP == M68000) && !(CHIP == ARM_CM) */
 #include "error, CHIP is not supported"
 #endif /* (CHIP == INTEL) */
 

@@ -118,12 +118,45 @@
 
 #endif /* (CHIP == M68000) */
 
+#if (CHIP == ARM_CM)
+
+#define K_STACK_BYTES   2048	/* kernel (handler mode, MSP) stack */
+
+/* Initial xPSR: only the Thumb bit; anything else is a fault on return. */
+#define INIT_PSW      0x01000000
+#define INIT_TASK_PSW 0x01000000
+
+/* CONTROL register: tasks run privileged, servers and users unprivileged.
+ * SPSEL is irrelevant, the exception return always selects the PSP. */
+#define CONTROL_NPRIV 0x1
+#define INIT_CONTROL      CONTROL_NPRIV
+#define INIT_TASK_CONTROL 0
+
+/* No single-step via the psw on Cortex-M; ptrace T_STEP is a no-op. */
+#define TRACEBIT      0
+#define PSW_USER_BITS 0xF80F0000 /* N Z C V Q and GE: user may change these */
+#define SETPSW(rp, new)	/* permits only certain bits to be set */ \
+	((rp)->p_reg.psw = ((rp)->p_reg.psw & ~PSW_USER_BITS) \
+					| ((new) & PSW_USER_BITS))
+
+/* Device interrupts are NVIC lines; SysTick drives the clock and is not one
+ * of them. */
+#define NR_IRQ_VECTORS    64
+#define EXC_SYSTICK       15	/* exception number of SysTick */
+
+/* Sizes of memory tables. */
+#define NR_MEMS            2	/* number of chunks of memory */
+
+#define MEM_BYTES  0xffffffff	/* memory size for /dev/mem */
+
+#endif /* (CHIP == ARM_CM) */
+
 /* The following items pertain to the scheduling queues. */
 #define TASK_Q             0	/* ready tasks are scheduled via queue 0 */
 #define SERVER_Q           1	/* ready servers are scheduled via queue 1 */
 #define USER_Q             2	/* ready users are scheduled via queue 2 */
 
-#if (MACHINE == ATARI)
+#if (SHADOWING == 1)
 #define SHADOW_Q           3	/* runnable, but shadowed processes */
 #define NQ                 4	/* # of scheduling queues */
 #else

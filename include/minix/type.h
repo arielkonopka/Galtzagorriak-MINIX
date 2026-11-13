@@ -20,6 +20,10 @@ typedef unsigned long vir_bytes;/* virtual addresses and lengths in bytes */
 typedef unsigned long vir_bytes;/* virtual addresses and lengths in bytes */
 #endif
 
+#if (CHIP == ARM_CM)
+typedef unsigned long vir_bytes;/* virtual addresses and lengths in bytes */
+#endif
+
 /* Types relating to messages. */
 #define M1                 1
 #define M3                 3

@@ -479,6 +479,7 @@ message *m_ptr;			/* pointer to request message */
   char monitor_code[64];
   phys_bytes src_phys;
 
+#if (CHIP == INTEL)
   if (m_ptr->m1_i1 == RBT_MONITOR) {
 	/* The monitor is to run user specified instructions. */
 	src_phys = numap(m_ptr->m_source, (vir_bytes) m_ptr->m1_p1,
@@ -488,6 +489,7 @@ message *m_ptr;			/* pointer to request message */
 					(phys_bytes) sizeof(monitor_code));
 	reboot_code = vir2phys(monitor_code);
   }
+#endif
   wreboot(m_ptr->m1_i1);
   return(OK);			/* pro-forma (really EDISASTER) */
 }
@@ -566,11 +568,21 @@ message *m_ptr;			/* pointer to request message */
   phys_copy(vir2phys(&sc), dst_phys, (phys_bytes) sizeof(struct sigcontext));
 
   /* Initialize the sigframe structure. */
+#if (CHIP == ARM_CM)
+  /* AAPCS wants an 8-byte aligned stack at the handler's entry. */
+  frp = (struct sigframe *) (((vir_bytes) scp - sizeof(struct sigframe))
+								& ~(vir_bytes) 7);
+#else
   frp = (struct sigframe *) scp - 1;
+#endif
   fr.sf_scpcopy = scp;
   fr.sf_retadr2= (void (*)()) rp->p_reg.pc;
+#if (CHIP == ARM_CM)
+  fr.sf_fp = rp->p_reg.r7;
+#else
   fr.sf_fp = rp->p_reg.fp;
   rp->p_reg.fp = (reg_t) &frp->sf_fp;
+#endif
   fr.sf_scp = scp;
   fr.sf_code = 0;	/* XXX - should be used for type of FP exception */
   fr.sf_signo = smsg.sm_signo;
@@ -584,6 +596,14 @@ message *m_ptr;			/* pointer to request message */
   /* Reset user registers to execute the signal handler. */
   rp->p_reg.sp = (reg_t) frp;
   rp->p_reg.pc = (reg_t) smsg.sm_sighandler;
+#if (CHIP == ARM_CM)
+  /* Arguments go in registers: handler(signo, code, scp); it returns to
+   * the library's sigreturn stub, which finds scp in the sigframe. */
+  rp->p_reg.retreg = smsg.sm_signo;
+  rp->p_reg.r1 = 0;
+  rp->p_reg.r2 = (reg_t) scp;
+  rp->p_reg.lr = (reg_t) smsg.sm_sigreturn;
+#endif
 
   return(OK);
 }
@@ -619,12 +639,22 @@ register message *m_ptr;
    */
   if (sc.sc_flags & SC_NOREGLOCALS) {
 	rp->p_reg.retreg = sc.sc_retreg;
+#if (CHIP == ARM_CM)
+	rp->p_reg.r7 = sc.sc_fp;
+#else
 	rp->p_reg.fp = sc.sc_fp;
+#endif
 	rp->p_reg.pc = sc.sc_pc;
 	rp->p_reg.sp = sc.sc_sp;
 	return (OK);
   }
   sc.sc_psw  = rp->p_reg.psw;
+
+#if (CHIP == ARM_CM)
+  /* The CONTROL register decides the privilege level: a process must never
+   * be able to set it through a forged sigcontext. */
+  sc.sc_regs.sr_control = rp->p_reg.control;
+#endif
 
 #if (CHIP == INTEL)
   /* Don't panic kernel if user gave bad selectors. */
@@ -1059,7 +1089,7 @@ vir_bytes bytes;		/* # of bytes to be copied */
   if (bytes <= 0) return( (phys_bytes) 0);
   vc = (vir_addr + bytes - 1) >> CLICK_SHIFT;	/* last click of data */
 
-#if (CHIP == INTEL) || (CHIP == M68000)
+#if (CHIP == INTEL) || (CHIP == M68000) || (CHIP == ARM_CM)
   if (seg != T)
 	seg = (vc < rp->p_map[D].mem_vir + rp->p_map[D].mem_len ? D : S);
 #else
@@ -1074,11 +1104,11 @@ vir_bytes bytes;		/* # of bytes to be copied */
   seg_base = seg_base << CLICK_SHIFT;	/* segment origin in bytes */
 #endif
   pa = (phys_bytes) vir_addr;
-#if (CHIP != M68000)
+#if (CHIP == INTEL)
   pa -= rp->p_map[seg].mem_vir << CLICK_SHIFT;
   return(seg_base + pa);
 #endif
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
 #if (SHADOWING == 0)
   pa -= (phys_bytes)rp->p_map[seg].mem_vir << CLICK_SHIFT;
   pa += (phys_bytes)rp->p_map[seg].mem_phys << CLICK_SHIFT;

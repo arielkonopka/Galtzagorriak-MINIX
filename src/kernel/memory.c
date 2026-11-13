@@ -168,7 +168,7 @@ PRIVATE void m_init()
 #endif
   }
 #else /* !(CHIP == INTEL) */
-#if (CHIP == M68000)
+#if (CHIP == M68000) || (CHIP == ARM_CM)
   m_geom[MEM_DEV].dv_size = MEM_BYTES;
 #else /* !(CHIP == M68000) */
 #error /* memory limit not set up */

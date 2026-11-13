@@ -70,6 +70,10 @@
 #define TIMER_FREQ  2457600L	/* timer 3 input clock frequency */
 #endif
 
+#if (CHIP == ARM_CM)
+#include "arm/armcpu.h"
+#endif
+
 /* Clock task variables. */
 PRIVATE clock_t realtime;	/* real time clock */
 PRIVATE time_t boot_time;	/* time in seconds of system boot */
@@ -437,10 +441,12 @@ int irq;
   register unsigned ticks;
   clock_t now;
 
+#if (CHIP == INTEL)
   if (ps_mca) {
 	/* Acknowledge the PS/2 clock interrupt. */
 	out_byte(PORT_B, in_byte(PORT_B) | CLOCK_ACK_BIT);
   }
+#endif
 
   /* Update user and system accounting times.
    * First charge the current process for user time.
@@ -460,7 +466,7 @@ int irq;
   pending_ticks += ticks;
   now = realtime + pending_ticks;
   if (tty_timeout <= now) tty_wakeup(now);	/* possibly wake up TTY */
-#if (CHIP != M68000)
+#if (CHIP == INTEL)
   pr_restart();					/* possibly restart printer */
 #endif
 #if (CHIP == M68000)
@@ -576,6 +582,84 @@ struct milli_state *msp;
   return msp->accum_count / (TIMER_FREQ / 1000);
 }
 #endif /* (CHIP == INTEL) */
+
+
+#if (CHIP == ARM_CM)
+
+/*===========================================================================*
+ *				init_clock				     *
+ *===========================================================================*/
+PRIVATE void init_clock()
+{
+/* Program SysTick to interrupt HZ times a second from the core clock.  The
+ * SysTick exception is dispatched like an IRQ, see arm/intr.c.
+ */
+  put_irq_handler(CLOCK_IRQ, clock_handler);
+  SYST_CSR = 0;
+  SYST_RVR = cpu_hz / HZ - 1;
+  SYST_CVR = 0;
+  SYST_CSR = SYST_CSR_CLKSOURCE | SYST_CSR_TICKINT | SYST_CSR_ENABLE;
+}
+
+
+/*===========================================================================*
+ *				clock_stop				     *
+ *===========================================================================*/
+PUBLIC void clock_stop()
+{
+  SYST_CSR = 0;
+}
+
+
+/*==========================================================================*
+ *				milli_delay				    *
+ *==========================================================================*/
+PUBLIC void milli_delay(millisec)
+unsigned millisec;
+{
+/* Delay some milliseconds. */
+
+  struct milli_state ms;
+
+  milli_start(&ms);
+  while (milli_elapsed(&ms) < millisec) {}
+}
+
+
+/*==========================================================================*
+ *				milli_start				    *
+ *==========================================================================*/
+PUBLIC void milli_start(msp)
+struct milli_state *msp;
+{
+  msp->prev_count = SYST_CVR;
+  msp->accum_count = 0;
+}
+
+
+/*==========================================================================*
+ *				milli_elapsed				    *
+ *==========================================================================*/
+PUBLIC unsigned milli_elapsed(msp)
+struct milli_state *msp;
+{
+/* Return the number of milliseconds since the call to milli_start().  Must be
+ * polled at least once per SysTick period.  SysTick counts down from
+ * SYST_RVR to 0 and reloads.
+ */
+  unsigned count, reload;
+
+  count = SYST_CVR;
+  reload = SYST_RVR + 1;
+  if (count <= msp->prev_count)
+	msp->accum_count += msp->prev_count - count;
+  else
+	msp->accum_count += msp->prev_count + (reload - count);
+  msp->prev_count = count;
+
+  return msp->accum_count / (cpu_hz / 1000);
+}
+#endif /* (CHIP == ARM_CM) */
 
 
 #if (CHIP == M68000)

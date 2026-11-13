@@ -80,6 +80,38 @@ struct sigregs {
   short sr_psw;
   short sr_dummy;		/* make size multiple of 4 for system.c */
 };
+#elif (CHIP == ARM_CM)
+/* Must match struct stackframe_s in src/kernel/type.h. */
+struct sigregs {
+  long sr_r4;			/* r4-r11: saved by the kernel entry code */
+  long sr_r5;
+  long sr_r6;
+  long sr_r7;
+  long sr_r8;
+  long sr_r9;
+  long sr_r10;
+  long sr_r11;
+  long sr_retreg;		/* r0 */
+  long sr_r1;
+  long sr_r2;
+  long sr_r3;
+  long sr_r12;
+  long sr_lr;
+  long sr_pc;
+  long sr_psw;			/* xPSR */
+  long sr_sp;			/* process stack pointer (PSP) */
+  long sr_control;		/* CONTROL register (privilege) */
+};
+
+struct sigframe {		/* stack frame created for signalled process */
+  _PROTOTYPE( void (*sf_retadr), (void) );
+  int sf_signo;
+  int sf_code;
+  struct sigcontext *sf_scp;
+  int sf_fp;
+  _PROTOTYPE( void (*sf_retadr2), (void) );
+  struct sigcontext *sf_scpcopy;
+};
 #else
 #include "error, CHIP is not supported"
 #endif
@@ -135,6 +167,18 @@ struct sigcontext {
 #define sc_pc sc_regs.sr_pc
 #define sc_psw sc_regs.sr_psw
 #endif /* CHIP == M68000 */
+
+#if (CHIP == ARM_CM)
+#define sc_retreg sc_regs.sr_retreg
+#define sc_r1 sc_regs.sr_r1
+#define sc_r2 sc_regs.sr_r2
+#define sc_r3 sc_regs.sr_r3
+#define sc_fp sc_regs.sr_r7		/* Thumb frame pointer */
+#define sc_lr sc_regs.sr_lr
+#define sc_sp sc_regs.sr_sp
+#define sc_pc sc_regs.sr_pc
+#define sc_psw sc_regs.sr_psw
+#endif /* CHIP == ARM_CM */
 
 /* Values for sc_flags.  Must agree with <minix/jmp_buf.h>. */
 #define SC_SIGCONTEXT	2	/* nonzero when signal context is included */

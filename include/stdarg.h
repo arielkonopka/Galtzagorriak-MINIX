@@ -22,7 +22,16 @@
 #define _STDARG_H
 
 
-#ifdef __GNUC__
+#if defined(__GNUC__) && __GNUC__ >= 3
+/* Modern gcc: arguments may be passed in registers (e.g. ARM AAPCS), so
+ * pointer arithmetic on the stack cannot work.  Use the compiler builtins.
+ */
+typedef __builtin_va_list va_list;
+#define va_start(ap, last)	__builtin_va_start(ap, last)
+#define va_arg(ap, type)	__builtin_va_arg(ap, type)
+#define va_end(ap)		__builtin_va_end(ap)
+#define va_copy(d, s)		__builtin_va_copy(d, s)
+#elif defined(__GNUC__)
 /* The GNU C-compiler uses its own, but similar varargs mechanism. */
 
 typedef char *va_list;

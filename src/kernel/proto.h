@@ -240,6 +240,45 @@ _PROTOTYPE( int wdeth_probe, (struct dpeth *dep)			);
 
 #endif /* (CHIP == INTEL) */
 
+#if (CHIP == ARM_CM)
+/* arm/klib.c */
+_PROTOTYPE( void cstart, (void)						);
+_PROTOTYPE( void arm_proc_layout, (struct proc *rp, int t)		);
+_PROTOTYPE( void mem_init, (void)					);
+_PROTOTYPE( void intr_init, (int mine)					);
+_PROTOTYPE( void put_irq_handler, (int irq, irq_handler_t handler)	);
+_PROTOTYPE( void enable_irq, (unsigned irq)				);
+_PROTOTYPE( int disable_irq, (unsigned irq)				);
+_PROTOTYPE( void irq_dispatch, (unsigned exc)				);
+_PROTOTYPE( void lock, (void)						);
+_PROTOTYPE( void unlock, (void)						);
+_PROTOTYPE( void phys_copy, (phys_bytes source, phys_bytes dest,
+		phys_bytes count)					);
+_PROTOTYPE( void idle_task, (void)					);
+_PROTOTYPE( void arm_exception, (unsigned exc)				);
+_PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
+_PROTOTYPE( void wreboot, (int how)					);
+_PROTOTYPE( char *k_getenv, (char *name)				);
+/* arm/mpx.S */
+_PROTOTYPE( void restart, (void)					);
+/* arm/cons.c */
+_PROTOTYPE( void scr_init, (struct tty *tp)				);
+_PROTOTYPE( void putk, (int c)						);
+/* arm/shadow.c */
+_PROTOTYPE( void mkshadow, (struct proc *p, phys_clicks c2)		);
+_PROTOTYPE( void rmshadow, (struct proc *p, phys_clicks *basep,
+		phys_clicks *sizep)					);
+_PROTOTYPE( void unshadow, (struct proc *p)				);
+_PROTOTYPE( void copyclicks, (phys_clicks src, phys_clicks dest,
+		phys_clicks nclicks)					);
+_PROTOTYPE( void zeroclicks, (phys_clicks dest, phys_clicks nclicks)	);
+_PROTOTYPE( void flipclicks, (phys_clicks c1, phys_clicks c2, phys_clicks n) );
+/* clock.c */
+_PROTOTYPE( void milli_start, (struct milli_state *msp)			);
+_PROTOTYPE( unsigned milli_elapsed, (struct milli_state *msp)		);
+_PROTOTYPE( void milli_delay, (unsigned millisec)			);
+#endif /* (CHIP == ARM_CM) */
+
 #if (CHIP == M68000)
 
 /* cstart.c */

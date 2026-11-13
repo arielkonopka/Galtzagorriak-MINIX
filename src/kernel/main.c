@@ -34,6 +34,11 @@ PUBLIC void main()
   struct memory *memp;
   struct tasktab *ttp;
 
+#if (CHIP == ARM_CM)
+  /* No boot monitor: set up the machine and load MM, FS and INIT. */
+  cstart();
+#endif
+
   /* Initialize the interrupt controller. */
   intr_init(1);
 
@@ -81,6 +86,14 @@ PUBLIC void main()
 	rp->p_reg.pc = (reg_t) ttp->initial_pc;
 	rp->p_reg.psw = istaskp(rp) ? INIT_TASK_PSW : INIT_PSW;
 
+#if (CHIP == ARM_CM)
+	/* Tasks execute in place from flash; MM, FS and INIT were loaded by
+	 * cstart().  Virtual addresses are physical here.
+	 */
+	arm_proc_layout(rp, t);
+	(void) sizeindex; (void) text_base; (void) text_clicks;
+	(void) data_clicks; (void) memp;
+#else
 	text_clicks = sizes[sizeindex];
 	data_clicks = sizes[sizeindex + 1];
 	rp->p_map[T].mem_phys = text_base;
@@ -109,10 +122,13 @@ PUBLIC void main()
 		text_base = 0x100000 >> CLICK_SHIFT;
 	}
 #endif
+#endif /* CHIP != ARM_CM */
 	if (!isidlehardware(t)) lock_ready(rp);	/* IDLE, HARDWARE neveready */
 	rp->p_flags = 0;
 
+#if (CHIP == INTEL)
 	alloc_segments(rp);
+#endif
   }
 
   proc[NR_TASKS+INIT_PROC_NR].p_pid = 1;/* INIT of course has pid 1 */
@@ -120,7 +136,13 @@ PUBLIC void main()
   lock_pick_proc();
 
   /* Now go to the assembly code to start running the current process. */
+#if (CHIP == ARM_CM)
+  /* restart() must run in Handler mode; the first SVC gets us there. */
+  __asm volatile ("svc 0");
+  panic("first process did not start", NO_NUM);
+#else
   restart();
+#endif
 }
 
 
