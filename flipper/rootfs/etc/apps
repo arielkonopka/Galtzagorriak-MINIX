@@ -1,0 +1,4 @@
+# Apps on the launcher's main screen: Label:user:/program arg ...
+# Apps run as the given user, in group "gui" (screen, buttons, LED).
+About:nobody:/bin/info
+Lights:nobody:/bin/lights

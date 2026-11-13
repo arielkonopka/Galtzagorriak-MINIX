@@ -24,3 +24,7 @@ test -f /etc/.setup-done && {
 update &
 
 cat /etc/motd
+
+# The main screen: replaces the boot screen on the LCD (runs as root, starts
+# the apps from /etc/apps with their own user rights).
+launcher &

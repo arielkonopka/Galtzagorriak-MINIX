@@ -64,7 +64,7 @@ $(MB)/libc.a: $(LIBC_OBJ)
 KDIR	:= $(MROOT)/src/kernel
 KSRC	:= main.c proc.c system.c clock.c table.c memory.c tty.c driver.c \
 	   drvlib.c misc.c arm/klib.c arm/cons.c arm/shadow.c arm/nodev.c \
-	   arm/disk.c arm/mpx.S
+	   arm/disk.c arm/flipdev.c arm/mpx.S
 KOBJ	:= $(KSRC:%=$(MB)/kernel/%.o) \
 	   $(filter-out %/main.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
 
@@ -174,7 +174,9 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 PORTCMDS := mkpart pkg
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(ZMODEM)
+# Programs for the LCD and buttons (flipper/gui), linked with gui.c.
+GUIAPPS	:= launcher info lights
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(ZMODEM) $(GUIAPPS)
 # Apps: built like commands but shipped as packages (flipper/apps).
 APPS	:= hello
 # Other names of multi-call programs, installed as copies.
@@ -217,6 +219,10 @@ OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
+$(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
 define user_prog

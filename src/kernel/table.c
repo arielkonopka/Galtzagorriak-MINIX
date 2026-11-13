@@ -91,10 +91,11 @@
 #if (CHIP == ARM_CM)
 /* No printer or floppy hardware; the task numbers must still exist. */
 #undef	PRINTER_STACK
-#define	PRINTER_STACK	SMALL_STACK
+#define	PRINTER_STACK	(3 * SMALL_STACK)	/* flipdev: SPI, I2C calls */
 #undef	FLOP_STACK
 #define	FLOP_STACK	SMALL_STACK
-#define printer_task	nodev_task
+#define printer_task	flipdev_task	/* LCD, buttons, LED: arm/flipdev.c */
+_PROTOTYPE( void flipdev_task, (void) );
 #define floppy_task	nodev_task
 
 _PROTOTYPE( void nodev_task, (void) );

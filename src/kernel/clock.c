@@ -469,6 +469,9 @@ int irq;
 #if (CHIP == INTEL)
   pr_restart();					/* possibly restart printer */
 #endif
+#if (CHIP == ARM_CM)
+  flipdev_tick();				/* sample the buttons */
+#endif
 #if (CHIP == M68000)
   kb_timer();					/* keyboard repeat */
   if (sched_ticks == 1) fd_timer();		/* floppy deselect */
