@@ -20,8 +20,8 @@
 #define	ptrint		long
 #endif
 
-#if	_EM_PSIZE == 2
-#define BRKSIZE		1024
+#if	_EM_PSIZE == 2 || defined(__ARM_ARCH)
+#define BRKSIZE		1024	/* small machines: don't waste heap */
 #else
 #define BRKSIZE		4096
 #endif

@@ -129,7 +129,13 @@ PRIVATE void mm_init()
    * including the gap between address 0 and the start of the kernel.
    */
   sys_getmap(SYSTASK, kernel_map);
+#if (CHIP == ARM_CM)
+  /* Text runs from flash; count only the RAM (data to stack) in use. */
+  minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len
+					- kernel_map[D].mem_phys;
+#else
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len;
+#endif
 
   /* Initialize MM's tables. */
   for (proc_nr = 0; proc_nr <= INIT_PROC_NR; proc_nr++) {
@@ -137,8 +143,13 @@ PRIVATE void mm_init()
 	rmp->mp_flags |= IN_USE;
 	sys_getmap(proc_nr, rmp->mp_seg);
 	if (rmp->mp_seg[T].mem_len != 0) rmp->mp_flags |= SEPARATE;
+#if (CHIP == ARM_CM)
+	minix_clicks += (rmp->mp_seg[S].mem_phys + rmp->mp_seg[S].mem_len)
+				- rmp->mp_seg[D].mem_phys;
+#else
 	minix_clicks += (rmp->mp_seg[S].mem_phys + rmp->mp_seg[S].mem_len)
 				- rmp->mp_seg[T].mem_phys;
+#endif
   }
   mproc[INIT_PROC_NR].mp_pid = INIT_PID;
   sigemptyset(&mproc[INIT_PROC_NR].mp_ignore);

@@ -230,7 +230,11 @@ register message *m_ptr;	/* pointer to request message */
 
 #if (SHADOWING == 1)
   rpc->p_nflips = 0;
+#if (CHIP == ARM_CM)
+  mkshadow(rpp, rpc, (phys_clicks)m_ptr->m1_p1);	/* run child first */
+#else
   mkshadow(rpp, (phys_clicks)m_ptr->m1_p1);	/* run child first */
+#endif
 #endif
 
   return(OK);
@@ -340,6 +344,13 @@ register message *m_ptr;	/* pointer to request message */
 #endif
 #endif
   rp->p_reg.pc = (reg_t) m_ptr->IP_PTR;	/* set pc */
+#if (CHIP == ARM_CM)
+  /* Fresh status (no stale IT/condition state) and unprivileged.  The
+   * argc/argv/envp stack is set up by MM; crtso finds it via sp. */
+  rp->p_reg.psw = INIT_PSW;
+  rp->p_reg.control = INIT_CONTROL;
+  rp->p_reg.lr = 0;
+#endif
   rp->p_alarm = 0;		/* reset alarm timer */
   rp->p_flags &= ~RECEIVING;	/* MM does not reply to EXEC call */
   if (rp->p_flags == 0) lock_ready(rp);

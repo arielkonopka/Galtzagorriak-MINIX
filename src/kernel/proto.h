@@ -265,7 +265,8 @@ _PROTOTYPE( void restart, (void)					);
 _PROTOTYPE( void scr_init, (struct tty *tp)				);
 _PROTOTYPE( void putk, (int c)						);
 /* arm/shadow.c */
-_PROTOTYPE( void mkshadow, (struct proc *p, phys_clicks c2)		);
+_PROTOTYPE( void mkshadow, (struct proc *parent, struct proc *child,
+		phys_clicks c2)						);
 _PROTOTYPE( void rmshadow, (struct proc *p, phys_clicks *basep,
 		phys_clicks *sizep)					);
 _PROTOTYPE( void unshadow, (struct proc *p)				);

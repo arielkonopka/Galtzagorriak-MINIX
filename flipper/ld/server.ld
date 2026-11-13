@@ -41,6 +41,7 @@ SECTIONS
 		*(.bss .bss.* COMMON)
 		. = ALIGN(4);
 		_ebss = .;
+		_end = .;		/* initial break (brksize.S) */
 	} > RAM
 
 	_flash_end = LOADADDR(.data) + SIZEOF(.data);

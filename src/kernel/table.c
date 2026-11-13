@@ -96,7 +96,7 @@
 #define	FLOP_STACK	SMALL_STACK
 #define printer_task	nodev_task
 #define floppy_task	nodev_task
-#define winchester_task	nodev_task	/* until the SD card driver exists */
+
 _PROTOTYPE( void nodev_task, (void) );
 #endif
 

@@ -87,12 +87,25 @@ __attribute__((weak)) void SysTick_Handler(void)
 	if (hal_tick_hook) hal_tick_hook();
 }
 
+/* Busy-wait with the cycle counter, so delays also work inside the MINIX
+ * kernel, which owns SysTick and runs with interrupts masked at times. */
+static void cycles_init(void)
+{
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CYCCNT = 0;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static uint32_t ms_since(uint32_t start)
+{
+	return (DWT->CYCCNT - start) / (SystemCoreClock / 1000);
+}
+
 void hal_delay_ms(uint32_t ms)
 {
-	uint32_t start = hal_ms;
+	uint32_t start = DWT->CYCCNT;
 
-	while (hal_ms - start < ms)
-		__WFI();
+	while (ms_since(start) < ms) ;
 }
 
 /*===========================================================================*
@@ -156,6 +169,21 @@ static void spi2_init(void)
 		  | (3u << SPI_CR1_BR_Pos) | SPI_CR1_SPE;
 }
 
+/* Baud rate divider code: fPCLK / 2^(code+1).  The display and the SD card
+ * share the bus and use different speeds; set it before each transaction. */
+#define SPI_DIV_DISPLAY	3	/* /16 = 4 MHz */
+#define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
+#define SPI_DIV_SD_FAST	2	/* /8 = 8 MHz */
+
+static void spi2_speed(unsigned code)
+{
+	uint32_t cr1 = SPI2->CR1;
+
+	if (((cr1 & SPI_CR1_BR) >> SPI_CR1_BR_Pos) == code) return;
+	SPI2->CR1 = cr1 & ~SPI_CR1_SPE;
+	SPI2->CR1 = (cr1 & ~SPI_CR1_BR) | (code << SPI_CR1_BR_Pos);
+}
+
 static uint8_t spi2_xfer(uint8_t out)
 {
 	while (!(SPI2->SR & SPI_SR_TXE)) ;
@@ -182,6 +210,7 @@ static void spi2_wait_idle(void)
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
+	spi2_speed(SPI_DIV_DISPLAY);
 	LCD_DATA(0);
 	LCD_CS(1);
 	while (n-- > 0) spi2_xfer(*cmd++);
@@ -232,6 +261,189 @@ void hal_lcd_flush(const uint8_t *fb)
 		spi2_wait_idle();
 		LCD_CS(0);
 	}
+}
+
+/*===========================================================================*
+ *				microSD card (SPI mode)			     *
+ *===========================================================================*/
+/* SD Physical Layer Simplified Specification, SPI mode.  Polled, one block
+ * per command (CMD17/CMD24); SDSC and SDHC/SDXC cards. */
+#define CMD0	0	/* GO_IDLE_STATE */
+#define CMD8	8	/* SEND_IF_COND */
+#define CMD9	9	/* SEND_CSD */
+#define CMD16	16	/* SET_BLOCKLEN */
+#define CMD17	17	/* READ_SINGLE_BLOCK */
+#define CMD24	24	/* WRITE_BLOCK */
+#define CMD55	55	/* APP_CMD */
+#define CMD58	58	/* READ_OCR */
+#define ACMD41	41	/* SD_SEND_OP_COND */
+#define R1_IDLE		0x01
+#define R1_ILLEGAL	0x04
+#define TOKEN_START	0xFE
+#define SD_TIMEOUT_MS	500
+
+static int sd_ready;		/* initialised */
+static int sd_block_addr;	/* SDHC/SDXC: block (not byte) addresses */
+static uint32_t sd_nsectors;
+
+static void sd_select(int on)
+{
+	SD_CS(on);
+	spi2_xfer(0xFF);	/* give the card clocks to release DO */
+}
+
+static int sd_wait_ready(void)
+{
+	uint32_t start = DWT->CYCCNT;
+
+	while (spi2_xfer(0xFF) != 0xFF)
+		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
+	return 0;
+}
+
+static uint8_t sd_cmd(uint8_t cmd, uint32_t arg)
+{
+	uint8_t r, crc = 0x01;
+	int n;
+
+	if (cmd == ACMD41) {
+		r = sd_cmd(CMD55, 0);
+		if (r > R1_IDLE) return r;
+	}
+	sd_select(0);
+	sd_select(1);
+	if (cmd != CMD0 && sd_wait_ready() < 0) return 0xFF;
+
+	if (cmd == CMD0) crc = 0x95;	/* CRC is only checked for these */
+	if (cmd == CMD8) crc = 0x87;
+	spi2_xfer(0x40 | cmd);
+	spi2_xfer(arg >> 24);
+	spi2_xfer(arg >> 16);
+	spi2_xfer(arg >> 8);
+	spi2_xfer(arg);
+	spi2_xfer(crc);
+
+	for (n = 0; n < 10; n++)	/* R1 within 8 bytes */
+		if (!((r = spi2_xfer(0xFF)) & 0x80)) break;
+	return r;
+}
+
+static int sd_read_data(uint8_t *buf, unsigned len)
+{
+	uint32_t start = DWT->CYCCNT;
+	uint8_t t;
+
+	while ((t = spi2_xfer(0xFF)) == 0xFF)
+		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
+	if (t != TOKEN_START) return -1;
+	while (len-- > 0) *buf++ = spi2_xfer(0xFF);
+	spi2_xfer(0xFF);	/* CRC */
+	spi2_xfer(0xFF);
+	return 0;
+}
+
+int hal_disk_init(void)
+{
+	uint8_t ocr[4], csd[16];
+	uint32_t start, c_size;
+	int i, v2;
+
+	sd_ready = 0;
+	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);	/* card detect */
+	spi2_speed(SPI_DIV_SD_INIT);
+	SD_CS(0);
+	for (i = 0; i < 10; i++) spi2_xfer(0xFF);	/* >= 74 clocks */
+
+	if (sd_cmd(CMD0, 0) != R1_IDLE) goto fail;
+	v2 = 0;
+	if (!(sd_cmd(CMD8, 0x1AA) & R1_ILLEGAL)) {	/* SD v2+ */
+		for (i = 0; i < 4; i++) ocr[i] = spi2_xfer(0xFF);
+		if (ocr[2] != 0x01 || ocr[3] != 0xAA) goto fail;
+		v2 = 1;
+	}
+	start = DWT->CYCCNT;
+	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0)	/* HCS */
+		if (ms_since(start) > 1000) goto fail;
+
+	sd_block_addr = 0;
+	if (v2) {
+		if (sd_cmd(CMD58, 0) != 0) goto fail;
+		for (i = 0; i < 4; i++) ocr[i] = spi2_xfer(0xFF);
+		sd_block_addr = (ocr[0] & 0x40) != 0;	/* CCS */
+	}
+	if (!sd_block_addr && sd_cmd(CMD16, 512) != 0) goto fail;
+
+	if (sd_cmd(CMD9, 0) != 0 || sd_read_data(csd, sizeof csd) < 0)
+		goto fail;
+	if ((csd[0] >> 6) == 1) {		/* CSD version 2 */
+		c_size = ((uint32_t) (csd[7] & 0x3F) << 16)
+			| ((uint32_t) csd[8] << 8) | csd[9];
+		sd_nsectors = (c_size + 1) * 1024;
+	} else {				/* CSD version 1 */
+		uint32_t read_bl_len = csd[5] & 0x0F;
+		uint32_t c_size_mult = ((csd[9] & 0x03) << 1) | (csd[10] >> 7);
+		c_size = ((uint32_t) (csd[6] & 0x03) << 10)
+			| ((uint32_t) csd[7] << 2) | (csd[8] >> 6);
+		sd_nsectors = (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9);
+	}
+	sd_select(0);
+	spi2_speed(SPI_DIV_SD_FAST);
+	sd_ready = 1;
+	return 0;
+fail:
+	sd_select(0);
+	return -1;
+}
+
+uint32_t hal_disk_sectors(void)
+{
+	return sd_ready ? sd_nsectors : 0;
+}
+
+int hal_disk_read(uint32_t sector, void *buf, unsigned count)
+{
+	uint8_t *p = buf;
+	int r = 0;
+
+	if (!sd_ready) return -1;
+	spi2_speed(SPI_DIV_SD_FAST);
+	for (; count > 0; count--, sector++, p += HAL_SECTOR_SIZE) {
+		if (sd_cmd(CMD17, sd_block_addr ? sector : sector * 512) != 0
+		    || sd_read_data(p, HAL_SECTOR_SIZE) < 0) {
+			r = -1;
+			break;
+		}
+	}
+	sd_select(0);
+	return r;
+}
+
+int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
+{
+	const uint8_t *p = buf;
+	unsigned i;
+	int r = 0;
+
+	if (!sd_ready) return -1;
+	spi2_speed(SPI_DIV_SD_FAST);
+	for (; count > 0; count--, sector++) {
+		if (sd_cmd(CMD24, sd_block_addr ? sector : sector * 512) != 0) {
+			r = -1;
+			break;
+		}
+		spi2_xfer(0xFF);
+		spi2_xfer(TOKEN_START);
+		for (i = 0; i < HAL_SECTOR_SIZE; i++) spi2_xfer(*p++);
+		spi2_xfer(0xFF);	/* dummy CRC */
+		spi2_xfer(0xFF);
+		if ((spi2_xfer(0xFF) & 0x1F) != 0x05		/* accepted? */
+		    || sd_wait_ready() < 0) {			/* programmed */
+			r = -1;
+			break;
+		}
+	}
+	sd_select(0);
+	return r;
 }
 
 /*===========================================================================*
@@ -306,6 +518,7 @@ void hal_early_boot(void)
 void hal_init(void)
 {
 	clock_init();
+	cycles_init();
 
 	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN
 		      | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIODEN

@@ -18,6 +18,8 @@ _start:
 	adds	r2, r2, #4		/* envp = argv + argc + 1 */
 	ldr	r3, =environ
 	str	r2, [r3]
+	ldr	r3, =_penvp		/* getenv() looks here */
+	str	r2, [r3]
 	mov	r4, sp
 	bic	r4, r4, #7		/* AAPCS: 8-byte aligned stack */
 	mov	sp, r4
@@ -30,4 +32,7 @@ _start:
 	.global	environ
 	.weak	environ
 environ:
+	.word	0
+	.global	_penvp
+_penvp:
 	.word	0

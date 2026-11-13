@@ -96,6 +96,27 @@ Limits of MINIX 2.0 (include/sys/types.h), verified with a 4000 MiB image:
 | 5 | LCD tty (4×6 font, 32×10), d-pad on-screen keyboard, USB CDC-ACM tty, console auto-select | Usable without PC |
 | 6 | MPU protection, RTC time, backlight/power-off, battery gauge, docs | Daily-usable build |
 
+### Flipper hardware (goal: the original device's feature set)
+
+Each peripheral becomes a MINIX driver task with device files, used by
+ordinary user programs; a menu UI on the LCD then mirrors the stock
+firmware's structure (Sub-GHz, RFID, NFC, Infrared, GPIO, iButton, USB,
+Bluetooth, Settings).
+
+| # | Deliverable | Device files |
+|---|-------------|--------------|
+| 7 | USB device stack: CDC-ACM console, later HID (keyboard) | `/dev/ttyusb`, `/dev/usbhid` |
+| 8 | GPIO header pins, 5 V/3.3 V power, vibro, speaker (PWM), RGB LED + backlight (LP5562, I2C), buttons as input device | `/dev/gpio`, `/dev/vibro`, `/dev/speaker`, `/dev/led`, `/dev/input` |
+| 9 | Infrared receive/transmit (timer capture / carrier PWM) | `/dev/ir` |
+| 10 | Sub-GHz CC1101 on SPI1, with region-based transmit frequency limits as in the stock firmware | `/dev/subghz` |
+| 11 | NFC (ST25R3916, SPI1), 125 kHz RFID, iButton (1-Wire) | `/dev/nfc`, `/dev/rfid`, `/dev/ibutton` |
+| 12 | Bluetooth LE: start CPU2 with ST's wireless stack already in flash, IPCC mailbox + HCI/ACI transport | `/dev/ble` |
+| 13 | Menu UI on the LCD mirroring the stock firmware's layout, apps per peripheral | — |
+
+Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
+changes the memory plan (the 10 KB SRAM2a/2b areas go to the radio). Sub-GHz
+transmit must stay inside the legal bands for the user's region.
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**
@@ -105,15 +126,33 @@ Limits of MINIX 2.0 (include/sys/types.h), verified with a 4000 MiB image:
   should print the banner on USART1 (115200 8N1, pins 13 TX / 14 RX, 3.3 V),
   show text on the LCD, echo button presses and serial input; hold BACK 2 s to
   halt.
-- **Milestone 1: done in QEMU, built for Flipper (hardware test pending).**
-  `make minix-run` boots the MINIX kernel (TTY, CLOCK, SYS, MEMORY, IDLE,
-  stub PRINTER/FLOPPY/WINCHESTER tasks) with test stand-ins for MM, FS and
-  INIT (`m1/`).  Checked: user -> server IPC, user -> task refused
-  (E_BAD_DEST, as in MINIX), clock interrupts preempt a spinning user,
-  console input by interrupt with REVIVE replies, and an unprivileged write
-  to SysTick faults and becomes a signal while the kernel survives.
-  `make minix BOARD=flipper` gives `build/flipper/minix/minix.bin` (~17 KB),
-  kernel RAM: ~17 KB.
+- **Milestone 1: done** (kernel core; its test stand-ins were replaced by
+  the real servers in milestone 2).
+- **Milestone 2: mostly done in QEMU, built for Flipper (hardware test
+  pending).**  `make disk minix-run` boots kernel + real MM + real FS + a test
+  INIT (`m2/init.c`); FS mounts the root file system from the "SD card"
+  (`/dev/hd1`, QEMU: `build/qemu/minix/disk.img` via semihosting), INIT does
+  file I/O and execs `/bin/m2test`, a relocated user program that checks
+  argv/environ, malloc/brk, signals, fork/wait (shadowing), pipes and
+  fork+exec.  Still to do: `/bin/sh` and the other commands, real `init`.
+  Memory: kernel 19 KB, MM 11 KB, FS 34 KB RAM; 113 KB left for programs.
+
+### Building the SD card
+
+    make -C flipper BOARD=flipper disk          # build/flipper/minix/fs.img
+    sudo dd if=flipper/build/flipper/minix/fs.img of=/dev/sdX1 bs=1M conv=fsync
+
+(`fs.img` is the file system for partition 1; it is smaller than the
+partition, which only means the rest stays unused until a bigger image is
+written.)
+
+### User programs
+
+Linked at 0 with relocations (`ld/user.ld`, `-Wl,-q`), converted by
+`tools/elf2mnx.py` to MINIX a.out (cpu `A_ARMCM`) with a GEMDOS-style
+relocation table, which exec relocates in MM (the Atari ST code path).
+Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
+`minix.mk`.
 
 ### How the ARM kernel works
 
@@ -140,8 +179,20 @@ Limits of MINIX 2.0 (include/sys/types.h), verified with a 4000 MiB image:
 - `include/stdarg.h`: gcc >= 2 branch used `__builtin_next_arg` pointer
   arithmetic, wrong whenever arguments are passed in registers (ARM, and any
   modern gcc); now uses the `__builtin_va_*` builtins.
-- Known, to fix in milestone 4: disk positions are 32-bit byte offsets
-  (`dv_base`, signed `POSITION`), see the SD card layout section.
+- `include/stdio.h`: `v*printf`/`v*scanf` declared with `char *` instead
+  of `va_list` (breaks with gcc's register-based va_list).
+- `src/lib/posix/_exec.c`, `src/lib/other/execlp.c`: `execl()`, `execle()`,
+  `execlp()` passed their `va_list` on as the argv array; rewritten to copy
+  the arguments.
+- `src/mm/exec.c`: the shadowing exec path used an undeclared `rp`.
+- `src/kernel/clock.c`: with shadowing, a runnable shadowed process could
+  wait forever on an idle system (the clock task was only woken at the end
+  of a quantum).
+- Boot servers had no stack segment, so MM did no checking and INIT's heap
+  could grow into its stack (`arm_proc_layout()` now gives them one).
+- The disk driver no longer uses 32-bit byte offsets for the sector number
+  (`arm/disk.c`); `dv_base`/`dv_size` are still 32-bit byte counts, so
+  partitions must stay below 4 GB.
 
 ## Layout
 
@@ -153,7 +204,9 @@ flipper/ld/        linker scripts (flipper.ld, qemu.ld, shared sections.ld,
 flipper/hal/       hal.h; common/ (vectors, kprintf, fbcon + 4x6 font, string)
                    flipper/board.c (STM32WB55), qemu/board.c (mps2-an386)
 flipper/m0/        milestone-0 bring-up test program
-flipper/m1/        milestone-1 stand-ins for MM, FS, INIT
+flipper/m2/        test INIT and the m2test user program
+flipper/rootfs/    root file system prototype (proto) and files
+flipper/minix.mk   libc, kernel, servers, user programs, disk image
 flipper/tools/     mkfont.py, mkflash.py (pack images), genaliases.py
 flipper/vendor/    CMSIS headers (ST cmsis_device_wb, ARM CMSIS_5), Apache-2.0
 src/kernel/arm/    mpx.S (entry/exit), klib.c (boot, irq, faults), cons.c

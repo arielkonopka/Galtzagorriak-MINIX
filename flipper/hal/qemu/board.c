@@ -117,14 +117,85 @@ unsigned hal_buttons(void)
 	return qemu_fake_buttons;
 }
 
-/* ARM semihosting SYS_EXIT_EXTENDED: QEMU exits with the given status
- * (requires -semihosting-config enable=on). */
+/* ARM semihosting call (requires -semihosting-config enable=on). */
+static uint32_t semihost(uint32_t op, void *arg)
+{
+	register uint32_t r0 __asm("r0") = op;
+	register uint32_t r1 __asm("r1") = (uint32_t) arg;
+
+	__asm volatile ("bkpt 0xAB" : "+r" (r0) : "r" (r1) : "memory");
+	return r0;
+}
+
+#define SYS_OPEN	0x01
+#define SYS_WRITE	0x05
+#define SYS_READ	0x06
+#define SYS_SEEK	0x0A
+#define SYS_FLEN	0x0C
+#define SYS_EXIT_EXTENDED 0x20
+#define OPEN_RW_BINARY	3		/* fopen mode "r+b" (7 would be "w+b": truncates!) */
+
+/* SYS_EXIT_EXTENDED: QEMU exits with the given status. */
 void hal_halt(int status)
 {
 	uint32_t block[2] = { 0x20026, (uint32_t) status };	/* ADP_Stopped_ApplicationExit */
-	register uint32_t r0 __asm("r0") = 0x20;		/* SYS_EXIT_EXTENDED */
-	register uint32_t r1 __asm("r1") = (uint32_t) block;
 
-	__asm volatile ("bkpt 0xAB" : : "r" (r0), "r" (r1) : "memory");
+	semihost(SYS_EXIT_EXTENDED, block);
 	for (;;) __asm volatile ("wfi");
+}
+
+/* The "SD card" is a disk image file on the host, see QEMU_DISK. */
+#ifndef QEMU_DISK
+#define QEMU_DISK "disk.img"
+#endif
+static int disk_fd = -1;
+static uint32_t disk_sectors;
+
+int hal_disk_init(void)
+{
+	static const char name[] = QEMU_DISK;
+	uint32_t open_args[3] = { (uint32_t) name, OPEN_RW_BINARY,
+				  sizeof name - 1 };
+	uint32_t fd, len;
+
+	if (disk_fd >= 0) return 0;
+	fd = semihost(SYS_OPEN, open_args);
+	if (fd == (uint32_t) -1) return -1;
+	len = semihost(SYS_FLEN, &fd);
+	if (len == (uint32_t) -1) return -1;
+	disk_fd = (int) fd;
+	disk_sectors = len / HAL_SECTOR_SIZE;
+	return 0;
+}
+
+uint32_t hal_disk_sectors(void)
+{
+	return disk_sectors;
+}
+
+static int disk_seek(uint32_t sector, unsigned count)
+{
+	uint32_t args[2];
+
+	if (disk_fd < 0 || sector >= disk_sectors
+				|| count > disk_sectors - sector) return -1;
+	args[0] = disk_fd;
+	args[1] = sector * HAL_SECTOR_SIZE;	/* image must stay < 4 GB */
+	return semihost(SYS_SEEK, args) == 0 ? 0 : -1;
+}
+
+int hal_disk_read(uint32_t sector, void *buf, unsigned count)
+{
+	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
+
+	if (disk_seek(sector, count) < 0) return -1;
+	return semihost(SYS_READ, args) == 0 ? 0 : -1;	/* 0 = all read */
+}
+
+int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
+{
+	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
+
+	if (disk_seek(sector, count) < 0) return -1;
+	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }

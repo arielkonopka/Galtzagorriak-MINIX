@@ -475,6 +475,13 @@ int irq;
 #endif
 
   if (next_alarm <= now ||
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+      /* A shadowed process can only run after the clock task swapped it
+       * in; do not make it wait for the end of a quantum (on an idle
+       * system sched_ticks never gets there at all).
+       */
+      rdy_head[SHADOW_Q] != NIL_PROC ||
+#endif
       sched_ticks == 1 &&
       bill_ptr == prev_ptr &&
 #if (SHADOWING == 0)

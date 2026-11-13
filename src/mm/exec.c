@@ -132,7 +132,7 @@ PUBLIC int do_exec()
 #if (SHADOWING == 1)
   if (lseek(fd, (off_t)sym_bytes, SEEK_CUR) == (off_t) -1) ;	/* error */
   if (relocate(fd, (unsigned char *)mbuf) < 0) 	;		/* error */
-  pc += (vir_bytes) rp->mp_seg[T].mem_vir << CLICK_SHIFT;
+  pc += (vir_bytes) rmp->mp_seg[T].mem_vir << CLICK_SHIFT;	/* was "rp": never compiled */
 #endif
 
   close(fd);			/* don't need exec file any more */
@@ -233,6 +233,9 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 #endif
 #if (CHIP == INTEL && _WORD_SIZE == 4)
   if (hdr.a_cpu != A_I80386) return(ENOEXEC);
+#endif
+#if (CHIP == ARM_CM)
+  if (hdr.a_cpu != A_ARMCM) return(ENOEXEC);
 #endif
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
 

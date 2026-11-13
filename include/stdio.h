@@ -84,17 +84,23 @@ _PROTOTYPE( int setvbuf,
 _PROTOTYPE( int fprintf, (FILE *_stream, const char *_format, ...)	);
 _PROTOTYPE( int printf, (const char *_format, ...)			);
 _PROTOTYPE( int sprintf, (char *_s, const char *_format, ...)		);
+/* The va_list type, without making the name visible (cf. <stdarg.h>). */
+#if defined(__GNUC__) && __GNUC__ >= 3
+#define _VA_LIST	__builtin_va_list
+#else
+#define _VA_LIST	char *
+#endif
 _PROTOTYPE( int vfprintf,
-		(FILE *_stream, const char *_format, char *_arg)	);
-_PROTOTYPE( int vprintf, (const char *_format, char *_arg)		);
-_PROTOTYPE( int vsprintf, (char *_s, const char *_format, char *_arg)	);
+		(FILE *_stream, const char *_format, _VA_LIST _arg)	);
+_PROTOTYPE( int vprintf, (const char *_format, _VA_LIST _arg)		);
+_PROTOTYPE( int vsprintf, (char *_s, const char *_format, _VA_LIST _arg)	);
 _PROTOTYPE( int fscanf, (FILE *_stream, const char *_format, ...)	);
 _PROTOTYPE( int scanf, (const char *_format, ...)			);
 _PROTOTYPE( int sscanf, (const char *_s, const char *_format, ...)	);
 #define vfscanf _doscan
-_PROTOTYPE( int vfscanf, (FILE *_stream, const char *_format, char *_arg));
-_PROTOTYPE( int vscanf, (const char *_format, char *_arg)		);
-_PROTOTYPE( int vsscanf, (const char *_s, const char *_format, char *_arg));
+_PROTOTYPE( int vfscanf, (FILE *_stream, const char *_format, _VA_LIST _arg));
+_PROTOTYPE( int vscanf, (const char *_format, _VA_LIST _arg)		);
+_PROTOTYPE( int vsscanf, (const char *_s, const char *_format, _VA_LIST _arg));
 _PROTOTYPE( int fgetc, (FILE *_stream)					);
 _PROTOTYPE( char *fgets, (char *_s, int _n, FILE *_stream)		);
 _PROTOTYPE( int fputc, (int _c, FILE *_stream)				);

@@ -13,47 +13,46 @@ extern char **environ;
 
 #define	PTRSIZE	(sizeof(char *))
 
-#ifdef _ANSI
+/* execl() and execle() used to pass their va_list straight on as the
+ * argv array.  That only works if all arguments lie on the stack in order,
+ * which is not true when arguments are passed in registers (ARM, and gcc's
+ * va_list in general).  Copy them into a real array instead.
+ */
+#define MAX_LARGS	256		/* max arguments to execl/execle */
+
 PUBLIC int execl(const char *name, const char *arg, ...)
-#else
-PUBLIC int execl(name)
-char *name;
-#endif
 {
   va_list argp;
-  int result;
+  char *argv[MAX_LARGS + 1];
+  int n = 0;
 
-  va_start(argp, name);
-
-  /* The following cast of argp is not portable.  Doing it right by copying
-   * the args to a true array will cost as much as ARG_MAX bytes of space.
-   */
-  result = execve(name, (char **) argp, environ);
+  va_start(argp, arg);
+  argv[n] = (char *) arg;
+  while (argv[n] != NIL_PTR) {
+	if (++n == MAX_LARGS) { va_end(argp); errno = E2BIG; return(-1); }
+	argv[n] = va_arg(argp, char *);
+  }
   va_end(argp);
-  return(result);
+  return(execve(name, argv, environ));
 }
 
 
-#ifdef _ANSI
 PUBLIC int execle(const char *name, const char *arg, ...)
-#else
-PUBLIC int execle(name)
-char *name;
-#endif
 {
   va_list argp;
-  char **p;
-  int result;
+  char *argv[MAX_LARGS + 1];
+  char **envp;
+  int n = 0;
 
-  va_start(argp, name);
-  
-  /* The following cast of argp is not portable, as for execl(). */
-  p = (char **) argp;
-  while (*p++ != NIL_PTR)
-	;			/* null statement */
-  result = execve(name, (char **) argp, (char **) *p);
+  va_start(argp, arg);
+  argv[n] = (char *) arg;
+  while (argv[n] != NIL_PTR) {
+	if (++n == MAX_LARGS) { va_end(argp); errno = E2BIG; return(-1); }
+	argv[n] = va_arg(argp, char *);
+  }
+  envp = va_arg(argp, char **);		/* follows the NULL */
   va_end(argp);
-  return(result);
+  return(execve(name, argv, envp));
 }
 
 

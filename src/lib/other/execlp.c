@@ -51,20 +51,21 @@
 
 extern char **environ;		/* environment pointer */
 
-#ifdef _ANSI
 int execlp(const char *file, const char *arg, ...)
-#else
-int execlp(file)
-char *file;
-#endif
 {
-  register va_list argp;
-  register int result;
+/* Copy the arguments into an array; the va_list is not one (see _exec.c). */
+  va_list argp;
+  char *argv[MAX_NUM_ARGS + 1];
+  int n = 0;
 
-  va_start(argp, file);
-  result = execvp(file, (char **) argp);
+  va_start(argp, arg);
+  argv[n] = (char *) arg;
+  while (argv[n] != NULL) {
+	if (++n == MAX_NUM_ARGS) { va_end(argp); errno = E2BIG; return(-1); }
+	argv[n] = va_arg(argp, char *);
+  }
   va_end(argp);
-  return(result);
+  return(execvp(file, argv));
 }
 
 #ifdef _ANSI

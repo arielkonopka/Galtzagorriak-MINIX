@@ -1,11 +1,33 @@
-/* Process shadowing (fork without an MMU) - milestone 3.
+/* Process shadowing: fork() without an MMU (as on the Atari ST).
  *
- * Placeholder: no process forks before MM, FS and the C library exist, so
- * reaching any of these is a bug.
+ * Without an MMU a child cannot be moved to new memory after fork(): its
+ * stack and data hold absolute pointers.  So parent and child keep the
+ * *same* addresses.  Only one member of such a group of processes can have
+ * its image at those addresses at any time - the resident one.  Every other
+ * member's data+stack image is kept in a private buffer of the same size,
+ * its shadow (p_shadow, allocated by MM at fork time).  The text segment is
+ * never copied; it is shared by the whole group.
+ *
+ * A shadowed process that becomes runnable is put on SHADOW_Q instead of
+ * USER_Q.  The clock task calls unshadow() on it, which exchanges its image
+ * with that of the resident member.  Message copies and kernel I/O to a
+ * shadowed process are redirected to its shadow by cp_mess(), umap() and
+ * proc_vir2phys().
+ *
+ * A group is identified by the click address of its data segment.
+ *
+ * mkshadow()  - from SYS_FORK: the child shares the parent's addresses.
+ * unshadow()  - from the clock task: make a shadowed process resident.
+ * rmshadow()  - from SYS_XIT and SYS_FRESH (exec): the process leaves its
+ *               group; returns the memory MM must now free.
  */
 #include "../kernel.h"
 #include "../proc.h"
 #include <string.h>
+
+FORWARD _PROTOTYPE( phys_clicks image_clicks, (struct proc *p)		);
+FORWARD _PROTOTYPE( struct proc *other_member, (struct proc *p,
+							int resident)	);
 
 /*===========================================================================*
  *			copyclicks, zeroclicks, flipclicks		     *
@@ -45,22 +67,141 @@ phys_clicks c1, c2, n;
 }
 
 
-PUBLIC void mkshadow(p, c2)
+/*===========================================================================*
+ *				image_clicks				     *
+ *===========================================================================*/
+PRIVATE phys_clicks image_clicks(p)
 struct proc *p;
-phys_clicks c2;
 {
-  panic("mkshadow not implemented", proc_number(p));
+/* Size of the part of p's image that is shadowed: data, gap and stack. */
+  return p->p_map[S].mem_phys + p->p_map[S].mem_len - p->p_map[D].mem_phys;
 }
 
-PUBLIC void rmshadow(p, basep, sizep)
+
+/*===========================================================================*
+ *				other_member				     *
+ *===========================================================================*/
+PRIVATE struct proc *other_member(p, resident)
 struct proc *p;
-phys_clicks *basep, *sizep;
+int resident;			/* look for the resident one? */
 {
-  panic("rmshadow not implemented", proc_number(p));
+/* Find another live user process at the same addresses as p: the resident
+ * one, or any shadowed one.
+ */
+  struct proc *q;
+
+  for (q = BEG_USER_ADDR; q < END_PROC_ADDR; q++) {
+	if (q == p || (q->p_flags & P_SLOT_FREE)) continue;
+	if (q->p_map[D].mem_phys != p->p_map[D].mem_phys) continue;
+	if (resident ? q->p_shadow == 0 : q->p_shadow != 0) return q;
+  }
+  return NIL_PROC;
 }
 
+
+/*===========================================================================*
+ *				mkshadow				     *
+ *===========================================================================*/
+PUBLIC void mkshadow(parent, child, c2)
+struct proc *parent;		/* the process that forked */
+struct proc *child;		/* its new child, a copy of the parent slot */
+phys_clicks c2;			/* fresh memory from MM, image_clicks() big */
+{
+/* Give the new child the parent's addresses.  The child runs first: it
+ * takes over the resident image and the parent moves into the new memory.
+ * If the parent is itself shadowed at this point (another member of its
+ * group got the addresses while it waited for MM), the child starts out
+ * shadowed instead, with a copy of the parent's shadow.
+ */
+  phys_clicks n = image_clicks(parent);
+
+  if (parent->p_shadow == 0) {
+	copyclicks(parent->p_map[D].mem_phys, c2, n);
+	parent->p_shadow = c2;	/* parent is blocked in fork(): no queue */
+	child->p_shadow = 0;
+  } else {
+	copyclicks(parent->p_shadow, c2, n);
+	child->p_shadow = c2;
+  }
+}
+
+
+/*===========================================================================*
+ *				unshadow				     *
+ *===========================================================================*/
 PUBLIC void unshadow(p)
-struct proc *p;
+struct proc *p;			/* a runnable, shadowed process */
 {
-  panic("unshadow not implemented", proc_number(p));
+/* Swap p's image in, and the image of the resident member of its group
+ * out into p's shadow buffer.  Called by the clock task.
+ */
+  struct proc *r;
+  int p_ready, r_ready;
+
+  if (p->p_shadow == 0) return;
+  if ((r = other_member(p, TRUE)) == NIL_PROC)
+	panic("unshadow: group has no resident process", proc_number(p));
+  if (p->p_physio || r->p_physio) return;	/* try again later */
+
+  /* Both change queues, so take them off their current queues first. */
+  p_ready = (p->p_flags == 0);
+  r_ready = (r->p_flags == 0);
+  if (p_ready) lock_unready(p);
+  if (r_ready) lock_unready(r);
+
+  flipclicks(p->p_map[D].mem_phys, p->p_shadow, image_clicks(p));
+  r->p_shadow = p->p_shadow;
+  p->p_shadow = 0;
+  p->p_nflips++;
+
+  if (p_ready) lock_ready(p);
+  if (r_ready) lock_ready(r);
+}
+
+
+/*===========================================================================*
+ *				rmshadow				     *
+ *===========================================================================*/
+PUBLIC void rmshadow(p, basep, sizep)
+struct proc *p;			/* process that exits or execs */
+phys_clicks *basep, *sizep;	/* memory for MM to free */
+{
+/* Process p gives up its image.  If it is shadowed, its shadow buffer is
+ * freed.  If it is resident and the group has other members, one of them
+ * moves into the addresses and its shadow buffer is freed.  If it was the
+ * last member, the whole image is freed, including the text if it lies
+ * just below the data (as exec lays it out).
+ */
+  struct proc *q;
+  phys_clicks n = image_clicks(p);
+  int q_ready;
+
+  *basep = *sizep = 0;
+  if (p->p_shadow != 0) {
+	*basep = p->p_shadow;
+	*sizep = n;
+	p->p_shadow = 0;
+	return;
+  }
+
+  if ((q = other_member(p, FALSE)) != NIL_PROC) {
+	q_ready = (q->p_flags == 0);
+	if (q_ready) lock_unready(q);
+	copyclicks(q->p_shadow, p->p_map[D].mem_phys, n);
+	*basep = q->p_shadow;
+	*sizep = n;
+	q->p_shadow = 0;
+	if (q_ready) lock_ready(q);
+	return;
+  }
+
+  /* Last member of the group. */
+  if (p->p_map[T].mem_len != 0 && p->p_map[T].mem_phys
+		+ p->p_map[T].mem_len == p->p_map[D].mem_phys) {
+	*basep = p->p_map[T].mem_phys;
+	*sizep = p->p_map[T].mem_len + n;
+  } else {
+	*basep = p->p_map[D].mem_phys;
+	*sizep = n;
+  }
 }

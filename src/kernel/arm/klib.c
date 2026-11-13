@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <minix/boot.h>
+#include <stdlib.h>
 #include <minix/callnr.h>
 #include <minix/com.h>
 #include "../proc.h"
@@ -18,6 +19,17 @@ PRIVATE u32_t kernel_stack[K_STACK_BYTES / sizeof(u32_t)]
 				__attribute__((aligned(8)));
 
 FORWARD _PROTOTYPE( void load_boot_images, (void) );
+FORWARD _PROTOTYPE( long env_number, (char *name) );
+
+extern struct bparam_s boot_parameters;		/* system.c */
+
+PRIVATE long env_number(name)
+char *name;
+{
+  char *v = k_getenv(name);
+
+  return v == NIL_PTR ? 0 : strtol(v, (char **) NULL, 10);
+}
 
 /*===========================================================================*
  *				cstart					     *
@@ -43,7 +55,29 @@ PUBLIC void cstart()
   SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;
   SCB_SHCSR |= SHCSR_ENABLES;
 
+  /* MPU: code (flash) is read-only for everyone, so stray writes fault
+   * (on QEMU the "flash" is RAM and would silently be overwritten).
+   * Everything else uses the default map for now.
+   */
+  MPU_RNR = 0;
+  MPU_RBAR = (u32_t) _stext & ~0x7FFFFu;
+  MPU_RASR = MPU_RASR_AP_RO_RO | (18 << 1) | MPU_RASR_ENABLE; /* 2^19 */
+  /* SRAM (256 KB) read/write and executable for everyone: user programs
+   * run from RAM.  Unprivileged code gets nothing else - no peripherals.
+   */
+  MPU_RNR = 1;
+  MPU_RBAR = (u32_t) _ram_start & ~0x3FFFFu;
+  MPU_RASR = MPU_RASR_AP_RW_RW | (17 << 1) | MPU_RASR_ENABLE; /* 2^18 */
+  MPU_CTRL = MPU_CTRL_PRIVDEFENA | MPU_CTRL_ENABLE;
+  __asm volatile ("dsb; isb");
+
   load_boot_images();
+
+  /* Boot parameters, as the boot monitor would pass them on the PC. */
+  boot_parameters.bp_rootdev = env_number("rootdev");
+  boot_parameters.bp_ramimagedev = env_number("ramimagedev");
+  boot_parameters.bp_ramsize = env_number("ramsize");
+  boot_parameters.bp_processor = 0;
 }
 
 
@@ -100,17 +134,30 @@ int t;
 	dbase = (phys_bytes) _ram_start >> CLICK_SHIFT;
 	dlen = (((phys_bytes) _ebss + CLICK_SIZE - 1) >> CLICK_SHIFT) - dbase;
 	rp->p_reg.control = INIT_TASK_CONTROL;
+	/* Tasks run inside the kernel: the stack is part of D. */
+	rp->p_map[S].mem_phys = rp->p_map[S].mem_vir = dbase + dlen;
+	rp->p_map[S].mem_len = 0;
   } else {
+	/* A server: data and bss, then a gap for brk(), then the stack at the
+	 * top, one click to start with.  (On the PC the stack lived inside D
+	 * and MM did no checking for these processes, so INIT's heap could
+	 * grow into its stack unnoticed.)  bi->stack_size covers gap + stack.
+	 */
+	phys_clicks total;
+
 	bi = boot_image[t];
 	tbase = bi->text_start >> CLICK_SHIFT;
 	tlen = (bi->text_size + CLICK_SIZE - 1) >> CLICK_SHIFT;
 	dbase = bi->data_start >> CLICK_SHIFT;
-	dlen = (bi->data_size + bi->bss_size + bi->stack_size
+	dlen = (bi->data_size + bi->bss_size + CLICK_SIZE - 1) >> CLICK_SHIFT;
+	total = (bi->data_size + bi->bss_size + bi->stack_size
 					+ CLICK_SIZE - 1) >> CLICK_SHIFT;
+	if (total < dlen + 2) panic("server stack too small", t);
+	rp->p_map[S].mem_phys = rp->p_map[S].mem_vir = dbase + total - 1;
+	rp->p_map[S].mem_len = 1;
 	rp->p_reg.pc = bi->entry;
-	/* Stack at the top of the data segment, one word left for crtso's
-	 * argc as on the PC. */
-	rp->p_reg.sp = ((dbase + dlen) << CLICK_SHIFT) - 2 * sizeof(reg_t);
+	/* One word left for crtso's argc (0) as on the PC. */
+	rp->p_reg.sp = ((dbase + total) << CLICK_SHIFT) - 2 * sizeof(reg_t);
 	rp->p_reg.control = INIT_CONTROL;
 	memcpy(rp->p_name, bi->name, sizeof bi->name);
 	rp->p_name[sizeof bi->name - 1] = 0;
@@ -119,9 +166,6 @@ int t;
   rp->p_map[T].mem_len = tlen;
   rp->p_map[D].mem_phys = rp->p_map[D].mem_vir = dbase;
   rp->p_map[D].mem_len = dlen;
-  /* The stack lives inside D: S is an empty segment at its end. */
-  rp->p_map[S].mem_phys = rp->p_map[S].mem_vir = dbase + dlen;
-  rp->p_map[S].mem_len = 0;
   rp->p_reg.psw = INIT_PSW;
 }
 
@@ -291,6 +335,13 @@ unsigned exc;
 	fault_regs(cfsr, hfsr);
 	panic("exception in system code", proc_number(rp));
   }
+  /* Report it (the PC kernel is silent here, but a one-line note costs
+   * nothing and saves a lot of guessing on a machine without an MMU). */
+  printf("%s[%d]: signal %d, pc=%08lx lr=%08lx addr=%08lx\n",
+	rp->p_name, proc_number(rp), sig, (unsigned long) rp->p_reg.pc,
+	(unsigned long) rp->p_reg.lr,
+	(unsigned long) ((cfsr & 0x80) ? SCB_MMFAR :
+			 (cfsr & 0x8000) ? SCB_BFAR : 0));
   cause_sig(proc_number(rp), sig);
 }
 
@@ -307,6 +358,15 @@ unsigned exc;
 	(unsigned long) frame[2], (unsigned long) frame[3],
 	(unsigned long) frame[4]);
   fault_regs(SCB_CFSR, SCB_HFSR);
+  if (k_booted) {
+	struct proc *rp = proc_ptr;
+
+	printf("current process %d (%s): r0=%08lx r1=%08lx r2=%08lx "
+		"pc=%08lx lr=%08lx\n", proc_number(rp), rp->p_name,
+		(unsigned long) rp->p_reg.retreg, (unsigned long) rp->p_reg.r1,
+		(unsigned long) rp->p_reg.r2, (unsigned long) rp->p_reg.pc,
+		(unsigned long) rp->p_reg.lr);
+  }
   wreboot(RBT_PANIC);
 }
 
@@ -334,7 +394,9 @@ int how;
 /*===========================================================================*
  *				k_getenv				     *
  *===========================================================================*/
-PRIVATE char k_environ[] = "rootdev=0\0";	/* boot parameters */
+/* Boot parameters.  The root file system is the first partition of the SD
+ * card: /dev/hd1 = (major 3, minor 1) = 0x0301 = 769.  No RAM disk. */
+PRIVATE char k_environ[] = "rootdev=769\0ramimagedev=769\0ramsize=0\0";
 
 PUBLIC char *k_getenv(name)
 char *name;

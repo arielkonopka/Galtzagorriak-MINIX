@@ -30,6 +30,17 @@
 #define SCB_MMFAR	REG32(0xE000ED34)
 #define SCB_BFAR	REG32(0xE000ED38)
 
+/* MPU (PMSAv7) */
+#define MPU_CTRL	REG32(0xE000ED94)
+#define MPU_RNR		REG32(0xE000ED98)
+#define MPU_RBAR	REG32(0xE000ED9C)
+#define MPU_RASR	REG32(0xE000EDA0)
+#define MPU_CTRL_ENABLE		0x1
+#define MPU_CTRL_PRIVDEFENA	0x4
+#define MPU_RASR_ENABLE		0x1
+#define MPU_RASR_AP_RO_RO	(6u << 24)	/* read-only, priv and user */
+#define MPU_RASR_AP_RW_RW	(3u << 24)	/* read/write, priv and user */
+
 #define AIRCR_VECTKEY	0x05FA0000
 #define AIRCR_SYSRESETREQ 0x4
 #define CCR_DIV_0_TRP	0x10

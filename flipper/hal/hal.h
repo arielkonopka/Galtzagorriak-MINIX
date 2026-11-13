@@ -52,6 +52,15 @@ void hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes */
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
 
+/* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
+ * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
+ * All return 0 on success, -1 on error. */
+#define HAL_SECTOR_SIZE 512
+int hal_disk_init(void);		/* (re)detect and initialise the card */
+uint32_t hal_disk_sectors(void);	/* capacity, valid after init */
+int hal_disk_read(uint32_t sector, void *buf, unsigned count);
+int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
+
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */
 void hal_halt(int status) __attribute__((noreturn));
