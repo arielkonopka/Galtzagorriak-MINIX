@@ -176,7 +176,10 @@ PORTCMDS := mkpart pkg
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(ZMODEM) $(GUIAPPS)
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(GUIAPPS)
+# (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
+# MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
+# tools/flsend use their own CRC-checked transfer instead.)
 # Apps: built like commands but shipped as packages (flipper/apps).
 APPS	:= hello
 # Other names of multi-call programs, installed as copies.
@@ -193,7 +196,8 @@ CHMEM_ls     := 12288
 CHMEM_rev    := 8192
 CHMEM_tee    := 8192
 CHMEM_m2test := 16384
-CHMEM_pkg    := 16384
+CHMEM_pkg    := 8192	# fork copies it: keep small
+CHMEM_launcher := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%

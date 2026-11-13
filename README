@@ -28,8 +28,10 @@ WHAT WORKS (in QEMU and on a real Flipper Zero)
 
 Packages: "pkg install file.tar", "pkg remove name", "pkg list", "pkg
 info name", "pkg files name".  Packages are made on the PC with
-flipper/tools/mkpkg.py (see flipper/minix.mk, target pkgs) and sent over
-the USB console with ZMODEM (rz on the Flipper, sz on the PC).
+flipper/tools/mkpkg.py (see flipper/minix.mk, target pkgs).  To install
+them from the PC: log in as root on the USB console, close the terminal,
+then run  flipper/tools/flsend file.tar ...  (it types "pkg get" and sends
+the files with a CRC check).
 
 Planned: LCD terminal with an on-screen keyboard, and
 the Flipper hardware (GPIO, LED/vibro/speaker, infrared, Sub-GHz radio,

@@ -20,6 +20,7 @@ PRIVATE char ibuf[CONS_IN_BYTES];
 PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */
 PRIVATE int uart_irq;
 PRIVATE int usb_irq = -1;
+PRIVATE int uart_held;		/* UART receive interrupt off: ibuf full */
 
 FORWARD _PROTOTYPE( void cons_write, (tty_t *tp)			);
 FORWARD _PROTOTYPE( void cons_echo, (tty_t *tp, int c)			);
@@ -124,15 +125,19 @@ PRIVATE int cons_int(irq)
 int irq;
 {
 /* Serial input interrupt: move characters into the ring buffer and wake the
- * TTY task.  Characters that do not fit are dropped.
+ * TTY task.  When the buffer is full the receive interrupt is switched off
+ * and the rest stays in the UART, which holds the sender back (QEMU does;
+ * a real line overruns); cons_read() switches it on again.
  */
   int c;
 
-  while ((c = hal_uart_getc()) >= 0) {
-	if (ihead - itail < CONS_IN_BYTES) {
-		ibuf[ihead % CONS_IN_BYTES] = c;
-		ihead++;
-	}
+  while (ihead - itail < CONS_IN_BYTES && (c = hal_uart_getc()) >= 0) {
+	ibuf[ihead % CONS_IN_BYTES] = c;
+	ihead++;
+  }
+  if (ihead - itail >= CONS_IN_BYTES) {
+	hal_uart_rx_irq(0);
+	uart_held = TRUE;
   }
   tty_table[0].tty_events = 1;
   force_timeout();
@@ -162,6 +167,28 @@ tty_t *tp;
 	 * byte). */
 	if (in_process(tp, &c, 1) == 0) break;
 	itail++;
+  }
+  if (uart_held && ihead - itail < CONS_IN_BYTES) {
+	/* Take what waits in the UART ourselves: switching the interrupt
+	 * back on does not necessarily raise it again for a byte that is
+	 * already there.
+	 */
+	int ch;
+
+	/* Interrupt on first, then drain: a byte arriving in between still
+	 * raises it (the other way round it could be stranded for good). */
+	lock();
+	uart_held = FALSE;
+	hal_uart_rx_irq(1);
+	while (ihead - itail < CONS_IN_BYTES && (ch = hal_uart_getc()) >= 0) {
+		ibuf[ihead % CONS_IN_BYTES] = ch;
+		ihead++;
+	}
+	if (ihead - itail >= CONS_IN_BYTES) {
+		hal_uart_rx_irq(0);
+		uart_held = TRUE;
+	}
+	unlock();
   }
 }
 
@@ -216,16 +243,11 @@ int c;
 PRIVATE void out_char(c)
 int c;
 {
-/* Output post-processing is done here like on the PC console: NL -> CR NL. */
-  static char crlf[2] = { '\r', '\n' };
+/* Send one byte as it is.  NL -> CR NL is TTY's job (OPOST/ONLCR), so
+ * binary output in raw mode (rz/sz) passes untouched.
+ */
   char ch = c;
 
-  if (c == '\n') {
-	hal_uart_putc('\r');
-	hal_uart_putc('\n');
-	usb_out(crlf, 2);
-	return;
-  }
   hal_uart_putc(c);
   usb_out(&ch, 1);
 }
@@ -238,5 +260,6 @@ PUBLIC void putk(c)
 int c;
 {
 /* Kernel printf() output.  c == 0 means flush, a no-op here. */
+  if (c == '\n') out_char('\r');
   if (c != 0) out_char(c);
 }

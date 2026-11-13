@@ -758,7 +758,10 @@ int count;			/* number of input characters */
 	if (tp->tty_termios.c_iflag & ISTRIP) ch &= 0x7F;
 
 	/* Input extensions? */
-	if (tp->tty_termios.c_lflag & IEXTEN) {
+	/* LNEXT and REPRINT only make sense for line editing: in raw mode
+	 * they ate ^V and ^R from binary data (ZMODEM).  (Was IEXTEN only.)
+	 */
+	if ((tp->tty_termios.c_lflag & (IEXTEN|ICANON)) == (IEXTEN|ICANON)) {
 
 		/* Previous character was a character escape? */
 		if (tp->tty_escaped) {

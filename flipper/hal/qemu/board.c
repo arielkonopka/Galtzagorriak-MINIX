@@ -75,8 +75,13 @@ int hal_uart_irq(void)
 
 void hal_uart_rx_irq(int on)
 {
-	if (on) UART_CTRL |= CTRL_RXINT;
-	else UART_CTRL &= ~CTRL_RXINT;
+	if (on) {
+		UART_CTRL |= CTRL_RXINT;
+	} else {
+		UART_CTRL &= ~CTRL_RXINT;
+		UART_INT = INT_RX;	/* the CMSDK UART keeps a raised
+					 * interrupt until it is cleared */
+	}
 }
 
 void hal_lcd_init(void)

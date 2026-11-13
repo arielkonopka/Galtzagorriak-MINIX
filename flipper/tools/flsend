@@ -5,29 +5,34 @@ install them.
 Usage: flsend [-p /dev/ttyACM0] file.tar ...
 
 Log in as root on the Flipper's console first and leave it at the shell
-prompt.  flsend types "pkg get", which starts rz on the Flipper, sends the
-files with sz (ZMODEM, from the lrzsz package) and shows pkg's output.
-Needs: sudo apt install lrzsz
+prompt.  flsend types "pkg get", then sends each file as
+
+    FILE name size crc32\\n  <size raw bytes>
+
+and waits for "OK" (or "BAD ...", then it resends, up to 3 times).  The
+console link has end-to-end flow control, so the files can be sent as fast
+as the Flipper takes them.  Package names must be at most 13 characters
+(MINIX file names are 14).
 """
 import argparse
 import os
 import select
-import shutil
-import subprocess
 import sys
 import termios
 import time
+import zlib
 
 
-def drain(fd, secs, until=None):
+def readuntil(fd, marks, secs):
     out = b""
     end = time.time() + secs
     while time.time() < end:
         if select.select([fd], [], [], 0.1)[0]:
             out += os.read(fd, 4096)
-            if until and until in out:
-                break
-    return out
+            for m in marks:
+                if m in out:
+                    return out, m
+    return out, None
 
 
 def main():
@@ -35,12 +40,12 @@ def main():
     ap.add_argument("-p", "--port", default="/dev/ttyACM0")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
-    sz = shutil.which("sz") or shutil.which("lsz")
-    if not sz:
-        sys.exit("flsend: sz not found (sudo apt install lrzsz)")
     for f in a.files:
+        name = os.path.basename(f)
         if not os.path.isfile(f):
             sys.exit(f"flsend: {f}: no such file")
+        if len(name) > 13 or not name.endswith(".tar"):
+            sys.exit(f"flsend: {name}: need a .tar name of at most 13 chars")
 
     fd = os.open(a.port, os.O_RDWR | os.O_NOCTTY)
     t = termios.tcgetattr(fd)
@@ -49,17 +54,39 @@ def main():
     t[3] = 0
     t[2] |= termios.CLOCAL | termios.CREAD
     termios.tcsetattr(fd, termios.TCSANOW, t)
-    drain(fd, 0.5)
+    readuntil(fd, [], 0.5)
     os.write(fd, b"pkg get\r")
-    head = drain(fd, 5, until=b"waiting for packages")
-    sys.stdout.write(head.decode("latin-1").replace("\r", ""))
-    if b"waiting for packages" not in head:
-        sys.exit("\nflsend: no 'pkg get' prompt; are you logged in as root?")
-    r = subprocess.run([sz, "-b", "-e"] + a.files, stdin=fd, stdout=fd)
-    tail = drain(fd, 20, until=b"# ")
-    sys.stdout.write(tail.decode("latin-1").replace("\r", ""))
+    out, m = readuntil(fd, [b"GPKG READY\n"], 10)
+    if not m:
+        sys.stdout.write(out.decode("latin-1"))
+        sys.exit("\nflsend: no answer from 'pkg get'; logged in as root?")
+
+    status = 0
+    for f in a.files:
+        data = open(f, "rb").read()
+        name = os.path.basename(f)
+        hdr = f"FILE {name} {len(data)} {zlib.crc32(data):08x}\n".encode()
+        for attempt in range(3):
+            t0 = time.time()
+            os.write(fd, hdr)
+            for i in range(0, len(data), 4096):
+                os.write(fd, data[i:i + 4096])
+            reply, m = readuntil(fd, [b"OK\n", b"BAD"], 60)
+            if m == b"OK\n":
+                dt = time.time() - t0
+                print(f"  {name}: {len(data)} bytes sent "
+                      f"({len(data) / dt / 1024:.1f} KB/s)")
+                break
+            print(f"  {name}: {reply.decode('latin-1').strip()!r}, resending")
+            time.sleep(0.5)
+        else:
+            print(f"  {name}: failed")
+            status = 1
+    os.write(fd, b"DONE\n")
+    out, _ = readuntil(fd, [b"# "], 60)
+    sys.stdout.write(out.decode("latin-1").replace("\r", ""))
     os.close(fd)
-    sys.exit(r.returncode)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

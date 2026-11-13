@@ -35,8 +35,10 @@ A small but complete distribution with a package manager, to add apps:
   holding `CONTROL/control` (Package, Version, Depends, Description),
   optional `CONTROL/postinst`/`prerm`, and the files relative to `/`.
   Database in `/usr/var/pkg`.  Built on the PC by `flipper/tools/mkpkg.py`.
-- **Transport**: over the USB serial console with ZMODEM (MINIX's rz/sz;
-  `sz` from screen/minicom on the PC); Bluetooth serial later as another
+- **Transport**: `tools/flsend file.tar` on the PC types `pkg get` on the
+  USB console and sends each file as `FILE name size crc32` + raw bytes;
+  pkg answers OK/BAD (resend).  ~26 KB/s in QEMU.  (ZMODEM was tried: the
+  1990 MINIX rz NAKs today's lrzsz.)  Bluetooth serial later as another
   link.
 
 ## Licensing
@@ -261,6 +263,11 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
   and < 4 GB.
 - `init` sends `/etc/rc` output to `/dev/log`, which was missing from the
   root file system (rc output vanished).
+- `src/kernel/tty.c`: LNEXT (^V) and REPRINT (^R) were also processed in
+  raw mode (IEXTEN only), eating those bytes from binary transfers.
+- Console flow control end to end (USB endpoint NAK, console ring, raw TTY
+  input kept, UART interrupt held); the CR inserted before every LF in the
+  console driver corrupted raw output and was moved to kernel printf only.
 - `src/fs/read.c`: block devices were given a "size" of `LONG_MAX`, so every
   read past 2 GB returned end-of-file; now `ULONG_MAX`.
 - The disk driver no longer uses 32-bit byte offsets for the sector number

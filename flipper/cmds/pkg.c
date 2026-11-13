@@ -5,9 +5,8 @@
  *	pkg list		list installed packages
  *	pkg info name		show a package's control file
  *	pkg files name		list the files a package installed
- *	pkg get			receive packages over the console with ZMODEM
- *				(rz) and install them; on the PC run
- *				flipper/tools/flsend file.tar ...
+ *	pkg get			receive packages over the console and install
+ *				them; on the PC: flipper/tools/flsend file.tar
  *
  * A package is a tar archive (name_version.tar, made on the PC with
  * flipper/tools/mkpkg.py) holding its files relative to / and a CONTROL
@@ -31,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define DB	"/usr/var/pkg/info"
@@ -151,43 +151,52 @@ static int in_list(const char *list, const char *word)
 	return 0;
 }
 
-/* Write the regular files under dir (minus CONTROL) to list, as paths
- * relative to /.  path holds the current directory relative to dir. */
-static void walk(FILE *list, const char *dir, char *path, size_t len)
+/* Write the files in the archive (minus CONTROL and directories) to list,
+ * as absolute paths, using "tar tf": no directory walking, which would need
+ * a buffer per directory level (memory is tight). */
+static int file_list(const char *archive, const char *listpath)
 {
-	char full[PATH_MAX];
-	DIR *d;
-	struct dirent *e;
-	struct stat st;
+	char raw[PATH_MAX], line[PATH_MAX];
+	char *argv[4];
+	FILE *in, *out;
 	size_t n;
+	pid_t pid;
+	int st, fd;
 
-	sprintf(full, "%s%s", dir, path);
-	if ((d = opendir(full)) == NULL) die("cannot read directory", full);
-	while ((e = readdir(d)) != NULL) {
-		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
-			continue;
-		if (len == 0 && strcmp(e->d_name, "CONTROL") == 0) continue;
-		n = strlen(e->d_name);
-		if (len + 1 + n >= PATH_MAX - strlen(dir) - 1) continue;
-		path[len] = '/';
-		strcpy(path + len + 1, e->d_name);
-		sprintf(full, "%s%s", dir, path);
-		if (stat(full, &st) == 0) {
-			if (S_ISDIR(st.st_mode))
-				walk(list, dir, path, len + 1 + n);
-			else
-				fprintf(list, "%s\n", path);
-		}
-		path[len] = 0;
+	sprintf(raw, "%s.raw", listpath);
+	fflush(stdout);
+	if ((pid = fork()) < 0) return -1;
+	if (pid == 0) {
+		if ((fd = creat(raw, 0600)) < 0) _exit(127);
+		dup2(fd, 1);
+		dup2(fd, 2);		/* MINIX tar lists on stderr */
+		close(fd);
+		argv[0] = "/bin/tar"; argv[1] = "tf"; argv[2] = (char *) archive;
+		argv[3] = NULL;
+		execv(argv[0], argv);
+		_exit(127);
 	}
-	closedir(d);
+	while (waitpid(pid, &st, 0) < 0) if (errno != EINTR) return -1;
+	if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) { unlink(raw); return -1; }
+
+	if ((in = fopen(raw, "r")) == NULL) return -1;
+	if ((out = fopen(listpath, "w")) == NULL) { fclose(in); return -1; }
+	while (fgets(line, sizeof line, in) != NULL) {
+		if ((n = strlen(line)) > 0 && line[n - 1] == '\n') line[--n] = 0;
+		if (n == 0 || line[n - 1] == '/') continue;	/* directory */
+		if (strncmp(line, "CONTROL/", 8) == 0) continue;
+		fprintf(out, "/%s\n", line[0] == '/' ? line + 1 : line);
+	}
+	fclose(in);
+	fclose(out);
+	unlink(raw);
+	return 0;
 }
 
 static int install(const char *file)
 {
 	char abs[PATH_MAX], path[PATH_MAX], rel[PATH_MAX], buf[PATH_MAX];
 	char *argv[4];
-	FILE *list;
 	char *dep, *p;
 	int upgrade;
 
@@ -226,10 +235,7 @@ static int install(const char *file)
 								ctl_version);
 
 	dbpath(buf, ctl_name, "list");
-	if ((list = fopen(buf, "w")) == NULL) die("cannot write", buf);
-	rel[0] = 0;
-	walk(list, tmp, rel, 0);
-	fclose(list);
+	if (file_list(abs, buf) < 0) die("cannot list the files of", file);
 
 	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
 	if (run("/", argv) != 0) die("unpacking into / failed", NULL);
@@ -341,21 +347,120 @@ static int cat(const char *name, const char *ext)
 }
 
 #define INCOMING TMPDIR "/incoming"
+#define MAXPKG	(4L * 1024 * 1024)	/* largest package accepted */
+
+/* CRC-32 (IEEE 802.3, as Python's zlib.crc32), bitwise: no table. */
+static unsigned long crc32_update(unsigned long crc, unsigned char *p, int n)
+{
+	int k;
+
+	crc = ~crc;
+	while (n-- > 0) {
+		crc ^= *p++;
+		for (k = 0; k < 8; k++)
+			crc = (crc >> 1) ^ (0xEDB88320UL & (0 - (crc & 1)));
+	}
+	return ~crc;
+}
+
+/* Read one line (without the newline) from fd 0; -1 on EOF. */
+static int get_line(char *buf, int len)
+{
+	int n = 0;
+	char c;
+
+	while (read(0, &c, 1) == 1) {
+		if (c == '\n') { buf[n] = 0; return n; }
+		if (c == '\r') continue;
+		if (n < len - 1) buf[n++] = c;
+	}
+	return -1;
+}
+
+static void say(const char *s)
+{
+	write(1, s, strlen(s));
+}
+
+static int good_name(const char *s)
+{
+	int n = strlen(s);
+
+	if (n < 5 || n > 13 || strcmp(s + n - 4, ".tar") != 0) return 0;
+	for (; *s != 0; s++)
+		if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z')
+		      || (*s >= '0' && *s <= '9') || *s == '.' || *s == '_'
+		      || *s == '-' || *s == '+')) return 0;
+	return 1;
+}
+
+/* Receive files sent by flipper/tools/flsend over the console:
+ *	host: "FILE name size crc32\n" + size raw bytes
+ *	pkg:  "OK\n" (stored) or "BAD ...\n" (host may resend)
+ *	host: "DONE\n"
+ * The console is in raw mode meanwhile; the USB and TTY flow control make
+ * sure no byte is lost, the CRC checks that none was changed.
+ */
+static int receive(void)
+{
+	struct termios old, raw;
+	char line[96], name[16], path[PATH_MAX];
+	unsigned char buf[512];
+	unsigned long size, crc, want, left;
+	int fd, n, files = 0;
+
+	if (tcgetattr(0, &old) < 0) die("stdin is not a terminal", NULL);
+	raw = old;
+	raw.c_iflag = 0;
+	raw.c_oflag = 0;
+	raw.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	raw.c_cc[VMIN] = 1;
+	raw.c_cc[VTIME] = 0;
+	tcsetattr(0, TCSANOW, &raw);
+	mkdir(INCOMING, 0700);
+	say("GPKG READY\n");
+
+	while (get_line(line, sizeof line) >= 0) {
+		if (strcmp(line, "DONE") == 0) break;
+		if (sscanf(line, "FILE %15s %lu %lx", name, &size, &want) != 3
+		    || !good_name(name) || size > MAXPKG) {
+			say("BAD header\n");
+			continue;
+		}
+		sprintf(path, "%s/%s", INCOMING, name);
+		if ((fd = creat(path, 0600)) < 0) { say("BAD create\n"); continue; }
+		crc = 0;
+		for (left = size; left > 0; left -= n) {
+			n = left < sizeof buf ? (int) left : (int) sizeof buf;
+			if ((n = read(0, buf, n)) <= 0) break;
+			crc = crc32_update(crc, buf, n);
+			if (write(fd, buf, n) != n) { n = -1; break; }
+		}
+		close(fd);
+		if (left != 0 || crc != want) {
+			unlink(path);
+			say(left != 0 ? "BAD short\n" : "BAD crc\n");
+			continue;
+		}
+		say("OK\n");
+		files++;
+	}
+	tcsetattr(0, TCSANOW, &old);
+	return files;
+}
 
 static int get(void)
 {
-	char *argv[3], path[PATH_MAX];
+	char path[PATH_MAX];
 	DIR *d;
 	struct dirent *e;
 	size_t n;
 	int r = 0, count = 0;
 
-	mkdir(INCOMING, 0700);
-	printf("pkg: waiting for packages (ZMODEM); on the PC: flsend file.tar\n");
-	argv[0] = "/bin/rz"; argv[1] = "-b"; argv[2] = NULL;	/* binary */
-	fflush(stdout);
-	if (run(INCOMING, argv) != 0) fprintf(stderr, "pkg: rz failed\n");
-
+	if (receive() == 0) {
+		fprintf(stderr, "pkg: no packages received\n");
+		return 1;
+	}
 	if ((d = opendir(INCOMING)) == NULL) die("cannot read", INCOMING);
 	while ((e = readdir(d)) != NULL) {
 		n = strlen(e->d_name);
@@ -366,7 +471,6 @@ static int get(void)
 		count++;
 	}
 	closedir(d);
-	if (count == 0) { fprintf(stderr, "pkg: no packages received\n"); r = 1; }
 	return r;
 }
 
