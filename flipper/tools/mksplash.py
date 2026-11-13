@@ -49,11 +49,19 @@ def main():
     ap.add_argument("args", nargs="+", help="[IMAGE] OUT.c")
     ap.add_argument("--title", default="GALTZAGORRIAK MINIX")
     ap.add_argument("--preview")
+    ap.add_argument("--crop", help="x0,y0,x1,y1 of the picture to use first")
+    ap.add_argument("--threshold", type=int,
+                    help="plain threshold (0-255) instead of dithering; "
+                    "better for line art")
+    ap.add_argument("--gamma", type=float, default=1.0,
+                    help="<1 lightens the picture before dithering")
     a = ap.parse_args()
     src, out = (a.args + [None])[:2] if len(a.args) == 2 else (None, a.args[0])
 
     if src:
         pic = Image.open(src).convert("L")
+        if a.crop:
+            pic = pic.crop(tuple(int(v) for v in a.crop.split(",")))
         w, h = pic.size
         if w / h > 2:                      # crop to 2:1 around the centre
             nw = 2 * h
@@ -63,8 +71,12 @@ def main():
             pic = pic.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
         pic = pic.resize((W, H), Image.LANCZOS)
         pic = ImageOps.autocontrast(pic, cutoff=2)
-        img = pic.convert("1")             # Floyd-Steinberg dithering
-        img = img.convert("L")
+        if a.gamma != 1.0:
+            pic = pic.point(lambda v: int(255 * (v / 255) ** a.gamma))
+        if a.threshold is not None:
+            img = pic.point(lambda v: 0 if v < a.threshold else 255)
+        else:
+            img = pic.convert("1").convert("L")    # Floyd-Steinberg
     else:
         img = Image.new("L", (W, H), 255)
 

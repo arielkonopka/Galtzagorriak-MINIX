@@ -77,6 +77,13 @@ $(MB)/kernel.elf: $(KOBJ) $(MB)/libc.a ld/$(BOARD).ld ld/sections.ld
 	   $(KOBJ) $(MB)/libc.a -lgcc -o $@
 	$(SIZE) $@
 
+# Boot screen (shown from kernel start until the launcher takes the LCD).
+SPLASH_ART  := art/galtzagorri.png
+SPLASH_OPTS := --crop 240,100,900,430 --threshold 110
+hal/common/splash.c: $(SPLASH_ART) tools/mksplash.py
+	python3 -I tools/mksplash.py $(SPLASH_ART) $@ $(SPLASH_OPTS) \
+	   --preview art/splash-preview.png
+
 #############################################################################
 # Boot servers: MM, FS and INIT.  Each links at the flash and RAM addresses
 # that follow the image before it: kernel -> mm -> fs -> init.
