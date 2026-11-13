@@ -21,8 +21,10 @@ A small but complete distribution with a package manager, to add apps:
   root partition only; a first-boot script creates the rest below 4 GiB:
   1 `/` 32 MB, 2 `/usr` ~2 GB (packages), 3 swap 64 MB (reserved for future
   process swapping), 4 `/home` the remainder.
-- **Status (QEMU)**: first boot (partition, reboot, mkfs, mount), `pkg`
-  install/list/info/files/remove of the example `hello` package all work.
+- **Status (real Flipper, 2026-11-13)**: boot screen, first boot
+  (partition, reboot, mkfs, mount: / 32 MB, /usr 2 GB, swap 64 MB, /home
+  1.6 GB on a 3.7 GB card), and `pkg install` + running `hello` all work
+  on the device.
   The art theme follows the Basque galtzagorriak (helpful gnome-like
   spirits); it belongs to the LCD/menu milestone.
 - **Packages**: opkg-style, kept tiny: `pkg` is a C program (a shell script
