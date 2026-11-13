@@ -158,9 +158,9 @@ static const struct cdc_config config_desc = {
 static const struct usb_string_descriptor lang_desc =
 	USB_ARRAY_DESC(USB_LANGID_ENG_US);
 static const struct usb_string_descriptor manuf_desc =
-	USB_STRING_DESC("MINIX");
+	USB_STRING_DESC("Galtzagorriak");
 static const struct usb_string_descriptor prod_desc =
-	USB_STRING_DESC("MINIX 2.0 on Flipper Zero");
+	USB_STRING_DESC("Galtzagorriak MINIX on Flipper Zero");
 static const struct usb_string_descriptor *const dtable[] = {
 	&lang_desc, &manuf_desc, &prod_desc,
 };

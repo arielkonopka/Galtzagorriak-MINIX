@@ -1,0 +1,4 @@
+# Poor man's File System Table (sourced by /etc/rc).
+root=/dev/hd1
+usr=/dev/hd2
+home=/dev/hd4

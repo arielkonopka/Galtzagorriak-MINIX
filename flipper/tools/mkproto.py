@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Expand @BINFILES@ in the root file system prototype.
 
-Usage: mkproto.py TEMPLATE OUT BINDIR "prog prog ..." "alias=prog ..."
+Usage: mkproto.py TEMPLATE OUT BINDIR "prog prog ..." "alias=prog ..." ["pkg.tar ..."]
 Each program becomes "name ---755 2 0 BINDIR/name"; aliases (other names
 of multi-call programs such as cp/mv/rm) are installed as copies."""
 import sys
 
-template, out, bindir, progs, aliases = sys.argv[1:]
+template, out, bindir, progs, aliases = sys.argv[1:6]
+pkgs = sys.argv[6].split() if len(sys.argv) > 6 else []
 lines = [f"      {p:<14} ---755 2 0 {bindir}/{p}" for p in progs.split()]
 for a in aliases.split():
     name, prog = a.split("=")
@@ -15,5 +16,7 @@ with open(template) as f:
     text = f.read()
 if "@BINFILES@" not in text:
     sys.exit(f"{template}: no @BINFILES@ line")
+pkglines = [f"      {p.split('/')[-1]:<14} ---644 0 0 {p}" for p in pkgs]
+text = text.replace("      @PKGFILES@", "\n".join(pkglines))
 with open(out, "w") as f:
     f.write(text.replace("      @BINFILES@", "\n".join(lines)))

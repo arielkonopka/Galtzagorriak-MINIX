@@ -234,6 +234,9 @@ def main():
     ap.add_argument("--inodes", type=int, default=0)
     ap.add_argument("--mbr")
     ap.add_argument("--root")
+    ap.add_argument("--disk-mb", type=int, default=0,
+                    help="with --mbr: total size of the disk image (sparse), "
+                    "e.g. the size of the SD card")
     ap.add_argument("--trim", action="store_true",
                     help="write only the used part (metadata + files); the "
                     "file system still has --blocks blocks.  For dd onto "
@@ -269,8 +272,13 @@ def main():
             f.write(mbr)
             f.write(b"\0" * ((start - 1) * 512))
             f.write(img)
-            f.truncate(start * 512 + blocks * BLOCK)
-        print(f"  {a.mbr}: MBR + partition 1 (type 0x81) at sector {start}")
+            if not a.trim:
+                f.truncate(start * 512 + blocks * BLOCK)
+            if a.disk_mb:
+                f.truncate(max(a.disk_mb * 1024 * 1024, f.tell()))
+        print(f"  {a.mbr}: MBR + partition 1 (type 0x81) at sector {start}"
+              + (f", disk {a.disk_mb} MB" if a.disk_mb else "")
+              + (" (trimmed: dd to the whole card)" if a.trim else ""))
 
 
 if __name__ == "__main__":

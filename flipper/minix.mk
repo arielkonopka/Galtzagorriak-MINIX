@@ -163,7 +163,13 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   printenv printroot pwd rev rmdir sed sleep sort split strings stty \
 	   su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
-UPROGS	:= sh halt m2test $(CMDS)
+# Commands written for the port (flipper/cmds).
+PORTCMDS := mkpart pkg
+# ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
+ZMODEM	:= rz sz
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(ZMODEM)
+# Apps: built like commands but shipped as packages (flipper/apps).
+APPS	:= hello
 # Other names of multi-call programs, installed as copies.
 ALIASES	:= mv=cp ln=cp cpdir=cp clone=cp [=test reboot=halt
 ALIASES	+= $(addsuffix =cp,rm)
@@ -178,6 +184,7 @@ CHMEM_ls     := 12288
 CHMEM_rev    := 8192
 CHMEM_tee    := 8192
 CHMEM_m2test := 16384
+CHMEM_pkg    := 16384
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
@@ -189,12 +196,20 @@ $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 $(MB)/cmd/m2test.o: m2/m2test.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
+$(MB)/cmd/port/%.o: cmds/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/%.o: $(MROOT)/src/commands/simple/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
 
 OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
+$(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
+$(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
 define user_prog
@@ -203,7 +218,20 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/srv/crtso.o $(MB)/libc.a ld/user
 	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user.ld -Wl,-Map=$$@.map \
 	   $(MB)/srv/crtso.o $(call objs_of,$(1)) $(MB)/libc.a -lgcc -o $$@
 endef
-$(foreach p,$(UPROGS),$(eval $(call user_prog,$(p))))
+$(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
+$(foreach p,$(UPROGS) $(APPS),$(eval $(call user_prog,$(p))))
+$(MB)/cmd/app/%.o: apps/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+
+# Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
+PKGDIR	:= $(MB)/pkgs
+PKGS	:= $(PKGDIR)/hello_1.0.tar
+$(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
+	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
+.PHONY: pkgs
+pkgs: $(PKGS)
 
 # Convert ELF -> MINIX a.out with the chmem value above (default 6 KB).
 $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk
@@ -213,23 +241,25 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
 # proto becomes one entry per program.
-$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py
+$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS)
 	@mkdir -p $(MB)
-	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)"
+	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
+	   "$(PKGS)"
+# The QEMU disk is as big as the SD card (sparse), so the first boot can
+# partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
 		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/fs.img --root . \
-	   --mbr $(MB)/disk.img
+	   --mbr $(MB)/disk.img --disk-mb $(CARD_MB)
 
-# Full-size root file system for the SD card partition, trimmed to the
-# part in use (~5 MB to write; the rest is free space in the bitmaps).
-# CARD_BLOCKS = partition size in KB: blockdev --getsize64 /dev/sdX1 / 1024.
-CARD_BLOCKS ?= 3871232
-CARD_INODES ?= 65535
+# SD card image: MBR + the 32 MB root partition, trimmed to the part in use.
+# Write it to the WHOLE card (dd of=/dev/sdX); the first boot adds /usr,
+# swap and /home in the rest (/etc/setup).
+CARD_MB	?= 3800
 $(MB)/card.img: $(MB)/proto tools/mkfsimg.py \
 		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
-	python3 -I tools/mkfsimg.py $(MB)/proto $@ --root . --trim \
-	   --blocks $(CARD_BLOCKS) --inodes $(CARD_INODES)
+	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/root.img --root . --trim \
+	   --mbr $@
 
 .PHONY: minix minix-run minix-flash libc disk card
 card: $(MB)/card.img

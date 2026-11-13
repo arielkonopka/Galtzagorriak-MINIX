@@ -1,0 +1,40 @@
+# /etc/setup - first-boot setup of the SD card, run by /etc/rc.
+#
+# The card arrives with only the root file system (partition 1, /dev/hd1).
+# Stage 1 adds the other partitions after it, below 4 GB, and reboots so the
+# kernel sees them; stage 2 makes the file systems.
+#	/dev/hd2  /usr   2 GB	programs and packages
+#	/dev/hd3  swap   64 MB	reserved
+#	/dev/hd4  /home  rest	your files
+
+if test ! -f /etc/.setup-parted
+then
+	echo "First boot: adding /usr (2 GB), swap (64 MB) and /home to the SD card."
+	mkpart /dev/hd0 81:2048 82:64 81:* || {
+		echo "setup: partitioning failed, starting without /usr and /home"
+		exit 1
+	}
+	>/etc/.setup-parted
+	sync
+	echo "Rebooting to use the new partitions."
+	reboot
+	exit 0
+fi
+
+echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
+mkfs /dev/hd2 && mkfs /dev/hd4 || {
+	echo "setup: mkfs failed"
+	exit 1
+}
+mount /dev/hd2 /usr && {
+	mkdir /usr/bin /usr/lib /usr/tmp /usr/var /usr/var/pkg /usr/var/pkg/info
+	chmod 1777 /usr/tmp
+	umount /dev/hd2
+}
+mount /dev/hd4 /home && {
+	mkdir /home/root
+	umount /dev/hd4
+}
+>/etc/.setup-done
+sync
+echo "First boot setup done."

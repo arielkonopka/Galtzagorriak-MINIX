@@ -1,6 +1,8 @@
-MINIX 2.0.0 FOR THE FLIPPER ZERO
+GALTZAGORRIAK MINIX - MINIX 2.0.0 FOR THE FLIPPER ZERO
 
-This tree is MINIX 2.0.0 ported to run bare-metal on the Flipper Zero
+Galtzagorriak MINIX is a small distribution of MINIX 2.0.0 for the Flipper
+Zero, named after the galtzagorriak, the small, helpful spirits of Basque
+mythology.  This tree is MINIX 2.0.0 ported to run bare-metal on the Flipper Zero
 (STM32WB55, ARM Cortex-M4, 64 MHz, 256 KB RAM, no MMU), replacing the
 Flipper firmware.  The root file system lives on the microSD card.  A QEMU
 target (mps2-an386, also a Cortex-M4) runs the same system for testing.
@@ -23,6 +25,11 @@ WHAT WORKS (in QEMU and on a real Flipper Zero)
   - Console on the Flipper's USB port (appears as /dev/ttyACM0 on the PC)
     and on the serial pins 13 TX / 14 RX (115200 8N1); QEMU: the terminal.
   - LCD boot messages, backlight, RGB LED, buttons.
+
+Packages: "pkg install file.tar", "pkg remove name", "pkg list", "pkg
+info name", "pkg files name".  Packages are made on the PC with
+flipper/tools/mkpkg.py (see flipper/minix.mk, target pkgs) and sent over
+the USB console with ZMODEM (rz on the Flipper, sz on the PC).
 
 Planned: LCD terminal with an on-screen keyboard, and
 the Flipper hardware (GPIO, LED/vibro/speaker, infrared, Sub-GHz radio,
@@ -48,10 +55,14 @@ Needs arm-none-eabi-gcc, python3, and qemu-system-arm or dfu-util.
 
 INSTALLING ON THE FLIPPER
 
-1. SD card: one MBR partition, type 81, starting at 1 MiB, ending below
-   4 GiB.  Write the file system image to it (this erases the partition):
+1. SD card: write the card image to the WHOLE card (this erases it):
 
-     sudo dd if=build/flipper/minix/fs.img of=/dev/sdX1 bs=1M conv=fsync
+     make BOARD=flipper minix card
+     sudo dd if=build/flipper/minix/card.img of=/dev/sdX bs=1M conv=fsync
+
+   It holds a partition table and the 32 MB root file system.  On the first
+   boot /etc/setup adds /usr (2 GB), a 64 MB swap area and /home (the rest,
+   up to 4 GB) and reboots once; this takes a minute or two.
 
 2. Flash: hold LEFT + BACK until the Flipper resets, release BACK and keep
    LEFT held to enter DFU mode, then

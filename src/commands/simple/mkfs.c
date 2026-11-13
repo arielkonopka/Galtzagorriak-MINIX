@@ -49,7 +49,11 @@
 #define BIN                  2
 #define BINGRP               2
 #define BIT_MAP_SHIFT       13
+#ifdef __ARM_ARCH
+#define N_BLOCKS         (4096L * 1024 - 1)	/* < 4 GB: 32-bit offsets */
+#else
 #define N_BLOCKS         (1024L * 1024)
+#endif
 #define N_BLOCKS16	  (128L * 1024)
 #define INODE_MAX       ((unsigned) 65535)
 
@@ -58,7 +62,14 @@
  * prefill MAX_INIT blocks.  (16-bit fsck can't check a file system larger
  * than N_BLOCKS16 anyway.)
  */
+#ifdef __ARM_ARCH
+/* Flipper: no room for a 128 KB map.  Blocks past MAX_INIT are simply read
+ * from the device; mkfs only writes metadata and the root directory there,
+ * which lie well below MAX_INIT unless the prototype holds many files. */
+#define MAX_INIT	 16384L
+#else
 #define MAX_INIT	 (sizeof(char *) == 2 ? N_BLOCKS16 : N_BLOCKS)
+#endif
 
 
 #ifdef DOS
@@ -1022,6 +1033,7 @@ block_t n;
   int w, s, mask, r;
 
   if (sizeof(char *) == 2 && n >= MAX_INIT) pexit("can't initialize past 128M");
+  if (n >= MAX_INIT) return(1);	/* not tracked: always read the device */
   w = n / 8;
   s = n % 8;
   mask = 1 << s;

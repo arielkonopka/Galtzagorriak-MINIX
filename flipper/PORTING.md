@@ -13,6 +13,28 @@ the console is the USB serial port (`/dev/ttyACM0` on the host).  Verified:
 boot after DFU, 64 MHz clock, SysTick, LCD, backlight + RGB LED (LP5562 on
 I2C1), buttons, USB CDC, SD card over SPI, file writes + sync.
 
+## Distribution: Galtzagorriak MINIX (decided 2026-11-13)
+
+A small but complete distribution with a package manager, to add apps:
+
+- **Card layout**: the image written to the card holds the MBR and a small
+  root partition only; a first-boot script creates the rest below 4 GiB:
+  1 `/` 32 MB, 2 `/usr` ~2 GB (packages), 3 swap 64 MB (reserved for future
+  process swapping), 4 `/home` the remainder.
+- **Status (QEMU)**: first boot (partition, reboot, mkfs, mount), `pkg`
+  install/list/info/files/remove of the example `hello` package all work.
+  The art theme follows the Basque galtzagorriak (helpful gnome-like
+  spirits); it belongs to the LCD/menu milestone.
+- **Packages**: opkg-style, kept tiny: `pkg` is a C program (a shell script
+  needed two ~35 KB shells at once and ran out of memory), (install,
+  remove, list, info, files) on MINIX tar; a package is `name_version.tar`
+  holding `CONTROL/control` (Package, Version, Depends, Description),
+  optional `CONTROL/postinst`/`prerm`, and the files relative to `/`.
+  Database in `/usr/var/pkg`.  Built on the PC by `flipper/tools/mkpkg.py`.
+- **Transport**: over the USB serial console with ZMODEM (MINIX's rz/sz;
+  `sz` from screen/minicom on the PC); Bluetooth serial later as another
+  link.
+
 ## Licensing
 
 - MINIX 2.0.0: `src/LICENSE` in this tree is the original 1997 Prentice-Hall
@@ -229,6 +251,12 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - `src/commands/simple/cp.c`: a 32 KB buffer on the stack (fine on a PC);
   ed's 8 KB line buffers and sort's 20 KB work area likewise sized down
   for ARM.
+- `src/commands/simple/mkfs.c`: on 32-bit machines the "already
+  initialised" bit map (128 KB of bss) was indexed past its end for file
+  systems over 1 GB, and the block limit was 1 GB; now 16 K tracked blocks
+  and < 4 GB.
+- `init` sends `/etc/rc` output to `/dev/log`, which was missing from the
+  root file system (rc output vanished).
 - `src/fs/read.c`: block devices were given a "size" of `LONG_MAX`, so every
   read past 2 GB returned end-of-file; now `ULONG_MAX`.
 - The disk driver no longer uses 32-bit byte offsets for the sector number

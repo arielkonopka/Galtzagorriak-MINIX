@@ -52,7 +52,7 @@ PUBLIC void cstart()
 #ifdef BOARD_FLIPPER
   hal_lcd_init();		/* also turns the backlight on */
   fbcon_init();
-  fbcon_puts("MINIX 2.0.0\nkernel started\n");
+  fbcon_puts("Galtzagorriak  (MINIX 2.0.0)\nkernel started\n");
   fbcon_flush();
 #endif
 
