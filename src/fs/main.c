@@ -182,21 +182,24 @@ PRIVATE void buf_pool()
 /* Initialize the buffer pool. */
 
   register struct buf *bp;
+  int i;
 
   bufs_in_use = 0;
-  front = &buf[0];
-  rear = &buf[NR_BUFS - 1];
+  front = BUF(0);
+  rear = BUF(NR_BUFS - 1);
 
-  for (bp = &buf[0]; bp < &buf[NR_BUFS]; bp++) {
+  /* (Via BUF(i): the buffers need not be one array, and need not start out
+   * zeroed.) */
+  for (i = 0; i < NR_BUFS; i++) {
+	bp = BUF(i);
 	bp->b_blocknr = NO_BLOCK;
 	bp->b_dev = NO_DEV;
-	bp->b_next = bp + 1;
-	bp->b_prev = bp - 1;
+	bp->b_dirt = CLEAN;
+	bp->b_count = 0;
+	bp->b_next = (i + 1 < NR_BUFS) ? BUF(i + 1) : NIL_BUF;
+	bp->b_prev = (i > 0) ? BUF(i - 1) : NIL_BUF;
+	bp->b_hash = bp->b_next;
   }
-  buf[0].b_prev = NIL_BUF;
-  buf[NR_BUFS - 1].b_next = NIL_BUF;
-
-  for (bp = &buf[0]; bp < &buf[NR_BUFS]; bp++) bp->b_hash = bp->b_next;
   buf_hash[0] = front;
 }
 

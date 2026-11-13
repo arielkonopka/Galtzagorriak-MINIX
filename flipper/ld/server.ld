@@ -9,6 +9,11 @@ MEMORY
 {
 	FLASH (rx)  : ORIGIN = FLASH_ORG, LENGTH = 512K
 	RAM   (rwx) : ORIGIN = RAM_ORG, LENGTH = RAM_END - RAM_ORG
+	/* The usable parts of SRAM2 (the rest is secure, for the radio CPU).
+	 * Only FS uses them, for its buffer cache (fs/buf.h).  Not loaded or
+	 * cleared by the kernel. */
+	RAM2A (rw)  : ORIGIN = 0x20030000, LENGTH = 10K
+	RAM2B (rw)  : ORIGIN = 0x20038000, LENGTH = 10K
 }
 
 SECTIONS
@@ -43,6 +48,9 @@ SECTIONS
 		_ebss = .;
 		_end = .;		/* initial break (brksize.S) */
 	} > RAM
+
+	.sram2a (NOLOAD) : { *(.sram2a) } > RAM2A
+	.sram2b (NOLOAD) : { *(.sram2b) } > RAM2B
 
 	_flash_end = LOADADDR(.data) + SIZEOF(.data);
 	/* Sizes for the struct boot_image header (bootimg.S). */

@@ -5,6 +5,21 @@ Goal: replace the Flipper Zero firmware with a native MINIX 2.0.0 kernel
 console when one is connected and an on-screen tty (LCD + d-pad keyboard)
 otherwise.
 
+## Licensing
+
+- MINIX 2.0.0: `src/LICENSE` in this tree is the original 1997 Prentice-Hall
+  agreement, but MINIX was relicensed under BSD-3-Clause in April 2000,
+  retroactively for all earlier versions
+  (<http://minix1.woodhull.com/current/LICENSE.html>).
+- Decision (2026-11-13): code from the official Flipper Zero firmware
+  (GPL-3.0) may be reused for the hardware features and the menu UI.  This
+  is a private project that is not distributed, so licence obligations do
+  not arise; should that ever change, the combination would be GPL-3.0
+  (BSD-3 MINIX and the Apache-2.0 CMSIS headers are compatible).  Keep the
+  original copyright notices on reused files.
+- Order of work (same date): shell and commands first, then the Flipper
+  hardware milestones.
+
 ## Target hardware (STM32WB55RG, verify pins against flipperzero-firmware
 `targets/f7/furi_hal/furi_hal_resources.c` before relying on them)
 
@@ -114,7 +129,8 @@ Bluetooth, Settings).
 | 13 | Menu UI on the LCD mirroring the stock firmware's layout, apps per peripheral | — |
 
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
-changes the memory plan (the 10 KB SRAM2a/2b areas go to the radio). Sub-GHz
+changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
+buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz
 transmit must stay inside the legal bands for the user's region.
 
 ## Status
@@ -128,14 +144,22 @@ transmit must stay inside the legal bands for the user's region.
   halt.
 - **Milestone 1: done** (kernel core; its test stand-ins were replaced by
   the real servers in milestone 2).
-- **Milestone 2: mostly done in QEMU, built for Flipper (hardware test
-  pending).**  `make disk minix-run` boots kernel + real MM + real FS + a test
-  INIT (`m2/init.c`); FS mounts the root file system from the "SD card"
-  (`/dev/hd1`, QEMU: `build/qemu/minix/disk.img` via semihosting), INIT does
-  file I/O and execs `/bin/m2test`, a relocated user program that checks
-  argv/environ, malloc/brk, signals, fork/wait (shadowing), pipes and
-  fork+exec.  Still to do: `/bin/sh` and the other commands, real `init`.
-  Memory: kernel 19 KB, MM 11 KB, FS 34 KB RAM; 113 KB left for programs.
+- **Milestone 2: done in QEMU, built for Flipper (hardware test pending).**
+  Real MM + FS, root file system on the SD card (QEMU: disk image via
+  semihosting), exec of relocated programs.  `make INIT=m2 minix minix-run`
+  runs the self-test (file I/O, argv/environ, malloc, signals, fork, pipes,
+  exec, MPU isolation) and exits QEMU with its status.
+- **Milestone 3: largely done in QEMU.**  Real `init` (src/tools/init.c),
+  getty, login, `/bin/sh` and ~80 commands; `/etc/rc`, ttytab, passwd.
+  Memory (QEMU and Flipper alike): kernel 18 KB, MM 11 KB, FS 13 KB in
+  SRAM1 plus the buffer cache in SRAM2; INIT 8 KB; **135 KB for user
+  processes**.  Limits: several concurrently forked shells each hold a
+  ~15 KB shadow copy, so long pipelines with loop subshells can run out of
+  memory ("not found").  Ideas: run program text in place from flash,
+  swapping to the SD card.
+- **Memory protection (from milestone 6) done:** the MPU confines each user
+  process to its own memory (`mpu_switch()`); flash is read-only.  MM and FS
+  run privileged.
 
 ### Building the SD card
 
@@ -190,6 +214,11 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
   of a quantum).
 - Boot servers had no stack segment, so MM did no checking and INIT's heap
   could grow into its stack (`arm_proc_layout()` now gives them one).
+- `src/commands/sh/sh.h`: `iofn` declared as taking no arguments but called
+  with two.
+- `src/commands/simple/cp.c`: a 32 KB buffer on the stack (fine on a PC);
+  ed's 8 KB line buffers and sort's 20 KB work area likewise sized down
+  for ARM.
 - The disk driver no longer uses 32-bit byte offsets for the sector number
   (`arm/disk.c`); `dv_base`/`dv_size` are still 32-bit byte counts, so
   partitions must stay below 4 GB.

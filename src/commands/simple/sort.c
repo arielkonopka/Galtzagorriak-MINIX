@@ -42,7 +42,11 @@
 #include <limits.h>
 
 #define OPEN_FILES	(OPEN_MAX-4)	/* Nr of open files per process */
+#ifdef __ARM_ARCH
+#define MEMORY_SIZE	(8 * 1024)	/* Flipper: little RAM, merge via temp files */
+#else
 #define MEMORY_SIZE	(20 * 1024)	/* Total mem_size */
+#endif
 #define LINE_SIZE	(1024 >> 1)	/* Max length of a line */
 #define IO_SIZE		(2 * 1024)	/* Size of buffered output */
 #define STD_OUT		 1	/* Fd of terminal */

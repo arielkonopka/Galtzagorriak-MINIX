@@ -26,7 +26,9 @@
 
 
 /* Copy files in this size chunks: */
-#if __minix && !__minix_vmd
+#if __ARM_ARCH
+#define CHUNK	2048	/* on the stack; Flipper processes have little room */
+#elif __minix && !__minix_vmd
 #define CHUNK	(8192 * sizeof(char *))
 #else
 #define CHUNK	(1024 << (sizeof(int) + sizeof(char *)))

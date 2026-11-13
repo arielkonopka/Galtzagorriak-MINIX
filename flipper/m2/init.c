@@ -50,6 +50,7 @@ int main(void)
 	open("/dev/console", O_WRONLY);
 	dup(1);
 
+	setbuf(stdout, NULL);	/* INIT has a 4 KB heap: no stdio buffer */
 	printf("\nINIT (milestone 2): root file system is mounted\n");
 
 	check(stat("/", &st) == 0 && S_ISDIR(st.st_mode), "stat /");
@@ -104,6 +105,7 @@ int main(void)
 		fflush(stdout);
 		execle("/bin/m2test", "m2test", "hello", "world", (char *) NULL,
 									env);
+		perror("  execle");
 		check(0, "exec /bin/m2test");
 	}
 	finish();

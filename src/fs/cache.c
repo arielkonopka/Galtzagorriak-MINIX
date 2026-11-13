@@ -291,9 +291,10 @@ dev_t device;			/* device whose blocks are to be purged */
 /* Remove all the blocks belonging to some device from the cache. */
 
   register struct buf *bp;
+  int i;
 
-  for (bp = &buf[0]; bp < &buf[NR_BUFS]; bp++)
-	if (bp->b_dev == device) bp->b_dev = NO_DEV;
+  for (i = 0; i < NR_BUFS; i++)
+	if ((bp = BUF(i))->b_dev == device) bp->b_dev = NO_DEV;
 
 #if ENABLE_CACHE2
   invalidate2(device);
@@ -311,10 +312,11 @@ dev_t dev;			/* device to flush */
 
   register struct buf *bp;
   static struct buf *dirty[NR_BUFS];	/* static so it isn't on stack */
-  int ndirty;
+  int ndirty, i;
 
-  for (bp = &buf[0], ndirty = 0; bp < &buf[NR_BUFS]; bp++)
-	if (bp->b_dirt == DIRTY && bp->b_dev == dev) dirty[ndirty++] = bp;
+  for (i = 0, ndirty = 0; i < NR_BUFS; i++)
+	if ((bp = BUF(i))->b_dirt == DIRTY && bp->b_dev == dev)
+		dirty[ndirty++] = bp;
   rw_scattered(dev, dirty, ndirty, WRITING);
 }
 

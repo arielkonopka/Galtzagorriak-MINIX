@@ -156,6 +156,7 @@ restart:
 	bl	unhold
 	cpsid	i
 1:
+	bl	mpu_switch		/* user process: load its MPU regions */
 	ldr	r0, =k_reenter
 	ldrb	r1, [r0]
 	subs	r1, r1, #1

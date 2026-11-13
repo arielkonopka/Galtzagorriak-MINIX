@@ -82,6 +82,9 @@ struct boot_image {
   char name[8];
 };
 
+/* End of the usable part of SRAM2b (FS buffer cache, flipper/ld/server.ld). */
+#define SRAM2_END	(0x20038000 + 10 * 1024)
+
 /* Kernel memory layout, from the linker script. */
 extern char _sidata[], _sdata[], _edata[], _sbss[], _ebss[];
 extern char _stext[], _etext[];

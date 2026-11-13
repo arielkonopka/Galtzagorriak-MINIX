@@ -134,6 +134,7 @@ PUBLIC int do_sync()
 
   register struct inode *rip;
   register struct buf *bp;
+  int i;
 
   /* The order in which the various tables are flushed is critical.  The
    * blocks must be flushed last, since rw_inode() leaves its results in
@@ -145,8 +146,9 @@ PUBLIC int do_sync()
 	if (rip->i_count > 0 && rip->i_dirt == DIRTY) rw_inode(rip, WRITING);
 
   /* Write all the dirty blocks to the disk, one drive at a time. */
-  for (bp = &buf[0]; bp < &buf[NR_BUFS]; bp++)
-	if (bp->b_dev != NO_DEV && bp->b_dirt == DIRTY) flushall(bp->b_dev);
+  for (i = 0; i < NR_BUFS; i++)
+	if ((bp = BUF(i))->b_dev != NO_DEV && bp->b_dirt == DIRTY)
+		flushall(bp->b_dev);
 
   return(OK);		/* sync() can't fail */
 }

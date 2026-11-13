@@ -153,7 +153,11 @@ typedef struct line LINE;
 #define LGLOB	2		/* line marked global */
 
 				/* max number of chars per line */
+#ifdef __ARM_ARCH
+#define MAXLINE	1024	/* Flipper: several of these live on the stack */
+#else
 #define MAXLINE	(sizeof(int) == 2 ? 256 : 8192)
+#endif
 #define MAXPAT	256		/* max number of chars per replacement
 				 * pattern */
 				/* max file name size */

@@ -13,7 +13,7 @@
 
 #include <sys/dir.h>			/* need struct direct */
 
-EXTERN struct buf {
+struct buf {
   /* Data portion of the buffer. */
   union {
     char b__data[BLOCK_SIZE];		     /* ordinary user data */
@@ -33,7 +33,20 @@ EXTERN struct buf {
   dev_t b_dev;			/* major | minor device where block resides */
   char b_dirt;			/* CLEAN or DIRTY */
   char b_count;			/* number of users of this buffer */
-} buf[NR_BUFS];
+};
+
+#if (MACHINE == FLIPPER)
+/* The cache lives in the two usable 10 KB blocks of SRAM2, which are not
+ * adjacent: two arrays, reached through BUF(i) (see flipper/ld/server.ld).
+ */
+#define NR_BUFS_A	(NR_BUFS / 2)
+EXTERN struct buf buf_a[NR_BUFS_A] __attribute__((section(".sram2a")));
+EXTERN struct buf buf_b[NR_BUFS - NR_BUFS_A] __attribute__((section(".sram2b")));
+#define BUF(i)	((i) < NR_BUFS_A ? &buf_a[i] : &buf_b[(i) - NR_BUFS_A])
+#else
+EXTERN struct buf buf[NR_BUFS];
+#define BUF(i)	(&buf[i])
+#endif
 
 /* A block is free if b_dev == NO_DEV. */
 

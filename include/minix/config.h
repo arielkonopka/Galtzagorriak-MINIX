@@ -66,7 +66,7 @@
 #endif
 
 #if (MACHINE == FLIPPER)
-#define NR_BUFS           20	/* # blocks in the buffer cache */
+#define NR_BUFS           18	/* # blocks in the buffer cache (SRAM2) */
 #define NR_BUF_HASH       32	/* size of buf hash table; MUST BE POWER OF 2*/
 #endif
 

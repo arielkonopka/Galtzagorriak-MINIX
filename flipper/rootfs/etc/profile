@@ -1,0 +1,2 @@
+# Time zone: the Flipper keeps UTC.
+TZ=GMT0	export TZ

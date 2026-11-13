@@ -41,7 +41,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("elf")
     ap.add_argument("out")
-    ap.add_argument("--stack", type=int, default=16384,
+    ap.add_argument("--stack", type=int, default=6144,
                     help="bytes for stack and heap (like chmem)")
     a = ap.parse_args()
     with open(a.elf, "rb") as f:

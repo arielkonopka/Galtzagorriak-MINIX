@@ -286,7 +286,7 @@ Extern struct ioarg ioargstack[NPUSH];
 
 /* an input generator's state */
 struct	io {
-	int	(*iofn)(_VOID);
+	int	(*iofn)();	/* (struct ioarg *, struct io *); was (_VOID), wrong */
 	struct	ioarg	*argp;
 	int	peekc;
 	char	prev;		/* previous character read by readc() */

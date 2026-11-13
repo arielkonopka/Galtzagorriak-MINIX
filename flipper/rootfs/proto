@@ -1,11 +1,11 @@
 # Root file system for MINIX on the Flipper Zero, MINIX mkfs(1) format.
 # Built by tools/mkfsimg.py (make disk).  Host paths are relative to this
-# directory of the Makefile; @BIN@ = the converted user programs.
+# directory of the Makefile; @BINFILES@ = the programs (tools/mkproto.py).
 boot
 8192 1024
 d--755 0 0
    bin d--755 2 0
-      m2test ---755 2 0 @BIN@/m2test
+      @BINFILES@
    $
    dev d--755 0 0
       console c--622 0 0 4 0
@@ -22,6 +22,11 @@ d--755 0 0
    $
    etc d--755 0 0
       motd ---644 0 0 rootfs/etc/motd
+      rc ---755 0 0 rootfs/etc/rc
+      ttytab ---644 0 0 rootfs/etc/ttytab
+      passwd ---644 0 0 rootfs/etc/passwd
+      group ---644 0 0 rootfs/etc/group
+      profile ---644 0 0 rootfs/etc/profile
    $
    tmp d--777 0 0
    $

@@ -175,6 +175,9 @@ PUBLIC void sys_task()
 	}
 
 	m.m_type = r;		/* 'r' reports status of call */
+#if (CHIP == ARM_CM)
+	mpu_proc = NIL_PROC;	/* maps may have changed: reload MPU */
+#endif
 	send(m.m_source, &m);	/* send reply to caller */
   }
 }

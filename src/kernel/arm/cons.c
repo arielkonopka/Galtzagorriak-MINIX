@@ -13,7 +13,7 @@
 #include "armcpu.h"
 #include "hal.h"
 
-#define CONS_IN_BYTES	64	/* serial input buffer (power of 2) */
+#define CONS_IN_BYTES	256	/* serial input buffer (power of 2): pasted lines */
 
 PRIVATE char ibuf[CONS_IN_BYTES];
 PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */

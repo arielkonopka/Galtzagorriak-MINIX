@@ -23,7 +23,7 @@
 #include <minix/type.h>
 #include <minix/minlib.h>
 #include "../../fs/const.h"
-#if (MACHINE == IBM_PC)
+#if (MACHINE == IBM_PC) || (MACHINE == FLIPPER)	/* MBR partitions */
 #include <minix/partition.h>
 #include <sys/ioctl.h>
 #endif

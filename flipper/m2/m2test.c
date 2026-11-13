@@ -95,6 +95,15 @@ int main(int argc, char **argv)
 	check(n == 17 && strcmp(buf, "through the pipe") == 0,
 						"fork + pipe");
 
+	/* Memory protection: a user process may not touch kernel memory. */
+	pid = fork();
+	if (pid == 0) {
+		*(volatile int *) 0x20000100 = 0;	/* kernel data */
+		_exit(0);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
+		&& WTERMSIG(st) == SIGSEGV, "write to kernel memory -> SIGSEGV");
+
 	pid = fork();
 	if (pid == 0) {
 		execl("/bin/m2test", "m2test", "child-exec", (char *) NULL);

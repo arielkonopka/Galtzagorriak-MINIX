@@ -1,14 +1,100 @@
+MINIX 2.0.0 FOR THE FLIPPER ZERO
+
+This tree is MINIX 2.0.0 ported to run bare-metal on the Flipper Zero
+(STM32WB55, ARM Cortex-M4, 64 MHz, 256 KB RAM, no MMU), replacing the
+Flipper firmware.  The root file system lives on the microSD card.  A QEMU
+target (mps2-an386, also a Cortex-M4) runs the same system for testing.
+
+The original PC sources are still here and the PC-specific code is
+untouched; the port adds a new machine type (MACHINE FLIPPER, CHIP ARM_CM).
+The full design, status and notes are in flipper/PORTING.md.
+
+
+WHAT WORKS (in QEMU; not yet tried on a real Flipper)
+
+  - The kernel with TTY, clock, memory, system and SD-card (WINCHESTER)
+    tasks, and the real MM and FS servers.
+  - fork() without an MMU through "shadowing" (as on the Atari ST), exec of
+    relocatable programs, signals, pipes.
+  - Memory protection with the MPU: each user process can only touch its
+    own memory; flash is read-only.
+  - init, getty, login, the shell and about 80 standard commands (ls, cat,
+    cp/mv/rm, ed, grep, sed, sort, tar, df, mkfs, ...).
+  - Console on the serial port (Flipper GPIO pins 13 TX / 14 RX, 115200 8N1;
+    QEMU: the terminal).
+
+Planned: USB serial console, LCD terminal with an on-screen keyboard, and
+the Flipper hardware (GPIO, LED/vibro/speaker, infrared, Sub-GHz radio,
+NFC/RFID, iButton, Bluetooth LE) with a menu interface like the stock
+firmware.  See flipper/PORTING.md for the milestones.
+
+
+BUILDING
+
+Needs arm-none-eabi-gcc, python3, and qemu-system-arm or dfu-util.
+
+  cd flipper
+  make minix disk          # QEMU: kernel image + disk image
+  make minix-run           # boot it in QEMU; log in as root (no password)
+
+  make BOARD=flipper minix disk
+                           # Flipper: build/flipper/minix/minix.bin (flash)
+                           #          build/flipper/minix/fs.img   (SD card)
+
+  make INIT=m2 minix minix-run
+                           # instead of the real init: self-test, exits QEMU
+
+
+INSTALLING ON THE FLIPPER
+
+1. SD card: one MBR partition, type 81, starting at 1 MiB, ending below
+   4 GiB.  Write the file system image to it (this erases the partition):
+
+     sudo dd if=build/flipper/minix/fs.img of=/dev/sdX1 bs=1M conv=fsync
+
+2. Flash: hold LEFT + BACK until the Flipper resets, release BACK and keep
+   LEFT held to enter DFU mode, then
+
+     make BOARD=flipper minix-flash
+
+   Every MINIX image enters DFU the same way.  If an image is broken, use
+   the hardware combination LEFT + BACK + OK, then release BACK and LEFT.
+   The stock firmware can always be restored with qFlipper's "Repair".
+
+3. Connect a 3.3 V serial adapter to pins 13/14 to see the console.
+
+
+LAYOUT
+
+  flipper/            build system, HAL (board support), linker scripts,
+                      host tools, root file system prototype, PORTING.md
+  src/kernel/arm/     ARM entry/exit, interrupts, MPU, SD driver, console,
+                      shadowing
+  src/lib/arm/        ARM C run-time pieces of the C library
+  include/            shared headers (ARM additions marked CHIP == ARM_CM)
+
+MINIX 2.0.0 is (c) Prentice-Hall; since April 2000 it is available under
+the BSD-3-Clause license, retroactively for all versions.  The file
+src/LICENSE in this tree is the original 1997 agreement.
+
+
+===========================================================================
+The original README of the MINIX 2.0.0 distribution follows.  It describes
+the PC version and refers to files (floppy images, manuals) that are not
+part of this tree.
+===========================================================================
+
 HOW TO GET AND INSTALL MINIX 2.0.0
 
 This directory and subdirectories contains Minix version 2.0.0, a small
-educational UNIX-like system for IBM PC's and compatibles. 
+educational UNIX-like system for IBM PC's and compatibles.
 
 Note: The files here are the same as found on the MINIX 2.0 CDROM
 in the MINIX directory, except that the surrounding fluff, README's
-and such, is more suited to FTP or WWW users. 
+and such, is more suited to FTP or WWW users.
 
 Before installing Minix, do the unthinkable and read the installation
-manual usage(8). It is in the following files in various forms: 
+manual usage(8). It is in the following files in various forms:
 
   install.ps            - Postscript
   install.t             - Troff -man source
@@ -17,17 +103,17 @@ manual usage(8). It is in the following files in various forms:
   manuals/              - All other Minix manual pages
 
 Alternatively, with a web browser you can view the whole manual
-page set. The page to start with is usage(8). 
+page set. The page to start with is usage(8).
 
 Before fetching Minix, you should get the checksum list (to verify
 correct transmission and unpacking). If you do not already have it,
 you will need the program to compute the checksums on your
-machine, crc.c: 
+machine, crc.c:
 
   crclist               - CRC's of all the files here
   crc.c                 - Command to make CRC checksums
 
-Eventually, you may also want these files: 
+Eventually, you may also want these files:
 
   changes-2.0.0         - List of changes between 1.7.4 and 2.0.0
   upgrade-2.0.0         - How to upgrade from 1.7.4 to 2.0.0
@@ -38,7 +124,7 @@ Eventually, you may also want these files:
   ack/                  - ACK Modula-2 and Pascal compilers
 
 
-Minix for the Intel architecture comes in three flavors: 
+Minix for the Intel architecture comes in three flavors:
 
    - Regular (for 386, 486, and Pentium machines)
    - Small (for 8086 and 286 machines)
@@ -51,7 +137,7 @@ both the i86 and xt directories. All these directories contain the
 executable programs of Minix. In addition, the src directory contains
 the full Minix source code, which is identical for all three flavors (the
 code contains #ifdef's where the difference matters). The following
-files can be found in these directories: 
+files can be found in these directories:
 
   i386:         ROOT USR USR.TAZ
   i86:          ROOT USR USR.TAZ
@@ -59,26 +145,26 @@ files can be found in these directories:
   src:          SYS.TAZ CMD.TAZ
 
 The files with names ending in .TAZ are compressed tar archives, the
-other files are diskette images of the installation boot floppies. 
+other files are diskette images of the installation boot floppies.
 
 The two installation floppies ROOT and USR can be combined on a
 1.2 Mb or 1.44 Mb diskette. The .TAZ files must be distributed over
-several floppies. Example for UNIX: 
+several floppies. Example for UNIX:
 
         cat ROOT USR >/dev/floppy
         dd if=USR.TAZ of=/dev/floppy bs=1440k count=1 skip=0
         dd if=USR.TAZ of=/dev/floppy bs=1440k count=1 skip=1
         dd if=USR.TAZ of=/dev/floppy bs=1440k count=1 skip=2
 
-Increase the "skip" count until dd writes a diskette partially. 
+Increase the "skip" count until dd writes a diskette partially.
 /dev/floppy should be the name of the floppy device. You have to
 find out what your Operating System names it today. Under MS-DOS
 you can use the FDVOL command found in the ../dosutil directory to
-write the floppy images. 
+write the floppy images.
 
 Be careful when you install Minix, many of the commands are
 potentionally dangerous in a way that a simple typing mistake may
-destroy all other data on your system. So make backups first! 
+destroy all other data on your system. So make backups first!
 
                                                 Kees J. Bot (kjb@cs.vu.nl)
 

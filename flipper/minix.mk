@@ -19,7 +19,7 @@ MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -fno-tree-loop-distribute-patterns -ffunction-sections -fdata-sections \
 	   -nostdinc -I$(MROOT)/include -isystem $(GCCINC) -Ihal \
 	   -DMACHINE=FLIPPER $(filter -DBOARD_FLIPPER -DBOARD_QEMU,$(CFLAGS)) \
-	   -D_EM_WSIZE=4 -D_EM_PSIZE=4 -D_EM_LSIZE=4 \
+	   -D_EM_WSIZE=4 -D_EM_PSIZE=4 -D_EM_LSIZE=4 -D__minix=1 \
 	   -Wall -Wno-parentheses -Wno-unused -Wno-implicit-int \
 	   -Wno-missing-braces -Wno-char-subscripts -Wno-pointer-sign \
 	   -Wno-old-style-definition -Wno-return-type -Wno-dangling-else \
@@ -84,7 +84,7 @@ $(MB)/kernel.elf: $(KOBJ) $(MB)/libc.a ld/$(BOARD).ld ld/sections.ld
 RAM_END		:= 0x20030000
 STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
-STACK_init	:= 10240	# heap (brk) + stack
+STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
 	   table.c putk.c trace.c getset.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
@@ -113,7 +113,17 @@ $(MB)/srv/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 srv_head = $(MB)/srv/$(1)/bootimg.o $(MB)/srv/crtso.o
 SRV_mm	 = $(call srv_head,mm) $(MM_SRC:%=$(MB)/mm/%.o)
 SRV_fs	 = $(call srv_head,fs) $(FS_SRC:%=$(MB)/fs/%.o)
+# INIT: the real one (src/tools/init.c), or INIT=m2 for the test INIT that
+# runs the milestone-2 checks and exits QEMU.
+INIT	?= real
+ifeq ($(INIT),m2)
 SRV_init = $(call srv_head,init) $(MB)/m2/init.o
+else
+SRV_init = $(call srv_head,init) $(MB)/tools/init.o
+endif
+$(MB)/tools/%.o: $(MROOT)/src/tools/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
 
 define link_server
 	$(CC) $(MLDFLAGS) \
@@ -130,7 +140,12 @@ $(MB)/mm.elf: $(MB)/kernel.elf $(SRV_mm) $(MB)/libc.a ld/server.ld
 	$(call link_server,mm,$(MB)/kernel.elf)
 $(MB)/fs.elf: $(MB)/mm.elf $(SRV_fs) $(MB)/libc.a ld/server.ld
 	$(call link_server,fs,$(MB)/mm.elf)
-$(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld
+# Relink when switching between INIT=real and INIT=m2.
+$(MB)/.init-$(INIT):
+	@mkdir -p $(MB)
+	@rm -f $(MB)/.init-*
+	@touch $@
+$(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$(INIT)
 	$(call link_server,init,$(MB)/fs.elf)
 
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
@@ -141,24 +156,66 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 # User programs: linked at 0 with relocations (ld/user.ld, -Wl,-q), then
 # converted to MINIX a.out by tools/elf2mnx.py.
 #############################################################################
-UPROGS	:= m2test
-$(MB)/user/%.o: m2/%.c
+# The shell, the MINIX commands (src/commands/simple, halt) and m2test.
+CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
+	   dirname du echo ed expand expr factor fgrep find fold getty grep \
+	   head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
+	   printenv printroot pwd rev rmdir sed sleep sort split strings stty \
+	   su sum sync tail tar tee test touch tr tty umount uname uniq update \
+	   wc which whoami yes
+UPROGS	:= sh halt m2test $(CMDS)
+# Other names of multi-call programs, installed as copies.
+ALIASES	:= mv=cp ln=cp cpdir=cp clone=cp [=test reboot=halt
+ALIASES	+= $(addsuffix =cp,rm)
+# Stack + heap reserve per program (MINIX chmem).  RAM is ~114 KB for all
+# user processes, and a fork needs a second copy of the data, so keep these
+# small: default 6 KB (tools/elf2mnx.py), more only where needed.
+CHMEM_sh     := 8192
+CHMEM_update := 2048
+CHMEM_ed     := 16384
+CHMEM_sort   := 12288
+CHMEM_ls     := 12288
+CHMEM_rev    := 8192
+CHMEM_tee    := 8192
+CHMEM_m2test := 16384
+
+SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
+$(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 	@mkdir -p $(dir $@)
-	$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
-$(MB)/user/%.elf: $(MB)/user/%.o $(MB)/srv/crtso.o $(MB)/libc.a ld/user.ld
-	$(CC) $(MLDFLAGS) -Wl,-q -Tld/user.ld -Wl,-Map=$@.map \
-	   $(MB)/srv/crtso.o $< $(MB)/libc.a -lgcc -o $@
-# Stack + heap per program (MINIX chmem), default 16 KB: CHMEM_<prog> := ...
-$(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
-	python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*))
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/m2test.o: m2/m2test.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/%.o: $(MROOT)/src/commands/simple/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+
+OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
+OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
+objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
+
+define user_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/srv/crtso.o $(MB)/libc.a ld/user.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user.ld -Wl,-Map=$$@.map \
+	   $(MB)/srv/crtso.o $(call objs_of,$(1)) $(MB)/libc.a -lgcc -o $$@
+endef
+$(foreach p,$(UPROGS),$(eval $(call user_prog,$(p))))
+
+# Convert ELF -> MINIX a.out with the chmem value above (default 6 KB).
+$(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk
+	@mkdir -p $(dir $@)
+	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*))
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
-# and disk.img (MBR + partition 1, the QEMU "SD card").  In the proto,
-# @BIN@ stands for the directory with the converted user programs.
-$(MB)/proto: rootfs/proto
+# and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
+# proto becomes one entry per program.
+$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py
 	@mkdir -p $(MB)
-	sed 's|@BIN@|$(MB)/bin|g' $< > $@
+	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)"
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
 		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/fs.img --root . \

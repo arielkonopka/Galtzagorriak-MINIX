@@ -55,19 +55,15 @@ PUBLIC void cstart()
   SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;
   SCB_SHCSR |= SHCSR_ENABLES;
 
-  /* MPU: code (flash) is read-only for everyone, so stray writes fault
-   * (on QEMU the "flash" is RAM and would silently be overwritten).
-   * Everything else uses the default map for now.
+  /* MPU: code (flash) is read-only (and executable) for everyone, so stray
+   * writes fault (on QEMU the "flash" is RAM and would silently be
+   * overwritten).  Privileged code - kernel, tasks, MM, FS - uses the
+   * default map for everything else.  An unprivileged (user) process only
+   * gets its own memory, set up by mpu_switch() on every switch to it.
    */
   MPU_RNR = 0;
   MPU_RBAR = (u32_t) _stext & ~0x7FFFFu;
   MPU_RASR = MPU_RASR_AP_RO_RO | (18 << 1) | MPU_RASR_ENABLE; /* 2^19 */
-  /* SRAM (256 KB) read/write and executable for everyone: user programs
-   * run from RAM.  Unprivileged code gets nothing else - no peripherals.
-   */
-  MPU_RNR = 1;
-  MPU_RBAR = (u32_t) _ram_start & ~0x3FFFFu;
-  MPU_RASR = MPU_RASR_AP_RW_RW | (17 << 1) | MPU_RASR_ENABLE; /* 2^18 */
   MPU_CTRL = MPU_CTRL_PRIVDEFENA | MPU_CTRL_ENABLE;
   __asm volatile ("dsb; isb");
 
@@ -155,10 +151,18 @@ int t;
 	if (total < dlen + 2) panic("server stack too small", t);
 	rp->p_map[S].mem_phys = rp->p_map[S].mem_vir = dbase + total - 1;
 	rp->p_map[S].mem_len = 1;
+	/* FS keeps its buffer cache in SRAM2 (fs/buf.h): its data segment
+	 * must reach that far, or drivers would refuse (numap) to copy into
+	 * the buffers.  Nothing else is affected: MM's free memory comes from
+	 * mem_init() and FS never forks or calls brk. */
+	if (t == FS_PROC_NR) dlen = (SRAM2_END >> CLICK_SHIFT) - dbase;
 	rp->p_reg.pc = bi->entry;
 	/* One word left for crtso's argc (0) as on the PC. */
 	rp->p_reg.sp = ((dbase + total) << CLICK_SHIFT) - 2 * sizeof(reg_t);
-	rp->p_reg.control = INIT_CONTROL;
+	/* MM and FS are trusted like the tasks and run privileged (MM writes
+	 * relocations straight into new process images); INIT and its
+	 * descendants are ordinary, MPU-confined user processes. */
+	rp->p_reg.control = (t < LOW_USER) ? INIT_TASK_CONTROL : INIT_CONTROL;
 	memcpy(rp->p_name, bi->name, sizeof bi->name);
 	rp->p_name[sizeof bi->name - 1] = 0;
   }
@@ -167,6 +171,92 @@ int t;
   rp->p_map[D].mem_phys = rp->p_map[D].mem_vir = dbase;
   rp->p_map[D].mem_len = dlen;
   rp->p_reg.psw = INIT_PSW;
+}
+
+
+/*===========================================================================*
+ *				mpu_switch				     *
+ *===========================================================================*/
+#define MPU_FIRST	1		/* region 0 is the flash */
+#define MPU_REGIONS	8
+PUBLIC struct proc *mpu_proc;		/* whose regions are loaded */
+
+PRIVATE int mpu_cover(lo, hi, rbar, rasr, max)
+u32_t lo, hi;			/* [lo, hi), multiples of 256 */
+u32_t *rbar, *rasr;
+int max;
+{
+/* Cover [lo, hi) exactly with at most max MPU regions, using subregions:
+ * each step takes the largest aligned power-of-two region whose subregion
+ * boundaries match lo and the covered end.  Returns the number used, or
+ * -1 if max is not enough.
+ */
+  int n = 0, k, s0, s1;
+  u32_t size, base, sub, end;
+
+  while (lo < hi) {
+	if (n == max) return -1;
+	for (k = 31; k >= 8; k--) {
+		size = (u32_t) 1 << k;
+		base = lo & ~(size - 1);
+		sub = size >> 3;
+		if (((lo - base) & (sub - 1)) != 0) continue;
+		end = hi - base > size ? base + size : hi;
+		if (((end - base) & (sub - 1)) != 0 || end <= lo) continue;
+		s0 = (lo - base) / sub;
+		s1 = (end - base) / sub;
+		rbar[n] = base;
+		rasr[n] = MPU_RASR_AP_RW_RW | ((u32_t) (k - 1) << 1)
+			| ((~(((1u << s1) - 1) & ~((1u << s0) - 1)) & 0xFF) << 8)
+			| MPU_RASR_ENABLE;
+		n++;
+		lo = end;
+		break;
+	}
+	if (k < 8) return -1;
+  }
+  return n;
+}
+
+PUBLIC void mpu_switch()
+{
+/* Called by restart() before entering proc_ptr.  Give an unprivileged
+ * process access to its own memory only: text (if in RAM) up to the end of
+ * the stack, which exec and fork keep contiguous.  Privileged processes run
+ * with the default map; their regions are left as they are.
+ */
+  struct proc *rp = proc_ptr;
+  u32_t rbar[MPU_REGIONS], rasr[MPU_REGIONS], lo, hi;
+  int i, n;
+  static int warned;
+
+  if (rp == mpu_proc || !(rp->p_reg.control & CONTROL_NPRIV)) return;
+  mpu_proc = rp;
+
+  lo = (u32_t) rp->p_map[T].mem_phys << CLICK_SHIFT;
+  if (lo < (u32_t) _ram_start || rp->p_map[T].mem_len == 0
+	|| rp->p_map[T].mem_phys + rp->p_map[T].mem_len != rp->p_map[D].mem_phys)
+	lo = (u32_t) rp->p_map[D].mem_phys << CLICK_SHIFT; /* text in flash */
+  hi = (u32_t) (rp->p_map[S].mem_phys + rp->p_map[S].mem_len) << CLICK_SHIFT;
+
+  n = mpu_cover(lo, hi, rbar, rasr, MPU_REGIONS - MPU_FIRST);
+  if (n < 0) {
+	/* Cannot be described: fall back to all of RAM (no isolation). */
+	if (!warned++) printf("mpu: %s too fragmented, not isolated\n",
+							rp->p_name);
+	n = mpu_cover((u32_t) _ram_start & ~0x3FFFFu,
+			((u32_t) _ram_start & ~0x3FFFFu) + 0x40000,
+			rbar, rasr, MPU_REGIONS - MPU_FIRST);
+  }
+  for (i = 0; i < MPU_REGIONS - MPU_FIRST; i++) {
+	MPU_RNR = MPU_FIRST + i;
+	if (i < n) {
+		MPU_RBAR = rbar[i];
+		MPU_RASR = rasr[i];
+	} else {
+		MPU_RASR = 0;
+	}
+  }
 }
 
 
@@ -337,11 +427,16 @@ unsigned exc;
   }
   /* Report it (the PC kernel is silent here, but a one-line note costs
    * nothing and saves a lot of guessing on a machine without an MMU). */
-  printf("%s[%d]: signal %d, pc=%08lx lr=%08lx addr=%08lx\n",
+  printf("%s[%d]: signal %d, pc=%08lx lr=%08lx sp=%08lx cfsr=%08lx addr=%08lx\n",
 	rp->p_name, proc_number(rp), sig, (unsigned long) rp->p_reg.pc,
-	(unsigned long) rp->p_reg.lr,
+	(unsigned long) rp->p_reg.lr, (unsigned long) rp->p_reg.sp,
+	(unsigned long) cfsr,
 	(unsigned long) ((cfsr & 0x80) ? SCB_MMFAR :
 			 (cfsr & 0x8000) ? SCB_BFAR : 0));
+  printf("    text %08lx+%lx data %08lx shadow %x\n",
+	(unsigned long) rp->p_map[T].mem_phys << CLICK_SHIFT,
+	(unsigned long) rp->p_map[T].mem_len << CLICK_SHIFT,
+	(unsigned long) rp->p_map[D].mem_phys << CLICK_SHIFT, rp->p_shadow);
   cause_sig(proc_number(rp), sig);
 }
 
