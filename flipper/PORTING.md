@@ -24,7 +24,9 @@ A small but complete distribution with a package manager, to add apps:
 - **Status (real Flipper, 2026-11-13)**: boot screen, first boot
   (partition, reboot, mkfs, mount: / 32 MB, /usr 2 GB, swap 64 MB, /home
   1.6 GB on a 3.7 GB card), and `pkg install` + running `hello` all work
-  on the device.
+  on the device.  Launcher (main screen, /etc/apps, apps as nobody in
+  group gui), button navigation and the About app work on the device
+  (2026-11-14).
   The art theme follows the Basque galtzagorriak (helpful gnome-like
   spirits); it belongs to the LCD/menu milestone.
 - **Packages**: opkg-style, kept tiny: `pkg` is a C program (a shell script
