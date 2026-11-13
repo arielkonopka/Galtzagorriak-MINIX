@@ -73,7 +73,10 @@ class FS:
         self.first = first
         if first >= nblocks:
             raise SystemExit("file system too small")
-        self.img = bytearray(nblocks * BLOCK)
+        # Metadata (boot, super, maps, inode table) is kept as one array;
+        # data zones sparsely, so file systems of several GB need no RAM.
+        self.img = bytearray(first * BLOCK)
+        self.data = {}
         self.inodes = {}
         self.next_zone = first
         self.now = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))
@@ -93,7 +96,17 @@ class FS:
         return z
 
     def put_block(self, z, data):
-        self.img[z * BLOCK:z * BLOCK + len(data)] = data
+        if z < self.first:
+            self.img[z * BLOCK:z * BLOCK + len(data)] = data
+        else:
+            self.data[z] = bytes(data).ljust(BLOCK, b"\0")
+
+    def image(self):
+        """Metadata and the used data zones: everything up to the last
+        allocated zone.  The rest of the file system is free space."""
+        return bytes(self.img) + b"".join(
+            self.data.get(z, bytes(BLOCK))
+            for z in range(self.first, self.next_zone))
 
     def write_data(self, ino):
         """Allocate zones for ino.data (direct, single and double indirect)."""
@@ -221,6 +234,10 @@ def main():
     ap.add_argument("--inodes", type=int, default=0)
     ap.add_argument("--mbr")
     ap.add_argument("--root")
+    ap.add_argument("--trim", action="store_true",
+                    help="write only the used part (metadata + files); the "
+                    "file system still has --blocks blocks.  For dd onto "
+                    "a partition of at least that size.")
     a = ap.parse_args()
 
     with open(a.proto) as f:
@@ -232,10 +249,14 @@ def main():
     fs = FS(blocks, inodes)
     build(fs, tokens, a.root or os.path.dirname(os.path.abspath(a.proto)))
     used = fs.finish()
+    img = fs.image()
     with open(a.out, "wb") as f:
-        f.write(fs.img)
-    print(f"  {a.out}: {blocks} blocks, {inodes} inodes, "
-          f"{len(fs.inodes)} files, {used} data zones used")
+        f.write(img)
+        if not a.trim:
+            f.truncate(blocks * BLOCK)        # sparse
+    print(f"  {a.out}: {blocks} blocks ({blocks // 1024} MB), {inodes} "
+          f"inodes, {len(fs.inodes)} files, {used} data zones used"
+          + (f"; trimmed to {len(img) // 1024} KB" if a.trim else ""))
 
     if a.mbr:
         start = 2048
@@ -247,7 +268,8 @@ def main():
         with open(a.mbr, "wb") as f:
             f.write(mbr)
             f.write(b"\0" * ((start - 1) * 512))
-            f.write(fs.img)
+            f.write(img)
+            f.truncate(start * 512 + blocks * BLOCK)
         print(f"  {a.mbr}: MBR + partition 1 (type 0x81) at sector {start}")
 
 

@@ -92,7 +92,7 @@ int rw_flag;			/* READING or WRITING */
 
   char_spec = (mode_word == I_CHAR_SPECIAL ? 1 : 0);
   block_spec = (mode_word == I_BLOCK_SPECIAL ? 1 : 0);
-  if (block_spec) f_size = LONG_MAX;
+  if (block_spec) f_size = ULONG_MAX;	/* was LONG_MAX: reads past 2 GB hit "EOF" */
   rdwt_err = OK;		/* set to EIO if disk error occurs */
 
   /* Check for character special files. */

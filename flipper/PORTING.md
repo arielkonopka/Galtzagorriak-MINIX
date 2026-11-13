@@ -171,12 +171,14 @@ transmit must stay inside the legal bands for the user's region.
 
 ### Building the SD card
 
-    make -C flipper BOARD=flipper disk          # build/flipper/minix/fs.img
-    sudo dd if=flipper/build/flipper/minix/fs.img of=/dev/sdX1 bs=1M conv=fsync
+    make -C flipper BOARD=flipper card CARD_BLOCKS=<partition size in KB>
+    sudo dd if=flipper/build/flipper/minix/card.img of=/dev/sdX1 bs=1M conv=fsync
 
-(`fs.img` is the file system for partition 1; it is smaller than the
-partition, which only means the rest stays unused until a bigger image is
-written.)
+`card.img` is a file system as large as the whole partition, trimmed to the
+part in use (~5 MB): unused zones are free in the bitmaps, so what is on the
+card there does not matter.  Partition size: `blockdev --getsize64
+/dev/sdX1` / 1024; the default is 3871232 (the 4000 MiB partition).  `make
+disk` builds the small 8 MB `fs.img` and the QEMU `disk.img`.
 
 ### User programs
 
@@ -227,6 +229,8 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - `src/commands/simple/cp.c`: a 32 KB buffer on the stack (fine on a PC);
   ed's 8 KB line buffers and sort's 20 KB work area likewise sized down
   for ARM.
+- `src/fs/read.c`: block devices were given a "size" of `LONG_MAX`, so every
+  read past 2 GB returned end-of-file; now `ULONG_MAX`.
 - The disk driver no longer uses 32-bit byte offsets for the sector number
   (`arm/disk.c`); `dv_base`/`dv_size` are still 32-bit byte counts, so
   partitions must stay below 4 GB.

@@ -221,7 +221,18 @@ $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/fs.img --root . \
 	   --mbr $(MB)/disk.img
 
-.PHONY: minix minix-run minix-flash libc disk
+# Full-size root file system for the SD card partition, trimmed to the
+# part in use (~5 MB to write; the rest is free space in the bitmaps).
+# CARD_BLOCKS = partition size in KB: blockdev --getsize64 /dev/sdX1 / 1024.
+CARD_BLOCKS ?= 3871232
+CARD_INODES ?= 65535
+$(MB)/card.img: $(MB)/proto tools/mkfsimg.py \
+		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
+	python3 -I tools/mkfsimg.py $(MB)/proto $@ --root . --trim \
+	   --blocks $(CARD_BLOCKS) --inodes $(CARD_INODES)
+
+.PHONY: minix minix-run minix-flash libc disk card
+card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin
 libc: $(MB)/libc.a
