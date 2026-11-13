@@ -18,12 +18,15 @@
 PRIVATE char ibuf[CONS_IN_BYTES];
 PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */
 PRIVATE int uart_irq;
+PRIVATE int usb_irq = -1;
 
 FORWARD _PROTOTYPE( void cons_write, (tty_t *tp)			);
 FORWARD _PROTOTYPE( void cons_echo, (tty_t *tp, int c)			);
 FORWARD _PROTOTYPE( void cons_read, (tty_t *tp)				);
 FORWARD _PROTOTYPE( int cons_int, (int irq)				);
 FORWARD _PROTOTYPE( void out_char, (int c)				);
+FORWARD _PROTOTYPE( int usb_int, (int irq)				);
+FORWARD _PROTOTYPE( void usb_out, (char *buf, unsigned n)		);
 
 /*===========================================================================*
  *				scr_init				     *
@@ -42,6 +45,61 @@ tty_t *tp;
   put_irq_handler(uart_irq, cons_int);
   hal_uart_rx_irq(1);
   enable_irq(uart_irq);
+
+  /* The USB serial port is a second way into the same console. */
+  if (hal_usb_init() == 0) {
+	usb_irq = hal_usb_irq();
+	put_irq_handler(usb_irq, usb_int);
+	enable_irq(usb_irq);
+  }
+}
+
+
+/*===========================================================================*
+ *				usb_int					     *
+ *===========================================================================*/
+PRIVATE int usb_int(irq)
+int irq;
+{
+/* USB interrupt: run the USB stack, then collect received characters. */
+  int c, got = 0;
+
+  hal_usb_poll();
+  while ((c = hal_usb_getc()) >= 0) {
+	if (ihead - itail < CONS_IN_BYTES) {
+		ibuf[ihead % CONS_IN_BYTES] = c;
+		ihead++;
+	}
+	got = 1;
+  }
+  if (got) {
+	tty_table[0].tty_events = 1;
+	force_timeout();
+  }
+  return 1;
+}
+
+
+/*===========================================================================*
+ *				usb_out					     *
+ *===========================================================================*/
+PRIVATE void usb_out(buf, n)
+char *buf;
+unsigned n;
+{
+/* Queue output for USB.  If a terminal is attached, wait for room (the USB
+ * interrupt drains the ring); with nobody listening, excess is dropped.
+ */
+  unsigned k;
+
+  if (usb_irq < 0) return;
+  while (n > 0) {
+	k = hal_usb_write(buf, n);
+	buf += k;
+	n -= k;
+	if (n > 0 && (!hal_usb_connected()
+			|| k_reenter != (unsigned char) -1)) break;	/* not a task */
+  }
 }
 
 
@@ -136,8 +194,17 @@ PRIVATE void out_char(c)
 int c;
 {
 /* Output post-processing is done here like on the PC console: NL -> CR NL. */
-  if (c == '\n') hal_uart_putc('\r');
+  static char crlf[2] = { '\r', '\n' };
+  char ch = c;
+
+  if (c == '\n') {
+	hal_uart_putc('\r');
+	hal_uart_putc('\n');
+	usb_out(crlf, 2);
+	return;
+  }
   hal_uart_putc(c);
+  usb_out(&ch, 1);
 }
 
 

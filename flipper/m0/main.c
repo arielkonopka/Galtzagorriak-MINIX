@@ -66,11 +66,19 @@ int main(void)
 		now = hal_buttons();
 		for (b = 1; b <= BTN_BACK; b <<= 1) {
 			if ((now & b) && !(prev & b)) {
+				/* LED test: UP red, DOWN green, LEFT blue,
+				 * RIGHT white-ish, OK off; LCD backlight
+				 * dims while OK is held. */
+				hal_led(b == BTN_UP || b == BTN_RIGHT ? 64 : 0,
+					b == BTN_DOWN || b == BTN_RIGHT ? 64 : 0,
+					b == BTN_LEFT || b == BTN_RIGHT ? 64 : 0);
+				if (b == BTN_OK) hal_backlight(30);
 				kprintf("press %s\n", button_name(b));
 				fbcon_puts(button_name(b));
 				fbcon_putc(' ');
 			}
 		}
+		if (!(now & BTN_OK) && (prev & BTN_OK)) hal_backlight(255);
 		if ((now & BTN_BACK) && !(prev & BTN_BACK)) back_since = hal_ms;
 		if ((now & BTN_BACK) && hal_ms - back_since > 2000) {
 			fbcon_puts("\nhalted.");

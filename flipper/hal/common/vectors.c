@@ -43,10 +43,37 @@ void (*const vector_table[16 + NR_IRQ])(void) = {
 /* Board hook run before .data/.bss exist (must not touch globals). */
 __attribute__((weak)) void hal_early_boot(void) {}
 
+/* Put the core into its reset state.  Reset_Handler is not only entered by
+ * a reset: ST's ROM DFU bootloader jumps here on "leave" with its own
+ * vector table installed, interrupts masked, SysTick and device interrupts
+ * possibly running.  (QEMU always starts clean, so this only shows on the
+ * real device: SysTick never reached our handler.)
+ */
+static void core_reset_state(void)
+{
+	volatile uint32_t *const SYST_CSR = (uint32_t *) 0xE000E010;
+	volatile uint32_t *const NVIC_ICER = (uint32_t *) 0xE000E180;
+	volatile uint32_t *const NVIC_ICPR = (uint32_t *) 0xE000E280;
+	volatile uint32_t *const SCB_ICSR = (uint32_t *) 0xE000ED04;
+	volatile uint32_t *const SCB_VTOR = (uint32_t *) 0xE000ED08;
+	int i;
+
+	__asm volatile ("cpsid i" : : : "memory");
+	*SYST_CSR = 0;
+	for (i = 0; i < 8; i++) {
+		NVIC_ICER[i] = 0xFFFFFFFF;
+		NVIC_ICPR[i] = 0xFFFFFFFF;
+	}
+	*SCB_ICSR = (1u << 25) | (1u << 27);	/* clear pending SysTick, PendSV */
+	*SCB_VTOR = (uint32_t) vector_table;
+	__asm volatile ("dsb; isb; cpsie i" : : : "memory");
+}
+
 void Reset_Handler(void)
 {
 	uint32_t *src, *dst;
 
+	core_reset_state();
 	hal_early_boot();
 	for (src = _sidata, dst = _sdata; dst < _edata; )
 		*dst++ = *src++;

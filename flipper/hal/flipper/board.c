@@ -55,6 +55,15 @@ static void clock_init(void)
 {
 	uint32_t timeout;
 
+	/* Coming from the DFU bootloader the CPU may already run from the
+	 * PLL; it cannot be reconfigured while in use.  Go back to MSI. */
+	if ((RCC->CFGR & RCC_CFGR_SWS) != 0) {
+		RCC->CR |= RCC_CR_MSION;
+		while (!(RCC->CR & RCC_CR_MSIRDY)) ;
+		RCC->CFGR &= ~RCC_CFGR_SW;
+		while ((RCC->CFGR & RCC_CFGR_SWS) != 0) ;
+	}
+
 	/* 3 wait states are required at 64 MHz in voltage range 1; set them
 	 * before raising the clock (harmless at 4 MHz). */
 	FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_3WS
@@ -208,6 +217,9 @@ static void spi2_wait_idle(void)
 
 #define OTP_DISPLAY_MGG	2	/* FuriHalVersionDisplayMgg */
 
+static void i2c1_init(void);
+static int lp5562_init(void);
+
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
 	spi2_speed(SPI_DIV_DISPLAY);
@@ -243,6 +255,9 @@ void hal_lcd_init(void)
 	hal_delay_ms(1);
 	if (lcd_is_mgg()) lcd_cmds(init_mgg, sizeof init_mgg);
 	else lcd_cmds(init_erc, sizeof init_erc);
+
+	i2c1_init();
+	if (lp5562_init() == 0) hal_backlight(255);
 }
 
 void hal_lcd_flush(const uint8_t *fb)
@@ -261,6 +276,94 @@ void hal_lcd_flush(const uint8_t *fb)
 		spi2_wait_idle();
 		LCD_CS(0);
 	}
+}
+
+/*===========================================================================*
+ *				I2C1 ("power" bus) and LP5562		     *
+ *===========================================================================*/
+/* I2C1 on PA9 (SCL) / PA10 (SDA), 100 kHz, as the stock firmware (timing
+ * value for a 64 MHz PCLK1).  The bus also carries the charger and fuel
+ * gauge.  The LP5562 LED driver runs the display backlight (white channel)
+ * and the RGB status LED. */
+#define I2C_TIMING_100K	0x10707DBC
+#define LP5562_ADDR	0x30		/* 7-bit (0x60 in 8-bit notation) */
+#define I2C_TIMEOUT_MS	5
+
+static int i2c_ready;
+
+static void i2c1_init(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_I2C1EN;
+	(void) RCC->APB1ENR1;
+	gpio_cfg(GPIOA, 9, MODE_AF, PULL_NONE, 4);
+	gpio_cfg(GPIOA, 10, MODE_AF, PULL_NONE, 4);
+	GPIOA->OTYPER |= (1u << 9) | (1u << 10);		/* open drain */
+	I2C1->CR1 = 0;
+	I2C1->TIMINGR = I2C_TIMING_100K;
+	I2C1->CR1 = I2C_CR1_PE;
+	i2c_ready = 1;
+}
+
+/* Write len bytes to a device; 0 on success, -1 on NACK or timeout. */
+static int i2c1_write(uint8_t addr, const uint8_t *buf, unsigned len)
+{
+	uint32_t start = DWT->CYCCNT;
+	int r = 0;
+
+	if (!i2c_ready) return -1;
+	while (I2C1->ISR & I2C_ISR_BUSY)
+		if (ms_since(start) > I2C_TIMEOUT_MS) return -1;
+	I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+	I2C1->CR2 = ((uint32_t) addr << 1) | (len << I2C_CR2_NBYTES_Pos)
+		  | (1u << I2C_CR2_AUTOEND_Pos) | (1u << I2C_CR2_START_Pos);
+	while (len > 0) {
+		if (I2C1->ISR & I2C_ISR_NACKF) { r = -1; break; }
+		if (I2C1->ISR & I2C_ISR_TXIS) {
+			I2C1->TXDR = *buf++;
+			len--;
+			continue;
+		}
+		if (ms_since(start) > I2C_TIMEOUT_MS) { r = -1; break; }
+	}
+	while (!(I2C1->ISR & I2C_ISR_STOPF))
+		if (ms_since(start) > I2C_TIMEOUT_MS) { r = -1; break; }
+	if (I2C1->ISR & I2C_ISR_NACKF) r = -1;
+	I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+	return r;
+}
+
+static int lp5562_write(uint8_t reg, uint8_t val)
+{
+	uint8_t b[2] = { reg, val };
+
+	return i2c1_write(LP5562_ADDR, b, 2);
+}
+
+/* Register sequence from the stock firmware (lib/drivers/lp5562.c). */
+static int lp5562_init(void)
+{
+	if (lp5562_write(0x0D, 0xFF) < 0) return -1;	/* reset */
+	lp5562_write(0x08, 0x61);	/* config: int. clock, power save, PWM HF */
+	lp5562_write(0x70, 0x00);	/* LED map: all channels under I2C control */
+	lp5562_write(0x00, 0xC0);	/* enable: CHIP_EN, LOG_EN */
+	hal_delay_ms(1);		/* > 488 us after writing register 0 */
+	lp5562_write(0x0F, 150);	/* white (backlight) current: 15 mA */
+	lp5562_write(0x07, 20);		/* red, green, blue: 2 mA */
+	lp5562_write(0x06, 20);
+	lp5562_write(0x05, 20);
+	return 0;
+}
+
+void hal_backlight(unsigned level)
+{
+	lp5562_write(0x0E, level > 255 ? 255 : level);
+}
+
+void hal_led(unsigned r, unsigned g, unsigned b)
+{
+	lp5562_write(0x04, r);
+	lp5562_write(0x03, g);
+	lp5562_write(0x02, b);
 }
 
 /*===========================================================================*

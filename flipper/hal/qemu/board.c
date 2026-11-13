@@ -207,3 +207,6 @@ void hal_usb_poll(void) { }
 int hal_usb_connected(void) { return 0; }
 unsigned hal_usb_write(const void *buf, unsigned n) { (void) buf; return n; }
 int hal_usb_getc(void) { return -1; }
+
+void hal_backlight(unsigned level) { (void) level; }
+void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }

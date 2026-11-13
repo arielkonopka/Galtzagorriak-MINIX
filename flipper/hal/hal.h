@@ -42,6 +42,8 @@ void hal_uart_rx_irq(int on);		/* receive interrupt on/off */
 #define LCD_H 64
 void hal_lcd_init(void);
 void hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes */
+void hal_backlight(unsigned level);	/* 0 (off) .. 255; on after lcd_init */
+void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
 
 /* Buttons: bitmask of currently pressed keys. */
 #define BTN_UP    0x01
