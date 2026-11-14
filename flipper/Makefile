@@ -7,7 +7,8 @@
 
 BOARD	?= qemu
 PROG	?= m0
-BUILD	:= build/$(BOARD)
+# LATTRACE=1: the latency trace build (spec R0.8e), in its own directory.
+BUILD	:= build/$(BOARD)$(if $(LATTRACE),-lat)
 
 CROSS	?= arm-none-eabi-
 CC	:= $(CROSS)gcc

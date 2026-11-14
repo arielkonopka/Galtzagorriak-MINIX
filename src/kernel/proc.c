@@ -173,6 +173,11 @@ message *m_ptr;			/* pointer to message buffer */
    * Handler mode and halt the system (S6). */
   if ((vir_bytes) m_ptr & (sizeof(long) - 1)) return(EFAULT);
 
+#if LATTRACE
+  if (istaskp(caller_ptr) && m_ptr->m_type == REVIVE)
+	lat_revive(m_ptr->REP_PROC_NR);
+#endif
+
   /* User processes are only allowed to send to FS and MM.  Check for this. */
   if (isuserp(caller_ptr) && !issysentn(dest)) return(E_BAD_DEST);
   dest_ptr = proc_addr(dest);	/* pointer to destination's proc entry */

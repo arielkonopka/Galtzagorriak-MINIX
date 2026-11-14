@@ -281,6 +281,9 @@ PUBLIC void mpu_switch()
   int i, n;
   static int warned;
 
+#if LATTRACE
+  lat_run(rp);
+#endif
   if (rp == mpu_proc || !(rp->p_reg.control & CONTROL_NPRIV)) return;
   mpu_proc = rp;
 
@@ -432,10 +435,16 @@ unsigned exc;
 PUBLIC void lock()
 {
   __asm volatile ("cpsid i" : : : "memory");
+#if LATTRACE
+  lat_lock();
+#endif
 }
 
 PUBLIC void unlock()
 {
+#if LATTRACE
+  lat_unlock();
+#endif
   __asm volatile ("cpsie i" : : : "memory");
 }
 

@@ -427,6 +427,7 @@ register message *m_ptr;	/* pointer to request message */
 #define NLEN (sizeof(rp->p_name)-1)
 
   if (!isoksusern(m_ptr->PROC1)) return E_BAD_PROC;
+  LAT_EVENT(LE_EXEC, m_ptr->PROC1);
   /* PROC2 field is used as flag to indicate process is being traced */
   if (m_ptr->PROC2) cause_sig(m_ptr->PROC1, SIGTRAP);
   sp = (reg_t) m_ptr->STACK_PTR;
@@ -484,6 +485,7 @@ message *m_ptr;			/* pointer to request message */
 
   parent = m_ptr->PROC1;	/* slot number of parent process */
   proc_nr = m_ptr->PROC2;	/* slot number of exiting process */
+  LAT_EVENT(LE_EXIT, proc_nr);
   if (!isoksusern(parent) || !isoksusern(proc_nr)) return(E_BAD_PROC);
   rp = proc_addr(parent);
   rc = proc_addr(proc_nr);

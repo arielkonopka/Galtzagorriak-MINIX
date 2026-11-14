@@ -31,6 +31,7 @@
 #include <minix/com.h>
 #include "../proc.h"
 #include "hal.h"
+#include <minix/lat.h>
 
 #define LCD_MINOR	0
 #define BTN_MINOR	1
@@ -104,6 +105,9 @@ PUBLIC void flipdev_task()
 	case DEV_OPEN:
 	case DEV_CLOSE:
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
+#if LATTRACE
+		if (fm.DEVICE == LAT_MINOR) r = OK;
+#endif
 		break;
 	case DEV_READ:
 	case DEV_WRITE:
@@ -141,6 +145,13 @@ message *m_ptr;
 	return(EFAULT);
 
   switch (m_ptr->DEVICE) {
+#if LATTRACE
+  case LAT_MINOR:			/* the latency trace (arm/lat.c) */
+	if (m_ptr->m_type == DEV_READ) return(lat_read(user, count));
+	lat_clear();
+	return(count);
+#endif
+
   case LCD_MINOR:
 	if (count > FB_SIZE) count = FB_SIZE;
 	if (m_ptr->m_type == DEV_READ) {
@@ -160,6 +171,7 @@ message *m_ptr;
 			lc_on = FALSE;
 		}
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
+		LAT_EVENT(LE_LCD, m_ptr->PROC_NR);
 		hal_lcd_flush(fbuf);
 	}
 	return(count);
@@ -167,8 +179,10 @@ message *m_ptr;
   case BTN_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (count < 2) return(EINVAL);
-	if (ev_head != ev_tail)
+	if (ev_head != ev_tail) {
+		LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
 		return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
+	}
 	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
 	if (rd_waiting) return(EIO);		/* one reader at a time */
 	rd_waiting = TRUE;
@@ -287,6 +301,7 @@ PRIVATE void do_hardint()
   }
   if (!rd_waiting || ev_head == ev_tail) return;
   rd_waiting = FALSE;
+  LAT_EVENT(LE_BREPLY, rd_proc);
   r = deliver(rd_proc, rd_vir, rd_count);
   reply(REVIVE, rd_caller, rd_proc, r);
 }
@@ -321,6 +336,7 @@ PUBLIC void flipdev_tick()
 	if (ev_head - ev_tail < NEVENTS) {
 		ev_key[ev_head % NEVENTS] = b;
 		ev_down[ev_head % NEVENTS] = (now & b) != 0;
+		if (now & b) LAT_EVENT(LE_BTN, b);
 		ev_head++;
 	}
   }
