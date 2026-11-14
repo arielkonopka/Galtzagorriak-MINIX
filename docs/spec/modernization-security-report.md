@@ -631,6 +631,8 @@ instead of writing into memory that now belongs to someone else.
   Pick victims whose removal produces the largest contiguous hole; break ties by
   longest-blocked. Keep a minimum resident time (e.g. 1 s) against thrashing. No background
   swapping: it would wear the card and cost latency for nothing.
+  *(Superseded 2026-11-14 by spec R12.5 (amended): a limited idle-priority reserve swap-out is
+  needed for the launch budget L6.)*
 - **Swap-in:** needs an exact-range allocation in MM (`alloc_mem_at(base, len)` in `alloc.c`).
   If the range is held by non-eligible processes, the wake stays pending and is retried
   whenever memory is freed. `free -v` shows such processes as "swapped, waiting for range".
