@@ -5,6 +5,8 @@ Revision 1 (same day) covered security, RAM, swap and flash-installed programs; 
 renumbered here (section C and the Roadmap list the mapping).
 Addition (2026-11-14, same revision): section I (time in UTC, Year 2038, location, first-boot
 wizard), Phase 2d and Phase 18b.
+Addition (2026-11-14): Phase 12d–12f (background-app tiers, park/hibernate API, two-ended
+placement, swap without a card, manual notes; owner request).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -122,6 +124,7 @@ Mechanisms every phase must respect:
   foreground FS request between chunks. Swap-out is decided ahead of need: MM keeps a free-RAM
   reserve (default 16 KB) by swapping idle processes in the background, so a launch does not wait
   for a swap-out. Only the launcher is pre-swapped-in when an app exits (L7).
+  Limits and order: R12.5 (amended), R12.23. Swap goes to the SD card only (R12.1).
 - **R0.8e Measurement tool.** Phase 1 adds `make BOARD=flipper latcheck` and a kernel trace using
   the DWT cycle counter: timestamps for button IRQ, `/dev/buttons` reply, LCD DMA start, IRQ entry,
   mask/unmask (longest masked interval), REVIVE→run and flash stalls, kept in a 32-entry ring
@@ -182,7 +185,8 @@ devices. That plan still fits protocol daemons (`bled`, `rpcd`) that start on de
 **A.5 Memory tiers.**
 - **Code:** installed region (hot: system and device apps) → run-time cache (warm: other
   commands, packages from SD) → RAM (cold fallback).
-- **Data:** RAM, plus swap for idle processes.
+- **Data:** RAM, plus swap for idle processes. Background apps use the cheapest of four tiers
+  (event, hibernate, park, stream; Phase 12d), so most of them hold no RAM while waiting.
 
 **A.6 Hardware-first RAM saving (standing rule from the project owner, 2026-11-14).**
 Whenever a hardware-specific approach can save RAM **safely**, use it. Concretely:
@@ -1958,6 +1962,134 @@ Design rationale: report Part 4.
   - after swap-in the kernel pokes the driver to retry.
 - **R12.15** Swap long-lived shadow copies (real `fork` without `exec`) instead of keeping them in RAM.
 
+### 12d. Background apps: four tiers (owner request, 2026-11-14)
+
+The stock firmware has no swap, so its background work lives inside one always-running image. Here
+background work must either be very small or be swapped cleverly. Each background job picks the
+**cheapest tier that does the job**. The tier is declared in the package manifest
+(`Background: event|hibernate|park|stream`) and checked by the launcher and `pkg`.
+
+| Tier | While waiting | RAM while waiting | Process slot while waiting | Back to work | Needs swap? |
+|---|---|---|---|---|---|
+| 0 `event` | no process; the trigger is a `timed` timer (F.2) held in RTC Alarm A, or an INIT event | 0 B | no | exec of installed text, ≈ 50–150 ms | no |
+| 1 `hibernate` | no process; the app saved a small state blob and exited | 0 B (blob on SD) | no | exec + read blob, ≈ 100–200 ms, at **any** address | no |
+| 2 `park` | process blocked in MM (`sigsuspend`), image swapped to SD when memory is needed | 0 B once swapped (whole image until then) | **yes** (one of 13 user slots) | swap-in at the **same** address, L6 ≤ 600 ms | yes (12a/12b) |
+| 3 `stream` | live radio, DMA or USB stream (never swappable, R12.3) | the logic sits in a kernel device task (section G), ≤ 64 B; a user part is ≤ 4 KB or exits | only if a user part stays | immediate | no |
+
+- **R12.16 Tier rule.** An app MUST use tier 0 or 1 when it can.
+  - Anything with a deadline (alarms, reminders, sensor alarms, logging at a set time) MUST be
+    tier 0: a swapped image can wait for its address range (R12.6), a fresh exec cannot.
+  - Tier 2 is for stock ports and other apps whose state is a large, pointer-rich heap that
+    can't be serialized cheaply.
+  - Tier 3 user parts above 4 KB need a measured reason in the PR.
+- **R12.17 Why there is no "resident stub" process.** The smallest MINIX process costs about
+  1.5–2 KB (minimal stack, libc data, `proc`/`mproc`/`fproc` entries) and one of only 16 process
+  slots (`NR_PROCS`, 13 for users). So the "tiny resident stub" of an app is not a process: it is
+  a registration that costs 0 B of process RAM. The stub forms are a `timed` timer file (tier 0),
+  the hibernation record (tier 1), the parked `mproc` entry (tier 2), or kernel device-task state
+  (tier 3).
+- **R12.18 Hibernate API** (in `libapp`, flash only; works without swap, so it MAY land with
+  Phase 7b):
+  - `app_hibernate(const void *state, size_t len, const struct app_wake *wake)` writes `state`
+    (≤ 4 KB) to `/var/hib/<uid>/<app>` (mode 0600, owner the app's uid; on the SD card, never in
+    internal flash), registers the wake sources, and exits with status 0;
+  - wake sources: a `timed` timer (`Action: run` with `--resume`), "user opened the app from the
+    launcher", a `notify_post()` reply. More sources (GPIO edge, sensor threshold) are added by the
+    phase that adds the driver, as INIT events like `SIGRTC`;
+  - `app_resume(void *buf, size_t max)` returns the blob's length (0 = fresh start) and removes the file;
+  - the blob holds **no pointers** (offsets and ids only), so the new process may live anywhere:
+    this is the relocation answer for tier 1;
+  - a blob is not encrypted: apps MUST NOT put secrets in it (keys go to the CPU2 enclave, R17.1).
+    A secret-holding app uses tier 2, whose image is encrypted (12b);
+  - an SD write of ≤ 4 KB goes through the FS cache as idle work; 0 flash writes.
+- **R12.19 Park API** (in `libapp` and in the `libfuri` main loop):
+  - `app_park(const struct app_wake *wake)` blocks the process in `sigsuspend()` with the given
+    timer (`alarm`/`setitimer`), so it is in the `PAUSED` state, which 12a may swap. It returns
+    when the app is brought to the front again (`SIGFG`, new) or its timer fires;
+  - a parked app MUST first release `/dev/lcd`, `/dev/buttons` and every radio or DMA device; R12.3
+    still applies, and a process holding one is refused with `EBUSY`;
+  - the `libfuri` shim does this for stock ports: when the launcher sends `SIGBG` (new), the main
+    loop leaves its `/dev/buttons` read, which is an FS wait and not swappable before 12c, closes
+    its devices and calls `app_park()`. Timers created with `furi_timer` become the park timer
+    (the earliest one); when it fires, the app runs at background priority, without screen or buttons;
+  - parking needs no swap: without a swap device, a parked app keeps its RAM (see R12.24).
+- **R12.20 Launcher support.**
+  - Apps with `Background: park` are parked on long-press Back instead of being ended. They end
+    from their own menu, or from the launcher's new **Running** list (Back on an entry = end with
+    `SIGTERM`, then `SIGKILL` after 3 s, as R4b.8).
+  - Other apps keep the stock behaviour: long-press Back ends them.
+  - The Running list shows each parked app with its state (`in RAM`, `on SD`, `waiting for
+    memory`) and its RAM, and is the place to free memory by hand.
+  - Owner question: is long-press Back the right gesture for parking, or should parking be an
+    explicit "Background" menu item, with long-press Back always ending the app as in stock?
+- **R12.21 Size guidance** (for app authors; the manual repeats it):
+  - tier 2 image (data + heap + stack) ≤ 16 KB SHOULD be the target: its swap-in is ≈ 55 ms with
+    single-block SD (≈ 300 KB/s) and ≈ 15–25 ms with multi-block (R4b.9). 32 KB is ≈ 110 ms and
+    ≈ 30–50 ms. AES1 GCM adds about 1 ms per 16 KB;
+  - all tier 3 user parts together ≤ 8 KB.
+
+### 12e. Placement, responsiveness and the card
+
+- **R12.22 Two-ended placement (relocation without an MMU).** The Cortex-M4 MPU protects but
+  does not translate. Data and stack hold absolute pointers (heap, frames, return addresses, GOT),
+  so neither swap-in nor compaction can move an image. A base register (`r9` with
+  `-msingle-pic-base`) would only relocate globals, not heap pointers, and is rejected for image swap.
+  Instead, MM places processes so that a swapped image usually finds its range free again:
+  - the foreground app (started through `FG_SET`, R4b.8) gets the **lowest** hole that fits (first fit);
+  - all other user processes, including the launcher, shells, daemons and `timed` children, get
+    the **highest** hole that fits (last fit);
+  - so foreground launches come and go at the bottom, and parked images return to the top;
+  - this is a rule in `alloc.c` with a flag passed by `exec`, and costs 0 B RAM.
+  Tier 1 avoids the problem completely (R12.18).
+- **R12.5 amended: when swap-out runs.** Two triggers, and both write only to the SD card:
+  - **(a) on demand**, as before: `new_mem`, `do_fork` or `do_brk` can't allocate. The victim
+    must have been eligible for ≥ 1 s;
+  - **(b) reserve** (rule R0.8d): at idle priority, when free RAM is below the reserve (default
+    16 KB, `svrctl(MMSWAPRES)`, 0 = off). The victim must have been eligible for ≥ 10 s (parked
+    apps first, then idle shells, then the launcher if an app is in front). At most 256 KB per
+    minute are written this way. A victim whose wake is already pending is skipped.
+  This replaces Part 4's "no background swapping": the reserve is what makes L6 hold, and with
+  (b)'s limits SD wear stays small. Typical use is 50–200 swap-outs a day of 8–32 KB, so ≤ 6 MB a
+  day, which is nothing for a card's wear levelling.
+- **R12.23 Swap-in priority.** A swap-in the user is waiting for (an app chosen in the Running list,
+  the launcher after an app exits, L7) runs in the interactive class: it goes ahead of any
+  reserve swap-out, between 4 KB chunks. Swap-ins for timer or signal wakes of background
+  processes run at idle priority. A swap-in never preempts a foreground FS request (R0.8d).
+- **R12.1 amended: only the SD card.** `MMSWAPON` MUST refuse any device that is not a partition
+  on the SD card (WINCHESTER major), so swap never goes to internal flash, the installed region, the
+  run-time cache or a RAM disk. A swap file is not allowed (as before). Swap causes **0 flash
+  writes** (rule 0.2 and the owner rule on run-time flash writes in `next-tasks.md`).
+- **R12.24 No swap device.** If the card has no swap partition, or `/etc/rc.conf` says `swap=off`:
+  - tiers 0, 1 and 3 work unchanged (they need only the root FS, which is on the card anyway);
+  - parking works, but the image stays in RAM;
+  - when an app can't start for lack of memory, the launcher says "Not enough memory" and opens
+    the Running list, so the user can end a parked app. Nothing is ended automatically.
+- **R12.25 Card removed or failing.** The Flipper's card-detect line (as stock
+  `furi_hal_sd_is_present`) or a swap I/O error:
+  - MM turns swap off at once (no more swap-outs);
+  - every swapped process is killed with `SIGKILL` when it would be swapped in (never run with a
+    partial image), and the console and the Running list say "lost: SD card removed";
+  - resident processes are not affected by swap. They may still fail if the root FS is gone,
+    which is the same as without swap;
+  - a swap-in read error is handled like a GCM tag mismatch (R12.12).
+- **R12.26 Smaller swapper state.** MM does not keep a stack length per slot: on swap-out it takes
+  `sp` with `sys_getsp()` (already used by `brk`), and the kernel keeps the saved PSP while the
+  process is swapped, so `[sp, S.end)` is known on swap-in. That saves 64 B over Part 4. The
+  per-slot write counters (16 × 4 B, needed against rollback, R12.10) and the boot nonce SHOULD
+  live in SRAM2 (A.6). Total MM swap state ≤ 96 B.
+
+### 12f. Notes for the system manual
+
+- The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
+  "parked" (2) and "runs in the radio chip or USB driver" (3). Which built-in apps use which tier.
+- The Running list: what `in RAM`, `on SD` and `waiting for memory` mean, and how to end an app.
+- Swap is on the SD card only, encrypted with a key that is new at every boot. Nothing swapped
+  survives a reboot, and removing the card ends the swapped apps.
+- How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
+  effect: parked apps stay in RAM.
+- For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
+  secrets in it, size targets).
+
 Acceptance criteria:
 - AC12.1 QEMU: start an app that needs more memory than is free while the launcher and a shell are
   idle. The app starts, `free -v` shows the shell and launcher swapped, and both work normally after
@@ -1973,6 +2105,17 @@ Acceptance criteria:
 - AC12.6 A kill of a swapped process frees its slot without reading it; 100 swap cycles in a loop leave
   free memory and slot use unchanged.
 - AC12.7 No regression in AC1.x and AC3.x tests.
+- AC12.8 Tier 1: `tests/hibernate` saves a 1 KB blob, exits, is resumed by a timer and by the
+  launcher, and gets the same blob back at a different load address; `/var/hib` is empty after.
+- AC12.9 Tier 2: a stock port (e.g. the Sub-GHz frequency analyzer without an open stream, or the
+  Snake game) is parked, swapped out by the reserve, brought back from the Running list with its
+  state intact, within L6 (≤ 600 ms).
+- AC12.10 Placement: after 50 random launch/park/resume cycles with two parked apps, no parked app
+  is ever "waiting for memory" for more than one foreground session.
+- AC12.11 `MMSWAPON` on any non-SD device fails with `EINVAL`; a full day of the AC12.9 cycle
+  writes 0 internal-flash pages (flash write counter, Phase 2b).
+- AC12.12 Card pulled while two apps are swapped: both are reported lost, nothing else crashes;
+  with `swap=off`, parking keeps images in RAM and a launch that doesn't fit opens the Running list.
 
 Responsiveness (R0.8d):
 - AC12.R1 While swap-out of an idle 32 KB process runs, the foreground app meets L1 and L2.
@@ -1983,7 +2126,8 @@ Responsiveness (R0.8d):
 
 RAM budget:
 - kernel +0 B (one flag bit);
-- MM: at most +160 B (counters, stack lengths, nonce, swap state);
+- MM: at most +96 B (counters, nonce, swap state; R12.26), SHOULD be in SRAM2;
+- `libapp` park/hibernate, launcher Running list, two-ended placement: flash only, +0 B;
 - driver: +0 B (reuse the bounce buffer, or encrypt in place);
 - per process: 0.
 
@@ -2462,6 +2606,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Sub-GHz, LF RFID | 8 |
 | USB HID, mass storage, CDC | 10 |
 | Swap (Part 4), A13 | 12 |
+| Background apps: tiers, park/hibernate API, Running list (owner request) | 12d–12f (R12.18 may land with 7b) |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
