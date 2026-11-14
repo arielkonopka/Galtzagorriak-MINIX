@@ -5,7 +5,7 @@ Each task goes on its own branch, branched from **main** (not stacked), and gets
 The usual gates apply: `ramcheck` (0 B unless stated), QEMU `M2 USER PASS`, and `lat` numbers before/after in PORTING.md.
 
 ## Standing rule (owner, 2026-11-14 20:41Z): few flash writes at run time
-When optimizing RAM or flash, keep **run-time** writes to internal flash to a minimum. Writes at build or install time (`make base-flash`, `pkg install --flash`, Phase 2b installed region) are fine. Every PR that writes flash at run time must say how often it writes in normal use and why that write can't happen at build or install time. Reviews check this.
+When optimizing RAM or flash, keep **run-time** writes to internal flash to a minimum. Writes at build or install time (`make base-flash`, `pkg install --flash`, Phase 2b installed region) are allowed, but should **also be as rare as possible**: only write pages whose contents changed (compare before erase), append instead of rewriting, and don't compact or reformat unless space runs out. Every PR that writes flash at run time must say how often it writes in normal use and why that write can't happen at build or install time. Reviews check this.
 
 ## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
