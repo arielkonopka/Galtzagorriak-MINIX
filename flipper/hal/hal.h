@@ -63,6 +63,17 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
 
+/* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
+ * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
+ * new level (0 = carrier seen, "mark").  Transmit: a carrier (38 kHz, 1/3
+ * duty) switched on and off; the caller times marks and spaces with
+ * hal_cycles() (core clock cycles, hal_cpu_hz() per second). */
+int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
+void hal_ir_rx_on(int on);
+int hal_ir_rx_edge(void);
+void hal_ir_carrier(int on);
+uint32_t hal_cycles(void);
+
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
  * hal_usb_poll() runs the USB stack and belongs in the USB interrupt. */
 int hal_usb_init(void);

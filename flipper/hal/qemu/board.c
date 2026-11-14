@@ -154,6 +154,11 @@ void hal_wdt_start(void) { }
 void hal_wdt_kick(void) { }
 void hal_tone(unsigned hz) { (void) hz; }
 void hal_vibro(int on) { (void) on; }
+int hal_ir_irq(void) { return -1; }	/* no infrared in QEMU */
+void hal_ir_rx_on(int on) { (void) on; }
+int hal_ir_rx_edge(void) { return 1; }
+void hal_ir_carrier(int on) { (void) on; }
+uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */
 /* GPIO: remembered levels only, so programs can be tried in QEMU. */
 static unsigned char gpio_level[HAL_GPIO_PINS];
 int hal_gpio(unsigned pin, unsigned op)

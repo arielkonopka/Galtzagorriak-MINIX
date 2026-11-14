@@ -191,6 +191,17 @@ the device: GPIO levels with pull-up/down and as outputs; tone timing.
 Not yet: the 5 V header supply (charger/OTG over I2C), a buttons
 "input" device beyond /dev/buttons.
 
+Status of #9 (2026-11-14): `/dev/ir` (minor 7): receive through EXTI on
+PA0 (both edges timed with the cycle counter, a frame ends after 30 ms of
+silence; read returns 32-bit microsecond durations, mark first), send on
+PB9 = TIM1 CH3N with a 38 kHz carrier (1/3 duty), marks and spaces timed
+against the cycle counter.  Command `ir rx [-n N]` (raw + NEC decoding),
+`ir tx nec ADDR CMD`, `ir tx raw ...`.  Checked on the device with its own
+LED: an NEC frame sent and received by reflection decodes correctly,
+timings within ~1 %.  Next: more protocols in `ir` (Samsung32, RC5/RC6,
+SIRC, Kaseikyo as in the stock firmware), carrier frequency per frame,
+a file format for remotes.
+
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
 changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
 buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz

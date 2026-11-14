@@ -20,6 +20,13 @@
  *				  0 low, 1 high (output), 2 input, 3 input
  *				  with pull-up, 4 with pull-down, 5 off
  *				read: one byte per pin, '0' or '1', from pin 0
+ *	minor 7  /dev/ir	infrared, "raw" timings: 32-bit little endian
+ *				durations in microseconds, mark first, then
+ *				space, mark, ... (an odd count).
+ *				read: one received frame (it ends after 30 ms
+ *				without carrier); blocks unless O_NONBLOCK
+ *				write: up to 256 durations, sent on a 38 kHz
+ *				carrier; returns when sent
  *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
@@ -39,7 +46,10 @@
 #define VIBRO_MINOR	4
 #define SPK_MINOR	5
 #define GPIO_MINOR	6
-#define LAST_MINOR	6
+#define IR_MINOR	7
+#define LAST_MINOR	7
+#define IR_MAX		256		/* durations per frame */
+#define IR_GAP_MS	30		/* silence that ends a frame */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -61,6 +71,17 @@ PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 
+/* Infrared receive, filled by ir_int() at interrupt level. */
+PRIVATE u32_t ir_buf[IR_MAX];
+PRIVATE volatile unsigned ir_n;		/* durations in ir_buf */
+PRIVATE volatile int ir_active;		/* a frame is coming in */
+PRIVATE volatile int ir_done;		/* a whole frame, not read yet */
+PRIVATE volatile int ir_level = 1;	/* receiver output, 0: mark */
+PRIVATE volatile u32_t ir_last;		/* hal_cycles() of the last edge */
+PRIVATE u32_t cyc_us;			/* cycles per microsecond */
+PRIVATE int ir_waiting, ir_caller, ir_proc, ir_count;
+PRIVATE vir_bytes ir_vir;
+
 /* A process blocked in a read of /dev/buttons. */
 PRIVATE int rd_waiting;
 PRIVATE int rd_caller, rd_proc, rd_count;
@@ -70,6 +91,9 @@ FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
+FORWARD _PROTOTYPE( int ir_int, (int irq)				);
+FORWARD _PROTOTYPE( int ir_deliver, (int proc, vir_bytes vir, int count) );
+FORWARD _PROTOTYPE( int ir_send, (phys_bytes user, int count)		);
 
 /*===========================================================================*
  *				flipdev_task				     *
@@ -79,6 +103,12 @@ PUBLIC void flipdev_task()
   int r;
 
   last_buttons = hal_buttons();
+  cyc_us = hal_cpu_hz() / 1000000;
+  if ((r = hal_ir_irq()) >= 0) {
+	put_irq_handler(r, ir_int);
+	hal_ir_rx_on(1);
+	enable_irq(r);
+  }
 
   while (TRUE) {
 	receive(ANY, &fm);
@@ -97,6 +127,7 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (ir_waiting && ir_proc == fm.PROC_NR) ir_waiting = FALSE;
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
 			note_i = note_n;
@@ -203,6 +234,21 @@ message *m_ptr;
 	return(count);
   }
 
+  case IR_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) return(ir_send(user, count));
+	if (count < 4) return(EINVAL);
+	if (ir_done)
+		return(ir_deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+								count));
+	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+	if (ir_waiting) return(EIO);		/* one reader at a time */
+	ir_waiting = TRUE;
+	ir_caller = m_ptr->m_source;
+	ir_proc = m_ptr->PROC_NR;
+	ir_vir = (vir_bytes) m_ptr->ADDRESS;
+	ir_count = count;
+	return(SUSPEND);
+
   case BL_MINOR:
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
@@ -253,6 +299,11 @@ PRIVATE void do_hardint()
 	sp_waiting = FALSE;
 	reply(REVIVE, sp_caller, sp_proc, sp_count);
   }
+  if (ir_waiting && ir_done) {			/* a frame came in */
+	ir_waiting = FALSE;
+	r = ir_deliver(ir_proc, ir_vir, ir_count);
+	reply(REVIVE, ir_caller, ir_proc, r);
+  }
   if (!rd_waiting || ev_head == ev_tail) return;
   rd_waiting = FALSE;
   r = deliver(rd_proc, rd_vir, rd_count);
@@ -279,6 +330,14 @@ PUBLIC void flipdev_tick()
 		interrupt(PRINTER);
 	}
   }
+  if (ir_active && ir_level == 1
+	&& hal_cycles() - ir_last > IR_GAP_MS * 1000 * cyc_us) {
+	ir_active = FALSE;			/* silence: the frame is over */
+	if (ir_n > 0) {
+		ir_done = TRUE;
+		if (ir_waiting) interrupt(PRINTER);
+	}
+  }
   if (changed == 0) return;
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
@@ -290,6 +349,82 @@ PUBLIC void flipdev_tick()
   }
   last_buttons = now;
   if (rd_waiting) interrupt(PRINTER);
+}
+
+
+/*===========================================================================*
+ *				ir_int					     *
+ *===========================================================================*/
+PRIVATE int ir_int(irq)
+int irq;
+{
+/* An edge from the infrared receiver: note the duration since the last. */
+  u32_t now = hal_cycles();
+  int level = hal_ir_rx_edge();
+
+  if (level == ir_level) return 1;	/* glitch, nothing changed */
+  ir_level = level;
+  if (ir_done) return 1;		/* last frame not read yet: drop */
+  if (!ir_active) {
+	if (level == 0) {		/* a frame starts with a mark */
+		ir_active = TRUE;
+		ir_n = 0;
+		ir_last = now;
+	}
+	return 1;
+  }
+  if (ir_n < IR_MAX) ir_buf[ir_n++] = (now - ir_last) / cyc_us;
+  ir_last = now;
+  return 1;
+}
+
+
+/*===========================================================================*
+ *				ir_deliver				     *
+ *===========================================================================*/
+PRIVATE int ir_deliver(proc, vir, count)
+int proc;
+vir_bytes vir;
+int count;
+{
+/* Hand the received frame to a reader; the receiver may take the next. */
+  phys_bytes user;
+  int n = ir_n * 4;
+
+  if (n > count) n = count & ~3;
+  if ((user = numap(proc, vir, (vir_bytes) n)) == 0) return(EFAULT);
+  phys_copy(vir2phys(ir_buf), user, (phys_bytes) n);
+  ir_done = FALSE;
+  return(n);
+}
+
+
+/*===========================================================================*
+ *				ir_send					     *
+ *===========================================================================*/
+PRIVATE int ir_send(user, count)
+phys_bytes user;
+int count;
+{
+/* Send marks and spaces.  Timed by the cycle counter against the start,
+ * so interrupts in between delay an edge a little but never add up. */
+  u32_t d[IR_MAX], t;
+  int i, n;
+
+  if (count % 4 != 0 || count == 0) return(EINVAL);
+  if (count > (int) sizeof(d)) count = sizeof(d);
+  phys_copy(user, vir2phys(d), (phys_bytes) count);
+  n = count / 4;
+  for (i = 0; i < n; i++)
+	if (d[i] > 1000000) return(EINVAL);	/* over a second: a mistake */
+  t = hal_cycles();
+  for (i = 0; i < n; i++) {
+	hal_ir_carrier((i & 1) == 0);
+	t += d[i] * cyc_us;
+	while ((i32_t) (hal_cycles() - t) < 0) ;
+  }
+  hal_ir_carrier(0);
+  return(count);
 }
 
 

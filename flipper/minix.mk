@@ -205,7 +205,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep
+PORTCMDS := mkpart pkg free gpio beep ir
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
@@ -301,7 +301,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.9
+BASE_VER := 3.10
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
