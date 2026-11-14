@@ -2,7 +2,9 @@
 """flsend - send packages to Galtzagorriak MINIX over the USB console and
 install them.
 
-Usage: flsend [-p /dev/ttyACM0] file.tar ...
+Usage: flsend [-p /dev/ttyACM0] [--flash] file.tar ...
+
+--flash: pkg get --flash, the programs also run from internal flash.
 
 Log in as root on the Flipper's console first and leave it at the shell
 prompt.  flsend types "pkg get", then sends each file as
@@ -38,6 +40,8 @@ def readuntil(fd, marks, secs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-p", "--port", default="/dev/ttyACM0")
+    ap.add_argument("--flash", action="store_true",
+                    help="install the programs into internal flash too")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
     for f in a.files:
@@ -55,7 +59,7 @@ def main():
     t[2] |= termios.CLOCAL | termios.CREAD
     termios.tcsetattr(fd, termios.TCSANOW, t)
     readuntil(fd, [], 0.5)
-    os.write(fd, b"pkg get\r")
+    os.write(fd, b"pkg get --flash\r" if a.flash else b"pkg get\r")
     out, m = readuntil(fd, [b"GPKG READY\n"], 10)
     if not m:
         sys.stdout.write(out.decode("latin-1"))

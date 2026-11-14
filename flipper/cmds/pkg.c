@@ -1,17 +1,22 @@
 /*	pkg - a very small package manager for Galtzagorriak	(Flipper port)
  *
- *	pkg install file.tar	install (or upgrade) a package
+ *	pkg install [--flash] file.tar
+ *				install (or upgrade) a package; --flash: its
+ *				programs also run from internal flash (root)
+ *	pkg flash file...	run these programs from internal flash
+ *	pkg unflash file...	stop that (their flash pages become free)
  *	pkg remove name		remove a package
  *	pkg list		list installed packages
  *	pkg info name		show a package's control file
  *	pkg files name		list the files a package installed
- *	pkg get			receive packages over the console and install
+ *	pkg get [--flash]	receive packages over the console and install
  *				them; on the PC: flipper/tools/flsend file.tar
  *
  * A package is a tar archive (name_version.tar, made on the PC with
  * flipper/tools/mkpkg.py) holding its files relative to / and a CONTROL
  * directory:
- *	CONTROL/control		Package:, Version:, Depends:, Description:
+ *	CONTROL/control		Package:, Version:, Depends:, Description:,
+ *				Flash: yes (as with install --flash)
  *	CONTROL/postinst	optional, run with sh after installing
  *	CONTROL/prerm		optional, run with sh before removing
  * The database is /usr/var/pkg/info: NAME.control, NAME.list (the files),
@@ -32,12 +37,16 @@
 #include <string.h>
 #include <termios.h>
 #include <unistd.h>
+#include <lib.h>
+#include <minix/callnr.h>
 
 #define DB	"/usr/var/pkg/info"
 #define TMPDIR	"/usr/tmp"
 #define LINE	256
 
 static char tmp[64];			/* unpack directory */
+static int to_flash;			/* install --flash */
+static int ctl_flash;			/* this package says Flash: yes */
 static char ctl_name[64], ctl_version[32], ctl_depends[LINE];
 
 static void cleanup(void);
@@ -119,6 +128,7 @@ static int read_control(const char *path)
 	size_t n;
 
 	ctl_name[0] = ctl_version[0] = ctl_depends[0] = 0;
+	ctl_flash = 0;
 	if ((f = fopen(path, "r")) == NULL) return -1;
 	while (fgets(line, sizeof line, f) != NULL) {
 		if ((n = strlen(line)) > 0 && line[n - 1] == '\n') line[n - 1] = 0;
@@ -131,6 +141,8 @@ static int read_control(const char *path)
 			strncpy(ctl_version, v, sizeof ctl_version - 1);
 		else if (strcmp(line, "Depends") == 0)
 			strncpy(ctl_depends, v, sizeof ctl_depends - 1);
+		else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0)
+			ctl_flash = 1;	/* spec R2b.5 */
 	}
 	fclose(f);
 	return ctl_name[0] != 0 ? 0 : -1;
@@ -205,6 +217,43 @@ static void make_parents(char *path)
 	}
 }
 
+/* Install a program's text in internal flash (op 0) or remove it (op 1):
+ * MM checks it (root, a file only root/bin could write), writes it once
+ * and reads it back (spec Phase 2b, R2b.5).  Returns 0 or -errno. */
+static int flash_op(const char *path, int op)
+{
+	message m;
+
+	m.m1_p1 = (char *) path;
+	m.m1_i1 = strlen(path) + 1;
+	m.m1_i2 = MI_INSTALL;
+	m.m1_i3 = op;
+	return _syscall(MM, MEMINFO, &m) < 0 ? -errno : 0;
+}
+
+static int is_program(const char *path)	/* separate I&D a.out? */
+{
+	unsigned char h[4];
+	int fd, n;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	n = read(fd, (char *) h, 4);
+	close(fd);
+	return n == 4 && h[0] == 0x01 && h[1] == 0x03 && (h[2] & 0x20);
+}
+
+static int flash_files(char **v, int n, int op)
+{
+	int i, e, r = 0;
+
+	for (i = 0; i < n; i++) {
+		if ((e = flash_op(v[i], op)) == 0) continue;
+		fprintf(stderr, "pkg: %s: %s\n", v[i], strerror(-e));
+		r = 1;
+	}
+	return r;
+}
+
 /* Copy each file named in the list from the scratch directory to its
  * place, keeping the mode; link first (same file system: no copy). */
 static int place_files(const char *listpath)
@@ -213,7 +262,7 @@ static int place_files(const char *listpath)
 	struct stat st;
 	FILE *list;
 	size_t n;
-	int r = 0;
+	int r = 0, e;
 
 	if ((list = fopen(listpath, "r")) == NULL) return -1;
 	while (fgets(line, sizeof line, list) != NULL) {
@@ -222,6 +271,7 @@ static int place_files(const char *listpath)
 		sprintf(src, "%s%s", tmp, line);
 		if (stat(src, &st) < 0) { r = -1; continue; }
 		make_parents(line);
+		(void) flash_op(line, 1);	/* the old version's flash copy */
 		unlink(line);
 		if (link(src, line) < 0) {
 			if (copy(src, line) < 0) {
@@ -233,6 +283,11 @@ static int place_files(const char *listpath)
 		/* owner as in the package (chown clears set-uid: first) */
 		chown(line, st.st_uid, st.st_gid);
 		chmod(line, st.st_mode & 07777);
+		/* last: the flash copy is bound to the ctime set just now */
+		if ((to_flash || ctl_flash) && S_ISREG(st.st_mode) && (st.st_mode & 0111)
+		    && is_program(line) && (e = flash_op(line, 0)) != 0)
+			fprintf(stderr, "pkg: %s stays in RAM: %s\n", line,
+								strerror(-e));
 	}
 	fclose(list);
 	return r;
@@ -359,7 +414,9 @@ static int remove_pkg(const char *name)
 	if ((list = fopen(buf, "r")) != NULL) {
 		while (fgets(line, sizeof line, list) != NULL) {
 			if ((n = strlen(line)) > 0 && line[n - 1] == '\n') line[n - 1] = 0;
-			if (line[0] == '/') unlink(line);
+			if (line[0] != '/') continue;
+			(void) flash_op(line, 1);	/* if it was there */
+			unlink(line);
 		}
 		fclose(list);
 	}
@@ -538,12 +595,27 @@ int main(int argc, char **argv)
 	if (stat(DB, &st) < 0 || !S_ISDIR(st.st_mode))
 		die(DB " is missing (is /usr mounted?)", NULL);
 	if (argc == 3 && strcmp(argv[1], "install") == 0) return install(argv[2]);
+	if (argc == 4 && strcmp(argv[1], "install") == 0
+			&& strcmp(argv[2], "--flash") == 0) {
+		to_flash = 1;
+		return install(argv[3]);
+	}
+	if (argc >= 3 && strcmp(argv[1], "flash") == 0)
+		return flash_files(argv + 2, argc - 2, 0);
+	if (argc >= 3 && strcmp(argv[1], "unflash") == 0)
+		return flash_files(argv + 2, argc - 2, 1);
 	if (argc == 3 && strcmp(argv[1], "remove") == 0) return remove_pkg(argv[2]);
 	if (argc == 2 && strcmp(argv[1], "list") == 0) return list_pkgs();
 	if (argc == 3 && strcmp(argv[1], "info") == 0) return cat(argv[2], "control");
 	if (argc == 3 && strcmp(argv[1], "files") == 0) return cat(argv[2], "list");
 	if (argc == 2 && strcmp(argv[1], "get") == 0) return get();
-	fprintf(stderr, "usage: pkg install file.tar | remove name | list | "
-			"info name | files name | get\n");
+	if (argc == 3 && strcmp(argv[1], "get") == 0
+			&& strcmp(argv[2], "--flash") == 0) {
+		to_flash = 1;
+		return get();
+	}
+	fprintf(stderr, "usage: pkg install [--flash] file.tar | remove name | "
+		"list | info name | files name | get [--flash] | flash file... | "
+		"unflash file...\n");
 	return 1;
 }

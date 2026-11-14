@@ -85,9 +85,10 @@ int main(int argc, char **argv)
 					"running), %lu of %lu KB at %08lx\n",
 					fi.entries, fi.running, fi.used / 1024,
 					fi.size / 1024, fi.cache_base);
-			printf("installed programs: %lu KB at %08lx; "
-				"CPU2 flash from %08lx\n", fi.inst_size / 1024,
-				fi.inst_base, fi.sfsa);
+			printf("installed programs: %d, %lu of %lu KB at "
+				"%08lx; CPU2 flash from %08lx\n",
+				fi.inst_entries, fi.inst_used / 1024,
+				fi.inst_size / 1024, fi.inst_base, fi.sfsa);
 		}
 	}
 	if (k) kstacks();

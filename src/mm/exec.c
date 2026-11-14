@@ -45,9 +45,10 @@ FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 							vir_bytes room)	);
 
 #if (CHIP == ARM_CM)
+PUBLIC char mbuf[ARG_MAX];	/* stack, zeroes; finst.c between execs */
 PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
-PRIVATE int fc_new;		/* text must be copied to flash first */
-PRIVATE int fc_bad;		/* copying failed: the process is killed */
+PRIVATE unsigned char fc_new;	/* text must be copied to flash first */
+PRIVATE unsigned char fc_bad;	/* copying failed: the process is killed */
 PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
 #endif
 #endif
@@ -68,7 +69,6 @@ PUBLIC int do_exec()
   register struct mproc *rmp;
   struct mproc *sh_mp;
   int m, r, fd, ft, sn;
-  static char mbuf[ARG_MAX];	/* buffer for stack and zeroes */
   static char name_buf[PATH_MAX]; /* the name of the file to exec */
   char *new_sp, *basename;
   vir_bytes src, dst, text_bytes, data_bytes, bss_bytes, stk_bytes, vsp;
@@ -133,7 +133,9 @@ PUBLIC int do_exec()
   /* Only files that nobody but their owner can have written, looked up
    * under their owner (S12, R1.4).  Others run with their text in RAM. */
   if (ft == SEPARATE && !(s_buf.st_mode & (S_IWGRP | S_IWOTH))) {
-	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
+	/* Installed by root first (R2b.4), then the run-time cache. */
+	fc_text = in_lookup(&s_buf, (unsigned long) text_bytes);
+	if (fc_text == 0) fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
 					(unsigned long) s_buf.st_uid);
 	if (fc_text == 0) {
 		fc_text = fc_reserve((unsigned long) text_bytes);

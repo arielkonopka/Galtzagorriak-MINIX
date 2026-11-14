@@ -51,9 +51,18 @@ u32_t *basep, *sizep;		/* region (all ops) */
   }
   hal_flash_region(basep, sizep);
   if (op == FL_INFO) return(OK);
-  if (addr < *basep || addr - *basep >= *sizep) return(EINVAL);
-  if (op == FL_WRITE && (len > *sizep - (addr - *basep) || len % 8 != 0))
-	return(EINVAL);
+  {	/* the cache or the installed programs (Phase 2b); only MM calls */
+	u32_t l[HAL_FL_N], b = *basep, n = *sizep;
+
+	if (addr - b >= n) {
+		hal_flash_layout(l);
+		b = l[HAL_FL_INST];
+		n = l[HAL_FL_INST_SIZE];
+	}
+	if (addr < b || addr - b >= n) return(EINVAL);
+	if (op == FL_WRITE && (len > n - (addr - b) || len % 8 != 0))
+		return(EINVAL);
+  }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 
   lock();
