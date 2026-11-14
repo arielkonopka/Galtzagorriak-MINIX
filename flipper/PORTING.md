@@ -372,6 +372,19 @@ pages once plus one 64-byte record; another 8 bytes when the version is
 replaced or removed; one directory page erase per 63 installs.  Static
 RAM: 0 B (MM 10172).
 
+R2b.6 (same day): `make BOARD=flipper base-flash` writes
+build/flipper/minix/minix-base.bin, minix.bin plus the programs of
+BASE_FLASH (sh, launcher, getty, login, ls, cat, cp, pkg, update, mount,
+printroot, test: 128 KB) in the installed region, with records that are
+not bound yet.  Flash it with DFU instead of minix.bin; /etc/rc runs
+`pkg bind /bin/*`, and the first boot afterwards binds each record to
+the file with the same SHA-256 text (on the Flipper: 12 texts, 18 files
+with the aliases [, clone, cpdir, ln, mv, rm).  Later boots: one MEMINFO
+call, nothing to do.  A base upgrade keeps them in flash: an unchanged
+text gets only a new record, no page is written.  Older cards need the
+`pkg bind /bin/*` line in /etc/rc added by hand (the base package does not
+carry /etc).
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

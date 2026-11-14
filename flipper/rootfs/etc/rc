@@ -20,6 +20,10 @@ test -f /etc/.setup-done && {
 	mount $home /home || echo "rc: cannot mount $home on /home"
 }
 
+# Programs built into the firmware's flash (make base-flash): bind them to
+# their files the first time (one hash each), then exec finds them directly.
+pkg bind /bin/*
+
 # Flush the buffer cache to the SD card every 30 seconds.
 update &
 
