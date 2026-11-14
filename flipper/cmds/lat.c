@@ -137,7 +137,15 @@ int main(int argc, char **argv)
 			: j == LE_LCD ? "lcd" : j == LE_EXEC ? "exec" : "exit", n);
 	}
 	printf("\n");
-	show("L1", "button -> next LCD frame", v, pairs(LE_BTN, LE_LCD, 0, 0, v));
+	/* L1: presses that change nothing on the screen (an app that does
+	 * not redraw) would pair with some much later frame: only frames
+	 * within a second count, the rest are reported apart. */
+	n = pairs(LE_BTN, LE_LCD, 0, 0, v);
+	for (i = j = 0; i < n; i++)
+		if (us(v[i]) < 1000000UL) v[j++] = v[i];
+	show("L1", "button -> next LCD frame", v, j);
+	if (n > j) printf("     (%d presses without a frame within 1 s)\n",
+								n - j);
 	show("L2", "button -> /dev/buttons answered", v,
 					pairs(LE_BTN, LE_BREPLY, 0, 0, v));
 	v[0] = li.mask_max;

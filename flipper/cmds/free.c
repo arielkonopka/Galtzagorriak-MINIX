@@ -79,10 +79,17 @@ int main(int argc, char **argv)
 
 		m.m1_p1 = (char *) &fi;
 		m.m1_i2 = MI_FCACHE;
-		if (_syscall(MM, MEMINFO, &m) == 0 && fi.size != 0)
-			printf("flash text cache: %d programs (%d running), "
-				"%lu of %lu KB\n", fi.entries, fi.running,
-				fi.used / 1024, fi.size / 1024);
+		if (_syscall(MM, MEMINFO, &m) == 0) {
+			if (fi.size != 0)
+				printf("flash text cache: %d programs (%d "
+					"running), %lu of %lu KB at %08lx\n",
+					fi.entries, fi.running, fi.used / 1024,
+					fi.size / 1024, fi.cache_base);
+			printf("installed programs: %d, %lu of %lu KB at "
+				"%08lx; CPU2 flash from %08lx\n",
+				fi.inst_entries, fi.inst_used / 1024,
+				fi.inst_size / 1024, fi.inst_base, fi.sfsa);
+		}
 	}
 	if (k) kstacks();
 	return 0;

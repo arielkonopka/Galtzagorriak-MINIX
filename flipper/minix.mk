@@ -123,7 +123,7 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c fcache.c
+	   table.c putk.c trace.c getset.c fcache.c finst.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
 	   protect.c time.c lock.c misc.c utility.c table.c putk.c
@@ -192,10 +192,24 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 		 tools/mkflash.py
 	python3 -I tools/mkflash.py $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@# The flash text cache starts 128 KB in (hal_flash_region()).
-	@test $$(stat -c %s $@) -le 131072 || \
-	   { echo "$@ is over 128 KB: it would overlap the flash text cache"; \
+	@# The installed programs start 192 KB in (hal_flash_layout(), R2b.1).
+	@test $$(stat -c %s $@) -le 196608 || \
+	   { echo "$@ is over 192 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
+
+# make base-flash: minix-base.bin = minix.bin with the programs used at boot
+# and login built into the installed region (R2b.6, tools/mkbaseflash.py).
+# Flash it with DFU like minix.bin, together with the base package or card
+# of the same build; /etc/rc binds them at the next boot (pkg bind).
+BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
+	      test
+$(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
+		      tools/mkbaseflash.py
+	python3 -I tools/mkbaseflash.py $< $@ \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x30000 \
+	   $(BASE_FLASH:%=$(MB)/bin/%)
+.PHONY: base-flash
+base-flash: $(MB)/minix-base.bin
 
 #############################################################################
 # User programs: position-independent (ld/user-pic.ld, -Wl,-q), converted
@@ -317,7 +331,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.34
+BASE_VER := 3.44
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

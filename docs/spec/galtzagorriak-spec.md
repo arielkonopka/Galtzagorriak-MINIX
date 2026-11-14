@@ -866,6 +866,66 @@ ABI number means for installing packages, and where the release notes are.
 
 ---
 
+## K. Pipes, structured text and GUI modules (owner discussion, 2026-11-14)
+
+**K.1 Pipes stay byte streams (decided).** PowerShell-style object pipes were analysed and
+rejected. PowerShell's pipeline is function calls inside one .NET process; objects are serialized
+anyway at every process boundary. Here every pipeline stage is its own MPU-isolated process, so
+object pipes would cost a type runtime and an object heap in every stage (≈ 2–8 KB RAM per stage,
+estimate), GC pauses on every stage (rule 0.8), and POSIX compatibility of `sh` and the ~75
+commands. What is kept from the idea:
+- **Structured text.** Commands that print records (sensor readings, radio scans, `ls`, `ps`,
+  logs, app data) get a flag **`-t`**: tab-separated values with one header line. Field names
+  carry type and unit: `_hz`, `_dbm`, `_ms`, `_c` (°C), `time` = UTC `time_t`. Escapes inside
+  fields: `\t`, `\n`, `\\`. 0 B RAM (streamed, one line on the stack); one shared helper in libc
+  (≈ 0.5 KB flash, R2b.9). Rule for every new command and app from now on; existing commands get
+  it when they are touched.
+- **Objects in Berry only**, inside one process (one heap, no serialization): a `pipe` module
+  (`where`, `sortby`, `head`, `map`) and a `tsv` module (`read`/`write`) at the edges. Part of 7c.
+- **JSON Lines only for export** to a phone or PC (`--json` where an export exists), never as an
+  internal format.
+- Not now, revisit only on demand: record-boundary pipes (packet mode, as Linux `O_DIRECT` pipes)
+  and CBOR sequences for large binary data.
+
+**K.2 Desktop and modules.** The GUI is one base app (the "desktop": status bar, home-screen
+tiles, notification list, app menu), extended by modules.
+- **Modules may be written in C, Berry or shell.** All talk to the desktop with the same
+  line protocol (K.3), so any language that can write a line works. **Modules whose logic has
+  settled are moved to C** (less RAM, no GC pauses); Berry and shell are for new, rarely run or
+  user-written modules. Owner rule, 2026-11-14.
+- **One process per module**, own uid and groups (A.3). Responsiveness wins over RAM: a GC pause
+  or bug in one module never stalls the desktop or other modules. Expected load: at most ~4
+  modules at once (≈ 16–24 KB if all are Berry; much less in C or with K.4).
+- **The desktop owns the screen and does navigation locally** (scrolling menus, moving focus).
+  Modules only get events such as "item 2 selected", so button → pixel (L1) does not depend on a
+  module being scheduled, swapped in or between GC cycles.
+- Complex apps may still take the whole screen as today (`libfuri`, Berry `gui` binding).
+
+**K.3 Desktop protocol (TSV lines).**
+- Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
+  `write()`, ≤ `PIPE_BUF`, so records from several modules never interleave (POSIX).
+- Records (first field = verb, second = module id): `tile`, `status`, `notify`, `window`
+  (menu, text, form), `close`. The desktop answers through a per-module reply FIFO with event
+  records (`select`, `back`, `input`, `redraw`).
+- The desktop keeps a fixed table (≈ 16 tiles × 48 B ≈ 0.8 KB, last 8 notifications ≈ 0.6 KB,
+  estimate) in its own data; nothing written to flash.
+- Debugging: typing a record on the USB console shows its effect. Reading the desktop FIFO with
+  `cat` would steal records, so the desktop gets a logging switch for watching traffic.
+
+**K.4 Alarms never depend on the desktop or a script.** A Berry or shell alarm module only edits
+the `timed` spool (F.2). Ringing is the C `alert` program with `FG_PREEMPT`, so an alarm rings
+even if the desktop or a module has crashed, and nothing is resident before it fires. Tile
+modules that refresh periodically run from `timed` and exit (0 B RAM between refreshes).
+
+**K.5 Default terminal editor: `mined`** (owner decision). Kept from MINIX 2.0, made safe and
+VT100-complete by task T8 (`next-tasks.md`). `ed` stays for scripts. A small text editor is
+part of the base system so scripts and settings can be edited on the device.
+
+For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
+C, Berry or shell, and the `mined` key table.
+
+---
+
 ## Roadmap: phase order
 
 Phases are ordered by what the next one needs, and by the stock features they unlock. Old numbers
@@ -2798,4 +2858,6 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (owner request) | 2d, R6.2, section I |
 | First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (owner request) | 18b, section I |
 | Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
+| Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (owner discussion) | section K, T10 |
+| `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

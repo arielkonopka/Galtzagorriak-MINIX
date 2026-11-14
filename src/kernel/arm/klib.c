@@ -45,11 +45,28 @@ u32_t *basep, *sizep;		/* region (all ops) */
   u32_t ctrl;
   int r;
 
+  if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA)) {
+	u32_t l[HAL_FL_N];		/* Phase 2b */
+
+	hal_flash_layout(l);
+	*basep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST] : l[HAL_FL_SFSA];
+	*sizep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST_SIZE] : 0;
+	return(OK);
+  }
   hal_flash_region(basep, sizep);
   if (op == FL_INFO) return(OK);
-  if (addr < *basep || addr - *basep >= *sizep) return(EINVAL);
-  if (op == FL_WRITE && (len > *sizep - (addr - *basep) || len % 8 != 0))
-	return(EINVAL);
+  {	/* the cache or the installed programs (Phase 2b); only MM calls */
+	u32_t l[HAL_FL_N], b = *basep, n = *sizep;
+
+	if (addr - b >= n) {
+		hal_flash_layout(l);
+		b = l[HAL_FL_INST];
+		n = l[HAL_FL_INST_SIZE];
+	}
+	if (addr < b || addr - b >= n) return(EINVAL);
+	if (op == FL_WRITE && (len > n - (addr - b) || len % 8 != 0))
+		return(EINVAL);
+  }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 
 #if LATTRACE
@@ -155,8 +172,10 @@ PUBLIC void cstart()
    * gets its own memory, set up by mpu_switch() on every switch to it.
    */
   MPU_RNR = 0;
-  MPU_RBAR = (u32_t) _stext & ~0x7FFFFu;
-  MPU_RASR = MPU_RASR_AP_RO_RO | (18 << 1) | MPU_RASR_ENABLE; /* 2^19 */
+  /* All 1 MB: the installed programs and the text cache reach up to
+   * CPU2's area (R2b.1); CPU2's own pages refuse CPU1 by themselves. */
+  MPU_RBAR = (u32_t) _stext & ~0xFFFFFu;
+  MPU_RASR = MPU_RASR_AP_RO_RO | (19 << 1) | MPU_RASR_ENABLE; /* 2^20 */
   MPU_CTRL = MPU_CTRL_PRIVDEFENA | MPU_CTRL_ENABLE;
   __asm volatile ("dsb; isb");
 

@@ -46,7 +46,7 @@ FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 							vir_bytes room)	);
 
 #if (CHIP == ARM_CM)
-PUBLIC char mbuf[ARG_MAX];	/* stack image; fcache.c between execs */
+PUBLIC char mbuf[ARG_MAX];	/* stack image; fcache.c, finst.c between execs */
 #endif
 #endif
 
@@ -141,7 +141,9 @@ PUBLIC int do_exec()
   /* Only files that nobody but their owner can have written, looked up
    * under their owner (S12, R1.4).  Others run with their text in RAM. */
   if (ft == SEPARATE && !(s_buf.st_mode & (S_IWGRP | S_IWOTH))) {
-	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
+	/* Installed by root first (R2b.4), then the run-time cache. */
+	fc_text = in_lookup(&s_buf, (unsigned long) text_bytes);
+	if (fc_text == 0) fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
 					(unsigned long) s_buf.st_uid);
 	fc_new = (fc_text == 0);	/* to be cached once it runs */
   }

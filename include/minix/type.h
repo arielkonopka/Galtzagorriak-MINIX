@@ -146,9 +146,13 @@ struct kstack {
 #define MI_KSTACKS	1
 #define MI_TRACE	2	/* m1_i1 = 1/0: report memory use at exit */
 #define MI_FCACHE	3	/* flash text cache: struct fcinfo to m1_p1 */
+#define MI_INSTALL	4	/* root: m1_p1 path, m1_i1 its length, m1_i3 0:
+			 * install its text in flash, 1: remove it */
 
 /* sys_flash() operations. */
-#define FL_INFO		0	/* cache region: base, size */
+#define FL_INFO		0	/* cache region: base, size; with addr: */
+#define FL_LAYOUT_INST	1	/*   the installed-programs region */
+#define FL_LAYOUT_SFSA	2	/*   where CPU2's flash starts */
 #define FL_ERASE	1	/* erase the page at addr */
 #define FL_WRITE	2	/* program len bytes at addr */
 
@@ -158,6 +162,11 @@ struct fcinfo {
   unsigned long used;		/* bytes in pages of live entries */
   int entries;			/* programs in the cache */
   int running;			/* of them in use by a process now */
+  unsigned long cache_base;	/* where the cache is */
+  unsigned long inst_base, inst_size;	/* installed programs (Phase 2b) */
+  unsigned long inst_used;	/* bytes in pages of installed programs */
+  int inst_entries;		/* programs installed */
+  unsigned long sfsa;		/* CPU2's flash starts here */
 };
 #endif
 

@@ -62,6 +62,50 @@ Spec: section J. Version 0.1.0 is already tagged (`v0.1.0`); this task puts it i
 - RAM: 0 B (strings in flash). Flash: ≤ 1.5 KB including `ver`. No run-time flash writes.
 - Add the `## Unreleased` line for each later feature PR from now on (J.4).
 
+## T8. `mined`: default editor, memory-safe and VT100-complete (owner decision 2026-11-14): after T1–T5
+Spec: K.5. `src/commands/mined` (MINIX 2.0 original) is not built for the Flipper today; only `ed` is. Review of main @ `63d008c`. Note: user code is built with `-fsigned-char` and has no stack canaries, so a stack overflow can reach a return address.
+Bugs and vulnerabilities to fix (all 0 B RAM):
+- **B1 (critical)** `get_line()` (`mined1.c:1369`) copies up to `\n` with no limit: into `text_buffer[1024]` (.bss) on load, and into `line_buffer[1024]` **on the stack** in `file_insert()` (`mined2.c:727`, `:735`; used by insert-file and paste). Fix: `get_line(fd, buf, size)`; longer lines are split at `MAX_CHARS - 1` and the status line says "N long lines split".
+- **B2** `file_name[80]`: `main` → `load_file` → `copy_string(file_name, argv[1])`; `get_file()` truncates only the last path component. Reject a too-long path with a message.
+- **B3** `input()` (`mined1.c:1859`) reads prompts into 80-byte stack buffers with no limit. Fix: `input(buf, size)`, bell when full.
+- **B4** unbounded string building: `bottom_line()` `buf[80]` (`mined1.c:600`), `file_status()` `msg[120]` (`:1713`, truncates only after writing), `change()` `mess_buf[80]` (`mined2.c:1125`, `"%s %s by:"`). Fix: `build_string(buf, size, fmt, ...)` and a bounded copy everywhere.
+- **B5** `compile()` (`mined2.c:1363`): in `[...]` the `exp_buffer` bound is checked only after a whole range is expanded (writes up to ~93 ints past the end with `[!-~!-~…]`); the list length lives in the low 8 bits, so a list > 255 entries spills into `NEGATE` and makes `check_string` step backwards; with `-fsigned-char`, bytes ≥ 0x80 corrupt opcodes (`NORMAL + c`) and end in `panic`. Fix: check before every store, limit lists to 255 ("List too long"), use `(unsigned char)`.
+- **B6** clipboard `scratch_file()` (`mined2.c:989`): predictable `/tmp/mined.<pid><letter>`, `access()` then `creat()` (follows symlinks, race), later yanks only `creat()`, mode 0644; `/tmp` is `777` without sticky bit (`flipper/rootfs/proto:46`). Fix: `unlink` own file, then `open(O_CREAT|O_EXCL|O_WRONLY, 0600)` on every write, random name part from the hardware RNG; sticky bit on `/tmp` in `proto` (as R3 for `/usr/tmp`).
+- **B7** terminal hangup (USB or BLE disconnect): `read()` returns 0 → `panic` → `XT()` → `ask_save()` → `getchar()` → `panic` … unbounded recursion, unsaved work lost. Fix: on `read()` 0/`EIO` and on `SIGHUP`, if modified, write `<file>.save` (or `~/mined.save`), mode 0600, no prompts, then exit.
+- **B8** `WT()` (`mined1.c:478`) truncates the original with `creat()` before writing: a full SD card loses both versions. Fix: write `<dir>/.<name>.tmp`, copy the mode, `rename()`. If the file has another owner or `st_nlink > 1`, keep today's in-place write.
+- **B9** bytes 0x80–0x9F (C1 controls, e.g. 0x9B = CSI) and file names in the status line go to the terminal raw. Fix: show them in reverse video like `^X` (ASCII mode), filter file names the same way.
+- **B10** `substitute()` (`mined2.c:1226`) calls `length_of(text_buffer)` before writing the `\0`. Fix: terminate first.
+VT100 (0 B RAM):
+- **V1** `escfunc()` only knows `ESC [ A/B/C/D/H` on `CHIP == ARM_CM`; Delete (`ESC [ 3 ~`), PgUp/PgDn (`ESC [ 5/6 ~`), End insert `~`, and DECCKM arrows (`ESC O A…D`) / PF1–PF4 (`ESC O P…S`) insert letters. Fix: one CSI/SS3 parser independent of `CHIP` (parameters up to a final byte 0x40–0x7E; **unknown sequences are dropped whole**), `const` map: arrows (both modes), Home (`[H`, `[1~`, `OH`), End (`[F`, `[4~`, `OF`), PgUp, PgDn, Delete, Insert (ignored), PF1–PF4 → file status, search forward, search back, mark. Remove the `INTEL`/`M68000` branches.
+- **V2** both 0x08 and 0x7F delete left, also in prompts; delete-under-cursor is `ESC [ 3 ~` (and the existing Ctrl keys).
+- **V3** screen size: run-time `xmax`/`ymax` from `ws_col`/`ws_row` (columns capped at 80; buffers stay 80 B). If the size is 0 (the Flipper tty starts with zeros, `tty.c:128`): `ESC 7`, `ESC [ 999;999 H`, `ESC [ 6 n`, read `ESC [ r ; c R` with `VMIN=0, VTIME=2`, `ESC 8`; store it with `TIOCSWINSZ`; no answer = 80×24. `^E` (redraw) measures again.
+- **V4** the LCD console sets its own `winsize` (32×10) at start.
+RAM (measured, cross-compiled with the user-program flags: `.text` 14 435 B, `.data` 1 082 B, `.bss` 7 385 B, static 8 467 B):
+- `key_map` → `const` (−1024 B); `exp_buffer` 1024 → 512 ints (−2048 B, overflow handled by B5); `screen` 1896 → 512 B (−1384 B; a full redraw becomes 4 writes). Target static RAM ≤ 4.5 KB.
+Integration:
+- Add `mined` to `CMDS` in `flipper/minix.mk` with a measured `CHMEM_mined` (`free -t on`, target ≤ 12 KB; the original `-S 64k` is not usable). `EDITOR=mined`, `VISUAL=mined` in `/etc/profile`. Update `man/man9/mined.9` (key table, line limit, `.save`). CHANGELOG line.
+- Host tests like T6: mined built for the host with a small tty shim; regressions for B1–B10 and the key parser.
+Acceptance:
+- A1 a file with a 5000-character line loads, inserts and pastes without a crash, lines split with a warning.
+- A2 a 200-character path, 200 characters typed into every prompt, a 79-character file name on a write error: no crash.
+- A3 an 80-character `[!-~!-~…]` pattern gives an error, no write past the buffer (host test with canaries).
+- A4 `flipper/tests/`: another uid plants a symlink at the clipboard name; mined does not use it, the target is untouched, the clipboard is mode 0600; `/tmp` has the sticky bit.
+- A5 USB unplugged while editing with changes: `<file>.save` exists, mined exits cleanly.
+- A6 writing to a full card leaves the original intact and shows an error.
+- A7 a file with 0x9B and `ESC` bytes shows markers; the terminal does not react.
+- A8 xterm, PuTTY and minicom over USB CDC: arrows in both DECCKM modes, Home, End, PgUp, PgDn, Delete, Backspace, PF1–PF4 work; no key leaves characters in the text.
+- A9 a 60×20 terminal with no size set: mined detects it; `stty size` then prints `20 60`.
+- A10 static RAM ≤ 4.5 KB; `CHMEM_mined` recorded. A11 still one `write()` per key; no visible echo delay over USB CDC.
+- Optional, separate PR after this one: UTF-8 (continuation bytes have width 0, cursor moves and deletes whole sequences, prompts accept UTF-8, `-a` switch for 8-bit terminals; 0 B RAM, ≈ +0.5 KB flash).
+
+## T9. Check that pipe data never reaches the disk (small, any time)
+Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`). Check whether pipe blocks can be written to the SD card (on `sync`, `update`, or cache eviction). If they can, keep them out of write-back (they are discarded when the pipe is empty or closed). Report the answer in PORTING.md; fix only if writes happen. RAM: 0 B.
+
+## T10. Structured text `-t` and the desktop protocol (spec K): design rules now, code later
+- From now on, every new command or app that prints records supports `-t` (K.1); existing commands get it when touched. The shared helper goes into libc with the first user.
+- The desktop and module protocol (K.2–K.4) is implemented with Phase 5 (`libfuri`, launcher) and 7c (Berry `gui`, `pipe`, `tsv` modules); alarms stay on `timed` + `alert` (F.2).
+- No separate PR now; PRs in those phases name K.
+
 ## Still open from reviews
 - #6/#7 (IR): TX on the pulse engine (no busy-wait in a kernel task), and no 1–2 KB static `ir_buf`. Rebase on main first; both PRs conflict.
 - Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.

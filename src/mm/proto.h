@@ -70,6 +70,12 @@ _PROTOTYPE( int fc_ran, (unsigned long crc, unsigned long owner)	);
 _PROTOTYPE( unsigned long fc_sync, (int fd, unsigned long size,
 	unsigned long crc, unsigned long owner, char *buf, int bufsize)	);
 _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
+/* finst.c */
+struct stat;
+_PROTOTYPE( void in_init, (void)					);
+_PROTOTYPE( unsigned long in_lookup, (struct stat *s, unsigned long size));
+_PROTOTYPE( int do_install, (void)					);
+_PROTOTYPE( void in_info, (int *entries, unsigned long *used)		);
 _PROTOTYPE( void mem_paint, (struct mproc *rmp)				);
 _PROTOTYPE( void mem_report, (struct mproc *rmp)			);
 #endif

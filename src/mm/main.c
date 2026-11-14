@@ -140,6 +140,7 @@ PRIVATE void mm_init()
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len
 					- kernel_map[D].mem_phys;
   fc_init();			/* the flash text cache, fcache.c */
+  in_init();			/* installed programs, finst.c */
 #else
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len;
 #endif
