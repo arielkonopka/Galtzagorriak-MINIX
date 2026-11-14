@@ -6,8 +6,8 @@ RAM was measured by building main (81506e0) and #6 with `make BOARD=flipper mini
 
 | PR | Verdict |
 |---|---|
-| #1 Flash cache after DFU, tty, cut | **Pass** |
-| #2 reboot -d, watchdog, bell | **Pass**, with follow-ups |
+| #1 Flash cache after DFU, tty, cut | **Pass**, squash-merged to main (4845bfa) |
+| #2 reboot -d, watchdog, bell | **Changes requested**: #3 was merged into this branch, so it now carries CHMEM_sh 16 KB |
 | #3 memops, SD FIFO/CRC/CMD18 | **Changes requested**: owner chose the exec-side fix over CHMEM_sh +4 KB |
 | #4 PendSV shadow kick, /dev/random, /dev/zero, CMD25 | **Pass**, with follow-ups |
 | #5 /dev/gpio, /dev/vibro, /dev/speaker | **Pass**, with a small note |
@@ -25,7 +25,7 @@ RAM was measured by building main (81506e0) and #6 with `make BOARD=flipper mini
 - `hal_halt` behaviour (kick on halt, stop on panic) matches R4a.4. OK.
 - The bell shares TIM16 with `/dev/speaker` (#5). A `^G` during a tune cuts the tune's current note after `HZ/6`. This is minor.
 
-## #3: changes requested (owner decision 17:10Z: no RAM increase)
+## #3: changes requested (owner decision 17:10Z: no RAM increase). #3 was merged into the #2 branch at 18:40Z, so the fix is now due on `dfu-watchdog-beep`
 - memcpy/memmove/memset look correct: alignment, overlap direction, and LDM/STM register lists. They are interruptible on the M4 (ICI), so there is no L3/L4 impact.
 - The SD retry and CRC logic is sound. Resuming at the failed sector is correct for CMD18. No interrupts are masked in the SD path.
 - **RAM:** `CHMEM_sh` goes from 12 KB to 16 KB, which is **+4 KB per running shell** (login shell, subshells, scripts). It fixes a real E2BIG, but it breaks the "never increase RAM" rule. A better fix is to stop the exec frame needing heap room after a glob. Options: build it on the stack, free the glob vector before `execve`, or let MM read argv directly. Alternatively, keep 12 KB and grow the reserve only on E2BIG.
