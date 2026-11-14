@@ -7,7 +7,7 @@
 #ifndef _CTYPE_H
 #define _CTYPE_H
 
-extern char	__ctype[];	/* property array defined in chartab.c */
+extern const char __ctype[];	/* property array defined in chartab.c */
 
 #define _U		0x01	/* this bit is for upper-case letters [A-Z] */
 #define _L		0x02	/* this bit is for lower-case letters [a-z] */

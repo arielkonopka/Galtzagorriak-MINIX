@@ -32,7 +32,7 @@ PUBLIC void main()
   phys_bytes phys_b;
   reg_t ktsb;			/* kernel task stack base */
   struct memory *memp;
-  struct tasktab *ttp;
+  const struct tasktab *ttp;
 
 #if (CHIP == ARM_CM)
   /* No boot monitor: set up the machine and load MM, FS and INIT. */

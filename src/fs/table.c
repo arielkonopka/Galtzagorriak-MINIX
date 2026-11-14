@@ -15,7 +15,7 @@
 #include "lock.h"
 #include "super.h"
 
-PUBLIC _PROTOTYPE (int (*call_vector[NCALLS]), (void) ) = {
+PUBLIC _PROTOTYPE (int (* const call_vector[NCALLS]), (void) ) = {
 	no_sys,		/*  0 = unused	*/
 	do_exit,	/*  1 = exit	*/
 	do_fork,	/*  2 = fork	*/
@@ -112,7 +112,7 @@ PUBLIC _PROTOTYPE (int (*call_vector[NCALLS]), (void) ) = {
  * Also note that if /dev/mem is changed from 1, NULL_MAJOR must be changed
  * in <include/minix/com.h>.
  */
-PUBLIC struct dmap dmap[] = {
+PUBLIC const struct dmap dmap[] = {
 /*  ?   Open       Read/Write   Close       Task #      Device  File
     -   ----       ----------   -----       -------     ------  ----       */
   DT(1, no_dev,    no_dev,      no_dev,     0)           /* 0 = not used   */

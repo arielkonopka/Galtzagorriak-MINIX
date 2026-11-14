@@ -147,14 +147,18 @@ $(MB)/srv/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 	@mkdir -p $(dir $@)
 	$(CC) $(MCFLAGS) -c $< -o $@
 
-srv_head = $(MB)/srv/$(1)/bootimg.o $(MB)/srv/crtso.o
+$(MB)/srv/exit.o: srv/exit.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBCFLAGS) -c $< -o $@
+
+srv_head = $(MB)/srv/$(1)/bootimg.o $(MB)/srv/crtso.o $(MB)/srv/exit.o
 SRV_mm	 = $(call srv_head,mm) $(MM_SRC:%=$(MB)/mm/%.o)
 SRV_fs	 = $(call srv_head,fs) $(FS_SRC:%=$(MB)/fs/%.o)
 # INIT: the real one (src/tools/init.c), or INIT=m2 for the test INIT that
 # runs the milestone-2 checks and exits QEMU.
 INIT	?= real
 ifeq ($(INIT),m2)
-SRV_init = $(call srv_head,init) $(MB)/m2/init.o
+SRV_init = $(MB)/srv/init/bootimg.o $(MB)/srv/crtso.o $(MB)/m2/init.o	# stdio: the libc exit
 else
 SRV_init = $(call srv_head,init) $(MB)/tools/init.o
 endif
@@ -313,7 +317,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.23
+BASE_VER := 3.27
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
