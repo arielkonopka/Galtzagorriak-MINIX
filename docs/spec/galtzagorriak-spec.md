@@ -2366,6 +2366,67 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
 - AC16.3.1 A BLE-advertising device is found and located from 5 m with locate mode.
 - RAM: `bled` +256 B scan list while scanning; `camfind` unchanged.
 
+### 16.4 `sbctl`: remote for Storz & Bickel vaporizers (owner request, 2026-11-14)
+
+Owner request: port the vendor's Web Bluetooth app (app.storz-bickel.com, v3.4.1) as a native app
+that controls the owner's own Volcano Hybrid, Venty, Veazy or Crafty/Crafty+ with the Flipper as
+BLE central. The vendor code is proprietary and is **not** copied: the protocol comes from the
+MIT-licensed reimplementation `storzandbickel-ble` (PyPI, 0.1.25), which documents the same app
+version, and from checks on real devices. Findings and UUID tables: project report
+`reports/storz-bickel-port.md` (to move to `docs/` with the manual).
+
+Scope: temperature target, heater on/off, Volcano air pump, boost and superboost, battery and
+charger state, LED brightness, auto-off time, vibration, °C/°F, Find my device, device info
+(serial, firmware, hours), Volcano workflows. **Out of scope:** device firmware update (Volcano
+bootloader; Venty/Veazy images are encrypted and fetched from the vendor's server by serial
+number), the "Analysis" upload, and any vendor cloud or analytics call.
+
+Requirements:
+- **R16.4.0** Needs the central role and a GATT client, so it depends on the same owner decision
+  as 16.1 (R16.1.0, full BLE stack). Until then `sbctl` says "needs the full BLE stack" and exits.
+- **R16.4.1** `bled` exposes the generic GATT client that R16.1.1 adds (scan with a name filter,
+  connect, discover by 128-bit UUID, read, write, write without response, notify) to apps through
+  its socket; HID-specific parts stay in 16.1. No pairing: the devices use an open GATT. If a
+  device or firmware asks for encryption, the R16.1.1 pairing path is used unchanged.
+- **R16.4.2** Device drivers are three small tables in `sbctl` (const, in flash): Volcano
+  (separate characteristics, 16-bit status registers), qvap = Venty and Veazy (one characteristic,
+  command byte + write mask), Crafty (three services, project status registers, security-code
+  write before auto-off). Discovered handles are cached per session (≈ 40 B), never persisted.
+- **R16.4.3** UI on 128x64: large temperature (current on Volcano and Crafty; target on
+  Venty/Veazy, which don't report the current one), target line, heater/pump/battery icons.
+  Up/Down = target ±1 °C (hold: ±5 °C every 150 ms), OK = heater, Right = pump (Volcano) or
+  boost → superboost → normal (others), Left = menu (workflows, favourite temperatures,
+  settings, Find my, info), long Back = quit. Button feedback is local and immediate; GATT writes
+  are coalesced (only the last value after 150 ms idle is sent) to keep radio traffic low.
+- **R16.4.4** Known devices (address, model, name) and favourites in `/ext/apps_data/sbctl/`
+  on the SD card. **0 internal-flash writes at run time.**
+- **R16.4.5** Background, tier 0 only (12d), nothing resident: the device heats on its own, so the
+  app may exit at any time. "Notify when ready": a `timed` interval timer runs `sbctl --poll`
+  every 15 s (connect, read state, disconnect; ≈ 2 KB for < 1 s) and posts `info` with
+  `notify_post()` when the setpoint is reached; it gives up after 15 min. Volcano workflow steps
+  have deadlines, so in the background each step is a one-shot `timed` timer (R12.16); version 1
+  MAY run workflows in the foreground only, with a progress bar.
+- **R16.4.6** Safety: the app never disables the device's own auto-off; it only sets values the
+  vendor app allows. Factory reset asks for confirmation. Register writes go through named bits,
+  never raw values from the user. A "pump off" step retries the connection up to 5 times, and the
+  workflow screen warns that a lost link leaves the pump to the device's own auto-off.
+- **R16.4.7** Temperature limits come from the model table (Volcano 40–230 °C, Venty, Veazy and
+  Crafty 40–210 °C) and are enforced before any write.
+- **R16.4.8** Before implementation, the UUIDs and packet layouts are confirmed on real hardware
+  (`nRF Connect` or `bluetoothctl` GATT dump); Veazy in particular. Differences go into the report.
+
+Acceptance:
+- AC16.4.1 On each owned model: connect, set the target, heater on/off, (Volcano) pump on/off,
+  values on the device follow within one second.
+- AC16.4.2 "Notify when ready" fires with no app open, and `make ramcheck` shows 0 B resident.
+- AC16.4.3 No internal-flash write during a session (flash write counter unchanged).
+
+Responsiveness: AC16.4.R Button → pixel ≤ 30 ms p99 (L1) independent of the radio; button →
+GATT write sent ≤ 150 ms + one connection interval.
+
+RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running); `sbctl`
+≈ 3 KB while open, 0 B in the background (≈ 2 KB for < 1 s per poll). Flash: ≈ 10 KB installed.
+
 ## Phase 17: Trust: U2F, signed packages, updater, option bytes
 
 **Depends on:** 15 (CPU2 enclave), 3.
@@ -2619,6 +2680,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Scripting (MicroPython/Lua question; owner request) | 7c |
 | Native app: Self Test (memory, audio-visual, input, board; modules added by 8, 10, 13, 15) | 7b.3 |
 | Native app: Bluetooth adapter for BLE mice and keyboards (owner request) | 16.1 |
+| Native app: Storz & Bickel vaporizer remote `sbctl` (owner request; no device firmware update) | 16.4 |
 | USB peripheral modes: RFID, iButton, IR, Sub-GHz / NFC reader / BT dongle (owner request) | 11.1 / 14.1 / 16.2, section G |
 | nRF24 module for 2.4 GHz dongle mice (optional, not confirmed) | G.3 question 3, deferred |
 | Sub-GHz, LF RFID | 8 |
