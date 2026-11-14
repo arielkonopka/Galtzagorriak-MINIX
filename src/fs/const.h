@@ -4,9 +4,15 @@
 #define V2_NR_DZONES       7	/* # direct zone numbers in a V2 inode */
 #define V2_NR_TZONES      10	/* total # zone numbers in a V2 inode */
 
+#if (MACHINE == FLIPPER)	/* 16 processes, 3 file systems: small tables */
+#define NR_FILPS          48	/* # slots in filp table */
+#define NR_INODES         40	/* # slots in "in core" inode table */
+#define NR_SUPERS          4	/* # slots in super block table */
+#else
 #define NR_FILPS         128	/* # slots in filp table */
 #define NR_INODES         64	/* # slots in "in core" inode table */
 #define NR_SUPERS          8	/* # slots in super block table */
+#endif
 #define NR_LOCKS           8	/* # slots in the file locking table */
 
 /* The type of sizeof may be (unsigned) long.  Use the following macro for

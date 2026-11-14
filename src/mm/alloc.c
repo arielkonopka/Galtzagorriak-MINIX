@@ -18,7 +18,11 @@
 #include "mm.h"
 #include <minix/com.h>
 
+#if (MACHINE == FLIPPER)
+#define NR_HOLES          32	/* max # entries in hole table */
+#else
 #define NR_HOLES         128	/* max # entries in hole table */
+#endif
 #define NIL_HOLE (struct hole *) 0
 
 PRIVATE struct hole {

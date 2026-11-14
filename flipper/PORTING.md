@@ -35,6 +35,8 @@ A small but complete distribution with a package manager, to add apps:
   holding `CONTROL/control` (Package, Version, Depends, Description),
   optional `CONTROL/postinst`/`prerm`, and the files relative to `/`.
   Database in `/usr/var/pkg`.  Built on the PC by `flipper/tools/mkpkg.py`.
+- **Verified on the Flipper (2026-11-14)**: `flsend hello_1.0.tar` ->
+  installed and runs (~105 KB/s over USB).
 - **Transport**: `tools/flsend file.tar` on the PC types `pkg get` on the
   USB console and sends each file as `FILE name size crc32` + raw bytes;
   pkg answers OK/BAD (resend).  ~26 KB/s in QEMU.  (ZMODEM was tried: the
@@ -268,6 +270,9 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - Console flow control end to end (USB endpoint NAK, console ring, raw TTY
   input kept, UART interrupt held); the CR inserted before every LF in the
   console driver corrupted raw output and was moved to kernel printf only.
+- Memory tuning for 16 processes: FS 48 filps / 40 inodes / 4 supers,
+  MM 32 holes, stdio BUFSIZ 512 (Flipper after login: 72 KB free, largest
+  hole 51 KB; was 27 KB).
 - Memory without an MMU: exec now places program images at the top of
   RAM (MM `alloc_mem_high`), fork shadow copies at the bottom; long-lived
   processes pile up at the top and the free space stays in one piece

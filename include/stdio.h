@@ -44,7 +44,11 @@ typedef struct __iobuf {
 #define	stdout		(&__stdout)
 #define	stderr		(&__stderr)
 
+#ifdef __ARM_ARCH
+#define	BUFSIZ		 512	/* Flipper: every heap byte counts */
+#else
 #define	BUFSIZ		1024
+#endif
 #define	NULL		((void *)0)
 #define	EOF		(-1)
 
