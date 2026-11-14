@@ -2372,6 +2372,9 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
 
 ### 16.4 `sbctl`: remote for Storz & Bickel vaporizers (owner request, 2026-11-14)
 
+Confirmed by the owner (2026-11-14): wanted. The protocol core comes early as task T6
+(`docs/spec/next-tasks.md`); the BLE and UI parts follow Phase 16.
+
 Owner request: port the vendor's Web Bluetooth app (app.storz-bickel.com, v3.4.1) as a native app
 that controls the owner's own Volcano Hybrid, Venty, Veazy or Crafty/Crafty+ with the Flipper as
 BLE central. The vendor code is proprietary and is **not** copied: the protocol comes from the

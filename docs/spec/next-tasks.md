@@ -42,6 +42,13 @@ Likely the same cause as T3 (a long kernel path) or the shadow swap (flipclicks 
 ## T5. sh: "out of string space" then SIGSEGV
 With `CHMEM_sh` 12 KB, `cat /bin/* /bin/*` should fail cleanly (an error message, exit status ≠ 0) instead of crashing. Fix it in sh. RAM: 0 B.
 
+## T6. `sbctl` protocol core (owner wants the app, 2026-11-14 23:14 Warsaw): after T1–T5
+Spec: 16.4. The BLE parts wait for Phases 15–16 (R16.1.0 decided: full stack), but the protocol core does not need the radio, so it can be written now and tested on the host.
+- `flipper/apps/sbctl/sbproto.c/.h`: pure C, no I/O, no malloc. Model tables in `const` (flash): Volcano, qvap (Venty/Veazy), Crafty. Functions: detect model from advertised name; encode a request (set target, heater, pump, boost mode, brightness, auto-off with the Crafty security-code write first, find-my) into a list of (characteristic UUID, bytes, with/without response); decode a notification or read into one `struct sb_state` (≤ 64 B). Temperature limits per model enforced in the encoder (R16.4.7).
+- Host unit tests (`make -C flipper/apps/sbctl test` with the host compiler): golden byte vectors per model for every request and for sample status packets, including the Venty "0x8000 = not reported" case and the Crafty "ready" bit 0x0100.
+- Protocol source: the MIT library `storzandbickel-ble` 0.1.25 (`protocol.py`), not the vendor's JS. Credit it in the file header; GPLv3 project, MIT is compatible.
+- No UI and no `bled` code yet. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
+
 ## Still open from reviews
 - #6/#7 (IR): TX on the pulse engine (no busy-wait in a kernel task), and no 1–2 KB static `ir_buf`. Rebase on main first; both PRs conflict.
 - Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
