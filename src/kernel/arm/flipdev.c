@@ -141,8 +141,10 @@ message *m_ptr;
   u8_t buf[3];
 
   if (count <= 0) return(EINVAL);
-  if ((user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count)) == 0)
-	return(EFAULT);
+  user = m_ptr->m_type == DEV_WRITE	/* a source may be constant */
+	? numap_src(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count)
+	: numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count);
+  if (user == 0) return(EFAULT);
 
   switch (m_ptr->DEVICE) {
 #if LATTRACE

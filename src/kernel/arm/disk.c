@@ -106,10 +106,13 @@ struct iorequest_s *iop;	/* pointer to read or write request */
   if ((nbytes & SECTOR_MASK) != 0 || (pos & SECTOR_MASK) != 0)
 	return(iop->io_nbytes = EINVAL);
 
-  user_phys = numap(proc_nr, (vir_bytes) iop->io_buf, nbytes);
-  if (user_phys == 0) return(iop->io_nbytes = EINVAL);
-
   opcode = iop->io_request & ~OPTIONAL_IO;
+
+  /* A buffer that is only read (a write to the disk) may be constant. */
+  user_phys = opcode == DEV_WRITE
+	? numap_src(proc_nr, (vir_bytes) iop->io_buf, nbytes)
+	: numap(proc_nr, (vir_bytes) iop->io_buf, nbytes);
+  if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
 
   if (pos >= w_dv->dv_size) return(OK);			/* at EOF */
   if (nbytes > w_dv->dv_size - pos) nbytes = w_dv->dv_size - pos;

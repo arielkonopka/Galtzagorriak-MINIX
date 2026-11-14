@@ -2,7 +2,8 @@
  * its 7 regions must not get access to all of RAM (the old fallback).
  * Copies of this program with many different chmem sizes are run; each
  * tries to read kernel RAM.  Allowed outcomes: SIGSEGV (isolated), SIGKILL
- * (fail closed), or exec refused (ENOMEM).  Not allowed: the read works.
+ * (fail closed), or the exec fails (ENOMEM, or any other error).  Not
+ * allowed: the read works.
  */
 #include "t.h"
 
@@ -14,7 +15,7 @@ static char *self;
 static void run(void)
 {
 	execl(PROG, "mpufrag", "probe", (char *) 0);
-	_exit(errno == ENOMEM || errno == EAGAIN ? 3 : 2);
+	_exit(errno == ENOMEM || errno == EAGAIN ? 3 : 100 + errno);
 }
 
 int main(int argc, char **argv)
@@ -48,11 +49,17 @@ int main(int argc, char **argv)
 		if (st != -1 && WIFSIGNALED(st) && WTERMSIG(st) == SIGSEGV) segv++;
 		else if (st != -1 && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL)
 			killed++;
-		else if (st != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 3)
-			refused++;
+		else if (st != -1 && WIFEXITED(st) && (WEXITSTATUS(st) == 3
+						|| WEXITSTATUS(st) >= 100))
+			refused++;	/* exec failed: safe either way */
 		else if (st != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 1)
 			bad++;
-		else other++;
+		else {
+			other++;
+			printf("     total %ld: %s%s\n", total, t_status(st),
+			    WIFEXITED(st) && WEXITSTATUS(st) >= 100
+			    ? " (exec errno = status - 100)" : "");
+		}
 	}
 	unlink(PROG);
 	sprintf(buf, "%d isolated, %d killed, %d refused, %d read RAM, "

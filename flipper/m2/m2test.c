@@ -4,6 +4,8 @@
  */
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,6 +178,25 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
 		&& WTERMSIG(st) == SIGSEGV, "write to kernel memory -> SIGSEGV");
+
+	/* Buffers of system calls are checked against the caller's memory
+	 * (S13): not into the kernel, not past the end of the stack; but a
+	 * constant (text, possibly in flash) is fine as a source. */
+	{
+		char local[4];
+		int z = open("/dev/zero", O_RDONLY), r1, r2, r3, r4;
+
+		errno = 0;
+		r1 = read(z, (char *) 0x20000100, 16);
+		check(r1 == -1 && errno == EFAULT, "read into kernel RAM -> EFAULT");
+		r2 = write(1, (char *) 0x20000100, 16);
+		check(r2 == -1 && errno == EFAULT, "write from kernel RAM -> EFAULT");
+		r3 = read(z, local, 65536);
+		check(r3 == -1 && errno == EFAULT, "buffer past the stack -> EFAULT");
+		r4 = write(1, "  ok   write from a constant\n", 29);
+		if (r4 != 29) check(0, "write from a constant");
+		close(z);
+	}
 
 	pid = fork();
 	if (pid == 0) {

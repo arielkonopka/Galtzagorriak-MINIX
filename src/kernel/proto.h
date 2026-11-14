@@ -81,6 +81,8 @@ _PROTOTYPE( void cause_sig, (int proc_nr, int sig_nr)			);
 _PROTOTYPE( void inform, (void)						);
 _PROTOTYPE( phys_bytes numap, (int proc_nr, vir_bytes vir_addr, 
 		vir_bytes bytes)					);
+_PROTOTYPE( phys_bytes numap_src, (int proc_nr, vir_bytes vir_addr, 
+		vir_bytes bytes)						);
 _PROTOTYPE( void sys_task, (void)					);
 _PROTOTYPE( phys_bytes umap, (struct proc *rp, int seg, vir_bytes vir_addr,
 		vir_bytes bytes)					);
