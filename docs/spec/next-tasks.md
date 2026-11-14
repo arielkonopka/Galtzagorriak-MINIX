@@ -4,7 +4,7 @@ Do these before new features: 1–3 in order, 4–5 after them or alongside.
 Each task goes on its own branch, branched from **main** (not stacked), and gets a PR naming the task number.
 The usual gates apply: `ramcheck` (0 B unless stated), QEMU `M2 USER PASS`, and `lat` numbers before/after in PORTING.md.
 
-## T1. S13: `umap()` bounds (critical security)
+## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
 - D/S: the whole range `[vir, vir+bytes)` must lie in `[D.mem_vir, S.mem_vir+S.mem_len)` (clicks). T: inside T.
 - Source-only fallback to **T** for reads from user memory (rodata literals). Never for destinations.
