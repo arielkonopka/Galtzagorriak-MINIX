@@ -77,6 +77,8 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
  * interrupts masked and the MPU off.  len and dst must be multiples of 8
  * (double-word programming).  Return 0 on success, -1 on error. */
 #define HAL_FLASH_PAGE	4096
+extern uint32_t hal_disk_errors;	/* transfers retried (CRC, timeout) */
+extern unsigned hal_disk_mhz;		/* bus clock for disk data */
 void hal_flash_region(uint32_t *base, uint32_t *size);
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);

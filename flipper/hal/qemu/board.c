@@ -225,6 +225,8 @@ void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b;
 
 /* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */
 uint32_t hal_flash_sr;
+uint32_t hal_disk_errors;
+unsigned hal_disk_mhz;
 uint32_t hal_flash_dbg[5];
 
 void hal_flash_region(uint32_t *base, uint32_t *size)

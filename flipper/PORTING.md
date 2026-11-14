@@ -220,18 +220,47 @@ transmit must stay inside the legal bands for the user's region.
    once in that case (minix.bin is also padded to whole double words, the
    programming unit).  A failing flash operation
    only turns the cache off (texts go to RAM) and logs the registers.
-3. **Swap to the SD card** (partition 3): swap out shadow copies and
-   idle processes.
+3. **Swap to the SD card** (partition 3): **postponed** (2026-11-14).
+   Without an MMU a process can only come back to the addresses it left
+   (its data holds absolute pointers), and whatever lies there by then
+   must leave first - in the general case a deadlock, in the simple one
+   (MINIX 2.0.4 style: swap out only processes blocked in wait/pause)
+   the gain is a waiting shell, ~16 KB.  Fork shadows are short-lived
+   (fork + exec frees them at once); long-lived ones (subshells) flip on
+   every switch and could not afford the card.  With 105 KB free after
+   boot it is not worth the risk now; revisit if RAM runs short.
 
 ## CPU-specific optimizations (work list, requested 2026-11-14)
 
 Where they are measurably better than gcc -Os and cost no RAM, with the C
-version kept as fallback:
-- `memcpy`/`memset`/`phys_copy`/shadow swapping (kernel/arm/shadow.c):
-  word and LDM/STM block loops instead of byte loops.
+version kept as fallback.  Timings on the Flipper (host wall clock):
+
+| | before | memops | + SPI |
+|---|---|---|---|
+| 10 x 512 KB from /dev/mem (with 10 fork+exec) | 1.27 s | 0.57 s | 0.53 s |
+| 2 MB from the SD card | 4.98 s | 4.56 s | 2.72 s |
+| `cat /bin/* \| wc -c` | 3.34 s | 3.08 s | 2.16 s |
+
+Done:
+- `memcpy`/`memmove`/`memset` in assembly (src/lib/arm/rts/memops.S):
+  32-byte LDM/STM blocks, word loops for unaligned sources (the M4 allows
+  unaligned LDR/STR on normal memory).  In libc for the programs and the
+  servers, and in the kernel (phys_copy, shadow copies), which now links
+  them from libc.a instead of the HAL's byte loops.  m2test checks every
+  alignment, length 0..80 and overlap both ways.
+- SD card / LCD SPI: block transfers keep the TX FIFO fed (two bytes in
+  flight), SD data at 16 MHz (was 8), multi-block reads (CMD18).  CRCs
+  are on (CMD59): CRC7 on commands, CRC16 on every data block, so a
+  garbled transfer is refused by the card or noticed on reading; it is
+  retried, and after repeated errors the bus drops to 8 MHz for good
+  (the kernel logs "sd: N transfer(s) retried").
+
+Still to do:
+- Multi-block writes (CMD25): 512 KB take 3.1 s, mostly the card's
+  programming time per CMD24.
+- `flipclicks` (shadow exchange) with LDM/STM; SPI by DMA.
 - CRC-32: the STM32WB CRC peripheral (pkg get, flash text cache keys).
 - The hardware RNG for salts, `/dev/random`; AES/PKA units later.
-- SPI transfers to the SD card and LCD by DMA.
 - CLZ / bit tricks where the old sources loop over bits.
 
 ## Userspace drivers (planned, not implemented)
@@ -429,6 +458,9 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
   its newline as well and could never be read; the console hung (only
   kill, ^U, got out - interrupt is DEL in MINIX, not ^C).  The last place
   is now kept for the line break: too long lines are cut short.
+- `cksum /bin/*` (and any exec after expanding /bin/*) gave "argument
+  list too long": sh builds the exec frame with sbrk() and its 12 KB had
+  no room left after the glob; sh chmem is 16 KB now.
 - `cut` took option arguments only as separate words (`-d : -f 2`);
   POSIX `-d: -f2` gave "syntax error".
 - After `dfu-util ... :leave` the ROM loader jumps to the image without a
