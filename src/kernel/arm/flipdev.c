@@ -23,10 +23,15 @@
  *	minor 7  /dev/ir	infrared, "raw" timings: 32-bit little endian
  *				durations in microseconds, mark first, then
  *				space, mark, ... (an odd count).
- *				read: one received frame (it ends after 30 ms
- *				without carrier); blocks unless O_NONBLOCK
- *				write: up to 256 durations, sent on a 38 kHz
- *				carrier; returns when sent
+ *				read: one received frame, up to 512 durations
+ *				(it ends after 30 ms without carrier); blocks
+ *				unless O_NONBLOCK
+ *				write: up to 2048 durations, sent on a 38 kHz
+ *				carrier with a third on; returns when sent.
+ *				A first word with bit 31 set chooses the
+ *				carrier instead: bits 0-19 the frequency
+ *				(10000..60000 Hz), 20-26 the duty in %
+ *				(0: 33 %)
  *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
@@ -48,7 +53,12 @@
 #define GPIO_MINOR	6
 #define IR_MINOR	7
 #define LAST_MINOR	7
-#define IR_MAX		256		/* durations per frame */
+#define IR_MAX		512		/* durations per received frame */
+#define IR_TX_MAX	2048		/* durations per write */
+#define IR_CHUNK	64		/* durations copied at a time */
+#define IR_FREQ_FLAG	0x80000000	/* first word: carrier, not a time */
+#define IR_HZ		38000		/* default carrier */
+#define IR_DUTY		33		/* default duty, % */
 #define IR_GAP_MS	30		/* silence that ends a frame */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
@@ -407,20 +417,41 @@ phys_bytes user;
 int count;
 {
 /* Send marks and spaces.  Timed by the cycle counter against the start,
- * so interrupts in between delay an edge a little but never add up. */
-  u32_t d[IR_MAX], t;
-  int i, n;
+ * so interrupts in between delay an edge a little but never add up.  The
+ * durations come from the caller in chunks, copied while a mark or space
+ * runs (a copy takes microseconds, the shortest duration hundreds). */
+  static u32_t d[IR_CHUNK];
+  u32_t t, hz = IR_HZ, duty = IR_DUTY;
+  int i, j, k, n, first = 0;
 
   if (count % 4 != 0 || count == 0) return(EINVAL);
-  if (count > (int) sizeof(d)) count = sizeof(d);
-  phys_copy(user, vir2phys(d), (phys_bytes) count);
   n = count / 4;
-  for (i = 0; i < n; i++)
-	if (d[i] > 1000000) return(EINVAL);	/* over a second: a mistake */
+  if (n > IR_TX_MAX) return(EINVAL);
+  for (i = 0; i < n; i += IR_CHUNK) {		/* check everything first */
+	k = n - i < IR_CHUNK ? n - i : IR_CHUNK;
+	phys_copy(user + i * 4, vir2phys(d), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		if (i + j == 0 && (d[0] & IR_FREQ_FLAG)) {
+			hz = d[0] & 0xFFFFF;
+			duty = (d[0] >> 20) & 0x7F;
+			if (duty == 0) duty = IR_DUTY;
+			if (hz < 10000 || hz > 60000 || duty > 90)
+				return(EINVAL);
+			first = 1;
+		} else if (d[j] > 1000000) return(EINVAL); /* over a second */
+	}
+  }
+  if (n - first == 0 || (n - first) % 2 == 0) return(EINVAL);
+  hal_ir_freq(hz, duty);
   t = hal_cycles();
-  for (i = 0; i < n; i++) {
-	hal_ir_carrier((i & 1) == 0);
-	t += d[i] * cyc_us;
+  for (i = first; i < n; i++) {
+	hal_ir_carrier(((i - first) & 1) == 0);
+	if (i == first || i % IR_CHUNK == 0) {
+		k = i - i % IR_CHUNK;
+		phys_copy(user + k * 4, vir2phys(d),
+		     (phys_bytes) (n - k < IR_CHUNK ? n - k : IR_CHUNK) * 4);
+	}
+	t += d[i % IR_CHUNK] * cyc_us;
 	while ((i32_t) (hal_cycles() - t) < 0) ;
   }
   hal_ir_carrier(0);

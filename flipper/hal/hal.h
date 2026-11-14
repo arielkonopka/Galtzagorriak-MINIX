@@ -72,6 +72,7 @@ int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
 void hal_ir_rx_on(int on);
 int hal_ir_rx_edge(void);
 void hal_ir_carrier(int on);
+void hal_ir_freq(unsigned hz, unsigned duty);	/* carrier, duty in % */
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).

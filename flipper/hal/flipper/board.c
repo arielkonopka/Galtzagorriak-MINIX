@@ -914,6 +914,8 @@ int hal_gpio_read(unsigned pin)
  * channel is forced inactive (the LED is dark at low level). */
 #define IR_CARRIER_HZ	38000u
 
+static uint32_t ir_period = 0, ir_on;	/* carrier, in timer clocks */
+
 uint32_t hal_cycles(void)
 {
 	return DWT->CYCCNT;
@@ -945,6 +947,12 @@ int hal_ir_rx_edge(void)
 	return gpio_get(GPIOA, 0);
 }
 
+void hal_ir_freq(unsigned hz, unsigned duty)
+{
+	ir_period = SystemCoreClock / hz;
+	ir_on = ir_period * duty / 100;
+}
+
 void hal_ir_carrier(int on)
 {
 	static int ready;
@@ -954,8 +962,9 @@ void hal_ir_carrier(int on)
 		(void) RCC->APB2ENR;
 		TIM1->CR1 = 0;
 		TIM1->PSC = 0;
-		TIM1->ARR = SystemCoreClock / IR_CARRIER_HZ - 1;
-		TIM1->CCR3 = (SystemCoreClock / IR_CARRIER_HZ) / 3;
+		if (ir_period == 0) hal_ir_freq(IR_CARRIER_HZ, 33);
+		TIM1->ARR = ir_period - 1;
+		TIM1->CCR3 = ir_on;
 		TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
 		TIM1->CCER = TIM_CCER_CC3NE;
 		TIM1->BDTR = TIM_BDTR_MOE;
@@ -964,6 +973,10 @@ void hal_ir_carrier(int on)
 		gpio_set(GPIOB, 9, 0);
 		gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
 		ready = 1;
+	}
+	if (on) {				/* preloaded, taken by UG */
+		TIM1->ARR = ir_period - 1;
+		TIM1->CCR3 = ir_on;
 	}
 	/* PWM mode 1 (110) or forced inactive (100); start a fresh period
 	 * so every mark begins with a whole carrier cycle */

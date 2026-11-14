@@ -198,9 +198,24 @@ PB9 = TIM1 CH3N with a 38 kHz carrier (1/3 duty), marks and spaces timed
 against the cycle counter.  Command `ir rx [-n N]` (raw + NEC decoding),
 `ir tx nec ADDR CMD`, `ir tx raw ...`.  Checked on the device with its own
 LED: an NEC frame sent and received by reflection decodes correctly,
-timings within ~1 %.  Next: more protocols in `ir` (Samsung32, RC5/RC6,
-SIRC, Kaseikyo as in the stock firmware), carrier frequency per frame,
-a file format for remotes.
+timings within ~1 %.
+
+Later the same day: all 14 protocols of the stock firmware (NEC NECext
+NEC42 NEC42ext Samsung32 RC5 RC5X RC6 SIRC SIRC15 SIRC20 Kaseikyo RCA
+Pioneer), with its address/command numbering, carriers (36/38/40 kHz)
+and minimum repeats (SIRC 3x, Pioneer 2x); repeated messages in one
+frame are counted ("(x3)").  The carrier is chosen per write (first word
+with bit 31 set: frequency and duty; 10-60 kHz), writes take up to 2048
+durations (copied in chunks while sending), reads up to 512.  Remote
+files in the stock "IR signals file" format: `ir list FILE`, `ir send
+FILE NAME`, `ir learn FILE NAME` (parsed if a known protocol, raw
+otherwise).  Checked: every protocol sent and decoded by reflection on
+the device; a stock remote file listed and sent, learn + send of a raw
+signal.  On the PC (encode, jitter +-80 us, decode, compare) all ~278000
+parsed signals of a 14500-file remote collection from a stock-firmware
+card pass; the only ones refused are IR Plus conversions with values the
+stock firmware refuses too (RC5 commands over 6 bits, RC6 other than
+mode 0).  The longest raw signal there has 1019 durations.
 
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
 changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
