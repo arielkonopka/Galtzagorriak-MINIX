@@ -1043,10 +1043,45 @@ void hal_tone(unsigned hz)
 			 | FLASH_SR_MISERR | FLASH_SR_FASTERR | FLASH_SR_RDERR \
 			 | FLASH_SR_OPTVERR)
 
+/* Flash layout (spec Phase 2b, R2b.1), worked out at boot from where CPU2's
+ * secure area starts (SFSA, FLASH->SFR, in 4 KB pages), as the stock
+ * firmware does:
+ *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
+ *	0x08030000  installed programs (Phase 2b)	up to the cache
+ *	...         run-time text cache			HAL_CACHE_SIZE
+ *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
+ *	SFSA ..     CPU2 wireless stack and FUS, never touched
+ */
+#define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
+#define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
+#define GUARD_PAGES	16u
+
+void hal_flash_layout(uint32_t *l)
+{
+	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE;
+
+	sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
+	top = sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
+	l[HAL_FL_SFSA] = sfsa;
+	if (sfsa < inst + GUARD_PAGES * HAL_FLASH_PAGE + HAL_CACHE_SIZE) {
+		/* no room: neither region is used */
+		l[HAL_FL_INST] = l[HAL_FL_INST_SIZE] = 0;
+		l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+		return;
+	}
+	l[HAL_FL_CACHE] = top - HAL_CACHE_SIZE;
+	l[HAL_FL_CACHE_SIZE] = HAL_CACHE_SIZE;
+	l[HAL_FL_INST] = inst;
+	l[HAL_FL_INST_SIZE] = top - HAL_CACHE_SIZE - inst;
+}
+
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
-	*base = FLASH_BASE + 0x20000;
-	*size = 0x60000;
+	uint32_t l[HAL_FL_N];
+
+	hal_flash_layout(l);
+	*base = l[HAL_FL_CACHE];
+	*size = l[HAL_FL_CACHE_SIZE];
 }
 
 uint32_t hal_flash_sr;			/* SR of the last failure, for the log */

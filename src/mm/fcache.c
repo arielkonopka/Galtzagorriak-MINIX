@@ -99,6 +99,15 @@ PUBLIC void fc_init()
   int i, ok0, ok1;
 
   if (sys_flash(FL_INFO, 0, NULL, 0, &base, &size) != OK) return;
+  {	/* the layout, once (R2b.1) */
+	unsigned long sfsa, ib, is, z;
+
+	if (sys_flash(FL_INFO, FL_LAYOUT_SFSA, NULL, 0, &sfsa, &z) == OK
+	    && sys_flash(FL_INFO, FL_LAYOUT_INST, NULL, 0, &ib, &is) == OK)
+		printf("flash: CPU2 from 0x%lx; programs 0x%lx %lu KB, "
+			"cache 0x%lx %lu KB\n", sfsa, ib, is >> 10,
+			base, size >> 10);
+  }
   if (size < (DIRPAGES + 1) * PAGE) return;
   if (size > MAXPAGES * PAGE) size = MAXPAGES * PAGE;
   fc_base = base;
@@ -318,7 +327,16 @@ struct fcinfo *fi;
   struct fcrec *r;
   int i;
 
+  unsigned long b, n;
+
   memset(fi, 0, sizeof(*fi));
+  if (sys_flash(FL_INFO, FL_LAYOUT_INST, NULL, 0, &b, &n) == OK) {
+	fi->inst_base = b;
+	fi->inst_size = n;
+  }
+  if (sys_flash(FL_INFO, FL_LAYOUT_SFSA, NULL, 0, &b, &n) == OK)
+	fi->sfsa = b;
+  fi->cache_base = fc_base;
   if (fc_size == 0) return;
   fi->size = fc_size - DIRPAGES * PAGE;
   for (i = 0; i < NREC; i++) {
