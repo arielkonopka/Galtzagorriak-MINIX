@@ -5,6 +5,8 @@
  *				programs also run from internal flash (root)
  *	pkg flash file...	run these programs from internal flash
  *	pkg unflash file...	stop that (their flash pages become free)
+ *	pkg bind file...	give programs built into the firmware (make
+ *				base-flash) to these files (/etc/rc, at boot)
  *	pkg remove name		remove a package
  *	pkg list		list installed packages
  *	pkg info name		show a package's control file
@@ -254,6 +256,22 @@ static int flash_files(char **v, int n, int op)
 	return r;
 }
 
+/* Programs built into the firmware's flash (spec R2b.6) are found by the
+ * hash of their text, once: then by the file, as installed ones. */
+static int bind(char **v, int n)
+{
+	message m;
+	int i, done = 0;
+
+	m.m1_i2 = MI_INSTALL;
+	m.m1_i3 = 3;				/* how many to bind? */
+	if (_syscall(MM, MEMINFO, &m) <= 0) return 0;
+	for (i = 0; i < n; i++)
+		if (flash_op(v[i], 2) == 0) done++;
+	if (done > 0) printf("pkg: %d built-in programs bound\n", done);
+	return 0;
+}
+
 /* Copy each file named in the list from the scratch directory to its
  * place, keeping the mode; link first (same file system: no copy). */
 static int place_files(const char *listpath)
@@ -262,7 +280,7 @@ static int place_files(const char *listpath)
 	struct stat st;
 	FILE *list;
 	size_t n;
-	int r = 0, e;
+	int r = 0, e, had;
 
 	if ((list = fopen(listpath, "r")) == NULL) return -1;
 	while (fgets(line, sizeof line, list) != NULL) {
@@ -271,7 +289,8 @@ static int place_files(const char *listpath)
 		sprintf(src, "%s%s", tmp, line);
 		if (stat(src, &st) < 0) { r = -1; continue; }
 		make_parents(line);
-		(void) flash_op(line, 1);	/* the old version's flash copy */
+		/* the old version's flash copy goes; the new one follows */
+		had = flash_op(line, 1) == 0;
 		unlink(line);
 		if (link(src, line) < 0) {
 			if (copy(src, line) < 0) {
@@ -284,7 +303,8 @@ static int place_files(const char *listpath)
 		chown(line, st.st_uid, st.st_gid);
 		chmod(line, st.st_mode & 07777);
 		/* last: the flash copy is bound to the ctime set just now */
-		if ((to_flash || ctl_flash) && S_ISREG(st.st_mode) && (st.st_mode & 0111)
+		if ((to_flash || ctl_flash || had) && S_ISREG(st.st_mode)
+		    && (st.st_mode & 0111)
 		    && is_program(line) && (e = flash_op(line, 0)) != 0)
 			fprintf(stderr, "pkg: %s stays in RAM: %s\n", line,
 								strerror(-e));
@@ -592,6 +612,8 @@ int main(int argc, char **argv)
 {
 	struct stat st;
 
+	if (argc >= 2 && strcmp(argv[1], "bind") == 0)	/* no /usr needed */
+		return bind(argv + 2, argc - 2);
 	if (stat(DB, &st) < 0 || !S_ISDIR(st.st_mode))
 		die(DB " is missing (is /usr mounted?)", NULL);
 	if (argc == 3 && strcmp(argv[1], "install") == 0) return install(argv[2]);

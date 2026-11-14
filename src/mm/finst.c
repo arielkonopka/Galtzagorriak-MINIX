@@ -46,6 +46,7 @@
 extern char mbuf[];			/* exec.c's buffer, free here */
 
 #define IN_MAGIC	0x534E4947UL	/* "GINS" */
+#define IN_SEED		0x424E4947UL	/* "GINB": made on the PC, base-flash */
 #define PAGE		4096UL
 #define HDR		8
 #define REC		64
@@ -74,7 +75,9 @@ PRIVATE unsigned long in_st;
 #define RECP(d, i)	((struct inrec *) (DIRADDR(d) + HDR + (i) * REC))
 #define FREE_SLOT(r)	((r)->addr == 0xFFFFFFFFUL)
 #define LIVE(r)		(!FREE_SLOT(r) && (r)->dead0 == 0xFFFFFFFFUL)
+#define MAGIC(d)	(((unsigned long *) DIRADDR(d))[0])
 #define GEN(d)		(((unsigned long *) DIRADDR(d))[1])
+#define UNBOUND(r)	((r)->id == 0xFFFFFFFFUL && (r)->ctime == 0xFFFFFFFFUL)
 #define BINDING(s)	((unsigned long) (s)->st_ino << 16 \
 					| ((unsigned long) (s)->st_dev & 0xFFFF))
 
@@ -192,8 +195,8 @@ PUBLIC void in_init()
   }
   h0 = (unsigned long *) DIRADDR(0);
   h1 = (unsigned long *) DIRADDR(1);
-  ok0 = h0[0] == IN_MAGIC && h0[1] != 0xFFFFFFFFUL;
-  ok1 = h1[0] == IN_MAGIC && h1[1] != 0xFFFFFFFFUL;
+  ok0 = (h0[0] == IN_MAGIC || h0[0] == IN_SEED) && h0[1] != 0xFFFFFFFFUL;
+  ok1 = (h1[0] == IN_MAGIC || h1[0] == IN_SEED) && h1[1] != 0xFFFFFFFFUL;
   if (ok0 && ok1) SET_DIR(h1[1] > h0[1]);
   else if (ok0 || ok1) SET_DIR(ok1);
   else SET_DIR(2);			/* none yet */
@@ -215,7 +218,7 @@ unsigned long size;		/* its text size */
   for (i = 0; i < NREC; i++) {
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if (LIVE(r) && r->id == id && r->ctime == (unsigned long) s->st_ctime
+	if (LIVE(r) && !UNBOUND(r) && r->id == id && r->ctime == (unsigned long) s->st_ctime
 	    && r->size == size && (best == NULL || r->seq > best->seq))
 		best = r;
   }
@@ -253,10 +256,14 @@ unsigned long addr;
 
 PRIVATE int in_compact()
 {
-/* Copy the live records to the other directory page, the new active one
- * (only when the directory is full, R2b.7). */
+/* Copy the live records to the other directory page, the new active one:
+ * when the directory is full (R2b.7) or was made on the PC (in_writable).
+ * The records go through MM's memory (the kernel takes no flash source).
+ * Double words still erased in a record (the binding of an unbound one,
+ * the dead marker of a live one) stay erased, to be written later. */
   int d = !in_dir, i, j;
   struct inrec *r;
+  unsigned long rec[REC / 4], to;
 
   if (in_format(d, GEN(in_dir) + 1) != OK) return(EIO);
   for (i = j = 0; i < NREC; i++) {
@@ -264,8 +271,15 @@ PRIVATE int in_compact()
 	if (FREE_SLOT(r)) break;
 	if (!LIVE(r) && !in_running(r->addr)) continue;
 	/* dead ones still run from keep their pages until they exit */
-	if (sys_flash(FL_WRITE, (unsigned long) RECP(d, j), r,
-				REC, NULL, NULL) != OK) return(EIO);
+	memcpy(rec, r, REC);
+	to = (unsigned long) RECP(d, j);
+	if (sys_flash(FL_WRITE, to, rec, 40, NULL, NULL) != OK
+	    || (!UNBOUND(r) && sys_flash(FL_WRITE, to + 40, rec + 10, 8,
+							NULL, NULL) != OK)
+	    || sys_flash(FL_WRITE, to + 48, rec + 12, 8, NULL, NULL) != OK
+	    || (!LIVE(r) && sys_flash(FL_WRITE, to + 56, rec + 14, 8,
+							NULL, NULL) != OK))
+		return(EIO);
 	j++;
   }
   (void) sys_flash(FL_ERASE, DIRADDR(in_dir), NULL, 0, NULL, NULL);
@@ -304,6 +318,19 @@ unsigned long npages;
   return(0);
 }
 
+PRIVATE int in_writable()
+{
+/* Before writing to the directory: make one if there is none, and copy one
+ * made on the PC to a page erased here first - DFU programmed its free
+ * double words with ones, which must not be programmed again (ECC). */
+  if (in_dir > 1) {
+	if (in_format(0, 1) != OK) return(EIO);
+	SET_DIR(0);
+	return(OK);
+  }
+  return(MAGIC(in_dir) == IN_SEED ? in_compact() : OK);
+}
+
 PRIVATE int in_kill(r)		/* mark a record dead */
 struct inrec *r;
 {
@@ -314,59 +341,38 @@ struct inrec *r;
 						sizeof(zero), NULL, NULL));
 }
 
-/*===========================================================================*
- *				in_install				     *
- *===========================================================================*/
-PRIVATE int in_install(fd, s)
-int fd;				/* the program, open */
+PRIVATE int in_check(fd, s, hdr)
+int fd;
 struct stat *s;
+struct exec *hdr;
 {
-  struct exec hdr;
-  struct sha sh;
-  struct inrec *r;
-  unsigned char sha[32];
-  unsigned long npages, addr, done, rec[14], id = BINDING(s);
-  int i, n, k;
-
   /* Only a file nobody but root or bin could have written (R2b.5 b). */
   if ((s->st_uid != SUPER_USER && s->st_uid != BIN_UID)
 	|| (s->st_mode & (S_IWGRP | S_IWOTH))) return(EPERM);
-  if (read(fd, (char *) &hdr, sizeof(hdr)) < (int) A_MINHDR
-	|| BADMAG(hdr) || !(hdr.a_flags & A_SEP) || hdr.a_text <= 0)
+  if (read(fd, (char *) hdr, sizeof(*hdr)) < (int) A_MINHDR
+	|| BADMAG(*hdr) || !(hdr->a_flags & A_SEP) || hdr->a_text <= 0)
 	return(ENOEXEC);
+  return(OK);
+}
 
-  if (in_dir > 1) {			/* first install: a directory */
-	if (in_format(0, 1) != OK) return(EIO);
-	SET_DIR(0);
-  }
-  for (i = 0; i < NREC; i++) {
-	r = RECP(in_dir, i);
-	if (FREE_SLOT(r)) break;
-	if (!LIVE(r) || r->id != id) continue;
-	if (r->ctime == (unsigned long) s->st_ctime
-		&& r->size == (unsigned long) hdr.a_text) return(OK);
-  }
-  if (i >= NREC) {			/* directory full: compact once */
-	if (in_compact() != OK) return(EIO);
-	for (i = 0; i < NREC; i++)
-		if (FREE_SLOT(RECP(in_dir, i))) break;
-	if (i >= NREC) return(ENOSPC);
-  }
+PRIVATE int in_text(fd, hdr, addr, sha)
+int fd;
+struct exec *hdr;
+unsigned long addr;		/* program it here too (erased), or 0 */
+unsigned char *sha;		/* SHA-256 of the file's text */
+{
+  struct sha sh;
+  unsigned long done;
+  int i, n, k;
 
-  npages = ((unsigned long) hdr.a_text + PAGE - 1) / PAGE;
-  if ((addr = in_find_run(npages)) == 0) return(ENOSPC);
-  for (done = 0; done < npages * PAGE; done += PAGE)
-	if (sys_flash(FL_ERASE, addr + done, NULL, 0, NULL, NULL) != OK)
-		return(EIO);
-
-  /* The text, hashed as it is written ... */
   sha_init(&sh);
-  if (lseek(fd, (off_t) hdr.a_hdrlen, SEEK_SET) != hdr.a_hdrlen)
+  if (lseek(fd, (off_t) hdr->a_hdrlen, SEEK_SET) != hdr->a_hdrlen)
 	return(EIO);
-  for (done = 0; done < (unsigned long) hdr.a_text; done += n) {
-	n = hdr.a_text - done < CHUNK ? (int) (hdr.a_text - done) : CHUNK;
+  for (done = 0; done < (unsigned long) hdr->a_text; done += n) {
+	n = hdr->a_text - done < CHUNK ? (int) (hdr->a_text - done) : CHUNK;
 	if (read(fd, mbuf, n) != n) return(EIO);
 	sha_add(&sh, (unsigned char *) mbuf, (unsigned long) n);
+	if (addr == 0) continue;
 	k = (n + 7) & ~7;
 	for (i = n; i < k; i++) mbuf[i] = (char) 0xFF;
 	if (sys_flash(FL_WRITE, addr + done, mbuf, (unsigned) k, NULL, NULL)
@@ -374,21 +380,103 @@ struct stat *s;
 		return(EIO);
   }
   sha_end(&sh, sha);
+  return(OK);
+}
 
-  /* ... and read back (R2b.5): the flash must hold exactly that. */
+PRIVATE int in_flash_ok(addr, size, sha)	/* does the flash hold it? */
+unsigned long addr, size;
+unsigned char *sha;
+{
+  struct sha sh;
+
   sha_init(&sh);
-  sha_add(&sh, (unsigned char *) addr, (unsigned long) hdr.a_text);
+  sha_add(&sh, (unsigned char *) addr, size);
   sha_end(&sh, (unsigned char *) mbuf);
-  if (memcmp(sha, mbuf, 32) != 0) {
-	printf("install: the flash copy does not read back\n");
-	return(EIO);
-  }
+  return(memcmp(sha, mbuf, 32) == 0);
+}
 
-  /* The record: now exec finds it.  Then the old version goes. */
+PRIVATE void in_old(id, keep)	/* other live records for the file: dead */
+unsigned long id;
+struct inrec *keep;
+{
+  struct inrec *r;
+  int i;
+
+  for (i = 0; i < NREC; i++) {
+	r = RECP(in_dir, i);
+	if (FREE_SLOT(r)) break;
+	if (r != keep && LIVE(r) && !UNBOUND(r) && r->id == id)
+		(void) in_kill(r);
+  }
+}
+
+/*===========================================================================*
+ *				Records					     *
+ *===========================================================================*/
+PRIVATE int in_has(s, size)	/* is this version of the file installed? */
+struct stat *s;
+unsigned long size;
+{
+  struct inrec *r;
+  int i;
+
+  for (i = 0; i < NREC && in_dir <= 1; i++) {
+	r = RECP(in_dir, i);
+	if (FREE_SLOT(r)) break;
+	if (LIVE(r) && !UNBOUND(r) && r->id == BINDING(s)
+		&& r->ctime == (unsigned long) s->st_ctime && r->size == size)
+		return(TRUE);
+  }
+  return(FALSE);
+}
+
+#define S_LIVE		0	/* in_same: live records */
+#define S_UNBOUND	1	/*   live, not bound yet */
+#define S_ANY		2	/*   dead ones too: check the flash then */
+
+PRIVATE struct inrec *in_same(size, sha, which)
+unsigned long size;
+unsigned char *sha;		/* NULL: any text of that size */
+int which;			/* S_LIVE, S_UNBOUND, S_ANY */
+{
+/* A record for this text (aliases such as [ and test, cp and mv are
+ * separate files with one text: one copy in flash, a record each; an
+ * upgrade with an unchanged program finds the old version's text). */
+  struct inrec *r;
+  int i;
+
+  for (i = 0; i < NREC && in_dir <= 1; i++) {
+	r = RECP(in_dir, i);
+	if (FREE_SLOT(r)) break;
+	if ((which == S_ANY || LIVE(r)) && r->size == size
+		&& (which != S_UNBOUND || UNBOUND(r))
+		&& (sha == NULL || memcmp(r->sha, sha, 32) == 0)) return(r);
+  }
+  return(NULL);
+}
+
+PRIVATE int in_record(addr, size, sha, s)
+unsigned long addr, size;
+unsigned char *sha;		/* in MM's memory, not the directory */
+struct stat *s;
+{
+/* Append the record of a text for this file; then older ones are dead. */
+  struct inrec *r;
+  unsigned long rec[14];
+  int i;
+
+  for (i = 0; i < NREC; i++)
+	if (FREE_SLOT(RECP(in_dir, i))) break;
+  if (i >= NREC) {			/* directory full: compact once */
+	if (in_compact() != OK) return(EIO);
+	for (i = 0; i < NREC; i++)
+		if (FREE_SLOT(RECP(in_dir, i))) break;
+	if (i >= NREC) return(ENOSPC);
+  }
   memcpy(rec, sha, 32);
   rec[8] = addr;
-  rec[9] = hdr.a_text;
-  rec[10] = id;
+  rec[9] = size;
+  rec[10] = BINDING(s);
   rec[11] = s->st_ctime;
   rec[12] = 0;
   for (i = 0; i < NREC; i++) {		/* the next seq */
@@ -397,16 +485,92 @@ struct stat *s;
 	if (r->seq >= rec[12]) rec[12] = r->seq + 1;
   }
   rec[13] = 0xFFFFFFFFUL;
-  for (i = 0; i < NREC; i++)
-	if (FREE_SLOT(RECP(in_dir, i))) break;
-  if (sys_flash(FL_WRITE, (unsigned long) RECP(in_dir, i), rec,
-					sizeof(rec), NULL, NULL) != OK)
+  r = RECP(in_dir, i);
+  if (sys_flash(FL_WRITE, (unsigned long) r, rec, sizeof(rec), NULL, NULL)
+								!= OK)
 	return(EIO);
-  for (i = 0; i < NREC; i++) {		/* older versions of the file */
-	r = RECP(in_dir, i);
-	if (FREE_SLOT(r)) break;
-	if (LIVE(r) && r->id == id && r->seq != rec[12]) (void) in_kill(r);
+  in_old(rec[10], r);
+  return(OK);
+}
+
+/*===========================================================================*
+ *				in_install				     *
+ *===========================================================================*/
+PRIVATE int in_install(fd, s)
+int fd;				/* the program, open */
+struct stat *s;
+{
+  struct exec hdr;
+  struct inrec *r;
+  unsigned char sha[32];
+  unsigned long npages, addr, done, size;
+  int i;
+
+  if ((i = in_check(fd, s, &hdr)) != OK) return(i);
+  size = (unsigned long) hdr.a_text;
+  if (in_has(s, size)) return(OK);		/* nothing to write */
+  if (in_writable() != OK) return(EIO);
+
+  /* The same text already there (an alias): only a record. */
+  if (in_text(fd, &hdr, 0UL, sha) != OK) return(EIO);
+  if ((r = in_same(size, sha, S_ANY)) != NULL
+	&& in_flash_ok(addr = r->addr, size, sha))
+	return(in_record(addr, size, sha, s));
+
+  npages = (size + PAGE - 1) / PAGE;
+  if ((addr = in_find_run(npages)) == 0) return(ENOSPC);
+  for (done = 0; done < npages * PAGE; done += PAGE)
+	if (sys_flash(FL_ERASE, addr + done, NULL, 0, NULL, NULL) != OK)
+		return(EIO);
+
+  /* The text, hashed as it is written, and read back (R2b.5). */
+  if (in_text(fd, &hdr, addr, sha) != OK) return(EIO);
+  if (!in_flash_ok(addr, size, sha)) {
+	printf("install: the flash copy does not read back\n");
+	return(EIO);
   }
+  /* The record: now exec finds it.  Then the old version goes. */
+  return(in_record(addr, size, sha, s));
+}
+
+/*===========================================================================*
+ *				in_bind					     *
+ *===========================================================================*/
+PRIVATE int in_bind(fd, s)
+int fd;				/* the program, open */
+struct stat *s;
+{
+/* Programs built into the firmware (make base-flash, R2b.6) have records
+ * without a binding: give this file the one whose text it holds, or a
+ * record of its own for a text already bound to an alias. */
+  struct exec hdr;
+  struct inrec *r;
+  unsigned char sha[32];
+  unsigned long b[2], size, addr;
+  int i;
+
+  if ((i = in_check(fd, s, &hdr)) != OK) return(i);
+  size = (unsigned long) hdr.a_text;
+  if (in_has(s, size)) return(OK);
+  if (in_same(size, (unsigned char *) NULL, S_LIVE) == NULL)
+	return(ENOENT);			/* cheap: no hashing */
+  if (in_text(fd, &hdr, 0UL, sha) != OK) return(EIO);
+  if ((r = in_same(size, sha, S_UNBOUND)) == NULL)
+	r = in_same(size, sha, S_LIVE);
+  if (r == NULL) return(ENOENT);
+  if (!in_flash_ok(addr = r->addr, size, sha)) {
+	printf("install: built-in text at %lx is damaged\n", addr);
+	return(EIO);
+  }
+  if (in_writable() != OK) return(EIO);	/* may move the records */
+  if ((r = in_same(size, sha, S_UNBOUND)) == NULL)	/* an alias */
+	return(in_record(addr, size, sha, s));
+  b[0] = BINDING(s);
+  b[1] = s->st_ctime;
+  if (sys_flash(FL_WRITE, (unsigned long) &r->id, b, sizeof(b), NULL, NULL)
+								!= OK)
+	return(EIO);
+  in_old(b[0], r);
   return(OK);
 }
 
@@ -417,14 +581,23 @@ PUBLIC int do_install()
 {
 /* MEMINFO with m1_i2 = MI_INSTALL (root only, R2b.2): m1_p1 = path,
  * m1_i1 = its length; m1_i3 = 0: install the program's text into the
- * flash region, 1: mark its records dead (pages free once no process
- * runs from them). */
+ * flash region, 1: mark its records dead (their pages are free once no
+ * process runs from them), 2: bind it to a built-in record (in_bind), 3: return
+ * the number of built-in records not bound yet (no path). */
   struct stat s;
   struct inrec *r;
   int fd, i, len = mm_in.m1_i1, rv;
 
   if (mp->mp_effuid != SUPER_USER) return(EPERM);	/* AC2b.4 */
   if (in_st == 0) return(ENOSYS);
+  if (mm_in.m1_i3 == 3) {
+	for (rv = i = 0; i < NREC && in_dir <= 1; i++) {
+		r = RECP(in_dir, i);
+		if (FREE_SLOT(r)) break;
+		if (LIVE(r) && UNBOUND(r)) rv++;
+	}
+	return(rv);
+  }
   if (len <= 0 || len > 256) return(EINVAL);
   if (sys_copy(who, D, (phys_bytes) mm_in.m1_p1, MM_PROC_NR, D,
 			(phys_bytes) (mbuf + 3584), (phys_bytes) len) != OK)
@@ -432,24 +605,25 @@ PUBLIC int do_install()
   mbuf[3584 + len - 1] = 0;
   tell_fs(CHDIR, who, FALSE, 0);		/* the caller's directory */
 
-  if (mm_in.m1_i3 == 0) {			/* install */
+  if (mm_in.m1_i3 == 0 || mm_in.m1_i3 == 2) {	/* install, bind */
 	if ((fd = allowed(mbuf + 3584, &s, X_BIT)) < 0) return(fd);
-	rv = in_install(fd, &s);
+	rv = mm_in.m1_i3 == 0 ? in_install(fd, &s) : in_bind(fd, &s);
 	close(fd);
 	return(rv);
   }
   /* uninstall: every live record for this file (any version) */
   if (stat(mbuf + 3584, &s) < 0) return(-errno);
   if (in_dir > 1) return(ENOENT);
-  rv = ENOENT;
-  for (i = 0; i < NREC; i++) {
+  for (rv = ENOENT, i = 0; i < NREC; i++) {	/* any?  all idle? */
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if (!LIVE(r) || r->id != BINDING(&s)) continue;
-	if (in_running(r->addr)) return(EBUSY);
-	rv = in_kill(r);
+	if (!LIVE(r) || UNBOUND(r) || r->id != BINDING(&s)) continue;
+	rv = OK;	/* pages still run from stay used (in_used) */
   }
-  return(rv);
+  if (rv != OK) return(rv);
+  if (in_writable() != OK) return(EIO);	/* may move the records */
+  in_old(BINDING(&s), (struct inrec *) NULL);
+  return(OK);
 }
 
 /*===========================================================================*
@@ -459,8 +633,8 @@ PUBLIC void in_info(entries, used)
 int *entries;
 unsigned long *used;
 {
-  struct inrec *r;
-  int i;
+  struct inrec *r, *q;
+  int i, j;
 
   *entries = 0;
   *used = 0;
@@ -470,7 +644,11 @@ unsigned long *used;
 	if (FREE_SLOT(r)) break;
 	if (!LIVE(r)) continue;
 	(*entries)++;
-	*used += (r->size + PAGE - 1) / PAGE * PAGE;
+	for (j = 0; j < i; j++) {	/* a text shared with an alias: once */
+		q = RECP(in_dir, j);
+		if (LIVE(q) && q->addr == r->addr) break;
+	}
+	if (j == i) *used += (r->size + PAGE - 1) / PAGE * PAGE;
   }
 }
 

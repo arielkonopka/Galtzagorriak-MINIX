@@ -197,6 +197,20 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 	   { echo "$@ is over 192 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
+# make base-flash: minix-base.bin = minix.bin with the programs used at boot
+# and login built into the installed region (R2b.6, tools/mkbaseflash.py).
+# Flash it with DFU like minix.bin, together with the base package or card
+# of the same build; /etc/rc binds them at the next boot (pkg bind).
+BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
+	      test
+$(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
+		      tools/mkbaseflash.py
+	python3 -I tools/mkbaseflash.py $< $@ \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x30000 \
+	   $(BASE_FLASH:%=$(MB)/bin/%)
+.PHONY: base-flash
+base-flash: $(MB)/minix-base.bin
+
 #############################################################################
 # User programs: position-independent (ld/user-pic.ld, -Wl,-q), converted
 # to MINIX a.out (separate I&D) by tools/elf2mnx.py; their text runs from
