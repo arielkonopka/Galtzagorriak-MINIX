@@ -18,6 +18,7 @@
 #define LE_EXEC		4	/* exec done (arg: proc) */
 #define LE_EXIT		5	/* process gone (arg: proc) */
 
+
 struct latevent {
   unsigned long cyc;		/* DWT cycle counter */
   unsigned short ev, arg;
@@ -29,6 +30,7 @@ struct latinfo {
   unsigned long mask_max;	/* longest lock()..unlock(), cycles */
   unsigned long rev_max, rev_sum, rev_n;	/* REVIVE -> process runs */
   unsigned long boot_lcd_ms;	/* boot to the first frame from a process */
+  unsigned long flash_max, flash_n;	/* longest flash operation (L9) */
   struct latevent ring[LAT_RING];
 };
 

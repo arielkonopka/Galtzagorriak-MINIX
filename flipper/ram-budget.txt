@@ -8,6 +8,7 @@
 # kernel +332 B after review of #2/#4/#5 (bell, RNG, note table 256 B): main 9708f4d.
 # kernel +8 B: LCD console view (#12, owner request): cursor/escape state.
 kernel    660    17236  17896
-mm        372    10312  10684
+# T2 (flash writes as idle work): MM +16 B (the background copy job).
+mm        372    10328  10700
 fs        476    27380  27856
 init      372    1376   1748

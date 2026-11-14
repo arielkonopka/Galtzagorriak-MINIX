@@ -354,6 +354,12 @@ in use by hand, background "cksum" of a 1.2 MB SD file in a loop):
 | L7 | app exit -> menu redrawn | 3.0-6.8 ms | 150 ms |
 | L10 | clock start -> launcher's first frame | 300 ms (plus the boot before the clock) | 3 s |
 
+After T2 (flash writes as idle work, 2026-11-14): L4 2 us max also while
+the cache is written (was 40 ms); L6 6-35 ms over 8 launches of "info",
+5 of them first runs from RAM (was up to 1.26 s); L9 one page erase
+21.95 ms, programming 256 B per step 2.75 ms, at most one erase per
+~270 ms; a 220-character line pasted during the copy arrived complete.
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

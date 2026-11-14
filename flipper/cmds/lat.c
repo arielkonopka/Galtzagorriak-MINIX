@@ -10,6 +10,7 @@
  *	L5  REVIVE -> the revived process runs
  *	L6  exec -> the new program's first frame	(app launch)
  *	L7  exit of a drawing app -> next frame by another (back to menu)
+ *	L9  one flash operation (an erase or 256 bytes programmed)
  *	L10 boot -> first frame by a process		(the launcher)
  * -w SECONDS: keep collecting for that long (press buttons, start apps),
  * reading the kernel's 32-event ring every second.  -c: clear the kernel's
@@ -129,7 +130,13 @@ int main(int argc, char **argv)
 	}
 	close(fd);
 
-	printf("%d events%s\n", nev, lost ? " (some lost: ring overflow)" : "");
+	printf("%d events%s:", nev, lost ? " (some lost: ring overflow)" : "");
+	for (j = 1; j <= LE_EXIT; j++) {
+		for (n = i = 0; i < nev; i++) if (ev[i].ev == j) n++;
+		printf(" %s %d", j == LE_BTN ? "btn" : j == LE_BREPLY ? "reply"
+			: j == LE_LCD ? "lcd" : j == LE_EXEC ? "exec" : "exit", n);
+	}
+	printf("\n");
 	show("L1", "button -> next LCD frame", v, pairs(LE_BTN, LE_LCD, 0, 0, v));
 	show("L2", "button -> /dev/buttons answered", v,
 					pairs(LE_BTN, LE_BREPLY, 0, 0, v));
@@ -140,7 +147,21 @@ int main(int argc, char **argv)
 			"              max %6lu us\n", li.rev_n,
 			us(li.rev_sum / li.rev_n), us(li.rev_max));
 	} else printf("L5   REVIVE -> process runs             no samples\n");
-	show("L6", "exec -> its first frame", v, pairs(LE_EXEC, LE_LCD, 1, 0, v));
+	/* L6: exec -> a frame by the same process before it exits or
+	 * execs again (programs that never draw don't count) */
+	n = 0;
+	for (i = 0; i < nev && n < MAXS; i++) {
+		if (ev[i].ev != LE_EXEC) continue;
+		for (j = i + 1; j < nev; j++) {
+			if (ev[j].arg != ev[i].arg) continue;
+			if (ev[j].ev == LE_EXIT || ev[j].ev == LE_EXEC) break;
+			if (ev[j].ev == LE_LCD) {
+				v[n++] = ev[j].cyc - ev[i].cyc;
+				break;
+			}
+		}
+	}
+	show("L6", "exec -> its first frame", v, n);
 	/* L7: exits of processes that drew something */
 	n = 0;
 	for (i = 0; i < nev && n < MAXS; i++) {
@@ -157,6 +178,10 @@ int main(int argc, char **argv)
 		}
 	}
 	show("L7", "app exit -> next frame (menu)", v, n);
+	if (li.flash_n > 0)
+		printf("L9   flash erase/program (stall)      %3lu"
+			"              max %6lu us\n", li.flash_n,
+			us(li.flash_max));
 	if (li.boot_lcd_ms != 0)
 		printf("L10  boot -> first frame                  %lu ms\n",
 							li.boot_lcd_ms);

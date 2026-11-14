@@ -46,8 +46,7 @@ FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 
 #if (CHIP == ARM_CM)
 PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
-PRIVATE int fc_new;		/* text must be copied to flash first */
-PRIVATE int fc_bad;		/* copying failed: the process is killed */
+PUBLIC char mbuf[ARG_MAX];	/* stack image; fcache.c between execs */
 PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
 #endif
 #endif
@@ -68,7 +67,6 @@ PUBLIC int do_exec()
   register struct mproc *rmp;
   struct mproc *sh_mp;
   int m, r, fd, ft, sn;
-  static char mbuf[ARG_MAX];	/* buffer for stack and zeroes */
   static char name_buf[PATH_MAX]; /* the name of the file to exec */
   char *new_sp, *basename;
   vir_bytes src, dst, text_bytes, data_bytes, bss_bytes, stk_bytes, vsp;
@@ -78,6 +76,9 @@ PUBLIC int do_exec()
   struct stat s_buf;
   vir_bytes pc;
   int reloc_bad = FALSE;
+#if (CHIP == ARM_CM)
+  int fc_new;			/* not cached yet: copy it after the exec */
+#endif
 
   /* Do some validity checks. */
   rmp = mp;
@@ -127,7 +128,9 @@ PUBLIC int do_exec()
    */
   sh_mp = NULL;
   /* Position-independent text: run it from the flash text cache
-   * (fcache.c) - found there, or copied there now - instead of RAM.
+   * (fcache.c) if it is there.  If not, it runs from RAM this time and
+   * MM copies it to the cache afterwards, as idle work (R0.8c): exec never
+   * waits for a flash write.
    */
   fc_text = fc_new = 0;
   /* Only files that nobody but their owner can have written, looked up
@@ -135,10 +138,7 @@ PUBLIC int do_exec()
   if (ft == SEPARATE && !(s_buf.st_mode & (S_IWGRP | S_IWOTH))) {
 	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
 					(unsigned long) s_buf.st_uid);
-	if (fc_text == 0) {
-		fc_text = fc_reserve((unsigned long) text_bytes);
-		fc_new = (fc_text != 0);
-	}
+	fc_new = (fc_text == 0);	/* to be cached once it runs */
   }
 #else
   sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
@@ -168,14 +168,6 @@ PUBLIC int do_exec()
 
   /* Read in text and data segments. */
 #if (CHIP == ARM_CM)
-  if (fc_new) {
-	/* First run: copy the text to the flash cache (mbuf is free now). */
-	if (fc_fill(fd, fc_text, (unsigned long) text_bytes, text_crc,
-			(unsigned long) s_buf.st_uid, mbuf, ARG_MAX) != OK) {
-		printf("exec: cannot write the flash text cache\n");
-		fc_bad = TRUE;
-	}
-  } else
   if (fc_text != 0) {
 	lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip text */
   } else
@@ -236,11 +228,13 @@ PUBLIC int do_exec()
 #endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
 #if (CHIP == ARM_CM)
-  if (fc_bad || reloc_bad) {	/* text incomplete or relocation refused:
-				 * never run it */
-	if (reloc_bad) printf("exec: %s: bad relocation, killed\n", basename);
-	fc_bad = FALSE;
+  if (reloc_bad) {		/* relocation refused: never run it */
+	printf("exec: %s: bad relocation, killed\n", basename);
 	sig_proc(rmp, SIGKILL);
+  } else if (fc_new) {		/* copy its RAM text to the cache, later */
+	fc_queue(who, (unsigned long) rmp->mp_seg[T].mem_phys << CLICK_SHIFT,
+		(unsigned long) text_bytes, text_crc,
+		(unsigned long) s_buf.st_uid);
   }
 #endif
   return(OK);

@@ -1113,8 +1113,14 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;
 		w1 = s[4] | s[5] << 8 | s[6] << 16 | (uint32_t) s[7] << 24;
 		if (w0 == 0xFFFFFFFFu && w1 == 0xFFFFFFFFu) continue;
-		*(volatile uint32_t *) dst = w0;	/* both words, in order */
-		*(volatile uint32_t *) (dst + 4) = w1;
+		{	/* both words, in order, nothing in between */
+			uint32_t pm = __get_PRIMASK();
+
+			__disable_irq();
+			*(volatile uint32_t *) dst = w0;
+			*(volatile uint32_t *) (dst + 4) = w1;
+			__set_PRIMASK(pm);
+		}
 		if ((r = flash_wait()) < 0) break;
 	}
 	FLASH->CR &= ~FLASH_CR_PG;
