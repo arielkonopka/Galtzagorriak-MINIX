@@ -181,6 +181,16 @@ Bluetooth, Settings).
 | 12 | Bluetooth LE: start CPU2 with ST's wireless stack already in flash, IPCC mailbox + HCI/ACI transport | `/dev/ble` |
 | 13 | Menu UI on the LCD mirroring the stock firmware's layout, apps per peripheral | — |
 
+Status of #8 (2026-11-14): `/dev/vibro` (PA8), `/dev/speaker` (TIM16 on
+PB8: notes of frequency + duration, played from the clock tick; ^G on the
+console beeps too), `/dev/gpio` (the eight free header pins PA7 PA6 PA4
+PB3 PB2 PC3 PC1 PC0 = pins 2-7, 15, 16; modes 0/1/in/up/down/off; PB6/PB7
+stay the debug UART), commands `gpio` and `beep` (`beep -c` calls for
+attention).  Minors 4-6 of major 6 (kernel/arm/flipdev.c).  Checked on
+the device: GPIO levels with pull-up/down and as outputs; tone timing.
+Not yet: the 5 V header supply (charger/OTG over I2C), a buttons
+"input" device beyond /dev/buttons.
+
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
 changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
 buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz
