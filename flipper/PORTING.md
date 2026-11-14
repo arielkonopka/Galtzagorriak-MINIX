@@ -171,6 +171,67 @@ changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
 buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz
 transmit must stay inside the legal bands for the user's region.
 
+## Memory plan (agreed 2026-11-14)
+
+1. **Tuning** (in progress): smaller FS/MM tables, stdio buffers, exec
+   top-down / fork shadows bottom-up.  Result on the device after login:
+   72 KB free, largest hole 51 KB.  Still to do: measure and shrink the
+   kernel task stacks (`t_stack` 7.7 KB) and the chmem of each program.
+2. **Program text from flash / shared text**: program code runs in place
+   (or one shared copy per program) instead of being copied into RAM
+   for every process.
+3. **Swap to the SD card** (partition 3): swap out shadow copies and
+   idle processes.
+
+## Userspace drivers (planned, not implemented)
+
+Goal: drivers that are not needed all the time, such as Bluetooth, Sub-GHz,
+NFC/RFID, IR, iButton, GPIO and extra USB classes, run as ordinary
+processes. They are started when a device file is opened and exit when they
+have been idle for a while, so their RAM is free the rest of the time.
+
+**What it saves.** The kernel runs from flash, so a driver built into the
+kernel costs RAM only for its data, its buffers and its share of the task
+stacks. Its code costs no RAM. A user process's code is copied into RAM
+today, so moving a driver out of the kernel *costs* RAM until memory plan
+point 2 is done. After that, a stopped driver costs nothing and a running
+one costs only its data and stack. That pays off for drivers with large
+buffers or protocol state, such as the BLE transport, the NFC protocol
+stack and IR capture buffers. Point 2 must come before userspace drivers.
+
+**USB.** USB RAM today is about 2.5 KB: `tx_ring` 2048, `rx_ring` 256,
+`udev`+`ubuf` about 230 B. It has no task stack of its own because it runs
+inside TTY. The CDC-ACM console is how the device is logged into and how
+packages are sent (`flsend`), so it is needed almost all the time. If its
+driver crashed or were unloaded, the device could only be reached through the
+LCD. Plan:
+- The CDC console stays in the kernel. Cheap savings: `tx_ring` 2048 → 512
+  saves 1.5 KB, which flow control makes safe. Optionally, power down the
+  USB peripheral when VBUS is absent.
+- Other USB functions, such as HID keyboard, mass storage (SD card as a USB
+  drive) and later CDC-ECM, run as a userspace driver `usbd`. When it
+  starts it takes the USB peripheral from the kernel; the console moves to
+  the LCD/UART, and the kernel CDC comes back when `usbd` exits or dies.
+
+**Design (light and deadlock-free):**
+- A kernel task `udrv` routes requests to the drivers. A request for
+  `/dev/X` is forwarded to driver X, and the caller is answered with
+  SUSPEND. The driver answers later and `udrv` REVIVEs the caller. The kernel
+  never waits on a user process (no blocking `sendrec` from a task to a user
+  process), so a driver that hangs blocks only its own callers.
+- `devd` (a userspace manager run as root) is started by `udrv` when a
+  device file is opened and no driver is running. It runs the driver from
+  `/etc/drivers` with its own uid. A driver that has been idle for N seconds
+  exits.
+- IRQs reach the driver as messages (`HARD_INT` notify). The kernel masks the
+  IRQ until the driver acknowledges it. MMIO is reached through an extra MPU
+  window over the peripheral's registers, limited to that driver. DMA is
+  allowed only into the driver's own memory.
+- When a driver dies, `udrv` fails every waiting request with EIO, releases
+  the IRQ and MMIO window, and `devd` can restart it on the next open.
+- Cost: one kernel task with a small table of drivers and requests
+  (< 1 KB), plus `devd` (stack + data, about 2–3 KB once point 2 is done).
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**
