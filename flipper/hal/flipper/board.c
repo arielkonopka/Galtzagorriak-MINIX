@@ -811,6 +811,7 @@ void hal_init(void)
 	gpio_cfg(GPIOC, 12, MODE_OUT, PULL_NONE, 0);	/* SD CS */
 	gpio_cfg(GPIOB, 0, MODE_OUT, PULL_NONE, 0);	/* display RST */
 	gpio_cfg(GPIOB, 1, MODE_OUT, PULL_NONE, 0);	/* display A0 */
+	hal_vibro(0);					/* PA8: motor off */
 
 	SysTick_Config(SystemCoreClock / 1000);
 	hal_wdt_start();
@@ -859,6 +860,49 @@ void hal_dfu_request(void)
 	*HAL_BOOT_WORD = HAL_BOOT_DFU;
 	__DSB();
 	NVIC_SystemReset();
+}
+
+/*===========================================================================*
+ *				Vibro, GPIO header			     *
+ *===========================================================================*/
+void hal_vibro(int on)
+{
+	gpio_set(GPIOA, 8, on);
+	gpio_cfg(GPIOA, 8, MODE_OUT, PULL_NONE, 0);
+}
+
+static const struct { GPIO_TypeDef *port; unsigned pin; } hdr[HAL_GPIO_PINS] = {
+	{ GPIOA, 7 }, { GPIOA, 6 }, { GPIOA, 4 }, { GPIOB, 3 },
+	{ GPIOB, 2 }, { GPIOC, 3 }, { GPIOC, 1 }, { GPIOC, 0 },
+};
+
+int hal_gpio(unsigned pin, unsigned op)
+{
+	GPIO_TypeDef *port;
+	unsigned n;
+
+	if (pin >= HAL_GPIO_PINS) return -1;
+	port = hdr[pin].port;
+	n = hdr[pin].pin;
+	switch (op) {
+	case HAL_GPIO_LOW:
+	case HAL_GPIO_HIGH:
+		gpio_set(port, n, op == HAL_GPIO_HIGH);	/* level first */
+		gpio_cfg(port, n, MODE_OUT, PULL_NONE, 0);
+		break;
+	case HAL_GPIO_IN:	gpio_cfg(port, n, MODE_IN, PULL_NONE, 0); break;
+	case HAL_GPIO_IN_UP:	gpio_cfg(port, n, MODE_IN, PULL_UP, 0); break;
+	case HAL_GPIO_IN_DOWN:	gpio_cfg(port, n, MODE_IN, PULL_DOWN, 0); break;
+	case HAL_GPIO_OFF:	gpio_cfg(port, n, MODE_ANALOG, PULL_NONE, 0); break;
+	default:		return -1;
+	}
+	return 0;
+}
+
+int hal_gpio_read(unsigned pin)
+{
+	if (pin >= HAL_GPIO_PINS) return -1;
+	return gpio_get(hdr[pin].port, hdr[pin].pin);
 }
 
 /*===========================================================================*
