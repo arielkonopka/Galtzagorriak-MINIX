@@ -99,6 +99,8 @@
 #	define MEM_DEV     1	/* minor device for /dev/mem */
 #	define KMEM_DEV    2	/* minor device for /dev/kmem */
 #	define NULL_DEV    3	/* minor device for /dev/null */
+#	define RANDOM_DEV  4	/* minor device for /dev/random (ARM_CM) */
+#	define ZERO_DEV    5	/* minor device for /dev/zero (ARM_CM) */
 
 #define CLOCK             -3	/* clock class */
 #	define SET_ALARM   1	/* fcn code to CLOCK, set up alarm */

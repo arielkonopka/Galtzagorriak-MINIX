@@ -166,16 +166,24 @@ char *argv[];
 
 		std_err(", try again\n");
 	}
-	/* SHA-256-crypt ("$5$", see pwdauth.c) with a 16 character salt.
-	 * A salt only has to differ between users and systems: the time,
-	 * pid and clock ticks, stirred, are enough for that.
+	/* SHA-256-crypt ("$5$", see pwdauth.c) with a 16 character salt
+	 * from /dev/random (the hardware generator on the Flipper).  Where
+	 * there is none: the time, pid and clock ticks, stirred - a salt
+	 * only has to differ between users and systems.
 	 */
 	{
 		static char a64[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 					"abcdefghijklmnopqrstuvwxyz";
 		struct tms tms;
 		unsigned long x;
+		unsigned char rnd[16];
+		int fd, got = 0;
 
+		if ((fd = open("/dev/random", O_RDONLY)) >= 0) {
+			got = read(fd, (char *) rnd, sizeof(rnd))
+							== sizeof(rnd);
+			close(fd);
+		}
 		time(&salt);
 		x = (unsigned long) salt ^ ((unsigned long) getpid() << 16)
 			^ ((unsigned long) times(&tms) << 7) ^ 0x9E3779B9UL;
@@ -184,7 +192,7 @@ char *argv[];
 			x ^= x << 13; x &= 0xffffffffUL;
 			x ^= x >> 17;
 			x ^= x << 5; x &= 0xffffffffUL;
-			sl[3 + cn] = a64[x & 63];
+			sl[3 + cn] = a64[(got ? rnd[cn] : x) & 63];
 		}
 		sl[19] = 0;
 	}

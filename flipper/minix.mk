@@ -93,7 +93,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 KDIR	:= $(MROOT)/src/kernel
 KSRC	:= main.c proc.c system.c clock.c table.c memory.c tty.c driver.c \
 	   drvlib.c misc.c arm/klib.c arm/cons.c arm/shadow.c arm/nodev.c \
-	   arm/disk.c arm/flipdev.c arm/lat.c arm/mpx.S
+	   arm/disk.c arm/flipdev.c arm/lat.c arm/mpx.S arm/flip.S
 KOBJ	:= $(KSRC:%=$(MB)/kernel/%.o) \
 	   $(filter-out %/main.o %/string.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
 # (string routines come from libc.a: memops.S, ansi/memcmp.c, strlen.c)
@@ -206,7 +206,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free lat
+PORTCMDS := mkpart pkg free gpio beep lat
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
@@ -222,7 +222,7 @@ LIBPROGS := pwdauth
 # Apps: built like commands but shipped as packages (flipper/apps).
 APPS	:= hello
 # Other names of multi-call programs, installed as copies.
-ALIASES	:= mv=cp ln=cp cpdir=cp clone=cp [=test reboot=halt
+ALIASES	:= mv=cp ln=cp cpdir=cp clone=cp [=test reboot=halt chgrp=chown
 ALIASES	+= $(addsuffix =cp,rm)
 # Stack + heap reserve per program (MINIX chmem).  RAM is ~114 KB for all
 # user processes, and a fork needs a second copy of the data, so keep these
@@ -244,7 +244,7 @@ CHMEM_cp     := 8192	# cpdir /etc: 1.3 KB left of 6 KB (also rm -r, mv)
 # Small one-shot tools used < 1 KB of the default 6 KB.
 SMALLCMDS    := basename dirname echo cat cmp date id kill \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
-		uname whoami yes printenv
+		uname whoami yes printenv gpio beep
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
@@ -313,7 +313,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.22
+BASE_VER := 3.23
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

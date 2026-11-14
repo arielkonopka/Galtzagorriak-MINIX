@@ -5,7 +5,9 @@
 #
 # image   data   bss    total   (measured)
 # Baseline main 76fd717 (= 5e3d0f0 + docs), 2026-11-14; Phase 1: +0 B.
-kernel    652    16904  17556
+# kernel +332 B after review of #2/#4/#5 (bell, RNG, note table 256 B): main 9708f4d.
+# kernel +8 B: LCD console view (#12, owner request): cursor/escape state.
+kernel    660    17236  17896
 mm        372    10312  10684
 fs        476    27380  27856
 init      372    1376   1748

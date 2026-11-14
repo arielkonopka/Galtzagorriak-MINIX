@@ -153,6 +153,29 @@ void hal_halt(int status)
 void hal_wdt_start(void) { }
 void hal_wdt_kick(void) { }
 void hal_tone(unsigned hz) { (void) hz; }
+void hal_vibro(int on) { (void) on; }
+/* GPIO: remembered levels only, so programs can be tried in QEMU. */
+static unsigned char gpio_level[HAL_GPIO_PINS];
+int hal_gpio(unsigned pin, unsigned op)
+{
+	if (pin >= HAL_GPIO_PINS || op > HAL_GPIO_OFF) return -1;
+	if (op <= HAL_GPIO_HIGH) gpio_level[pin] = op;
+	return 0;
+}
+int hal_gpio_read(unsigned pin)
+{
+	return pin < HAL_GPIO_PINS ? gpio_level[pin] : -1;
+}
+/* QEMU has no RNG: a xorshift seeded from the tick count.  Not random. */
+int hal_random(uint32_t *w)
+{
+	static uint32_t x;
+
+	if (x == 0) x = hal_ms * 2654435761u | 1;
+	x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+	*w = x;
+	return 0;
+}
 void hal_dfu_request(void) { hal_halt(0); }
 
 /* The "SD card" is a disk image file on the host, see QEMU_DISK. */

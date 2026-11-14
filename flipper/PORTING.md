@@ -181,6 +181,16 @@ Bluetooth, Settings).
 | 12 | Bluetooth LE: start CPU2 with ST's wireless stack already in flash, IPCC mailbox + HCI/ACI transport | `/dev/ble` |
 | 13 | Menu UI on the LCD mirroring the stock firmware's layout, apps per peripheral | — |
 
+Status of #8 (2026-11-14): `/dev/vibro` (PA8), `/dev/speaker` (TIM16 on
+PB8: notes of frequency + duration, played from the clock tick; ^G on the
+console beeps too), `/dev/gpio` (the eight free header pins PA7 PA6 PA4
+PB3 PB2 PC3 PC1 PC0 = pins 2-7, 15, 16; modes 0/1/in/up/down/off; PB6/PB7
+stay the debug UART), commands `gpio` and `beep` (`beep -c` calls for
+attention).  Minors 4-6 of major 6 (kernel/arm/flipdev.c).  Checked on
+the device: GPIO levels with pull-up/down and as outputs; tone timing.
+Not yet: the 5 V header supply (charger/OTG over I2C), a buttons
+"input" device beyond /dev/buttons.
+
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
 changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
 buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz
@@ -255,13 +265,26 @@ Done:
   retried, and after repeated errors the bus drops to 8 MHz for good
   (the kernel logs "sd: N transfer(s) retried").
 
+- Multi-block writes (CMD25): 512 KB written in 2.35 s (was 3.11 s).
+- Hardware RNG (STM32WB TRNG, 48 MHz clock or LSI): `/dev/random`
+  (minor 4) and `/dev/zero` (minor 5, was missing) in the memory driver;
+  `passwd` takes its `$5$` salt from /dev/random.
+- Shadow exchange (`flipclicks`) with LDM/STM (arm/flip.S).  The real
+  cost was elsewhere: a ready shadowed process waited for the clock tick
+  to be swapped in (16.7 ms per switch).  The idle task now raises
+  PendSV, which wakes the clock task at once (a kick, not counted as a
+  tick); idle checks and sleeps with interrupts masked so it cannot come
+  back into `wfi` with a shadow waiting.  m2test's 200 round trips
+  between a forked pair (400 switches): 6.66 s -> 0.25 s.
+
+Dropped: the CRC peripheral for CRC-32 (pkg is limited by USB, ~100 KB/s,
+where the table CRC costs ~1 % CPU; a kernel call per block would cost
+more than it saves).
+
 Still to do:
-- Multi-block writes (CMD25): 512 KB take 3.1 s, mostly the card's
-  programming time per CMD24.
-- `flipclicks` (shadow exchange) with LDM/STM; SPI by DMA.
-- CRC-32: the STM32WB CRC peripheral (pkg get, flash text cache keys).
-- The hardware RNG for salts, `/dev/random`; AES/PKA units later.
-- CLZ / bit tricks where the old sources loop over bits.
+- SPI by DMA (the CPU could do other work during SD transfers).
+- AES/PKA units if something needs them; CLZ / bit tricks where the old
+  sources loop over bits.
 
 ## Userspace drivers (planned, not implemented)
 

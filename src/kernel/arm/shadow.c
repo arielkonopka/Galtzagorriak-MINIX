@@ -26,6 +26,7 @@
 #include <string.h>
 
 FORWARD _PROTOTYPE( phys_clicks image_clicks, (struct proc *p)		);
+_PROTOTYPE( void flipwords, (u32_t *a, u32_t *b, size_t bytes)		);
 FORWARD _PROTOTYPE( struct proc *other_member, (struct proc *p,
 							int resident)	);
 
@@ -53,17 +54,10 @@ phys_clicks dest, nclicks;
 PUBLIC void flipclicks(c1, c2, n)
 phys_clicks c1, c2, n;
 {
-/* Exchange two non-overlapping click ranges. */
-  u32_t *a = (u32_t *) ((phys_bytes) c1 << CLICK_SHIFT);
-  u32_t *b = (u32_t *) ((phys_bytes) c2 << CLICK_SHIFT);
-  size_t words = ((size_t) n << CLICK_SHIFT) / sizeof(u32_t);
-  u32_t t;
-
-  while (words-- > 0) {
-	t = *a;
-	*a++ = *b;
-	*b++ = t;
-  }
+/* Exchange two non-overlapping click ranges (arm/flip.S: LDM/STM). */
+  flipwords((u32_t *) ((phys_bytes) c1 << CLICK_SHIFT),
+	    (u32_t *) ((phys_bytes) c2 << CLICK_SHIFT),
+	    (size_t) n << CLICK_SHIFT);
 }
 
 

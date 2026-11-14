@@ -7,11 +7,13 @@ RAM was measured by building main (81506e0) and #6 with `make BOARD=flipper mini
 | PR | Verdict |
 |---|---|
 | #1 Flash cache after DFU, tty, cut | **Pass**, squash-merged to main (4845bfa) |
-| #2 reboot -d, watchdog, bell | **Changes requested**: #3 was merged into this branch, so it now carries CHMEM_sh 16 KB |
-| #3 memops, SD FIFO/CRC/CMD18 | **Changes requested**: owner chose the exec-side fix over CHMEM_sh +4 KB |
-| #4 PendSV shadow kick, /dev/random, /dev/zero, CMD25 | **Pass**, with follow-ups |
-| #5 /dev/gpio, /dev/vibro, /dev/speaker | **Pass**, with a small note |
-| #6 /dev/ir | **Changes requested** (blocking) |
+| #2 reboot -d, watchdog, bell (+#3, + exec fix) | **Pass**, squash-merged (74af76e). CHMEM_sh back to 12 KB, MM gathers argv/envp |
+| #3 memops, SD FIFO/CRC/CMD18 | Merged as part of #2 |
+| #4 PendSV shadow kick, /dev/random, /dev/zero, CMD25 | **Pass**, squash-merged (0aa5137) |
+| #5 /dev/gpio, /dev/vibro, /dev/speaker | **Pass**, squash-merged (9708f4d) |
+| #6 /dev/ir | **Changes requested** (blocking); #7 is stacked on it and has the same blockers |
+
+See also `umap-bounds-finding.md` (S13, critical, found during the #2 re-review).
 
 ## #1: pass
 - The DFU reset runs at most once (the SFTRSTF guard). It runs before .data/.bss, so it costs no RAM.
