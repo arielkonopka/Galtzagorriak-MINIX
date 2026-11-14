@@ -30,7 +30,8 @@
 FORWARD _PROTOTYPE( void load_seg, (int fd, int seg, vir_bytes seg_bytes) );
 FORWARD _PROTOTYPE( int new_mem, (struct mproc *sh_mp, vir_bytes text_bytes,
 		vir_bytes data_bytes, vir_bytes bss_bytes,
-		vir_bytes stk_bytes, phys_bytes tot_bytes)		);
+		vir_bytes stk_bytes, phys_bytes tot_bytes,
+		unsigned long fc_text)					);
 FORWARD _PROTOTYPE( void patch_ptr, (char stack [ARG_MAX ], vir_bytes base) );
 FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 		vir_bytes *data_bytes, vir_bytes *bss_bytes,
@@ -45,11 +46,7 @@ FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 							vir_bytes room)	);
 
 #if (CHIP == ARM_CM)
-PUBLIC char mbuf[ARG_MAX];	/* stack, zeroes; finst.c between execs */
-PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
-PRIVATE unsigned char fc_new;	/* text must be copied to flash first */
-PRIVATE unsigned char fc_bad;	/* copying failed: the process is killed */
-PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
+PUBLIC char mbuf[ARG_MAX];	/* stack image; fcache.c, finst.c between execs */
 #endif
 #endif
 
@@ -78,6 +75,12 @@ PUBLIC int do_exec()
   struct stat s_buf;
   vir_bytes pc;
   int reloc_bad = FALSE;
+#if (CHIP == ARM_CM)
+  int fc_new;			/* not cached yet: copy it after the exec */
+  unsigned long fc_text;	/* flash address of the text, 0: in RAM */
+  off_t text_off;
+  int text_read;		/* fc_sync() has read the text already */
+#endif
 
   /* Do some validity checks. */
   rmp = mp;
@@ -107,6 +110,9 @@ PUBLIC int do_exec()
 	close(fd);		/* something wrong with header */
 	return(ENOEXEC);
   }
+#if (CHIP == ARM_CM)
+  text_off = lseek(fd, 0L, SEEK_CUR);	/* where the text is in the file */
+#endif
 
   /* Fetch the stack from the user before destroying the old core image. */
   if (stack_ptr != NULL) {
@@ -127,7 +133,9 @@ PUBLIC int do_exec()
    */
   sh_mp = NULL;
   /* Position-independent text: run it from the flash text cache
-   * (fcache.c) - found there, or copied there now - instead of RAM.
+   * (fcache.c) if it is there.  If not, it runs from RAM this time and
+   * MM copies it to the cache afterwards, as idle work (R0.8c): exec never
+   * waits for a flash write.
    */
   fc_text = fc_new = 0;
   /* Only files that nobody but their owner can have written, looked up
@@ -137,17 +145,31 @@ PUBLIC int do_exec()
 	fc_text = in_lookup(&s_buf, (unsigned long) text_bytes);
 	if (fc_text == 0) fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
 					(unsigned long) s_buf.st_uid);
-	if (fc_text == 0) {
-		fc_text = fc_reserve((unsigned long) text_bytes);
-		fc_new = (fc_text != 0);
-	}
+	fc_new = (fc_text == 0);	/* to be cached once it runs */
   }
 #else
   sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
 #endif
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
-  r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes);
+  r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes,
+								fc_text);
+#if (CHIP == ARM_CM)
+  text_read = FALSE;
+  if (r != OK && fc_new) {
+	/* No room for its text in RAM (right after an update, nothing is
+	 * cached yet): put the text in the cache now, the old way, and run
+	 * it from flash.  The only case where exec waits for a flash write. */
+	fc_text = fc_sync(fd, (unsigned long) text_bytes, text_crc,
+				(unsigned long) s_buf.st_uid, mbuf, ARG_MAX);
+	if (fc_text != 0) {
+		fc_new = FALSE;
+		text_read = TRUE;		/* fd is past the text now */
+		r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes,
+						stk_bytes, tot_bytes, fc_text);
+	}
+  }
+#endif
   if (r != OK) {
 	close(fd);		/* insufficient core or program too big */
 	return(r);
@@ -170,16 +192,9 @@ PUBLIC int do_exec()
 
   /* Read in text and data segments. */
 #if (CHIP == ARM_CM)
-  if (fc_new) {
-	/* First run: copy the text to the flash cache (mbuf is free now). */
-	if (fc_fill(fd, fc_text, (unsigned long) text_bytes, text_crc,
-			(unsigned long) s_buf.st_uid, mbuf, ARG_MAX) != OK) {
-		printf("exec: cannot write the flash text cache\n");
-		fc_bad = TRUE;
-	}
-  } else
   if (fc_text != 0) {
-	lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip text */
+	if (!text_read)
+		lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip */
   } else
 #endif
   if (sh_mp != NULL) {
@@ -198,6 +213,14 @@ PUBLIC int do_exec()
   pc += (vir_bytes) rmp->mp_seg[T].mem_vir << CLICK_SHIFT;	/* was "rp": never compiled */
 #endif
 
+#if (CHIP == ARM_CM)
+  /* Run from RAM often enough: MM copies its text from this file to the
+   * cache later, keeping the file open meanwhile (the program itself may
+   * be long gone by then). */
+  if (reloc_bad || !fc_new || !fc_ran(text_crc, (unsigned long) s_buf.st_uid)
+	|| !fc_queue(fd, (unsigned long) text_off, (unsigned long) text_bytes,
+				text_crc, (unsigned long) s_buf.st_uid))
+#endif
   close(fd);			/* don't need exec file any more */
 
   /* Take care of setuid/setgid bits. */
@@ -238,10 +261,8 @@ PUBLIC int do_exec()
 #endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
 #if (CHIP == ARM_CM)
-  if (fc_bad || reloc_bad) {	/* text incomplete or relocation refused:
-				 * never run it */
-	if (reloc_bad) printf("exec: %s: bad relocation, killed\n", basename);
-	fc_bad = FALSE;
+  if (reloc_bad) {		/* relocation refused: never run it */
+	printf("exec: %s: bad relocation, killed\n", basename);
 	sig_proc(rmp, SIGKILL);
   }
 #endif
@@ -372,14 +393,17 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 /*===========================================================================*
  *				new_mem					     *
  *===========================================================================*/
-PRIVATE int new_mem(sh_mp, text_bytes, data_bytes,bss_bytes,stk_bytes,tot_bytes)
+PRIVATE int new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes,
+							tot_bytes, fc_text)
 struct mproc *sh_mp;		/* text can be shared with this process */
 vir_bytes text_bytes;		/* text segment size in bytes */
 vir_bytes data_bytes;		/* size of initialized data in bytes */
 vir_bytes bss_bytes;		/* size of bss in bytes */
 vir_bytes stk_bytes;		/* size of initial stack segment in bytes */
 phys_bytes tot_bytes;		/* total memory to allocate, including gap */
+unsigned long fc_text;		/* the text in the flash cache, or 0 */
 {
+  vir_clicks tflash_clicks;	/* text size when in flash */
 /* Allocate new memory and release the old memory.  Change the map and report
  * the new map to the kernel.  Zero the new core image's bss, gap and stack.
  */

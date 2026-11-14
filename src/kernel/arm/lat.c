@@ -14,11 +14,26 @@ PRIVATE unsigned long lock_cyc;
 PRIVATE int rev_proc = -1000;
 PRIVATE unsigned long rev_cyc;
 
+PRIVATE unsigned long long lcd_wanted;	/* procs whose next frame counts */
+PRIVATE int lcd_after_btn;		/* the next frame after a button */
+
 PUBLIC void lat_event(ev, arg)
 int ev, arg;
 {
   struct latevent *e;
   unsigned long pm;
+  unsigned long long bit = 1ULL << ((arg + NR_TASKS) & 63);
+
+  /* Only the frames the budgets need: a process's first after exec or
+   * exit of another (L6, L7) and the first after a button (L1); an app
+   * redrawing all the time would flush everything else out of the ring. */
+  if (ev == LE_EXEC || ev == LE_EXIT) lcd_wanted = ~0ULL;
+  if (ev == LE_BTN) lcd_after_btn = TRUE;
+  if (ev == LE_LCD) {
+	if (!(lcd_wanted & bit) && !lcd_after_btn) return;
+	lcd_wanted &= ~bit;
+	lcd_after_btn = FALSE;
+  }
 
   /* Interrupts may already be off here: save and restore PRIMASK. */
   __asm volatile ("mrs %0, primask\n\tcpsid i" : "=r" (pm) : : "memory");
@@ -64,6 +79,18 @@ struct proc *rp;
   lat.rev_n++;
 }
 
+PUBLIC void lat_flash(end)		/* a flash operation starts/ends */
+int end;
+{
+  static unsigned long t0;
+  unsigned long d;
+
+  if (!end) { t0 = CYCCNT; return; }
+  d = CYCCNT - t0;
+  if (d > lat.flash_max) lat.flash_max = d;
+  lat.flash_n++;
+}
+
 PUBLIC int lat_read(user, count)	/* /dev/lat */
 phys_bytes user;
 int count;
@@ -77,5 +104,6 @@ int count;
 PUBLIC void lat_clear()
 {
   lat.mask_max = lat.rev_max = lat.rev_sum = lat.rev_n = 0;
+  lat.flash_max = lat.flash_n = 0;
 }
 #endif /* LATTRACE */

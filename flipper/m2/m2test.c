@@ -88,6 +88,9 @@ int main(int argc, char **argv)
 	int i, st, fd[2], n;
 	pid_t pid;
 
+	if (argc == 2 && strcmp(argv[1], "warm") == 0) {	/* see init.c */
+		for (;;) pause();
+	}
 	if (argc == 2 && strcmp(argv[1], "child-exec") == 0) {
 		printf("  [exec'd child pid %d running]\n", getpid());
 		return 7;

@@ -37,6 +37,12 @@ PUBLIC void main()
   while (TRUE) {
 	/* Wait for message. */
 	get_work();		/* wait for an MM system call */
+#if (CHIP == ARM_CM)
+	if (who == SYN_ALRM_TASK) {	/* flash cache idle work (fcache.c) */
+		fc_step();
+		continue;
+	}
+#endif
 	mp = &mproc[who];
 
   	/* Set some flags. */

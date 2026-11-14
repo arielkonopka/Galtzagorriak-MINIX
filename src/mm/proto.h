@@ -63,10 +63,12 @@ _PROTOTYPE( int do_reboot, (void)					);
 _PROTOTYPE( void fc_init, (void)					);
 _PROTOTYPE( unsigned long fc_lookup, (unsigned long crc, unsigned long size,
 						unsigned long owner)	);
-_PROTOTYPE( unsigned long fc_reserve, (unsigned long size)		);
-_PROTOTYPE( int fc_fill, (int fd, unsigned long addr, unsigned long size,
-		unsigned long crc, unsigned long owner, char *buf,
-							int bufsize)	);
+_PROTOTYPE( int fc_queue, (int fd, unsigned long toff, unsigned long size,
+			unsigned long crc, unsigned long owner)		);
+_PROTOTYPE( void fc_step, (void)					);
+_PROTOTYPE( int fc_ran, (unsigned long crc, unsigned long owner)	);
+_PROTOTYPE( unsigned long fc_sync, (int fd, unsigned long size,
+	unsigned long crc, unsigned long owner, char *buf, int bufsize)	);
 _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
 /* finst.c */
 struct stat;

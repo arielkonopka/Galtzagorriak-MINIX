@@ -270,6 +270,7 @@ _PROTOTYPE( void lat_revive, (int proc_nr)				);
 _PROTOTYPE( void lat_run, (struct proc *rp)				);
 _PROTOTYPE( int lat_read, (phys_bytes user, int count)			);
 _PROTOTYPE( void lat_clear, (void)					);
+_PROTOTYPE( void lat_flash, (int end)					);
 #define LAT_EVENT(ev, arg)	lat_event((ev), (arg))
 #else
 #define LAT_EVENT(ev, arg)	((void) 0)

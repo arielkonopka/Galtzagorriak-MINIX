@@ -29,14 +29,24 @@
  * leaves pages that no record claims, and they are simply reused.
  *
  * When there is no room, records of programs that no process is running
- * are removed, oldest first.  If that is not enough the text goes to RAM
- * as before.
+ * are removed, oldest first.
+ *
+ * All writing is idle work (spec R0.8c): exec only looks programs up.  A
+ * program that is not cached runs with its text in RAM, and fc_queue()
+ * notes it; MM then copies that RAM text to the cache in small steps, one
+ * per synchronous alarm (fc_step(): an erase of one page, or 256 bytes of
+ * programming, or one directory record), so the scheduler is free in
+ * between.  If the program exits first, the copy is dropped - its pages
+ * are not claimed by any record and get reused.  Formatting a fresh
+ * directory at boot is such a step too.
  */
 #include "mm.h"
 #include <minix/com.h>
 #include <signal.h>
 #include <string.h>
 #include "mproc.h"
+
+extern char mbuf[];		/* exec.c, free between execs */
 
 #if (CHIP == ARM_CM)
 
@@ -56,9 +66,41 @@ struct fcrec {
   unsigned long dead0, dead1;
 };
 
+#define STEP_TICKS	1		/* clock ticks between steps */
+#define STEP_BYTES	256		/* programmed per step (~2.7 ms) */
+#define START_TICKS	(5 * HZ)	/* first step after boot */
+
+/* The one copy in progress, if any. */
+enum { J_IDLE, J_RESERVE, J_ERASE, J_PROGRAM, J_RECORD, J_COMPACT,
+	J_COMPACT_COPY, J_COMPACT_DROP };
+PRIVATE struct {			/* packed: MM's static RAM (rule 0.1) */
+  unsigned char state;
+  unsigned char fd;		/* the program file, kept open by exec */
+  unsigned char unformatted;	/* no valid directory yet */
+  unsigned char page;		/* first reserved page; compaction: next
+				 * record (they are never needed together) */
+  unsigned short toff, owner;	/* text offset in the file; owner (key) */
+  unsigned long size, crc;	/* the text, key */
+  unsigned long done;		/* bytes erased/programmed, records */
+} job;
+#define JOB_ADDR	(fc_base + (unsigned long) job.page * PAGE)
+
+/* Programs run from RAM, counted: one is copied to the cache only after
+ * its third run (owner rule: as few flash writes as possible at run
+ * time).  Nothing is written to count. */
+#define NRUNS		8
+#define RUNS_TO_CACHE	3
+PRIVATE struct {
+  unsigned long crc;
+  unsigned short owner;
+  unsigned char runs, pad;
+} runs[NRUNS];
+#define fc_unformatted	job.unformatted
+
 PRIVATE unsigned long fc_base, fc_size;	/* region; 0: no cache */
 PRIVATE int fc_dir;			/* active directory page (0, 1) */
-PRIVATE unsigned long fc_gen, fc_seq;
+PRIVATE unsigned long fc_seq;
+#define fc_gen	(((unsigned long *) DIRADDR(fc_dir))[1])	/* from its header */
 PRIVATE unsigned char used[MAXPAGES / 8];
 
 #define DIRADDR(d)	(fc_base + (d) * PAGE)
@@ -71,6 +113,9 @@ FORWARD _PROTOTYPE( int fc_compact, (void)				);
 FORWARD _PROTOTYPE( int fc_running, (unsigned long addr)		);
 FORWARD _PROTOTYPE( void fc_map, (void)					);
 FORWARD _PROTOTYPE( unsigned long fc_find_run, (unsigned long npages)	);
+FORWARD _PROTOTYPE( int fc_reserve, (void)				);
+FORWARD _PROTOTYPE( int fc_compact_step, (void)				);
+FORWARD _PROTOTYPE( void fc_alarm, (int ticks)				);
 
 /*===========================================================================*
  *				fc_format				     *
@@ -120,10 +165,13 @@ PUBLIC void fc_init()
   if (ok0 && ok1) fc_dir = h1[1] > h0[1];
   else if (ok0 || ok1) fc_dir = ok1;
   else {
-	if (fc_format(0, 1) != OK) { fc_base = fc_size = 0; return; }
+	/* No directory: format one later, as idle work (R0.8c); until
+	 * then nothing is found or cached. */
+	fc_unformatted = TRUE;
 	fc_dir = 0;
+	fc_alarm(START_TICKS);
+	return;
   }
-  fc_gen = ((unsigned long *) DIRADDR(fc_dir))[1];
   for (i = 0; i < NREC; i++) {
 	r = RECP(fc_dir, i);
 	if (!FREE_SLOT(r) && r->seq != 0xFFFFFFFFUL && r->seq >= fc_seq)
@@ -142,7 +190,7 @@ unsigned long owner;		/* uid of the program file */
   struct fcrec *r;
   int i;
 
-  if (fc_size == 0 || size == 0) return(0);
+  if (fc_size == 0 || size == 0 || fc_unformatted) return(0);
   for (i = 0; i < NREC; i++) {
 	r = RECP(fc_dir, i);
 	if (FREE_SLOT(r)) break;	/* slots are used in order */
@@ -208,114 +256,300 @@ unsigned long npages;
 }
 
 /*===========================================================================*
- *				fc_compact				     *
+ *				fc_ran					     *
  *===========================================================================*/
-PRIVATE int fc_compact()
+PUBLIC int fc_ran(crc, owner)
+unsigned long crc, owner;
 {
-/* Copy the live records to the other directory page; it becomes active. */
-  int i, j, d = !fc_dir;
-  struct fcrec *r;
-  unsigned long rec[6];
+/* An uncached program ran from RAM once more: is it time to cache it? */
+  int i, k = 0;
 
-  if (fc_format(d, fc_gen + 1) != OK) return(-1);
-  for (i = j = 0; i < NREC; i++) {
-	r = RECP(fc_dir, i);
-	if (FREE_SLOT(r)) break;
-	if (!LIVE(r)) continue;
-	rec[0] = r->crc; rec[1] = r->size; rec[2] = r->addr; rec[3] = r->seq;
-	rec[4] = r->owner; rec[5] = r->flags;
-	if (sys_flash(FL_WRITE, (unsigned long) RECP(d, j), rec, sizeof(rec),
-						NULL, NULL) != OK) return(-1);
-	j++;
+  for (i = 0; i < NRUNS; i++) {
+	if (runs[i].runs != 0 && runs[i].crc == crc
+				&& runs[i].owner == (unsigned short) owner) {
+		if (runs[i].runs < 255) runs[i].runs++;
+		return(runs[i].runs >= RUNS_TO_CACHE);
+	}
+	if (runs[i].runs < runs[k].runs) k = i;	/* the least run */
   }
-  (void) sys_flash(FL_ERASE, DIRADDR(fc_dir), NULL, 0, NULL, NULL);
-  fc_dir = d;
-  fc_gen++;
-  return(OK);
+  runs[k].crc = crc;
+  runs[k].owner = (unsigned short) owner;
+  runs[k].runs = 1;
+  return(RUNS_TO_CACHE <= 1);
 }
+
+
+/*===========================================================================*
+ *				fc_queue				     *
+ *===========================================================================*/
+PUBLIC int fc_queue(fd, toff, size, crc, owner)
+int fd;				/* the program file, open */
+unsigned long toff;		/* where its text starts */
+unsigned long size, crc, owner;
+{
+/* Note a program to copy to the cache; returns TRUE if the job keeps fd
+ * (and closes it when done).  One at a time: if a copy is going on, this
+ * one is cached on a later run. */
+  if (fc_size == 0 || size == 0 || job.state != J_IDLE || toff > 0xFFFF
+	|| fd > 255) return(FALSE);
+  if ((size + PAGE - 1) / PAGE > fc_size / PAGE - DIRPAGES) return(FALSE);
+  job.fd = fd;
+  job.toff = toff;
+  job.size = size;
+  job.crc = crc;
+  job.owner = owner;
+  job.state = J_RESERVE;
+  if (!fc_unformatted) fc_alarm(STEP_TICKS);
+  return(TRUE);
+}
+
+
+/*===========================================================================*
+ *				fc_step					     *
+ *===========================================================================*/
+PUBLIC void fc_step()
+{
+/* One piece of the cache's flash work (a synchronous alarm came in). */
+  unsigned long npages, n, rec[6];
+  int r = OK, i;
+
+  if (fc_size == 0) return;
+  if (fc_unformatted) {
+	if (fc_format(0, 1) == OK) {
+		fc_unformatted = FALSE;
+		fc_dir = 0;
+	} else {
+		fc_base = fc_size = 0;		/* no cache, then */
+		return;
+	}
+	if (job.state != J_IDLE) fc_alarm(STEP_TICKS);
+	return;
+  }
+  if (job.state == J_IDLE) return;
+
+  npages = (job.size + PAGE - 1) / PAGE;
+
+  if (r == OK) switch (job.state) {
+  case J_RESERVE:
+	r = fc_reserve();
+	break;
+  case J_COMPACT:
+  case J_COMPACT_COPY:
+  case J_COMPACT_DROP:
+	r = fc_compact_step();
+	break;
+  case J_ERASE:				/* a page per step */
+	r = sys_flash(FL_ERASE, JOB_ADDR + job.done, NULL, 0, NULL, NULL);
+	job.done += PAGE;
+	if (job.done == npages * PAGE) {
+		job.state = J_PROGRAM;
+		job.done = 0;
+	}
+	break;
+  case J_PROGRAM:			/* STEP_BYTES per step, via mbuf */
+	n = job.size - job.done < STEP_BYTES ? job.size - job.done
+					     : STEP_BYTES;
+	if (lseek(job.fd, (off_t) (job.toff + job.done), SEEK_SET) < 0
+				|| read(job.fd, mbuf, (unsigned) n) != n) {
+		r = EIO;
+		break;
+	}
+	for (i = n; i < (int) ((n + 7) & ~7); i++) mbuf[i] = (char) 0xFF;
+	r = sys_flash(FL_WRITE, JOB_ADDR + job.done, mbuf,
+			(unsigned) ((n + 7) & ~7), NULL, NULL);
+	job.done += n;
+	if (job.done == job.size) job.state = J_RECORD;
+	break;
+  case J_RECORD:			/* now it can be found */
+	for (i = 0; i < NREC; i++)
+		if (FREE_SLOT(RECP(fc_dir, i))) break;
+	if (i == NREC) { r = EAGAIN; break; }
+	rec[0] = job.crc; rec[1] = job.size; rec[2] = JOB_ADDR;
+	rec[3] = fc_seq++; rec[4] = job.owner; rec[5] = 0xFFFFFFFFUL;
+	r = sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
+						sizeof(rec), NULL, NULL);
+	job.state = J_IDLE;
+	close(job.fd);
+	for (i = 0; i < NRUNS; i++)		/* counted no more */
+		if (runs[i].crc == job.crc
+				&& runs[i].owner == job.owner) runs[i].runs = 0;
+	return;
+  }
+  if (r != OK) {			/* give up; it is cached next time */
+	job.state = J_IDLE;
+	close(job.fd);
+	return;
+  }
+  fc_alarm(STEP_TICKS);
+}
+
+
+/*===========================================================================*
+ *				fc_sync					     *
+ *===========================================================================*/
+PUBLIC unsigned long fc_sync(fd, size, crc, owner, buf, bufsize)
+int fd;				/* program file, at the start of the text */
+unsigned long size, crc, owner;	/* the text and its key */
+char *buf;			/* MM buffer to read through */
+int bufsize;			/* its size, a multiple of 8 */
+{
+/* Cache a text right now, from the file (exec is short of RAM for it).
+ * A background copy in progress is dropped: this one is wanted more.
+ * Returns the flash address, or 0.
+ */
+  unsigned long npages = (size + PAGE - 1) / PAGE, addr = 0, done, rec[6];
+  int n, k, i;
+
+  if (fc_size == 0 || fc_unformatted || size == 0
+		|| npages > fc_size / PAGE - DIRPAGES) return(0);
+  if (job.state != J_IDLE) close(job.fd);	/* drop that copy */
+  job.state = J_IDLE;
+
+  /* Room: in the directory, then pages (each pass changes one thing). */
+  for (;;) {
+	if (!FREE_SLOT(RECP(fc_dir, NREC - 1))) {
+		job.state = J_COMPACT;
+		while (job.state != J_RESERVE)
+			if (fc_compact_step() != OK) {
+				job.state = J_IDLE;
+				return(0);
+			}
+		job.state = J_IDLE;
+		continue;
+	}
+	job.size = size;
+	if (fc_reserve() != OK) return(0);	/* nothing left to evict */
+	if (job.state == J_ERASE) {
+		addr = JOB_ADDR;
+		job.state = J_IDLE;
+		break;
+	}
+  }
+
+  for (done = 0; done < npages * PAGE; done += PAGE)
+	if (sys_flash(FL_ERASE, addr + done, NULL, 0, NULL, NULL) != OK)
+		return(0);
+  for (done = 0; done < size; done += n) {
+	n = size - done < (unsigned long) bufsize ? (int) (size - done)
+							: bufsize;
+	if (read(fd, buf, n) != n) return(0);
+	k = (n + 7) & ~7;
+	for (i = n; i < k; i++) buf[i] = (char) 0xFF;
+	/* STEP_BYTES per kernel call (~2.7 ms, R0.8b), not the whole buffer
+	 * (4 KB held the system task for 44 ms) */
+	for (i = 0; i < k; i += STEP_BYTES)
+		if (sys_flash(FL_WRITE, addr + done + i, buf + i,
+			(unsigned) (k - i < STEP_BYTES ? k - i : STEP_BYTES),
+							NULL, NULL) != OK)
+			return(0);
+  }
+  for (i = 0; i < NREC; i++)
+	if (FREE_SLOT(RECP(fc_dir, i))) break;
+  if (i == NREC) return(0);
+  rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_seq++;
+  rec[4] = owner; rec[5] = 0xFFFFFFFFUL;
+  if (sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
+					sizeof(rec), NULL, NULL) != OK)
+	return(0);
+  return(addr);
+}
+
 
 /*===========================================================================*
  *				fc_reserve				     *
  *===========================================================================*/
-PUBLIC unsigned long fc_reserve(size)
-unsigned long size;
+PRIVATE int fc_reserve()
 {
-/* Find erased pages for a text of size bytes, making room by removing
- * records nobody runs, oldest first.  Returns the address, or 0 (then the
- * text goes to RAM).
- */
-  unsigned long npages = (size + PAGE - 1) / PAGE, addr, page, zero[2];
+/* Find erased-to-be pages for the job, or make room: each call writes at
+ * most one thing (a "dead" mark, or starts a compaction). */
+  unsigned long npages = (job.size + PAGE - 1) / PAGE, zero[2], addr;
   struct fcrec *r, *old;
   int i;
 
-  if (fc_size == 0 || size == 0 || npages > fc_size / PAGE - DIRPAGES)
-	return(0);
-
-  for (;;) {
-	fc_map();
-	if ((addr = fc_find_run(npages)) != 0) break;
-	/* Remove the oldest record that no process uses. */
-	old = NULL;
-	for (i = 0; i < NREC; i++) {
-		r = RECP(fc_dir, i);
-		if (FREE_SLOT(r)) break;
-		if (!LIVE(r) || fc_running(r->addr)) continue;
-		if (old == NULL || r->seq < old->seq) old = r;
-	}
-	if (old == NULL) return(0);
-	zero[0] = zero[1] = 0;
-	if (sys_flash(FL_WRITE, (unsigned long) &old->dead0, zero,
-					sizeof(zero), NULL, NULL) != OK)
-		return(0);
+  if (!FREE_SLOT(RECP(fc_dir, NREC - 1))) {	/* directory full */
+	job.state = J_COMPACT;
+	return(OK);
   }
-
-  /* A free directory slot is needed too. */
-  if (!FREE_SLOT(RECP(fc_dir, NREC - 1))) {
-	if (fc_compact() != OK || !FREE_SLOT(RECP(fc_dir, NREC - 1)))
-		return(0);
+  fc_map();
+  if ((addr = fc_find_run(npages)) != 0) {
+	job.page = (addr - fc_base) / PAGE;
+	job.state = J_ERASE;
+	job.done = 0;
+	return(OK);
   }
-
-  for (page = 0; page < npages; page++) {
-	if (sys_flash(FL_ERASE, addr + page * PAGE, NULL, 0, NULL, NULL)
-								!= OK)
-		return(0);
+  /* Remove the oldest record that no process uses. */
+  old = NULL;
+  for (i = 0; i < NREC; i++) {
+	r = RECP(fc_dir, i);
+	if (FREE_SLOT(r)) break;
+	if (!LIVE(r) || fc_running(r->addr)) continue;
+	if (old == NULL || r->seq < old->seq) old = r;
   }
-  return(addr);
+  if (old == NULL) return(ENOSPC);
+  zero[0] = zero[1] = 0;
+  return(sys_flash(FL_WRITE, (unsigned long) &old->dead0, zero,
+						sizeof(zero), NULL, NULL));
 }
+
 
 /*===========================================================================*
- *				fc_fill					     *
+ *				fc_compact_step				     *
  *===========================================================================*/
-PUBLIC int fc_fill(fd, addr, size, crc, owner, buf, bufsize)
-int fd;				/* program file, at the start of the text */
-unsigned long addr, size, crc;	/* where the text goes, its size and CRC */
-unsigned long owner;		/* uid of the program file */
-char *buf;			/* MM buffer to read through */
-int bufsize;			/* its size, a multiple of 8 */
+PRIVATE int fc_compact_step()
 {
-/* Copy the text from the file to the reserved pages and record it. */
-  unsigned long done = 0, rec[6];
-  int n, k, i;
+/* Copy the live records to the other directory page, which becomes the
+ * active one: erase it (a step), copy 8 records per step, erase the old. */
+  int d = !fc_dir, k;
+  struct fcrec *r;
+  unsigned long rec[6];
 
-  while (done < size) {
-	n = size - done < (unsigned long) bufsize ? (int) (size - done) : bufsize;
-	if (read(fd, buf, n) != n) return(-1);
-	k = (n + 7) & ~7;
-	for (i = n; i < k; i++) buf[i] = (char) 0xFF;
-	if (sys_flash(FL_WRITE, addr + done, buf, (unsigned) k, NULL, NULL)
-								!= OK)
-		return(-1);
-	done += n;
+  switch (job.state) {
+  case J_COMPACT:
+	if (fc_format(d, fc_gen + 1) != OK) return(EIO);
+	job.page = 0;
+	job.done = 0;			/* records written so far */
+	job.state = J_COMPACT_COPY;
+	return(OK);
+  case J_COMPACT_COPY:
+	for (k = 0; k < 8 && job.page < NREC; job.page++) {
+		r = RECP(fc_dir, job.page);
+		if (FREE_SLOT(r)) { job.page = NREC; break; }
+		if (!LIVE(r)) continue;
+		rec[0] = r->crc; rec[1] = r->size; rec[2] = r->addr;
+		rec[3] = r->seq; rec[4] = r->owner; rec[5] = r->flags;
+		if (sys_flash(FL_WRITE, (unsigned long) RECP(d, job.done),
+				rec, sizeof(rec), NULL, NULL) != OK)
+			return(EIO);
+		job.done++;
+		k++;
+	}
+	if (job.page >= NREC) job.state = J_COMPACT_DROP;
+	return(OK);
+  case J_COMPACT_DROP:
+	(void) sys_flash(FL_ERASE, DIRADDR(fc_dir), NULL, 0, NULL, NULL);
+	fc_dir = d;			/* its header has the next generation */
+	job.state = J_RESERVE;
+	return(OK);
   }
-  for (i = 0; i < NREC; i++) {
-	if (FREE_SLOT(RECP(fc_dir, i))) break;
-  }
-  if (i == NREC) return(-1);
-  rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_seq++;
-  rec[4] = owner; rec[5] = 0xFFFFFFFFUL;
-  return(sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
-						sizeof(rec), NULL, NULL));
+  return(EIO);
 }
+
+
+/*===========================================================================*
+ *				fc_alarm				     *
+ *===========================================================================*/
+PRIVATE void fc_alarm(ticks)
+int ticks;
+{
+/* Have SYN_ALRM_TASK send MM a CLOCK_INT in that many ticks (fc_step). */
+  message m;
+
+  m.m_type = SET_SYNC_AL;
+  m.CLOCK_PROC_NR = MM_PROC_NR;
+  m.DELTA_TICKS = (long) ticks;
+  (void) sendrec(CLOCK, &m);
+}
+
 
 /*===========================================================================*
  *				fc_info					     *
@@ -337,7 +571,7 @@ struct fcinfo *fi;
   if (sys_flash(FL_INFO, FL_LAYOUT_SFSA, NULL, 0, &b, &n) == OK)
 	fi->sfsa = b;
   fi->cache_base = fc_base;
-  if (fc_size == 0) return;
+  if (fc_size == 0 || fc_unformatted) return;
   fi->size = fc_size - DIRPAGES * PAGE;
   for (i = 0; i < NREC; i++) {
 	r = RECP(fc_dir, i);

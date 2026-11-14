@@ -35,8 +35,12 @@ u32_t *basep, *sizep;		/* region (all ops) */
 {
 /* Flash text cache operations for do_flash().  Only inside the region the
  * board sets aside for it.  The MPU keeps the flash read-only even for
- * privileged code, so it is off while the controller writes; interrupts
- * are masked meanwhile (an erase stalls the CPU for ~20 ms anyway).
+ * privileged code, so it is off while the controller writes (only this
+ * privileged task runs meanwhile: interrupts return to it).  Interrupts
+ * stay enabled (R0.8c): during an erase every fetch from flash - handlers
+ * included - simply waits for it; hal_flash_write masks them only around
+ * the two stores of a double word.  MM calls this as idle work, one page
+ * erase or 256 bytes at a time (fcache.c).
  */
   u32_t ctrl;
   int r;
@@ -65,7 +69,9 @@ u32_t *basep, *sizep;		/* region (all ops) */
   }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 
-  lock();
+#if LATTRACE
+  lat_flash(0);
+#endif
   ctrl = MPU_CTRL;
   MPU_CTRL = 0;
   *(volatile u32_t *) 0xE000E008 |= 2;	/* ACTLR.DISDEFWBUF: precise faults */
@@ -75,7 +81,9 @@ u32_t *basep, *sizep;		/* region (all ops) */
   MPU_CTRL = ctrl;
   *(volatile u32_t *) 0xE000E008 &= ~2;
   __asm volatile ("dsb; isb");
-  unlock();
+#if LATTRACE
+  lat_flash(1);
+#endif
   if (r != 0) {
 	static int reported;
 	if (reported++ < 4)

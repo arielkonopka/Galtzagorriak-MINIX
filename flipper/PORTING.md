@@ -354,6 +354,22 @@ in use by hand, background "cksum" of a 1.2 MB SD file in a loop):
 | L7 | app exit -> menu redrawn | 3.0-6.8 ms | 150 ms |
 | L10 | clock start -> launcher's first frame | 300 ms (plus the boot before the clock) | 3 s |
 
+After T2 (flash writes as idle work, 2026-11-14): L4 2 us max also while
+the cache is written (was 40 ms); L6 6-35 ms over 8 launches of "info",
+5 of them first runs from RAM (was up to 1.26 s); L9 one page erase
+21.95 ms, programming 256 B per step 2.75 ms, at most one erase per
+~270 ms; a 220-character line pasted during the copy arrived complete.
+
+Flash writes at run time (owner rule, 2026-11-14): a program is copied
+to the text cache only after its third run from RAM (MM counts runs of up
+to 8 uncached programs, nothing written for that), from its file, which
+exec leaves open for the copy; the directory is written only for a new
+record, a compaction when it is full, or a format when there is none.  So
+a day of normal use writes 0 pages once the programs in use are cached;
+each newly installed program costs its own pages once (e.g. sum: 1 page
+erase + 1 KB programmed + one 32-byte record) after its third run, and
+nothing if it is never run three times.  Exception: a first run that has
+no RAM for its text is cached at once (fc_sync), the old way.
 T3 (2026-11-14, by hand on the Flipper, 238 presses in the launcher,
 About and Console, background cksum of a 1.2 MB SD file; T2 kernel): keys
 now come on press (gui.c).  L1 median 136 ms -> 5 ms, min 52 ms ->
