@@ -26,6 +26,7 @@ MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -Wno-old-style-definition -Wno-return-type -Wno-dangling-else \
 	   -Wno-format -Wno-uninitialized -Wno-maybe-uninitialized \
 	   -Wno-stringop-overflow	# FS passes "." for char[NAME_MAX]; reads stop at NUL
+MCFLAGS	+= $(if $(LATTRACE),-DLATTRACE=1)
 MLDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections \
 	    -Wl,--no-warn-rwx-segments
 
@@ -92,7 +93,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 KDIR	:= $(MROOT)/src/kernel
 KSRC	:= main.c proc.c system.c clock.c table.c memory.c tty.c driver.c \
 	   drvlib.c misc.c arm/klib.c arm/cons.c arm/shadow.c arm/nodev.c \
-	   arm/disk.c arm/flipdev.c arm/mpx.S arm/flip.S
+	   arm/disk.c arm/flipdev.c arm/lat.c arm/mpx.S arm/flip.S
 KOBJ	:= $(KSRC:%=$(MB)/kernel/%.o) \
 	   $(filter-out %/main.o %/string.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
 # (string routines come from libc.a: memops.S, ansi/memcmp.c, strlen.c)
@@ -205,11 +206,11 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep
+PORTCMDS := mkpart pkg free gpio beep lat
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights
+GUIAPPS	:= launcher info lights console
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(GUIAPPS)
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -248,6 +249,7 @@ $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_launcher := 4096
+CHMEM_console  := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
@@ -287,14 +289,24 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 	   $(MB)/user/crtso.o $(call objs_of,$(1)) $(MB)/libc-pic.a -lgcc -o $$@
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS),$(eval $(call user_prog,$(p))))
+# Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag
+$(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+$(MB)/cmd/test/%.o: tests/%.c tests/t.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
+	   -D "Security tests (spec Phase 1)" \
+	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
@@ -342,7 +354,19 @@ $(MB)/card.img: $(MB)/proto tools/mkfsimg.py \
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/root.img --root . --trim \
 	   --mbr $@
 
-.PHONY: minix minix-run minix-flash libc disk card
+.PHONY: minix minix-run minix-flash libc disk card ramcheck latcheck
+
+# The latency trace build (spec R0.8e): the same system with the kernel's
+# event ring (arm/lat.c); flash it, then run lat on the device.
+latcheck:
+	$(MAKE) LATTRACE=1 BOARD=$(BOARD) minix base
+	@echo "Latency build: build/$(BOARD)-lat/minix/minix.bin and its base"
+	@echo "package; flash both, then run 'lat -w 30' while testing."
+
+# Static RAM of the system images against ram-budget.txt (spec rule 0.3).
+ramcheck: $(MB)/minix.bin
+	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
+	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
 card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin

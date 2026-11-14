@@ -335,6 +335,29 @@ LCD. Plan:
 - Cost: one kernel task with a small table of drivers and requests
   (< 1 KB), plus `devd` (stack + data, about 2–3 KB once point 2 is done).
 
+## Phase 1 measurements (spec rule 0.3, R0.8e), 2026-11-14
+
+Static RAM (make BOARD=flipper ramcheck), bytes .data+.bss: kernel 17556,
+MM 10684, FS 27856, INIT 1748 on main 76fd717; Phase 1 adds 0 B.
+
+Latency baseline on the Flipper (make latcheck kernel, lat -w 60, launcher
+in use by hand, background "cksum" of a 1.2 MB SD file in a loop):
+
+| ID | Path | Measured | Budget |
+|---|---|---|---|
+| L1 | button -> next LCD frame | min 19 ms, max 967 ms (86 presses; pairs every press, also ones that change nothing on screen) | 30 ms p99 / 50 ms |
+| L2 | button -> /dev/buttons answered | 7-8 us | 2 ms p99 |
+| L4 | interrupts masked, normal work (SD, ls -lR, cp 1.2 MB) | 0-2 us | 20 us |
+| L4 | interrupts masked, flash text cache write (first run of a program) | 40 ms (also ~44 ms at boot: cache directory) | not allowed (R0.8c) |
+| L5 | REVIVE -> process runs | avg 47 us, max 905 us (171) | 100 us |
+| L6 | exec -> its first frame | 2.3 ms .. 1.26 s (first runs write the flash cache) | 300 ms |
+| L7 | app exit -> menu redrawn | 3.0-6.8 ms | 150 ms |
+| L10 | clock start -> launcher's first frame | 300 ms (plus the boot before the clock) | 3 s |
+
+To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
+and install its base package, mknod /dev/lat c 6 15, then lat -c and
+lat -w SECONDS while testing.  lat prints min/median/p99/max.
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**

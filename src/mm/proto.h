@@ -61,10 +61,12 @@ _PROTOTYPE( int do_reboot, (void)					);
 #if (CHIP == ARM_CM)
 /* fcache.c */
 _PROTOTYPE( void fc_init, (void)					);
-_PROTOTYPE( unsigned long fc_lookup, (unsigned long crc, unsigned long size));
+_PROTOTYPE( unsigned long fc_lookup, (unsigned long crc, unsigned long size,
+						unsigned long owner)	);
 _PROTOTYPE( unsigned long fc_reserve, (unsigned long size)		);
 _PROTOTYPE( int fc_fill, (int fd, unsigned long addr, unsigned long size,
-			unsigned long crc, char *buf, int bufsize)	);
+		unsigned long crc, unsigned long owner, char *buf,
+							int bufsize)	);
 _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
 _PROTOTYPE( void mem_paint, (struct mproc *rmp)				);
 _PROTOTYPE( void mem_report, (struct mproc *rmp)			);

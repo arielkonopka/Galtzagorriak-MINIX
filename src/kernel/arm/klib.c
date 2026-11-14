@@ -266,42 +266,7 @@ int t;
 #define MPU_REGIONS	8
 PUBLIC struct proc *mpu_proc;		/* whose regions are loaded */
 
-PRIVATE int mpu_cover(lo, hi, rbar, rasr, max)
-u32_t lo, hi;			/* [lo, hi), multiples of 256 */
-u32_t *rbar, *rasr;
-int max;
-{
-/* Cover [lo, hi) exactly with at most max MPU regions, using subregions:
- * each step takes the largest aligned power-of-two region whose subregion
- * boundaries match lo and the covered end.  Returns the number used, or
- * -1 if max is not enough.
- */
-  int n = 0, k, s0, s1;
-  u32_t size, base, sub, end;
-
-  while (lo < hi) {
-	if (n == max) return -1;
-	for (k = 31; k >= 8; k--) {
-		size = (u32_t) 1 << k;
-		base = lo & ~(size - 1);
-		sub = size >> 3;
-		if (((lo - base) & (sub - 1)) != 0) continue;
-		end = hi - base > size ? base + size : hi;
-		if (((end - base) & (sub - 1)) != 0 || end <= lo) continue;
-		s0 = (lo - base) / sub;
-		s1 = (end - base) / sub;
-		rbar[n] = base;
-		rasr[n] = MPU_RASR_AP_RW_RW | ((u32_t) (k - 1) << 1)
-			| ((~(((1u << s1) - 1) & ~((1u << s0) - 1)) & 0xFF) << 8)
-			| MPU_RASR_ENABLE;
-		n++;
-		lo = end;
-		break;
-	}
-	if (k < 8) return -1;
-  }
-  return n;
-}
+#include <minix/mpucover.h>
 
 PUBLIC void mpu_switch()
 {
@@ -311,10 +276,14 @@ PUBLIC void mpu_switch()
  * with the default map; their regions are left as they are.
  */
   struct proc *rp = proc_ptr;
-  u32_t rbar[MPU_REGIONS], rasr[MPU_REGIONS], lo, hi;
+  unsigned long rbar[MPU_REGIONS], rasr[MPU_REGIONS];
+  u32_t lo, hi;
   int i, n;
   static int warned;
 
+#if LATTRACE
+  lat_run(rp);
+#endif
   if (rp == mpu_proc || !(rp->p_reg.control & CONTROL_NPRIV)) return;
   mpu_proc = rp;
 
@@ -326,12 +295,12 @@ PUBLIC void mpu_switch()
 
   n = mpu_cover(lo, hi, rbar, rasr, MPU_REGIONS - MPU_FIRST);
   if (n < 0) {
-	/* Cannot be described: fall back to all of RAM (no isolation). */
-	if (!warned++) printf("mpu: %s too fragmented, not isolated\n",
+	/* Cannot be described (MM should have refused the layout): fail
+	 * closed with no regions at all.  restart's unprivileged frame
+	 * store then faults and the process gets SIGSEGV (S3, R1.6). */
+	if (!warned++) printf("mpu: %s cannot be isolated, stopped\n",
 							rp->p_name);
-	n = mpu_cover((u32_t) _ram_start & ~0x3FFFFu,
-			((u32_t) _ram_start & ~0x3FFFFu) + 0x40000,
-			rbar, rasr, MPU_REGIONS - MPU_FIRST);
+	n = 0;
   }
   for (i = 0; i < MPU_REGIONS - MPU_FIRST; i++) {
 	MPU_RNR = MPU_FIRST + i;
@@ -466,10 +435,16 @@ unsigned exc;
 PUBLIC void lock()
 {
   __asm volatile ("cpsid i" : : : "memory");
+#if LATTRACE
+  lat_lock();
+#endif
 }
 
 PUBLIC void unlock()
 {
+#if LATTRACE
+  lat_unlock();
+#endif
   __asm volatile ("cpsie i" : : : "memory");
 }
 
@@ -558,6 +533,31 @@ unsigned exc;
 	(unsigned long) rp->p_map[T].mem_len << CLICK_SHIFT,
 	(unsigned long) rp->p_map[D].mem_phys << CLICK_SHIFT, rp->p_shadow);
   cause_sig(proc_number(rp), sig);
+}
+
+/*===========================================================================*
+ *				user_frame_fault			     *
+ *===========================================================================*/
+PUBLIC void user_frame_fault()
+{
+/* The unprivileged load or store of proc_ptr's exception frame faulted
+ * (mpx.S, frame_recover): its stack pointer is not in its memory.  It gets
+ * SIGSEGV (a kernel SIGKILL would mean "everybody", do_ksig in MM); until
+ * MM has handled that it is not runnable (cause_sig unreadies it).  Its
+ * stack pointer is set to the top of its own stack, so the signal frame
+ * and any later restart are inside its memory.
+ */
+  struct proc *rp = proc_ptr;
+
+  printf("%s[%d]: bad stack pointer %08lx, signal 11\n", rp->p_name,
+		proc_number(rp), (unsigned long) rp->p_reg.sp);
+  rp->p_reg.sp = (reg_t) ((rp->p_map[S].mem_vir + rp->p_map[S].mem_len)
+							<< CLICK_SHIFT);
+  /* The frame could not be stacked, so an SVC this process made is still
+   * pending: it would be taken later in whatever process runs next. */
+  SCB_SHCSR &= ~SHCSR_SVCALLPENDED;
+  cause_sig(proc_number(rp), SIGSEGV);
+
 }
 
 PUBLIC void kernel_fault_report(frame, exc)

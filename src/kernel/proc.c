@@ -169,6 +169,15 @@ message *m_ptr;			/* pointer to message buffer */
   vir_bytes vb;			/* message buffer pointer as vir_bytes */
   vir_clicks vlo, vhi;		/* virtual clicks containing message to send */
 
+  /* cp_mess moves words (LDM/STM): an unaligned message would fault in
+   * Handler mode and halt the system (S6). */
+  if ((vir_bytes) m_ptr & (sizeof(long) - 1)) return(EFAULT);
+
+#if LATTRACE
+  if (istaskp(caller_ptr) && m_ptr->m_type == REVIVE)
+	lat_revive(m_ptr->REP_PROC_NR);
+#endif
+
   /* User processes are only allowed to send to FS and MM.  Check for this. */
   if (isuserp(caller_ptr) && !issysentn(dest)) return(E_BAD_DEST);
   dest_ptr = proc_addr(dest);	/* pointer to destination's proc entry */
@@ -253,6 +262,8 @@ message *m_ptr;			/* pointer to message buffer */
 
   register struct proc *sender_ptr;
   register struct proc *previous_ptr;
+
+  if ((vir_bytes) m_ptr & (sizeof(long) - 1)) return(EFAULT);	/* S6 */
 
   /* Check to see if a message from desired source is already available. */
   if (!(caller_ptr->p_flags & SENDING)) {

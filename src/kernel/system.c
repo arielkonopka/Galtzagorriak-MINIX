@@ -427,6 +427,7 @@ register message *m_ptr;	/* pointer to request message */
 #define NLEN (sizeof(rp->p_name)-1)
 
   if (!isoksusern(m_ptr->PROC1)) return E_BAD_PROC;
+  LAT_EVENT(LE_EXEC, m_ptr->PROC1);
   /* PROC2 field is used as flag to indicate process is being traced */
   if (m_ptr->PROC2) cause_sig(m_ptr->PROC1, SIGTRAP);
   sp = (reg_t) m_ptr->STACK_PTR;
@@ -484,6 +485,7 @@ message *m_ptr;			/* pointer to request message */
 
   parent = m_ptr->PROC1;	/* slot number of parent process */
   proc_nr = m_ptr->PROC2;	/* slot number of exiting process */
+  LAT_EVENT(LE_EXIT, proc_nr);
   if (!isoksusern(parent) || !isoksusern(proc_nr)) return(E_BAD_PROC);
   rp = proc_addr(parent);
   rc = proc_addr(proc_nr);
@@ -720,6 +722,30 @@ message *m_ptr;			/* pointer to request message */
   return(OK);
 }
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				user_frame_ok				     *
+ *===========================================================================*/
+PUBLIC int user_frame_ok(rp, sp)
+struct proc *rp;
+vir_bytes sp;
+{
+/* Is sp a stack pointer the kernel may build a hardware exception frame
+ * below (32 bytes)?  Word aligned, and [sp - 32, sp) inside the process's
+ * own memory, from the start of D to the end of S (the gap between them
+ * belongs to the process too).
+ */
+  vir_bytes lo, hi;
+
+  lo = (vir_bytes) rp->p_map[D].mem_vir << CLICK_SHIFT;
+  hi = (vir_bytes) (rp->p_map[S].mem_vir + rp->p_map[S].mem_len)
+							<< CLICK_SHIFT;
+  if (sp & 3) return(FALSE);
+  if (sp < lo + 32 || sp > hi) return(FALSE);
+  return(TRUE);
+}
+#endif
+
 /*===========================================================================*
  *			      do_sigreturn				     *
  *===========================================================================*/
@@ -745,6 +771,12 @@ register message *m_ptr;
 
   /* Make sure that this is not just a jmp_buf. */
   if ((sc.sc_flags & SC_SIGCONTEXT) == 0) return(EINVAL);
+
+#if (CHIP == ARM_CM)
+  /* restart (mpx.S) writes the exception frame at sp - 32: the stack
+   * pointer must be aligned and the frame inside the process (S1). */
+  if (!user_frame_ok(rp, (vir_bytes) sc.sc_sp)) return(EFAULT);
+#endif
 
   /* Fix up only certain key registers if the compiler doesn't use
    * register variables within functions containing setjmp.
