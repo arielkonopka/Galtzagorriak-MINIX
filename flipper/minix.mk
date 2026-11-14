@@ -209,7 +209,7 @@ PORTCMDS := mkpart pkg free gpio beep
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights
+GUIAPPS	:= launcher info lights console
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(GUIAPPS)
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -248,6 +248,7 @@ $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_launcher := 4096
+CHMEM_console  := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
@@ -311,7 +312,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.21
+BASE_VER := 3.22
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

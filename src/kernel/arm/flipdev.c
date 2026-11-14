@@ -70,6 +70,20 @@ FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
+FORWARD _PROTOTYPE( void lc_newline, (void)				);
+
+/* The console on the LCD (launcher: "Console"): what goes out on the
+ * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
+ * so it costs no buffer: 32 x 10 characters of the 4x6 font, scrolled by
+ * shifting the pixel columns.  A one-byte write of 'C' to /dev/lcd turns
+ * it on, any other write (an app drawing) off.  The task pushes the
+ * screen out at most every LC_TICKS clock ticks. */
+#define LC_COLS		(LCD_W / 4)
+#define LC_ROWS		(LCD_H / 6)
+#define LC_TICKS	(HZ / 15)
+extern const unsigned char font_4x6[95][6];	/* hal/common/font4x6.c */
+PRIVATE u8_t lc_on, lc_x, lc_y, lc_esc, lc_wait;
+PRIVATE volatile u8_t lc_dirty;
 
 /*===========================================================================*
  *				flipdev_task				     *
@@ -130,8 +144,21 @@ message *m_ptr;
   case LCD_MINOR:
 	if (count > FB_SIZE) count = FB_SIZE;
 	if (m_ptr->m_type == DEV_READ) {
+		if (lc_on) return(0);	/* console text is not for apps */
 		phys_copy(vir2phys(fbuf), user, (phys_bytes) count);
+	} else if (count == 1) {
+		phys_copy(user, vir2phys(buf), (phys_bytes) 1);
+		if (buf[0] != 'C') return(EINVAL);
+		memset(fbuf, 0, sizeof(fbuf));	/* the console from now on */
+		lc_x = lc_y = lc_esc = 0;
+		lc_on = TRUE;
+		hal_lcd_flush(fbuf);
 	} else {
+		if (lc_on) {	/* a short frame must not leave console text
+				 * behind in fbuf for a later read */
+			memset(fbuf, 0, sizeof(fbuf));
+			lc_on = FALSE;
+		}
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
 		hal_lcd_flush(fbuf);
 	}
@@ -246,9 +273,14 @@ int count;
  *===========================================================================*/
 PRIVATE void do_hardint()
 {
-/* New button events: finish a suspended read. */
+/* New button events: finish a suspended read.  Console text on the LCD:
+ * show it. */
   int r;
 
+  if (lc_on && lc_dirty) {
+	lc_dirty = FALSE;
+	hal_lcd_flush(fbuf);
+  }
   if (sp_waiting && note_i >= note_n) {		/* the tune is over */
 	sp_waiting = FALSE;
 	reply(REVIVE, sp_caller, sp_proc, sp_count);
@@ -270,6 +302,10 @@ PUBLIC void flipdev_tick()
  */
   unsigned now = hal_buttons(), changed = now ^ last_buttons, b;
 
+  if (lc_dirty && ++lc_wait >= LC_TICKS) {
+	lc_wait = 0;
+	interrupt(PRINTER);
+  }
   if (note_i < note_n && --note_left == 0) {	/* next note, or quiet */
 	if (++note_i < note_n) {
 		note_left = note_ticks[note_i];
@@ -305,4 +341,74 @@ int code, replyee, proc, status;
   m.REP_PROC_NR = proc;
   m.REP_STATUS = status;
   send(replyee, &m);
+}
+
+
+/*===========================================================================*
+ *				lcd_cons_putc				     *
+ *===========================================================================*/
+PUBLIC void lcd_cons_putc(c)
+int c;
+{
+/* A console character, for the LCD if the console is shown there.  Escape
+ * sequences (ESC [ ... letter) are skipped. */
+  const unsigned char *g;
+  int px, py, row, col;
+
+  if (!lc_on) return;
+  if (lc_esc) {
+	if (lc_esc == 1) lc_esc = (c == '[') ? 2 : 0;
+	else if (c >= 0x40 && c <= 0x7E) lc_esc = 0;
+	return;
+  }
+  switch (c) {
+  case 033:	lc_esc = 1; return;
+  case '\r':	lc_x = 0; return;
+  case '\n':	lc_newline(); break;
+  case '\b':	if (lc_x > 0) lc_x--; return;
+  case '\t':	c = ' '; /* one space: the screen is narrow */ /* FALLTHROUGH */
+  default:
+	if (c < ' ' || c > '~') return;
+	if (lc_x >= LC_COLS) {
+		lc_x = 0;
+		lc_newline();
+	}
+	g = font_4x6[c - ' '];
+	for (row = 0; row < 6; row++) {
+		py = lc_y * 6 + row;
+		for (col = 0; col < 4; col++) {
+			px = lc_x * 4 + col;
+			if (g[row] & (0x80 >> col))
+				fbuf[(py >> 3) * LCD_W + px] |= 1 << (py & 7);
+			else
+				fbuf[(py >> 3) * LCD_W + px] &= ~(1 << (py & 7));
+		}
+	}
+	lc_x++;
+  }
+  lc_dirty = TRUE;
+}
+
+
+PRIVATE void lc_newline()
+{
+/* Next line; at the bottom, move every pixel column up by one text row. */
+  unsigned long long colbits;
+  int x, p;
+
+  lc_x = 0;
+  if (lc_y < LC_ROWS - 1) {
+	lc_y++;
+	return;
+  }
+  for (x = 0; x < LCD_W; x++) {
+	colbits = 0;
+	for (p = LCD_H / 8 - 1; p >= 0; p--)
+		colbits = colbits << 8 | fbuf[p * LCD_W + x];
+	colbits >>= 6;
+	for (p = 0; p < LCD_H / 8; p++) {
+		fbuf[p * LCD_W + x] = colbits;
+		colbits >>= 8;
+	}
+  }
 }

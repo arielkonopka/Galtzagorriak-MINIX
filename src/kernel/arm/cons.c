@@ -255,6 +255,7 @@ int c;
 
   hal_uart_putc(c);
   usb_out(&ch, 1);
+  lcd_cons_putc(c);		/* and on the LCD, if it shows the console */
 }
 
 
