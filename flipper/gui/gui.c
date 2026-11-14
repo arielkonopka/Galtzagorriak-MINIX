@@ -9,7 +9,6 @@
 
 static unsigned char fb[GUI_W * GUI_H / 8];
 static int lcd_fd = -1, btn_fd = -1, btn_nb_fd = -1;
-static time_t pressed_at[8];
 
 int gui_open(void)
 {
@@ -101,7 +100,10 @@ void gui_flush(void)
 	write(lcd_fd, fb, sizeof fb);
 }
 
-/* Events are (key, down) pairs; return presses, marking long ones. */
+/* Events are (key, down) pairs; return a key as soon as it goes down
+ * (T3: waiting for the release put the whole press, 50-150 ms, into the
+ * button -> screen latency L1).  KEY_LONG is not reported any more: no
+ * app used it, and long Back becomes the kernel's job (spec R4b.8). */
 static int event(int fd)
 {
 	unsigned char ev[2];
@@ -110,16 +112,7 @@ static int event(int fd)
 	for (;;) {
 		if (read(fd, ev, 2) != 2) return 0;
 		for (k = 0; k < 8 && !(ev[0] & (1 << k)); k++) ;
-		if (k == 8) continue;
-		if (ev[1]) {
-			pressed_at[k] = time(NULL);
-			continue;		/* report on release */
-		}
-		if (pressed_at[k] != 0 && time(NULL) - pressed_at[k] >= 1) {
-			pressed_at[k] = 0;
-			return ev[0] | KEY_LONG;
-		}
-		pressed_at[k] = 0;
+		if (k == 8 || !ev[1]) continue;		/* releases */
 		return ev[0];
 	}
 }
