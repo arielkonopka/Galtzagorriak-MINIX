@@ -80,6 +80,8 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 void hal_flash_region(uint32_t *base, uint32_t *size);
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);
+extern uint32_t hal_flash_sr;	/* status of the last failure */
+extern uint32_t hal_flash_dbg[5];
 
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */

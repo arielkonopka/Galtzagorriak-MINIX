@@ -133,8 +133,22 @@ register unsigned char *buffer;
 				i++;
 			} while (i < 4 && *arg >= '0' && *arg <= '7');
 			*buffer++ = ac;
-		} else if (*arg != '\0')
-			*buffer++ = *arg++;
+		} else if (*arg != '\0') {
+			/* POSIX escapes; any other character stands for
+			 * itself (\\, \-, \[) */
+			switch (*arg) {
+			case 'n': ac = '\n'; break;
+			case 't': ac = '\t'; break;
+			case 'r': ac = '\r'; break;
+			case 'b': ac = '\b'; break;
+			case 'f': ac = '\f'; break;
+			case 'v': ac = '\v'; break;
+			case 'a': ac = '\007'; break;
+			default:  ac = *arg; break;
+			}
+			arg++;
+			*buffer++ = ac;
+		}
 	} else if (*arg == '[') {
 		arg++;
 		i = *arg++;

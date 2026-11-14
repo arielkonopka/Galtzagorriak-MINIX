@@ -675,23 +675,59 @@ void hal_flash_region(uint32_t *base, uint32_t *size)
 	*size = 0x60000;
 }
 
+uint32_t hal_flash_sr;			/* SR of the last failure, for the log */
+uint32_t hal_flash_dbg[5];
+
+/* A page erase takes about 22 ms, a double word 82 us (DS11929); give up
+ * after a few hundred ms instead of hanging with interrupts masked. */
 static int flash_wait(void)
 {
-	uint32_t sr;
+	uint32_t sr, n;
 
-	while (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) {}
+	for (n = 0; FLASH->SR & FLASH_SR_BSY; )
+		if (++n == 4000000u) goto timeout;
 	sr = FLASH->SR;
+	/* CFGBSY stays set until the error flags are cleared (RM0434 3.3.8):
+	 * clear them first, then wait for it. */
 	FLASH->SR = (sr & FLASH_ERRS) | FLASH_SR_EOP;	/* write 1 to clear */
-	return (sr & FLASH_ERRS) ? -1 : 0;
+	for (n = 0; FLASH->SR & FLASH_SR_CFGBSY; )
+		if (++n == 4000000u) goto timeout;
+	if (sr & FLASH_ERRS) {
+		hal_flash_sr = sr;
+		return -1;
+	}
+	return 0;
+timeout:
+	hal_flash_sr = FLASH->SR | 0x80000000u;
+	return -1;
 }
 
-static void flash_unlock(void)
+/* Erase and program are timed by HSI16 (RM0434 3.3.5); the clock setup
+ * runs from HSE and the PLL only, so start it here.  It stays on. */
+static int flash_unlock(void)
 {
+	uint32_t n;
+
+	if (!(RCC->CR & RCC_CR_HSIRDY)) {
+		RCC->CR |= RCC_CR_HSION;
+		for (n = 0; !(RCC->CR & RCC_CR_HSIRDY); )
+			if (++n == 1000000u) {
+				hal_flash_sr = 0x40000000u;
+				return -1;
+			}
+	}
 	if (FLASH->CR & FLASH_CR_LOCK) {
 		FLASH->KEYR = FLASH_KEY1v;
 		FLASH->KEYR = FLASH_KEY2v;
 	}
-	(void) flash_wait();			/* and clear old errors */
+	if (FLASH->CR & FLASH_CR_LOCK) {
+		hal_flash_sr = 0x20000000u;
+		return -1;
+	}
+	/* Errors left over - the ROM DFU loader jumps to the image without a
+	 * reset and leaves its flags set - are not ours; only busy counts. */
+	(void) flash_wait();
+	return (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) ? -1 : 0;
 }
 
 /* The flash caches may hold the old contents of a page just changed. */
@@ -699,6 +735,13 @@ static void flash_done(void)
 {
 	uint32_t acr = FLASH->ACR & (FLASH_ACR_ICEN | FLASH_ACR_DCEN);
 
+	hal_flash_dbg[0] = FLASH->SR;
+	hal_flash_dbg[1] = FLASH->CR;
+	hal_flash_dbg[2] = RCC->CR;
+	hal_flash_dbg[3] = FLASH->OPTR;
+	hal_flash_dbg[4] = FLASH->SFR;
+	/* FLASH_CR is not writable while the controller is busy (bus error) */
+	if (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) return;
 	FLASH->CR |= FLASH_CR_LOCK;
 	FLASH->ACR &= ~(FLASH_ACR_ICEN | FLASH_ACR_DCEN);
 	FLASH->ACR |= FLASH_ACR_ICRST | FLASH_ACR_DCRST;
@@ -720,7 +763,7 @@ int hal_flash_erase(uint32_t page_addr)
 
 	if (page_addr % HAL_FLASH_PAGE != 0
 			|| !flash_ok(page_addr, HAL_FLASH_PAGE)) return -1;
-	flash_unlock();
+	if (flash_unlock() < 0) { flash_done(); return -1; }
 	FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
 		| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
 							<< FLASH_CR_PNB_Pos);
@@ -738,7 +781,7 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	int r = 0;
 
 	if (dst % 8 != 0 || len % 8 != 0 || !flash_ok(dst, len)) return -1;
-	flash_unlock();
+	if (flash_unlock() < 0) { flash_done(); return -1; }
 	FLASH->CR |= FLASH_CR_PG;
 	for (; len > 0; len -= 8, dst += 8, s += 8) {
 		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;

@@ -229,8 +229,13 @@ CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
 CHMEM_ls     := 12288	# ls -l /bin (83 files) used 7.4 KB
+# opendir() mallocs a 1 KB DIR per open directory level (and malloc grows
+# the heap in 1 KB steps): recursive tools need room for a few levels.
+CHMEM_find   := 10240	# 6 KB: "can't read directory" already at /etc
+CHMEM_du     := 8192	# 6 KB: did not descend at all
+CHMEM_cp     := 8192	# cpdir /etc: 1.3 KB left of 6 KB (also rm -r, mv)
 # Small one-shot tools used < 1 KB of the default 6 KB.
-SMALLCMDS    := basename dirname echo cat chmod chown cmp date id kill \
+SMALLCMDS    := basename dirname echo cat cmp date id kill \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
 		uname whoami yes printenv
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
@@ -290,7 +295,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.0
+BASE_VER := 3.1
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
