@@ -307,6 +307,13 @@ PUBLIC int do_meminfo()
   /* m1_i2 = MI_KSTACKS: the kernel task stack table instead. */
   if (mm_in.m1_i2 == MI_KSTACKS)
 	return(sys_kstacks(who, mm_in.m1_p1, mm_in.m1_i1));
+  /* m1_i2 = MI_FCACHE: the flash text cache summary to m1_p1. */
+  if (mm_in.m1_i2 == MI_FCACHE) {
+	struct fcinfo fi;
+	fc_info(&fi);
+	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fi, who, D,
+		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fi)));
+  }
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);

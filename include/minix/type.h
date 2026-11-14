@@ -145,6 +145,20 @@ struct kstack {
 };
 #define MI_KSTACKS	1
 #define MI_TRACE	2	/* m1_i1 = 1/0: report memory use at exit */
+#define MI_FCACHE	3	/* flash text cache: struct fcinfo to m1_p1 */
+
+/* sys_flash() operations. */
+#define FL_INFO		0	/* cache region: base, size */
+#define FL_ERASE	1	/* erase the page at addr */
+#define FL_WRITE	2	/* program len bytes at addr */
+
+/* Flash text cache summary (MEMINFO, MI_FCACHE). */
+struct fcinfo {
+  unsigned long size;		/* bytes in the cache's data pages */
+  unsigned long used;		/* bytes in pages of live entries */
+  int entries;			/* programs in the cache */
+  int running;			/* of them in use by a process now */
+};
 #endif
 
 #endif /* _MINIX_TYPE_H */

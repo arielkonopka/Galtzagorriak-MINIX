@@ -117,7 +117,7 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c
+	   table.c putk.c trace.c getset.c fcache.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
 	   protect.c time.c lock.c misc.c utility.c table.c putk.c
@@ -182,10 +182,15 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 		 tools/mkflash.py
 	python3 -I tools/mkflash.py $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
+	@# The flash text cache starts 128 KB in (hal_flash_region()).
+	@test $$(stat -c %s $@) -le 131072 || \
+	   { echo "$@ is over 128 KB: it would overlap the flash text cache"; \
+	     touch -d @0 $@; exit 1; }
 
 #############################################################################
-# User programs: linked at 0 with relocations (ld/user.ld, -Wl,-q), then
-# converted to MINIX a.out by tools/elf2mnx.py.
+# User programs: position-independent (ld/user-pic.ld, -Wl,-q), converted
+# to MINIX a.out (separate I&D) by tools/elf2mnx.py; their text runs from
+# the flash text cache (src/mm/fcache.c).
 #############################################################################
 # The shell, the MINIX commands (src/commands/simple, halt) and m2test.
 CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
@@ -285,7 +290,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 2.3
+BASE_VER := 3.0
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

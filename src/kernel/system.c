@@ -134,6 +134,7 @@ FORWARD _PROTOTYPE( int do_vcopy, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_getmap, (message *m_ptr) );
 #if (CHIP == ARM_CM)
 FORWARD _PROTOTYPE( int do_kstacks, (message *m_ptr) );
+FORWARD _PROTOTYPE( int do_flash, (message *m_ptr) );
 #endif
 
 #if (SHADOWING == 1)
@@ -158,6 +159,7 @@ PUBLIC void sys_task()
 	    case SYS_GETMAP:	r = do_getmap(&m);	break;
 #if (CHIP == ARM_CM)
 	    case SYS_KSTACKS:	r = do_kstacks(&m);	break;
+	    case SYS_FLASH:	r = do_flash(&m);	break;
 #endif
 	    case SYS_EXEC:	r = do_exec(&m);	break;
 	    case SYS_XIT:	r = do_xit(&m);		break;
@@ -290,6 +292,39 @@ message *m_ptr;			/* pointer to request message */
 
   return(OK);
 }
+
+
+/*===========================================================================*
+ *				do_flash				     *
+ *===========================================================================*/
+#if (CHIP == ARM_CM)
+PRIVATE int do_flash(m_ptr)
+message *m_ptr;
+{
+/* Erase or program the flash text cache for MM (mm/fcache.c).  m1_i1 = op,
+ * m1_p2 = flash address, m1_p1 = MM buffer, m1_i2 = length.  FL_INFO
+ * returns the region in m2_l1 (base) and m2_l2 (size).
+ */
+  u32_t base, size;
+  phys_bytes src = 0;
+  int r, op = m_ptr->m1_i1;
+  unsigned len = (unsigned) m_ptr->m1_i2;
+  u32_t addr = (u32_t) m_ptr->m1_p2;
+
+  if (m_ptr->m_source != MM_PROC_NR) return(EPERM);
+  if (op == FL_WRITE) {
+	src = umap(proc_addr(MM_PROC_NR), D, (vir_bytes) m_ptr->m1_p1,
+							(vir_bytes) len);
+	if (src == 0) return(EFAULT);
+  }
+  r = arm_flash(op, addr, src, len, &base, &size);
+  if (op == FL_INFO) {
+	m_ptr->m2_l1 = (long) base;
+	m_ptr->m2_l2 = (long) size;
+  }
+  return(r);
+}
+#endif
 
 
 /*===========================================================================*

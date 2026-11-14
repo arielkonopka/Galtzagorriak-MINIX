@@ -36,6 +36,13 @@ FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 
 #if (SHADOWING == 1)
 FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf, int sep)	);
+
+#if (CHIP == ARM_CM)
+PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
+PRIVATE int fc_new;		/* text must be copied to flash first */
+PRIVATE int fc_bad;		/* copying failed: the process is killed */
+PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
+#endif
 #endif
 
 /*===========================================================================*
@@ -102,6 +109,17 @@ PUBLIC int do_exec()
    * RAM are not done.  Text is shared through the flash cache instead.
    */
   sh_mp = NULL;
+  /* Position-independent text: run it from the flash text cache
+   * (fcache.c) - found there, or copied there now - instead of RAM.
+   */
+  fc_text = fc_new = 0;
+  if (ft == SEPARATE) {
+	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes);
+	if (fc_text == 0) {
+		fc_text = fc_reserve((unsigned long) text_bytes);
+		fc_new = (fc_text != 0);
+	}
+  }
 #else
   sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
 #endif
@@ -129,6 +147,19 @@ PUBLIC int do_exec()
   if (r != OK) panic("do_exec stack copy err", NO_NUM);
 
   /* Read in text and data segments. */
+#if (CHIP == ARM_CM)
+  if (fc_new) {
+	/* First run: copy the text to the flash cache (mbuf is free now). */
+	if (fc_fill(fd, fc_text, (unsigned long) text_bytes, text_crc,
+						mbuf, ARG_MAX) != OK) {
+		printf("exec: cannot write the flash text cache\n");
+		fc_bad = TRUE;
+	}
+  } else
+  if (fc_text != 0) {
+	lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip text */
+  } else
+#endif
   if (sh_mp != NULL) {
 	lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* shared: skip text */
   } else {
@@ -181,6 +212,12 @@ PUBLIC int do_exec()
   strncpy(rmp->mp_name, basename, sizeof(rmp->mp_name));
 #endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
+#if (CHIP == ARM_CM)
+  if (fc_bad) {			/* its text is incomplete: never run it */
+	fc_bad = FALSE;
+	sig_proc(rmp, SIGKILL);
+  }
+#endif
   return(OK);
 }
 
@@ -333,6 +370,10 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
 
   /* No need to allocate text if it can be shared. */
   if (sh_mp != NULL) text_bytes = 0;
+#if (CHIP == ARM_CM)
+  tflash_clicks = ((unsigned long) text_bytes + CLICK_SIZE - 1) >> CLICK_SHIFT;
+  if (fc_text != 0) text_bytes = 0;	/* in the flash cache */
+#endif
 
   /* Acquire the new memory.  Each of the 4 parts: text, (data+bss), gap,
    * and stack occupies an integral number of clicks, starting at click
@@ -377,6 +418,13 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
 #endif
   if (new_base == NO_MEM) panic("MM hole list is inconsistent", NO_NUM);
 
+#if (CHIP == ARM_CM)
+  if (fc_text != 0) {
+	rmp->mp_seg[T].mem_phys = (phys_clicks) (fc_text >> CLICK_SHIFT);
+	rmp->mp_seg[T].mem_vir = 0;
+	rmp->mp_seg[T].mem_len = tflash_clicks;
+  } else
+#endif
   if (sh_mp != NULL) {
 	/* Share the text segment. */
 	rmp->mp_seg[T] = sh_mp->mp_seg[T];

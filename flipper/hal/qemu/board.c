@@ -215,3 +215,29 @@ int hal_usb_getc(void) { return -1; }
 
 void hal_backlight(unsigned level) { (void) level; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+
+
+/* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */
+void hal_flash_region(uint32_t *base, uint32_t *size)
+{
+	*base = 0x00020000;	/* above the 128 KB kept for the system image */
+	*size = 0x00060000;	/* up to 512 KB */
+}
+
+int hal_flash_erase(uint32_t page_addr)
+{
+	uint32_t *p = (uint32_t *) page_addr;
+	unsigned i;
+
+	for (i = 0; i < HAL_FLASH_PAGE / 4; i++) p[i] = 0xFFFFFFFFu;
+	return 0;
+}
+
+int hal_flash_write(uint32_t dst, const void *src, unsigned len)
+{
+	const uint8_t *s = src;
+	uint8_t *d = (uint8_t *) dst;
+
+	while (len-- > 0) *d++ = *s++;
+	return 0;
+}

@@ -24,6 +24,44 @@ PRIVATE u32_t kernel_stack[K_STACK_BYTES / sizeof(u32_t)]
 FORWARD _PROTOTYPE( void load_boot_images, (void) );
 
 /*===========================================================================*
+ *				arm_flash				     *
+ *===========================================================================*/
+PUBLIC int arm_flash(op, addr, src, len, basep, sizep)
+int op;				/* FL_INFO, FL_ERASE or FL_WRITE */
+u32_t addr;			/* flash address */
+phys_bytes src;			/* data to program (FL_WRITE) */
+unsigned len;			/* bytes to program */
+u32_t *basep, *sizep;		/* region (all ops) */
+{
+/* Flash text cache operations for do_flash().  Only inside the region the
+ * board sets aside for it.  The MPU keeps the flash read-only even for
+ * privileged code, so it is off while the controller writes; interrupts
+ * are masked meanwhile (an erase stalls the CPU for ~20 ms anyway).
+ */
+  u32_t ctrl;
+  int r;
+
+  hal_flash_region(basep, sizep);
+  if (op == FL_INFO) return(OK);
+  if (addr < *basep || addr - *basep >= *sizep) return(EINVAL);
+  if (op == FL_WRITE && (len > *sizep - (addr - *basep) || len % 8 != 0))
+	return(EINVAL);
+  if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
+
+  lock();
+  ctrl = MPU_CTRL;
+  MPU_CTRL = 0;
+  __asm volatile ("dsb; isb");
+  r = op == FL_ERASE ? hal_flash_erase(addr)
+		     : hal_flash_write(addr, (const void *) src, len);
+  MPU_CTRL = ctrl;
+  __asm volatile ("dsb; isb");
+  unlock();
+  return(r == 0 ? OK : EIO);
+}
+
+
+/*===========================================================================*
  *				kstack_used				     *
  *===========================================================================*/
 PUBLIC unsigned kstack_used(size)

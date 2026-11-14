@@ -72,6 +72,15 @@ uint32_t hal_disk_sectors(void);	/* capacity, valid after init */
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 
+/* Internal flash for the program text cache (mm/fcache.c): a region of
+ * whole pages that only the cache uses.  The kernel calls these with
+ * interrupts masked and the MPU off.  len and dst must be multiples of 8
+ * (double-word programming).  Return 0 on success, -1 on error. */
+#define HAL_FLASH_PAGE	4096
+void hal_flash_region(uint32_t *base, uint32_t *size);
+int hal_flash_erase(uint32_t page_addr);
+int hal_flash_write(uint32_t dst, const void *src, unsigned len);
+
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */
 void hal_halt(int status) __attribute__((noreturn));

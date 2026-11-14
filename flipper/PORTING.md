@@ -185,9 +185,17 @@ transmit must stay inside the legal bands for the user's region.
    wc` still does not fit; point 2 is the cure (20 KB of it is code).
    Updating the system programs: `make BOARD=flipper base` and
    `tools/flsend build/flipper/minix/pkgs/base_<ver>.tar`.
-2. **Program text from flash / shared text**: program code runs in place
-   (or one shared copy per program) instead of being copied into RAM
-   for every process.
+2. **Program text from flash** (done in QEMU, 2026-11-14): user programs
+   are position-independent (`-fpic -msingle-pic-base`, r9 = GOT = start
+   of data; ld/user-pic.ld, A_SEP images from tools/elf2mnx.py).  MM keeps
+   a text cache in internal flash (src/mm/fcache.c, 376 KB after the
+   128 KB system image): the first exec copies the text there, later ones
+   find it by CRC-32 + size and need RAM only for data and stack.  Full:
+   records of programs nobody runs are dropped, oldest first; otherwise the
+   text goes to RAM as before.  Kernel call SYS_FLASH (MM only, region
+   only, MPU off and interrupts masked while the controller works).  QEMU
+   after login: 106 KB free in one piece (was 73 KB, largest 52 KB); `ls -l
+   /bin | sort | wc` fits now.  `free -v` shows the cache.
 3. **Swap to the SD card** (partition 3): swap out shadow copies and
    idle processes.
 

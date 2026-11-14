@@ -74,6 +74,16 @@ int main(int argc, char **argv)
 	for (i = 0; v && i < 16 && holes[2 * i + 1] != 0; i++)
 		printf("  hole at %08lx  %5lu bytes (%lu KB)\n", holes[2 * i],
 			holes[2 * i + 1], holes[2 * i + 1] / 1024);
+	if (v) {
+		struct fcinfo fi;
+
+		m.m1_p1 = (char *) &fi;
+		m.m1_i2 = MI_FCACHE;
+		if (_syscall(MM, MEMINFO, &m) == 0 && fi.size != 0)
+			printf("flash text cache: %d programs (%d running), "
+				"%lu of %lu KB\n", fi.entries, fi.running,
+				fi.used / 1024, fi.size / 1024);
+	}
 	if (k) kstacks();
 	return 0;
 }

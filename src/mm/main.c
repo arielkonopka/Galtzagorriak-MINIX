@@ -133,6 +133,7 @@ PRIVATE void mm_init()
   /* Text runs from flash; count only the RAM (data to stack) in use. */
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len
 					- kernel_map[D].mem_phys;
+  fc_init();			/* the flash text cache, fcache.c */
 #else
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len;
 #endif

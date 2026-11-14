@@ -16,6 +16,7 @@
  */
 
 #include "mm.h"
+#include <string.h>
 #include <signal.h>
 #include "mproc.h"
 #include "param.h"

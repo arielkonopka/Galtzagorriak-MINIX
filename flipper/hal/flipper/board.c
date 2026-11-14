@@ -650,3 +650,105 @@ void hal_halt(int status)
 	 * host (polled: interrupts are off). */
 	for (;;) hal_usb_poll();
 }
+
+
+/*
+ * Internal flash: the program text cache (mm/fcache.c).
+ *
+ * The bottom 128 KB hold the system image (kernel, MM, FS, INIT: about
+ * 64 KB now), the next 384 KB the cache, all far below the CPU2 radio stack
+ * and FUS at the top of the 1 MB.  CPU2 is not started, so no semaphores
+ * are needed (RM0434 3.3.8: with CPU2 running, PESD and the flash
+ * semaphore would have to be respected).  The CPU stalls on flash reads
+ * while a page is erased or written; the kernel masks interrupts.
+ */
+#define FLASH_KEY1v	0x45670123u
+#define FLASH_KEY2v	0xCDEF89ABu
+#define FLASH_ERRS	(FLASH_SR_OPERR | FLASH_SR_PROGERR | FLASH_SR_WRPERR \
+			 | FLASH_SR_PGAERR | FLASH_SR_SIZERR | FLASH_SR_PGSERR \
+			 | FLASH_SR_MISERR | FLASH_SR_FASTERR | FLASH_SR_RDERR \
+			 | FLASH_SR_OPTVERR)
+
+void hal_flash_region(uint32_t *base, uint32_t *size)
+{
+	*base = FLASH_BASE + 0x20000;
+	*size = 0x60000;
+}
+
+static int flash_wait(void)
+{
+	uint32_t sr;
+
+	while (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) {}
+	sr = FLASH->SR;
+	FLASH->SR = (sr & FLASH_ERRS) | FLASH_SR_EOP;	/* write 1 to clear */
+	return (sr & FLASH_ERRS) ? -1 : 0;
+}
+
+static void flash_unlock(void)
+{
+	if (FLASH->CR & FLASH_CR_LOCK) {
+		FLASH->KEYR = FLASH_KEY1v;
+		FLASH->KEYR = FLASH_KEY2v;
+	}
+	(void) flash_wait();			/* and clear old errors */
+}
+
+/* The flash caches may hold the old contents of a page just changed. */
+static void flash_done(void)
+{
+	uint32_t acr = FLASH->ACR & (FLASH_ACR_ICEN | FLASH_ACR_DCEN);
+
+	FLASH->CR |= FLASH_CR_LOCK;
+	FLASH->ACR &= ~(FLASH_ACR_ICEN | FLASH_ACR_DCEN);
+	FLASH->ACR |= FLASH_ACR_ICRST | FLASH_ACR_DCRST;
+	FLASH->ACR &= ~(FLASH_ACR_ICRST | FLASH_ACR_DCRST);
+	FLASH->ACR |= acr;
+}
+
+static int flash_ok(uint32_t addr, unsigned len)
+{
+	uint32_t base, size;
+
+	hal_flash_region(&base, &size);
+	return addr >= base && len <= size && addr - base <= size - len;
+}
+
+int hal_flash_erase(uint32_t page_addr)
+{
+	int r;
+
+	if (page_addr % HAL_FLASH_PAGE != 0
+			|| !flash_ok(page_addr, HAL_FLASH_PAGE)) return -1;
+	flash_unlock();
+	FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
+		| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
+							<< FLASH_CR_PNB_Pos);
+	FLASH->CR |= FLASH_CR_STRT;
+	r = flash_wait();
+	FLASH->CR &= ~(FLASH_CR_PER | FLASH_CR_PNB);
+	flash_done();
+	return r;
+}
+
+int hal_flash_write(uint32_t dst, const void *src, unsigned len)
+{
+	const uint8_t *s = src;
+	uint32_t w0, w1;
+	int r = 0;
+
+	if (dst % 8 != 0 || len % 8 != 0 || !flash_ok(dst, len)) return -1;
+	flash_unlock();
+	FLASH->CR |= FLASH_CR_PG;
+	for (; len > 0; len -= 8, dst += 8, s += 8) {
+		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;
+		w1 = s[4] | s[5] << 8 | s[6] << 16 | (uint32_t) s[7] << 24;
+		if (w0 == 0xFFFFFFFFu && w1 == 0xFFFFFFFFu) continue;
+		*(volatile uint32_t *) dst = w0;	/* both words, in order */
+		*(volatile uint32_t *) (dst + 4) = w1;
+		if ((r = flash_wait()) < 0) break;
+	}
+	FLASH->CR &= ~FLASH_CR_PG;
+	flash_done();
+	return r;
+}
