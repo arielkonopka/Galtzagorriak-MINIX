@@ -415,6 +415,10 @@ unsigned exc;
 	hal_wdt_kick();			/* the clock still ticks: alive */
 	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
   }
+  if (exc == EXC_PENDSV) {		/* raised by the idle task */
+	shadow_kick();
+	return;
+  }
   irq = (exc == EXC_SYSTICK) ? CLOCK_IRQ : (int) exc - EXC_IRQ0;
   if ((unsigned) irq >= NR_IRQ_VECTORS) return;
   handler = irq_table[irq];
@@ -452,7 +456,21 @@ phys_bytes source, dest, count;
  *===========================================================================*/
 PUBLIC void idle_task()
 {
-  for (;;) __asm volatile ("wfi");
+/* Nothing to run.  But a shadowed process may be ready, waiting for the
+ * clock task to swap it in: PendSV wakes the clock task now rather than
+ * at the next tick (a fork()ed pair taking turns: 16 ms per switch). */
+  for (;;) {
+	/* Check and sleep with interrupts masked (wfi still wakes up on a
+	 * pending one): idle may be switched out anywhere, and must not come
+	 * back straight into wfi with a shadowed process waiting. */
+	__asm volatile ("cpsid i" : : : "memory");
+	if (rdy_head[SHADOW_Q] != NIL_PROC) {
+		SCB_ICSR = ICSR_PENDSVSET;
+		__asm volatile ("dsb; cpsie i; isb" : : : "memory");
+		continue;		/* PendSV ran; look again */
+	}
+	__asm volatile ("wfi; cpsie i; isb" : : : "memory");
+  }
 }
 
 

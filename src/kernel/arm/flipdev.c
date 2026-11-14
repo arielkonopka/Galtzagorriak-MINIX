@@ -10,9 +10,20 @@
  *				blocks until there is one, unless O_NONBLOCK
  *	minor 2  /dev/backlight	write: one byte, brightness 0..255
  *	minor 3  /dev/led	write: three bytes, red green blue 0..255
+ *	minor 4  /dev/vibro	write: one byte, 0 or '0' off, anything else on
+ *	minor 5  /dev/speaker	write: notes, 4 bytes each: frequency in Hz and
+ *				duration in ms, both 16-bit little endian;
+ *				0 Hz is a rest.  Up to 64 notes per write;
+ *				the write returns when they have played
+ *	minor 6  /dev/gpio	the eight free header pins (hal.h), 0..7
+ *				write: pairs of bytes, pin and operation:
+ *				  0 low, 1 high (output), 2 input, 3 input
+ *				  with pull-up, 4 with pull-down, 5 off
+ *				read: one byte per pin, '0' or '1', from pin 0
  *
  * Access is controlled with the permissions of the device files.  The
- * buttons are sampled on every clock tick (flipdev_tick, from clock.c).
+ * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
+ * from clock.c).
  */
 #include "../kernel.h"
 #include <termios.h>
@@ -25,6 +36,11 @@
 #define BTN_MINOR	1
 #define BL_MINOR	2
 #define LED_MINOR	3
+#define VIBRO_MINOR	4
+#define SPK_MINOR	5
+#define GPIO_MINOR	6
+#define LAST_MINOR	6
+#define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
 
@@ -37,6 +53,13 @@ PRIVATE message fm;
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
 PRIVATE unsigned last_buttons;
+
+/* Notes being played (/dev/speaker), timed by flipdev_tick(). */
+PRIVATE u16_t note_hz[NNOTES], note_ticks[NNOTES];
+PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
+					 * done */
+PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
+PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 
 /* A process blocked in a read of /dev/buttons. */
 PRIVATE int rd_waiting;
@@ -66,7 +89,7 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
-		r = (unsigned) fm.DEVICE <= LED_MINOR ? OK : ENXIO;
+		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
 		break;
 	case DEV_READ:
 	case DEV_WRITE:
@@ -74,6 +97,11 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
+			sp_waiting = FALSE;
+			note_i = note_n;
+			hal_tone(0);
+		}
 		r = EINTR;
 		break;
 	default:
@@ -123,6 +151,58 @@ message *m_ptr;
 	rd_count = count;
 	return(SUSPEND);
 
+  case VIBRO_MINOR:
+	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
+	phys_copy(user, vir2phys(buf), (phys_bytes) 1);
+	hal_vibro(buf[0] != 0 && buf[0] != '0');
+	return(count);
+
+  case SPK_MINOR: {
+	u8_t nb[4 * NNOTES];
+	int i, n;
+
+	if (m_ptr->m_type != DEV_WRITE || count % 4 != 0) return(EINVAL);
+	if (sp_waiting) return(EIO);		/* one tune at a time */
+	if (count > (int) sizeof(nb)) count = sizeof(nb);
+	phys_copy(user, vir2phys(nb), (phys_bytes) count);
+	n = count / 4;
+	for (i = 0; i < n; i++) {
+		unsigned ms = nb[4*i+2] | nb[4*i+3] << 8;
+		note_hz[i] = nb[4*i] | nb[4*i+1] << 8;
+		note_ticks[i] = (ms * HZ + 999) / 1000;
+		if (note_ticks[i] == 0) note_ticks[i] = 1;
+	}
+	lock();
+	note_n = n;
+	note_i = 0;
+	note_left = note_ticks[0];
+	hal_tone(note_hz[0]);
+	unlock();
+	sp_waiting = TRUE;
+	sp_caller = m_ptr->m_source;
+	sp_proc = m_ptr->PROC_NR;
+	sp_count = count;
+	return(SUSPEND);
+  }
+
+  case GPIO_MINOR: {
+	u8_t gb[2 * HAL_GPIO_PINS];
+	int i;
+
+	if (m_ptr->m_type == DEV_READ) {
+		if (count > HAL_GPIO_PINS) count = HAL_GPIO_PINS;
+		for (i = 0; i < count; i++) gb[i] = '0' + hal_gpio_read(i);
+		phys_copy(vir2phys(gb), user, (phys_bytes) count);
+		return(count);
+	}
+	if (count % 2 != 0) return(EINVAL);
+	if (count > (int) sizeof(gb)) count = sizeof(gb);
+	phys_copy(user, vir2phys(gb), (phys_bytes) count);
+	for (i = 0; i < count; i += 2)
+		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
+	return(count);
+  }
+
   case BL_MINOR:
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
@@ -169,6 +249,10 @@ PRIVATE void do_hardint()
 /* New button events: finish a suspended read. */
   int r;
 
+  if (sp_waiting && note_i >= note_n) {		/* the tune is over */
+	sp_waiting = FALSE;
+	reply(REVIVE, sp_caller, sp_proc, sp_count);
+  }
   if (!rd_waiting || ev_head == ev_tail) return;
   rd_waiting = FALSE;
   r = deliver(rd_proc, rd_vir, rd_count);
@@ -186,6 +270,15 @@ PUBLIC void flipdev_tick()
  */
   unsigned now = hal_buttons(), changed = now ^ last_buttons, b;
 
+  if (note_i < note_n && --note_left == 0) {	/* next note, or quiet */
+	if (++note_i < note_n) {
+		note_left = note_ticks[note_i];
+		hal_tone(note_hz[note_i]);
+	} else {
+		hal_tone(0);
+		interrupt(PRINTER);
+	}
+  }
   if (changed == 0) return;
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;

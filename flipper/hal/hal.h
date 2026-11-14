@@ -54,6 +54,15 @@ void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
 
+/* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
+ * PA7 PA6 PA4 PB3 PB2 PC3 PC1 PC0 = header pins 2 3 4 5 6 7 15 16). */
+void hal_vibro(int on);
+#define HAL_GPIO_PINS	8
+enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
+       HAL_GPIO_IN_DOWN, HAL_GPIO_OFF };	/* OFF: analog, high impedance */
+int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
+int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
+
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
  * hal_usb_poll() runs the USB stack and belongs in the USB interrupt. */
 int hal_usb_init(void);
@@ -77,6 +86,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
  * interrupts masked and the MPU off.  len and dst must be multiples of 8
  * (double-word programming).  Return 0 on success, -1 on error. */
 #define HAL_FLASH_PAGE	4096
+int hal_random(uint32_t *w);		/* hardware RNG: 0, or -1 on error */
 extern uint32_t hal_disk_errors;	/* transfers retried (CRC, timeout) */
 extern unsigned hal_disk_mhz;		/* bus clock for disk data */
 void hal_flash_region(uint32_t *base, uint32_t *size);
