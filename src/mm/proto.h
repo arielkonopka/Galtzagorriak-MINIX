@@ -58,6 +58,7 @@ _PROTOTYPE( int do_sigprocmask, (void)					);
 _PROTOTYPE( int do_sigreturn, (void)					);
 _PROTOTYPE( int do_sigsuspend, (void)					);
 _PROTOTYPE( int do_reboot, (void)					);
+_PROTOTYPE( int do_meminfo, (void)					);
 
 /* trace.c */
 _PROTOTYPE( int do_trace, (void)					);

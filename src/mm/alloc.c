@@ -244,3 +244,42 @@ phys_clicks *total, *free;		/* memory size summaries */
 	*free += size;
   }
 }
+
+
+/*===========================================================================*
+ *				do_meminfo				     *
+ *===========================================================================*/
+PUBLIC int do_meminfo()
+{
+/* Report free memory: the reply is the total free in bytes, reply_i1 the
+ * largest hole in bytes.  Without an MMU
+ * a program needs one contiguous hole, so the largest one is what decides
+ * whether it can be started.
+ */
+  register struct hole *hp;
+  phys_clicks total = 0, max = 0;
+
+  phys_bytes list[2 * 16];		/* (base, len) pairs, in bytes */
+  int n = 0;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next) {
+	total += hp->h_len;
+	if (hp->h_len > max) max = hp->h_len;
+	if (n < 16) {
+		list[2 * n] = (phys_bytes) hp->h_base << CLICK_SHIFT;
+		list[2 * n + 1] = (phys_bytes) hp->h_len << CLICK_SHIFT;
+		n++;
+	}
+  }
+  /* Optionally the holes themselves: m1_p1 = buffer, m1_i1 = its size. */
+  if (mm_in.m1_p1 != NULL && mm_in.m1_i1 >= (int) sizeof(list[0]) * 2) {
+	if (n * 2 * (int) sizeof(list[0]) > mm_in.m1_i1)
+		n = mm_in.m1_i1 / (2 * (int) sizeof(list[0]));
+	if (n < 16) list[2 * n] = list[2 * n + 1] = 0;	/* end mark */
+	sys_copy(MM_PROC_NR, D, (phys_bytes) list, who, D,
+		(phys_bytes) mm_in.m1_p1,
+		(phys_bytes) (n < 16 ? n + 1 : n) * 2 * sizeof(list[0]));
+  }
+  result2 = (int) ((phys_bytes) max << CLICK_SHIFT);
+  return((int) ((phys_bytes) total << CLICK_SHIFT));
+}

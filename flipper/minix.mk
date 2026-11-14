@@ -171,7 +171,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg
+PORTCMDS := mkpart pkg free
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
@@ -196,7 +196,7 @@ CHMEM_ls     := 12288
 CHMEM_rev    := 8192
 CHMEM_tee    := 8192
 CHMEM_m2test := 16384
-CHMEM_pkg    := 8192	# fork copies it: keep small
+CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_launcher := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c

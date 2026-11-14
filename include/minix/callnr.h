@@ -64,3 +64,4 @@
 #define SIGRETURN	  75
 
 #define REBOOT		  76
+#define MEMINFO		  69	/* to MM: free memory and largest hole */
