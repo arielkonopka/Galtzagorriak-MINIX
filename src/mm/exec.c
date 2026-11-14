@@ -78,6 +78,7 @@ PUBLIC int do_exec()
   int reloc_bad = FALSE;
 #if (CHIP == ARM_CM)
   int fc_new;			/* not cached yet: copy it after the exec */
+  int text_read;		/* fc_sync() has read the text already */
 #endif
 
   /* Do some validity checks. */
@@ -146,6 +147,22 @@ PUBLIC int do_exec()
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
   r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes);
+#if (CHIP == ARM_CM)
+  text_read = FALSE;
+  if (r != OK && fc_new) {
+	/* No room for its text in RAM (right after an update, nothing is
+	 * cached yet): put the text in the cache now, the old way, and run
+	 * it from flash.  The only case where exec waits for a flash write. */
+	fc_text = fc_sync(fd, (unsigned long) text_bytes, text_crc,
+				(unsigned long) s_buf.st_uid, mbuf, ARG_MAX);
+	if (fc_text != 0) {
+		fc_new = FALSE;
+		text_read = TRUE;		/* fd is past the text now */
+		r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes,
+							stk_bytes, tot_bytes);
+	}
+  }
+#endif
   if (r != OK) {
 	close(fd);		/* insufficient core or program too big */
 	return(r);
@@ -169,7 +186,8 @@ PUBLIC int do_exec()
   /* Read in text and data segments. */
 #if (CHIP == ARM_CM)
   if (fc_text != 0) {
-	lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip text */
+	if (!text_read)
+		lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* cached: skip */
   } else
 #endif
   if (sh_mp != NULL) {

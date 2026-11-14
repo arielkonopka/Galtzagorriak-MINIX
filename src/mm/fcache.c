@@ -342,6 +342,72 @@ PUBLIC void fc_step()
 
 
 /*===========================================================================*
+ *				fc_sync					     *
+ *===========================================================================*/
+PUBLIC unsigned long fc_sync(fd, size, crc, owner, buf, bufsize)
+int fd;				/* program file, at the start of the text */
+unsigned long size, crc, owner;	/* the text and its key */
+char *buf;			/* MM buffer to read through */
+int bufsize;			/* its size, a multiple of 8 */
+{
+/* Cache a text right now, from the file (exec is short of RAM for it).
+ * A background copy in progress is dropped: this one is wanted more.
+ * Returns the flash address, or 0.
+ */
+  unsigned long npages = (size + PAGE - 1) / PAGE, addr = 0, done, rec[6];
+  int n, k, i;
+
+  if (fc_size == 0 || fc_unformatted || size == 0
+		|| npages > fc_size / PAGE - DIRPAGES) return(0);
+  job.state = J_IDLE;
+
+  /* Room: in the directory, then pages (each pass changes one thing). */
+  for (;;) {
+	if (!FREE_SLOT(RECP(fc_dir, NREC - 1))) {
+		job.state = J_COMPACT;
+		while (job.state != J_RESERVE)
+			if (fc_compact_step() != OK) {
+				job.state = J_IDLE;
+				return(0);
+			}
+		job.state = J_IDLE;
+		continue;
+	}
+	job.size = size;
+	if (fc_reserve() != OK) return(0);	/* nothing left to evict */
+	if (job.state == J_ERASE) {
+		addr = JOB_ADDR;
+		job.state = J_IDLE;
+		break;
+	}
+  }
+
+  for (done = 0; done < npages * PAGE; done += PAGE)
+	if (sys_flash(FL_ERASE, addr + done, NULL, 0, NULL, NULL) != OK)
+		return(0);
+  for (done = 0; done < size; done += n) {
+	n = size - done < (unsigned long) bufsize ? (int) (size - done)
+							: bufsize;
+	if (read(fd, buf, n) != n) return(0);
+	k = (n + 7) & ~7;
+	for (i = n; i < k; i++) buf[i] = (char) 0xFF;
+	if (sys_flash(FL_WRITE, addr + done, buf, (unsigned) k, NULL, NULL)
+								!= OK)
+		return(0);
+  }
+  for (i = 0; i < NREC; i++)
+	if (FREE_SLOT(RECP(fc_dir, i))) break;
+  if (i == NREC) return(0);
+  rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_seq++;
+  rec[4] = owner; rec[5] = 0xFFFFFFFFUL;
+  if (sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
+					sizeof(rec), NULL, NULL) != OK)
+	return(0);
+  return(addr);
+}
+
+
+/*===========================================================================*
  *				fc_reserve				     *
  *===========================================================================*/
 PRIVATE int fc_reserve()

@@ -66,6 +66,8 @@ _PROTOTYPE( unsigned long fc_lookup, (unsigned long crc, unsigned long size,
 _PROTOTYPE( void fc_queue, (int slot, unsigned long src, unsigned long size,
 			unsigned long crc, unsigned long owner)		);
 _PROTOTYPE( void fc_step, (void)					);
+_PROTOTYPE( unsigned long fc_sync, (int fd, unsigned long size,
+	unsigned long crc, unsigned long owner, char *buf, int bufsize)	);
 _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
 _PROTOTYPE( void mem_paint, (struct mproc *rmp)				);
 _PROTOTYPE( void mem_report, (struct mproc *rmp)			);
