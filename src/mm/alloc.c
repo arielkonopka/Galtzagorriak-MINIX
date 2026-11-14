@@ -311,9 +311,11 @@ PUBLIC int do_meminfo()
   if (mm_in.m1_i2 == MI_FCACHE) {
 	struct fcinfo fi;
 	fc_info(&fi);
+	in_info(&fi.inst_entries, &fi.inst_used);
 	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fi, who, D,
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fi)));
   }
+  if (mm_in.m1_i2 == MI_INSTALL) return(do_install());
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);

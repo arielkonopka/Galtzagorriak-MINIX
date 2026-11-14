@@ -362,6 +362,16 @@ app (the next frame is the app's, after fork + exec) and first runs that
 had to be cached synchronously for lack of RAM (L6 max 2 s).  L2 max
 2 ms, L5 avg 46 us max 2 ms, L7 median 3.6 ms.
 
+Phase 2b part 2 (2026-11-15, Flipper, normal kernel): `pkg flash
+/bin/ed` (14 KB file, 4 pages) takes about 1 s; MM is busy for that time
+(other MM calls such as fork and exec wait), while interrupts, the clock
+and the GUI's /dev reads keep running (flash writes no longer mask
+interrupts).  exec of an installed program writes nothing and copies no
+text.  The flash is written only by pkg: per program and version, its
+pages once plus one 64-byte record; another 8 bytes when the version is
+replaced or removed; one directory page erase per 63 installs.  Static
+RAM: 0 B (MM 10172).
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

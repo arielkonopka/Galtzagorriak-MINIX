@@ -1158,12 +1158,16 @@ static void flash_done(void)
 	FLASH->ACR |= acr;
 }
 
-static int flash_ok(uint32_t addr, unsigned len)
+static int flash_ok(uint32_t addr, unsigned len)	/* cache, installed */
 {
-	uint32_t base, size;
+	uint32_t l[HAL_FL_N];
 
-	hal_flash_region(&base, &size);
-	return addr >= base && len <= size && addr - base <= size - len;
+	hal_flash_layout(l);
+	if (addr >= l[HAL_FL_CACHE] && len <= l[HAL_FL_CACHE_SIZE]
+			&& addr - l[HAL_FL_CACHE] <= l[HAL_FL_CACHE_SIZE] - len)
+		return 1;
+	return addr >= l[HAL_FL_INST] && len <= l[HAL_FL_INST_SIZE]
+		&& addr - l[HAL_FL_INST] <= l[HAL_FL_INST_SIZE] - len;
 }
 
 int hal_flash_erase(uint32_t page_addr)

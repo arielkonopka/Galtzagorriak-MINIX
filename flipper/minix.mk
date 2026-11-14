@@ -123,7 +123,7 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c fcache.c
+	   table.c putk.c trace.c getset.c fcache.c finst.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
 	   protect.c time.c lock.c misc.c utility.c table.c putk.c
