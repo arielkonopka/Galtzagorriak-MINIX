@@ -893,6 +893,10 @@ register message *m_ptr;	/* pointer to request message */
 
 	src_phys = umap(proc_addr(src_proc), src_space, src_vir,
 			(vir_bytes) bytes);
+	/* The source may be a constant in the text segment (S13). */
+	if (src_phys == 0 && src_space == D)
+		src_phys = umap(proc_addr(src_proc), T, src_vir,
+			(vir_bytes) bytes);
 #if (SHADOWING == 0)
 	}
 #endif
@@ -941,7 +945,7 @@ register message *m_ptr;	/* pointer to request message */
 	src_vir= cpvec_table[i].cpv_src;
 	dst_vir= cpvec_table[i].cpv_dst;
 	bytes= cpvec_table[i].cpv_size;
-	src_phys = numap(src_proc,src_vir,(vir_bytes)bytes);
+	src_phys = numap_src(src_proc,src_vir,(vir_bytes)bytes);
 	dst_phys = numap(dst_proc,dst_vir,(vir_bytes)bytes);
 	if (src_phys == 0 || dst_phys == 0) return(EFAULT);
 	phys_copy(src_phys, dst_phys, bytes);
@@ -1233,6 +1237,30 @@ vir_bytes bytes;		/* # of bytes to be copied */
   if (bytes <= 0) return( (phys_bytes) 0);
   vc = (vir_addr + bytes - 1) >> CLICK_SHIFT;	/* last click of data */
 
+#if (CHIP == ARM_CM)
+  {
+	/* Virtual addresses are physical here, so the whole range must be
+	 * checked against the process's own memory (S13): T alone, or D up
+	 * to the end of S (the gap between them is the process's too; for
+	 * FS, D reaches further than S - its buffer cache in SRAM2).
+	 */
+	vir_clicks lo, hi, end;
+
+	if (vir_addr + bytes - 1 < vir_addr) return( (phys_bytes) 0 );
+	if (seg == T) {
+		lo = rp->p_map[T].mem_vir;
+		hi = lo + rp->p_map[T].mem_len;
+	} else {
+		lo = rp->p_map[D].mem_vir;
+		hi = rp->p_map[D].mem_vir + rp->p_map[D].mem_len;
+		end = rp->p_map[S].mem_vir + rp->p_map[S].mem_len;
+		if (end > hi) hi = end;
+	}
+	if ((vir_addr >> CLICK_SHIFT) < lo || vc >= hi)
+		return( (phys_bytes) 0 );
+  }
+#endif
+
 #if (CHIP == INTEL) || (CHIP == M68000) || (CHIP == ARM_CM)
   if (seg != T)
 	seg = (vc < rp->p_map[D].mem_vir + rp->p_map[D].mem_len ? D : S);
@@ -1241,8 +1269,10 @@ vir_bytes bytes;		/* # of bytes to be copied */
 	seg = (vc < rp->p_map[S].mem_vir ? D : S);
 #endif
 
+#if (CHIP != ARM_CM)
   if((vir_addr>>CLICK_SHIFT) >= rp->p_map[seg].mem_vir+ rp->p_map[seg].mem_len)
 	return( (phys_bytes) 0 );
+#endif
 #if (CHIP == INTEL)
   seg_base = (phys_bytes) rp->p_map[seg].mem_phys;
   seg_base = seg_base << CLICK_SHIFT;	/* segment origin in bytes */
@@ -1282,6 +1312,26 @@ vir_bytes bytes;		/* # of bytes required in segment  */
  */
 
   return(umap(proc_addr(proc_nr), D, vir_addr, bytes));
+}
+
+
+/*==========================================================================*
+ *				numap_src				    *
+ *==========================================================================*/
+PUBLIC phys_bytes numap_src(proc_nr, vir_addr, bytes)
+int proc_nr;			/* process number to be mapped */
+vir_bytes vir_addr;		/* virtual address in bytes */
+vir_bytes bytes;		/* # of bytes required */
+{
+/* Like numap(), for a buffer that is only read: it may also lie in the
+ * text segment, where string literals and other constants are (rodata of
+ * a program whose text runs from flash).  Never use it for a buffer that
+ * gets written.
+ */
+  phys_bytes p = umap(proc_addr(proc_nr), D, vir_addr, bytes);
+
+  if (p == 0) p = umap(proc_addr(proc_nr), T, vir_addr, bytes);
+  return(p);
 }
 
 
