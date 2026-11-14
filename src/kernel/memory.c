@@ -4,6 +4,8 @@
  *     /dev/mem		- absolute memory
  *     /dev/kmem	- kernel virtual memory
  *     /dev/ram		- RAM disk
+ *     /dev/random	- hardware random numbers (ARM_CM: the STM32 RNG)
+ *     /dev/zero	- zeroes (ARM_CM)
  *
  * The file contains one entry point:
  *
@@ -16,8 +18,14 @@
 #include "kernel.h"
 #include "driver.h"
 #include <sys/ioctl.h>
+#include <string.h>
 
+#if (CHIP == ARM_CM)
+#include "hal.h"
+#define NR_RAMS            6	/* + /dev/random, /dev/zero */
+#else
 #define NR_RAMS            4	/* number of RAM-type devices */
+#endif
 
 PRIVATE struct device m_geom[NR_RAMS];	/* Base and size of each RAM disk */
 PRIVATE int m_device;		/* current device */
@@ -106,6 +114,38 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 		count = dv->dv_size - iop->io_position;
   }
 
+#if (CHIP == ARM_CM)
+  if (device == RANDOM_DEV || device == ZERO_DEV) {
+	int done = FALSE;
+
+	if (opcode == DEV_WRITE) {	/* accepted and dropped */
+		iop->io_nbytes -= count;
+		return(OK);
+	}
+	if (device == ZERO_DEV) {
+		memset((void *) user_phys, 0, (size_t) count);
+		iop->io_nbytes -= count;
+		return(OK);
+	}
+	while (count > 0) {		/* the hardware generator */
+		u32_t w[16];
+		int i, n = count < (int) sizeof(w) ? count : (int) sizeof(w);
+
+		for (i = 0; i < (n + 3) / 4; i++)
+			if (hal_random(&w[i]) < 0) {
+				if (!done) return(iop->io_nbytes = EIO);
+				return(OK);	/* a short read */
+			}
+		phys_copy(vir2phys(w), user_phys, (phys_bytes) n);
+		user_phys += n;
+		count -= n;
+		iop->io_nbytes -= n;
+		done = TRUE;
+	}
+	return(OK);
+  }
+#endif
+
   /* Set up 'mem_phys' for /dev/mem, /dev/kmem, or /dev/ram */
   mem_phys = dv->dv_base + iop->io_position;
 
@@ -170,6 +210,10 @@ PRIVATE void m_init()
 #else /* !(CHIP == INTEL) */
 #if (CHIP == M68000) || (CHIP == ARM_CM)
   m_geom[MEM_DEV].dv_size = MEM_BYTES;
+#if (CHIP == ARM_CM)
+  m_geom[RANDOM_DEV].dv_size = 0xFFFFFFFF;	/* no end */
+  m_geom[ZERO_DEV].dv_size = 0xFFFFFFFF;
+#endif
 #else /* !(CHIP == M68000) */
 #error /* memory limit not set up */
 #endif /* !(CHIP == M68000) */

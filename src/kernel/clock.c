@@ -102,6 +102,19 @@ FORWARD _PROTOTYPE( void init_clock, (void) );
 FORWARD _PROTOTYPE( void cause_alarm, (void) );
 FORWARD _PROTOTYPE( void do_setsyn_alrm, (message *m_ptr) );
 FORWARD _PROTOTYPE( int clock_handler, (int irq) );
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+PRIVATE int tick_due;		/* the HARD_INT came from a real tick */
+
+/*===========================================================================*
+ *				shadow_kick				     *
+ *===========================================================================*/
+PUBLIC void shadow_kick()
+{
+/* From PendSV, raised by the idle task: wake the clock task to swap in a
+ * ready shadowed process (see the HARD_INT case in clock_task). */
+  if (rdy_head[SHADOW_Q] != NIL_PROC) interrupt(CLOCK);
+}
+#endif
 
 /*===========================================================================*
  *				clock_task				     *
@@ -129,7 +142,22 @@ PUBLIC void clock_task()
      unlock();
 
      switch (opcode) {
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+	case HARD_INT:
+		/* A real tick, or only shadow_kick() from the idle task: a
+		 * shadowed process is ready and nothing else is - swap it in
+		 * now instead of at the next tick (16 ms).  A kick must not
+		 * count as a tick (alarms, quantum). */
+		if (tick_due) {
+			tick_due = FALSE;
+			do_clocktick();
+		} else if (rdy_head[SHADOW_Q] != NIL_PROC) {
+			unshadow(rdy_head[SHADOW_Q]);
+		}
+		break;
+#else
 	case HARD_INT:   do_clocktick();	break;
+#endif
 	case GET_UPTIME: do_getuptime();	break;
 	case GET_TIME:	 do_get_time();		break;
 	case SET_TIME:	 do_set_time(&mc);	break;
@@ -491,6 +519,9 @@ int irq;
       rdy_head[USER_Q] != NIL_PROC) {
 #else
       (rdy_head[USER_Q] != NIL_PROC || rdy_head[SHADOW_Q] != NIL_PROC)) {
+#endif
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+	tick_due = TRUE;
 #endif
 	interrupt(CLOCK);
 	return 1;	/* Reenable interrupts */
