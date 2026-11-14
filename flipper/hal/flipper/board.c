@@ -604,7 +604,19 @@ void hal_early_boot(void)
 	GPIOB->MODER |= 3u << 22;
 	GPIOB->PUPDR &= ~(3u << 22);
 	RCC->AHB2ENR &= ~RCC_AHB2ENR_GPIOBEN;
-	if (!left) return;
+	if (!left) {
+		/* ST's DFU loader starts the new image ("leave") with a jump,
+		 * not a reset, and leaves the flash controller with CFGBSY
+		 * stuck: no erase or program until a reset (the flash text
+		 * cache would stay off).  Reset once - not again if the last
+		 * reset was this one. */
+		uint32_t csr = RCC->CSR;
+
+		RCC->CSR = csr | RCC_CSR_RMVF;	/* clear the reset flags */
+		if ((FLASH->SR & FLASH_SR_CFGBSY) && !(csr & RCC_CSR_SFTRSTF))
+			NVIC_SystemReset();
+		return;
+	}
 
 	sp = sysmem[0];
 	pc = sysmem[1];

@@ -43,6 +43,11 @@ for elf in [kernel] + servers:
     image += binary(elf)
     print(f"  {os.path.basename(elf):10s} at {base + start:#010x}, "
           f"{len(image) - start} bytes")
+# The STM32WB flash is programmed in double words.  ST's DFU loader writes a
+# trailing half as a lone first word, and the controller then waits for the
+# second one (FLASH_SR.CFGBSY stays set) until the next reset: no erase or
+# program works, the flash text cache stays off.  Whole double words only.
+image += b"\xff" * (-len(image) % 8)
 with open(out, "wb") as f:
     f.write(image)
 print(f"  {out}: {len(image)} bytes")

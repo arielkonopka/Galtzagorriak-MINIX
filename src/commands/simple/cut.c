@@ -210,9 +210,32 @@ char *argv[];
 {
   int i = 1;
   int numberFilenames = 0;
+  static char opts[] = "dfbc";
+  static char *optname[] = { "-d", "-f", "-b", "-c" };
+  char **nargv, *p;
+  int j;
+
   name = argv[0];
 
   if (argc == 1) cuterror(USAGE);
+
+  /* POSIX allows the option argument attached (-f2, -d:) as well as
+   * separate (-f 2); the parsing below wants it separate: split it. */
+  if ((nargv = (char **) malloc((2 * argc + 1) * sizeof(char *))) == NULL)
+	cuterror(USAGE);
+  for (i = j = 0; i < argc; i++) {
+	if (i > 0 && argv[i][0] == '-' && argv[i][1] != '\0'
+		&& (p = strchr(opts, argv[i][1])) != NULL
+		&& argv[i][2] != '\0') {
+		nargv[j++] = optname[p - opts];
+		nargv[j++] = argv[i] + 2;
+	} else
+		nargv[j++] = argv[i];
+  }
+  nargv[j] = NULL;
+  argc = j;
+  argv = nargv;
+  i = 1;
 
   while (i < argc) {
 	if (argv[i][0] == '-') {
