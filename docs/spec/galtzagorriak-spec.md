@@ -2029,6 +2029,23 @@ background work must either be very small or be swapped cleverly. Each backgroun
     ≈ 30–50 ms. AES1 GCM adds about 1 ms per 16 KB;
   - all tier 3 user parts together ≤ 8 KB.
 
+- **R12.27 Example: GPIO sensor and Bluetooth at the same time** (owner note 2026-11-14; future,
+  low priority, after Phase 15; not in the task queue). Simple background jobs combine tiers and
+  need almost no user RAM:
+  - **Periodic (a thermometer that the phone reads):** tier 0. A `timed` timer runs
+    `thermo --log` once a minute (≈ 2 KB for under 1 s, R7b.4). It writes the sample to the SD
+    log and to a GATT characteristic (Environmental Sensing) **held by the CPU2 stack**. CPU2 keeps
+    the connection, answers reads and sends notifications by itself. User RAM while waiting:
+    0 B. `bled` (≈ 6 KB) runs only for pairing.
+  - **Continuous (GPIO edges or ADC streamed to the phone at 10–50 Hz):** tier 3. A small kernel
+    bridge from the sensor driver to the GATT characteristic, like `btbridge` (16.1): state
+    ≤ 64 B in the device-task union. User RAM: 0 B. Simpler alternative: a Berry script (7c) that
+    stays resident at ≈ 6–8 KB. It is too short-lived between samples to be worth parking.
+  - **Concurrency:** BLE radio timing is on CPU2, and the sensor is read by timer/DMA hardware
+    (H.2), so neither masks interrupts for the other (L3, L4). The one shared resource is the
+    pulse engine (DHT, IR, async Sub-GHz, R4b.7): while it is busy, a DHT read
+    returns the cached value (H.2). Prefer I2C or 1-Wire sensors for always-on jobs.
+
 ### 12e. Placement, responsiveness and the card
 
 - **R12.22 Two-ended placement (relocation without an MMU).** The Cortex-M4 MPU protects but
