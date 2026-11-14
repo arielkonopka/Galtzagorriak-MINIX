@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/times.h>
 #include <sys/stat.h>
 #include <minix/minlib.h>
 #include <stdio.h>
@@ -92,7 +93,8 @@ char *argv[];
   FILE *fp_tmp;
   time_t salt;
   struct passwd *pwd;
-  char *name, pwname[9], oldpwd[9], newpwd[9], newcrypted[14], sl[2];
+  /* getpass() returns up to 32 characters; these were 9 bytes. */
+  char *name, pwname[9], oldpwd[33], newpwd[33], newcrypted[100], sl[20];
   char *argn;
   int shadow = 0;
 
@@ -164,14 +166,31 @@ char *argv[];
 
 		std_err(", try again\n");
 	}
-	time(&salt);
-	sl[0] = (salt & 077) + '.';
-	sl[1] = ((salt >> 6) & 077) + '.';
-	for (cn = 0; cn < 2; cn++) {
-		if (sl[cn] > '9') sl[cn] += 7;
-		if (sl[cn] > 'Z') sl[cn] += 6;
+	/* SHA-256-crypt ("$5$", see pwdauth.c) with a 16 character salt.
+	 * A salt only has to differ between users and systems: the time,
+	 * pid and clock ticks, stirred, are enough for that.
+	 */
+	{
+		static char a64[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+					"abcdefghijklmnopqrstuvwxyz";
+		struct tms tms;
+		unsigned long x;
+
+		time(&salt);
+		x = (unsigned long) salt ^ ((unsigned long) getpid() << 16)
+			^ ((unsigned long) times(&tms) << 7) ^ 0x9E3779B9UL;
+		strcpy(sl, "$5$");
+		for (cn = 0; cn < 16; cn++) {
+			x ^= x << 13; x &= 0xffffffffUL;
+			x ^= x >> 17;
+			x ^= x << 5; x &= 0xffffffffUL;
+			sl[3 + cn] = a64[x & 63];
+		}
+		sl[19] = 0;
 	}
-	strcpy(newcrypted, crypt(newpwd, sl));
+	strncpy(newcrypted, crypt(newpwd, sl), sizeof(newcrypted) - 1);
+	newcrypted[sizeof(newcrypted) - 1] = 0;
+	if (strncmp(newcrypted, "$5$", 3) != 0) fatal("crypt failed");
 	break;
 
       case CHFN:

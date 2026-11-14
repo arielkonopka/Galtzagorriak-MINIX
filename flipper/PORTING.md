@@ -180,8 +180,8 @@ transmit must stay inside the legal bands for the user's region.
    terminal is open).  Result on the device after login: 77 KB free,
    largest hole 57 KB.  chmem of every program checked with `free -t on`
    (MM paints the gap at exec and reports the untouched part at exit):
-   small one-shot tools 4 KB, `sh` 10 KB (needs ~8 KB to expand
-   `/bin/*`), `ed` 10 KB, `tail` 8 KB.  Known limit: `ls -l /bin | sort |
+   small one-shot tools 4 KB, `sh` 12 KB (`echo /bin/*`: ~8 KB for the
+   glob plus the exec frame), `ed` 10 KB, `tail` 8 KB.  Known limit: `ls -l /bin | sort |
    wc` still does not fit; point 2 is the cure (20 KB of it is code).
    Updating the system programs: `make BOARD=flipper base` and
    `tools/flsend build/flipper/minix/pkgs/base_<ver>.tar`.
@@ -360,6 +360,23 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - `tr` only knew System V ranges `[a-z]`; POSIX `a-z` now works too.
 - Known: `sh` crashes (signal 11) instead of just failing when it runs
   out of heap ("out of string space"), e.g. on a glob too big for it.
+- **Security:** `getty` ran `/usr/bin/login` (ours is `/bin/login`) and,
+  when that failed, a root shell without a password, for any name typed
+  at the `login:` prompt.  Now it tries `/bin/login` and `/usr/bin/login`
+  and otherwise gives up (init starts a new getty).
+- **Security:** `passwd` (set-uid root) copied passwords of up to 32
+  characters (`getpass`) into 9-byte buffers.
+- Passwords could not be checked at all: crypt(3) needs the helper
+  `pwdauth`, which was not installed (now `/lib/pwdauth`, on the root file
+  system, set-uid root; `passwd` and `su` are set-uid root too, in the
+  image and in the `base` package).
+- Modernised: password hashes are SHA-256-crypt (`$5$`, 5000 rounds, 16
+  character salt), the glibc format, so `openssl passwd -5` makes the same
+  hashes; old DES hashes are still accepted.  About 1 s per check on the
+  Flipper (QEMU takes minutes: it emulates the small MPU regions slowly).
+- `pkg` failed with "cannot make /usr/tmp/pkg.*" when a run that had died
+  left its work directory and a later boot reused the pid; it now
+  removes the stale directory.
 
 ## Layout
 

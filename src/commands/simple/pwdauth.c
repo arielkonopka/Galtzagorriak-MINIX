@@ -12,6 +12,10 @@
  *
  * Otherwise the key will be encrypted normally and the result returned.
  *
+ * Hashes: "$5$[rounds=N$]salt$hash" is SHA-256-crypt, the format of glibc
+ * and "openssl passwd -5" (Galtzagorriak MINIX, 2026); anything else is
+ * the original DES crypt, still accepted for old password files.
+ *
  * As a special case, anything matches a null encrypted password to allow
  * a no-password login.
  */
@@ -286,7 +290,7 @@ static void encrypt(char *blck, int edflag)
 	transpose(p, &FinalTr, 64);
 }
 
-char *crypt(const char *pw, const char *salt)
+static char *des_crypt(const char *pw, const char *salt)
 {
 	char pwb[66];
 	char *cp;
@@ -354,4 +358,207 @@ char *crypt(const char *pw, const char *salt)
 	}
 	*cp = 0;
 	return result;
+}
+
+
+/* SHA-256 (FIPS 180-4) and SHA-256-crypt (U. Drepper, "Unix crypt using
+ * SHA-256 and SHA-512", the $5$ scheme of glibc).
+ */
+typedef unsigned long u32;	/* at least 32 bits */
+
+struct sha256 {
+	u32 h[8];
+	unsigned char buf[64];
+	unsigned long len;		/* bytes hashed so far */
+};
+
+static const u32 K256[64] = {
+	0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,
+	0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
+	0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,
+	0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+	0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,
+	0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
+	0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,
+	0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+	0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,
+	0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
+	0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+#define M32(x)		((x) & 0xffffffffUL)
+#define ROR(x, n)	M32(((x) >> (n)) | ((x) << (32 - (n))))
+
+static void sha_block(struct sha256 *c, const unsigned char *p)
+{
+	u32 w[64], a, b, d, e, f, g, h, cc, t1, t2;
+	int i;
+
+	for (i = 0; i < 16; i++, p += 4)
+		w[i] = ((u32) p[0] << 24) | ((u32) p[1] << 16)
+					| ((u32) p[2] << 8) | p[3];
+	for (; i < 64; i++) {
+		t1 = ROR(w[i-2], 17) ^ ROR(w[i-2], 19) ^ (w[i-2] >> 10);
+		t2 = ROR(w[i-15], 7) ^ ROR(w[i-15], 18) ^ (w[i-15] >> 3);
+		w[i] = M32(t1 + w[i-7] + t2 + w[i-16]);
+	}
+	a = c->h[0]; b = c->h[1]; cc = c->h[2]; d = c->h[3];
+	e = c->h[4]; f = c->h[5]; g = c->h[6]; h = c->h[7];
+	for (i = 0; i < 64; i++) {
+		t1 = M32(h + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25))
+			+ ((e & f) ^ (~e & g)) + K256[i] + w[i]);
+		t2 = M32((ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22))
+			+ ((a & b) ^ (a & cc) ^ (b & cc)));
+		h = g; g = f; f = e; e = M32(d + t1);
+		d = cc; cc = b; b = a; a = M32(t1 + t2);
+	}
+	c->h[0] = M32(c->h[0] + a); c->h[1] = M32(c->h[1] + b);
+	c->h[2] = M32(c->h[2] + cc); c->h[3] = M32(c->h[3] + d);
+	c->h[4] = M32(c->h[4] + e); c->h[5] = M32(c->h[5] + f);
+	c->h[6] = M32(c->h[6] + g); c->h[7] = M32(c->h[7] + h);
+}
+
+static void sha_init(struct sha256 *c)
+{
+	static const u32 h0[8] = {
+		0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+		0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
+	};
+	memcpy(c->h, h0, sizeof(c->h));
+	c->len = 0;
+}
+
+static void sha_add(struct sha256 *c, const void *data, size_t n)
+{
+	const unsigned char *p = data;
+
+	while (n > 0) {
+		size_t k = c->len % 64, m = 64 - k;
+		if (m > n) m = n;
+		memcpy(c->buf + k, p, m);
+		c->len += m; p += m; n -= m;
+		if (c->len % 64 == 0) sha_block(c, c->buf);
+	}
+}
+
+static void sha_done(struct sha256 *c, unsigned char out[32])
+{
+	unsigned long bits = c->len * 8;
+	size_t k = c->len % 64;
+	int i;
+
+	c->buf[k++] = 0x80;
+	if (k > 56) {
+		memset(c->buf + k, 0, 64 - k);
+		sha_block(c, c->buf);
+		k = 0;
+	}
+	memset(c->buf + k, 0, 56 - k);
+	for (i = 0; i < 8; i++)		/* length < 2^32 bits here */
+		c->buf[63 - i] = i < 4 ? (bits >> (8 * i)) & 0xff : 0;
+	sha_block(c, c->buf);
+	for (i = 0; i < 32; i++)
+		out[i] = (c->h[i / 4] >> (24 - 8 * (i % 4))) & 0xff;
+}
+
+static const char itoa64[] =
+	"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+static char *b64(char *cp, unsigned b2, unsigned b1, unsigned b0, int n)
+{
+	u32 w = ((u32) b2 << 16) | ((u32) b1 << 8) | b0;
+
+	while (n-- > 0) {
+		*cp++ = itoa64[w & 0x3f];
+		w >>= 6;
+	}
+	return cp;
+}
+
+#define ROUNDS_DEFAULT	5000
+#define ROUNDS_MIN	1000
+#define ROUNDS_MAX	999999999UL
+
+static char *sha256_crypt(const char *key, const char *salt)
+{
+	static char result[3 + 17 + 17 + 43 + 1];
+	static const unsigned char order[10][3] = {
+		{0,10,20},{21,1,11},{12,22,2},{3,13,23},{24,4,14},
+		{15,25,5},{6,16,26},{27,7,17},{18,28,8},{9,19,29}
+	};
+	struct sha256 c, alt;
+	unsigned char a[32], dp[32], ds[32];
+	unsigned long rounds = ROUNDS_DEFAULT, r, i;
+	size_t klen = strlen(key), slen;
+	int custom = 0;
+	char *cp, *end;
+
+	salt += 3;				/* skip "$5$" */
+	if (strncmp(salt, "rounds=", 7) == 0) {
+		r = strtoul(salt + 7, &end, 10);
+		if (*end == '$') {
+			salt = end + 1;
+			rounds = r < ROUNDS_MIN ? ROUNDS_MIN
+				: r > ROUNDS_MAX ? ROUNDS_MAX : r;
+			custom = 1;
+		}
+	}
+	for (slen = 0; slen < 16 && salt[slen] && salt[slen] != '$'; slen++) {}
+
+	/* B = H(key salt key) */
+	sha_init(&alt);
+	sha_add(&alt, key, klen); sha_add(&alt, salt, slen);
+	sha_add(&alt, key, klen);
+	sha_done(&alt, a);
+	/* A = H(key salt B... bits) */
+	sha_init(&c);
+	sha_add(&c, key, klen); sha_add(&c, salt, slen);
+	for (i = klen; i > 32; i -= 32) sha_add(&c, a, 32);
+	sha_add(&c, a, i);
+	for (i = klen; i > 0; i >>= 1)
+		if (i & 1) sha_add(&c, a, 32); else sha_add(&c, key, klen);
+	sha_done(&c, a);
+	/* DP = H(key x klen), DS = H(salt x (16 + A[0])) */
+	sha_init(&alt);
+	for (i = 0; i < klen; i++) sha_add(&alt, key, klen);
+	sha_done(&alt, dp);
+	sha_init(&alt);
+	for (i = 0; i < 16 + (unsigned) a[0]; i++) sha_add(&alt, salt, slen);
+	sha_done(&alt, ds);
+	/* P and S are DP and DS repeated to klen and slen bytes; they are fed
+	 * from dp/ds directly instead of being stored.
+	 */
+#define ADD_P(c)	do { size_t n_ = klen; \
+		while (n_ > 32) { sha_add(c, dp, 32); n_ -= 32; } \
+		sha_add(c, dp, n_); } while (0)
+	for (r = 0; r < rounds; r++) {
+		sha_init(&c);
+		if (r & 1) ADD_P(&c); else sha_add(&c, a, 32);
+		if (r % 3) sha_add(&c, ds, slen);	/* slen <= 16 < 32 */
+		if (r % 7) ADD_P(&c);
+		if (r & 1) sha_add(&c, a, 32); else ADD_P(&c);
+		sha_done(&c, a);
+	}
+
+	cp = result;
+	strcpy(cp, "$5$"); cp += 3;
+	if (custom) {
+		sprintf(cp, "rounds=%lu$", rounds);
+		cp += strlen(cp);
+	}
+	memcpy(cp, salt, slen); cp += slen;
+	*cp++ = '$';
+	for (i = 0; i < 10; i++)
+		cp = b64(cp, a[order[i][0]], a[order[i][1]], a[order[i][2]], 4);
+	cp = b64(cp, 0, a[31], a[30], 3);
+	*cp = 0;
+	memset(a, 0, sizeof(a)); memset(dp, 0, sizeof(dp));
+	memset(&c, 0, sizeof(c)); memset(&alt, 0, sizeof(alt));
+	return result;
+}
+
+char *crypt(const char *key, const char *salt)
+{
+	if (strncmp(salt, "$5$", 3) == 0) return sha256_crypt(key, salt);
+	return des_crypt(key, salt);
 }

@@ -44,6 +44,7 @@ d--755 0 0
    home d--755 0 0
    $
    lib d--755 0 0
+      pwdauth -u-755 0 0 @BINDIR@/pwdauth
       pkg d--755 0 0
          @PKGFILES@
       $

@@ -36,8 +36,8 @@
 #include <errno.h>
 #include <sys/utsname.h>
 
-char LOGIN[] =		"/usr/bin/login";
-char SHELL[] =		"/bin/sh";
+char LOGIN[] =		"/bin/login";
+char ULOGIN[] =		"/usr/bin/login";
 
 #define ST_IDLE			 44	/* the getty is idle */
 #define ST_RUNNING		 55	/* getty is now RUNNING */
@@ -190,10 +190,14 @@ void do_getty(char *name, size_t len, char **args)
 void do_login(char *name)
 { 
   execl(LOGIN, LOGIN, name, (char *) NULL);
-  /* Failed to exec login.  Impossible, but true.  Try a shell.  (This is
-   * so unlikely that we forget about the security implications.)
+  execl(ULOGIN, ULOGIN, name, (char *) NULL);
+  /* Failed to exec login (on the Flipper: out of memory, or login not in
+   * /bin).  The original fell back to a root shell without a password,
+   * for any name typed; just give up, init starts a new getty.
    */
-  execl(SHELL, SHELL, (char *) NULL);
+  write(1, "getty: cannot run login\n", 24);
+  sleep(2);
+  exit(1);
 }
 
 

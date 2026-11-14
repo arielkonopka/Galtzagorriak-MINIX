@@ -7,6 +7,7 @@
 #   make disk           root file system image (MINIX V2) for SD card / QEMU
 
 MROOT	:= ..
+COMMA	:= ,
 NM	:= $(CROSS)nm
 AR	:= $(CROSS)ar
 GCCINC	:= $(shell $(CC) -print-file-name=include)
@@ -168,7 +169,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   dirname du echo ed expand expr factor fgrep find fold getty grep \
 	   head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
 	   printenv printroot pwd rev rmdir sed sleep sort split strings stty \
-	   su sum sync tail tar tee test touch tr tty umount uname uniq update \
+	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free
@@ -177,6 +178,10 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(GUIAPPS)
+# Set-uid root programs, and the password helper of crypt(3) in /lib
+# (on the root file system, so login works before /usr is mounted).
+SUIDPROGS := passwd su
+LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
 # tools/flsend use their own CRC-checked transfer instead.)
@@ -190,7 +195,7 @@ ALIASES	+= $(addsuffix =cp,rm)
 # small: default 6 KB (tools/elf2mnx.py), more only where needed.
 # Values checked with "free -t on" (MM reports the untouched part of the
 # reserve at exit), 2026-11-14: keep at least ~2 KB never used.
-CHMEM_sh     := 10240	# expanding /bin/* (82 names) needs ~8 KB
+CHMEM_sh     := 12288	# echo /bin/* (84 names): ~8 KB glob + the exec frame
 CHMEM_update := 2048
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
@@ -242,7 +247,7 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/srv/crtso.o $(MB)/libc.a ld/user
 	   $(MB)/srv/crtso.o $(call objs_of,$(1)) $(MB)/libc.a -lgcc -o $$@
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
-$(foreach p,$(UPROGS) $(APPS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
@@ -256,12 +261,13 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 2.1
+BASE_VER := 2.3
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
-$(BASEPKG): $(UPROGS:%=$(MB)/bin/%) tools/mkpkg.py
+$(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
 	   -D "Galtzagorriak MINIX system programs" \
-	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)) \
+	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
+	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
@@ -279,11 +285,11 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk
 $(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
-	   "$(PKGS)"
+	   "$(PKGS)" "$(SUIDPROGS)"
 # The QEMU disk is as big as the SD card (sparse), so the first boot can
 # partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
-		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
+		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%)
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/fs.img --root . \
 	   --mbr $(MB)/disk.img --disk-mb $(CARD_MB)
 
@@ -292,7 +298,7 @@ $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
 # swap and /home in the rest (/etc/setup).
 CARD_MB	?= 3800
 $(MB)/card.img: $(MB)/proto tools/mkfsimg.py \
-		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%)
+		$(wildcard rootfs/etc/*) $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%)
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/root.img --root . --trim \
 	   --mbr $@
 

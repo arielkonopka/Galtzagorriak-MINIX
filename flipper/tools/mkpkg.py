@@ -7,7 +7,8 @@ Usage:
 
 Each dest=source puts the host file `source` at path `dest` on the Flipper,
 e.g. /usr/bin/hello=build/flipper/minix/bin/hello (mode 755 if the path is
-in a bin directory, else 644).  Writes OUTDIR/NAME_VERSION.tar in the old
+in a bin directory, else 644; ",MODE" after the source sets it, e.g. ,4755
+for a set-uid program, which is then owned by root).  Writes OUTDIR/NAME_VERSION.tar in the old
 POSIX ustar format that MINIX 2.0 tar understands (names < 100 chars).
 """
 import argparse
@@ -21,8 +22,12 @@ def add(tar, name, data, mode):
     info = tarfile.TarInfo(name)
     info.size = len(data)
     info.mode = mode
-    info.uid, info.gid = 2, 0            # bin, operator: like /bin
-    info.uname, info.gname = "bin", "operator"
+    if mode & 0o6000:                    # set-uid/gid: owned by root
+        info.uid, info.gid = 0, 0
+        info.uname, info.gname = "root", "operator"
+    else:
+        info.uid, info.gid = 2, 0        # bin, operator: like /bin
+        info.uname, info.gname = "bin", "operator"
     info.mtime = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))
     if len(name) >= 100:
         raise SystemExit(f"path too long for MINIX tar: {name}")
@@ -56,6 +61,9 @@ def main():
             dest, src = spec.split("=", 1)
             dest = dest.lstrip("/")
             mode = 0o755 if "/bin/" in "/" + dest else 0o644
+            if "," in src:
+                src, m = src.rsplit(",", 1)
+                mode = int(m, 8)
             with open(src, "rb") as f:
                 add(tar, dest, f.read(), mode)
     print(f"  {out}: {os.path.getsize(out)} bytes")

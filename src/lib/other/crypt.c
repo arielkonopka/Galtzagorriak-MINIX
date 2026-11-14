@@ -20,7 +20,11 @@
 #include <sys/wait.h>
 
 /* Set-uid root program to read /etc/shadow or encrypt passwords. */
+#if __ARM_ARCH		/* Flipper: on the root file system */
+static char PWDAUTH[] = "/lib/pwdauth";
+#else
 static char PWDAUTH[] = "/usr/lib/pwdauth";
+#endif
 #define LEN	1024
 
 char *crypt(const char *key, const char *salt)

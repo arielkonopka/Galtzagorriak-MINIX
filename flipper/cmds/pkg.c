@@ -230,6 +230,8 @@ static int place_files(const char *listpath)
 				continue;
 			}
 		}
+		/* owner as in the package (chown clears set-uid: first) */
+		chown(line, st.st_uid, st.st_gid);
 		chmod(line, st.st_mode & 07777);
 	}
 	fclose(list);
@@ -251,7 +253,18 @@ static int install(const char *file)
 
 	/* Unpack into a scratch directory to read CONTROL and the file list. */
 	sprintf(tmp, "%s/pkg.%d", TMPDIR, (int) getpid());
-	if (mkdir(tmp, 0700) < 0) { tmp[0] = 0; die("cannot make", TMPDIR "/pkg.*"); }
+	if (mkdir(tmp, 0700) < 0) {
+		/* Left over by a run that died (pids start again at boot):
+		 * remove it and try once more.
+		 */
+		int e = errno;
+
+		if (e == EEXIST) rm_r(tmp);
+		if (e != EEXIST || mkdir(tmp, 0700) < 0) {
+			tmp[0] = 0;
+			die("cannot make", TMPDIR "/pkg.*");
+		}
+	}
 	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
 	if (run(tmp, argv) != 0) die("cannot unpack", file);
 	sprintf(path, "%s/CONTROL/control", tmp);
