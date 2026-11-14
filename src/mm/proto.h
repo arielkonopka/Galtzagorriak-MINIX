@@ -58,6 +58,10 @@ _PROTOTYPE( int do_sigprocmask, (void)					);
 _PROTOTYPE( int do_sigreturn, (void)					);
 _PROTOTYPE( int do_sigsuspend, (void)					);
 _PROTOTYPE( int do_reboot, (void)					);
+#if (CHIP == ARM_CM)
+_PROTOTYPE( void mem_paint, (struct mproc *rmp)				);
+_PROTOTYPE( void mem_report, (struct mproc *rmp)			);
+#endif
 _PROTOTYPE( int do_meminfo, (void)					);
 _PROTOTYPE( phys_clicks alloc_mem_high, (phys_clicks clicks)		);
 

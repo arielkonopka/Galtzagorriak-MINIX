@@ -178,7 +178,13 @@ transmit must stay inside the legal bands for the user's region.
    sized from measured high-water marks (`free -k`, 9.7 KB → 5.2 KB);
    USB transmit ring 2048 → 512 B (keeps the newest output while no
    terminal is open).  Result on the device after login: 77 KB free,
-   largest hole 57 KB.  Still to do: the chmem of each program.
+   largest hole 57 KB.  chmem of every program checked with `free -t on`
+   (MM paints the gap at exec and reports the untouched part at exit):
+   small one-shot tools 4 KB, `sh` 10 KB (needs ~8 KB to expand
+   `/bin/*`), `ed` 10 KB, `tail` 8 KB.  Known limit: `ls -l /bin | sort |
+   wc` still does not fit; point 2 is the cure (20 KB of it is code).
+   Updating the system programs: `make BOARD=flipper base` and
+   `tools/flsend build/flipper/minix/pkgs/base_<ver>.tar`.
 2. **Program text from flash / shared text**: program code runs in place
    (or one shared copy per program) instead of being copied into RAM
    for every process.
@@ -345,6 +351,15 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - The disk driver no longer uses 32-bit byte offsets for the sector number
   (`arm/disk.c`); `dv_base`/`dv_size` are still 32-bit byte counts, so
   partitions must stay below 4 GB.
+- `sed` needed 48 KB of static tables (more than the largest free block,
+  so it never started); on ARM 1 KB lines, 100 commands, 3 KB pool.
+- `tail` on a pipe mallocked `LINE_MAX * 10` = 20 KB and always failed;
+  on ARM a 4 KB ring.
+- `uname()` left `machine` and `arch` unset on non-Intel chips (garbage
+  from the stack); now "flipper" / "armv7e-m".
+- `tr` only knew System V ranges `[a-z]`; POSIX `a-z` now works too.
+- Known: `sh` crashes (signal 11) instead of just failing when it runs
+  out of heap ("out of string space"), e.g. on a glob too big for it.
 
 ## Layout
 

@@ -1,9 +1,11 @@
 /*	free - show free memory				(Flipper port)
  *
- *	free [-v] [-k]
+ *	free [-v] [-k] [-t on|off]
  *
  * Total free RAM and the largest contiguous hole; -v lists the holes,
- * -k the stack use (high-water mark) of the kernel tasks.
+ * -k the stack use (high-water mark) of the kernel tasks.  -t on makes MM
+ * print, for every program that exits, how much of its chmem (gap + stack)
+ * was never touched (root only; slows exec down a little).
  * Without an MMU every program needs one contiguous block (text + data +
  * stack/heap), so the largest hole decides what can still be started.
  */
@@ -41,11 +43,21 @@ int main(int argc, char **argv)
 	unsigned long holes[2 * 16];
 	int total, i, v = 0, k = 0;
 
+	if (argc == 3 && strcmp(argv[1], "-t") == 0) {
+		m.m1_i1 = strcmp(argv[2], "on") == 0;
+		m.m1_i2 = MI_TRACE;
+		if (_syscall(MM, MEMINFO, &m) < 0) {
+			perror("free -t");
+			return 1;
+		}
+		return 0;
+	}
+
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-v") == 0) v = 1;
 		else if (strcmp(argv[i], "-k") == 0) k = 1;
 		else {
-			fprintf(stderr, "Usage: free [-v] [-k]\n");
+			fprintf(stderr, "Usage: free [-v] [-k] | free -t on|off\n");
 			return 1;
 		}
 	}

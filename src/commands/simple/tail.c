@@ -77,7 +77,11 @@ extern int optind;
 #define SUCCESS	0		/* exit code in case of success */
 #define FAILURE 1		/*                   or failure */
 #define DEFAULT_COUNT 10	/* default number of lines or bytes */
+#if __ARM_ARCH	/* Flipper: 20 KB does not fit; long tails get cut */
+#define MIN_BUFSIZE 4096
+#else
 #define MIN_BUFSIZE (LINE_MAX * DEFAULT_COUNT)
+#endif
 #define SLEEP_INTERVAL	1	/* sleep for one second intervals with -f */
 
 #define FALSE 0

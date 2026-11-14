@@ -170,6 +170,9 @@ PUBLIC int do_exec()
   /* System will save command line for debugging, ps(1) output, etc. */
   basename = strrchr(name_buf, '/');
   if (basename == NULL) basename = name_buf; else basename++;
+#if (CHIP == ARM_CM)
+  strncpy(rmp->mp_name, basename, sizeof(rmp->mp_name));
+#endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
   return(OK);
 }
@@ -413,6 +416,9 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
   sys_fresh(who, rmp->mp_seg, (phys_clicks)(data_bytes >> CLICK_SHIFT),
 			&base, &size);
   free_mem(base, size);
+#endif
+#if (CHIP == ARM_CM)
+  if (mem_trace) mem_paint(rmp);
 #endif
 
   return(OK);

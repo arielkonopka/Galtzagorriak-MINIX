@@ -124,6 +124,10 @@ PUBLIC int do_mm_exit()
  * which is also called when a process is killed by a signal.
  */
 
+#if (CHIP == ARM_CM)
+  /* The image is in place: MM runs before any other user process. */
+  if (mem_trace) mem_report(mp);
+#endif
   mm_exit(mp, status);
   dont_reply = TRUE;		/* don't reply to newly terminated process */
   return(OK);			/* pro forma return code */

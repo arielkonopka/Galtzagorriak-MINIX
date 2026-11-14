@@ -30,7 +30,11 @@ $(OBJS):	sed.h
 /* Sed.h -- types and constants for the stream editor */
 
 /* Data area sizes used by both modules */
+#if __ARM_ARCH		/* Flipper: the whole program must fit in ~50 KB */
+#define MAXBUF		1024	/* current line buffer size */
+#else
 #define MAXBUF		4000	/* current line buffer size */
+#endif
 #define MAXAPPENDS	20	/* maximum number of appends */
 #define MAXTAGS		9	/* tagged patterns are \1 to \9 */
 
@@ -133,8 +137,13 @@ typedef struct cmd_t sedcmd;	/* use this name for declarations */
 
 /***** public stuff ******/
 
+#if __ARM_ARCH
+#define MAXCMDS		100	/* maximum number of compiled commands */
+#define MAXLINES	32	/* max # numeric addresses to compile */
+#else
 #define MAXCMDS		500	/* maximum number of compiled commands */
 #define MAXLINES	256	/* max # numeric addresses to compile */
+#endif
 
 /* Main data areas */
 char linebuf[MAXBUF + 1];	/* current-line buffer */
@@ -149,7 +158,11 @@ char bits[] = {1, 2, 4, 8, 16, 32, 64, 128};
 
 /***** module common stuff *****/
 
+#if __ARM_ARCH
+#define POOLSIZE	3000	/* size of string-pool space */
+#else
 #define POOLSIZE	20000	/* size of string-pool space */
+#endif
 #define WFILES		10	/* max # w output files that can be compiled */
 #define RELIMIT		256	/* max chars in compiled RE */
 #define MAXDEPTH	20	/* maximum {}-nesting level */

@@ -17,6 +17,8 @@
 
 #include "mm.h"
 #include <minix/com.h>
+#include <signal.h>
+#include "mproc.h"
 
 #if (MACHINE == FLIPPER)
 #define NR_HOLES          32	/* max # entries in hole table */
@@ -305,6 +307,12 @@ PUBLIC int do_meminfo()
   /* m1_i2 = MI_KSTACKS: the kernel task stack table instead. */
   if (mm_in.m1_i2 == MI_KSTACKS)
 	return(sys_kstacks(who, mm_in.m1_p1, mm_in.m1_i1));
+  /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
+  if (mm_in.m1_i2 == MI_TRACE) {
+	if (mp->mp_effuid != SUPER_USER) return(EPERM);
+	mem_trace = mm_in.m1_i1;
+	return(OK);
+  }
 #endif
 
   for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next) {
@@ -328,3 +336,57 @@ PUBLIC int do_meminfo()
   result2 = (int) ((phys_bytes) max << CLICK_SHIFT);
   return((int) ((phys_bytes) total << CLICK_SHIFT));
 }
+
+
+#if (CHIP == ARM_CM)
+/* Memory use trace ("free -t on"): exec fills the gap and stack of a new
+ * image with a pattern, exit reports how much of it was ever touched.
+ * The largest untouched run between the heap and the stack is what chmem
+ * could have done without.  MM runs privileged with a flat map, so it
+ * reads and writes the image directly.
+ */
+#define PAINT	0xDEADBEEFUL
+
+/*===========================================================================*
+ *				mem_paint				     *
+ *===========================================================================*/
+PUBLIC void mem_paint(rmp)
+struct mproc *rmp;
+{
+  unsigned long *w, *end;
+
+  w = (unsigned long *) ((rmp->mp_seg[D].mem_phys + rmp->mp_seg[D].mem_len)
+							<< CLICK_SHIFT);
+  end = (unsigned long *) ((rmp->mp_seg[S].mem_phys + rmp->mp_seg[S].mem_len)
+							<< CLICK_SHIFT);
+  while (w < end) *w++ = PAINT;
+}
+
+/*===========================================================================*
+ *				mem_report				     *
+ *===========================================================================*/
+PUBLIC void mem_report(rmp)
+struct mproc *rmp;
+{
+  unsigned long *w, *end, *run;
+  unsigned long best = 0, total;
+
+  w = (unsigned long *) ((rmp->mp_seg[D].mem_phys + rmp->mp_seg[D].mem_len)
+							<< CLICK_SHIFT);
+  end = (unsigned long *) ((rmp->mp_seg[S].mem_phys + rmp->mp_seg[S].mem_len)
+							<< CLICK_SHIFT);
+  total = (end - w) * sizeof(*w);
+  while (w < end) {
+	if (*w != PAINT) { w++; continue; }
+	run = w;
+	while (w < end && *w == PAINT) w++;
+	if ((unsigned long) (w - run) > best) best = w - run;
+  }
+  best *= sizeof(*w);
+  /* Heap given out by brk() is below the D end now and counts as used;
+   * the untouched run is what chmem could be lowered by.
+   */
+  printf("memuse: %-8.8s %5lu bytes never used (gap+stack now %lu)\n",
+	rmp->mp_name, best, total);
+}
+#endif

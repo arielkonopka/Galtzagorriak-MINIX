@@ -146,6 +146,12 @@ register unsigned char *buffer;
 		ac = *arg++;
 		while (i <= ac) *buffer++ = i++;
 		arg++;		/* Skip ']' */
+	} else if (arg[1] == '-' && arg[2] != '\0') {
+		/* POSIX range a-z (the [a-z] form above is System V) */
+		i = (unsigned char) arg[0];
+		ac = (unsigned char) arg[2];
+		while (i <= ac) *buffer++ = i++;
+		arg += 3;
 	} else
 		*buffer++ = *arg++;
   }

@@ -51,5 +51,11 @@ int uname(name) struct utsname *name;
   strcpy(name->arch, "i86");
 #endif
 #endif
+#if (CHIP == ARM_CM)
+  strcpy(name->machine, "flipper");
+  strcpy(name->arch, "armv7e-m");
+#elif (CHIP != INTEL)
+  name->machine[0] = name->arch[0] = 0;
+#endif
   return(0);
 }

@@ -7,6 +7,9 @@
 
 EXTERN struct mproc {
   struct mem_map mp_seg[NR_SEGS];/* points to text, data, stack */
+#if (CHIP == ARM_CM)
+  char mp_name[8];		/* program name, for the memory trace */
+#endif
   char mp_exitstatus;		/* storage for status when process exits */
   char mp_sigstatus;		/* storage for signal # for killed procs */
   pid_t mp_pid;			/* process id */

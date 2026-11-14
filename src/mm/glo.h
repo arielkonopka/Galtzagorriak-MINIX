@@ -19,6 +19,9 @@ EXTERN int mm_call;		/* system call number */
 EXTERN int err_code;		/* temporary storage for error number */
 EXTERN int result2;		/* secondary result */
 EXTERN char *res_ptr;		/* result, if pointer */
+#if (CHIP == ARM_CM)
+EXTERN int mem_trace;		/* report memory use at exit (free -t) */
+#endif
 
 extern _PROTOTYPE (int (*call_vec[]), (void) );	/* system call handlers */
 extern char core_name[];	/* file name where core images are produced */

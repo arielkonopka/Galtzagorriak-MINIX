@@ -144,6 +144,7 @@ struct kstack {
   u16_t used;			/* high-water mark in bytes */
 };
 #define MI_KSTACKS	1
+#define MI_TRACE	2	/* m1_i1 = 1/0: report memory use at exit */
 #endif
 
 #endif /* _MINIX_TYPE_H */

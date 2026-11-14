@@ -50,7 +50,21 @@ PUBLIC int do_brk()
   }
   new_clicks -= rmp->mp_seg[D].mem_vir;
   sys_getsp(who, &new_sp);	/* ask kernel for current sp value */
+#if (CHIP == ARM_CM)
+  {	/* The memory trace (free -t) paints the gap; programs expect the
+	 * heap they get from brk() to be zero as it is after exec.
+	 */
+	vir_clicks old_len = rmp->mp_seg[D].mem_len;
+	r = adjust(rmp, new_clicks, new_sp);
+	if (r == OK && mem_trace && rmp->mp_seg[D].mem_len > old_len)
+		memset((char *) ((rmp->mp_seg[D].mem_phys + old_len)
+							<< CLICK_SHIFT), 0,
+			(size_t) (rmp->mp_seg[D].mem_len - old_len)
+							<< CLICK_SHIFT);
+  }
+#else
   r = adjust(rmp, new_clicks, new_sp);
+#endif
   res_ptr = (r == OK ? addr : (char *) -1);
   return(r);			/* return new address or -1 */
 }
