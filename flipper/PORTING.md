@@ -185,7 +185,7 @@ transmit must stay inside the legal bands for the user's region.
    wc` still does not fit; point 2 is the cure (20 KB of it is code).
    Updating the system programs: `make BOARD=flipper base` and
    `tools/flsend build/flipper/minix/pkgs/base_<ver>.tar`.
-2. **Program text from flash** (done in QEMU, 2026-11-14): user programs
+2. **Program text from flash** (done, on the device 2026-11-14): user programs
    are position-independent (`-fpic -msingle-pic-base`, r9 = GOT = start
    of data; ld/user-pic.ld, A_SEP images from tools/elf2mnx.py).  MM keeps
    a text cache in internal flash (src/mm/fcache.c, 376 KB after the
@@ -196,6 +196,15 @@ transmit must stay inside the legal bands for the user's region.
    only, MPU off and interrupts masked while the controller works).  QEMU
    after login: 106 KB free in one piece (was 73 KB, largest 52 KB); `ls -l
    /bin | sort | wc` fits now.  `free -v` shows the cache.
+   Flipper: 105 KB free in one piece after boot (was 73 KB, largest 48 KB),
+   the cache survives reboots.  STM32WB flash notes (hal/flipper/board.c):
+   erase/program need HSI16 running; CFGBSY clears only after the error
+   flags are cleared; FLASH_CR must not be written while busy (bus error);
+   and ST's DFU loader jumps to the image without a reset, leaving its
+   error flags set and CFGBSY on until a reset, so hal_early_boot() resets
+   once in that case (minix.bin is also padded to whole double words, the
+   programming unit).  A failing flash operation
+   only turns the cache off (texts go to RAM) and logs the registers.
 3. **Swap to the SD card** (partition 3): swap out shadow copies and
    idle processes.
 
@@ -396,6 +405,22 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - `pkg` failed with "cannot make /usr/tmp/pkg.*" when a run that had died
   left its work directory and a later boot reused the pid; it now
   removes the stale directory.
+- `find` and `du` could not read any directory ("can't read directory"):
+  opendir() mallocs a 1 KB DIR and the 6 KB chmem left too little gap;
+  `cpdir`, `chmod -R` had about 1.5 KB to spare.  chmem raised (minix.mk).
+- `tr` knew only octal escapes: `tr '\n' ' '` replaced the letter n.  The
+  POSIX escapes (\n \t \r \b \f \v \a) are handled now.
+- tty: a line that filled the 256-byte input queue in canonical mode lost
+  its newline as well and could never be read; the console hung (only
+  kill, ^U, got out - interrupt is DEL in MINIX, not ^C).  The last place
+  is now kept for the line break: too long lines are cut short.
+- `cut` took option arguments only as separate words (`-d : -f 2`);
+  POSIX `-d: -f2` gave "syntax error".
+- After `dfu-util ... :leave` the ROM loader jumps to the image without a
+  reset and the flash controller stays busy (CFGBSY) - not caused by an
+  odd image size (padding did not help).  hal_early_boot() resets once
+  when it sees that; a stale SFTRSTF from an earlier `reboot` blocked
+  this on the first try, so the reset flags are cleared at every boot.
 
 ## Layout
 

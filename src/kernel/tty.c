@@ -869,6 +869,12 @@ int count;			/* number of input characters */
 		if (tp->tty_termios.c_lflag & ICANON) continue;
 		break;
 	}
+	/* In canonical mode the last place is kept for the line break: a
+	 * line that filled the queue lost its newline too and could never
+	 * be read - the terminal hung (only kill, ^U, got out of it).  Too
+	 * long lines are cut short instead. */
+	if ((tp->tty_termios.c_lflag & ICANON) && !(ch & IN_EOT)
+		&& tp->tty_incount == buflen(tp->tty_inbuf) - 1) continue;
 
 	if (!(tp->tty_termios.c_lflag & ICANON)) {
 		/* In raw mode all characters are "line breaks". */
