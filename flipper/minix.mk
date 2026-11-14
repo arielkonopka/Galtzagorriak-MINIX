@@ -59,6 +59,29 @@ $(MB)/libc.a: $(LIBC_OBJ)
 	@$(AR) rcs $@ $^
 	@echo "  libc.a: $(words $^) objects"
 
+# User programs are position-independent (ld/user-pic.ld): data only through
+# the GOT with r9 as its base, so one copy of a program's text - in RAM or
+# in the flash text cache - can serve every process.  Their C library is
+# built a second time that way; kernel and servers keep the plain one.
+PICFLAGS := -fpic -msingle-pic-base -mpic-register=r9 \
+	    -mno-pic-data-is-text-relative
+UCFLAGS	:= $(LIBCFLAGS) $(PICFLAGS)
+LIBCP_OBJ := $(LIBC_OBJ:$(MB)/libc/%=$(MB)/libcp/%)
+$(MB)/libcp/%.o: $(MROOT)/src/lib/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/libcp/arm/%.o: $(MROOT)/src/lib/arm/rts/%
+	@mkdir -p $(dir $@)
+	$(CC) $(MCFLAGS) $(PICFLAGS) -c $< -o $@
+$(MB)/libcp/syscall_aliases.o: $(MB)/libc/syscall_aliases.S
+	$(CC) $(MCFLAGS) $(PICFLAGS) -c $< -o $@
+$(MB)/libc-pic.a: $(LIBCP_OBJ)
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+	@echo "  libc-pic.a: $(words $^) objects"
+$(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
+	@mkdir -p $(dir $@)
+	$(CC) $(MCFLAGS) $(PICFLAGS) -c $< -o $@
+
 #############################################################################
 # Kernel
 #############################################################################
@@ -213,22 +236,22 @@ CHMEM_launcher := 4096
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/m2test.o: m2/m2test.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
 $(MB)/cmd/port/%.o: cmds/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/%.o: $(MROOT)/src/commands/simple/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
@@ -237,20 +260,21 @@ $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
 define user_prog
-$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/srv/crtso.o $(MB)/libc.a ld/user.ld
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
+		ld/user-pic.ld
 	@mkdir -p $$(dir $$@)
-	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user.ld -Wl,-Map=$$@.map \
-	   $(MB)/srv/crtso.o $(call objs_of,$(1)) $(MB)/libc.a -lgcc -o $$@
+	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user-pic.ld -Wl,-Map=$$@.map \
+	   $(MB)/user/crtso.o $(call objs_of,$(1)) $(MB)/libc-pic.a -lgcc -o $$@
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 $(foreach p,$(UPROGS) $(APPS) $(LIBPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(LIBCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs

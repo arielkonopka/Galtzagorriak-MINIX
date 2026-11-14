@@ -21,6 +21,7 @@ EXTERN int result2;		/* secondary result */
 EXTERN char *res_ptr;		/* result, if pointer */
 #if (CHIP == ARM_CM)
 EXTERN int mem_trace;		/* report memory use at exit (free -t) */
+EXTERN unsigned long text_crc;	/* CRC-32 of the text being exec'd (A_SEP) */
 #endif
 
 extern _PROTOTYPE (int (*call_vec[]), (void) );	/* system call handlers */

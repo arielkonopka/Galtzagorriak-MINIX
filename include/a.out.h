@@ -36,6 +36,11 @@ struct	exec {			/* a.out header */
 #define A_I80386 0x10	/* intel i80386 */
 #define A_SPARC	0x17	/* Sun SPARC */
 #define A_ARMCM	0x18	/* ARM Cortex-M, Thumb-2, little-endian */
+/* ARM Cortex-M with A_SEP: position-independent text (-fpic, r9 = data
+ * base), data linked at A_DATA_LINK, a_syms = CRC-32 of the text (key of
+ * the flash text cache).  See flipper/tools/elf2mnx.py and mm/exec.c.
+ */
+#define A_DATA_LINK	0x10000000UL
 
 #define A_BLR(cputype)	((cputype&0x01)!=0) /* TRUE if bytes left-to-right */
 #define A_WLR(cputype)	((cputype&0x02)!=0) /* TRUE if words left-to-right */

@@ -16,16 +16,34 @@ _start:
 	add	r1, sp, #4		/* argv */
 	add	r2, r1, r0, lsl #2
 	adds	r2, r2, #4		/* envp = argv + argc + 1 */
+#ifdef __PIC__
+	/* Position-independent program: data only through the GOT, whose
+	 * base the kernel put in r9 (see kernel/system.c do_exec). */
+	ldr	r3, .Lgot_environ
+	ldr	r3, [r9, r3]
+	str	r2, [r3]
+	ldr	r3, .Lgot_penvp		/* getenv() looks here */
+	ldr	r3, [r9, r3]
+	str	r2, [r3]
+#else
 	ldr	r3, =environ
 	str	r2, [r3]
 	ldr	r3, =_penvp		/* getenv() looks here */
 	str	r2, [r3]
+#endif
 	mov	r4, sp
 	bic	r4, r4, #7		/* AAPCS: 8-byte aligned stack */
 	mov	sp, r4
 	bl	main
 	bl	exit
 1:	b	1b
+#ifdef __PIC__
+	.p2align 2
+.Lgot_environ:
+	.word	environ(GOT)
+.Lgot_penvp:
+	.word	_penvp(GOT)
+#endif
 
 	.data
 	.p2align 2

@@ -15,10 +15,20 @@ Output layout (see <a.out.h> and mm/exec.c):
 Every word marked is an absolute address in the image; exec adds the load
 address.  PC-relative relocations need no fixing because the whole image
 moves as one.
+
+Position-independent programs (ld/user-pic.ld: .got/.data linked at
+A_DATA_LINK = 0x10000000) become separate I&D (A_SEP) images: the text has
+no relocations at all, so it can run from anywhere (the flash text cache);
+the relocation offsets count from the start of data (the first one stored
+plus 1, as the GOT starts at offset 0) and cover the GOT and
+initialized pointers; exec adds the text or the data base depending on
+whether the word holds an address below or above A_DATA_LINK.  a_total
+then excludes the text and a_syms holds the CRC-32 of the text.
 """
 import argparse
 import struct
 import sys
+import zlib
 
 R_ARM_NONE, R_ARM_ABS32, R_ARM_REL32, R_ARM_TARGET1 = 0, 2, 3, 38
 PC_RELATIVE = {
@@ -34,7 +44,10 @@ PC_RELATIVE = {
     129,  # R_ARM_THM_PC12
 }
 SHN_UNDEF, SHN_ABS = 0, 0xFFF1
-A_EXEC, A_ARMCM = 0x10, 0x18
+A_EXEC, A_SEP, A_ARMCM = 0x10, 0x20, 0x18
+A_DATA_LINK = 0x10000000
+# Resolved at link time against the GOT origin (= start of data): no fixup.
+GOT_RELATIVE = {24, 26}    # R_ARM_GOTOFF32, R_ARM_GOT_BREL
 
 
 def main():
@@ -63,6 +76,8 @@ def main():
         return s[:s.index(b"\0")].decode()
 
     secs = {name(sh[0]): sh for sh in shdrs}
+    if ".data" in secs and secs[".data"][3] >= A_DATA_LINK:
+        return separate(a, elf, secs, name, shdrs, e_entry)
     for need in (".text", ".data", ".bss"):
         if need not in secs:
             sys.exit(f"missing section {need}")
@@ -133,6 +148,98 @@ def main():
         f.write(hdr + image + stream)
     print(f"  {a.out}: text {a_text} data {a_data} bss {a_bss} "
           f"total {a_total}, {len(offs)} relocations")
+
+
+def symbols(elf, secs):
+    symtab = secs.get(".symtab")
+    syms = []
+    if symtab:
+        for i in range(symtab[5] // 16):
+            _, value, _, info, _, shndx = struct.unpack_from(
+                "<IIIBBH", elf, symtab[4] + i * 16)
+            syms.append((value, shndx))
+    return syms
+
+
+def reloc_stream(offs):
+    """GEMDOS-style stream for A_SEP; the first long is the first offset
+    plus 1, because the GOT starts at data offset 0 (0 = no relocations)."""
+    stream = bytearray()
+    if not offs:
+        return bytearray(struct.pack("<I", 0))
+    stream += struct.pack("<I", offs[0] + 1)
+    for prev, cur in zip(offs, offs[1:]):
+        d = cur - prev
+        while d > 254:
+            stream.append(1)
+            d -= 254
+        stream.append(d)
+    stream.append(0)
+    return stream
+
+
+def separate(a, elf, secs, name, shdrs, e_entry):
+    """Position-independent program -> A_SEP image (see the top)."""
+    text = secs[".text"]
+    if text[3] != 0:
+        sys.exit(".text must be linked at address 0")
+    t_bytes = elf[text[4]:text[4] + text[5]]
+    parts = [secs[n] for n in (".got", ".data") if n in secs and secs[n][5]]
+    d_start = A_DATA_LINK
+    d_end = max(sh[3] + sh[5] for sh in parts) if parts else d_start
+    data = bytearray(d_end - d_start)
+    for sh in parts:
+        data[sh[3] - d_start:sh[3] - d_start + sh[5]] = \
+            elf[sh[4]:sh[4] + sh[5]]
+    bss = secs.get(".bss")
+    a_bss = bss[3] + bss[5] - d_end if bss and bss[5] else 0
+    syms = symbols(elf, secs)
+
+    relocs = set()
+    for sname, sh in secs.items():
+        if sh[1] != 9:                        # SHT_REL
+            continue
+        target = name(shdrs[sh[7]][0])
+        for i in range(sh[5] // 8):
+            r_offset, r_info = struct.unpack_from("<II", elf, sh[4] + i * 8)
+            rtype, rsym = r_info & 0xFF, r_info >> 8
+            if (rtype in PC_RELATIVE or rtype in GOT_RELATIVE
+                    or rtype == R_ARM_NONE):
+                continue
+            if target == ".text":
+                sys.exit(f"{a.elf}: absolute relocation (type {rtype}) in "
+                         f"the text at {r_offset:#x}: an object not compiled "
+                         "with -fpic -msingle-pic-base")
+            if target not in (".data", ".got"):
+                continue
+            if rtype not in (R_ARM_ABS32, R_ARM_TARGET1):
+                sys.exit(f"{a.elf}: unsupported relocation type {rtype} at "
+                         f"{r_offset:#x} in {target}")
+            if rsym < len(syms) and syms[rsym][1] in (SHN_UNDEF, SHN_ABS):
+                continue
+            relocs.add(r_offset - d_start)
+    # The linker fills the GOT itself and -q emits no relocations for it:
+    # every non-zero entry is an address (zero: undefined weak symbol).
+    got = secs.get(".got")
+    if got:
+        for off in range(got[3] - d_start, got[3] - d_start + got[5], 4):
+            if struct.unpack_from("<I", data, off)[0] != 0:
+                relocs.add(off)
+    for off in relocs:
+        v = struct.unpack_from("<I", data, off)[0]
+        if not (v < len(t_bytes) + 1 or d_start <= v <= d_end + a_bss):
+            sys.exit(f"{a.elf}: data word at {off:#x} = {v:#x} is neither "
+                     "a text nor a data address")
+    offs = sorted(relocs)
+    a_text, a_data = len(t_bytes), len(data)
+    a_total = a_data + a_bss + a.stack
+    crc = zlib.crc32(t_bytes) & 0xFFFFFFFF
+    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC | A_SEP, A_ARMCM,
+                      32, 0, 0, a_text, a_data, a_bss, e_entry, a_total, crc)
+    with open(a.out, "wb") as f:
+        f.write(hdr + t_bytes + data + reloc_stream(offs))
+    print(f"  {a.out}: text {a_text} data {a_data} bss {a_bss} "
+          f"total {a_total} (+text), {len(offs)} relocations, PIC")
 
 
 if __name__ == "__main__":

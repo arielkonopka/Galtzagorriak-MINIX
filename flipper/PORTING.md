@@ -191,6 +191,17 @@ transmit must stay inside the legal bands for the user's region.
 3. **Swap to the SD card** (partition 3): swap out shadow copies and
    idle processes.
 
+## CPU-specific optimizations (work list, requested 2026-11-14)
+
+Where they are measurably better than gcc -Os and cost no RAM, with the C
+version kept as fallback:
+- `memcpy`/`memset`/`phys_copy`/shadow swapping (kernel/arm/shadow.c):
+  word and LDM/STM block loops instead of byte loops.
+- CRC-32: the STM32WB CRC peripheral (pkg get, flash text cache keys).
+- The hardware RNG for salts, `/dev/random`; AES/PKA units later.
+- SPI transfers to the SD card and LCD by DMA.
+- CLZ / bit tricks where the old sources loop over bits.
+
 ## Userspace drivers (planned, not implemented)
 
 Goal: drivers that are not needed all the time, such as Bluetooth, Sub-GHz,

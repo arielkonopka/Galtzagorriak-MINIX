@@ -411,6 +411,11 @@ register message *m_ptr;	/* pointer to request message */
   rp->p_reg.psw = INIT_PSW;
   rp->p_reg.control = INIT_CONTROL;
   rp->p_reg.lr = 0;
+  /* Position-independent programs (A_SEP, see mm/exec.c) reach their data
+   * through the GOT at the start of the data segment, with r9 as base
+   * (-msingle-pic-base); r9 never changes after this.
+   */
+  rp->p_reg.r9 = (reg_t) rp->p_map[D].mem_phys << CLICK_SHIFT;
 #endif
   rp->p_alarm = 0;		/* reset alarm timer */
   rp->p_flags &= ~RECEIVING;	/* MM does not reply to EXEC call */

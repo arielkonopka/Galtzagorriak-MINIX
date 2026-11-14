@@ -35,7 +35,7 @@ FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 		vir_bytes *pc)						);
 
 #if (SHADOWING == 1)
-FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf)		);
+FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf, int sep)	);
 #endif
 
 /*===========================================================================*
@@ -97,7 +97,14 @@ PUBLIC int do_exec()
   }
 
   /* Can the process' text be shared with that of one already running? */
+#if (CHIP == ARM_CM)
+  /* Not with shadowing on ARM: freeing and MPU cover of shared text in
+   * RAM are not done.  Text is shared through the flash cache instead.
+   */
+  sh_mp = NULL;
+#else
   sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
+#endif
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
   r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes);
@@ -131,7 +138,7 @@ PUBLIC int do_exec()
 
 #if (SHADOWING == 1)
   if (lseek(fd, (off_t)sym_bytes, SEEK_CUR) == (off_t) -1) ;	/* error */
-  if (relocate(fd, (unsigned char *)mbuf) < 0) 	;		/* error */
+  if (relocate(fd, (unsigned char *)mbuf, ft == SEPARATE) < 0) ;	/* error */
   pc += (vir_bytes) rmp->mp_seg[T].mem_vir << CLICK_SHIFT;	/* was "rp": never compiled */
 #endif
 
@@ -250,6 +257,12 @@ vir_bytes *pc;			/* program entry point (initial PC) */
   *bss_bytes  = (vir_bytes) hdr.a_bss;	/* bss size in bytes */
   *tot_bytes  = hdr.a_total;		/* total bytes to allocate for prog */
   *sym_bytes  = hdr.a_syms;		/* symbol table size in bytes */
+#if (CHIP == ARM_CM)
+  if (hdr.a_flags & A_SEP) {	/* a_syms is the CRC of the text */
+	text_crc = hdr.a_syms;
+	*sym_bytes = 0;
+  }
+#endif
   if (*tot_bytes == 0) return(ENOEXEC);
 
   if (*ft != SEPARATE) {
@@ -527,9 +540,10 @@ time_t ctime;
 /*===========================================================================*
  *				relocate				     *
  *===========================================================================*/
-PRIVATE int relocate(fd, buf)
+PRIVATE int relocate(fd, buf, sep)
 int fd;				/* file descriptor to read from */
 unsigned char *buf;		/* borrowed from do_exec() */
+int sep;			/* separate I&D: position-independent code */
 {
   register int n;
   register unsigned char *p, c;
@@ -557,6 +571,43 @@ unsigned char *buf;		/* borrowed from do_exec() */
    *	illegal
    */
   off = (phys_bytes)mp->mp_seg[T].mem_phys << CLICK_SHIFT;
+#if (CHIP == ARM_CM)
+  /* Separate I&D (position-independent code, tools/elf2mnx.py): only data
+   * is relocated - the GOT and initialized pointers.  Offsets count from
+   * the start of data.  Each word holds a link-time address: data was
+   * linked at A_DATA_LINK, text at 0, so the value says which base to add.
+   */
+  if (sep) {
+	phys_bytes tbase = off;
+	phys_bytes dbase = (phys_bytes)mp->mp_seg[D].mem_phys << CLICK_SHIFT;
+	long first;
+
+	p = buf;
+	n = read(fd, (char *)p, ARG_MAX);
+	if (n < sizeof(long)) return(-1);
+	first = *((long *)p);		/* first offset + 1; 0 = none */
+	if (first == 0) return(0);
+	adr = dbase + first - 1;
+	n -= sizeof(long);
+	p += sizeof(long);
+	for (;;) {
+		unsigned long *w = (unsigned long *) adr;
+		*w = *w >= A_DATA_LINK ? *w - A_DATA_LINK + dbase : *w + tbase;
+		do {
+			if (--n < 0) {
+				p = buf;
+				n = read(fd, (char *)p, ARG_MAX);
+				if (--n < 0) return(-1);
+			}
+			c = *p++;
+			if (c == 0) return(0);
+			if (c == 1) adr += 254;
+			else if (c & 1) return(-1);
+			else adr += c;
+		} while (c == 1);
+	}
+  }
+#endif
   p = buf;
   n = read(fd, (char *)p, ARG_MAX);
   if (n < sizeof(long)) return(-1);	/* error */
