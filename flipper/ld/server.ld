@@ -10,9 +10,10 @@ MEMORY
 	FLASH (rx)  : ORIGIN = FLASH_ORG, LENGTH = 512K
 	RAM   (rwx) : ORIGIN = RAM_ORG, LENGTH = RAM_END - RAM_ORG
 	/* The usable parts of SRAM2 (the rest is secure, for the radio CPU).
-	 * Only FS uses them, for its buffer cache (fs/buf.h).  Not loaded or
-	 * cleared by the kernel. */
-	RAM2A (rw)  : ORIGIN = 0x20030000, LENGTH = 10K
+	 * FS uses them for its buffer cache (fs/buf.h); not loaded or cleared
+	 * by the kernel.  The first 768 bytes of SRAM2a are the mailbox
+	 * tables CPU2 reads at start (hal_cpu2_probe(), R2b.10). */
+	RAM2A (rw)  : ORIGIN = 0x20030300, LENGTH = 10K - 0x300
 	RAM2B (rw)  : ORIGIN = 0x20038000, LENGTH = 10K
 }
 

@@ -94,6 +94,11 @@ PUBLIC void flipdev_task()
   int r;
 
   last_buttons = hal_buttons();
+  {	/* start CPU2 once, before FS uses SRAM2 (R2b.10); MM reports it */
+	u32_t info[5];
+
+	(void) hal_cpu2_probe(info);
+  }
 
   while (TRUE) {
 	receive(ANY, &fm);

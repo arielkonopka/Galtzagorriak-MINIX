@@ -41,6 +41,48 @@ u32_t *basep, *sizep;		/* region (all ops) */
   u32_t ctrl;
   int r;
 
+  if (op == FL_INFO && addr == 99) {	/* DBG */
+	*basep = *(volatile u32_t *) 0x58004000u + 0x3C;
+	*basep = (*(volatile u32_t *) (0x58004000u + 0x3C));
+	*sizep = *(volatile u32_t *) 0x20030000u;
+	return(OK);
+  }
+  if (op == FL_INFO && addr == 96) {	/* DBG late probe */
+	u32_t info[5];
+	int r = hal_cpu2_probe(info);
+	*basep = (u32_t) r ^ (info[0] << 8);
+	*sizep = *(volatile u32_t *) 0x5800040Cu;	/* PWR_CR4 */
+	return(OK);
+  }
+  if (op == FL_INFO && addr == 97) {	/* DBG write test */
+	volatile u32_t *t = (volatile u32_t *) 0x20030000u;
+	t[60] = 0x12345678u;
+	*basep = t[60];
+	*sizep = *(volatile u32_t *) 0x40010008u;	/* SYSCFG_SWPR1 */
+	return(OK);
+  }
+  if (op == FL_INFO && addr == 98) {	/* DBG */
+	u32_t *t = (u32_t *) 0x20030000u;
+	*basep = t[10];		/* devinfo[0] */
+	*sizep = t[14] | (*(volatile u32_t *) 0x5800040Cu & 0x8000);	/* devinfo[4], PWR_CR4 */
+	return(OK);
+  }
+  if (op == FL_INFO && (addr == FL_CPU2_A || addr == FL_CPU2_B)) {
+	u32_t info[5];			/* probed at boot (flipdev.c) */
+
+	if (hal_cpu2_info(info) < 0) return(ENXIO);
+	*basep = info[addr == FL_CPU2_A ? 0 : 2];
+	*sizep = info[addr == FL_CPU2_A ? 1 : 3];
+	return(OK);
+  }
+  if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA)) {
+	u32_t l[HAL_FL_N];		/* Phase 2b */
+
+	hal_flash_layout(l);
+	*basep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST] : l[HAL_FL_SFSA];
+	*sizep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST_SIZE] : 0;
+	return(OK);
+  }
   hal_flash_region(basep, sizep);
   if (op == FL_INFO) return(OK);
   if (addr < *basep || addr - *basep >= *sizep) return(EINVAL);
@@ -147,8 +189,10 @@ PUBLIC void cstart()
    * gets its own memory, set up by mpu_switch() on every switch to it.
    */
   MPU_RNR = 0;
-  MPU_RBAR = (u32_t) _stext & ~0x7FFFFu;
-  MPU_RASR = MPU_RASR_AP_RO_RO | (18 << 1) | MPU_RASR_ENABLE; /* 2^19 */
+  /* All 1 MB: the installed programs and the text cache reach up to
+   * CPU2's area (R2b.1); CPU2's own pages refuse CPU1 by themselves. */
+  MPU_RBAR = (u32_t) _stext & ~0xFFFFFu;
+  MPU_RASR = MPU_RASR_AP_RO_RO | (19 << 1) | MPU_RASR_ENABLE; /* 2^20 */
   MPU_CTRL = MPU_CTRL_PRIVDEFENA | MPU_CTRL_ENABLE;
   __asm volatile ("dsb; isb");
 

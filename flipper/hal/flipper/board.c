@@ -995,10 +995,148 @@ void hal_tone(unsigned hz)
 			 | FLASH_SR_MISERR | FLASH_SR_FASTERR | FLASH_SR_RDERR \
 			 | FLASH_SR_OPTVERR)
 
+/*===========================================================================*
+ *				CPU2 probe				     *
+ *===========================================================================*/
+/* R2b.10: start CPU2 once at boot and read what it runs - FUS and wireless
+ * stack versions, the stack type - from the device information table it
+ * fills in (ST's mailbox, mbox_def.h, at SRAM2A + IPCCDBA * 4).  The tables
+ * take the first 768 bytes of SRAM2a, kept free for them (ld/server.ld);
+ * CPU2 then stays idle, nothing is sent to it, until Bluetooth (Phase 15).
+ * info: [0] 0 no answer, 1 FUS running, 2 wireless stack running;
+ * [1] FUS version, [2] stack version, [3] stack type, [4] stack memory
+ * (ST's packed "MemorySize": 4 KB flash pages etc.). */
+#define MB_AREA		0x300u
+#define FUS_KEYWORD	0xA94656B9u
+
+struct cpu2_tables {
+	uint32_t ref[10];		/* MB_RefTable_t */
+	uint32_t devinfo[16];		/* MB_DeviceInfoTable_t / FUS's */
+	uint32_t sys[2];		/* MB_SysTable_t */
+	uint32_t mm[7];			/* MB_MemManagerTable_t */
+	uint32_t sysq[2], freeq[2];	/* list heads */
+	uint8_t sysevt[272], syscmd[272];
+};
+
+int hal_cpu2_probe(uint32_t *info)
+{
+	uint32_t off = (FLASH->IPCCBR & FLASH_IPCCBR_IPCCDBA) * 4, t0;
+	volatile struct cpu2_tables *t;
+	unsigned i;
+
+	for (i = 0; i < 5; i++) info[i] = 0;
+	if (off + sizeof(struct cpu2_tables) > MB_AREA) return -1;
+	t = (volatile struct cpu2_tables *) (SRAM2A_BASE + off);
+	for (i = 0; i < sizeof(*t) / 4; i++) ((volatile uint32_t *) t)[i] = 0;
+	t->ref[0] = (uint32_t) t->devinfo;
+	t->ref[3] = (uint32_t) t->sys;
+	t->ref[4] = (uint32_t) t->mm;
+	t->sys[0] = (uint32_t) t->syscmd;
+	t->sys[1] = (uint32_t) t->sysq;
+	t->sysq[0] = t->sysq[1] = (uint32_t) t->sysq;	/* empty lists */
+	t->freeq[0] = t->freeq[1] = (uint32_t) t->freeq;
+	t->mm[1] = (uint32_t) t->sysevt;	/* spare_sys_buffer */
+	t->mm[4] = (uint32_t) t->freeq;	/* pevt_free_buffer_queue */
+	__asm volatile ("dsb");
+
+	RCC->AHB3ENR |= RCC_AHB3ENR_IPCCEN | RCC_AHB3ENR_HSEMEN;
+	(void) RCC->AHB3ENR;
+	/* the radio's wakeup clock: the 32.768 kHz crystal (LSE), as the
+	 * stock firmware sets it up for CPU2 */
+	PWR->CR1 |= PWR_CR1_DBP;
+	if (!(RCC->BDCR & RCC_BDCR_LSERDY)) {
+		RCC->BDCR |= RCC_BDCR_LSEON;
+		for (t0 = DWT->CYCCNT; !(RCC->BDCR & RCC_BDCR_LSERDY)
+					&& ms_since(t0) < 2000; ) ;
+	}
+	RCC->CSR = (RCC->CSR & ~RCC_CSR_RFWKPSEL) | RCC_CSR_RFWKPSEL_0;
+	/* as ST's HW_IPCC_Enable(): EXTI line 41 as an event for CPU2 (it
+	 * wakes it from standby), then boot it */
+	EXTI->C2EMR2 |= 1u << (41 - 32);
+	EXTI->RTSR2 |= 1u << (41 - 32);
+	__SEV();
+	__WFE();
+	PWR->CR4 |= PWR_CR4_C2BOOT;
+
+	for (t0 = DWT->CYCCNT; ms_since(t0) < 1000; ) {
+		if (hal_cpu2_info(info) == 0) {
+			for (t0 = DWT->CYCCNT; ms_since(t0) < 20; ) ;
+			return hal_cpu2_info(info);	/* all of it written */
+		}
+	}
+	return -1;
+}
+
+/* Read what CPU2 wrote into the device information table (no RAM of our
+ * own keeps it: the table is in SRAM2a). */
+int hal_cpu2_info(uint32_t *info)
+{
+	uint32_t off = (FLASH->IPCCBR & FLASH_IPCCBR_IPCCDBA) * 4;
+	volatile struct cpu2_tables *t;
+	volatile uint32_t *d;
+
+	if (off + sizeof(struct cpu2_tables) > MB_AREA) return -1;
+	t = (volatile struct cpu2_tables *) (SRAM2A_BASE + off);
+	d = t->devinfo;
+	if (t->ref[0] != (uint32_t) t->devinfo) return -1;	/* not probed */
+	if (d[0] == FUS_KEYWORD) {
+		info[0] = 1;			/* FUS (its own table) */
+		info[1] = d[3];
+		info[2] = d[5];
+		info[3] = d[7] & 0xFF;
+		info[4] = d[6];
+		return 0;
+	}
+	if (d[4] != 0 || t->sysq[0] != (uint32_t) t->sysq) {
+		info[0] = 2;			/* the stack's table */
+		info[1] = d[1];
+		info[2] = d[4];
+		info[3] = d[6] & 0xFF;
+		info[4] = d[5];
+		return 0;
+	}
+	return -1;
+}
+
+/* Flash layout (spec Phase 2b, R2b.1), worked out at boot from where CPU2's
+ * secure area starts (SFSA, FLASH->SFR, in 4 KB pages), as the stock
+ * firmware does:
+ *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
+ *	0x08030000  installed programs (Phase 2b)	up to the cache
+ *	...         run-time text cache			HAL_CACHE_SIZE
+ *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
+ *	SFSA ..     CPU2 wireless stack and FUS, never touched
+ */
+#define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
+#define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
+#define GUARD_PAGES	16u
+
+void hal_flash_layout(uint32_t *l)
+{
+	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE;
+
+	sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
+	top = sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
+	l[HAL_FL_SFSA] = sfsa;
+	if (sfsa < inst + GUARD_PAGES * HAL_FLASH_PAGE + HAL_CACHE_SIZE) {
+		/* no room: neither region is used */
+		l[HAL_FL_INST] = l[HAL_FL_INST_SIZE] = 0;
+		l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+		return;
+	}
+	l[HAL_FL_CACHE] = top - HAL_CACHE_SIZE;
+	l[HAL_FL_CACHE_SIZE] = HAL_CACHE_SIZE;
+	l[HAL_FL_INST] = inst;
+	l[HAL_FL_INST_SIZE] = top - HAL_CACHE_SIZE - inst;
+}
+
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
-	*base = FLASH_BASE + 0x20000;
-	*size = 0x60000;
+	uint32_t l[HAL_FL_N];
+
+	hal_flash_layout(l);
+	*base = l[HAL_FL_CACHE];
+	*size = l[HAL_FL_CACHE_SIZE];
 }
 
 uint32_t hal_flash_sr;			/* SR of the last failure, for the log */

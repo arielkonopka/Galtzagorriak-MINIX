@@ -67,6 +67,7 @@ PRIVATE unsigned char used[MAXPAGES / 8];
 #define LIVE(r)		(!FREE_SLOT(r) && (r)->dead0 == 0xFFFFFFFFUL)
 
 FORWARD _PROTOTYPE( int fc_format, (int d, unsigned long gen)		);
+FORWARD _PROTOTYPE( void cpu2_line, (void)				);
 FORWARD _PROTOTYPE( int fc_compact, (void)				);
 FORWARD _PROTOTYPE( int fc_running, (unsigned long addr)		);
 FORWARD _PROTOTYPE( void fc_map, (void)					);
@@ -89,6 +90,40 @@ unsigned long gen;
 }
 
 /*===========================================================================*
+ *				cpu2_line				     *
+ *===========================================================================*/
+PRIVATE void cpu2_line()
+{
+/* What the kernel's boot probe of CPU2 found (R2b.10), said once. */
+  static char *type[] = { "none", "BLE full", "BLE HCI", "BLE light",
+	"BLE beacon", "BLE basic", "BLE full ext adv", "BLE HCI ext adv" };
+  unsigned long run, fus, stack, st;
+
+  if (sys_flash(FL_INFO, FL_CPU2_A, NULL, 0, &run, &fus) != OK
+	|| sys_flash(FL_INFO, FL_CPU2_B, NULL, 0, &stack, &st) != OK
+	|| run == 0) {
+	unsigned long a, b, c, e;
+	sys_flash(FL_INFO, 99, NULL, 0, &a, &b);
+	sys_flash(FL_INFO, 98, NULL, 0, &c, &e);
+	printf("cpu2: no response DBG ipccbr %lx ref0 %lx di0 %lx di4/cr4 %lx\n", a, b, c, e);
+	sys_flash(FL_INFO, 97, NULL, 0, &a, &b);
+	printf("DBG write %lx swpr %lx\n", a, b);
+	sys_flash(FL_INFO, 96, NULL, 0, &a, &b);
+	printf("DBG late probe r %lx cr4 %lx\n", a, b);
+	sys_flash(FL_INFO, 98, NULL, 0, &c, &e);
+	sys_flash(FL_INFO, 99, NULL, 0, &a, &b);
+	printf("DBG after: ref0 %lx di0 %lx di4/cr4 %lx\n", b, c, e);
+	return;
+  }
+  printf("cpu2: %s running; FUS %lu.%lu.%lu, stack %lu.%lu.%lu %s "
+	"(type 0x%02lx)\n", run == 1 ? "FUS" : "wireless stack",
+	fus >> 24, (fus >> 16) & 0xFF, (fus >> 8) & 0xFF,
+	stack >> 24, (stack >> 16) & 0xFF, (stack >> 8) & 0xFF,
+	st < 8 ? type[st] : "other", st);
+}
+
+
+/*===========================================================================*
  *				fc_init					     *
  *===========================================================================*/
 PUBLIC void fc_init()
@@ -99,6 +134,16 @@ PUBLIC void fc_init()
   int i, ok0, ok1;
 
   if (sys_flash(FL_INFO, 0, NULL, 0, &base, &size) != OK) return;
+  {	/* the layout, once (R2b.1) */
+	unsigned long sfsa, ib, is, z;
+
+	if (sys_flash(FL_INFO, FL_LAYOUT_SFSA, NULL, 0, &sfsa, &z) == OK
+	    && sys_flash(FL_INFO, FL_LAYOUT_INST, NULL, 0, &ib, &is) == OK)
+		printf("flash: CPU2 from 0x%lx; programs 0x%lx %lu KB, "
+			"cache 0x%lx %lu KB\n", sfsa, ib, is >> 10,
+			base, size >> 10);
+	cpu2_line();
+  }
   if (size < (DIRPAGES + 1) * PAGE) return;
   if (size > MAXPAGES * PAGE) size = MAXPAGES * PAGE;
   fc_base = base;
@@ -318,7 +363,16 @@ struct fcinfo *fi;
   struct fcrec *r;
   int i;
 
+  unsigned long b, n;
+
   memset(fi, 0, sizeof(*fi));
+  if (sys_flash(FL_INFO, FL_LAYOUT_INST, NULL, 0, &b, &n) == OK) {
+	fi->inst_base = b;
+	fi->inst_size = n;
+  }
+  if (sys_flash(FL_INFO, FL_LAYOUT_SFSA, NULL, 0, &b, &n) == OK)
+	fi->sfsa = b;
+  fi->cache_base = fc_base;
   if (fc_size == 0) return;
   fi->size = fc_size - DIRPAGES * PAGE;
   for (i = 0; i < NREC; i++) {
