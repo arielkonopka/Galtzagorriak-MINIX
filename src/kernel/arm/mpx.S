@@ -101,6 +101,9 @@ first_restart:
  * calls the handler registered with put_irq_handler(). */
 	.global	IRQ_Handler
 	.global	SysTick_Handler
+	.global	PendSV_Handler
+	.thumb_func
+PendSV_Handler:
 	.thumb_func
 IRQ_Handler:
 	.thumb_func

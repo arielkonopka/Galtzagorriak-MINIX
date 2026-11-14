@@ -255,13 +255,26 @@ Done:
   retried, and after repeated errors the bus drops to 8 MHz for good
   (the kernel logs "sd: N transfer(s) retried").
 
+- Multi-block writes (CMD25): 512 KB written in 2.35 s (was 3.11 s).
+- Hardware RNG (STM32WB TRNG, 48 MHz clock or LSI): `/dev/random`
+  (minor 4) and `/dev/zero` (minor 5, was missing) in the memory driver;
+  `passwd` takes its `$5$` salt from /dev/random.
+- Shadow exchange (`flipclicks`) with LDM/STM (arm/flip.S).  The real
+  cost was elsewhere: a ready shadowed process waited for the clock tick
+  to be swapped in (16.7 ms per switch).  The idle task now raises
+  PendSV, which wakes the clock task at once (a kick, not counted as a
+  tick); idle checks and sleeps with interrupts masked so it cannot come
+  back into `wfi` with a shadow waiting.  m2test's 200 round trips
+  between a forked pair (400 switches): 6.66 s -> 0.25 s.
+
+Dropped: the CRC peripheral for CRC-32 (pkg is limited by USB, ~100 KB/s,
+where the table CRC costs ~1 % CPU; a kernel call per block would cost
+more than it saves).
+
 Still to do:
-- Multi-block writes (CMD25): 512 KB take 3.1 s, mostly the card's
-  programming time per CMD24.
-- `flipclicks` (shadow exchange) with LDM/STM; SPI by DMA.
-- CRC-32: the STM32WB CRC peripheral (pkg get, flash text cache keys).
-- The hardware RNG for salts, `/dev/random`; AES/PKA units later.
-- CLZ / bit tricks where the old sources loop over bits.
+- SPI by DMA (the CPU could do other work during SD transfers).
+- AES/PKA units if something needs them; CLZ / bit tricks where the old
+  sources loop over bits.
 
 ## Userspace drivers (planned, not implemented)
 

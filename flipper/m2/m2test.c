@@ -136,6 +136,38 @@ int main(int argc, char **argv)
 	check(n == 17 && strcmp(buf, "through the pipe") == 0,
 						"fork + pipe");
 
+	/* Shadowing under load: parent and child (same addresses) take
+	 * turns 200 times; each flip exchanges their images (flipclicks).
+	 * Each must keep seeing its own data. */
+	{
+		int up[2], down[2], k, okk = 1;
+		char c = 0;
+
+		pipe(up);
+		pipe(down);
+		pid = fork();
+		if (pid == 0) {
+			data_word = 777;
+			for (k = 0; k < 200; k++) {
+				if (read(down[0], &c, 1) != 1 || data_word != 777)
+					_exit(1);
+				c++;
+				write(up[1], &c, 1);
+			}
+			_exit(0);
+		}
+		for (k = 0; k < 200 && okk; k++) {
+			c = (char) k;
+			write(down[1], &c, 1);
+			if (read(up[0], &c, 1) != 1 || c != (char) (k + 1)
+						|| data_word != 12345)
+				okk = 0;
+		}
+		close(up[0]); close(up[1]); close(down[0]); close(down[1]);
+		check(okk && wait(&st) == pid && WIFEXITED(st)
+			&& WEXITSTATUS(st) == 0, "fork: 200 shadow flips");
+	}
+
 	/* Memory protection: a user process may not touch kernel memory. */
 	pid = fork();
 	if (pid == 0) {
