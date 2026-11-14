@@ -604,6 +604,15 @@ void hal_early_boot(void)
 	GPIOB->MODER |= 3u << 22;
 	GPIOB->PUPDR &= ~(3u << 22);
 	RCC->AHB2ENR &= ~RCC_AHB2ENR_GPIOBEN;
+
+	/* DFU without the buttons: asked for by hal_dfu_request() ("reboot
+	 * -d"), or after the watchdog reset a hung or panicked kernel - a
+	 * new image that fails comes back to DFU by itself. */
+	if (*HAL_BOOT_WORD == HAL_BOOT_DFU || (RCC->CSR & RCC_CSR_IWDGRSTF)) {
+		*HAL_BOOT_WORD = 0;
+		RCC->CSR |= RCC_CSR_RMVF;
+		left = 1;
+	}
 	if (!left) {
 		/* ST's DFU loader starts the new image ("leave") with a jump,
 		 * not a reset, and leaves the flash controller with CFGBSY
@@ -649,6 +658,7 @@ void hal_init(void)
 	gpio_cfg(GPIOB, 1, MODE_OUT, PULL_NONE, 0);	/* display A0 */
 
 	SysTick_Config(SystemCoreClock / 1000);
+	hal_wdt_start();
 	uart_init();
 	spi2_init();
 	buttons_init();
@@ -656,11 +666,79 @@ void hal_init(void)
 
 void hal_halt(int status)
 {
-	(void) status;
 	__disable_irq();
+	hal_tone(0);
 	/* Keep the USB console alive so a panic message still reaches the
-	 * host (polled: interrupts are off). */
-	for (;;) hal_usb_poll();
+	 * host (polled: interrupts are off).  After a panic the watchdog is
+	 * left to run out: the reset takes the board to DFU (hal_early_boot)
+	 * once the message had time to get out. */
+	for (;;) {
+		hal_usb_poll();
+		if (status == 0) hal_wdt_kick();
+	}
+}
+
+/*===========================================================================*
+ *				Watchdog, DFU request			     *
+ *===========================================================================*/
+/* IWDG on the 32 kHz LSI: /256 = 125 Hz, 1250 counts = 10 s.  Kicked from
+ * the clock tick (and hal_halt); interrupts are never masked that long.
+ * A system reset stops it again (software watchdog option). */
+void hal_wdt_start(void)
+{
+	IWDG->KR = 0xCCCC;			/* start (and LSI) */
+	IWDG->KR = 0x5555;			/* unlock PR, RLR */
+	IWDG->PR = 6;				/* /256 */
+	IWDG->RLR = 1250;
+	while (IWDG->SR & (IWDG_SR_PVU | IWDG_SR_RVU)) ;
+	IWDG->KR = 0xAAAA;
+}
+
+void hal_wdt_kick(void)
+{
+	IWDG->KR = 0xAAAA;
+}
+
+void hal_dfu_request(void)
+{
+	*HAL_BOOT_WORD = HAL_BOOT_DFU;
+	__DSB();
+	NVIC_SystemReset();
+}
+
+/*===========================================================================*
+ *				Speaker					     *
+ *===========================================================================*/
+/* Piezo on PB8, TIM16 channel 1 (AF14), as on the stock firmware.  The
+ * timer counts at 1 MHz; a square wave at hz, 0 stops it. */
+void hal_tone(unsigned hz)
+{
+	static int ready;
+	uint32_t arr;
+
+	if (hz == 0) {
+		if (ready) {
+			TIM16->CR1 &= ~TIM_CR1_CEN;
+			gpio_cfg(GPIOB, 8, MODE_ANALOG, PULL_NONE, 0);
+		}
+		return;
+	}
+	if (!ready) {
+		RCC->APB2ENR |= RCC_APB2ENR_TIM16EN;
+		(void) RCC->APB2ENR;
+		TIM16->PSC = SystemCoreClock / 1000000u - 1;
+		TIM16->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+		TIM16->CCER = TIM_CCER_CC1E;
+		TIM16->BDTR = TIM_BDTR_MOE;
+		ready = 1;
+	}
+	if (hz < 20) hz = 20;
+	arr = 1000000u / hz - 1;
+	TIM16->ARR = arr;
+	TIM16->CCR1 = arr / 2;
+	TIM16->EGR = TIM_EGR_UG;
+	gpio_cfg(GPIOB, 8, MODE_AF, PULL_NONE, 14);
+	TIM16->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;
 }
 
 

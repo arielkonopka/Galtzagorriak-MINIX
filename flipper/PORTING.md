@@ -83,6 +83,21 @@ never change option bytes or touch the radio stack.
 | Stock firmware or any MINIX image | Hold **Left + Back** (hardware reset), release Back, keep holding Left. Stock firmware and our `hal_early_boot()` both check Left as their first action and jump to DFU. |
 | Image broken before that check | Hardware DFU: hold **Left + Back + OK**, release Back and Left, keep holding OK. |
 
+Without the buttons (2026-11-14):
+
+- `reboot -d` (root) restarts into ST's ROM DFU loader (RBT_MONITOR: there
+  is no boot monitor; hal_dfu_request() leaves a magic word at 0x20000000,
+  the 8 bytes the RAM map skips, and resets; hal_early_boot() sees it).
+- Independent watchdog, 10 s, kicked from the clock tick: a kernel that
+  hangs - or panics (hal_halt() stops kicking after a panic, so the
+  message still gets out over USB) - resets, and a watchdog reset goes to
+  DFU.  Tested with a kernel spinning at boot: DFU after 11 s.
+- ^G on the console beeps (speaker PB8, TIM16 CH1), e.g.
+  `echo 7 | tr 7 '\007'` - to call someone to the device.
+
+So a new image is flashed with `reboot -d` and dfu-util, and a broken one
+comes back to DFU by itself; the buttons are needed only if both fail.
+
 Then `make BOARD=flipper flash` (= `dfu-util -a 0 -s 0x08000000:leave -D
 build/flipper/m0.bin`). Back to stock firmware: qFlipper → *Repair* from
 DFU mode. Iterating on MINIX never needs Repair.

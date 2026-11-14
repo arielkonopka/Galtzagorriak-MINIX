@@ -423,6 +423,19 @@ unsigned irq;
   return was;
 }
 
+/*===========================================================================*
+ *				bell					     *
+ *===========================================================================*/
+PUBLIC unsigned bell_ticks;	/* ticks until the speaker goes quiet */
+
+PUBLIC void bell()
+{
+/* ^G on the console: a short beep (stopped from the clock tick). */
+  hal_tone(2000);
+  bell_ticks = HZ / 6;
+}
+
+
 PUBLIC void irq_dispatch(exc)
 unsigned exc;
 {
@@ -432,6 +445,10 @@ unsigned exc;
   int irq;
   irq_handler_t handler;
 
+  if (exc == EXC_SYSTICK) {
+	hal_wdt_kick();			/* the clock still ticks: alive */
+	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
+  }
   irq = (exc == EXC_SYSTICK) ? CLOCK_IRQ : (int) exc - EXC_IRQ0;
   if ((unsigned) irq >= NR_IRQ_VECTORS) return;
   handler = irq_table[irq];
@@ -563,6 +580,12 @@ int how;
   clock_stop();
   if (how == RBT_PANIC) printf("System halted after panic.\n");
   else if (how == RBT_HALT) printf("System halted.\n");
+  if (how == RBT_MONITOR) {
+	/* No boot monitor: "return to the monitor" means ST's ROM DFU
+	 * loader, so a new image can be flashed without the buttons. */
+	printf("Rebooting to DFU.\n");
+	hal_dfu_request();
+  }
   if (how == RBT_REBOOT || how == RBT_RESET) {
 	SCB_AIRCR = AIRCR_VECTKEY | AIRCR_SYSRESETREQ;
 	for (;;) ;

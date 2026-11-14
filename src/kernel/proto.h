@@ -258,6 +258,7 @@ _PROTOTYPE( void idle_task, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( void mpu_switch, (void)					);
+_PROTOTYPE( void bell, (void)						);
 _PROTOTYPE( unsigned kstack_used, (unsigned *size)			);
 _PROTOTYPE( int arm_flash, (int op, u32_t addr, phys_bytes src,
 		unsigned len, u32_t *base, u32_t *size)			);

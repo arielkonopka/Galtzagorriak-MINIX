@@ -215,7 +215,12 @@ register tty_t *tp;
 	tp->tty_outcum += count;
 	tp->tty_outleft -= count;
 
-	for (i = 0; i < count; i++) out_char(buf[i]);
+	for (i = 0; i < count; i++) {
+		/* ^G beeps, unless the output is raw (binary, rz/sz). */
+		if (buf[i] == '\007' && (tp->tty_termios.c_oflag & OPOST))
+			bell();
+		out_char(buf[i]);
+	}
   } while ((count = tp->tty_outleft) != 0 && !tp->tty_inhibited);
 
   if (tp->tty_outleft == 0) {

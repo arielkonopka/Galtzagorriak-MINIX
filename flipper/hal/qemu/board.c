@@ -149,6 +149,12 @@ void hal_halt(int status)
 	for (;;) __asm volatile ("wfi");
 }
 
+/* No watchdog, speaker or DFU in QEMU: "reboot -d" just stops it. */
+void hal_wdt_start(void) { }
+void hal_wdt_kick(void) { }
+void hal_tone(unsigned hz) { (void) hz; }
+void hal_dfu_request(void) { hal_halt(0); }
+
 /* The "SD card" is a disk image file on the host, see QEMU_DISK. */
 #ifndef QEMU_DISK
 #define QEMU_DISK "disk.img"

@@ -85,6 +85,14 @@ extern uint32_t hal_flash_dbg[5];
 
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */
+/* Watchdog (10 s, kicked from the clock tick), and DFU without buttons:
+ * the word below survives the reset; hal_early_boot() looks at it. */
+#define HAL_BOOT_WORD	((volatile uint32_t *) 0x20000000)	/* not in RAM */
+#define HAL_BOOT_DFU	0x21554644u				/* "DFU!" */
+void hal_wdt_start(void);
+void hal_wdt_kick(void);
+void hal_dfu_request(void) __attribute__((noreturn));
+void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));
 
 /* Low-level console output used by kprintf() and panics. */
