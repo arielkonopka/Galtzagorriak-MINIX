@@ -3,7 +3,7 @@
 #define execle	_execle
 #define execv	_execv
 #define execve	_execve
-#define sbrk	_sbrk
+
 #include <minix/minlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -98,9 +98,8 @@ int nenvps;			/* number of environment strings */
  * have to allocate up to ARG_MAX bytes just to prepend "sh" to the arg array.
  */
 
-  char *hp, **ap, *p;
+  char **ap;
   int i, stackbytes, npointers, overflow, temp;
-  char *stack;
   message m;
 
   /* Decide how big a stack is needed. Be paranoid about overflow. */
@@ -130,50 +129,25 @@ int nenvps;			/* number of environment strings */
   if (temp < stackbytes) overflow = TRUE;
   stackbytes = (temp / PTRSIZE) * PTRSIZE;
 
-  /* Check for overflow before committing sbrk. */
+  /* Check for overflow. */
   if (overflow) {
 	errno = E2BIG;
 	return(-1);
   }
 
-  /* Allocate the stack. */
-  stack = sbrk(stackbytes);
-  if (stack == (char *) -1) {
-	errno = E2BIG;
-	return(-1);
-  }
-
-  /* Prepare the stack vector and argc. */
-  ap = (char **) stack;
-  hp = &stack[npointers * PTRSIZE];
-  *ap++ = (char *) nargs;
-
-  /* Prepare the argument pointers and strings. */
-  for (i = 0; i < nargs; i++) {
-	*ap++ = (char *) (hp - stack);
-	p = *argv++;
-	while ( (*hp++ = *p++) != 0)
-		;
-  }
-  *ap++ = (char *) NULL;
-
-  /* Prepare the environment pointers and strings. */
-  for (i = 0; i < nenvps; i++) {
-	*ap++ = (char *) (hp - stack);
-	p = *envp++;
-	while ( (*hp++ = *p++) != 0)
-		;
-  }
-  *ap++ = (char *) NULL;
-
-  /* Do the real work. */
+  /* MM gathers the arguments and the environment from argv and envp
+   * itself (mm/exec.c, gather()), so no stack image is built here: a
+   * process short of memory (a shell after a big glob) can still exec.
+   * stackbytes is only a size check for MM.
+   */
   m.m1_i1 = strlen(path) + 1;
   m.m1_i2 = stackbytes;
+  m.m1_i3 = (int) envp;
   m.m1_p1 = (char *) path;
-  m.m1_p2 = stack;
+  m.m1_p2 = NULL;
+  m.m1_p3 = (char *) argv;
   (void) _syscall(MM, EXEC, &m);
 
   /* The exec failed. */
-  sbrk(-stackbytes);
   return(m.m_type);
 }
