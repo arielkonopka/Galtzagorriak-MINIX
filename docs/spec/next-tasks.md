@@ -109,3 +109,6 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 ## Still open from reviews
 - #6/#7 (IR): TX on the pulse engine (no busy-wait in a kernel task), and no 1–2 KB static `ir_buf`. Rebase on main first; both PRs conflict.
 - Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
+- T2 (#24, merged by owner decision 2026-11-14: responsiveness first): **win back the MM +68 B** (`runs[]` + `job`). Options: 4-byte `runs[]` entries (28-bit key from crc^owner + 4-bit count), one shared hex table, trim `hole[]`. Also **check the flash copy before `J_RECORD`** (SHA-256 as in finst.c, or the text CRC), so a file rewritten during the copy never lands in the cache under the old key.
+- Phase 2b (#37/#38): AC2b.R1 (L6 from the installed region), AC2b.R2 (`lat` during a 50 KB install), AC2b.5 (power-cut test), MM stack high-water after bind + compaction (estimated 500–600 of 1024 B), first-boot bind time in PORTING.md; old cards need `pkg bind /bin/*` in `/etc/rc` (have pkg/update add it, or document it).
+- T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
