@@ -35,7 +35,11 @@ MLDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections \
 LIBDIRS	:= ansi posix other stdio syslib math
 LIBC_SRC := $(foreach d,$(LIBDIRS),$(wildcard $(MROOT)/src/lib/$(d)/*.c)) \
 	    $(MROOT)/src/lib/fphook/fltpr.c $(MROOT)/src/lib/fphook/strtod.c
-LIBC_RTS := _sendrec.S setjmp.S __sigreturn.S brksize.S
+# memcpy/memmove/memset: Cortex-M4 assembly (arm/rts/memops.S) instead of
+# the byte-at-a-time C versions; the kernel uses them too.
+LIBC_SRC := $(filter-out $(addprefix $(MROOT)/src/lib/ansi/,memcpy.c memmove.c \
+		memset.c),$(LIBC_SRC))
+LIBC_RTS := _sendrec.S setjmp.S __sigreturn.S brksize.S memops.S
 LIBC_OBJ := $(LIBC_SRC:$(MROOT)/src/lib/%.c=$(MB)/libc/%.o) \
 	    $(LIBC_RTS:%=$(MB)/libc/arm/%.o) $(MB)/libc/syscall_aliases.o
 LIBCFLAGS := $(MCFLAGS) -D_MINIX -D_POSIX_SOURCE -I$(MROOT)/src
@@ -90,7 +94,8 @@ KSRC	:= main.c proc.c system.c clock.c table.c memory.c tty.c driver.c \
 	   drvlib.c misc.c arm/klib.c arm/cons.c arm/shadow.c arm/nodev.c \
 	   arm/disk.c arm/flipdev.c arm/mpx.S
 KOBJ	:= $(KSRC:%=$(MB)/kernel/%.o) \
-	   $(filter-out %/main.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
+	   $(filter-out %/main.o %/string.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
+# (string routines come from libc.a: memops.S, ansi/memcmp.c, strlen.c)
 
 $(MB)/kernel/%.o: $(KDIR)/%
 	@mkdir -p $(dir $@)
@@ -223,7 +228,8 @@ ALIASES	+= $(addsuffix =cp,rm)
 # small: default 6 KB (tools/elf2mnx.py), more only where needed.
 # Values checked with "free -t on" (MM reports the untouched part of the
 # reserve at exit), 2026-11-14: keep at least ~2 KB never used.
-CHMEM_sh     := 12288	# echo /bin/* (84 names): ~8 KB glob + the exec frame
+CHMEM_sh     := 12288	# /bin/* (84 names) uses ~8 KB; exec needs no heap
+			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
@@ -295,7 +301,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.2
+BASE_VER := 3.18
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

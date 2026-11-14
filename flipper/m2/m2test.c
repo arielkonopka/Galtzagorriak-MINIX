@@ -21,6 +21,45 @@ static void check(int ok, const char *what)
 	if (!ok) fails++;
 }
 
+/* memcpy/memmove/memset (arm/rts/memops.S) against byte loops: every
+ * alignment of source and destination, lengths 0..80, overlap both ways. */
+static unsigned char ta[200], tb[200], tr[200];
+
+static void fill(unsigned char *p, int seed)
+{
+	int i;
+
+	for (i = 0; i < 200; i++) p[i] = (unsigned char) (i * 7 + seed);
+}
+
+static int memops_ok(void)
+{
+	int so, d, n, i, k;
+
+	for (so = 0; so < 4; so++) for (d = 0; d < 4; d++)
+	for (n = 0; n <= 80; n++) {
+		fill(ta, 1); fill(tb, 2); fill(tr, 2);
+		for (i = 0; i < n; i++) tr[50 + d + i] = ta[10 + so + i];
+		if (memcpy(tb + 50 + d, ta + 10 + so, n) != tb + 50 + d) return 0;
+		if (memcmp(tb, tr, 200) != 0) return 0;
+
+		fill(tb, 3); fill(tr, 3);
+		for (i = 0; i < n; i++) tr[20 + d + i] = (unsigned char) (so + 9);
+		if (memset(tb + 20 + d, so + 9 + 256, n) != tb + 20 + d) return 0;
+		if (memcmp(tb, tr, 200) != 0) return 0;
+
+		for (k = -9; k <= 9; k++) {		/* overlapping moves */
+			fill(tb, 4); fill(tr, 4);
+			for (i = 0; i < n; i++) ta[i] = tr[60 + so + i];
+			for (i = 0; i < n; i++) tr[60 + so + k + i] = ta[i];
+			if (memmove(tb + 60 + so + k, tb + 60 + so, n)
+						!= tb + 60 + so + k) return 0;
+			if (memcmp(tb, tr, 200) != 0) return 0;
+		}
+	}
+	return 1;
+}
+
 static void handler(int sig)
 {
 	got_sig = sig;
@@ -61,6 +100,8 @@ int main(int argc, char **argv)
 							"environ");
 	check(data_word == 12345 && strcmp(msg, "relocated pointer") == 0,
 							"data + relocations");
+
+	check(memops_ok(), "memcpy/memmove/memset, all alignments");
 
 	p = malloc(10000);	/* default heap + stack is 16 KB (chmem) */
 	if (p != NULL) memset(p, 0x5A, 10000);

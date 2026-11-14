@@ -149,6 +149,12 @@ void hal_halt(int status)
 	for (;;) __asm volatile ("wfi");
 }
 
+/* No watchdog, speaker or DFU in QEMU: "reboot -d" just stops it. */
+void hal_wdt_start(void) { }
+void hal_wdt_kick(void) { }
+void hal_tone(unsigned hz) { (void) hz; }
+void hal_dfu_request(void) { hal_halt(0); }
+
 /* The "SD card" is a disk image file on the host, see QEMU_DISK. */
 #ifndef QEMU_DISK
 #define QEMU_DISK "disk.img"
@@ -219,6 +225,8 @@ void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b;
 
 /* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */
 uint32_t hal_flash_sr;
+uint32_t hal_disk_errors;
+unsigned hal_disk_mhz;
 uint32_t hal_flash_dbg[5];
 
 void hal_flash_region(uint32_t *base, uint32_t *size)

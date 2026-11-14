@@ -4,6 +4,7 @@
  * targets/f7/furi_hal/furi_hal_resources.[ch]; the display init sequence
  * from lib/u8g2/u8g2_glue.c.  CPU2 (radio core) is never started.
  */
+#include <stddef.h>
 #include <stdint.h>
 #include "stm32wbxx.h"
 #include "hal.h"
@@ -182,7 +183,7 @@ static void spi2_init(void)
  * share the bus and use different speeds; set it before each transaction. */
 #define SPI_DIV_DISPLAY	3	/* /16 = 4 MHz */
 #define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
-#define SPI_DIV_SD_FAST	2	/* /8 = 8 MHz */
+#define SPI_DIV_SD_FAST	1	/* /4 = 16 MHz (the stock firmware's SD speed) */
 
 static void spi2_speed(unsigned code)
 {
@@ -199,6 +200,30 @@ static uint8_t spi2_xfer(uint8_t out)
 	*(volatile uint8_t *) &SPI2->DR = out;	/* 8-bit access: no packing */
 	while (!(SPI2->SR & SPI_SR_RXNE)) ;
 	return *(volatile uint8_t *) &SPI2->DR;
+}
+
+/* A block: out (NULL: all 0xFF) is sent, what comes back goes to in
+ * (NULL: dropped).  The next byte goes into the TX FIFO before the last
+ * one is read back, so the bus does not stop between bytes; at most two
+ * are in flight, which the 4-byte RX FIFO holds even if an interrupt
+ * comes in between. */
+static void spi2_block(const uint8_t *out, uint8_t *in, unsigned len)
+{
+	volatile uint8_t *dr = (volatile uint8_t *) &SPI2->DR;
+	unsigned tx = 0, rx = 0;
+	uint8_t c;
+
+	while (rx < len) {
+		if (tx < len && tx - rx < 2 && (SPI2->SR & SPI_SR_TXE)) {
+			*dr = out != NULL ? out[tx] : 0xFF;
+			tx++;
+		}
+		if (SPI2->SR & SPI_SR_RXNE) {
+			c = *dr;
+			if (in != NULL) in[rx] = c;
+			rx++;
+		}
+	}
 }
 
 static void spi2_wait_idle(void)
@@ -263,7 +288,7 @@ void hal_lcd_init(void)
 void hal_lcd_flush(const uint8_t *fb)
 {
 	uint8_t addr[3];
-	unsigned page, x;
+	unsigned page;
 
 	for (page = 0; page < LCD_H / 8; page++) {
 		addr[0] = 0xB0 | page;		/* page address */
@@ -272,7 +297,7 @@ void hal_lcd_flush(const uint8_t *fb)
 		lcd_cmds(addr, sizeof addr);
 		LCD_DATA(1);
 		LCD_CS(1);
-		for (x = 0; x < LCD_W; x++) spi2_xfer(fb[page * LCD_W + x]);
+		spi2_block(&fb[page * LCD_W], NULL, LCD_W);
 		spi2_wait_idle();
 		LCD_CS(0);
 	}
@@ -375,7 +400,9 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define CMD8	8	/* SEND_IF_COND */
 #define CMD9	9	/* SEND_CSD */
 #define CMD16	16	/* SET_BLOCKLEN */
+#define CMD12	12	/* STOP_TRANSMISSION */
 #define CMD17	17	/* READ_SINGLE_BLOCK */
+#define CMD18	18	/* READ_MULTIPLE_BLOCK */
 #define CMD24	24	/* WRITE_BLOCK */
 #define CMD55	55	/* APP_CMD */
 #define CMD58	58	/* READ_OCR */
@@ -385,9 +412,45 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define TOKEN_START	0xFE
 #define SD_TIMEOUT_MS	500
 
+#define CMD59	59	/* CRC_ON_OFF */
+
 static int sd_ready;		/* initialised */
+static unsigned sd_fast = SPI_DIV_SD_FAST;	/* lowered after CRC errors */
+
+/* CRCs are on (CMD59): commands carry a CRC7, data blocks a CRC16, so a
+ * transfer garbled on the bus is refused by the card (writes) or noticed
+ * here (reads) instead of reaching the file system. */
+static uint8_t crc7(const uint8_t *p, unsigned n)
+{
+	unsigned crc = 0, i;
+
+	while (n-- > 0) {
+		crc ^= *p++;
+		for (i = 0; i < 8; i++)
+			crc = (crc & 0x80) ? (crc << 1) ^ (0x09 << 1) : crc << 1;
+	}
+	return (uint8_t) (crc | 1);		/* CRC7 << 1, end bit */
+}
+
+static uint16_t crc16(const uint8_t *p, unsigned n)	/* CCITT, 0x1021 */
+{
+	static const uint16_t t[16] = {
+		0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
+		0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
+	};
+	uint16_t crc = 0;
+
+	while (n-- > 0) {
+		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p >> 4)]);
+		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p++ & 0x0F)]);
+	}
+	return crc;
+}
+
 static int sd_block_addr;	/* SDHC/SDXC: block (not byte) addresses */
 static uint32_t sd_nsectors;
+uint32_t hal_disk_errors;	/* retried transfers, for the log */
+unsigned hal_disk_mhz = 16;	/* SPI clock for data */
 
 static void sd_select(int on)
 {
@@ -406,7 +469,7 @@ static int sd_wait_ready(void)
 
 static uint8_t sd_cmd(uint8_t cmd, uint32_t arg)
 {
-	uint8_t r, crc = 0x01;
+	uint8_t r;
 	int n;
 
 	if (cmd == ACMD41) {
@@ -417,14 +480,17 @@ static uint8_t sd_cmd(uint8_t cmd, uint32_t arg)
 	sd_select(1);
 	if (cmd != CMD0 && sd_wait_ready() < 0) return 0xFF;
 
-	if (cmd == CMD0) crc = 0x95;	/* CRC is only checked for these */
-	if (cmd == CMD8) crc = 0x87;
-	spi2_xfer(0x40 | cmd);
-	spi2_xfer(arg >> 24);
-	spi2_xfer(arg >> 16);
-	spi2_xfer(arg >> 8);
-	spi2_xfer(arg);
-	spi2_xfer(crc);
+	{
+		uint8_t f[6];
+
+		f[0] = 0x40 | cmd;
+		f[1] = arg >> 24;
+		f[2] = arg >> 16;
+		f[3] = arg >> 8;
+		f[4] = arg;
+		f[5] = crc7(f, 5);
+		spi2_block(f, NULL, 6);
+	}
 
 	for (n = 0; n < 10; n++)	/* R1 within 8 bytes */
 		if (!((r = spi2_xfer(0xFF)) & 0x80)) break;
@@ -434,15 +500,16 @@ static uint8_t sd_cmd(uint8_t cmd, uint32_t arg)
 static int sd_read_data(uint8_t *buf, unsigned len)
 {
 	uint32_t start = DWT->CYCCNT;
+	uint16_t crc;
 	uint8_t t;
 
 	while ((t = spi2_xfer(0xFF)) == 0xFF)
 		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
 	if (t != TOKEN_START) return -1;
-	while (len-- > 0) *buf++ = spi2_xfer(0xFF);
-	spi2_xfer(0xFF);	/* CRC */
-	spi2_xfer(0xFF);
-	return 0;
+	spi2_block(NULL, buf, len);
+	crc = (uint16_t) (spi2_xfer(0xFF) << 8);
+	crc |= spi2_xfer(0xFF);
+	return crc == crc16(buf, len) ? 0 : -2;
 }
 
 int hal_disk_init(void)
@@ -458,6 +525,7 @@ int hal_disk_init(void)
 	for (i = 0; i < 10; i++) spi2_xfer(0xFF);	/* >= 74 clocks */
 
 	if (sd_cmd(CMD0, 0) != R1_IDLE) goto fail;
+	if (sd_cmd(CMD59, 1) > R1_IDLE) goto fail;	/* CRCs on */
 	v2 = 0;
 	if (!(sd_cmd(CMD8, 0x1AA) & R1_ILLEGAL)) {	/* SD v2+ */
 		for (i = 0; i < 4; i++) ocr[i] = spi2_xfer(0xFF);
@@ -490,7 +558,7 @@ int hal_disk_init(void)
 		sd_nsectors = (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9);
 	}
 	sd_select(0);
-	spi2_speed(SPI_DIV_SD_FAST);
+	spi2_speed(sd_fast);
 	sd_ready = 1;
 	return 0;
 fail:
@@ -503,50 +571,108 @@ uint32_t hal_disk_sectors(void)
 	return sd_ready ? sd_nsectors : 0;
 }
 
+/* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
+ * no select toggle or ready wait first; a stuff byte, R1, then busy. */
+static int sd_stop(void)
+{
+	uint8_t f[6], r;
+	int n;
+
+	f[0] = 0x40 | CMD12;
+	f[1] = f[2] = f[3] = f[4] = 0;
+	f[5] = crc7(f, 5);
+	spi2_block(f, NULL, 6);
+	spi2_xfer(0xFF);			/* stuff byte */
+	for (n = 0; n < 10; n++)
+		if (!((r = spi2_xfer(0xFF)) & 0x80)) break;
+	if (sd_wait_ready() < 0) return -1;
+	return r == 0 ? 0 : -1;
+}
+
+/* A CRC error or timeout is retried; after the second one in a row the bus
+ * goes back to 8 MHz for good. */
+static void sd_trouble(int *tries)
+{
+	if (++*tries >= 2 && sd_fast != 2) {
+		sd_fast = 2;
+		hal_disk_mhz = 8;
+	}
+	sd_select(0);
+	spi2_speed(sd_fast);
+}
+
 int hal_disk_read(uint32_t sector, void *buf, unsigned count)
 {
 	uint8_t *p = buf;
-	int r = 0;
+	int tries = 0;
 
 	if (!sd_ready) return -1;
-	spi2_speed(SPI_DIV_SD_FAST);
-	for (; count > 0; count--, sector++, p += HAL_SECTOR_SIZE) {
-		if (sd_cmd(CMD17, sd_block_addr ? sector : sector * 512) != 0
-		    || sd_read_data(p, HAL_SECTOR_SIZE) < 0) {
-			r = -1;
+	spi2_speed(sd_fast);
+	while (count > 0) {
+		if (count == 1) {
+			if (sd_cmd(CMD17, sd_block_addr ? sector : sector * 512)
+				!= 0 || sd_read_data(p, HAL_SECTOR_SIZE) < 0)
+				goto bad;
+			count--;
 			break;
 		}
+		/* Several sectors: one CMD18 saves a command and the card's
+		 * access time per sector. */
+		if (sd_cmd(CMD18, sd_block_addr ? sector : sector * 512) != 0)
+			goto bad;
+		while (count > 0) {
+			if (sd_read_data(p, HAL_SECTOR_SIZE) < 0) {
+				(void) sd_stop();
+				goto bad;
+			}
+			tries = 0;
+			count--, sector++, p += HAL_SECTOR_SIZE;
+		}
+		if (sd_stop() < 0) {	/* the data came through (CRC) */
+			hal_disk_errors++;
+			sd_select(0);
+		}
+		break;
+	bad:
+		hal_disk_errors++;
+		if (tries >= 4) break;
+		sd_trouble(&tries);
 	}
 	sd_select(0);
-	return r;
+	return count == 0 ? 0 : -1;
 }
 
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 {
 	const uint8_t *p = buf;
-	unsigned i;
-	int r = 0;
+	uint16_t crc;
+	uint8_t resp;
+	int tries = 0;
 
 	if (!sd_ready) return -1;
-	spi2_speed(SPI_DIV_SD_FAST);
-	for (; count > 0; count--, sector++) {
-		if (sd_cmd(CMD24, sd_block_addr ? sector : sector * 512) != 0) {
-			r = -1;
-			break;
-		}
+	spi2_speed(sd_fast);
+	while (count > 0) {
+		if (sd_cmd(CMD24, sd_block_addr ? sector : sector * 512) != 0)
+			goto bad;
+		crc = crc16(p, HAL_SECTOR_SIZE);
 		spi2_xfer(0xFF);
 		spi2_xfer(TOKEN_START);
-		for (i = 0; i < HAL_SECTOR_SIZE; i++) spi2_xfer(*p++);
-		spi2_xfer(0xFF);	/* dummy CRC */
-		spi2_xfer(0xFF);
-		if ((spi2_xfer(0xFF) & 0x1F) != 0x05		/* accepted? */
-		    || sd_wait_ready() < 0) {			/* programmed */
-			r = -1;
-			break;
-		}
+		spi2_block(p, NULL, HAL_SECTOR_SIZE);
+		spi2_xfer(crc >> 8);
+		spi2_xfer(crc & 0xFF);
+		resp = spi2_xfer(0xFF) & 0x1F;		/* 0x05 accepted, */
+		if (sd_wait_ready() < 0 || resp != 0x05)	/* 0x0B CRC */
+			goto bad;
+		tries = 0;
+		count--, sector++, p += HAL_SECTOR_SIZE;
+		continue;
+	bad:
+		hal_disk_errors++;
+		if (tries >= 4) break;
+		sd_trouble(&tries);
 	}
 	sd_select(0);
-	return r;
+	return count == 0 ? 0 : -1;
 }
 
 /*===========================================================================*
@@ -604,6 +730,15 @@ void hal_early_boot(void)
 	GPIOB->MODER |= 3u << 22;
 	GPIOB->PUPDR &= ~(3u << 22);
 	RCC->AHB2ENR &= ~RCC_AHB2ENR_GPIOBEN;
+
+	/* DFU without the buttons: asked for by hal_dfu_request() ("reboot
+	 * -d"), or after the watchdog reset a hung or panicked kernel - a
+	 * new image that fails comes back to DFU by itself. */
+	if (*HAL_BOOT_WORD == HAL_BOOT_DFU || (RCC->CSR & RCC_CSR_IWDGRSTF)) {
+		*HAL_BOOT_WORD = 0;
+		RCC->CSR |= RCC_CSR_RMVF;
+		left = 1;
+	}
 	if (!left) {
 		/* ST's DFU loader starts the new image ("leave") with a jump,
 		 * not a reset, and leaves the flash controller with CFGBSY
@@ -649,6 +784,7 @@ void hal_init(void)
 	gpio_cfg(GPIOB, 1, MODE_OUT, PULL_NONE, 0);	/* display A0 */
 
 	SysTick_Config(SystemCoreClock / 1000);
+	hal_wdt_start();
 	uart_init();
 	spi2_init();
 	buttons_init();
@@ -656,11 +792,79 @@ void hal_init(void)
 
 void hal_halt(int status)
 {
-	(void) status;
 	__disable_irq();
+	hal_tone(0);
 	/* Keep the USB console alive so a panic message still reaches the
-	 * host (polled: interrupts are off). */
-	for (;;) hal_usb_poll();
+	 * host (polled: interrupts are off).  After a panic the watchdog is
+	 * left to run out: the reset takes the board to DFU (hal_early_boot)
+	 * once the message had time to get out. */
+	for (;;) {
+		hal_usb_poll();
+		if (status == 0) hal_wdt_kick();
+	}
+}
+
+/*===========================================================================*
+ *				Watchdog, DFU request			     *
+ *===========================================================================*/
+/* IWDG on the 32 kHz LSI: /256 = 125 Hz, 1250 counts = 10 s.  Kicked from
+ * the clock tick (and hal_halt); interrupts are never masked that long.
+ * A system reset stops it again (software watchdog option). */
+void hal_wdt_start(void)
+{
+	IWDG->KR = 0xCCCC;			/* start (and LSI) */
+	IWDG->KR = 0x5555;			/* unlock PR, RLR */
+	IWDG->PR = 6;				/* /256 */
+	IWDG->RLR = 1250;
+	while (IWDG->SR & (IWDG_SR_PVU | IWDG_SR_RVU)) ;
+	IWDG->KR = 0xAAAA;
+}
+
+void hal_wdt_kick(void)
+{
+	IWDG->KR = 0xAAAA;
+}
+
+void hal_dfu_request(void)
+{
+	*HAL_BOOT_WORD = HAL_BOOT_DFU;
+	__DSB();
+	NVIC_SystemReset();
+}
+
+/*===========================================================================*
+ *				Speaker					     *
+ *===========================================================================*/
+/* Piezo on PB8, TIM16 channel 1 (AF14), as on the stock firmware.  The
+ * timer counts at 1 MHz; a square wave at hz, 0 stops it. */
+void hal_tone(unsigned hz)
+{
+	static int ready;
+	uint32_t arr;
+
+	if (hz == 0) {
+		if (ready) {
+			TIM16->CR1 &= ~TIM_CR1_CEN;
+			gpio_cfg(GPIOB, 8, MODE_ANALOG, PULL_NONE, 0);
+		}
+		return;
+	}
+	if (!ready) {
+		RCC->APB2ENR |= RCC_APB2ENR_TIM16EN;
+		(void) RCC->APB2ENR;
+		TIM16->PSC = SystemCoreClock / 1000000u - 1;
+		TIM16->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+		TIM16->CCER = TIM_CCER_CC1E;
+		TIM16->BDTR = TIM_BDTR_MOE;
+		ready = 1;
+	}
+	if (hz < 20) hz = 20;
+	arr = 1000000u / hz - 1;
+	TIM16->ARR = arr;
+	TIM16->CCR1 = arr / 2;
+	TIM16->EGR = TIM_EGR_UG;
+	gpio_cfg(GPIOB, 8, MODE_AF, PULL_NONE, 14);
+	TIM16->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;
 }
 
 

@@ -10,6 +10,8 @@
 #define sig		mm_in.m6_i1
 #define stack_bytes	mm_in.m1_i2
 #define stack_ptr	mm_in.m1_p2
+#define exec_argv	mm_in.m1_p3
+#define exec_envp	((char *) mm_in.m1_i3)
 #define status		mm_in.m1_i1
 #define usr_id		(uid_t) mm_in.m1_i1
 #define request		mm_in.m2_i2

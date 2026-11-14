@@ -21,6 +21,7 @@
 #define NR_SUBDEVS	(MAX_DRIVES * SUB_PER_DRIVE)
 #define BUF_SECTORS	(BLOCK_SIZE / SECTOR_SIZE)
 
+PRIVATE u32_t w_errors;		/* hal_disk_errors last reported */
 PRIVATE struct wini {
   int present;
   unsigned open_ct;
@@ -123,6 +124,11 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 		if (r == 0)
 			phys_copy(vir2phys(w_buf), user_phys,
 							(phys_bytes) count);
+	}
+	if (hal_disk_errors != w_errors) {	/* retried: CRC, timeout */
+		w_errors = hal_disk_errors;
+		printf("%s: %lu transfer(s) retried in all, bus at %u MHz\n",
+			w_name(), (unsigned long) w_errors, hal_disk_mhz);
 	}
 	if (r != 0) {
 		printf("%s: I/O error at sector %lu\n", w_name(), sector);

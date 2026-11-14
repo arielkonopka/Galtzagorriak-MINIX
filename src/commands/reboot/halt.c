@@ -32,6 +32,7 @@ char **argv;
 {
   int flag = RBT_HALT;		/* halting system is default */
   int fast = 0;			/* fast halt/reboot, don't kill all. */
+  int dfu = 0;			/* reboot to the firmware loader */
   struct stat dummy;
 
   prog = strrchr(*argv,'/');
@@ -40,13 +41,16 @@ char **argv;
   else
     prog++;
 
-  if (argc > 1) {
+  while (argc > 1) {
     if (strcmp(argv[1], "-f") == 0)
       fast = 1;
+    else if (strcmp(argv[1], "-d") == 0)
+      dfu = 1;		/* Flipper: to the ROM DFU loader (RBT_MONITOR) */
     else {
-      fprintf(stderr, "Usage: %s [-f]\n", prog);
+      fprintf(stderr, "Usage: %s [-f] [-d]\n", prog);
       exit(1);
     }
+    argc--, argv++;
   }
 
   /* Make sure that we don't die. */
@@ -74,7 +78,10 @@ char **argv;
     flag=RBT_REBOOT;
   
   write_log();
-  reboot(flag);
+  if (dfu)
+    reboot(RBT_MONITOR, "", (size_t) 1);
+  else
+    reboot(flag);
   fprintf(stderr, "reboot call failed\n");
   return 1;
 }

@@ -77,6 +77,8 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
  * interrupts masked and the MPU off.  len and dst must be multiples of 8
  * (double-word programming).  Return 0 on success, -1 on error. */
 #define HAL_FLASH_PAGE	4096
+extern uint32_t hal_disk_errors;	/* transfers retried (CRC, timeout) */
+extern unsigned hal_disk_mhz;		/* bus clock for disk data */
 void hal_flash_region(uint32_t *base, uint32_t *size);
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);
@@ -85,6 +87,14 @@ extern uint32_t hal_flash_dbg[5];
 
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */
+/* Watchdog (10 s, kicked from the clock tick), and DFU without buttons:
+ * the word below survives the reset; hal_early_boot() looks at it. */
+#define HAL_BOOT_WORD	((volatile uint32_t *) 0x20000000)	/* not in RAM */
+#define HAL_BOOT_DFU	0x21554644u				/* "DFU!" */
+void hal_wdt_start(void);
+void hal_wdt_kick(void);
+void hal_dfu_request(void) __attribute__((noreturn));
+void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));
 
 /* Low-level console output used by kprintf() and panics. */
