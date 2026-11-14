@@ -9,7 +9,8 @@
 # kernel +8 B: LCD console view (#12, owner request): cursor/escape state.
 # Phase 2a: -4864 B (kernel -2744, MM -512, FS -624, INIT -984).
 kernel    196    14956  15152
-mm        64     10108  10172
+# T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
+# (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
+mm        64     10176  10240
 fs        56     27176  27232
 init      100    664    764
-# T2 (flash writes as idle work): MM 0 B (copy job + run counter, paid by print_buf and globals).
