@@ -116,23 +116,31 @@ int main(void)
 
 	if (access("/bin/m2test", X_OK) == 0) {
 		static char *env[] = { "HOME=/", "PATH=/bin:/usr/bin", NULL };
-		int pid, k, st;
+		int pid, k, st, n;
 
 		/* A first run has its text in RAM while MM copies it to the
 		 * flash cache in the background (R0.8c).  Run it once, wait
 		 * for the copy, and check that it is now cached: the test
 		 * run then executes from flash (QEMU is very slow running
 		 * code next to data it writes). */
+		/* Cached only after three runs from RAM (few flash writes):
+		 * the first two must not write anything. */
 		k = cached();
-		if ((pid = fork()) == 0) {
-			execle("/bin/m2test", "m2test", "warm", (char *) NULL,
-									env);
-			_exit(1);
+		for (n = 1; n <= 3; n++) {
+			if ((pid = fork()) == 0) {
+				execle("/bin/m2test", "m2test", "warm",
+						(char *) NULL, env);
+				_exit(1);
+			}
+			if (n < 3) sleep(2);	/* would the copy start? */
+			else for (i = 0; i < 30 && cached() == k; i++)
+				sleep(1);
+			kill(pid, SIGKILL);	/* it stays until copied */
+			waitpid(pid, &st, 0);
+			if (n == 2) check(cached() == k,
+					"not cached after two runs");
 		}
-		for (i = 0; i < 30 && cached() == k; i++) sleep(1);
-		kill(pid, SIGKILL);	/* it stays until copied */
-		waitpid(pid, &st, 0);
-		check(cached() == k + 1, "first run cached in the background");
+		check(cached() == k + 1, "cached in the background (3rd run)");
 		printf("  exec /bin/m2test\n");
 		fflush(stdout);
 		execle("/bin/m2test", "m2test", "hello", "world", (char *) NULL,

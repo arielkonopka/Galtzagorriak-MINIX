@@ -30,7 +30,8 @@
 FORWARD _PROTOTYPE( void load_seg, (int fd, int seg, vir_bytes seg_bytes) );
 FORWARD _PROTOTYPE( int new_mem, (struct mproc *sh_mp, vir_bytes text_bytes,
 		vir_bytes data_bytes, vir_bytes bss_bytes,
-		vir_bytes stk_bytes, phys_bytes tot_bytes)		);
+		vir_bytes stk_bytes, phys_bytes tot_bytes,
+		unsigned long fc_text)					);
 FORWARD _PROTOTYPE( void patch_ptr, (char stack [ARG_MAX ], vir_bytes base) );
 FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 		vir_bytes *data_bytes, vir_bytes *bss_bytes,
@@ -45,9 +46,7 @@ FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 							vir_bytes room)	);
 
 #if (CHIP == ARM_CM)
-PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
 PUBLIC char mbuf[ARG_MAX];	/* stack image; fcache.c between execs */
-PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
 #endif
 #endif
 
@@ -78,6 +77,8 @@ PUBLIC int do_exec()
   int reloc_bad = FALSE;
 #if (CHIP == ARM_CM)
   int fc_new;			/* not cached yet: copy it after the exec */
+  unsigned long fc_text;	/* flash address of the text, 0: in RAM */
+  off_t text_off;
   int text_read;		/* fc_sync() has read the text already */
 #endif
 
@@ -109,6 +110,9 @@ PUBLIC int do_exec()
 	close(fd);		/* something wrong with header */
 	return(ENOEXEC);
   }
+#if (CHIP == ARM_CM)
+  text_off = lseek(fd, 0L, SEEK_CUR);	/* where the text is in the file */
+#endif
 
   /* Fetch the stack from the user before destroying the old core image. */
   if (stack_ptr != NULL) {
@@ -146,7 +150,8 @@ PUBLIC int do_exec()
 #endif
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
-  r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes);
+  r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes,
+								fc_text);
 #if (CHIP == ARM_CM)
   text_read = FALSE;
   if (r != OK && fc_new) {
@@ -159,7 +164,7 @@ PUBLIC int do_exec()
 		fc_new = FALSE;
 		text_read = TRUE;		/* fd is past the text now */
 		r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes,
-							stk_bytes, tot_bytes);
+						stk_bytes, tot_bytes, fc_text);
 	}
   }
 #endif
@@ -206,6 +211,14 @@ PUBLIC int do_exec()
   pc += (vir_bytes) rmp->mp_seg[T].mem_vir << CLICK_SHIFT;	/* was "rp": never compiled */
 #endif
 
+#if (CHIP == ARM_CM)
+  /* Run from RAM often enough: MM copies its text from this file to the
+   * cache later, keeping the file open meanwhile (the program itself may
+   * be long gone by then). */
+  if (reloc_bad || !fc_new || !fc_ran(text_crc, (unsigned long) s_buf.st_uid)
+	|| !fc_queue(fd, (unsigned long) text_off, (unsigned long) text_bytes,
+				text_crc, (unsigned long) s_buf.st_uid))
+#endif
   close(fd);			/* don't need exec file any more */
 
   /* Take care of setuid/setgid bits. */
@@ -249,10 +262,6 @@ PUBLIC int do_exec()
   if (reloc_bad) {		/* relocation refused: never run it */
 	printf("exec: %s: bad relocation, killed\n", basename);
 	sig_proc(rmp, SIGKILL);
-  } else if (fc_new) {		/* copy its RAM text to the cache, later */
-	fc_queue(who, (unsigned long) rmp->mp_seg[T].mem_phys << CLICK_SHIFT,
-		(unsigned long) text_bytes, text_crc,
-		(unsigned long) s_buf.st_uid);
   }
 #endif
   return(OK);
@@ -382,14 +391,17 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 /*===========================================================================*
  *				new_mem					     *
  *===========================================================================*/
-PRIVATE int new_mem(sh_mp, text_bytes, data_bytes,bss_bytes,stk_bytes,tot_bytes)
+PRIVATE int new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes,
+							tot_bytes, fc_text)
 struct mproc *sh_mp;		/* text can be shared with this process */
 vir_bytes text_bytes;		/* text segment size in bytes */
 vir_bytes data_bytes;		/* size of initialized data in bytes */
 vir_bytes bss_bytes;		/* size of bss in bytes */
 vir_bytes stk_bytes;		/* size of initial stack segment in bytes */
 phys_bytes tot_bytes;		/* total memory to allocate, including gap */
+unsigned long fc_text;		/* the text in the flash cache, or 0 */
 {
+  vir_clicks tflash_clicks;	/* text size when in flash */
 /* Allocate new memory and release the old memory.  Change the map and report
  * the new map to the kernel.  Zero the new core image's bss, gap and stack.
  */

@@ -360,6 +360,17 @@ the cache is written (was 40 ms); L6 6-35 ms over 8 launches of "info",
 21.95 ms, programming 256 B per step 2.75 ms, at most one erase per
 ~270 ms; a 220-character line pasted during the copy arrived complete.
 
+Flash writes at run time (owner rule, 2026-11-14): a program is copied
+to the text cache only after its third run from RAM (MM counts runs of up
+to 8 uncached programs, nothing written for that), from its file, which
+exec leaves open for the copy; the directory is written only for a new
+record, a compaction when it is full, or a format when there is none.  So
+a day of normal use writes 0 pages once the programs in use are cached;
+each newly installed program costs its own pages once (e.g. sum: 1 page
+erase + 1 KB programmed + one 32-byte record) after its third run, and
+nothing if it is never run three times.  Exception: a first run that has
+no RAM for its text is cached at once (fc_sync), the old way.
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.
