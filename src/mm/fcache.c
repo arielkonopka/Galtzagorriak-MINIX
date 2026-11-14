@@ -391,9 +391,13 @@ int bufsize;			/* its size, a multiple of 8 */
 	if (read(fd, buf, n) != n) return(0);
 	k = (n + 7) & ~7;
 	for (i = n; i < k; i++) buf[i] = (char) 0xFF;
-	if (sys_flash(FL_WRITE, addr + done, buf, (unsigned) k, NULL, NULL)
-								!= OK)
-		return(0);
+	/* STEP_BYTES per kernel call (~2.7 ms, R0.8b), not the whole buffer
+	 * (4 KB held the system task for 44 ms) */
+	for (i = 0; i < k; i += STEP_BYTES)
+		if (sys_flash(FL_WRITE, addr + done + i, buf + i,
+			(unsigned) (k - i < STEP_BYTES ? k - i : STEP_BYTES),
+							NULL, NULL) != OK)
+			return(0);
   }
   for (i = 0; i < NREC; i++)
 	if (FREE_SLOT(RECP(fc_dir, i))) break;
