@@ -356,9 +356,9 @@ int mine;
   for (i = 0; i < NR_IRQ_VECTORS - 1; i++) {
 	NVIC_ICER(i >> 5) = 1u << (i & 31);
 	NVIC_IPR8(i) = KERNEL_PRIO;
-	irq_table[i] = 0;
+	irq_slot[i] = 0;
   }
-  irq_table[CLOCK_IRQ] = 0;
+  irq_slot[CLOCK_IRQ] = 0;
   SCB_SHPR(EXC_SVCALL) = KERNEL_PRIO - 0x10;
   SCB_SHPR(EXC_PENDSV) = KERNEL_PRIO;
   SCB_SHPR(EXC_SYSTICK) = KERNEL_PRIO;
@@ -371,12 +371,18 @@ PUBLIC void put_irq_handler(irq, handler)
 int irq;
 irq_handler_t handler;
 {
+  int s;
+
   if ((unsigned) irq >= NR_IRQ_VECTORS)
 	panic("invalid call to put_irq_handler", irq);
-  if (irq_table[irq] == handler) return;	/* extra initialization */
-  if (irq_table[irq] != 0)
+  if (irq_slot[irq] != 0) {
+	if (irq_handlers[irq_slot[irq] - 1] == handler) return; /* again */
 	panic("attempt to register second irq handler for irq", irq);
-  irq_table[irq] = handler;
+  }
+  for (s = 0; s < NR_IRQ_HANDLERS && irq_handlers[s] != 0; s++) ;
+  if (s == NR_IRQ_HANDLERS) panic("too many irq handlers", irq);
+  irq_handlers[s] = handler;
+  irq_slot[irq] = s + 1;
 }
 
 PUBLIC void enable_irq(irq)
@@ -432,7 +438,7 @@ unsigned exc;
   }
   irq = (exc == EXC_SYSTICK) ? CLOCK_IRQ : (int) exc - EXC_IRQ0;
   if ((unsigned) irq >= NR_IRQ_VECTORS) return;
-  handler = irq_table[irq];
+  handler = irq_slot[irq] ? irq_handlers[irq_slot[irq] - 1] : 0;
   if (handler == 0) {
 	(void) disable_irq(irq);	/* spurious: shut it up */
 	return;

@@ -403,6 +403,16 @@ unsigned hal_usb_write(const void *buf, unsigned n)
 	return done;
 }
 
+int hal_usb_peekc(void)
+{
+	int c = -1;
+	uint32_t s = irq_save();
+
+	if (rx_tail != rx_head) c = rx_ring[rx_tail % RX_RING];
+	irq_restore(s);
+	return c;
+}
+
 int hal_usb_getc(void)
 {
 	int c = -1;
