@@ -49,6 +49,19 @@ Spec: 16.4. The BLE parts wait for Phases 15–16 (R16.1.0 decided: full stack),
 - Protocol source: the MIT library `storzandbickel-ble` 0.1.25 (`protocol.py`), not the vendor's JS. Credit it in the file header; GPLv3 project, MIT is compatible.
 - No UI and no `bled` code yet. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
 
+## T7. Own version: Galtzagorriak 0.1.0 (owner decision 2026-11-14): small, after T1–T5, may go alongside T6
+Spec: section J. Version 0.1.0 is already tagged (`v0.1.0`); this task puts it into the code.
+- `include/minix/gzversion.h` with `GZ_NAME`, `GZ_MAJOR/MINOR/PATCH`, `GZ_RELEASE "0.1.0"`, `GZ_ABI 1`, `GZ_BASE "MINIX 2.0.0"`. Keep `OS_RELEASE`/`OS_VERSION`.
+- Build writes `gzbuild.h` with `GZ_BUILD` from `git describe` (empty at a tag, else `+N.gHASH[-dirty]`), rewritten only when it changes.
+- `uname()`: sysname `Galtzagorriak`, release `GZ_RELEASE`, version `M2.0.0` (J.2 table). Fix `test3.c` to accept it.
+- Banner: `Galtzagorriak 0.1.0+N.gHASH (based on MINIX 2.0.0), ABI 1`, then the Prentice-Hall line.
+- `ver` command in the base package (J.2).
+- ABI stamp (J.3): `elf2mnx.py` sets `a_version = GZ_ABI`; MM exec: 0 → 1, mismatch → `ENOEXEC` before allocating. `mkpkg.py` writes `Abi:` (programs: N, else `any`); `pkg install` refuses a mismatch with the J.3 message.
+- `make versioncheck` (J.4), run together with `ramcheck`.
+- Tests: `uname -a` output; an executable with `a_version = 99` fails with ENOEXEC and the system keeps running; a package with `Abi: 99` is refused; old programs (`a_version = 0`) still run.
+- RAM: 0 B (strings in flash). Flash: ≤ 1.5 KB including `ver`. No run-time flash writes.
+- Add the `## Unreleased` line for each later feature PR from now on (J.4).
+
 ## Still open from reviews
 - #6/#7 (IR): TX on the pulse engine (no busy-wait in a kernel task), and no 1–2 KB static `ir_buf`. Rebase on main first; both PRs conflict.
 - Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
