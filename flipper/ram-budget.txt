@@ -7,7 +7,8 @@
 # Baseline main 76fd717 (= 5e3d0f0 + docs), 2026-11-14; Phase 1: +0 B.
 # kernel +332 B after review of #2/#4/#5 (bell, RNG, note table 256 B): main 9708f4d.
 # kernel +8 B: LCD console view (#12, owner request): cursor/escape state.
-kernel    660    17236  17896
-mm        372    10312  10684
-fs        476    27380  27856
-init      372    1376   1748
+# Phase 2a: -4864 B (kernel -2744, MM -512, FS -624, INIT -984).
+kernel    196    14956  15152
+mm        64     10108  10172
+fs        56     27176  27232
+init      100    664    764

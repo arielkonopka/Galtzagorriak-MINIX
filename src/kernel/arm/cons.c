@@ -14,7 +14,8 @@
 #include "hal.h"
 #include "fbcon.h"
 
-#define CONS_IN_BYTES	256	/* serial input buffer (power of 2): pasted lines */
+#define CONS_IN_BYTES	64	/* UART input buffer (power of 2); USB input is
+				 * read from the USB layer's own ring (R2a.3) */
 
 PRIVATE char ibuf[CONS_IN_BYTES];
 PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */
@@ -80,17 +81,11 @@ int irq;
  *===========================================================================*/
 PRIVATE int usb_fill()
 {
-/* Move received USB characters into ibuf, but only as many as fit: the rest
- * stays queued in the USB layer, which then holds the host off (flow
- * control).  Returns true if anything is waiting in ibuf.
+/* Is there input?  USB characters stay in the USB layer's ring until the
+ * line discipline takes them (cons_read); a full ring holds the host off
+ * (flow control).
  */
-  int c;
-
-  if (usb_irq < 0) return ihead != itail;
-  while (ihead - itail < CONS_IN_BYTES && (c = hal_usb_getc()) >= 0) {
-	ibuf[ihead % CONS_IN_BYTES] = c;
-	ihead++;
-  }
+  if (usb_irq >= 0 && hal_usb_peekc() >= 0) return TRUE;
   return ihead != itail;
 }
 
@@ -154,19 +149,22 @@ tty_t *tp;
 /* Hand buffered input characters to the line discipline. */
   char c;
 
+  /* In raw mode a full input queue refuses a character; it is kept for
+   * the next read instead of dropped (ZMODEM needs every byte): looked at
+   * first, taken only when accepted. */
   for (;;) {
-	if (itail == ihead) {
-		lock();
-		(void) usb_fill();	/* more may wait in the USB layer */
-		unlock();
-		if (itail == ihead) break;
+	int ch;
+
+	if (itail != ihead) {			/* UART input */
+		c = ibuf[itail % CONS_IN_BYTES];
+		if (in_process(tp, &c, 1) == 0) break;
+		itail++;
+		continue;
 	}
-	c = ibuf[itail % CONS_IN_BYTES];
-	/* In raw mode a full input queue refuses the character; keep it
-	 * for the next read instead of dropping it (ZMODEM needs every
-	 * byte). */
+	if (usb_irq < 0 || (ch = hal_usb_peekc()) < 0) break;
+	c = ch;
 	if (in_process(tp, &c, 1) == 0) break;
-	itail++;
+	(void) hal_usb_getc();
   }
   if (uart_held && ihead - itail < CONS_IN_BYTES) {
 	/* Take what waits in the UART ourselves: switching the interrupt

@@ -6,7 +6,7 @@
 #include "fs.h"
 #include <minix/com.h>
 
-#define BUF_SIZE          100	/* print buffer size */
+#define BUF_SIZE           32	/* print buffer size */
 
 PRIVATE int buf_count;		/* # characters in the buffer */
 PRIVATE char print_buf[BUF_SIZE];	/* output is buffered here */

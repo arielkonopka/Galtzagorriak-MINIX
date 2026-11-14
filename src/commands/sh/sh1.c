@@ -457,8 +457,14 @@ int n;
 {
 	register char *cp;
 
-	if ((cp = getcell(n)) == 0)
+	if ((cp = getcell(n)) == 0) {
 		err("out of string space");
+		/* err() returns when interactive: no caller expects NULL
+		 * (a big glob crashed in forkexec), so give up the whole
+		 * command instead, with a failure status. */
+		setstatus(1);
+		fail();
+	}
 	return(cp);
 }
 

@@ -24,6 +24,6 @@ EXTERN int mem_trace;		/* report memory use at exit (free -t) */
 EXTERN unsigned long text_crc;	/* CRC-32 of the text being exec'd (A_SEP) */
 #endif
 
-extern _PROTOTYPE (int (*call_vec[]), (void) );	/* system call handlers */
+extern _PROTOTYPE (int (* const call_vec[]), (void) );	/* system call handlers */
 extern char core_name[];	/* file name where core images are produced */
 EXTERN sigset_t core_sset;	/* which signals cause core images */

@@ -435,19 +435,23 @@ static uint8_t crc7(const uint8_t *p, unsigned n)
 	return (uint8_t) (crc | 1);		/* CRC7 << 1, end bit */
 }
 
-static uint16_t crc16(const uint8_t *p, unsigned n)	/* CCITT, 0x1021 */
+static uint16_t crc16_more(uint16_t crc, const uint8_t *p, unsigned n)
 {
 	static const uint16_t t[16] = {
 		0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
 		0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
 	};
-	uint16_t crc = 0;
 
 	while (n-- > 0) {
 		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p >> 4)]);
 		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p++ & 0x0F)]);
 	}
 	return crc;
+}
+
+static uint16_t crc16(const uint8_t *p, unsigned n)	/* CCITT, 0x1021 */
+{
+	return crc16_more(0, p, n);
 }
 
 static int sd_block_addr;	/* SDHC/SDXC: block (not byte) addresses */
@@ -602,6 +606,50 @@ static void sd_trouble(int *tries)
 	}
 	sd_select(0);
 	spi2_speed(sd_fast);
+}
+
+/* Bytes off..off+len of one sector, without a sector buffer: the block is
+ * clocked through 64 bytes at a time and its CRC checked on the way (the
+ * partition table: 66 bytes at 446). */
+int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
+{
+	uint8_t chunk[64], *out = buf;
+	uint32_t start;
+	uint16_t crc = 0, got;
+	unsigned pos, n, k;
+	int tries = 0, r;
+	uint8_t t;
+
+	if (!sd_ready || off + len > HAL_SECTOR_SIZE) return -1;
+	spi2_speed(sd_fast);
+	for (;;) {
+		r = -1;
+		if (sd_cmd(CMD17, sd_block_addr ? sector : sector * 512) != 0)
+			goto bad;
+		start = DWT->CYCCNT;
+		while ((t = spi2_xfer(0xFF)) == 0xFF)
+			if (ms_since(start) > SD_TIMEOUT_MS) goto bad;
+		if (t != TOKEN_START) goto bad;
+		for (pos = 0; pos < HAL_SECTOR_SIZE; pos += n) {
+			n = HAL_SECTOR_SIZE - pos < sizeof(chunk)
+				? HAL_SECTOR_SIZE - pos : sizeof(chunk);
+			spi2_block(NULL, chunk, n);
+			crc = crc16_more(crc, chunk, n);
+			for (k = 0; k < n; k++)
+				if (pos + k >= off && pos + k < off + len)
+					out[pos + k - off] = chunk[k];
+		}
+		got = (uint16_t) (spi2_xfer(0xFF) << 8);
+		got |= spi2_xfer(0xFF);
+		if (got == crc) r = 0;
+	bad:
+		if (r == 0 || tries >= 4) break;
+		hal_disk_errors++;
+		crc = 0;
+		sd_trouble(&tries);
+	}
+	sd_select(0);
+	return r;
 }
 
 int hal_disk_read(uint32_t sector, void *buf, unsigned count)
