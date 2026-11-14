@@ -23,6 +23,9 @@
 #include <string.h>
 #include "mproc.h"
 #include "param.h"
+#if (CHIP == ARM_CM)
+#include <minix/mpucover.h>
+#endif
 
 FORWARD _PROTOTYPE( void load_seg, (int fd, int seg, vir_bytes seg_bytes) );
 FORWARD _PROTOTYPE( int new_mem, (struct mproc *sh_mp, vir_bytes text_bytes,
@@ -35,7 +38,8 @@ FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 		vir_bytes *pc)						);
 
 #if (SHADOWING == 1)
-FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf, int sep)	);
+FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf, int sep,
+			vir_bytes text_bytes, vir_bytes data_bytes)	);
 FORWARD _PROTOTYPE( int gather, (char *buf, vir_bytes *bytes)		);
 FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
 							vir_bytes room)	);
@@ -73,6 +77,7 @@ PUBLIC int do_exec()
   vir_clicks sc;
   struct stat s_buf;
   vir_bytes pc;
+  int reloc_bad = FALSE;
 
   /* Do some validity checks. */
   rmp = mp;
@@ -125,8 +130,11 @@ PUBLIC int do_exec()
    * (fcache.c) - found there, or copied there now - instead of RAM.
    */
   fc_text = fc_new = 0;
-  if (ft == SEPARATE) {
-	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes);
+  /* Only files that nobody but their owner can have written, looked up
+   * under their owner (S12, R1.4).  Others run with their text in RAM. */
+  if (ft == SEPARATE && !(s_buf.st_mode & (S_IWGRP | S_IWOTH))) {
+	fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
+					(unsigned long) s_buf.st_uid);
 	if (fc_text == 0) {
 		fc_text = fc_reserve((unsigned long) text_bytes);
 		fc_new = (fc_text != 0);
@@ -163,7 +171,7 @@ PUBLIC int do_exec()
   if (fc_new) {
 	/* First run: copy the text to the flash cache (mbuf is free now). */
 	if (fc_fill(fd, fc_text, (unsigned long) text_bytes, text_crc,
-						mbuf, ARG_MAX) != OK) {
+			(unsigned long) s_buf.st_uid, mbuf, ARG_MAX) != OK) {
 		printf("exec: cannot write the flash text cache\n");
 		fc_bad = TRUE;
 	}
@@ -181,14 +189,17 @@ PUBLIC int do_exec()
 
 #if (SHADOWING == 1)
   if (lseek(fd, (off_t)sym_bytes, SEEK_CUR) == (off_t) -1) ;	/* error */
-  if (relocate(fd, (unsigned char *)mbuf, ft == SEPARATE) < 0) ;	/* error */
+  /* A bad relocation table (out of the image, unaligned, malformed) is
+   * past the point of no return: the image is killed below (S2). */
+  reloc_bad = relocate(fd, (unsigned char *)mbuf, ft == SEPARATE,
+					text_bytes, data_bytes) < 0;
   pc += (vir_bytes) rmp->mp_seg[T].mem_vir << CLICK_SHIFT;	/* was "rp": never compiled */
 #endif
 
   close(fd);			/* don't need exec file any more */
 
   /* Take care of setuid/setgid bits. */
-  if ((rmp->mp_flags & TRACED) == 0) { /* suppress if tracing */
+  if ((rmp->mp_flags & TRACED) == 0 && !reloc_bad) {
 	if (s_buf.st_mode & I_SET_UID_BIT) {
 		rmp->mp_effuid = s_buf.st_uid;
 		tell_fs(SETUID,who, (int)rmp->mp_realuid, (int)rmp->mp_effuid);
@@ -225,7 +236,9 @@ PUBLIC int do_exec()
 #endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
 #if (CHIP == ARM_CM)
-  if (fc_bad) {			/* its text is incomplete: never run it */
+  if (fc_bad || reloc_bad) {	/* text incomplete or relocation refused:
+				 * never run it */
+	if (reloc_bad) printf("exec: %s: bad relocation, killed\n", basename);
 	fc_bad = FALSE;
 	sig_proc(rmp, SIGKILL);
   }
@@ -429,6 +442,21 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
   new_base = alloc_mem(text_clicks + tot_clicks);	/* new core image */
 #endif
   if (new_base == NO_MEM) panic("MM hole list is inconsistent", NO_NUM);
+#if (CHIP == ARM_CM) && (SHADOWING == 1)
+  {
+	/* The kernel gives the process exactly [text in RAM or data, end of
+	 * stack) through the MPU; refuse a layout it cannot express (R1.6)
+	 * while the old image is still there. */
+	phys_clicks top = new_base + text_clicks + tot_clicks;
+
+	if (mpu_cover((unsigned long) new_base << CLICK_SHIFT,
+			(unsigned long) top << CLICK_SHIFT, NULL, NULL,
+			MPUC_REGIONS) < 0) {
+		free_mem(new_base, text_clicks + tot_clicks);
+		return(ENOMEM);
+	}
+  }
+#endif
 
 #if (CHIP == ARM_CM)
   if (fc_text != 0) {
@@ -600,10 +628,12 @@ time_t ctime;
 /*===========================================================================*
  *				relocate				     *
  *===========================================================================*/
-PRIVATE int relocate(fd, buf, sep)
+PRIVATE int relocate(fd, buf, sep, text_bytes, data_bytes)
 int fd;				/* file descriptor to read from */
 unsigned char *buf;		/* borrowed from do_exec() */
 int sep;			/* separate I&D: position-independent code */
+vir_bytes text_bytes;		/* the image, to check every address in */
+vir_bytes data_bytes;		/* initialized data */
 {
   register int n;
   register unsigned char *p, c;
@@ -647,11 +677,16 @@ int sep;			/* separate I&D: position-independent code */
 	if (n < sizeof(long)) return(-1);
 	first = *((long *)p);		/* first offset + 1; 0 = none */
 	if (first == 0) return(0);
+	if ((unsigned long) first - 1 >= data_bytes) return(-1);
 	adr = dbase + first - 1;
 	n -= sizeof(long);
 	p += sizeof(long);
 	for (;;) {
 		unsigned long *w = (unsigned long *) adr;
+
+		/* Only aligned words inside the new data (S2). */
+		if ((adr & 3) != 0 || adr < dbase
+				|| adr + 4 > dbase + data_bytes) return(-1);
 		*w = *w >= A_DATA_LINK ? *w - A_DATA_LINK + dbase : *w + tbase;
 		do {
 			if (--n < 0) {
@@ -672,9 +707,14 @@ int sep;			/* separate I&D: position-independent code */
   n = read(fd, (char *)p, ARG_MAX);
   if (n < sizeof(long)) return(-1);	/* error */
   if (*((long *)p) == 0) return(0);	/* ok */
+  if ((unsigned long) *((long *)p) >= text_bytes + data_bytes) return(-1);
   adr = off + *((long *)p);
   n -= sizeof(long);
   p += sizeof(long);
+  /* Only aligned words inside the new text and data (S2). */
+#define RELOC_OK(a)	(((a) & 3) == 0 && (a) >= off \
+			 && (a) + 4 <= off + text_bytes + data_bytes)
+  if (!RELOC_OK(adr)) return(-1);
   *((long *)adr) += off;
   while (1) {			/* once per relocation byte */
 	if (--n < 0) {
@@ -692,6 +732,7 @@ int sep;			/* separate I&D: position-independent code */
 		return(-1);	/* error */
 	else {
 		adr += c;
+		if (!RELOC_OK(adr)) return(-1);
 		*((long *)adr) += off;
 	}
   }

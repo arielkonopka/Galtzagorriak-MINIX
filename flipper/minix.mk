@@ -287,21 +287,31 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 	   $(MB)/user/crtso.o $(call objs_of,$(1)) $(MB)/libc-pic.a -lgcc -o $$@
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS),$(eval $(call user_prog,$(p))))
+# Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag
+$(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+$(MB)/cmd/test/%.o: tests/%.c tests/t.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
+	   -D "Security tests (spec Phase 1)" \
+	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.20
+BASE_VER := 3.21
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
@@ -342,7 +352,12 @@ $(MB)/card.img: $(MB)/proto tools/mkfsimg.py \
 	python3 -I tools/mkfsimg.py $(MB)/proto $(MB)/root.img --root . --trim \
 	   --mbr $@
 
-.PHONY: minix minix-run minix-flash libc disk card
+.PHONY: minix minix-run minix-flash libc disk card ramcheck
+
+# Static RAM of the system images against ram-budget.txt (spec rule 0.3).
+ramcheck: $(MB)/minix.bin
+	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
+	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
 card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin

@@ -4,15 +4,22 @@
  * single absolute address, so it can run in place from the internal flash
  * and be shared by every process running it.  Their text is copied into a
  * region of flash the first time they are executed; later executions find
- * it there by the CRC-32 and size of the text (a_syms, a_text), and only
- * data, bss and stack take RAM.
+ * it there by the CRC-32 and size of the text (a_syms, a_text) and the
+ * owner of the program file, and only data, bss and stack take RAM.
+ *
+ * The CRC comes from the file header and proves nothing (S12): a file
+ * could claim another program's CRC.  With the owner in the key, a forged
+ * header can only alias text among one owner's own files, who controls
+ * them all anyway; and exec.c caches only files nobody but their owner can
+ * write.  So the text found for /bin/su was put there from a root file.
  *
  * Layout of the region (the board decides where, kernel call FL_INFO):
  *   page 0, 1	directories; the valid one with the higher generation is
  *		active.  Header (8 bytes): magic, generation.  Then records
- *		of 24 bytes = three double words, written once each:
+ *		of 32 bytes = four double words, written once each:
  *		  crc, size	- all ones: free slot
  *		  addr, seq	- where the text is, insertion counter
+ *		  owner, flags	- uid of the program file; flags unused
  *		  dead		- all ones: live; programmed 0: removed
  *   page 2..	text, whole pages per program.
  * Flash bits only go from 1 to 0 without an erase, hence the dead word.
@@ -33,10 +40,11 @@
 
 #if (CHIP == ARM_CM)
 
-#define FC_MAGIC	0x43585447UL	/* "GTXC" */
+#define FC_MAGIC	0x32585447UL	/* "GTX2": 32-byte records with owner;
+					 * older directories are reformatted */
 #define PAGE		4096UL
 #define HDR		8
-#define REC		24
+#define REC		32
 #define NREC		((PAGE - HDR) / REC)
 #define DIRPAGES	2
 #define MAXPAGES	128		/* bitmap size: up to 512 KB */
@@ -44,6 +52,7 @@
 struct fcrec {
   unsigned long crc, size;
   unsigned long addr, seq;
+  unsigned long owner, flags;
   unsigned long dead0, dead1;
 };
 
@@ -116,8 +125,9 @@ PUBLIC void fc_init()
 /*===========================================================================*
  *				fc_lookup				     *
  *===========================================================================*/
-PUBLIC unsigned long fc_lookup(crc, size)
+PUBLIC unsigned long fc_lookup(crc, size, owner)
 unsigned long crc, size;
+unsigned long owner;		/* uid of the program file */
 {
 /* The flash address of a cached text, or 0. */
   struct fcrec *r;
@@ -127,7 +137,8 @@ unsigned long crc, size;
   for (i = 0; i < NREC; i++) {
 	r = RECP(fc_dir, i);
 	if (FREE_SLOT(r)) break;	/* slots are used in order */
-	if (LIVE(r) && r->crc == crc && r->size == size) return(r->addr);
+	if (LIVE(r) && r->crc == crc && r->size == size && r->owner == owner)
+		return(r->addr);
   }
   return(0);
 }
@@ -195,7 +206,7 @@ PRIVATE int fc_compact()
 /* Copy the live records to the other directory page; it becomes active. */
   int i, j, d = !fc_dir;
   struct fcrec *r;
-  unsigned long rec[4];
+  unsigned long rec[6];
 
   if (fc_format(d, fc_gen + 1) != OK) return(-1);
   for (i = j = 0; i < NREC; i++) {
@@ -203,6 +214,7 @@ PRIVATE int fc_compact()
 	if (FREE_SLOT(r)) break;
 	if (!LIVE(r)) continue;
 	rec[0] = r->crc; rec[1] = r->size; rec[2] = r->addr; rec[3] = r->seq;
+	rec[4] = r->owner; rec[5] = r->flags;
 	if (sys_flash(FL_WRITE, (unsigned long) RECP(d, j), rec, sizeof(rec),
 						NULL, NULL) != OK) return(-1);
 	j++;
@@ -265,14 +277,15 @@ unsigned long size;
 /*===========================================================================*
  *				fc_fill					     *
  *===========================================================================*/
-PUBLIC int fc_fill(fd, addr, size, crc, buf, bufsize)
+PUBLIC int fc_fill(fd, addr, size, crc, owner, buf, bufsize)
 int fd;				/* program file, at the start of the text */
 unsigned long addr, size, crc;	/* where the text goes, its size and CRC */
+unsigned long owner;		/* uid of the program file */
 char *buf;			/* MM buffer to read through */
 int bufsize;			/* its size, a multiple of 8 */
 {
 /* Copy the text from the file to the reserved pages and record it. */
-  unsigned long done = 0, rec[4];
+  unsigned long done = 0, rec[6];
   int n, k, i;
 
   while (done < size) {
@@ -290,6 +303,7 @@ int bufsize;			/* its size, a multiple of 8 */
   }
   if (i == NREC) return(-1);
   rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_seq++;
+  rec[4] = owner; rec[5] = 0xFFFFFFFFUL;
   return(sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
 						sizeof(rec), NULL, NULL));
 }

@@ -48,6 +48,7 @@
 #define CCR_UNALIGN_TRP	0x08
 #define CCR_STKALIGN	0x200
 #define SHCSR_ENABLES	0x00070000	/* usage, bus, memmanage fault enable */
+#define SHCSR_SVCALLPENDED 0x00008000	/* an SVC waits to be taken */
 
 /* Exception numbers */
 #define EXC_MEMMANAGE	4
