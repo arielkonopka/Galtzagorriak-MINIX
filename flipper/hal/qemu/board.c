@@ -159,6 +159,11 @@ void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }
 void hal_ir_carrier(int on) { (void) on; }
 void hal_ir_freq(unsigned hz, unsigned duty) { (void) hz; (void) duty; }
+int hal_rf_xfer(const uint8_t *out, uint8_t *in, unsigned len)	/* no radio */
+{ (void) out; (void) in; (void) len; return -1; }
+void hal_rf_switch(int sw) { (void) sw; }
+int hal_rf_gdo0(void) { return 0; }
+int hal_rf_region(void) { return 0; }
 uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */
 /* GPIO: remembered levels only, so programs can be tried in QEMU. */
 static unsigned char gpio_level[HAL_GPIO_PINS];

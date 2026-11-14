@@ -75,6 +75,15 @@ void hal_ir_carrier(int on);
 void hal_ir_freq(unsigned hz, unsigned duty);	/* carrier, duty in % */
 uint32_t hal_cycles(void);
 
+/* Sub-GHz radio (CC1101).  hal_rf_xfer() is one SPI transaction (chip
+ * select around it), out and in may be the same buffer; -1: the chip did
+ * not answer.  hal_rf_switch() sets the board's half of the antenna
+ * filter selection (the other half is the chip's GDO2 output). */
+int hal_rf_xfer(const uint8_t *out, uint8_t *in, unsigned len);
+void hal_rf_switch(int sw);
+int hal_rf_gdo0(void);
+int hal_rf_region(void);		/* 0 unknown, 1 EU, 2 US, 3 JP, 4 world */
+
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
  * hal_usb_poll() runs the USB stack and belongs in the USB interrupt. */
 int hal_usb_init(void);

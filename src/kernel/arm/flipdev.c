@@ -32,6 +32,8 @@
  *				carrier instead: bits 0-19 the frequency
  *				(10000..60000 Hz), 20-26 the duty in %
  *				(0: 33 %)
+ *	minor 8  /dev/subghz	the CC1101 radio, register access: see
+ *				arm/subghz.c
  *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
@@ -52,7 +54,8 @@
 #define SPK_MINOR	5
 #define GPIO_MINOR	6
 #define IR_MINOR	7
-#define LAST_MINOR	7
+#define SUBGHZ_MINOR	8		/* arm/subghz.c */
+#define LAST_MINOR	8
 #define IR_MAX		512		/* durations per received frame */
 #define IR_TX_MAX	2048		/* durations per write */
 #define IR_CHUNK	64		/* durations copied at a time */
@@ -114,6 +117,7 @@ PUBLIC void flipdev_task()
 
   last_buttons = hal_buttons();
   cyc_us = hal_cpu_hz() / 1000000;
+  subghz_init();
   if ((r = hal_ir_irq()) >= 0) {
 	put_irq_handler(r, ir_int);
 	hal_ir_rx_on(1);
@@ -243,6 +247,9 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case SUBGHZ_MINOR:
+	return(subghz_rw(m_ptr->m_type == DEV_WRITE, user, count));
 
   case IR_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(ir_send(user, count));

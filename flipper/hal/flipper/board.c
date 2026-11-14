@@ -986,6 +986,96 @@ void hal_ir_carrier(int on)
 }
 
 /*===========================================================================*
+ *				Sub-GHz radio (CC1101)			     *
+ *===========================================================================*/
+/* As on the stock firmware: the CC1101 on SPI1 ("spi_r", shared with the
+ * NFC chip, CS PE4): SCK PA5, MISO PB4, MOSI PB5 (AF5), CS PD0; GDO0 on
+ * PA1; the antenna filter switch on PC4 together with the chip's GDO2.
+ * SPI mode 0 at 8 MHz.  After CS goes low the chip pulls MISO low when
+ * its crystal runs (CHIP_RDYn); wait for that before clocking. */
+#define RF_CS(on)	gpio_set(GPIOD, 0, !(on))
+#define RF_TIMEOUT	(SystemCoreClock / 1000 * 2)	/* 2 ms in cycles */
+
+static int rf_ready;
+
+static void rf_init(void)
+{
+	RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+	(void) RCC->APB2ENR;
+	gpio_set(GPIOE, 4, 1);
+	gpio_cfg(GPIOE, 4, MODE_OUT, PULL_NONE, 0);	/* NFC CS: off */
+	gpio_set(GPIOD, 0, 1);
+	gpio_cfg(GPIOD, 0, MODE_OUT, PULL_NONE, 0);	/* CC1101 CS */
+	gpio_cfg(GPIOA, 5, MODE_AF, PULL_NONE, 5);	/* SCK  */
+	gpio_cfg(GPIOB, 5, MODE_AF, PULL_NONE, 5);	/* MOSI */
+	gpio_cfg(GPIOB, 4, MODE_AF, PULL_NONE, 5);	/* MISO */
+	gpio_set(GPIOC, 4, 0);
+	gpio_cfg(GPIOC, 4, MODE_OUT, PULL_NONE, 0);	/* filter switch */
+	gpio_cfg(GPIOA, 1, MODE_IN, PULL_NONE, 0);	/* GDO0 */
+	SPI1->CR1 = 0;
+	SPI1->CR2 = (7u << SPI_CR2_DS_Pos) | SPI_CR2_FRXTH;	/* 8-bit */
+	SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI
+		  | (2u << SPI_CR1_BR_Pos) | SPI_CR1_SPE;	/* /8: 8 MHz */
+	rf_ready = 1;
+}
+
+int hal_rf_xfer(const uint8_t *out, uint8_t *in, unsigned len)
+{
+	volatile uint8_t *dr = (volatile uint8_t *) &SPI1->DR;
+	unsigned tx = 0, rx = 0;
+	uint32_t t0;
+	uint8_t c;
+
+	if (!rf_ready) rf_init();
+	RF_CS(1);
+	t0 = DWT->CYCCNT;
+	while (gpio_get(GPIOB, 4)) {			/* CHIP_RDYn */
+		if (DWT->CYCCNT - t0 > RF_TIMEOUT) {
+			RF_CS(0);
+			return -1;
+		}
+	}
+	while (rx < len) {			/* as spi2_block() */
+		if (tx < len && tx - rx < 2 && (SPI1->SR & SPI_SR_TXE)) {
+			*dr = out[tx];
+			tx++;
+		}
+		if (SPI1->SR & SPI_SR_RXNE) {
+			c = *dr;
+			if (in != NULL) in[rx] = c;
+			rx++;
+		}
+	}
+	while (SPI1->SR & SPI_SR_BSY) ;
+	RF_CS(0);
+	return 0;
+}
+
+void hal_rf_switch(int sw)
+{
+	if (!rf_ready) rf_init();
+	gpio_set(GPIOC, 4, sw);
+}
+
+int hal_rf_gdo0(void)
+{
+	return gpio_get(GPIOA, 1);
+}
+
+/* The region the device was sold for, from the factory OTP (as the stock
+ * firmware's furi_hal_version): 0 unknown, 1 EU/RU, 2 US/CA/AU, 3 JP,
+ * 4 world. */
+int hal_rf_region(void)
+{
+	const volatile uint8_t *otp = (const volatile uint8_t *) OTP_AREA_BASE;
+
+	if (otp[0] != 0xBE || otp[1] != 0xBA) return 0;
+	if (otp[2] == 1) return otp[13];
+	if (otp[2] == 2) return otp[17];
+	return 0;
+}
+
+/*===========================================================================*
  *				Random numbers				     *
  *===========================================================================*/
 /* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
