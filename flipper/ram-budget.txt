@@ -5,7 +5,8 @@
 #
 # image   data   bss    total   (measured)
 # Baseline main 92996aa (#2-#5 merged), 2026-11-14; Phase 1: +0 B.
-kernel    660    17228  17888
+# Console on the LCD (owner request): kernel +8 B (cursor state).
+kernel    660    17236  17896
 mm        372    10312  10684
 fs        476    27380  27856
 init      368    1376   1744
