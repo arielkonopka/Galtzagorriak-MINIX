@@ -26,7 +26,7 @@ EXTERN int err_code;		/* temporary storage for error number */
 EXTERN int rdwt_err;		/* status of last disk i/o request */
 
 /* Data which need initialization. */
-extern _PROTOTYPE (int (*call_vector[]), (void) ); /* sys call table */
+extern _PROTOTYPE (int (* const call_vector[]), (void) ); /* sys call table */
 extern int max_major;  /* maximum major device (+ 1) */
 extern char dot1[2];   /* dot1 (&dot1[0]) and dot2 (&dot2[0]) have a special */
 extern char dot2[3];   /* meaning to search_dir: no access permission check. */

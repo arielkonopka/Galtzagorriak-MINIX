@@ -95,7 +95,7 @@
  * the interrupted task's stack; handlers run on the kernel stack.
  */
 #undef	TTY_STACK
-#define	TTY_STACK	768			/* (352) */
+#define	TTY_STACK	640			/* (352) */
 #undef	WINCH_STACK
 #define	WINCH_STACK	(1024 * ENABLE_WINI)	/* (640) SD card over SPI */
 #undef	SYN_ALRM_STACK
@@ -133,7 +133,7 @@ _PROTOTYPE( void nodev_task, (void) );
  *  3) The task name is used for the process name (p_name).
  */
 
-PUBLIC struct tasktab tasktab[] = {
+PUBLIC const struct tasktab tasktab[] = {
 	{ tty_task,		TTY_STACK,	"TTY"		},
 #if ENABLE_NETWORKING
 	{ dp8390_task,		DP8390_STACK,	"DP8390"	},

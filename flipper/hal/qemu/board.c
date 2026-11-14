@@ -4,6 +4,7 @@
  * when hal_lcd_flush() is called, so display code can be tested headless.
  * There are no buttons; test code may set qemu_fake_buttons. */
 #include <stdint.h>
+#include <string.h>
 #include "hal.h"
 
 #define CPU_HZ		25000000u	/* MPS2 FPGA system clock */
@@ -218,6 +219,28 @@ static int disk_seek(uint32_t sector, unsigned count)
 	return semihost(SYS_SEEK, args) == 0 ? 0 : -1;
 }
 
+int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
+{
+	uint8_t chunk[64], *out = buf;
+	unsigned pos;
+
+	/* the semihosted file: just seek inside the sector */
+	for (pos = 0; pos < len; pos += sizeof(chunk)) {
+		unsigned n = len - pos < sizeof(chunk) ? len - pos : sizeof(chunk);
+		uint32_t args[3] = { disk_fd, (uint32_t) chunk, n };
+
+		if (disk_seek(sector, 1) < 0) return -1;
+		{
+			uint32_t sk[2] = { disk_fd,
+				sector * HAL_SECTOR_SIZE + off + pos };
+			if (semihost(SYS_SEEK, sk) != 0) return -1;
+		}
+		if (semihost(SYS_READ, args) != 0) return -1;
+		memcpy(out + pos, chunk, n);
+	}
+	return 0;
+}
+
 int hal_disk_read(uint32_t sector, void *buf, unsigned count)
 {
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
@@ -241,6 +264,7 @@ void hal_usb_poll(void) { }
 int hal_usb_connected(void) { return 0; }
 unsigned hal_usb_write(const void *buf, unsigned n) { (void) buf; return n; }
 int hal_usb_getc(void) { return -1; }
+int hal_usb_peekc(void) { return -1; }
 
 void hal_backlight(unsigned level) { (void) level; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }

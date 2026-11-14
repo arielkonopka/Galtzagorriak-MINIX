@@ -17,9 +17,11 @@
 
 static char TTYTAB[]= "/etc/ttytab";	/* The table of terminal devices. */
 
-static char buf[512];			/* Read buffer. */
-static char ttline[256];		/* One line from the ttytab file. */
-static char *ttargv[32];		/* Compound arguments. */
+/* Sizes for a small /etc/ttytab (R2a: they sit in INIT, getty and login
+ * for good); a longer line just ends the table early, as before. */
+static char buf[128];			/* Read buffer. */
+static char ttline[128];		/* One line from the ttytab file. */
+static char *ttargv[16];		/* Compound arguments. */
 static struct ttyent entry;		/* Entry to fill and return. */
 static int ttfd= -1;			/* Filedescriptor to the file. */
 static char *bufptr;			/* Place in buf. */

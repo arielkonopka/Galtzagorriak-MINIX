@@ -7,6 +7,9 @@
 #include "kernel.h"
 #include "driver.h"
 #include "drvlib.h"
+#if (CHIP == ARM_CM)
+#include "hal.h"
+#endif
 
 
 FORWARD _PROTOTYPE( void extpartition, (struct driver *dp, int extdev,
@@ -149,6 +152,23 @@ struct part_entry *table;	/* four entries */
 /* Read the partition table for the device, return true iff there were no
  * errors.
  */
+#if (CHIP == ARM_CM)
+  /* Only the 64-byte table and the signature are read, without a sector
+   * buffer (R2a.3: no tmp_buf; hal_disk_read_part checks the CRC). */
+  struct device *dv;
+  unsigned char part[NR_PARTITIONS * sizeof(table[0]) + 2];
+
+  if ((dv = (*dp->dr_prepare)(device)) == NIL_DEV
+	|| hal_disk_read_part((dv->dv_base >> SECTOR_SHIFT) + offset,
+				PART_TABLE_OFF, sizeof(part), part) != 0) {
+	printf("%s: can't read partition table\n", (*dp->dr_name)());
+	return 0;
+  }
+  if (part[sizeof(part) - 2] != 0x55 || part[sizeof(part) - 1] != 0xAA)
+	return 0;			/* invalid partition table */
+  memcpy(table, part, NR_PARTITIONS * sizeof(table[0]));
+  return 1;
+#else
   message mess;
 
   mess.DEVICE = device;
@@ -168,6 +188,7 @@ struct part_entry *table;	/* four entries */
   }
   memcpy(table, (tmp_buf + PART_TABLE_OFF), NR_PARTITIONS * sizeof(table[0]));
   return 1;
+#endif
 }
 
 
