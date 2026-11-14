@@ -3,6 +3,8 @@
 Status: Revision 2 (2026-11-14): re-evaluated for feature parity with the stock Flipper firmware.
 Revision 1 (same day) covered security, RAM, swap and flash-installed programs; its phases are
 renumbered here (section C and the Roadmap list the mapping).
+Addition (2026-11-14, same revision): section I (time in UTC, Year 2038, location, first-boot
+wizard), Phase 2d and Phase 18b.
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -612,6 +614,161 @@ another pin if both are needed.
 
 ---
 
+## I. Time, location and the first-boot wizard (owner request, 2026-11-14)
+
+The owner asked for three things that belong together: the system clock is kept in **UTC**, it
+must not break in **2038**, and the first start for the user runs a **wizard** (hostname, region,
+date and time, location, today's sunrise and sunset). Location plus an accurate clock is also the
+groundwork for a future **celestial ("old-style") navigation** app (I.6). The time model (I.1–I.3)
+changes the ABI, so it is done early, in Phase 2d. The wizard needs almost every other part, so it
+is done last, in Phase 18b.
+
+### I.1 Time model
+
+- **One time scale inside the system: UTC**, as POSIX seconds since 1970-01-01 00:00:00 UTC
+  (leap seconds not counted, as POSIX). The RTC calendar holds UTC. Files, timers that name an
+  instant, logs and the RPC/NTP sync all use UTC.
+- **Local time exists only for people.** The time zone is a POSIX `TZ` string (for example
+  `CET-1CEST,M3.5.0,M10.5.0/3`), which the existing ACK libc already parses (`src/lib/ansi/misc.c`,
+  with `M` rules for daylight saving). No tz database on the device: a `const` table of about 80
+  common zones (label → `TZ` string, ≈ 3 KB) lives in the installed region and is used only by the
+  wizard and the settings app.
+- **Wall-clock timers** (`daily` in F.2) are local times and follow the `TZ` rules; `once` timers
+  are stored as a UTC instant. On a spring-forward day a timer that falls into the missing hour
+  fires at the first instant after it; on a fall-back day it fires once, at the first occurrence.
+- **The RTC is the wall clock.** `time()` reads the RTC hardware (BCD calendar, with the shadow
+  registers bypassed and read twice for consistency) and converts it with a branch-free
+  days-from-civil routine. The kernel no longer keeps `boot_time` (−4 B) and the wall clock stays
+  right across Stop2 and tickless idle, whatever the tick count did (rule 0.7).
+
+### I.2 Year 2038: the options compared
+
+Today `time_t` is a signed 32-bit `long` (`include/sys/types.h`, `include/time.h`), so the clock
+breaks on 2038-01-19 03:14:08 UTC. The on-disk MINIX V2 inode (64 B) has three 32-bit times and no
+spare bytes. The owner suggested shifting the epoch or widening the type. Five ways were compared:
+
+| Option | Range | RAM | ABI / formats | Verdict |
+|---|---|---|---|---|
+| A. Keep signed 32-bit | to 2038 | 0 | none | breaks in 12 years |
+| B. Shift the epoch (signed 32-bit from e.g. 2000) | 1932–2068 | 0 | every boundary converts: tar, `mkfsimg.py`, host tools, RPC, NTP, stock `uint32_t` timestamps; one missed conversion is a silent 30-year error | buys only 30 years, high bug risk |
+| C. Unsigned 32-bit `time_t` | 1970–2106 | 0 | same size, but the type changes sign: negative differences, `t < 0` checks and ported libraries (lwIP, mbedTLS, Berry) that assume a signed `time_t` | workable, but the semantic change leaks into ported code |
+| D. 64-bit everywhere, disk included | ±292·10⁹ years | FS +480 B (40 in-core inodes × 12 B), larger inode on disk | new FS version, `mkfs`, `fsck`, `mkfsimg.py` | too expensive in RAM |
+| **E. Hybrid (chosen)** | programs: ±292·10⁹ years; stored times: 1970–2106, extensible later | **kernel −4 B, FS 0, MM 0**; `struct stat` +16 B on the stack only | one ABI break now (all binaries are rebuilt from source anyway); no message-size change | **recommended** |
+
+**Decision (recommended, Phase 2d): option E.**
+- **Every interface is 64-bit:** `time_t` is a signed 64-bit integer in libc, in `struct stat`,
+  `struct utimbuf`, `time()`, `stime()`, and later `struct timespec`/`timeval`, Berry integers and
+  `libfuri`. Programs compiled now never need another ABI change.
+- **Storage stays 32-bit where RAM or disk layout is at stake,** read as **unsigned**: MFS
+  inode times on disk and in the in-core inode table, MM's `mp_ctime` (only an identity tag), the
+  `(dev, ino, ctime)` records of the installed region (R2b). Valid from 1970 to 2106-02-07.
+  Conversion happens at the boundary (`stat`, `utime`) and nowhere else.
+- **Messages keep their size.** A 64-bit value travels as two 32-bit halves (`m2_l1` low,
+  `m2_l2` high). A 64-bit member in the message union is forbidden: it would make `message`
+  8-byte aligned and could grow every message buffer in the kernel and in every process.
+- **The owner's epoch-shift idea is kept for later, on disk only:** if 2106 ever matters, the
+  superblock gets a `time base` field (the on-disk superblock has unused bytes) and inode times are
+  read as `base + uint32`. That is an FS-internal change; no program sees it. Not scheduled.
+- Cost on the Cortex-M4: 64-bit add, subtract and compare are two instructions; division (only in
+  `gmtime`/`mktime`, and when converting the RTC calendar) uses the 64-bit helper of libgcc, about
+  0.5–1 KB once in the shared libc, run rarely. Responsiveness is unaffected.
+
+### I.3 Other clocks that wrap
+
+- **Uptime ticks.** `realtime` (`src/kernel/clock.c`) is a signed 32-bit `clock_t` at `HZ`=60: it
+  overflows (undefined behaviour) after 414 days and wraps after 828. A desk clock on a charger
+  reaches that. Fix at 0 B: make it unsigned and compare deadlines wrap-safely
+  (`(long)(deadline − now) <= 0`) in the clock task, `p_alarm` and `next_alarm`.
+- **RTC calendar.** The STM32WB55 RTC keeps a two-digit BCD year (00–99) and treats every year
+  divisible by 4 as a leap year (RM0434). The century goes into an **RTC backup register**
+  (`RTC_BKPxR`, battery domain, survives power-off and reset; 0 B RAM), together with the last
+  year seen, so a century rollover is detected even if it happened while the device was off. On
+  2100-02-29 (a date the hardware invents) the driver rewrites the date to 2100-03-01. If RM0434
+  shows a binary counter mode (`BIN` bits of newer STM32 RTCs) on this part, the driver SHOULD use
+  it instead of the BCD calendar.
+- **Backup registers are shared with the stock firmware.** Stock `furi_hal_rtc` uses the low
+  registers (header, flags, fault data, PIN data). MINIX takes its register from the top
+  (`RTC_BKP19R` first) and keeps a register map table in PORTING.md.
+- **NTP** (Phase 19) counts seconds from 1900 in 32 bits and wraps in 2036 (era 1); the SNTP
+  client picks the era closest to the current RTC time (or the build date, if the RTC is unset).
+- **Stock timestamps** are `uint32_t` (`furi_hal_rtc_get_timestamp`); `libfuri` keeps that type for
+  source compatibility, which matches the 1970–2106 storage range.
+
+### I.4 Location, region and hostname data
+
+| File | Content | Owner, mode | Read by |
+|---|---|---|---|
+| `/etc/hostname` | one line, `[a-z0-9-]`, 1–8 characters (the stock name limit; the BLE name becomes `Flipper <name>`, as stock) | root, 0644 | shell prompt, `bled` advertising name, USB product string, RPC device info |
+| `/etc/flipper/region` | radio region code (R8.2) | root, 0644 | the Sub-GHz transmit check (R8.2), NFC/RFID power limits |
+| `/etc/TZ` | POSIX `TZ` string, and the zone label in a `#` comment | root, 0644 | INIT puts it into the environment of everything it starts; re-read on `SIGHUP` and `SIGRTC` |
+| `/etc/location` | FlipperFormat: `Latitude`, `Longitude` (decimal degrees, 4 decimals), `Elevation` (m), `Source` (`manual`, `city`, `sun`, `gps`), `Accuracy_km`, `Set` (UTC time) | root, **0640, group `location`** | apps whose manifest says `Location: yes` (granted group `location`) |
+
+- **Location is private data.** It is not readable by `nobody`, not sent over RPC or BLE unless the
+  caller is root, and not written to logs.
+- **Region** default: the hardware region in OTP (as stock `furi_hal_version_get_hw_region`).
+  Changing it requires root and is logged to `/var/log/messages`.
+- An optional GPS module on the header UART (section H) can later fill both the location
+  (`Source: gps`) and the time.
+
+### I.5 Sun computation (`libastro`)
+
+A small shared library in the installed region (≈ 4 KB, 0 B resident), used by the wizard, the
+clock apps, and the future navigation app (I.6):
+- sun position for a UTC instant: declination, equation of time, Greenwich hour angle;
+- **sunrise and sunset** for a date and position, plus civil and nautical twilight (nautical
+  twilight is when a navigator takes star sights), and day length; polar day and polar night are
+  reported as such, not as an error;
+- standard refraction at the horizon (−0.833°), and the dip correction from `Elevation`;
+- **the inverse, position from the sun:** from an observed sunrise and/or sunset (UTC):
+  - both times: longitude from local apparent noon (the midpoint, corrected by the equation of
+    time), latitude from the day length (solved by bisection);
+  - one time and a known latitude: longitude; one time and a known longitude: latitude;
+  - accuracy: 1 min of timing error ≈ 0.25° (15 arcmin) of longitude; the latitude from day length
+    is ill-conditioned within about 3 weeks of an equinox (the day is ≈ 12 h everywhere), where
+    the library reports "latitude undetermined" and the wizard asks for it instead;
+- arithmetic in `double` (soft-float; the M4 FPU is single precision). Times are split into
+  integer days since J2000 plus a fraction, so no precision is lost (a Julian date in `float` is
+  only good to ≈ 6 h). One sunrise/sunset computation must take ≤ 20 ms on the device.
+- Formulas are reimplemented from published astronomy (Meeus, *Astronomical Algorithms*; NOAA
+  solar calculator); no third-party code is copied.
+
+### I.6 Groundwork for celestial navigation (future app, not scheduled)
+
+The owner may later add an app for navigation "the old way": a sextant sight plus an accurate
+clock gives a position line. What it will need, and where this spec already provides it:
+- **Accurate UTC.** 4 s of clock error is 1 arcminute of longitude, which is 1 nautical mile at the
+  equator. The LSE drifts about ±20 ppm (≈ 2 s a day), so:
+  - every clock sync (RPC from the phone, NTP, or a manual check against a time signal in the
+    clock settings) appends the measured offset to `/var/db/chrono` (UTC time, offset in ms);
+  - from that log the system computes the **daily rate**, as navigators do with a marine
+    chronometer, and corrects it in hardware with RTC smooth calibration (`RTC_CALR`, about
+    0.95 ppm steps). 0 B RAM; the log is a few lines on the SD card;
+  - the clock app shows the estimated current error ("±n s since the last sync").
+- **A dead-reckoning start:** `/etc/location` (I.4).
+- **An almanac in flash:** `libastro` grows from the sun (I.5) to the moon, the four navigational
+  planets and the 57 navigational stars plus Polaris (a `const` table, ≈ 1 KB); Greenwich hour
+  angle and declination for any UTC second.
+- **Sight reduction:** computed altitude and azimuth (intercept method), altitude corrections
+  (dip, refraction, semi-diameter, parallax), running fixes.
+- **UT1 versus UTC** (DUT1, under 0.9 s, ≤ 0.23 arcmin) is ignored and documented.
+
+### I.7 Notes for the system manual
+
+The final deliverable includes a complete manual. These facts go into it:
+- The clock is kept in UTC; local time comes from `/etc/TZ`. How to change the zone (settings
+  app, `setup tz`) and what happens to alarms on daylight-saving days (I.1).
+- Times are 64-bit for programs; files store times up to 2106-02-07 (I.2).
+- After switching from the stock firmware, the RTC still holds the stock firmware's **local**
+  time; the wizard asks to confirm it (Phase 18b). After switching back to stock, the stock
+  firmware shows UTC until it is set again.
+- What the region means (which bands may transmit) and that changing it needs root.
+- Location: what it is used for, who can read it, and the three ways to set it, including the
+  sunrise/sunset method and its limits near the equinoxes.
+- Re-running the wizard or a single step: `setup`, `setup <step>`, Settings → System → Setup.
+- Clock accuracy, the daily rate and calibration (I.6).
+
+---
+
 ## Roadmap: phase order
 
 Phases are ordered by what the next one needs, and by the stock features they unlock. Old numbers
@@ -620,7 +777,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | Phase | Content | Unlocks |
 |---|---|---|
 | 1 | Close the local-root holes [1] | everything |
-| 2 | Memory foundation: 2a static RAM [4], 2b flash-installed programs and shared libc [4b], 2c vfork [6] | room for apps |
+| 2 | Memory foundation: 2a static RAM [4], 2b flash-installed programs and shared libc [4b], 2c vfork [6]; 2d time ABI: UTC and 64-bit `time_t`, before Phase 3 (section I) | room for apps; a clock past 2038 |
 | 3 | Accounts, packages, randomness [2] | multi-user, safe installs |
 | 4 | Device platform: 4a Cortex-M4 hardening [3], 4b driver platform (new) | every driver |
 | 5 | App framework `libfuri` and porting toolchain (new) | app ports |
@@ -639,10 +796,12 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 16 | App ports V: BLE remote, BLE serial, mobile app; native: Bluetooth adapter (BLE mouse/keyboard → USB, 16.1); Bluetooth dongle mode for the PC (16.2); camera finder v2 with BLE scan (16.3) | |
 | 17 | Trust: U2F, signed packages [9], updater, option bytes (deferred item) | |
 | 18 | App ports VI: U2F, catalog, porting guide, CI | parity |
+| 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
 | 19 | Networking: lwIP over USB and BLE (19a can start right after 10) | |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 
-Phases 1–4 are the foundation and run in order (2a, 2c and 4a can overlap). From Phase 5 on,
+Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
+before Phase 3). From Phase 5 on,
 a driver phase and the app phase before it can overlap.
 
 ---
@@ -909,6 +1068,57 @@ Responsiveness: AC2c.R `sh -c ls` start-to-first-output time drops by at least t
 
 RAM budget: **0 B static**. Saves one image copy per fork+exec.
 
+### 2d. Time ABI: UTC and a 64-bit `time_t` (section I; owner request 2026-11-14)
+
+**Goal:** a clock that is right after 2038, kept in UTC, decided before any package or port is
+built against the old ABI. **Depends on:** Phase 1. **Must be merged before Phase 3** (packages)
+and Phase 5 (porting toolchain). Can overlap with 2a and 2c.
+
+- **R2d.1 Types.** `time_t` becomes a signed 64-bit integer (`long long`) in `include/sys/types.h`
+  and `include/time.h`. A new `ftime32_t` (`unsigned long`) names the 32-bit stored form (I.2).
+  `clock_t` stays 32-bit.
+- **R2d.2 System calls without bigger messages.** `time()` returns its value in `m2_l1` (low) and
+  `m2_l2` (high); `stime()` takes it the same way. `utime()` keeps its message: libc refuses values
+  outside 1970–2106 with `EINVAL` (FS cannot store them) and sends them as `ftime32_t`.
+  No 64-bit member is added to the message union (I.2).
+- **R2d.3 FS and MM.** Inode times on disk and in core are `ftime32_t`, read as unsigned. `stat`
+  and `fstat` widen them into the 64-bit `struct stat`. FS stamps files with the current time
+  saturated at `0xFFFFFFFE` (and reports it once on the console), never wrapped. `mp_ctime` in MM
+  and the installed-region records stay 32-bit. `flipper/tools/mkfsimg.py` packs times unsigned.
+- **R2d.4 libc.** `gmtime`, `localtime`, `mktime`, `ctime`, `asctime`, `strftime`, `difftime`
+  work on the 64-bit type; `gmtime` uses a days-from-civil conversion (no year loop) with a
+  32-bit fast path. The 64-bit division helper lives once in the shared libc (R2b.9).
+- **R2d.5 Kernel.** The wall clock is read from the RTC on each `time()` call (I.1); the kernel's
+  `boot_time` is removed. Until the RTC driver of R6.2 exists (and in QEMU), the kernel keeps
+  `boot_time` as a 32-bit `ftime32_t` and adds the uptime, so the RAM figure is the same.
+- **R2d.6 Uptime wrap.** `realtime` becomes unsigned and every deadline compare is wrap-safe
+  (I.3). A debug build option starts `realtime` 10 s before the 32-bit wrap.
+- **R2d.7 Audit.** Every place that keeps a time in `int` or `long` (about 10 call sites in
+  `src/commands`, plus `ls`, `make`, `date`, `touch`, `find`, `tar`, `pkg`, `ash`) is fixed. A
+  script in `flipper/tools/` greps for `long.*time(`, `(long) *time` and `%ld` next to time values
+  and runs in `make check`.
+- **R2d.8 `date`.** `date` prints UTC with `-u` and local time otherwise; `date -s` takes local
+  time, or UTC with `-u` or a trailing `Z`, and always writes UTC to the RTC.
+- **R2d.9 Manual notes** for I.7 go into PORTING.md under "Time" in the same PR.
+
+Acceptance:
+- AC2d.1 With the clock set to 2038-01-19 03:13:58 UTC: after 20 s `date -u` shows 03:14:18;
+  `touch f; ls -l f` shows 2038; `make` rebuilds a target whose source is newer; `sleep 5` and
+  `alarm()` behave normally across the second.
+- AC2d.2 `touch -t 210601010000 f` works; `touch -t 210701010000 f` fails with `EINVAL`.
+- AC2d.3 The uptime-wrap debug build runs `sleep 30` and a pending `alarm(20)` across the wrap
+  correctly.
+- AC2d.4 `make INIT=m2 minix minix-run` passes; a file system image made before this phase mounts
+  and shows the same times.
+- AC2d.5 `TZ=CET-1CEST,M3.5.0,M10.5.0/3 date` around 2026-03-29 00:59:59 UTC shows 01:59:59 then
+  03:00:00 local.
+
+Responsiveness: AC2d.R `time()` ≤ 5 µs (one RTC read and conversion); `ls -l` of 100 files is not
+measurably slower than before (record both).
+
+RAM budget: kernel −4 B (no `boot_time`, once R6.2 is in) or 0; FS 0; MM 0; INIT 0; per process
+0 static, `struct stat` +16 B on the stack while used. Flash: ≈ +1 KB in the shared libc.
+
 ---
 
 ## Phase 3: Accounts, packages, randomness
@@ -1124,7 +1334,10 @@ infrared, iButton, low-power modes.
     OTG boost, ship-mode power-off) on I2C1, exposed as `/dev/power` (read: a status record;
     `ioctl`: OTG on/off, power-off).
   - Low battery sends `SIGPWR` to INIT.
-- **R6.2 RTC.** LSE RTC: the kernel reads it at boot into `boot_time`; `stime()` writes it.
+- **R6.2 RTC.** LSE RTC holding **UTC** (section I): `time()` reads it directly and `stime()`
+  writes it (R2d.5); the century and last-seen year in a backup register, the 2100-02-29 fix-up
+  and the backup register map (I.3); `RTC_CALR` smooth calibration exposed to the clock settings
+  and driven by the daily rate (I.6).
 - **R6.3 Vibro and speaker.**
   - `/dev/vibro` (on/off, timed);
   - `/dev/speaker` (frequency, volume; PWM on TIM16 via PB8);
@@ -2030,6 +2243,72 @@ Acceptance: AC18.1 At least 10 community apps (games, tools) run unchanged excep
 
 ---
 
+## Phase 18b: First-boot wizard (owner request, 2026-11-14)
+
+**Goal:** the first time the user turns the device on, a wizard walks them through the settings
+the system needs from a person: hostname, region, date and time, location, and it shows today's
+sunrise and sunset. Last on the roadmap, because it sets things that the other phases make
+real (region: 8; hostname as BLE name: 15; GUI: 5; time: 2d and 6).
+**Depends on:** 2d, 3 (root password at first boot, R3.4), 5 (`libfuri`), 6 (RTC), 8 (region
+table), 15 (BLE name), section I.
+
+- **R18b.1 Program.** `setup` in the installed region, run by `/etc/rc` when
+  `/var/db/setup-done` is missing, before the launcher, as root. It runs on the LCD with the
+  d-pad (`libfuri` widgets); on a tty (USB console) the same steps are plain text prompts. The
+  marker file holds the wizard version, so a later firmware asks only the steps that are new.
+- **R18b.2 Steps,** in this order; every step shows its current value, Back returns to the
+  previous step, and every step except the root password can be skipped (a sensible default is
+  kept and the summary says "skipped"):
+  1. Welcome (and the root password of R3.4, if not yet set; it moves into the wizard here).
+  2. **Hostname:** default from the OTP name, as stock; 1–8 characters `[a-z0-9-]` (I.4).
+  3. **Region:** default from OTP; a list with the allowed transmit bands of each region; the user
+     confirms they will use the device under that region's rules (I.4, R8.2).
+  4. **Date, time and time zone:** zone from the `const` zone table (grouped by region); date and
+     time entered in **local** time and stored in **UTC**. The field is pre-filled from the RTC
+     with a note that, after a switch from the stock firmware, the RTC still holds the old
+     local time (I.7). If the phone is connected over BLE or USB RPC, "Take time from phone" fills
+     it in.
+  5. **Location,** three ways (I.4, I.5):
+     - a city from a `const` table in flash (≈ 250 cities: name, country, latitude, longitude,
+       zone index; ≈ 6 KB); it also offers that city's zone if it differs from step 4;
+     - latitude and longitude typed in (degrees and minutes, or decimal degrees);
+     - **from the sun:** today's (or yesterday's) sunrise and/or sunset time as the user observed
+       it or read it, giving an approximate position (I.5), with its accuracy shown; near an
+       equinox it asks for the latitude as well.
+  6. **Summary:** hostname, region, zone, local time and UTC, position, and for today at that
+     position: **sunrise, sunset**, day length, and the start of civil and nautical twilight,
+     computed by `libastro` from the location and the RTC. If the user entered sunrise/sunset in
+     step 5, both the entered and the computed times are shown. OK writes everything.
+- **R18b.3 Writing.** All files of I.4 and the RTC are written only at the end, each through a
+  temporary file and `rename`, so a power loss mid-wizard leaves the old state and the wizard runs
+  again. Then INIT gets `SIGHUP` (new `TZ`), `bled` gets the new name, and the launcher starts.
+- **R18b.4 Re-run.** `setup` (all steps) or `setup hostname|region|time|tz|location|sun` (one
+  step; `sun` only shows the summary), as root; Settings → System → Setup runs the same program.
+- **R18b.5 Manual notes** (I.7) go into the manual chapter "First start".
+
+Acceptance:
+- AC18b.1 A fresh card shows the wizard on the LCD after boot; completing it with only the d-pad
+  writes the four files of I.4 with the right owners and modes and sets the RTC to UTC.
+- AC18b.2 Power cut during step 5: the next boot shows the wizard again; no file is half-written.
+- AC18b.3 City "Warszawa", 2026-06-21: the summary shows sunrise and sunset within ±2 min of the
+  NOAA solar calculator for that place and day (also for 2026-12-21, and for a place north of the
+  Arctic Circle in June: "sun does not set").
+- AC18b.4 From the sun: entering the NOAA sunrise and sunset times for Warszawa on 2026-06-21
+  gives a position within 0.5° of longitude and 1° of latitude; on 2026-03-20 the wizard asks for
+  the latitude.
+- AC18b.5 As `nobody`, `cat /etc/location` fails; an app with `Location: yes` can read it.
+- AC18b.6 `setup tz` alone changes the zone; `date` shows the new local time at once in a new
+  shell; armed alarms (7b) ring at the new local time.
+
+Responsiveness: AC18b.R The first wizard screen appears within L10 of power-on; every step
+meets L1; the summary (with the sun computation) appears ≤ 200 ms after OK.
+
+RAM budget: kernel 0, INIT 0; `setup` ≈ 8 KB while running (with the shared libc, `libfuri`,
+`libastro`), 0 B after it exits. Flash (installed region): `setup` ≈ 12 KB, `libastro` ≈ 4 KB,
+zone table ≈ 3 KB, city table ≈ 6 KB.
+
+---
+
 ## Phase 19: Networking: a small TCP/IP stack over USB and Bluetooth
 
 **Goal:** IP connectivity to a PC or phone over the links the Flipper has, with RAM spent only
@@ -2191,4 +2470,6 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | M8, A6, A8, M9, A11, M10, A5 | 20a (parts pulled into 4b and 6) |
 | M6, M7, M13, M12, A4 | 20b |
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
+| Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (owner request) | 2d, R6.2, section I |
+| First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (owner request) | 18b, section I |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
