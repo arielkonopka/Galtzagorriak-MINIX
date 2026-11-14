@@ -7,6 +7,8 @@ Addition (2026-11-14, same revision): section I (time in UTC, Year 2038, locatio
 wizard), Phase 2d and Phase 18b.
 Addition (2026-11-14): Phase 12d–12f (background-app tiers, park/hibernate API, two-ended
 placement, swap without a card, manual notes; owner request).
+Addition (2026-11-14): section J (own versioning: Galtzagorriak 0.x on a MINIX 2.0.0 base, ABI
+number, tags and CHANGELOG; owner decision).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -770,6 +772,97 @@ The final deliverable includes a complete manual. These facts go into it:
   sunrise/sunset method and its limits near the equinoxes.
 - Re-running the wizard or a single step: `setup`, `setup <step>`, Settings → System → Setup.
 - Clock accuracy, the daily rate and calibration (I.6).
+
+---
+
+## J. Versioning and releases (owner decision, 2026-11-14)
+
+The system has changed enough to be its own system, so it gets its own name and version. MINIX
+2.0.0 stays visible as the base.
+
+**J.1 Name and version number.**
+- The system is **Galtzagorriak**. Versions follow semantic versioning, `MAJOR.MINOR.PATCH`.
+- **0.x until feature parity.** The minor number goes up by one each time a phase or a lettered
+  sub-phase (2a, 2b, 7b, …) is complete, that is, all its acceptance criteria pass and its PRs
+  are merged. The minor number is a counter, not the phase number: phases may finish out of
+  order (e.g. 2a, 2c, 2d before 2b), and each one adds one.
+- The patch number goes up for a release with fixes and tasks only (e.g. T2–T5).
+- **1.0.0** is released when Phase 18 is complete: feature parity with the stock firmware, with
+  the rule 0.8 budgets met.
+- After 1.0: major for an ABI break (J.3), minor for new features, patch for fixes.
+- **Starting point: 0.1.0 = Phase 1 complete** (R1.1–R1.7, AC1.R; tagged on main after this
+  section was merged). Earlier history (milestones 0–3, flash text cache, PIC programs, the
+  hardware PRs) is summed up in `CHANGELOG.md` under 0.1.0; no older tags are added.
+
+**J.2 Where the version shows.**
+- `include/minix/gzversion.h` (new, hand-edited) is the **only** place the numbers are written:
+  `GZ_NAME "Galtzagorriak"`, `GZ_MAJOR`, `GZ_MINOR`, `GZ_PATCH`, `GZ_RELEASE "0.1.0"`, `GZ_ABI 1`,
+  `GZ_BASE "MINIX 2.0.0"`. `OS_RELEASE "2.0"` / `OS_VERSION "0"` in `<minix/config.h>` keep their
+  meaning (the MINIX base) so old code that reads them still builds.
+- **Build id.** The build writes `gzbuild.h` (in the build tree, not in git) with `GZ_BUILD`:
+  empty for a build exactly at a release tag, otherwise `+N.gHASH` from `git describe`
+  (`-dirty` added for uncommitted changes), e.g. `0.1.0+7.g1a2b3c4`. The file is rewritten only
+  when its contents change, so a build does not recompile everything.
+- `uname()` (libc) returns:
+
+  | Field | Value | Note |
+  |---|---|---|
+  | sysname | `Galtzagorriak` | 13 of 15 chars |
+  | release | `0.1.0` | `GZ_RELEASE`, ≤ 11 chars |
+  | version | `M2.0.0` | the MINIX base, ≤ 7 chars |
+  | machine / arch | `flipper` / `armv7e-m` | unchanged |
+
+  So `uname -a` shows both the system and its base: `Galtzagorriak flipper 0.1.0 M2.0.0 flipper armv7e-m`.
+  `src/test/test3.c` (now `#if 0`) accepts `Galtzagorriak` too.
+- **Boot banner** (tty task, USB console and LCD console):
+  `Galtzagorriak 0.1.0+7.g1a2b3c4 (based on MINIX 2.0.0), ABI 1`, then the original
+  Prentice-Hall copyright line for the MINIX code.
+- **`ver`** (new, base package, ~1 KB flash): prints name, release with build id, build date,
+  base, ABI, and the hardware revision and CPU2 stack version once Phase 6/15 can read them. The
+  Settings → About screen (Phase 7) shows the same lines.
+- **RAM: 0 B.** All strings are `const` in flash (kernel, libc text). `struct utsname` belongs to
+  the caller, as now. No file on the card or in flash is written to hold the version.
+
+**J.3 ABI number.**
+- `GZ_ABI` is a small integer for **binary compatibility of programs and packages** with the
+  kernel, MM, FS and the shared libc (Phase 2b). It is not the release number.
+- It goes up when an already built program would break: changed system-call numbers or message
+  layouts, changed sizes or layouts of shared types (`time_t`, `struct stat`, `struct
+  sigcontext`), a changed executable format or relocation rules, or a changed shared-libc entry
+  table. It does not go up for new calls, new devices or new files.
+- **ABI 1** is today's main. **Phase 2d (64-bit `time_t`, R2d.1) raises it to 2.** Phase 2b (shared
+  libc) raises it again if its entry table is not frozen in the same release as 2d; try to land
+  both in one ABI step.
+- **Executables:** `elf2mnx.py` writes `GZ_ABI` into the a.out header field `a_version`
+  ("version stamp, not used at present", 16 bits, so no format change). MM's exec checks it:
+  `a_version == 0` counts as ABI 1 (programs built before this change); any other value that is
+  not the running ABI fails with `ENOEXEC`, before any memory is allocated. Cost: a few
+  instructions in MM, 0 B RAM, no extra read (the header is already read).
+- **Packages:** `mkpkg.py` writes `Abi: N` into `CONTROL/control`. `pkg install` refuses a
+  package whose `Abi:` is not the running one (missing = 1) with the message
+  `pkg: NAME needs ABI N, this system is ABI M`. Packages with no programs (data, scripts,
+  Berry apps) write `Abi: any`.
+- A program knows the ABI it was built for from `GZ_ABI`; the running one is printed by `ver`.
+  No new system call.
+
+**J.4 Releases, tags and changelog.**
+- A release is a commit on main that changes `gzversion.h` and adds the `CHANGELOG.md` section,
+  in one PR named `release: X.Y.Z`. After merge, the review side tags the merge commit
+  **`vX.Y.Z`** (annotated tag, message = the changelog section). The base package's
+  `BASE_VER` stays its own update counter; its control file gets `Os: X.Y.Z`.
+- `CHANGELOG.md` (repo root), newest first. One section per release: date, phases or tasks
+  completed, user-visible changes, ABI change (if any), RAM and flash change, and the
+  latency numbers that moved (from PORTING.md). It is written for the user, in short lines,
+  because it feeds the final system manual (one chapter of release notes).
+- Every feature PR adds one line under `## Unreleased` at the top of `CHANGELOG.md`. The release
+  PR turns `Unreleased` into the version section.
+- `make BOARD=flipper versioncheck` (run together with `ramcheck`): fails if `GZ_MAJOR`/`GZ_MINOR`/
+  `GZ_PATCH`, `GZ_RELEASE` and the newest released `CHANGELOG.md` section disagree.
+- Flash writes: none at run time. A release changes only what `make base-flash` /
+  `pkg install --flash` already write at install time (standing rule on flash writes, `next-tasks.md`).
+
+For the manual: how to read the version (`uname -a`, `ver`, banner, Settings → About), what the
+ABI number means for installing packages, and where the release notes are.
 
 ---
 
@@ -2704,4 +2797,5 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
 | Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (owner request) | 2d, R6.2, section I |
 | First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (owner request) | 18b, section I |
+| Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
