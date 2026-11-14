@@ -89,7 +89,11 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 int hal_random(uint32_t *w);		/* hardware RNG: 0, or -1 on error */
 extern uint32_t hal_disk_errors;	/* transfers retried (CRC, timeout) */
 extern unsigned hal_disk_mhz;		/* bus clock for disk data */
-void hal_flash_region(uint32_t *base, uint32_t *size);
+void hal_flash_region(uint32_t *base, uint32_t *size);	/* the text cache */
+/* The whole layout (Phase 2b): l[HAL_FL_N] */
+enum { HAL_FL_SFSA, HAL_FL_INST, HAL_FL_INST_SIZE, HAL_FL_CACHE,
+       HAL_FL_CACHE_SIZE, HAL_FL_N };
+void hal_flash_layout(uint32_t *l);
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);
 extern uint32_t hal_flash_sr;	/* status of the last failure */

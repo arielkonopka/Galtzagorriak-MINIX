@@ -252,10 +252,22 @@ uint32_t hal_disk_errors;
 unsigned hal_disk_mhz;
 uint32_t hal_flash_dbg[5];
 
+void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
+{
+	l[HAL_FL_SFSA] = 0x00090000;
+	l[HAL_FL_INST] = 0x00030000;		/* after 192 KB of system */
+	l[HAL_FL_INST_SIZE] = 0x00030000;
+	l[HAL_FL_CACHE] = 0x00060000;
+	l[HAL_FL_CACHE_SIZE] = 0x00020000;
+}
+
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
-	*base = 0x00020000;	/* above the 128 KB kept for the system image */
-	*size = 0x00060000;	/* up to 512 KB */
+	uint32_t l[HAL_FL_N];
+
+	hal_flash_layout(l);
+	*base = l[HAL_FL_CACHE];
+	*size = l[HAL_FL_CACHE_SIZE];
 }
 
 int hal_flash_erase(uint32_t page_addr)

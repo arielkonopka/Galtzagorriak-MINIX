@@ -188,9 +188,9 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 		 tools/mkflash.py
 	python3 -I tools/mkflash.py $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@# The flash text cache starts 128 KB in (hal_flash_region()).
-	@test $$(stat -c %s $@) -le 131072 || \
-	   { echo "$@ is over 128 KB: it would overlap the flash text cache"; \
+	@# The installed programs start 192 KB in (hal_flash_layout(), R2b.1).
+	@test $$(stat -c %s $@) -le 196608 || \
+	   { echo "$@ is over 192 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
 #############################################################################
@@ -313,7 +313,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.24
+BASE_VER := 3.41
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
