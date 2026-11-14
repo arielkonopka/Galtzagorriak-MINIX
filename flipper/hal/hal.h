@@ -71,6 +71,7 @@ void hal_usb_poll(void);
 int hal_usb_connected(void);		/* host has the port open (DTR) */
 unsigned hal_usb_write(const void *buf, unsigned n);	/* bytes queued */
 int hal_usb_getc(void);			/* -1 if nothing received */
+int hal_usb_peekc(void);		/* the same byte, left in place */
 
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
@@ -78,6 +79,7 @@ int hal_usb_getc(void);			/* -1 if nothing received */
 #define HAL_SECTOR_SIZE 512
 int hal_disk_init(void);		/* (re)detect and initialise the card */
 uint32_t hal_disk_sectors(void);	/* capacity, valid after init */
+int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 

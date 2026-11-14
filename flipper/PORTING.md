@@ -354,6 +354,14 @@ in use by hand, background "cksum" of a 1.2 MB SD file in a loop):
 | L7 | app exit -> menu redrawn | 3.0-6.8 ms | 150 ms |
 | L10 | clock start -> launcher's first frame | 300 ms (plus the boot before the clock) | 3 s |
 
+T3 (2026-11-14, by hand on the Flipper, 238 presses in the launcher,
+About and Console, background cksum of a 1.2 MB SD file; T2 kernel): keys
+now come on press (gui.c).  L1 median 136 ms -> 5 ms, min 52 ms ->
+0.17 ms; the tail (p99 0.75 s, max 0.92 s) is OK presses that start an
+app (the next frame is the app's, after fork + exec) and first runs that
+had to be cached synchronously for lack of RAM (L6 max 2 s).  L2 max
+2 ms, L5 avg 46 us max 2 ms, L7 median 3.6 ms.
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

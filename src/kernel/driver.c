@@ -45,9 +45,11 @@ phys_bytes tmp_phys;		/* phys address of DMA buffer */
 
 #else /* CHIP != INTEL */
 
+#if (CHIP != ARM_CM)	/* ARM: no DMA bounce buffer (drvlib.c, R2a.3) */
 /* Claim space for variables. */
 u8_t tmp_buf[DMA_BUF_SIZE];	/* the DMA buffer */
 phys_bytes tmp_phys;		/* phys address of DMA buffer */
+#endif
 
 #endif /* CHIP != INTEL */
 
@@ -138,7 +140,7 @@ PRIVATE void init_buffer()
 	tmp_buf += DMA_BUF_SIZE;
 	tmp_phys += DMA_BUF_SIZE;
   }
-#else /* CHIP != INTEL */
+#elif (CHIP != ARM_CM)
   tmp_phys = vir2phys(tmp_buf);
 #endif /* CHIP != INTEL */
 }

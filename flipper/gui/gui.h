@@ -15,7 +15,7 @@
 #define KEY_RIGHT	0x08
 #define KEY_OK		0x10
 #define KEY_BACK	0x20
-#define KEY_LONG	0x80		/* or-ed in: held for a second or more */
+#define KEY_LONG	0x80		/* not reported any more (keys come on press) */
 
 int gui_open(void);			/* 0 or -1 */
 void gui_close(void);
