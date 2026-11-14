@@ -228,8 +228,8 @@ ALIASES	+= $(addsuffix =cp,rm)
 # small: default 6 KB (tools/elf2mnx.py), more only where needed.
 # Values checked with "free -t on" (MM reports the untouched part of the
 # reserve at exit), 2026-11-14: keep at least ~2 KB never used.
-CHMEM_sh     := 16384	# /bin/* (84 names): ~8 KB glob, and exec() sbrks the frame:
-			# cksum /bin/* gave E2BIG with 12 KB
+CHMEM_sh     := 12288	# /bin/* (84 names) uses ~8 KB; exec needs no heap
+			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
@@ -301,7 +301,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.5
+BASE_VER := 3.18
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \

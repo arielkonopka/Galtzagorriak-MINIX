@@ -36,6 +36,9 @@ FORWARD _PROTOTYPE( int read_header, (int fd, int *ft, vir_bytes *text_bytes,
 
 #if (SHADOWING == 1)
 FORWARD _PROTOTYPE( int relocate, (int fd, unsigned char *buf, int sep)	);
+FORWARD _PROTOTYPE( int gather, (char *buf, vir_bytes *bytes)		);
+FORWARD _PROTOTYPE( int fetch_ptrs, (vir_bytes src, char *buf, int *n,
+							vir_bytes room)	);
 
 #if (CHIP == ARM_CM)
 PRIVATE unsigned long fc_text;	/* flash address of the text, 0: in RAM */
@@ -50,9 +53,12 @@ PRIVATE vir_clicks tflash_clicks;	/* text size when in flash */
  *===========================================================================*/
 PUBLIC int do_exec()
 {
-/* Perform the execve(name, argv, envp) call.  The user library builds a
- * complete stack image, including pointers, args, environ, etc.  The stack
- * is copied to a buffer inside MM, and then to the new core image.
+/* Perform the execve(name, argv, envp) call.  The stack image (argc,
+ * pointers, args, environ) is put together in a buffer inside MM, then
+ * copied to the new core image.  Old programs build the image themselves
+ * and pass it (stack_ptr); the current library passes argv and envp
+ * (stack_ptr NULL) and MM gathers the strings from the process, so the
+ * process needs no free memory to exec (a shell after a big glob).
  */
 
   register struct mproc *rmp;
@@ -73,6 +79,10 @@ PUBLIC int do_exec()
   stk_bytes = (vir_bytes) stack_bytes;
   if (stk_bytes > ARG_MAX) return(ENOMEM);	/* stack too big */
   if (exec_len <= 0 || exec_len > PATH_MAX) return(EINVAL);
+  if (stack_ptr == NULL) {
+	/* Gather the arguments now, while the old image still exists. */
+	if ((r = gather(mbuf, &stk_bytes)) != OK) return(r);
+  }
 
   /* Get the exec file name and see if the file is executable. */
   src = (vir_bytes) exec_name;
@@ -94,13 +104,15 @@ PUBLIC int do_exec()
   }
 
   /* Fetch the stack from the user before destroying the old core image. */
-  src = (vir_bytes) stack_ptr;
-  dst = (vir_bytes) mbuf;
-  r = sys_copy(who, D, (phys_bytes) src,
-  			MM_PROC_NR, D, (phys_bytes) dst, (phys_bytes)stk_bytes);
-  if (r != OK) {
-	close(fd);		/* can't fetch stack (e.g. bad virtual addr) */
-	return(EACCES);
+  if (stack_ptr != NULL) {
+	src = (vir_bytes) stack_ptr;
+	dst = (vir_bytes) mbuf;
+	r = sys_copy(who, D, (phys_bytes) src,
+			MM_PROC_NR, D, (phys_bytes) dst, (phys_bytes)stk_bytes);
+	if (r != OK) {
+		close(fd);	/* can't fetch stack (e.g. bad virtual addr) */
+		return(EACCES);
+	}
   }
 
   /* Can the process' text be shared with that of one already running? */
@@ -685,3 +697,113 @@ int sep;			/* separate I&D: position-independent code */
   }
 }
 #endif
+
+
+/*===========================================================================*
+ *				gather					     *
+ *===========================================================================*/
+PRIVATE int gather(buf, bytes)
+char *buf;			/* the stack image goes here (ARG_MAX bytes) */
+vir_bytes *bytes;		/* its size, rounded up to a word */
+{
+/* Build the initial stack image from the caller's argv and envp, the same
+ * layout the library used to build: argc, argv offsets, 0, envp offsets, 0,
+ * the strings.  Offsets are relative to the image (patch_ptr relocates
+ * them).  Everything is fetched with sys_copy, so a bad pointer only fails
+ * this exec (E2BIG if it does not fit, EFAULT if unreadable).
+ */
+  char **slot;
+  char *hp, *end = buf + ARG_MAX;
+  vir_bytes p, room;
+  int nargs, nenv, i, r, n, k;
+
+  /* The pointer arrays, each up to and including its NULL. */
+  room = ARG_MAX - sizeof(char *);
+  nargs = 0;
+  if (exec_argv != NULL) {
+	r = fetch_ptrs((vir_bytes) exec_argv, buf + sizeof(char *), &nargs,
+									room);
+	if (r != OK) return(r);
+  }
+  ((char **) buf)[1 + nargs] = NULL;
+  room -= (nargs + 1) * sizeof(char *);
+  if (room < sizeof(char *)) return(E2BIG);
+  nenv = 0;
+  if (exec_envp != NULL) {
+	r = fetch_ptrs((vir_bytes) exec_envp,
+		buf + (2 + nargs) * sizeof(char *), &nenv, room);
+	if (r != OK) return(r);
+  }
+  ((char **) buf)[2 + nargs + nenv] = NULL;
+  ((char **) buf)[0] = (char *) nargs;
+
+  /* The strings, after the pointers. */
+  hp = buf + (3 + nargs + nenv) * sizeof(char *);
+  slot = (char **) buf + 1;
+  for (i = 0; i < nargs + 1 + nenv; i++, slot++) {
+	if (i == nargs) continue;		/* the NULL after argv */
+	p = (vir_bytes) *slot;
+	*slot = (char *) (hp - buf);
+	for (;;) {				/* in chunks, to the NUL */
+		n = end - hp < 64 ? end - hp : 64;
+		if (n <= 0) return(E2BIG);
+		r = sys_copy(who, D, (phys_bytes) p,
+				MM_PROC_NR, D, (phys_bytes) hp, (phys_bytes) n);
+		if (r != OK) {			/* near the segment end */
+			n = 1;
+			r = sys_copy(who, D, (phys_bytes) p, MM_PROC_NR, D,
+					(phys_bytes) hp, (phys_bytes) 1);
+			if (r != OK) return(EFAULT);
+		}
+		for (k = 0; k < n && hp[k] != 0; k++) ;
+		if (k < n) {			/* found the end */
+			hp += k + 1;
+			break;
+		}
+		hp += n;
+		p += n;
+	}
+  }
+  *bytes = ((hp - buf) + sizeof(char *) - 1) & ~(sizeof(char *) - 1);
+  if (*bytes > ARG_MAX) return(E2BIG);
+  while (hp < buf + *bytes) *hp++ = 0;
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				fetch_ptrs				     *
+ *===========================================================================*/
+PRIVATE int fetch_ptrs(src, buf, n, room)
+vir_bytes src;			/* a NULL-terminated pointer array */
+char *buf;			/* where to put it */
+int *n;				/* number of pointers before the NULL */
+vir_bytes room;			/* bytes available at buf */
+{
+  char **ptr = (char **) buf;
+  int got = 0, k, chunk, r;
+
+  for (;;) {
+	chunk = 16;
+	if ((got + chunk) * sizeof(char *) > room)
+		chunk = room / sizeof(char *) - got;
+	if (chunk <= 0) return(E2BIG);
+	r = sys_copy(who, D, (phys_bytes) (src + got * sizeof(char *)),
+			MM_PROC_NR, D, (phys_bytes) (ptr + got),
+			(phys_bytes) (chunk * sizeof(char *)));
+	if (r != OK) {				/* near the segment end */
+		chunk = 1;
+		r = sys_copy(who, D, (phys_bytes) (src + got * sizeof(char *)),
+			MM_PROC_NR, D, (phys_bytes) (ptr + got),
+			(phys_bytes) sizeof(char *));
+		if (r != OK) return(EFAULT);
+	}
+	for (k = 0; k < chunk; k++) {
+		if (ptr[got + k] == NULL) {
+			*n = got + k;
+			return(OK);
+		}
+	}
+	got += chunk;
+  }
+}
