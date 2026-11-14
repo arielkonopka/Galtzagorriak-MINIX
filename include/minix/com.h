@@ -135,6 +135,8 @@
 #	define SYS_SIGRETURN 18	/* fcn code for sys_sigreturn(&sigmsg) */
 #	define SYS_ENDSIG    19	/* fcn code for sys_endsig(procno) */
 #	define SYS_GETMAP    20	/* fcn code for sys_getmap(procno, map_ptr) */
+#	define SYS_KSTACKS   21	/* fcn code for sys_kstacks(procno, buf, len)
+				 * (ARM_CM: kernel task stack use) */
 
 #define HARDWARE          -1	/* used as source on interrupt generated msgs*/
 

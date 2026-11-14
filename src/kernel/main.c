@@ -73,6 +73,14 @@ PUBLIC void main()
 		if (ttp->stksize > 0) {
 			rp->p_stguard = (reg_t *) ktsb;
 			*rp->p_stguard = STACK_GUARD;
+#if (CHIP == ARM_CM)
+			{	/* paint it, for the high-water mark */
+				reg_t *w = rp->p_stguard;
+				while ((char *) ++w < (char *) ktsb
+							+ ttp->stksize)
+					*w = STACK_GUARD;
+			}
+#endif
 		}
 		ktsb += ttp->stksize;
 		rp->p_reg.sp = ktsb;

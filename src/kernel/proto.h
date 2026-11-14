@@ -258,6 +258,7 @@ _PROTOTYPE( void idle_task, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( void mpu_switch, (void)					);
+_PROTOTYPE( unsigned kstack_used, (unsigned *size)			);
 extern struct proc *mpu_proc;
 _PROTOTYPE( void wreboot, (int how)					);
 _PROTOTYPE( char *k_getenv, (char *name)				);

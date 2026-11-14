@@ -132,6 +132,9 @@ FORWARD _PROTOTYPE( int do_umap, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_xit, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_vcopy, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_getmap, (message *m_ptr) );
+#if (CHIP == ARM_CM)
+FORWARD _PROTOTYPE( int do_kstacks, (message *m_ptr) );
+#endif
 
 #if (SHADOWING == 1)
 FORWARD _PROTOTYPE( int do_fresh, (message *m_ptr) );
@@ -153,6 +156,9 @@ PUBLIC void sys_task()
 	    case SYS_FORK:	r = do_fork(&m);	break;
 	    case SYS_NEWMAP:	r = do_newmap(&m);	break;
 	    case SYS_GETMAP:	r = do_getmap(&m);	break;
+#if (CHIP == ARM_CM)
+	    case SYS_KSTACKS:	r = do_kstacks(&m);	break;
+#endif
 	    case SYS_EXEC:	r = do_exec(&m);	break;
 	    case SYS_XIT:	r = do_xit(&m);		break;
 	    case SYS_GETSP:	r = do_getsp(&m);	break;
@@ -284,6 +290,58 @@ message *m_ptr;			/* pointer to request message */
 
   return(OK);
 }
+
+
+/*===========================================================================*
+ *				do_kstacks				     *
+ *===========================================================================*/
+#if (CHIP == ARM_CM)
+PRIVATE int do_kstacks(m_ptr)
+message *m_ptr;			/* pointer to request message */
+{
+/* Report how much of each kernel task stack has ever been used.  main()
+ * fills the stacks with STACK_GUARD; the words still holding it from the
+ * bottom up were never touched.  The table goes to process PROC1.
+ */
+  struct kstack ks;
+  struct tasktab *ttp;
+  register struct proc *rp;
+  reg_t *w, *end;
+  phys_bytes dst;
+  int t, n = 0, max;
+
+  if (!isokprocn(m_ptr->PROC1)) return(EINVAL);
+  max = m_ptr->m1_i2 / (int) sizeof(ks);
+  for (t = -NR_TASKS; t < 0 && n < max; t++) {
+	ttp = &tasktab[t + NR_TASKS];
+	if (ttp->stksize <= 0) continue;
+	rp = proc_addr(t);
+	w = rp->p_stguard + 1;
+	end = (reg_t *) ((char *) rp->p_stguard + ttp->stksize);
+	while (w < end && *w == STACK_GUARD) w++;
+	strncpy(ks.name, ttp->name, sizeof(ks.name));
+	ks.size = ttp->stksize;
+	ks.used = (char *) end - (char *) w;
+	dst = umap(proc_addr(m_ptr->PROC1), D,
+		(vir_bytes) (m_ptr->m1_p1 + n * sizeof(ks)), sizeof(ks));
+	if (dst == 0) return(EFAULT);
+	phys_copy(vir2phys(&ks), dst, (phys_bytes) sizeof(ks));
+	n++;
+  }
+  if (n < max) {		/* last: the exception (interrupt) stack */
+	unsigned size;
+	ks.used = kstack_used(&size);
+	ks.size = size;
+	strncpy(ks.name, "(irq)", sizeof(ks.name));
+	dst = umap(proc_addr(m_ptr->PROC1), D,
+		(vir_bytes) (m_ptr->m1_p1 + n * sizeof(ks)), sizeof(ks));
+	if (dst == 0) return(EFAULT);
+	phys_copy(vir2phys(&ks), dst, (phys_bytes) sizeof(ks));
+	n++;
+  }
+  return(n);
+}
+#endif
 
 
 /*===========================================================================*

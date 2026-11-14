@@ -174,9 +174,11 @@ transmit must stay inside the legal bands for the user's region.
 ## Memory plan (agreed 2026-11-14)
 
 1. **Tuning** (in progress): smaller FS/MM tables, stdio buffers, exec
-   top-down / fork shadows bottom-up.  Result on the device after login:
-   72 KB free, largest hole 51 KB.  Still to do: measure and shrink the
-   kernel task stacks (`t_stack` 7.7 KB) and the chmem of each program.
+   top-down / fork shadows bottom-up; kernel task and exception stacks
+   sized from measured high-water marks (`free -k`, 9.7 KB → 5.2 KB);
+   USB transmit ring 2048 → 512 B (keeps the newest output while no
+   terminal is open).  Result on the device after login: 77 KB free,
+   largest hole 57 KB.  Still to do: the chmem of each program.
 2. **Program text from flash / shared text**: program code runs in place
    (or one shared copy per program) instead of being copied into RAM
    for every process.
@@ -205,8 +207,8 @@ inside TTY. The CDC-ACM console is how the device is logged into and how
 packages are sent (`flsend`), so it is needed almost all the time. If its
 driver crashed or were unloaded, the device could only be reached through the
 LCD. Plan:
-- The CDC console stays in the kernel. Cheap savings: `tx_ring` 2048 → 512
-  saves 1.5 KB, which flow control makes safe. Optionally, power down the
+- The CDC console stays in the kernel. `tx_ring` is now 512 B (done,
+  1.5 KB saved; flow control makes it safe). Optionally, power down the
   USB peripheral when VBUS is absent.
 - Other USB functions, such as HID keyboard, mass storage (SD card as a USB
   drive) and later CDC-ECM, run as a userspace driver `usbd`. When it

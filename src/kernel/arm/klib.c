@@ -22,6 +22,21 @@ PRIVATE u32_t kernel_stack[K_STACK_BYTES / sizeof(u32_t)]
 				__attribute__((aligned(8)));
 
 FORWARD _PROTOTYPE( void load_boot_images, (void) );
+
+/*===========================================================================*
+ *				kstack_used				     *
+ *===========================================================================*/
+PUBLIC unsigned kstack_used(size)
+unsigned *size;
+{
+/* High-water mark of the kernel (exception) stack, for do_kstacks(). */
+  int i = 0;
+
+  *size = sizeof kernel_stack;
+  while (i < sizeof kernel_stack / sizeof kernel_stack[0]
+					&& kernel_stack[i] == STACK_GUARD) i++;
+  return sizeof kernel_stack - i * sizeof kernel_stack[0];
+}
 FORWARD _PROTOTYPE( long env_number, (char *name) );
 
 extern struct bparam_s boot_parameters;		/* system.c */
@@ -63,6 +78,12 @@ PUBLIC void cstart()
   k_reenter = 0;		/* main() -> restart() makes it -1 */
   kernel_sp_top = (reg_t) &kernel_stack[sizeof kernel_stack / sizeof
 							kernel_stack[0]];
+  {	/* still running on the reset stack: paint the kernel stack for
+	 * the high-water mark (kstack_used()) */
+	int i;
+	for (i = 0; i < sizeof kernel_stack / sizeof kernel_stack[0]; i++)
+		kernel_stack[i] = STACK_GUARD;
+  }
 
   /* Trap divide by zero; fault handlers instead of escalation. */
   SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;

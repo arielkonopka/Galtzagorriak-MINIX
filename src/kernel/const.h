@@ -120,7 +120,8 @@
 
 #if (CHIP == ARM_CM)
 
-#define K_STACK_BYTES   2048	/* kernel (handler mode, MSP) stack */
+#define K_STACK_BYTES   1024	/* kernel (handler mode, MSP) stack; peak
+				 * seen on the Flipper 176 B (free -k) */
 
 /* Initial xPSR: only the Thumb bit; anything else is a fault on return. */
 #define INIT_PSW      0x01000000

@@ -89,11 +89,30 @@
  * WINCHESTER, but for now the choice is fixed.
  */
 #if (CHIP == ARM_CM)
+/* Sizes from the high-water marks measured on the Flipper with "free -k"
+ * (2026-11-14, bytes used in brackets), about twice that, more for the
+ * tasks whose drivers will grow.  An interrupt adds a 32-byte frame to
+ * the interrupted task's stack; handlers run on the kernel stack.
+ */
+#undef	TTY_STACK
+#define	TTY_STACK	768			/* (352) */
+#undef	WINCH_STACK
+#define	WINCH_STACK	(1024 * ENABLE_WINI)	/* (640) SD card over SPI */
+#undef	SYN_ALRM_STACK
+#define	SYN_ALRM_STACK	256			/* (100) */
+#undef	IDLE_STACK
+#define	IDLE_STACK	128			/* (36) */
+#undef	MEM_STACK
+#define	MEM_STACK	256			/* (120) */
+#undef	CLOCK_STACK
+#define	CLOCK_STACK	256			/* (108) */
+#undef	SYS_STACK
+#define	SYS_STACK	SMALL_STACK		/* (364) */
 /* No printer or floppy hardware; the task numbers must still exist. */
 #undef	PRINTER_STACK
-#define	PRINTER_STACK	(3 * SMALL_STACK)	/* flipdev: SPI, I2C calls */
+#define	PRINTER_STACK	768	/* (176) flipdev: SPI, I2C calls */
 #undef	FLOP_STACK
-#define	FLOP_STACK	SMALL_STACK
+#define	FLOP_STACK	256			/* (84) nodev */
 #define printer_task	flipdev_task	/* LCD, buttons, LED: arm/flipdev.c */
 _PROTOTYPE( void flipdev_task, (void) );
 #define floppy_task	nodev_task

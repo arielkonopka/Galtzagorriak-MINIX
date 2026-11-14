@@ -301,6 +301,12 @@ PUBLIC int do_meminfo()
   phys_bytes list[2 * 16];		/* (base, len) pairs, in bytes */
   int n = 0;
 
+#if (CHIP == ARM_CM)
+  /* m1_i2 = MI_KSTACKS: the kernel task stack table instead. */
+  if (mm_in.m1_i2 == MI_KSTACKS)
+	return(sys_kstacks(who, mm_in.m1_p1, mm_in.m1_i1));
+#endif
+
   for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next) {
 	total += hp->h_len;
 	if (hp->h_len > max) max = hp->h_len;

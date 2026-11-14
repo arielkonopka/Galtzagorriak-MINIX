@@ -136,4 +136,14 @@ struct psinfo {		/* information for the ps(1) program */
   vir_bytes proc, mproc, fproc;	/* addresses of the main process tables. */
 };
 
+#if (CHIP == ARM_CM)
+/* Stack use of one kernel task, from MEMINFO with m1_i2 = MI_KSTACKS. */
+struct kstack {
+  char name[8];			/* task name */
+  u16_t size;			/* stack size in bytes */
+  u16_t used;			/* high-water mark in bytes */
+};
+#define MI_KSTACKS	1
+#endif
+
 #endif /* _MINIX_TYPE_H */

@@ -25,7 +25,7 @@
 #define NTF_EP		0x82
 #define NTF_SZ		0x08
 
-#define TX_RING		2048	/* power of 2 */
+#define TX_RING		512	/* power of 2 */
 #define RX_RING		256	/* power of 2 */
 
 struct cdc_config {
@@ -390,7 +390,11 @@ unsigned hal_usb_write(const void *buf, unsigned n)
 	unsigned done = 0;
 	uint32_t s = irq_save();
 
-	while (done < n && tx_head - tx_tail < TX_RING) {
+	while (done < n) {
+		if (tx_head - tx_tail >= TX_RING) {
+			if (configured && dtr) break;	/* host reads: wait */
+			tx_tail++;	/* nobody listens: keep the newest */
+		}
 		tx_ring[tx_head % TX_RING] = p[done++];
 		tx_head++;
 	}
