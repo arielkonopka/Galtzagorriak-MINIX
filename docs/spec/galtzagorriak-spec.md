@@ -348,8 +348,8 @@ goes into the system image; user flash goes into the installed region.
 Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is the smallest; the
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
-region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0 for the full BLE stack, needed for the
-Bluetooth adapter; R19.7 for Thread or Zigbee).
+region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
+for central and GATT client apps; R19.7 for Thread or Zigbee).
 
 ---
 
@@ -2294,8 +2294,12 @@ Limits, stated up front:
   (R16.1.0)**; the full stack also keeps everything the light one does (mobile app, BLE remote).
 
 Requirements:
-- **R16.1.0** Owner decision: install the full BLE stack. Until then `btbridge` reports "needs
-  the full BLE stack" and exits.
+- **R16.1.0** Decided by the owner (2026-11-14): install the full BLE stack. When: at the start
+  of Phase 16, after Phase 15 works on the stack already installed (R15.1), as one FUS update
+  (R17.3 path, as qFlipper does), with the before/after `SFSA`, installed-region size and SRAM2
+  reservation recorded in the PR. One install, no run-time switching (rule: minimize flash
+  writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
+  report "needs the full BLE stack" and exit.
 - **R16.1.1** `bled` gains the central role: scan (filtered to HID service UUID 0x1812), connect,
   pair/bond (LE Secure Connections; passkey shown on or typed into the Flipper as the device
   asks), GATT client discovery of the HID service, Report Map read, and notifications enabled on
@@ -2345,7 +2349,7 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
   on a CDC serial port.
 - **R16.2.2** Stack: with the light stack only peripheral operation works, which is of little use
   to a PC; a useful dongle needs the full stack (R16.1.0) or ST's HCI-only stack. Which one to
-  install is the same owner decision as R16.1.0.
+  install was decided by R16.1.0: the full stack.
 - **R16.2.3** While in dongle mode, MINIX's own `bled` is stopped (the PC owns the controller); the
   mobile-app link and the 16.1 bridge are unavailable until the mode ends.
 - **R16.2.4** BLE only (no Classic, as 16.1). Windows' and macOS's acceptance of an LE-only
@@ -2657,7 +2661,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the owner confirms.
-- Full BLE stack on CPU2 (R16.1.0, for the Bluetooth adapter): owner decision, after Phase 15.
+- Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.7): owner decision, after Phase 15.
 - A FAP binary loader: not planned; apps are ported from source (D.2).
 
