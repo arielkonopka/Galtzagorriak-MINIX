@@ -91,6 +91,12 @@ int act;
 	wp = (wp2 = t->words) != NULL
 	     ? eval(wp2, t->type == TCOM ? DOALL : DOALL & ~DOKEY)
 	     : NULL;
+	if (wp2 != NULL && wp == NULL) {
+		/* the words could not be expanded (out of string space,
+		 * already reported): fail the command, don't run it */
+		rv = setstatus(1);
+		goto broken;
+	}
 
 	switch(t->type) {
 	case TPAREN:
