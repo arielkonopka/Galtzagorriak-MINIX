@@ -261,6 +261,7 @@ _PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp)	);
 _PROTOTYPE( void lcd_cons_putc, (int c)					);
 _PROTOTYPE( void user_frame_fault, (void)				);
 _PROTOTYPE( void mpu_switch, (void)					);
+_PROTOTYPE( void shadow_kick, (void)					);
 _PROTOTYPE( void bell, (void)						);
 _PROTOTYPE( unsigned kstack_used, (unsigned *size)			);
 _PROTOTYPE( int arm_flash, (int op, u32_t addr, phys_bytes src,

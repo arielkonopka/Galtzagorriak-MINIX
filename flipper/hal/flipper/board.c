@@ -404,6 +404,9 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define CMD17	17	/* READ_SINGLE_BLOCK */
 #define CMD18	18	/* READ_MULTIPLE_BLOCK */
 #define CMD24	24	/* WRITE_BLOCK */
+#define CMD25	25	/* WRITE_MULTIPLE_BLOCK */
+#define TOKEN_MULTI	0xFC	/* data token for CMD25 */
+#define TOKEN_STOP	0xFD	/* ends a CMD25 transfer */
 #define CMD55	55	/* APP_CMD */
 #define CMD58	58	/* READ_OCR */
 #define ACMD41	41	/* SD_SEND_OP_COND */
@@ -642,30 +645,56 @@ int hal_disk_read(uint32_t sector, void *buf, unsigned count)
 	return count == 0 ? 0 : -1;
 }
 
+/* One data block of a write: token, data, CRC16; the card answers 0x05
+ * (accepted) or 0x0B (CRC error) and is busy while it programs. */
+static int sd_write_data(uint8_t token, const uint8_t *p)
+{
+	uint16_t crc = crc16(p, HAL_SECTOR_SIZE);
+	uint8_t resp;
+
+	spi2_xfer(0xFF);
+	spi2_xfer(token);
+	spi2_block(p, NULL, HAL_SECTOR_SIZE);
+	spi2_xfer(crc >> 8);
+	spi2_xfer(crc & 0xFF);
+	resp = spi2_xfer(0xFF) & 0x1F;
+	if (sd_wait_ready() < 0 || resp != 0x05) return -1;
+	return 0;
+}
+
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 {
 	const uint8_t *p = buf;
-	uint16_t crc;
-	uint8_t resp;
-	int tries = 0;
+	int tries = 0, r;
 
 	if (!sd_ready) return -1;
 	spi2_speed(sd_fast);
 	while (count > 0) {
-		if (sd_cmd(CMD24, sd_block_addr ? sector : sector * 512) != 0)
+		if (count == 1) {
+			if (sd_cmd(CMD24, sd_block_addr ? sector : sector * 512)
+				!= 0 || sd_write_data(TOKEN_START, p) < 0)
+				goto bad;
+			count--;
+			break;
+		}
+		/* Several sectors: one CMD25, ended by the stop token. */
+		if (sd_cmd(CMD25, sd_block_addr ? sector : sector * 512) != 0)
 			goto bad;
-		crc = crc16(p, HAL_SECTOR_SIZE);
+		r = 0;
+		while (count > 0) {
+			if (sd_write_data(TOKEN_MULTI, p) < 0) {
+				r = -1;
+				break;
+			}
+			tries = 0;
+			count--, sector++, p += HAL_SECTOR_SIZE;
+		}
+		spi2_xfer(TOKEN_STOP);
 		spi2_xfer(0xFF);
-		spi2_xfer(TOKEN_START);
-		spi2_block(p, NULL, HAL_SECTOR_SIZE);
-		spi2_xfer(crc >> 8);
-		spi2_xfer(crc & 0xFF);
-		resp = spi2_xfer(0xFF) & 0x1F;		/* 0x05 accepted, */
-		if (sd_wait_ready() < 0 || resp != 0x05)	/* 0x0B CRC */
-			goto bad;
-		tries = 0;
-		count--, sector++, p += HAL_SECTOR_SIZE;
-		continue;
+		if (sd_wait_ready() < 0) r = -1;
+		if (r == 0) break;
+		/* The blocks before the bad one were accepted; on with the
+		 * rest. */
 	bad:
 		hal_disk_errors++;
 		if (tries >= 4) break;
@@ -782,6 +811,7 @@ void hal_init(void)
 	gpio_cfg(GPIOC, 12, MODE_OUT, PULL_NONE, 0);	/* SD CS */
 	gpio_cfg(GPIOB, 0, MODE_OUT, PULL_NONE, 0);	/* display RST */
 	gpio_cfg(GPIOB, 1, MODE_OUT, PULL_NONE, 0);	/* display A0 */
+	hal_vibro(0);					/* PA8: motor off */
 
 	SysTick_Config(SystemCoreClock / 1000);
 	hal_wdt_start();
@@ -830,6 +860,86 @@ void hal_dfu_request(void)
 	*HAL_BOOT_WORD = HAL_BOOT_DFU;
 	__DSB();
 	NVIC_SystemReset();
+}
+
+/*===========================================================================*
+ *				Vibro, GPIO header			     *
+ *===========================================================================*/
+void hal_vibro(int on)
+{
+	gpio_set(GPIOA, 8, on);
+	gpio_cfg(GPIOA, 8, MODE_OUT, PULL_NONE, 0);
+}
+
+static const struct { GPIO_TypeDef *port; unsigned pin; } hdr[HAL_GPIO_PINS] = {
+	{ GPIOA, 7 }, { GPIOA, 6 }, { GPIOA, 4 }, { GPIOB, 3 },
+	{ GPIOB, 2 }, { GPIOC, 3 }, { GPIOC, 1 }, { GPIOC, 0 },
+};
+
+int hal_gpio(unsigned pin, unsigned op)
+{
+	GPIO_TypeDef *port;
+	unsigned n;
+
+	if (pin >= HAL_GPIO_PINS) return -1;
+	port = hdr[pin].port;
+	n = hdr[pin].pin;
+	switch (op) {
+	case HAL_GPIO_LOW:
+	case HAL_GPIO_HIGH:
+		gpio_set(port, n, op == HAL_GPIO_HIGH);	/* level first */
+		gpio_cfg(port, n, MODE_OUT, PULL_NONE, 0);
+		break;
+	case HAL_GPIO_IN:	gpio_cfg(port, n, MODE_IN, PULL_NONE, 0); break;
+	case HAL_GPIO_IN_UP:	gpio_cfg(port, n, MODE_IN, PULL_UP, 0); break;
+	case HAL_GPIO_IN_DOWN:	gpio_cfg(port, n, MODE_IN, PULL_DOWN, 0); break;
+	case HAL_GPIO_OFF:	gpio_cfg(port, n, MODE_ANALOG, PULL_NONE, 0); break;
+	default:		return -1;
+	}
+	return 0;
+}
+
+int hal_gpio_read(unsigned pin)
+{
+	if (pin >= HAL_GPIO_PINS) return -1;
+	return gpio_get(hdr[pin].port, hdr[pin].pin);
+}
+
+/*===========================================================================*
+ *				Random numbers				     *
+ *===========================================================================*/
+/* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
+ * else from the LSI (on anyway for the watchdog; then the clock error
+ * check, which wants more than HCLK/32, is off).  CPU2 is not started,
+ * so no semaphore. */
+int hal_random(uint32_t *w)
+{
+	static int on;
+	uint32_t n;
+
+	if (!on) {
+		RCC->AHB3ENR |= RCC_AHB3ENR_RNGEN;
+		(void) RCC->AHB3ENR;
+		RCC->CCIPR &= ~RCC_CCIPR_RNGSEL;		/* CLK48 */
+		if (!(RCC->CR & RCC_CR_PLLSAI1RDY)) {
+			RCC->CCIPR |= 1u << RCC_CCIPR_RNGSEL_Pos;	/* LSI */
+			RNG->CR |= RNG_CR_CED;
+		}
+		RNG->CR |= RNG_CR_RNGEN;
+		on = 1;
+	}
+	for (n = 0; !(RNG->SR & RNG_SR_DRDY); n++) {
+		if ((RNG->SR & (RNG_SR_SECS | RNG_SR_CECS)) || n == 1000000u) {
+			/* seed or clock error: restart it, the caller may
+			 * try again */
+			RNG->CR &= ~RNG_CR_RNGEN;
+			RNG->SR = 0;
+			RNG->CR |= RNG_CR_RNGEN;
+			return -1;
+		}
+	}
+	*w = RNG->DR;
+	return 0;
 }
 
 /*===========================================================================*
