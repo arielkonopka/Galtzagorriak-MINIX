@@ -1,0 +1,11 @@
+# Static RAM budget per system image (spec rule 0.1, 0.3), bytes.
+# make BOARD=flipper ramcheck compares arm-none-eabi-size of each image
+# with its line and fails when .data + .bss is larger.  A phase that is
+# allowed to grow an image raises its line in the same commit.
+#
+# image   data   bss    total   (measured)
+# Baseline main 76fd717 (= 5e3d0f0 + docs), 2026-11-14; Phase 1: +0 B.
+kernel    652    16904  17556
+mm        372    10312  10684
+fs        476    27380  27856
+init      372    1376   1748
