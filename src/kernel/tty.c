@@ -303,8 +303,9 @@ register message *m_ptr;	/* pointer to message sent to the task */
   if (m_ptr->COUNT <= 0) {
 	r = EINVAL;
   } else
-  if (numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, m_ptr->COUNT) == 0) {
-	r = EFAULT;
+  if (numap_src(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, m_ptr->COUNT)
+									== 0) {
+	r = EFAULT;	/* output may come from a constant (text) */
   } else {
 	/* Copy message parameters to the tty structure. */
 	tp->tty_outrepcode = TASK_REPLY;
@@ -680,14 +681,13 @@ register tty_t *tp;		/* pointer to terminal to read from */
 
   int ch;
   int count;
-  phys_bytes buf_phys, user_base;
+  phys_bytes buf_phys;
   char buf[64], *bp;
 
   /* Anything to do? */
   if (tp->tty_inleft == 0 || tp->tty_eotct < tp->tty_min) return;
 
   buf_phys = vir2phys(buf);
-  user_base = proc_vir2phys(proc_addr(tp->tty_inproc), 0);
   bp = buf;
   while (tp->tty_inleft > 0 && tp->tty_eotct > 0) {
 	ch = *tp->tty_intail;
@@ -698,7 +698,7 @@ register tty_t *tp;		/* pointer to terminal to read from */
 		tp->tty_inleft--;
 		if (++bp == bufend(buf)) {
 			/* Temp buffer full, copy to user space. */
-			phys_copy(buf_phys, user_base + tp->tty_in_vir,
+			phys_copy(buf_phys, proc_vir2phys(proc_addr(tp->tty_inproc), tp->tty_in_vir),
 						(phys_bytes) buflen(buf));
 			tp->tty_in_vir += buflen(buf);
 			tp->tty_incum += buflen(buf);
@@ -720,7 +720,7 @@ register tty_t *tp;		/* pointer to terminal to read from */
   if (bp > buf) {
 	/* Leftover characters in the buffer. */
 	count = bp - buf;
-	phys_copy(buf_phys, user_base + tp->tty_in_vir, (phys_bytes) count);
+	phys_copy(buf_phys, proc_vir2phys(proc_addr(tp->tty_inproc), tp->tty_in_vir), (phys_bytes) count);
 	tp->tty_in_vir += count;
 	tp->tty_incum += count;
   }

@@ -107,7 +107,9 @@ struct proc {
 /* Flat addressing: a virtual address is physical, unless the process image
  * currently lives in its shadow copy (see arm/shadow.c). */
 #define proc_vir2phys(p, vir) \
-	((phys_bytes) (vir) + ((p)->p_shadow == 0 ? 0 : \
+	((phys_bytes) (vir) + ((p)->p_shadow == 0 \
+	  || (phys_bytes) (vir) < (phys_bytes) (p)->p_map[D].mem_vir \
+							<< CLICK_SHIFT ? 0 : \
 	  ((phys_bytes) (p)->p_shadow - (p)->p_map[D].mem_phys) << CLICK_SHIFT))
 #else
 #define proc_vir2phys(p, vir) \

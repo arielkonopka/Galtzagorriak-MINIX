@@ -98,9 +98,12 @@ struct iorequest_s *iop;	/* pointer to read or write request */
   dv = &m_geom[device];
 
   /* Determine address where data is to go or to come from. */
-  user_phys = numap(proc_nr, (vir_bytes) iop->io_buf,
-  						(vir_bytes) iop->io_nbytes);
-  if (user_phys == 0) return(iop->io_nbytes = EINVAL);
+  user_phys = opcode == DEV_WRITE	/* a source may be constant */
+	? numap_src(proc_nr, (vir_bytes) iop->io_buf,
+						(vir_bytes) iop->io_nbytes)
+	: numap(proc_nr, (vir_bytes) iop->io_buf,
+						(vir_bytes) iop->io_nbytes);
+  if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
 
   if (device == NULL_DEV) {
 	/* /dev/null: Black hole. */
