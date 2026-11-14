@@ -59,6 +59,7 @@ _PROTOTYPE( int do_sigreturn, (void)					);
 _PROTOTYPE( int do_sigsuspend, (void)					);
 _PROTOTYPE( int do_reboot, (void)					);
 _PROTOTYPE( int do_meminfo, (void)					);
+_PROTOTYPE( phys_clicks alloc_mem_high, (phys_clicks clicks)		);
 
 /* trace.c */
 _PROTOTYPE( int do_trace, (void)					);

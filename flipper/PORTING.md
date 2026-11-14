@@ -268,6 +268,10 @@ Stack + heap per program like `chmem`: 16 KB default, `CHMEM_<prog>` in
 - Console flow control end to end (USB endpoint NAK, console ring, raw TTY
   input kept, UART interrupt held); the CR inserted before every LF in the
   console driver corrupted raw output and was moved to kernel printf only.
+- Memory without an MMU: exec now places program images at the top of
+  RAM (MM `alloc_mem_high`), fork shadow copies at the bottom; long-lived
+  processes pile up at the top and the free space stays in one piece
+  (largest hole after login 29 KB -> 48 KB).  `free -v` shows the holes.
 - `src/fs/read.c`: block devices were given a "size" of `LONG_MAX`, so every
   read past 2 GB returned end-of-file; now `ULONG_MAX`.
 - The disk driver no longer uses 32-bit byte offsets for the sector number

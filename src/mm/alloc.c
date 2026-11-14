@@ -247,6 +247,41 @@ phys_clicks *total, *free;		/* memory size summaries */
 
 
 /*===========================================================================*
+ *				alloc_mem_high				     *
+ *===========================================================================*/
+PUBLIC phys_clicks alloc_mem_high(clicks)
+phys_clicks clicks;		/* amount of memory requested */
+{
+/* Like alloc_mem(), but take the block from the top end of the highest hole
+ * that is big enough.  Without an MMU nothing can be moved later, so the
+ * placement matters: exec puts program images at the top, where the long-
+ * lived ones (launcher, shells, daemons) pile up, while fork's temporary
+ * shadow copies come from the bottom (alloc_mem).  The free space then
+ * stays together instead of being cut into pieces too small to run
+ * anything.
+ */
+  register struct hole *hp, *prev_ptr, *best, *best_prev;
+
+  best = best_prev = prev_ptr = NIL_HOLE;
+  for (hp = hole_head; hp != NIL_HOLE; prev_ptr = hp, hp = hp->h_next) {
+	if (hp->h_len >= clicks) {	/* the list is sorted by address */
+		best = hp;
+		best_prev = prev_ptr;
+	}
+  }
+  if (best == NIL_HOLE) return(NO_MEM);
+  best->h_len -= clicks;
+  if (best->h_len == 0) {
+	phys_clicks base = best->h_base;
+
+	del_slot(best_prev, best);
+	return(base);
+  }
+  return(best->h_base + best->h_len);
+}
+
+
+/*===========================================================================*
  *				do_meminfo				     *
  *===========================================================================*/
 PUBLIC int do_meminfo()

@@ -352,7 +352,13 @@ phys_bytes tot_bytes;		/* total memory to allocate, including gap */
   /* We have now passed the point of no return.  The old core image has been
    * forever lost.  The call must go through now.  Set up and report new map.
    */
+#if (CHIP == ARM_CM)
+  /* Program images from the top, fork copies from the bottom: see
+   * alloc_mem_high() - this keeps free memory in one piece. */
+  new_base = alloc_mem_high(text_clicks + tot_clicks);
+#else
   new_base = alloc_mem(text_clicks + tot_clicks);	/* new core image */
+#endif
   if (new_base == NO_MEM) panic("MM hole list is inconsistent", NO_NUM);
 
   if (sh_mp != NULL) {

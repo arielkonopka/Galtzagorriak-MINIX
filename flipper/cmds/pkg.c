@@ -193,6 +193,49 @@ static int file_list(const char *archive, const char *listpath)
 	return 0;
 }
 
+/* Make the parent directories of path (mkdir -p). */
+static void make_parents(char *path)
+{
+	char *p;
+
+	for (p = path + 1; (p = strchr(p, '/')) != NULL; p++) {
+		*p = 0;
+		if (!exists(path)) mkdir(path, 0755);
+		*p = '/';
+	}
+}
+
+/* Copy each file named in the list from the scratch directory to its
+ * place, keeping the mode; link first (same file system: no copy). */
+static int place_files(const char *listpath)
+{
+	char line[PATH_MAX], src[PATH_MAX];
+	struct stat st;
+	FILE *list;
+	size_t n;
+	int r = 0;
+
+	if ((list = fopen(listpath, "r")) == NULL) return -1;
+	while (fgets(line, sizeof line, list) != NULL) {
+		if ((n = strlen(line)) > 0 && line[n - 1] == '\n') line[--n] = 0;
+		if (line[0] != '/') continue;
+		sprintf(src, "%s%s", tmp, line);
+		if (stat(src, &st) < 0) { r = -1; continue; }
+		make_parents(line);
+		unlink(line);
+		if (link(src, line) < 0) {
+			if (copy(src, line) < 0) {
+				fprintf(stderr, "pkg: cannot install %s\n", line);
+				r = -1;
+				continue;
+			}
+		}
+		chmod(line, st.st_mode & 07777);
+	}
+	fclose(list);
+	return r;
+}
+
 static int install(const char *file)
 {
 	char abs[PATH_MAX], path[PATH_MAX], rel[PATH_MAX], buf[PATH_MAX];
@@ -237,9 +280,10 @@ static int install(const char *file)
 	dbpath(buf, ctl_name, "list");
 	if (file_list(abs, buf) < 0) die("cannot list the files of", file);
 
-	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
-	if (run("/", argv) != 0) die("unpacking into / failed", NULL);
-	rm_r("/CONTROL");
+	/* Move the files from the scratch directory into place ourselves: a
+	 * second tar would need another fork + exec, which may not fit. */
+	dbpath(buf, ctl_name, "list");
+	if (place_files(buf) < 0) die("installing the files failed", NULL);
 
 	dbpath(buf, ctl_name, "control");
 	copy(path, buf);
