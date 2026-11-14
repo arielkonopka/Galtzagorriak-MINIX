@@ -2020,8 +2020,9 @@ background work must either be very small or be swapped cleverly. Each backgroun
   - Other apps keep the stock behaviour: long-press Back ends them.
   - The Running list shows each parked app with its state (`in RAM`, `on SD`, `waiting for
     memory`) and its RAM, and is the place to free memory by hand.
-  - Owner question: is long-press Back the right gesture for parking, or should parking be an
-    explicit "Background" menu item, with long-press Back always ending the app as in stock?
+  - Decided by the owner (2026-11-14): long-press Back parks apps that declare `Background: park`.
+    The app's own menu SHOULD also offer "Quit", and the launcher shows a one-time hint the first
+    time an app is parked ("Parked. End it from Running.").
 - **R12.21 Size guidance** (for app authors; the manual repeats it):
   - tier 2 image (data + heap + stack) ≤ 16 KB SHOULD be the target: its swap-in is ≈ 55 ms with
     single-block SD (≈ 300 KB/s) and ≈ 15–25 ms with multi-block (R4b.9). 32 KB is ≈ 110 ms and
