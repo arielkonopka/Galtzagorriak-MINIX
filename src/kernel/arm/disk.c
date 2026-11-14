@@ -13,6 +13,7 @@
 #include "../kernel.h"
 #include "../driver.h"
 #include "../drvlib.h"
+#include "../proc.h"
 #include "hal.h"
 
 #define MAX_DRIVES	1
@@ -30,7 +31,6 @@ PRIVATE struct wini {
 } wini[MAX_DRIVES];
 
 PRIVATE struct device *w_dv;		/* current device */
-PRIVATE u8_t w_buf[BLOCK_SIZE];		/* bounce buffer */
 
 FORWARD _PROTOTYPE( struct device *w_prepare, (int device)		);
 FORWARD _PROTOTYPE( char *w_name, (void)				);
@@ -98,6 +98,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 {
   unsigned long pos, nbytes, sector, count;
   phys_bytes user_phys;
+  struct proc *rp;
   int opcode, r;
 
   nbytes = iop->io_nbytes;
@@ -117,17 +118,19 @@ struct iorequest_s *iop;	/* pointer to read or write request */
   if (nbytes > w_dv->dv_size - pos) nbytes = w_dv->dv_size - pos;
   sector = (w_dv->dv_base >> SECTOR_SHIFT) + (pos >> SECTOR_SHIFT);
 
+  /* Straight between the card and the caller's memory (R2a.3: no bounce
+   * buffer; the SPI moves bytes, so any alignment does).  The caller must
+   * stay where it is meanwhile: no shadow swap (p_physio). */
+  rp = proc_addr(proc_nr);
+  rp->p_physio = TRUE;
   while (nbytes > 0) {
-	count = nbytes < sizeof(w_buf) ? nbytes : sizeof(w_buf);
-	if (opcode == DEV_WRITE) {
-		phys_copy(user_phys, vir2phys(w_buf), (phys_bytes) count);
-		r = hal_disk_write(sector, w_buf, count >> SECTOR_SHIFT);
-	} else {
-		r = hal_disk_read(sector, w_buf, count >> SECTOR_SHIFT);
-		if (r == 0)
-			phys_copy(vir2phys(w_buf), user_phys,
-							(phys_bytes) count);
-	}
+	count = nbytes < BLOCK_SIZE ? nbytes : BLOCK_SIZE;
+	if (opcode == DEV_WRITE)
+		r = hal_disk_write(sector, (void *) user_phys,
+						count >> SECTOR_SHIFT);
+	else
+		r = hal_disk_read(sector, (void *) user_phys,
+						count >> SECTOR_SHIFT);
 	if (hal_disk_errors != w_errors) {	/* retried: CRC, timeout */
 		w_errors = hal_disk_errors;
 		printf("%s: %lu transfer(s) retried in all, bus at %u MHz\n",
@@ -135,6 +138,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 	}
 	if (r != 0) {
 		printf("%s: I/O error at sector %lu\n", w_name(), sector);
+		rp->p_physio = FALSE;
 		return(iop->io_nbytes = EIO);
 	}
 	sector += count >> SECTOR_SHIFT;
@@ -142,6 +146,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 	nbytes -= count;
 	iop->io_nbytes -= count;
   }
+  rp->p_physio = FALSE;
   return(OK);
 }
 

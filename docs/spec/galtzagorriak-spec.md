@@ -5,6 +5,10 @@ Revision 1 (same day) covered security, RAM, swap and flash-installed programs; 
 renumbered here (section C and the Roadmap list the mapping).
 Addition (2026-11-14, same revision): section I (time in UTC, Year 2038, location, first-boot
 wizard), Phase 2d and Phase 18b.
+Addition (2026-11-14): Phase 12d–12f (background-app tiers, park/hibernate API, two-ended
+placement, swap without a card, manual notes; owner request).
+Addition (2026-11-14): section J (own versioning: Galtzagorriak 0.x on a MINIX 2.0.0 base, ABI
+number, tags and CHANGELOG; owner decision).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -122,6 +126,7 @@ Mechanisms every phase must respect:
   foreground FS request between chunks. Swap-out is decided ahead of need: MM keeps a free-RAM
   reserve (default 16 KB) by swapping idle processes in the background, so a launch does not wait
   for a swap-out. Only the launcher is pre-swapped-in when an app exits (L7).
+  Limits and order: R12.5 (amended), R12.23. Swap goes to the SD card only (R12.1).
 - **R0.8e Measurement tool.** Phase 1 adds `make BOARD=flipper latcheck` and a kernel trace using
   the DWT cycle counter: timestamps for button IRQ, `/dev/buttons` reply, LCD DMA start, IRQ entry,
   mask/unmask (longest masked interval), REVIVE→run and flash stalls, kept in a 32-entry ring
@@ -182,7 +187,8 @@ devices. That plan still fits protocol daemons (`bled`, `rpcd`) that start on de
 **A.5 Memory tiers.**
 - **Code:** installed region (hot: system and device apps) → run-time cache (warm: other
   commands, packages from SD) → RAM (cold fallback).
-- **Data:** RAM, plus swap for idle processes.
+- **Data:** RAM, plus swap for idle processes. Background apps use the cheapest of four tiers
+  (event, hibernate, park, stream; Phase 12d), so most of them hold no RAM while waiting.
 
 **A.6 Hardware-first RAM saving (standing rule from the project owner, 2026-11-14).**
 Whenever a hardware-specific approach can save RAM **safely**, use it. Concretely:
@@ -344,8 +350,8 @@ goes into the system image; user flash goes into the installed region.
 Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is the smallest; the
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
-region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0 for the full BLE stack, needed for the
-Bluetooth adapter; R19.7 for Thread or Zigbee).
+region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
+for central and GATT client apps; R19.7 for Thread or Zigbee).
 
 ---
 
@@ -766,6 +772,97 @@ The final deliverable includes a complete manual. These facts go into it:
   sunrise/sunset method and its limits near the equinoxes.
 - Re-running the wizard or a single step: `setup`, `setup <step>`, Settings → System → Setup.
 - Clock accuracy, the daily rate and calibration (I.6).
+
+---
+
+## J. Versioning and releases (owner decision, 2026-11-14)
+
+The system has changed enough to be its own system, so it gets its own name and version. MINIX
+2.0.0 stays visible as the base.
+
+**J.1 Name and version number.**
+- The system is **Galtzagorriak**. Versions follow semantic versioning, `MAJOR.MINOR.PATCH`.
+- **0.x until feature parity.** The minor number goes up by one each time a phase or a lettered
+  sub-phase (2a, 2b, 7b, …) is complete, that is, all its acceptance criteria pass and its PRs
+  are merged. The minor number is a counter, not the phase number: phases may finish out of
+  order (e.g. 2a, 2c, 2d before 2b), and each one adds one.
+- The patch number goes up for a release with fixes and tasks only (e.g. T2–T5).
+- **1.0.0** is released when Phase 18 is complete: feature parity with the stock firmware, with
+  the rule 0.8 budgets met.
+- After 1.0: major for an ABI break (J.3), minor for new features, patch for fixes.
+- **Starting point: 0.1.0 = Phase 1 complete** (R1.1–R1.7, AC1.R; tagged on main after this
+  section was merged). Earlier history (milestones 0–3, flash text cache, PIC programs, the
+  hardware PRs) is summed up in `CHANGELOG.md` under 0.1.0; no older tags are added.
+
+**J.2 Where the version shows.**
+- `include/minix/gzversion.h` (new, hand-edited) is the **only** place the numbers are written:
+  `GZ_NAME "Galtzagorriak"`, `GZ_MAJOR`, `GZ_MINOR`, `GZ_PATCH`, `GZ_RELEASE "0.1.0"`, `GZ_ABI 1`,
+  `GZ_BASE "MINIX 2.0.0"`. `OS_RELEASE "2.0"` / `OS_VERSION "0"` in `<minix/config.h>` keep their
+  meaning (the MINIX base) so old code that reads them still builds.
+- **Build id.** The build writes `gzbuild.h` (in the build tree, not in git) with `GZ_BUILD`:
+  empty for a build exactly at a release tag, otherwise `+N.gHASH` from `git describe`
+  (`-dirty` added for uncommitted changes), e.g. `0.1.0+7.g1a2b3c4`. The file is rewritten only
+  when its contents change, so a build does not recompile everything.
+- `uname()` (libc) returns:
+
+  | Field | Value | Note |
+  |---|---|---|
+  | sysname | `Galtzagorriak` | 13 of 15 chars |
+  | release | `0.1.0` | `GZ_RELEASE`, ≤ 11 chars |
+  | version | `M2.0.0` | the MINIX base, ≤ 7 chars |
+  | machine / arch | `flipper` / `armv7e-m` | unchanged |
+
+  So `uname -a` shows both the system and its base: `Galtzagorriak flipper 0.1.0 M2.0.0 flipper armv7e-m`.
+  `src/test/test3.c` (now `#if 0`) accepts `Galtzagorriak` too.
+- **Boot banner** (tty task, USB console and LCD console):
+  `Galtzagorriak 0.1.0+7.g1a2b3c4 (based on MINIX 2.0.0), ABI 1`, then the original
+  Prentice-Hall copyright line for the MINIX code.
+- **`ver`** (new, base package, ~1 KB flash): prints name, release with build id, build date,
+  base, ABI, and the hardware revision and CPU2 stack version once Phase 6/15 can read them. The
+  Settings → About screen (Phase 7) shows the same lines.
+- **RAM: 0 B.** All strings are `const` in flash (kernel, libc text). `struct utsname` belongs to
+  the caller, as now. No file on the card or in flash is written to hold the version.
+
+**J.3 ABI number.**
+- `GZ_ABI` is a small integer for **binary compatibility of programs and packages** with the
+  kernel, MM, FS and the shared libc (Phase 2b). It is not the release number.
+- It goes up when an already built program would break: changed system-call numbers or message
+  layouts, changed sizes or layouts of shared types (`time_t`, `struct stat`, `struct
+  sigcontext`), a changed executable format or relocation rules, or a changed shared-libc entry
+  table. It does not go up for new calls, new devices or new files.
+- **ABI 1** is today's main. **Phase 2d (64-bit `time_t`, R2d.1) raises it to 2.** Phase 2b (shared
+  libc) raises it again if its entry table is not frozen in the same release as 2d; try to land
+  both in one ABI step.
+- **Executables:** `elf2mnx.py` writes `GZ_ABI` into the a.out header field `a_version`
+  ("version stamp, not used at present", 16 bits, so no format change). MM's exec checks it:
+  `a_version == 0` counts as ABI 1 (programs built before this change); any other value that is
+  not the running ABI fails with `ENOEXEC`, before any memory is allocated. Cost: a few
+  instructions in MM, 0 B RAM, no extra read (the header is already read).
+- **Packages:** `mkpkg.py` writes `Abi: N` into `CONTROL/control`. `pkg install` refuses a
+  package whose `Abi:` is not the running one (missing = 1) with the message
+  `pkg: NAME needs ABI N, this system is ABI M`. Packages with no programs (data, scripts,
+  Berry apps) write `Abi: any`.
+- A program knows the ABI it was built for from `GZ_ABI`; the running one is printed by `ver`.
+  No new system call.
+
+**J.4 Releases, tags and changelog.**
+- A release is a commit on main that changes `gzversion.h` and adds the `CHANGELOG.md` section,
+  in one PR named `release: X.Y.Z`. After merge, the review side tags the merge commit
+  **`vX.Y.Z`** (annotated tag, message = the changelog section). The base package's
+  `BASE_VER` stays its own update counter; its control file gets `Os: X.Y.Z`.
+- `CHANGELOG.md` (repo root), newest first. One section per release: date, phases or tasks
+  completed, user-visible changes, ABI change (if any), RAM and flash change, and the
+  latency numbers that moved (from PORTING.md). It is written for the user, in short lines,
+  because it feeds the final system manual (one chapter of release notes).
+- Every feature PR adds one line under `## Unreleased` at the top of `CHANGELOG.md`. The release
+  PR turns `Unreleased` into the version section.
+- `make BOARD=flipper versioncheck` (run together with `ramcheck`): fails if `GZ_MAJOR`/`GZ_MINOR`/
+  `GZ_PATCH`, `GZ_RELEASE` and the newest released `CHANGELOG.md` section disagree.
+- Flash writes: none at run time. A release changes only what `make base-flash` /
+  `pkg install --flash` already write at install time (standing rule on flash writes, `next-tasks.md`).
+
+For the manual: how to read the version (`uname -a`, `ver`, banner, Settings → About), what the
+ABI number means for installing packages, and where the release notes are.
 
 ---
 
@@ -1958,6 +2055,152 @@ Design rationale: report Part 4.
   - after swap-in the kernel pokes the driver to retry.
 - **R12.15** Swap long-lived shadow copies (real `fork` without `exec`) instead of keeping them in RAM.
 
+### 12d. Background apps: four tiers (owner request, 2026-11-14)
+
+The stock firmware has no swap, so its background work lives inside one always-running image. Here
+background work must either be very small or be swapped cleverly. Each background job picks the
+**cheapest tier that does the job**. The tier is declared in the package manifest
+(`Background: event|hibernate|park|stream`) and checked by the launcher and `pkg`.
+
+| Tier | While waiting | RAM while waiting | Process slot while waiting | Back to work | Needs swap? |
+|---|---|---|---|---|---|
+| 0 `event` | no process; the trigger is a `timed` timer (F.2) held in RTC Alarm A, or an INIT event | 0 B | no | exec of installed text, ≈ 50–150 ms | no |
+| 1 `hibernate` | no process; the app saved a small state blob and exited | 0 B (blob on SD) | no | exec + read blob, ≈ 100–200 ms, at **any** address | no |
+| 2 `park` | process blocked in MM (`sigsuspend`), image swapped to SD when memory is needed | 0 B once swapped (whole image until then) | **yes** (one of 13 user slots) | swap-in at the **same** address, L6 ≤ 600 ms | yes (12a/12b) |
+| 3 `stream` | live radio, DMA or USB stream (never swappable, R12.3) | the logic sits in a kernel device task (section G), ≤ 64 B; a user part is ≤ 4 KB or exits | only if a user part stays | immediate | no |
+
+- **R12.16 Tier rule.** An app MUST use tier 0 or 1 when it can.
+  - Anything with a deadline (alarms, reminders, sensor alarms, logging at a set time) MUST be
+    tier 0: a swapped image can wait for its address range (R12.6), a fresh exec cannot.
+  - Tier 2 is for stock ports and other apps whose state is a large, pointer-rich heap that
+    can't be serialized cheaply.
+  - Tier 3 user parts above 4 KB need a measured reason in the PR.
+- **R12.17 Why there is no "resident stub" process.** The smallest MINIX process costs about
+  1.5–2 KB (minimal stack, libc data, `proc`/`mproc`/`fproc` entries) and one of only 16 process
+  slots (`NR_PROCS`, 13 for users). So the "tiny resident stub" of an app is not a process: it is
+  a registration that costs 0 B of process RAM. The stub forms are a `timed` timer file (tier 0),
+  the hibernation record (tier 1), the parked `mproc` entry (tier 2), or kernel device-task state
+  (tier 3).
+- **R12.18 Hibernate API** (in `libapp`, flash only; works without swap, so it MAY land with
+  Phase 7b):
+  - `app_hibernate(const void *state, size_t len, const struct app_wake *wake)` writes `state`
+    (≤ 4 KB) to `/var/hib/<uid>/<app>` (mode 0600, owner the app's uid; on the SD card, never in
+    internal flash), registers the wake sources, and exits with status 0;
+  - wake sources: a `timed` timer (`Action: run` with `--resume`), "user opened the app from the
+    launcher", a `notify_post()` reply. More sources (GPIO edge, sensor threshold) are added by the
+    phase that adds the driver, as INIT events like `SIGRTC`;
+  - `app_resume(void *buf, size_t max)` returns the blob's length (0 = fresh start) and removes the file;
+  - the blob holds **no pointers** (offsets and ids only), so the new process may live anywhere:
+    this is the relocation answer for tier 1;
+  - a blob is not encrypted: apps MUST NOT put secrets in it (keys go to the CPU2 enclave, R17.1).
+    A secret-holding app uses tier 2, whose image is encrypted (12b);
+  - an SD write of ≤ 4 KB goes through the FS cache as idle work; 0 flash writes.
+- **R12.19 Park API** (in `libapp` and in the `libfuri` main loop):
+  - `app_park(const struct app_wake *wake)` blocks the process in `sigsuspend()` with the given
+    timer (`alarm`/`setitimer`), so it is in the `PAUSED` state, which 12a may swap. It returns
+    when the app is brought to the front again (`SIGFG`, new) or its timer fires;
+  - a parked app MUST first release `/dev/lcd`, `/dev/buttons` and every radio or DMA device; R12.3
+    still applies, and a process holding one is refused with `EBUSY`;
+  - the `libfuri` shim does this for stock ports: when the launcher sends `SIGBG` (new), the main
+    loop leaves its `/dev/buttons` read, which is an FS wait and not swappable before 12c, closes
+    its devices and calls `app_park()`. Timers created with `furi_timer` become the park timer
+    (the earliest one); when it fires, the app runs at background priority, without screen or buttons;
+  - parking needs no swap: without a swap device, a parked app keeps its RAM (see R12.24).
+- **R12.20 Launcher support.**
+  - Apps with `Background: park` are parked on long-press Back instead of being ended. They end
+    from their own menu, or from the launcher's new **Running** list (Back on an entry = end with
+    `SIGTERM`, then `SIGKILL` after 3 s, as R4b.8).
+  - Other apps keep the stock behaviour: long-press Back ends them.
+  - The Running list shows each parked app with its state (`in RAM`, `on SD`, `waiting for
+    memory`) and its RAM, and is the place to free memory by hand.
+  - Decided by the owner (2026-11-14): long-press Back parks apps that declare `Background: park`.
+    The app's own menu SHOULD also offer "Quit", and the launcher shows a one-time hint the first
+    time an app is parked ("Parked. End it from Running.").
+- **R12.21 Size guidance** (for app authors; the manual repeats it):
+  - tier 2 image (data + heap + stack) ≤ 16 KB SHOULD be the target: its swap-in is ≈ 55 ms with
+    single-block SD (≈ 300 KB/s) and ≈ 15–25 ms with multi-block (R4b.9). 32 KB is ≈ 110 ms and
+    ≈ 30–50 ms. AES1 GCM adds about 1 ms per 16 KB;
+  - all tier 3 user parts together ≤ 8 KB.
+
+- **R12.27 Example: GPIO sensor and Bluetooth at the same time** (owner note 2026-11-14; future,
+  low priority, after Phase 15; not in the task queue). Simple background jobs combine tiers and
+  need almost no user RAM:
+  - **Periodic (a thermometer that the phone reads):** tier 0. A `timed` timer runs
+    `thermo --log` once a minute (≈ 2 KB for under 1 s, R7b.4). It writes the sample to the SD
+    log and to a GATT characteristic (Environmental Sensing) **held by the CPU2 stack**. CPU2 keeps
+    the connection, answers reads and sends notifications by itself. User RAM while waiting:
+    0 B. `bled` (≈ 6 KB) runs only for pairing.
+  - **Continuous (GPIO edges or ADC streamed to the phone at 10–50 Hz):** tier 3. A small kernel
+    bridge from the sensor driver to the GATT characteristic, like `btbridge` (16.1): state
+    ≤ 64 B in the device-task union. User RAM: 0 B. Simpler alternative: a Berry script (7c) that
+    stays resident at ≈ 6–8 KB. It is too short-lived between samples to be worth parking.
+  - **Concurrency:** BLE radio timing is on CPU2, and the sensor is read by timer/DMA hardware
+    (H.2), so neither masks interrupts for the other (L3, L4). The one shared resource is the
+    pulse engine (DHT, IR, async Sub-GHz, R4b.7): while it is busy, a DHT read
+    returns the cached value (H.2). Prefer I2C or 1-Wire sensors for always-on jobs.
+
+### 12e. Placement, responsiveness and the card
+
+- **R12.22 Two-ended placement (relocation without an MMU).** The Cortex-M4 MPU protects but
+  does not translate. Data and stack hold absolute pointers (heap, frames, return addresses, GOT),
+  so neither swap-in nor compaction can move an image. A base register (`r9` with
+  `-msingle-pic-base`) would only relocate globals, not heap pointers, and is rejected for image swap.
+  Instead, MM places processes so that a swapped image usually finds its range free again:
+  - the foreground app (started through `FG_SET`, R4b.8) gets the **lowest** hole that fits (first fit);
+  - all other user processes, including the launcher, shells, daemons and `timed` children, get
+    the **highest** hole that fits (last fit);
+  - so foreground launches come and go at the bottom, and parked images return to the top;
+  - this is a rule in `alloc.c` with a flag passed by `exec`, and costs 0 B RAM.
+  Tier 1 avoids the problem completely (R12.18).
+- **R12.5 amended: when swap-out runs.** Two triggers, and both write only to the SD card:
+  - **(a) on demand**, as before: `new_mem`, `do_fork` or `do_brk` can't allocate. The victim
+    must have been eligible for ≥ 1 s;
+  - **(b) reserve** (rule R0.8d): at idle priority, when free RAM is below the reserve (default
+    16 KB, `svrctl(MMSWAPRES)`, 0 = off). The victim must have been eligible for ≥ 10 s (parked
+    apps first, then idle shells, then the launcher if an app is in front). At most 256 KB per
+    minute are written this way. A victim whose wake is already pending is skipped.
+  This replaces Part 4's "no background swapping": the reserve is what makes L6 hold, and with
+  (b)'s limits SD wear stays small. Typical use is 50–200 swap-outs a day of 8–32 KB, so ≤ 6 MB a
+  day, which is nothing for a card's wear levelling.
+- **R12.23 Swap-in priority.** A swap-in the user is waiting for (an app chosen in the Running list,
+  the launcher after an app exits, L7) runs in the interactive class: it goes ahead of any
+  reserve swap-out, between 4 KB chunks. Swap-ins for timer or signal wakes of background
+  processes run at idle priority. A swap-in never preempts a foreground FS request (R0.8d).
+- **R12.1 amended: only the SD card.** `MMSWAPON` MUST refuse any device that is not a partition
+  on the SD card (WINCHESTER major), so swap never goes to internal flash, the installed region, the
+  run-time cache or a RAM disk. A swap file is not allowed (as before). Swap causes **0 flash
+  writes** (rule 0.2 and the owner rule on run-time flash writes in `next-tasks.md`).
+- **R12.24 No swap device.** If the card has no swap partition, or `/etc/rc.conf` says `swap=off`:
+  - tiers 0, 1 and 3 work unchanged (they need only the root FS, which is on the card anyway);
+  - parking works, but the image stays in RAM;
+  - when an app can't start for lack of memory, the launcher says "Not enough memory" and opens
+    the Running list, so the user can end a parked app. Nothing is ended automatically.
+- **R12.25 Card removed or failing.** The Flipper's card-detect line (as stock
+  `furi_hal_sd_is_present`) or a swap I/O error:
+  - MM turns swap off at once (no more swap-outs);
+  - every swapped process is killed with `SIGKILL` when it would be swapped in (never run with a
+    partial image), and the console and the Running list say "lost: SD card removed";
+  - resident processes are not affected by swap. They may still fail if the root FS is gone,
+    which is the same as without swap;
+  - a swap-in read error is handled like a GCM tag mismatch (R12.12).
+- **R12.26 Smaller swapper state.** MM does not keep a stack length per slot: on swap-out it takes
+  `sp` with `sys_getsp()` (already used by `brk`), and the kernel keeps the saved PSP while the
+  process is swapped, so `[sp, S.end)` is known on swap-in. That saves 64 B over Part 4. The
+  per-slot write counters (16 × 4 B, needed against rollback, R12.10) and the boot nonce SHOULD
+  live in SRAM2 (A.6). Total MM swap state ≤ 96 B.
+
+### 12f. Notes for the system manual
+
+- The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
+  "parked" (2) and "runs in the radio chip or USB driver" (3). Which built-in apps use which tier.
+- The Running list: what `in RAM`, `on SD` and `waiting for memory` mean, and how to end an app.
+- Swap is on the SD card only, encrypted with a key that is new at every boot. Nothing swapped
+  survives a reboot, and removing the card ends the swapped apps.
+- How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
+  effect: parked apps stay in RAM.
+- For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
+  secrets in it, size targets).
+
 Acceptance criteria:
 - AC12.1 QEMU: start an app that needs more memory than is free while the launcher and a shell are
   idle. The app starts, `free -v` shows the shell and launcher swapped, and both work normally after
@@ -1973,6 +2216,17 @@ Acceptance criteria:
 - AC12.6 A kill of a swapped process frees its slot without reading it; 100 swap cycles in a loop leave
   free memory and slot use unchanged.
 - AC12.7 No regression in AC1.x and AC3.x tests.
+- AC12.8 Tier 1: `tests/hibernate` saves a 1 KB blob, exits, is resumed by a timer and by the
+  launcher, and gets the same blob back at a different load address; `/var/hib` is empty after.
+- AC12.9 Tier 2: a stock port (e.g. the Sub-GHz frequency analyzer without an open stream, or the
+  Snake game) is parked, swapped out by the reserve, brought back from the Running list with its
+  state intact, within L6 (≤ 600 ms).
+- AC12.10 Placement: after 50 random launch/park/resume cycles with two parked apps, no parked app
+  is ever "waiting for memory" for more than one foreground session.
+- AC12.11 `MMSWAPON` on any non-SD device fails with `EINVAL`; a full day of the AC12.9 cycle
+  writes 0 internal-flash pages (flash write counter, Phase 2b).
+- AC12.12 Card pulled while two apps are swapped: both are reported lost, nothing else crashes;
+  with `swap=off`, parking keeps images in RAM and a launch that doesn't fit opens the Running list.
 
 Responsiveness (R0.8d):
 - AC12.R1 While swap-out of an idle 32 KB process runs, the foreground app meets L1 and L2.
@@ -1983,7 +2237,8 @@ Responsiveness (R0.8d):
 
 RAM budget:
 - kernel +0 B (one flag bit);
-- MM: at most +160 B (counters, stack lengths, nonce, swap state);
+- MM: at most +96 B (counters, nonce, swap state; R12.26), SHOULD be in SRAM2;
+- `libapp` park/hibernate, launcher Running list, two-ended placement: flash only, +0 B;
 - driver: +0 B (reuse the bounce buffer, or encrypt in place);
 - per process: 0.
 
@@ -2132,8 +2387,12 @@ Limits, stated up front:
   (R16.1.0)**; the full stack also keeps everything the light one does (mobile app, BLE remote).
 
 Requirements:
-- **R16.1.0** Owner decision: install the full BLE stack. Until then `btbridge` reports "needs
-  the full BLE stack" and exits.
+- **R16.1.0** Decided by the owner (2026-11-14): install the full BLE stack. When: at the start
+  of Phase 16, after Phase 15 works on the stack already installed (R15.1), as one FUS update
+  (R17.3 path, as qFlipper does), with the before/after `SFSA`, installed-region size and SRAM2
+  reservation recorded in the PR. One install, no run-time switching (rule: minimize flash
+  writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
+  report "needs the full BLE stack" and exit.
 - **R16.1.1** `bled` gains the central role: scan (filtered to HID service UUID 0x1812), connect,
   pair/bond (LE Secure Connections; passkey shown on or typed into the Flipper as the device
   asks), GATT client discovery of the HID service, Report Map read, and notifications enabled on
@@ -2183,7 +2442,7 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
   on a CDC serial port.
 - **R16.2.2** Stack: with the light stack only peripheral operation works, which is of little use
   to a PC; a useful dongle needs the full stack (R16.1.0) or ST's HCI-only stack. Which one to
-  install is the same owner decision as R16.1.0.
+  install was decided by R16.1.0: the full stack.
 - **R16.2.3** While in dongle mode, MINIX's own `bled` is stopped (the PC owns the controller); the
   mobile-app link and the 16.1 bridge are unavailable until the mode ends.
 - **R16.2.4** BLE only (no Classic, as 16.1). Windows' and macOS's acceptance of an LE-only
@@ -2203,6 +2462,70 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
   (hot/cold on one address; random addresses are followed while their payload stays the same).
 - AC16.3.1 A BLE-advertising device is found and located from 5 m with locate mode.
 - RAM: `bled` +256 B scan list while scanning; `camfind` unchanged.
+
+### 16.4 `sbctl`: remote for Storz & Bickel vaporizers (owner request, 2026-11-14)
+
+Confirmed by the owner (2026-11-14): wanted. The protocol core comes early as task T6
+(`docs/spec/next-tasks.md`); the BLE and UI parts follow Phase 16.
+
+Owner request: port the vendor's Web Bluetooth app (app.storz-bickel.com, v3.4.1) as a native app
+that controls the owner's own Volcano Hybrid, Venty, Veazy or Crafty/Crafty+ with the Flipper as
+BLE central. The vendor code is proprietary and is **not** copied: the protocol comes from the
+MIT-licensed reimplementation `storzandbickel-ble` (PyPI, 0.1.25), which documents the same app
+version, and from checks on real devices. Findings and UUID tables: project report
+`reports/storz-bickel-port.md` (to move to `docs/` with the manual).
+
+Scope: temperature target, heater on/off, Volcano air pump, boost and superboost, battery and
+charger state, LED brightness, auto-off time, vibration, °C/°F, Find my device, device info
+(serial, firmware, hours), Volcano workflows. **Out of scope:** device firmware update (Volcano
+bootloader; Venty/Veazy images are encrypted and fetched from the vendor's server by serial
+number), the "Analysis" upload, and any vendor cloud or analytics call.
+
+Requirements:
+- **R16.4.0** Needs the central role and a GATT client, so it depends on the same owner decision
+  as 16.1 (R16.1.0, full BLE stack). Until then `sbctl` says "needs the full BLE stack" and exits.
+- **R16.4.1** `bled` exposes the generic GATT client that R16.1.1 adds (scan with a name filter,
+  connect, discover by 128-bit UUID, read, write, write without response, notify) to apps through
+  its socket; HID-specific parts stay in 16.1. No pairing: the devices use an open GATT. If a
+  device or firmware asks for encryption, the R16.1.1 pairing path is used unchanged.
+- **R16.4.2** Device drivers are three small tables in `sbctl` (const, in flash): Volcano
+  (separate characteristics, 16-bit status registers), qvap = Venty and Veazy (one characteristic,
+  command byte + write mask), Crafty (three services, project status registers, security-code
+  write before auto-off). Discovered handles are cached per session (≈ 40 B), never persisted.
+- **R16.4.3** UI on 128x64: large temperature (current on Volcano and Crafty; target on
+  Venty/Veazy, which don't report the current one), target line, heater/pump/battery icons.
+  Up/Down = target ±1 °C (hold: ±5 °C every 150 ms), OK = heater, Right = pump (Volcano) or
+  boost → superboost → normal (others), Left = menu (workflows, favourite temperatures,
+  settings, Find my, info), long Back = quit. Button feedback is local and immediate; GATT writes
+  are coalesced (only the last value after 150 ms idle is sent) to keep radio traffic low.
+- **R16.4.4** Known devices (address, model, name) and favourites in `/ext/apps_data/sbctl/`
+  on the SD card. **0 internal-flash writes at run time.**
+- **R16.4.5** Background, tier 0 only (12d), nothing resident: the device heats on its own, so the
+  app may exit at any time. "Notify when ready": a `timed` interval timer runs `sbctl --poll`
+  every 15 s (connect, read state, disconnect; ≈ 2 KB for < 1 s) and posts `info` with
+  `notify_post()` when the setpoint is reached; it gives up after 15 min. Volcano workflow steps
+  have deadlines, so in the background each step is a one-shot `timed` timer (R12.16); version 1
+  MAY run workflows in the foreground only, with a progress bar.
+- **R16.4.6** Safety: the app never disables the device's own auto-off; it only sets values the
+  vendor app allows. Factory reset asks for confirmation. Register writes go through named bits,
+  never raw values from the user. A "pump off" step retries the connection up to 5 times, and the
+  workflow screen warns that a lost link leaves the pump to the device's own auto-off.
+- **R16.4.7** Temperature limits come from the model table (Volcano 40–230 °C, Venty, Veazy and
+  Crafty 40–210 °C) and are enforced before any write.
+- **R16.4.8** Before implementation, the UUIDs and packet layouts are confirmed on real hardware
+  (`nRF Connect` or `bluetoothctl` GATT dump); Veazy in particular. Differences go into the report.
+
+Acceptance:
+- AC16.4.1 On each owned model: connect, set the target, heater on/off, (Volcano) pump on/off,
+  values on the device follow within one second.
+- AC16.4.2 "Notify when ready" fires with no app open, and `make ramcheck` shows 0 B resident.
+- AC16.4.3 No internal-flash write during a session (flash write counter unchanged).
+
+Responsiveness: AC16.4.R Button → pixel ≤ 30 ms p99 (L1) independent of the radio; button →
+GATT write sent ≤ 150 ms + one connection interval.
+
+RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running); `sbctl`
+≈ 3 KB while open, 0 B in the background (≈ 2 KB for < 1 s per poll). Flash: ≈ 10 KB installed.
 
 ## Phase 17: Trust: U2F, signed packages, updater, option bytes
 
@@ -2434,7 +2757,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the owner confirms.
-- Full BLE stack on CPU2 (R16.1.0, for the Bluetooth adapter): owner decision, after Phase 15.
+- Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.7): owner decision, after Phase 15.
 - A FAP binary loader: not planned; apps are ported from source (D.2).
 
@@ -2457,11 +2780,13 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Scripting (MicroPython/Lua question; owner request) | 7c |
 | Native app: Self Test (memory, audio-visual, input, board; modules added by 8, 10, 13, 15) | 7b.3 |
 | Native app: Bluetooth adapter for BLE mice and keyboards (owner request) | 16.1 |
+| Native app: Storz & Bickel vaporizer remote `sbctl` (owner request; no device firmware update) | 16.4 |
 | USB peripheral modes: RFID, iButton, IR, Sub-GHz / NFC reader / BT dongle (owner request) | 11.1 / 14.1 / 16.2, section G |
 | nRF24 module for 2.4 GHz dongle mice (optional, not confirmed) | G.3 question 3, deferred |
 | Sub-GHz, LF RFID | 8 |
 | USB HID, mass storage, CDC | 10 |
 | Swap (Part 4), A13 | 12 |
+| Background apps: tiers, park/hibernate API, Running list (owner request) | 12d–12f (R12.18 may land with 7b) |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
@@ -2472,4 +2797,5 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
 | Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (owner request) | 2d, R6.2, section I |
 | First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (owner request) | 18b, section I |
+| Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

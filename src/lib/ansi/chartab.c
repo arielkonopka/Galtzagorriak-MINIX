@@ -1,6 +1,6 @@
 #include	<ctype.h>
 
-char __ctype[] = {
+const char __ctype[] = {	/* const: in flash, not in every data segment */
 0,
 _C,
 _C,

@@ -27,7 +27,7 @@ EXTERN phys_clicks tot_mem_size;	/* total system memory size */
 
 /* Miscellaneous. */
 extern u16_t sizes[];		/* table filled in by boot monitor */
-extern struct tasktab tasktab[];/* initialized in table.c, so extern here */
+extern const struct tasktab tasktab[];/* initialized in table.c, so extern here */
 extern char *t_stack[];		/* initialized in table.c, so extern here */
 EXTERN unsigned lost_ticks;	/* clock ticks counted outside the clock task */
 EXTERN clock_t tty_timeout;	/* time to wake up the TTY task */
@@ -67,7 +67,11 @@ EXTERN _PROTOTYPE( void (*level0_func), (void) );
 #endif /* (CHIP == INTEL) */
 
 #if (CHIP == ARM_CM)
-EXTERN irq_handler_t irq_table[NR_IRQ_VECTORS];
+/* IRQ handlers: few lines have one, so a byte per line says which of a
+ * handful of slots (R2a.2: 72 instead of 256 bytes). */
+#define NR_IRQ_HANDLERS	8
+EXTERN u8_t irq_slot[NR_IRQ_VECTORS];	/* 0: none, else slot + 1 */
+EXTERN irq_handler_t irq_handlers[NR_IRQ_HANDLERS];
 EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
 #endif
 
