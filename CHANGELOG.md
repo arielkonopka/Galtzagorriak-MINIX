@@ -7,6 +7,8 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 ## Unreleased
 
 - (T8) `mined` is the default editor: memory-safe (B1-B10), VT100/xterm keys, terminal size detection, `.save` when the terminal goes away, safe writes.
+- (T9) Pipes no longer write their data or inode to the SD card; freed blocks are not written either.
+- (T4) Background flash work waits while a process is ready or a key was pressed; `lat` explains slow wakeups (L5).
 - (T2 follow-up) The flash text cache records a program only after its flash copy matches the text's CRC; MM back to its RAM budget, kernel and FS 36 B smaller.
 - (T7) Version strings: `uname` reports Galtzagorriak, boot banner, `ver`, ABI stamp in programs and packages.
 

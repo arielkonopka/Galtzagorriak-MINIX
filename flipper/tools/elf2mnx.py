@@ -26,9 +26,17 @@ whether the word holds an address below or above A_DATA_LINK.  a_total
 then excludes the text and a_syms holds the CRC-32 of the text.
 """
 import argparse
+import os
+import re
 import struct
 import sys
 import zlib
+
+# a_version = the ABI the program is built for (spec J.3; MM's exec
+# refuses another one, 0 = from before the stamp).
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "../../include/minix/gzversion.h")) as _f:
+    GZ_ABI = int(re.search(r"#define\s+GZ_ABI\s+(\d+)", _f.read()).group(1))
 
 R_ARM_NONE, R_ARM_ABS32, R_ARM_REL32, R_ARM_TARGET1 = 0, 2, 3, 38
 PC_RELATIVE = {
@@ -142,7 +150,7 @@ def main():
         stream.append(0)
 
     a_total = a_text + a_data + a_bss + a.stack
-    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC, A_ARMCM, 32, 0, 0,
+    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC, A_ARMCM, 32, 0, GZ_ABI,
                       a_text, a_data, a_bss, e_entry, a_total, 0)
     with open(a.out, "wb") as f:
         f.write(hdr + image + stream)
@@ -235,7 +243,7 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     a_total = a_data + a_bss + a.stack
     crc = zlib.crc32(t_bytes) & 0xFFFFFFFF
     hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC | A_SEP, A_ARMCM,
-                      32, 0, 0, a_text, a_data, a_bss, e_entry, a_total, crc)
+                      32, 0, GZ_ABI, a_text, a_data, a_bss, e_entry, a_total, crc)
     with open(a.out, "wb") as f:
         f.write(hdr + t_bytes + data + reloc_stream(offs))
     print(f"  {a.out}: text {a_text} data {a_data} bss {a_bss} "

@@ -41,6 +41,7 @@
 #include <unistd.h>
 #include <lib.h>
 #include <minix/callnr.h>
+#include <minix/gzversion.h>
 
 #define DB	"/usr/var/pkg/info"
 #define TMPDIR	"/usr/tmp"
@@ -49,6 +50,7 @@
 static char tmp[64];			/* unpack directory */
 static int to_flash;			/* install --flash */
 static int ctl_flash;			/* this package says Flash: yes */
+static char ctl_abi[8];			/* Abi: N or any; none = 1 (J.3) */
 static char ctl_name[64], ctl_version[32], ctl_depends[LINE];
 
 static void cleanup(void);
@@ -131,6 +133,7 @@ static int read_control(const char *path)
 
 	ctl_name[0] = ctl_version[0] = ctl_depends[0] = 0;
 	ctl_flash = 0;
+	ctl_abi[0] = 0;
 	if ((f = fopen(path, "r")) == NULL) return -1;
 	while (fgets(line, sizeof line, f) != NULL) {
 		if ((n = strlen(line)) > 0 && line[n - 1] == '\n') line[n - 1] = 0;
@@ -143,6 +146,8 @@ static int read_control(const char *path)
 			strncpy(ctl_version, v, sizeof ctl_version - 1);
 		else if (strcmp(line, "Depends") == 0)
 			strncpy(ctl_depends, v, sizeof ctl_depends - 1);
+		else if (strcmp(line, "Abi") == 0)
+			strncpy(ctl_abi, v, sizeof ctl_abi - 1);
 		else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0)
 			ctl_flash = 1;	/* spec R2b.5 */
 	}
@@ -344,6 +349,13 @@ static int install(const char *file)
 	if (run(tmp, argv) != 0) die("cannot unpack", file);
 	sprintf(path, "%s/CONTROL/control", tmp);
 	if (read_control(path) < 0) die("no valid CONTROL/control in", file);
+	if (strcmp(ctl_abi, "any") != 0
+	    && (ctl_abi[0] ? atoi(ctl_abi) : 1) != GZ_ABI) {
+		fprintf(stderr, "pkg: %s needs ABI %s, this system is ABI %d\n",
+			ctl_name, ctl_abi[0] ? ctl_abi : "1", GZ_ABI);
+		cleanup();
+		return 1;
+	}
 
 	for (p = ctl_depends; *p != 0; ) {	/* dependencies installed? */
 		while (*p == ' ' || *p == ',') p++;

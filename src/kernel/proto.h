@@ -23,6 +23,8 @@ _PROTOTYPE( void aha_scsi_task, (void)					);
 _PROTOTYPE( void clock_task, (void)					);
 _PROTOTYPE( void clock_stop, (void)					);
 _PROTOTYPE( clock_t get_uptime, (void)					);
+_PROTOTYPE( unsigned server_stack_used, (int t, unsigned *sizep)	);
+_PROTOTYPE( clock_t uptime_irq, (void)					);
 _PROTOTYPE( void syn_alrm_task, (void)					);
 
 /* dmp.c */
@@ -271,6 +273,8 @@ _PROTOTYPE( void lat_run, (struct proc *rp)				);
 _PROTOTYPE( int lat_read, (phys_bytes user, int count)			);
 _PROTOTYPE( void lat_clear, (void)					);
 _PROTOTYPE( void lat_flash, (int end)					);
+_PROTOTYPE( void lat_reply, (struct proc *rp)				);
+_PROTOTYPE( void lat_flip, (int end, unsigned long bytes)		);
 #define LAT_EVENT(ev, arg)	lat_event((ev), (arg))
 #else
 #define LAT_EVENT(ev, arg)	((void) 0)

@@ -307,11 +307,17 @@ message *m_ptr;
  */
   u32_t base, size;
   phys_bytes src = 0;
-  int r, op = m_ptr->m1_i1;
+  int r, op = m_ptr->m1_i1 & ~FL_BG;
   unsigned len = (unsigned) m_ptr->m1_i2;
   u32_t addr = (u32_t) m_ptr->m1_p2;
 
   if (m_ptr->m_source != MM_PROC_NR) return(EPERM);
+  /* Background work only when nobody waits: the CPU stalls for every
+   * erase (22 ms) and double word (85 us), and a page erase cannot be
+   * split (T4, L5). */
+  if ((m_ptr->m1_i1 & FL_BG) && (rdy_head[USER_Q] != NIL_PROC
+			|| get_uptime() - k_input < (clock_t) HZ))
+	return(EAGAIN);
   if (op == FL_WRITE) {
 	src = umap(proc_addr(MM_PROC_NR), D, (vir_bytes) m_ptr->m1_p1,
 							(vir_bytes) len);
@@ -368,6 +374,18 @@ message *m_ptr;			/* pointer to request message */
 	ks.used = kstack_used(&size);
 	ks.size = size;
 	strncpy(ks.name, "(irq)", sizeof(ks.name));
+	dst = umap(proc_addr(m_ptr->PROC1), D,
+		(vir_bytes) (m_ptr->m1_p1 + n * sizeof(ks)), sizeof(ks));
+	if (dst == 0) return(EFAULT);
+	phys_copy(vir2phys(&ks), dst, (phys_bytes) sizeof(ks));
+	n++;
+  }
+  for (t = 0; t < 2 && n < max; t++) {	/* then MM and FS (arm_load) */
+	unsigned size;
+
+	ks.used = server_stack_used(t, &size);
+	ks.size = size;
+	strncpy(ks.name, t == 0 ? "MM" : "FS", sizeof(ks.name));
 	dst = umap(proc_addr(m_ptr->PROC1), D,
 		(vir_bytes) (m_ptr->m1_p1 + n * sizeof(ks)), sizeof(ks));
 	if (dst == 0) return(EFAULT);

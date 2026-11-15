@@ -274,7 +274,6 @@ void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b;
 uint32_t hal_flash_sr;
 uint32_t hal_disk_errors;
 unsigned hal_disk_mhz;
-uint32_t hal_flash_dbg[5];
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {

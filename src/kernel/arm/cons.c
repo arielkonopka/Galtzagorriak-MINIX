@@ -159,12 +159,14 @@ tty_t *tp;
 		c = ibuf[itail % CONS_IN_BYTES];
 		if (in_process(tp, &c, 1) == 0) break;
 		itail++;
+		k_input = get_uptime();
 		continue;
 	}
 	if (usb_irq < 0 || (ch = hal_usb_peekc()) < 0) break;
 	c = ch;
 	if (in_process(tp, &c, 1) == 0) break;
 	(void) hal_usb_getc();
+	k_input = get_uptime();		/* no background flash work now */
   }
   if (uart_held && ihead - itail < CONS_IN_BYTES) {
 	/* Take what waits in the UART ourselves: switching the interrupt

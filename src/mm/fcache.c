@@ -341,11 +341,19 @@ unsigned long size, crc, owner;
  *===========================================================================*/
 PUBLIC void fc_step()
 {
-/* One piece of the cache's flash work (a synchronous alarm came in). */
-  unsigned long npages, n, rec[6];
-  int r = OK, i;
+/* One piece of the cache's flash work (a synchronous alarm came in).
+ * Only while nobody waits (T4): the kernel says EAGAIN to FL_BG while a
+ * user process is ready or a key or button came in the last second; the
+ * step is tried again a tick later.  A step erases at most one page. */
+  unsigned long npages, n, rec[6], b, z;
+  int r = OK, i, k;
 
   if (fc_size == 0) return;
+  if ((fc_unformatted || job.state != J_IDLE)
+		&& sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK) {
+	fc_alarm(STEP_TICKS);
+	return;
+  }
   if (fc_unformatted) {
 	if (fc_format(0, 1) == OK) {
 		fc_unformatted = FALSE;
@@ -388,12 +396,20 @@ PUBLIC void fc_step()
 		break;
 	}
 	for (i = n; i < (int) ((n + 7) & ~7); i++) mbuf[i] = (char) 0xFF;
-	r = sys_flash(FL_WRITE, JOB_ADDR + job.done, mbuf,
-			(unsigned) ((n + 7) & ~7), NULL, NULL);
-	/* what the flash holds now, for the check before the record */
-	job.vcrc = crc32_more(job.vcrc,
-		(const unsigned char *) (JOB_ADDR + job.done), n);
-	job.done += n;
+	/* a double word per call (85 us of stall), each FL_BG: stops as soon
+	 * as somebody waits; the rest is read again next step */
+	for (i = 0; i < (int) n; i += 8) {
+		r = sys_flash(FL_WRITE | FL_BG, JOB_ADDR + job.done, mbuf + i,
+							8, NULL, NULL);
+		if (r != OK) break;
+		k = n - i < 8 ? (int) (n - i) : 8;
+		/* what the flash holds now, for the check before the record */
+		job.vcrc = crc32_more(job.vcrc,
+			(const unsigned char *) (JOB_ADDR + job.done),
+			(unsigned long) k);
+		job.done += k;
+	}
+	if (r == EAGAIN) r = OK;		/* the rest later */
 	if (job.done == job.size) job.state = J_RECORD;
 	break;
   case J_RECORD:			/* now it can be found */
