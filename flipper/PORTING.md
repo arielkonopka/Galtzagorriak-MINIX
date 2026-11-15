@@ -459,6 +459,44 @@ AC2b.R1/R2 (2026-11-15, Flipper, latcheck kernel):
 - Flash writes: unchanged (the same pages and record per program).
 - L1 during an install still needs the owner's hands (buttons).
 
+AC2b.5, power cuts during installs (2026-11-15, QEMU only, no Flipper
+flash written): `tools/powercut.py`.  The QEMU board's flash now behaves
+like the STM32WB's: a double word can be programmed only when erased
+(or with zeros), otherwise PROGERR.  The test cuts the power at the Nth
+operation on the region, either before it or half done (half a page
+erased, one word of a double word written).  Then it resets the
+machine; the "flash" survives the reset, like the real one.  After the
+reboot the test checks four things: /tmp/p runs the text of the file it
+now is (od or cksum); it installs again; a new program installs too;
+and nothing printed "not erased", "damaged" or a panic.
+
+| Scenario | main | now |
+|---|---|---|
+| install od, then upgrade to cksum: every erase, the ends of every text, every directory write (52 runs) | 16 failed | 0 |
+| the same, every operation (`--all`, 2624 runs) | | 0 (6 logins timed out with 8 QEMUs at once; all 6 passed again) |
+| directory compaction, every operation (`--compact`, 22 runs) | 9 lost the installed record | 0 |
+
+- Safety held everywhere: no run ever executed a half-written or
+  wrong text.  The text is written first, the record after it.
+- Bug 1: a cut inside a directory record, before its address was
+  written, left a slot that looked free but was not erased.  Every
+  later install programmed over it and failed (PROGERR on the
+  Flipper), for good.  Now only a slot erased throughout is free, and
+  a record counts only when its address and seq are written.  A torn
+  record is skipped, the seq count ignores it, and the next compaction
+  drops it.
+- Bug 2: compaction wrote the new directory's header first, then
+  copied the records.  A cut in between made a directory that was
+  valid but short, and the installs it had not copied yet were lost
+  (their programs fell back to RAM).  Now the header is written last,
+  so until then the old directory is the valid one.
+- The run-time cache's records were already safe: one is found only
+  when its last double word (the owner) matches.
+- Also: the installed region is capped at 256 pages (the job's page
+  index is a byte; the WB55 has about 160).
+- RAM 0 B.  Flash writes: unchanged (the header is one double word
+  written later, not an extra one).
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

@@ -73,13 +73,28 @@ PRIVATE unsigned long in_st;
 #define SET_DIR(d)	(in_st = in_base | (d))
 #define DIRADDR(d)	(in_base + (d) * PAGE)
 #define RECP(d, i)	((struct inrec *) (DIRADDR(d) + HDR + (i) * REC))
-#define FREE_SLOT(r)	((r)->addr == 0xFFFFFFFFUL)
-#define LIVE(r)		(!FREE_SLOT(r) && (r)->dead0 == 0xFFFFFFFFUL)
+/* A record is written in ascending double words, seq last but one: a power
+ * cut can leave it torn (AC2b.5).  Only a slot that is erased throughout is
+ * free (programming a written double word again fails); only a record
+ * with its address and seq written counts; a torn one is skipped and
+ * dropped by the next compaction. */
+#define FREE_SLOT(r)	in_erased((unsigned long *) (r))
+#define WHOLE(r)	((r)->addr != 0xFFFFFFFFUL && (r)->seq != 0xFFFFFFFFUL)
+#define LIVE(r)		(WHOLE(r) && (r)->dead0 == 0xFFFFFFFFUL)
 #define MAGIC(d)	(((unsigned long *) DIRADDR(d))[0])
 #define GEN(d)		(((unsigned long *) DIRADDR(d))[1])
 #define UNBOUND(r)	((r)->id == 0xFFFFFFFFUL && (r)->ctime == 0xFFFFFFFFUL)
 #define BINDING(s)	((unsigned long) (s)->st_ino << 16 \
 					| ((unsigned long) (s)->st_dev & 0xFFFF))
+
+PRIVATE int in_erased(w)	/* a whole record still erased? */
+unsigned long *w;
+{
+  int i;
+
+  for (i = 0; i < REC / 4; i++) if (w[i] != 0xFFFFFFFFUL) return(FALSE);
+  return(TRUE);
+}
 
 /*===========================================================================*
  *				SHA-256					     *
@@ -263,7 +278,8 @@ int i;
   for (j = 0; j < NREC; j++) {
 	q = RECP(in_dir, j);
 	if (FREE_SLOT(q)) break;
-	if (j != i && q->addr == r->addr && (LIVE(q) || j < i)) return(TRUE);
+	if (j != i && WHOLE(q) && q->addr == r->addr && (LIVE(q) || j < i))
+		return(TRUE);
   }
   return(FALSE);
 }
@@ -279,7 +295,10 @@ PRIVATE int in_compact()
   struct inrec *r;
   unsigned long rec[REC / 4], to;
 
-  if (in_format(d, GEN(in_dir) + 1) != OK) return(EIO);
+  /* The header last: a power cut before it leaves the old directory the
+   * valid one (AC2b.5); the new page is erased again next time. */
+  if (sys_flash(FL_ERASE, DIRADDR(d), NULL, 0, NULL, NULL) != OK)
+	return(EIO);
   for (i = j = 0; i < NREC; i++) {
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
@@ -300,6 +319,10 @@ PRIVATE int in_compact()
 		return(EIO);
 	j++;
   }
+  rec[0] = IN_MAGIC;
+  rec[1] = GEN(in_dir) + 1;
+  if (sys_flash(FL_WRITE, DIRADDR(d), rec, 8, NULL, NULL) != OK)
+	return(EIO);
   (void) sys_flash(FL_ERASE, DIRADDR(in_dir), NULL, 0, NULL, NULL);
   SET_DIR(d);
   return(OK);
@@ -329,6 +352,7 @@ unsigned long npages;
   unsigned long a, end, size;
 
   if (in_region(&size) != OK) return(0);
+  if (size > 256 * PAGE) size = 256 * PAGE;	/* mjob.page is a byte */
   end = in_base + size;
 
   for (a = in_base + DIRPAGES * PAGE; a + npages * PAGE <= end; a += PAGE)
@@ -467,7 +491,8 @@ int which;			/* S_LIVE, S_UNBOUND, S_ANY */
   for (i = 0; i < NREC && in_dir <= 1; i++) {
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if ((which == S_ANY || LIVE(r)) && r->size == size
+	if ((which == S_ANY || LIVE(r)) && r->addr != 0xFFFFFFFFUL
+		&& r->size == size
 		&& (which != S_UNBOUND || UNBOUND(r))
 		&& (sha == NULL || memcmp(r->sha, sha, 32) == 0)) return(r);
   }
@@ -501,7 +526,7 @@ struct stat *s;
   for (i = 0; i < NREC; i++) {		/* the next seq */
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if (r->seq >= rec[12]) rec[12] = r->seq + 1;
+	if (WHOLE(r) && r->seq >= rec[12]) rec[12] = r->seq + 1;
   }
   rec[13] = 0xFFFFFFFFUL;
   r = RECP(in_dir, i);
