@@ -95,6 +95,16 @@ Without the buttons (2026-11-14):
   stops kicking, the message still gets out over USB) resets the board.
   A halt keeps kicking.  Before this the ISR kicked it: a task stuck in
   `for(;;)` with interrupts on never reset.
+- RTC backup registers used by MINIX (battery domain; the stock firmware
+  uses the low ones, MINIX takes them from the top, spec I.3):
+
+  | Register | Use |
+  |---|---|
+  | BKP19R | "GZ" magic, dev bit, reset cause (watchdog, R4a.4) |
+  | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
+  | BKP17R | run-time cache pages erased in all |
+  | BKP16R | installed-region pages erased in all |
+
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
   dev bit, a normal reboot or halt clears it.  Dev bit set: watchdog reset
@@ -496,6 +506,24 @@ and nothing printed "not erased", "damaged" or a panic.
   index is a byte; the WB55 has about 160).
 - RAM 0 B.  Flash writes: unchanged (the header is one double word
   written later, not an extra one).
+
+R2b.11, the run-time cache erase budget (2026-11-15): the kernel counts
+every flash erase (`hal_fc_erase_ok`, before the erase).  An erase of
+the run-time cache is refused (ENOSPC) once today's budget is spent
+(default 32 pages: one cycle a day of the 128 KB cache).  MM then drops
+the copy, and the program keeps running with its text in RAM.  The
+counts live in RTC backup registers (table above): 0 B of RAM, and a
+reboot loop cannot reset today's count.  `pkg budget [pages]` shows or
+sets the budget (root; 0 turns run-time caching off).  `/etc/rc` sets it
+from `fcache_budget=` in `/etc/rc.conf` (sh variables, optional).
+`free -v` prints `flash: cache N pages erased (M today, budget B),
+installed K`.  This MINIX has no `svrctl`, so the setting goes through
+MEMINFO (`MI_FCBUDGET`) like the other MM controls.
+QEMU, AC2b.9: five uncached programs, run ten times each with pauses.
+With `pkg budget 2`: 2 pages erased (the directory and one program),
+the rest ran from RAM.  With the default: 6 pages, 4 programs.  That the
+count survives a reboot is checked on the Flipper (QEMU has no backup
+registers).
 
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in

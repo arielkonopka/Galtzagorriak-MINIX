@@ -24,6 +24,11 @@ test -f /etc/.setup-done && {
 # their files the first time (one hash each), then exec finds them directly.
 pkg bind /bin/*
 
+# Local settings (sh variables), e.g. fcache_budget=8: the run-time text
+# cache may erase at most that many flash pages a day (default 32).
+test -f /etc/rc.conf && . /etc/rc.conf
+test -n "$fcache_budget" && pkg budget $fcache_budget >/dev/null
+
 # Flush the buffer cache to the SD card every 30 seconds.
 update &
 

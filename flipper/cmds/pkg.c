@@ -7,6 +7,9 @@
  *	pkg unflash file...	stop that (their flash pages become free)
  *	pkg bind file...	give programs built into the firmware (make
  *				base-flash) to these files (/etc/rc, at boot)
+ *	pkg budget [pages]	show (set: root) how many run-time cache pages
+ *				may be erased a day (R2b.11; 0: no caching;
+ *				/etc/rc sets fcache_budget= from rc.conf)
  *	pkg remove name		remove a package
  *	pkg list		list installed packages
  *	pkg info name		show a package's control file
@@ -628,12 +631,34 @@ static int get(void)
 	return r;
 }
 
+static int budget(int argc, char **argv)	/* R2b.11 */
+{
+	message m;
+	struct fccount fc;
+
+	m.m1_p1 = (char *) &fc;
+	m.m1_i1 = argc == 3 ? atoi(argv[2]) : -1;
+	m.m1_i2 = MI_FCBUDGET;
+	if (argc == 3 && (argv[2][0] < '0' || argv[2][0] > '9'))
+		die("budget: a number of pages, 0-255", NULL);
+	if (_syscall(MM, MEMINFO, &m) < 0) {
+		fprintf(stderr, "pkg: budget: %s\n", strerror(errno));
+		return 1;
+	}
+	printf("run-time cache: %lu of %lu pages erased today, %lu in all; "
+		"installed programs: %lu\n", fc.today, fc.budget, fc.erased,
+		fc.inst_erased);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct stat st;
 
 	if (argc >= 2 && strcmp(argv[1], "bind") == 0)	/* no /usr needed */
 		return bind(argv + 2, argc - 2);
+	if ((argc == 2 || argc == 3) && strcmp(argv[1], "budget") == 0)
+		return budget(argc, argv);
 	if (stat(DB, &st) < 0 || !S_ISDIR(st.st_mode))
 		die(DB " is missing (is /usr mounted?)", NULL);
 	if (argc == 3 && strcmp(argv[1], "install") == 0) return install(argv[2]);
@@ -658,6 +683,6 @@ int main(int argc, char **argv)
 	}
 	fprintf(stderr, "usage: pkg install [--flash] file.tar | remove name | "
 		"list | info name | files name | get [--flash] | flash file... | "
-		"unflash file...\n");
+		"unflash file... | budget [pages]\n");
 	return 1;
 }

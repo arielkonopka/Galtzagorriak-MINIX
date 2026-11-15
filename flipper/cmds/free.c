@@ -83,6 +83,15 @@ int main(int argc, char **argv)
 	if (v) {
 		struct fcinfo fi;
 
+		struct fccount fc;
+
+		m.m1_p1 = (char *) &fc;		/* erase counts (R2b.11) */
+		m.m1_i1 = -1;
+		m.m1_i2 = MI_FCBUDGET;
+		if (_syscall(MM, MEMINFO, &m) == 0)
+			printf("flash: cache %lu pages erased (%lu today, "
+				"budget %lu), installed %lu\n", fc.erased,
+				fc.today, fc.budget, fc.inst_erased);
 		m.m1_p1 = (char *) &fi;
 		m.m1_i2 = MI_FCACHE;
 		if (_syscall(MM, MEMINFO, &m) == 0) {

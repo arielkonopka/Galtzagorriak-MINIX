@@ -952,6 +952,94 @@ int hal_dev(void)
 	return (boot_reg() & BOOT_DEV) != 0;
 }
 
+/* Flash erase accounting (R2b.11).  Backup registers, from the top (the
+ * stock firmware uses the low ones; map in PORTING.md):
+ *   BKP18R  0xA magic (4 bits), budget (8), cache pages erased today (8),
+ *           the day (12 bits: RTC date, or days of uptime without an RTC)
+ *   BKP17R  cache pages erased in all
+ *   BKP16R  installed-region pages erased in all
+ * In the battery domain: a reboot loop cannot reset today's budget. */
+#define FC_REG		(RTC->BKP18R)
+#define FC_MAGIC	0xA0000000u
+
+static unsigned fc_day(unsigned upday)
+{
+	uint32_t tr, dr;
+
+	if ((RCC->BDCR & RCC_BDCR_RTCEN) && (RTC->ISR & RTC_ISR_INITS)) {
+		tr = RTC->TR;			/* locks DR until it is read */
+		dr = RTC->DR;
+		(void) tr;
+		return (((dr >> 20 & 15) * 10 + (dr >> 16 & 15)) * 372
+			+ ((dr >> 12 & 1) * 10 + (dr >> 8 & 15)) * 31
+			+ (dr >> 4 & 3) * 10 + (dr & 15)) & 0xFFF;
+	}
+	return upday & 0xFFF;
+}
+
+static uint32_t fc_reg(unsigned upday)	/* today's word, renewed daily */
+{
+	uint32_t r = FC_REG, day = fc_day(upday);
+
+	if ((r & 0xF0000000u) != FC_MAGIC)
+		r = FC_MAGIC | (uint32_t) HAL_FC_BUDGET << 20 | day;
+	if ((r & 0xFFF) != day) r = (r & 0xFFF00000u) | day;	/* a new day */
+	return r;
+}
+
+static void bkp_set(volatile uint32_t *reg, uint32_t v)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	PWR->CR1 |= PWR_CR1_DBP;		/* backup domain writable */
+	*reg = v;
+	(void) *reg;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+int hal_fc_erase_ok(int cache, unsigned upday)
+{
+	uint32_t r;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	if (!cache) {
+		bkp_set(&RTC->BKP16R, RTC->BKP16R + 1);
+		return 1;
+	}
+	r = fc_reg(upday);
+	if ((r >> 12 & 0xFF) >= (r >> 20 & 0xFF)) {	/* spent */
+		if (r != FC_REG) bkp_set(&FC_REG, r);
+		return 0;
+	}
+	bkp_set(&FC_REG, r + (1u << 12));
+	bkp_set(&RTC->BKP17R, RTC->BKP17R + 1);
+	return 1;
+}
+
+void hal_fc_counts(uint32_t *c, unsigned upday)
+{
+	uint32_t r;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	r = fc_reg(upday);
+	c[0] = RTC->BKP17R;
+	c[1] = RTC->BKP16R;
+	c[2] = r >> 12 & 0xFF;
+	c[3] = r >> 20 & 0xFF;
+}
+
+void hal_fc_budget(unsigned pages, unsigned upday)
+{
+	uint32_t r;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	r = fc_reg(upday);
+	bkp_set(&FC_REG, (r & ~0x0FF00000u) | (uint32_t) (pages & 0xFF) << 20);
+}
+
 int hal_reset_bits(void)
 {
 	return (int) (boot_reg() & (BOOT_DEV | BOOT_CAUSE));

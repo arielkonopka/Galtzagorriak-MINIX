@@ -315,6 +315,22 @@ PUBLIC int do_meminfo()
 	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fi, who, D,
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fi)));
   }
+  if (mm_in.m1_i2 == MI_FCBUDGET) {	/* R2b.11 */
+	struct fccount fc;
+	unsigned long b, z;
+
+	if (mm_in.m1_i1 >= 0 && mp->mp_effuid != SUPER_USER) return(EPERM);
+	if (mm_in.m1_i1 > 255) return(EINVAL);
+	if (sys_flash(FL_INFO, FL_BUDGET, NULL, mm_in.m1_i1 >= 0
+			? (unsigned) mm_in.m1_i1 + 1 : 0, &b, &z) != OK
+	    || sys_flash(FL_INFO, FL_COUNTS, NULL, 0, &fc.erased,
+						&fc.inst_erased) != OK)
+		return(EIO);
+	fc.budget = b;
+	fc.today = z;
+	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fc, who, D,
+		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fc)));
+  }
   if (mm_in.m1_i2 == MI_INSTALL) return(do_install());
   if (mm_in.m1_i2 == MI_RESET) return(sys_kstacks(who, (char *) 0, 0));
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
