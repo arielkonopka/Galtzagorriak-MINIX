@@ -8,7 +8,11 @@
  *				  byte 0: BTN_* bit (hal.h)
  *				  byte 1: 1 = pressed, 0 = released
  *				blocks until there is one, unless O_NONBLOCK
- *	minor 2  /dev/backlight	write: one byte, brightness 0..255
+ *	minor 2  /dev/backlight	write: one byte, brightness 0..255; three:
+ *				and the idle timeout in seconds (LE, 0:
+ *				never; default 300).  Off when idle, on at
+ *				any key or button; kept over resets.
+ *				read: the state, 4 bytes (hal.h HAL_BL_*)
  *	minor 3  /dev/led	write: three bytes, red green blue 0..255
  *	minor 4  /dev/vibro	write: one byte, 0 or '0' off, anything else on
  *	minor 5  /dev/speaker	write: notes, 4 bytes each: frequency in Hz and
@@ -132,6 +136,7 @@ FORWARD _PROTOTYPE( void lc_newline, (void)				);
 FORWARD _PROTOTYPE( int ir_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
+FORWARD _PROTOTYPE( void bl_apply, (void) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
@@ -157,6 +162,12 @@ PUBLIC void flipdev_task()
   int r;
 
   last_buttons = hal_buttons();
+  {	/* the backlight as it was set before the reset, and on */
+	u32_t st = hal_bl_state() & ~HAL_BL_OFF;
+
+	hal_bl_state_set(st);
+	hal_backlight(HAL_BL_LEVEL(st));
+  }
   if ((r = hal_ir_irq()) >= 0) {
 	put_irq_handler(r, ir_int);
 	hal_ir_rx_on(1);
@@ -343,11 +354,32 @@ message *m_ptr;
 	return(SUSPEND);
 
   case BL_MINOR:
+	if (m_ptr->m_type == DEV_READ) {	/* the state, 4 bytes (hal.h) */
+		u32_t st;
+
+		bl_apply();		/* a key that just came: on first */
+		st = hal_bl_state();
+
+		if (count < 4) return(EINVAL);
+		phys_copy(vir2phys(&st), user, (phys_bytes) 4);
+		return(4);
+	}
+	/* fall through */
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
 	if (count > 3) count = 3;
 	phys_copy(user, vir2phys(buf), (phys_bytes) count);
-	if (m_ptr->DEVICE == BL_MINOR) hal_backlight(buf[0]);
+	if (m_ptr->DEVICE == BL_MINOR) {
+		/* brightness; 3 bytes: and the idle timeout in seconds
+		 * (little endian, 0: never).  Kept over resets. */
+		u32_t st = hal_bl_state() & 0xFFFF;
+
+		if (count == 3) st = buf[1] | (u32_t) buf[2] << 8;
+		else if (count != 1) return(EINVAL);
+		hal_bl_state_set((u32_t) buf[0] << 16 | st);	/* on */
+		hal_backlight(buf[0]);
+		k_input = get_uptime();		/* the timeout starts now */
+	}
 	else if (count == 3) hal_led(buf[0], buf[1], buf[2]);
 	else return(EINVAL);
 	return(count);
@@ -381,6 +413,28 @@ int count;
 
 
 /*===========================================================================*
+ *				bl_apply				     *
+ *===========================================================================*/
+PRIVATE void bl_apply()
+{
+/* The backlight goes off after the idle timeout (owner, 2026-11-15:
+ * 5 minutes; 0 = never) and on again at any key or button (k_input).
+ * The setting and the state live in an RTC backup register (no RAM). */
+  u32_t st = hal_bl_state();
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
+  int idle = t != 0 && get_uptime() - k_input >= t;
+
+  if (idle && !(st & HAL_BL_OFF)) {
+	hal_backlight(0);
+	hal_bl_state_set(st | HAL_BL_OFF);
+  } else if (!idle && (st & HAL_BL_OFF)) {
+	hal_backlight(HAL_BL_LEVEL(st));
+	hal_bl_state_set(st & ~HAL_BL_OFF);
+  }
+}
+
+
+/*===========================================================================*
  *				do_hardint				     *
  *===========================================================================*/
 PRIVATE void do_hardint()
@@ -389,6 +443,7 @@ PRIVATE void do_hardint()
  * show it. */
   int r;
 
+  bl_apply();
   if (lc_on && lc_dirty) {
 	lc_dirty = FALSE;
 	hal_lcd_flush(fbuf);
@@ -445,6 +500,13 @@ PUBLIC void flipdev_tick()
 		else rx_over = TRUE;
 		interrupt(PRINTER);
 	}
+  }
+  {	/* the backlight's idle timeout: the task does the I2C (bl_apply) */
+	u32_t st = hal_bl_state();
+	clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
+
+	if ((t != 0 && uptime_irq() - k_input >= t) != ((st & HAL_BL_OFF) != 0))
+		interrupt(PRINTER);
   }
   if (changed == 0) return;
   k_input = uptime_irq();		/* no background flash work now */

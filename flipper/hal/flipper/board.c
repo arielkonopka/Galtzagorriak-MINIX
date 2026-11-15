@@ -1106,6 +1106,24 @@ uint32_t hal_rtc_time(void)
 		+ (tr >> 4 & 7) * 10 + (tr & 15));
 }
 
+/* The backlight's settings (hal.h): BKP15R, magic 0xB in the top nibble
+ * (register map in PORTING.md). */
+#define BL_REG		(RTC->BKP15R)
+#define BL_MAGIC	0xB0000000u
+
+uint32_t hal_bl_state(void)
+{
+	uint32_t r = BL_REG;	/* the RTC's APB clock is on (hal_early_boot) */
+
+	if ((r & 0xF0000000u) != BL_MAGIC) return 255u << 16 | 300u;
+	return r & 0x0FFFFFFFu;
+}
+
+void hal_bl_state_set(uint32_t st)
+{
+	bkp_set(&BL_REG, BL_MAGIC | (st & 0x0FFFFFFFu));
+}
+
 int hal_reset_bits(void)
 {
 	return (int) (boot_reg() & (BOOT_DEV | BOOT_CAUSE));
