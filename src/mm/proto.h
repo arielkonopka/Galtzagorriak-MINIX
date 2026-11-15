@@ -70,6 +70,8 @@ _PROTOTYPE( int fc_ran, (unsigned long crc, unsigned long owner)	);
 _PROTOTYPE( unsigned long fc_sync, (int fd, unsigned long size,
 	unsigned long crc, unsigned long owner, char *buf, int bufsize)	);
 _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
+_PROTOTYPE( int fc_lend, (void)						);
+_PROTOTYPE( void fc_return, (void)					);
 /* finst.c */
 struct stat;
 _PROTOTYPE( void in_init, (void)					);

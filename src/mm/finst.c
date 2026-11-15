@@ -355,15 +355,14 @@ struct exec *hdr;
   return(OK);
 }
 
-PRIVATE int in_text(fd, hdr, addr, sha)
+PRIVATE int in_text(fd, hdr, sha)
 int fd;
 struct exec *hdr;
-unsigned long addr;		/* program it here too (erased), or 0 */
 unsigned char *sha;		/* SHA-256 of the file's text */
 {
   struct sha sh;
   unsigned long done;
-  int i, n, k;
+  int n;
 
   sha_init(&sh);
   if (lseek(fd, (off_t) hdr->a_hdrlen, SEEK_SET) != hdr->a_hdrlen)
@@ -372,26 +371,28 @@ unsigned char *sha;		/* SHA-256 of the file's text */
 	n = hdr->a_text - done < CHUNK ? (int) (hdr->a_text - done) : CHUNK;
 	if (read(fd, mbuf, n) != n) return(EIO);
 	sha_add(&sh, (unsigned char *) mbuf, (unsigned long) n);
-	if (addr == 0) continue;
-	k = (n + 7) & ~7;
-	for (i = n; i < k; i++) mbuf[i] = (char) 0xFF;
-	if (sys_flash(FL_WRITE, addr + done, mbuf, (unsigned) k, NULL, NULL)
-								!= OK)
-		return(EIO);
   }
   sha_end(&sh, sha);
   return(OK);
+}
+
+PRIVATE void in_hash(out, p, n)		/* SHA-256 of memory (flash) */
+unsigned char *out;
+unsigned char *p;
+unsigned long n;
+{
+  struct sha sh;
+
+  sha_init(&sh);
+  sha_add(&sh, p, n);
+  sha_end(&sh, out);
 }
 
 PRIVATE int in_flash_ok(addr, size, sha)	/* does the flash hold it? */
 unsigned long addr, size;
 unsigned char *sha;
 {
-  struct sha sh;
-
-  sha_init(&sh);
-  sha_add(&sh, (unsigned char *) addr, size);
-  sha_end(&sh, (unsigned char *) mbuf);
+  in_hash((unsigned char *) mbuf, (unsigned char *) addr, size);
   return(memcmp(sha, mbuf, 32) == 0);
 }
 
@@ -500,10 +501,15 @@ PRIVATE int in_install(fd, s)
 int fd;				/* the program, open */
 struct stat *s;
 {
+/* Start an install: 1 if the caller must go on with MI_INSTALL op 4 (one
+ * flash step per call, in_step), else done (OK or an error).  The steps
+ * keep their state in MM's flash job (fcache.c), so MM serves exec and
+ * everybody else between them: an exec waits for one page erase (22 ms)
+ * or 256 bytes, never for a whole install (AC2b.R2, R0.8c). */
   struct exec hdr;
   struct inrec *r;
   unsigned char sha[32];
-  unsigned long npages, addr, done, size;
+  unsigned long npages, addr, size;
   int i;
 
   if ((i = in_check(fd, s, &hdr)) != OK) return(i);
@@ -512,25 +518,81 @@ struct stat *s;
   if (in_writable() != OK) return(EIO);
 
   /* The same text already there (an alias): only a record. */
-  if (in_text(fd, &hdr, 0UL, sha) != OK) return(EIO);
+  if (in_text(fd, &hdr, sha) != OK) return(EIO);
   if ((r = in_same(size, sha, S_ANY)) != NULL
 	&& in_flash_ok(addr = r->addr, size, sha))
 	return(in_record(addr, size, sha, s));
 
   npages = (size + PAGE - 1) / PAGE;
   if ((addr = in_find_run(npages)) == 0) return(ENOSPC);
-  for (done = 0; done < npages * PAGE; done += PAGE)
-	if (sys_flash(FL_ERASE, addr + done, NULL, 0, NULL, NULL) != OK)
-		return(EIO);
+  if ((i = fc_lend()) != OK) return(i);
+  mjob.fd = fd;				/* do_install leaves it open */
+  mjob.state = J_INST_ERASE;
+  mjob.page = (addr - in_base) / PAGE;
+  mjob.toff = hdr.a_hdrlen;
+  mjob.size = size;
+  mjob.crc = (unsigned long) s->st_ctime;
+  mjob.done = 0;
+  mjob.owner = who;
+  mjob.vcrc = (unsigned long) mp->mp_pid;
+  return(1);
+}
 
-  /* The text, hashed as it is written, and read back (R2b.5). */
-  if (in_text(fd, &hdr, addr, sha) != OK) return(EIO);
-  if (!in_flash_ok(addr, size, sha)) {
-	printf("install: the flash copy does not read back\n");
-	return(EIO);
+/*===========================================================================*
+ *				in_step					     *
+ *===========================================================================*/
+PRIVATE int in_step()
+{
+/* One step of the caller's install: 1 for more, else OK or an error.
+ * Text pages, each piece compared with the file as it is programmed; then
+ * the record (the file must not have changed meanwhile: its ctime), and
+ * the old version's record is marked dead. */
+  struct stat s;
+  unsigned char sha[32];
+  unsigned long addr = in_base + (unsigned long) mjob.page * PAGE;
+  unsigned long npages = (mjob.size + PAGE - 1) / PAGE;
+  int r = OK, i, n, k;
+
+  if (!J_INSTALLING(mjob.state) || mjob.owner != who
+		|| mjob.vcrc != (unsigned long) mp->mp_pid) return(EINVAL);
+  switch (mjob.state) {
+  case J_INST_ERASE:			/* a page per call */
+	if (sys_flash(FL_ERASE, addr + mjob.done, NULL, 0, NULL, NULL) != OK)
+		{ r = EIO; break; }
+	mjob.done += PAGE;
+	if (mjob.done == npages * PAGE) {
+		mjob.state = J_INST_PROGRAM;
+		mjob.done = 0;
+	}
+	return(1);
+  case J_INST_PROGRAM:			/* CHUNK bytes per call */
+	n = mjob.size - mjob.done < CHUNK ? (int) (mjob.size - mjob.done)
+					  : CHUNK;
+	if (lseek(mjob.fd, (off_t) (mjob.toff + mjob.done), SEEK_SET) < 0
+			|| read(mjob.fd, mbuf, n) != n) { r = EIO; break; }
+	k = (n + 7) & ~7;
+	for (i = n; i < k; i++) mbuf[i] = (char) 0xFF;
+	if (sys_flash(FL_WRITE, addr + mjob.done, mbuf, (unsigned) k,
+							NULL, NULL) != OK
+		|| memcmp((char *) (addr + mjob.done), mbuf, n) != 0) {
+		printf("install: the flash copy does not read back\n");
+		r = EIO;
+		break;
+	}
+	mjob.done += n;
+	if (mjob.done == mjob.size) mjob.state = J_INST_RECORD;
+	return(1);
+  case J_INST_RECORD:	/* every piece matched the file as read: if the
+			 * file is unchanged, the flash holds its text */
+	if (fstat(mjob.fd, &s) < 0
+		|| (unsigned long) s.st_ctime != mjob.crc) { r = EIO; break; }
+	in_hash(&sha[0], (unsigned char *) addr, mjob.size);
+	r = in_record(addr, mjob.size, sha, &s);
+	break;
   }
-  /* The record: now exec finds it.  Then the old version goes. */
-  return(in_record(addr, size, sha, s));
+  close(mjob.fd);			/* done, or given up: the pages stay */
+  fc_return();				/* unclaimed and are reused */
+  return(r);
 }
 
 /*===========================================================================*
@@ -554,7 +616,7 @@ struct stat *s;
   if (in_has(s, size)) return(OK);
   if (in_same(size, (unsigned char *) NULL, S_LIVE) == NULL)
 	return(ENOENT);			/* cheap: no hashing */
-  if (in_text(fd, &hdr, 0UL, sha) != OK) return(EIO);
+  if (in_text(fd, &hdr, sha) != OK) return(EIO);
   if ((r = in_same(size, sha, S_UNBOUND)) == NULL)
 	r = in_same(size, sha, S_LIVE);
   if (r == NULL) return(ENOENT);
@@ -583,13 +645,15 @@ PUBLIC int do_install()
  * m1_i1 = its length; m1_i3 = 0: install the program's text into the
  * flash region, 1: mark its records dead (their pages are free once no
  * process runs from them), 2: bind it to a built-in record (in_bind), 3: return
- * the number of built-in records not bound yet (no path). */
+ * the number of built-in records not bound yet (no path), 4: the next step
+ * of the caller's install (op 0 answered 1: call again until not 1). */
   struct stat s;
   struct inrec *r;
   int fd, i, len = mm_in.m1_i1, rv;
 
   if (mp->mp_effuid != SUPER_USER) return(EPERM);	/* AC2b.4 */
   if (in_st == 0) return(ENOSYS);
+  if (mm_in.m1_i3 == 4) return(in_step());	/* the next step */
   if (mm_in.m1_i3 == 3) {
 	for (rv = i = 0; i < NREC && in_dir <= 1; i++) {
 		r = RECP(in_dir, i);
@@ -608,7 +672,7 @@ PUBLIC int do_install()
   if (mm_in.m1_i3 == 0 || mm_in.m1_i3 == 2) {	/* install, bind */
 	if ((fd = allowed(mbuf + 3584, &s, X_BIT)) < 0) return(fd);
 	rv = mm_in.m1_i3 == 0 ? in_install(fd, &s) : in_bind(fd, &s);
-	close(fd);
+	if (rv != 1) close(fd);		/* 1: the install job keeps it */
 	return(rv);
   }
   /* uninstall: every live record for this file (any version) */
