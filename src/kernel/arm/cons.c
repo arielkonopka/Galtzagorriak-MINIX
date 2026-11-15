@@ -22,6 +22,8 @@ PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */
 PRIVATE int uart_irq;
 PRIVATE int usb_irq = -1;
 PRIVATE int uart_held;		/* UART receive interrupt off: ibuf full */
+#define USB_CHUNK	64	/* cons_write waits for this much ring room */
+#define USB_WAIT_MS	20	/* echo/printf: longest wait for room */
 
 FORWARD _PROTOTYPE( void cons_write, (tty_t *tp)			);
 FORWARD _PROTOTYPE( void cons_echo, (tty_t *tp, int c)			);
@@ -68,8 +70,9 @@ int irq;
 {
 /* USB interrupt: run the USB stack, then collect received characters. */
   hal_usb_poll();
-  if (usb_fill()) {
-	tty_table[0].tty_events = 1;
+  if (usb_fill()
+	|| (tty_table[0].tty_outleft != 0 && hal_usb_room() >= USB_CHUNK)) {
+	tty_table[0].tty_events = 1;	/* input, or room for waiting output */
 	force_timeout();
   }
   return 1;
@@ -97,10 +100,14 @@ PRIVATE void usb_out(buf, n)
 char *buf;
 unsigned n;
 {
-/* Queue output for USB.  If a terminal is attached, wait for room (the USB
- * interrupt drains the ring); with nobody listening, excess is dropped.
+/* Queue output for USB; with nobody listening, excess is dropped.  Writes
+ * from processes never get here without room (cons_write).  Echo and kernel
+ * printf() from a task wait for room at most USB_WAIT_MS, then drop: a
+ * terminal that is open but not read must not hold a kernel task (rule
+ * 0.8; the watchdog would reset the board after 2 s).
  */
   unsigned k;
+  u32_t start = hal_cycles();
 
   if (usb_irq < 0) return;
   while (n > 0) {
@@ -108,7 +115,9 @@ unsigned n;
 	buf += k;
 	n -= k;
 	if (n > 0 && (!hal_usb_connected()
-			|| k_reenter != (unsigned char) -1)) break;	/* not a task */
+			|| k_reenter != (unsigned char) -1	/* not a task */
+			|| hal_cycles() - start
+				> USB_WAIT_MS * (hal_cpu_hz() / 1000))) break;
   }
 }
 
@@ -204,10 +213,19 @@ register tty_t *tp;
   char buf[64];
   phys_bytes user_phys;
 
+  unsigned room;
+
   if ((count = tp->tty_outleft) == 0 || tp->tty_inhibited) return;
 
   do {
 	if (count > sizeof(buf)) count = sizeof(buf);
+	/* Only what the USB ring takes now; the rest when the USB interrupt
+	 * sees room (usb_int), the writer stays suspended meanwhile.  No
+	 * waiting in the task for a host that does not read. */
+	if (usb_irq >= 0 && (room = hal_usb_room()) < (unsigned) count) {
+		if (room < USB_CHUNK) break;
+		count = room;
+	}
 	user_phys = proc_vir2phys(proc_addr(tp->tty_outproc), tp->tty_out_vir);
 	phys_copy(user_phys, vir2phys(buf), (phys_bytes) count);
 
@@ -222,6 +240,7 @@ register tty_t *tp;
 		out_char(buf[i]);
 	}
   } while ((count = tp->tty_outleft) != 0 && !tp->tty_inhibited);
+  /* (break: the USB interrupt wakes TTY when there is room) */
 
   if (tp->tty_outleft == 0) {
 	tty_reply(tp->tty_outrepcode, tp->tty_outcaller, tp->tty_outproc,

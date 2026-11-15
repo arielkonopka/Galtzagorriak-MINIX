@@ -203,14 +203,19 @@ static void tx_kick(void)
 		pkt[n++] = tx_ring[tx_tail % TX_RING];
 		tx_tail++;
 	}
-	if (n == 0) {
-		if (!last_full) return;
-		last_full = 0;		/* end the transfer: zero length packet */
-	} else {
-		last_full = (n == DATA_SZ);
+	if (n == 0 && !last_full) return;
+	/* The endpoint may refuse the packet (not NAK: still VALID, or
+	 * stalled).  Ignored, tx_busy stayed set with nothing in flight: no
+	 * completion event ever came, output stopped for good, the console
+	 * task waited for ring space and input stopped too, until a USB reset
+	 * (unplugging).  Now the bytes go back to the ring for the next try
+	 * (the next write or endpoint event). */
+	if (usbd_ep_write(&udev, TXD_EP, pkt, n) < 0) {
+		tx_tail -= n;
+		return;
 	}
+	last_full = (n == DATA_SZ);	/* n == 0: the zero length packet */
 	tx_busy = 1;
-	usbd_ep_write(&udev, TXD_EP, pkt, n);
 }
 
 static void cdc_rxtx(usbd_device *dev, uint8_t event, uint8_t ep)
@@ -382,6 +387,13 @@ void hal_usb_poll(void)
 int hal_usb_connected(void)
 {
 	return configured && dtr;
+}
+
+unsigned hal_usb_room(void)
+{
+	/* nobody listening: writes drop the oldest bytes, never wait */
+	if (!configured || !dtr) return TX_RING;
+	return TX_RING - (tx_head - tx_tail);
 }
 
 unsigned hal_usb_write(const void *buf, unsigned n)
