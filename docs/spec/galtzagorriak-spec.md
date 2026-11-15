@@ -1081,7 +1081,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 7b | Time services and first native apps: interval reminder, alarm clock, Self Test (section F); GPIO sensors: thermo-hygrometer, sonar (7b.4, section H); more native apps get 7b.N subsections | apps that act at a set time |
 | 7c | Scripting runtime: Berry (owner decision) with bindings to sensors, timers, alerts, GPIO and radios | script apps |
 | 8 | Sub-GHz and LF RFID drivers | |
-| 9 | App ports II: Sub-GHz, 125 kHz RFID; gadget: hidden camera finder v1 (Wi-Fi devboard, Sub-GHz, IR meter, 9.1) | |
+| 9 | App ports II: Sub-GHz, 125 kHz RFID; gadget: hidden camera finder v1 (Sub-GHz, IR meter, 9.1; its Wi-Fi devboard part is in Phase 22) | |
 | 10 | USB composite classes: HID, mass storage, second CDC | BadUSB, 19a |
 | 11 | App ports III: BadUSB, USB mass storage; USB reader modes for RFID, iButton, IR, Sub-GHz (11.1, section G) | |
 | 12 | Swapping to the SD card [5] | RAM headroom for NFC/BLE |
@@ -1095,6 +1095,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 | 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
+| 22 | Wi-Fi / ESP32 devboard work, deferred to the end (owner decision 2026-11-15): `camfind`'s devboard firmware (R9.1.1, R9.1.8), the `wifi` canary (R9.2.4), ESP32 offload mode (R19.7) | Wi-Fi scans |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
 before Phase 3). From Phase 5 on,
