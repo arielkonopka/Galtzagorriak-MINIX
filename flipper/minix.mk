@@ -308,7 +308,7 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
-TESTS	:= sigret unaligned badreloc fcpoison mpufrag
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag fccheck
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
@@ -333,8 +333,10 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # of rewriting the card.  Raise BASE_VER for every update sent.
 BASE_VER := 3.44
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
-$(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
+$(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+	    rootfs/base.postinst
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
+	   --postinst rootfs/base.postinst \
 	   -D "Galtzagorriak MINIX system programs" \
 	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \

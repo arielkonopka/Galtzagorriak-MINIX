@@ -399,7 +399,15 @@ with the aliases [, clone, cpdir, ln, mv, rm).  Later boots: one MEMINFO
 call, nothing to do.  A base upgrade keeps them in flash: an unchanged
 text gets only a new record, no page is written.  Older cards need the
 `pkg bind /bin/*` line in /etc/rc added by hand (the base package does not
-carry /etc).
+carry /etc).  Now the base package's postinst adds it (rootfs/base.postinst).
+
+Phase 2b follow-ups (2026-11-15, Flipper): the first `pkg bind /bin/*`
+after flashing minix-base.bin (18 files, 12 texts, the directory moved
+once) takes 1.86 s; with nothing left to bind it is one MEMINFO call,
+59 ms for the whole command.  `free -k` now also shows the servers'
+stack high-water marks (the kernel marks their stacks at load): MM 428
+of 1024 bytes after boot and login, 588 after the bind with its
+compaction; FS 516 of 2048.
 
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and

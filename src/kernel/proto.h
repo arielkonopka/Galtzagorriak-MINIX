@@ -23,6 +23,7 @@ _PROTOTYPE( void aha_scsi_task, (void)					);
 _PROTOTYPE( void clock_task, (void)					);
 _PROTOTYPE( void clock_stop, (void)					);
 _PROTOTYPE( clock_t get_uptime, (void)					);
+_PROTOTYPE( unsigned server_stack_used, (int t, unsigned *sizep)	);
 _PROTOTYPE( void syn_alrm_task, (void)					);
 
 /* dmp.c */

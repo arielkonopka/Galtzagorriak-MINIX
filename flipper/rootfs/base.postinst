@@ -1,0 +1,7 @@
+# postinst of the base package: cards made before make base-flash (R2b.6)
+# lack the line in /etc/rc that binds the programs built into the firmware.
+grep 'pkg bind' /etc/rc >/dev/null || {
+	(echo '/^update/i'; echo '# Programs built into the firmware (make base-flash): bind them at boot.'
+	 echo 'pkg bind /bin/*'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
+	echo "base: /etc/rc now runs pkg bind /bin/* at boot"
+}
