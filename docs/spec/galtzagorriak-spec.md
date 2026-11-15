@@ -660,6 +660,9 @@ is done last, in Phase 18b.
   with `M` rules for daylight saving). No tz database on the device: a `const` table of about 80
   common zones (label → `TZ` string, ≈ 3 KB) lives in the installed region and is used only by the
   wizard and the settings app.
+- **Time from the phone is local time.** The stock mobile app sends the phone's local wall time
+  (stock keeps local time in its RTC); `rpcd` converts it to UTC with `/etc/TZ` before `stime()`,
+  and does not step the clock when the phone's zone differs from ours (R15.7).
 - **Wall-clock timers** (`daily` in F.2) are local times and follow the `TZ` rules; `once` timers
   are stored as a UTC instant. On a spring-forward day a timer that falls into the missing hour
   fires at the first instant after it; on a fall-back day it fires once, at the first occurrence.
@@ -793,6 +796,9 @@ The final deliverable includes a complete manual. These facts go into it:
   sunrise/sunset method and its limits near the equinoxes.
 - Re-running the wizard or a single step: `setup`, `setup <step>`, Settings → System → Setup.
 - Clock accuracy, the daily rate and calibration (I.6).
+- Syncing the clock from the Flipper mobile app (R15.7): the app sends local time, MINIX stores
+  UTC; offsets of 2 s or less are only logged; a phone in another zone gives a notice instead of a
+  clock change; what the app can and cannot do with MINIX.
 
 ---
 
@@ -2769,12 +2775,84 @@ Responsiveness: see AC13.R; the NFC app's screens meet L1.
     injection, system info, date/time;
   - runs as its own user, with access limited to `/home/flipper` unless root.
 - **R15.6** Over-the-air package install via RPC lands in `pkg`'s incoming directory and follows R3.5.
+- **R15.7 Phone link: the official Flipper mobile app (owner request, 2026-11-15).** Nothing can be
+  installed on the phone, so MINIX speaks the app's own protocol: it is a BLE **peripheral** that
+  offers the stock serial service and answers a **subset of the stock RPC** (protobuf, `flipper.proto`,
+  `system.proto`, `storage.proto` from the stock tree). This works with the light stack (R15.1).
+  - **Profile "phone", in order:**
+    1. *Session start (needed by everything):* `system_ping`, `system_protobuf_version` (we report
+       the stock major/minor we were generated from), `system_device_info` (the keys the app reads,
+       taken from stock `furi_hal_info_get`, with our own `firmware_*` values and a `firmware_origin`
+       that says MINIX), `system_power_info` (battery, from the BQ27220 fuel gauge, R6.1). Unknown requests
+       get `ERROR_NOT_IMPLEMENTED`, never a disconnect, so the app keeps working with what exists.
+    2. *Time sync (the reason for this item):* `system_set_datetime` and `system_get_datetime`, see
+       the rules below.
+    3. *Storage browsing:* `storage_list`, `storage_stat`, `storage_info`, `storage_read`, and later
+       `storage_write`, `storage_mkdir`, `storage_delete`, `storage_rename` (as R15.5), limited to
+       `/ext` with the permissions of `rpcd`'s user (R15.5). Writes go to the SD card only.
+    4. *Later:* screen streaming and input injection (R15.5, R4b.8), `app_start` (R15.5),
+       `system_play_audiovisual_alert` (the app's "find my Flipper"; plays through `alert`, F.2).
+    Not answered: `system_factory_reset` and `system_reboot` mode `UPDATE` (`ERROR_NOT_IMPLEMENTED`;
+    our updater is Phase 17), `system_update_request` (Phase 17 decides).
+  - **Time rules (section I.1; owner, 2026-11-15: the clock stays UTC, for navigation by sunrise
+    and sunset, I.5–I.6).** The stock `DateTime` message has no zone and no sub-seconds; stock keeps
+    **local** time in its RTC, so the app sends the phone's **local** wall time (to be confirmed
+    in the PR with a log of what the app sends, on Android and iOS).
+    - On `set_datetime`, `rpcd` checks the fields (year 2000–2099, month, day of the month, H:M:S;
+      `weekday` is ignored and recomputed), converts the local time to UTC with the system zone
+      (`/etc/TZ`, `mktime` with the `TZ` rules), and only then calls `stime()`. **Local time is
+      never stored**, not in the RTC and not in a file. Stock does not check the fields
+      (`rpc_system.c` passes them straight to `furi_hal_rtc_set_datetime`); we do.
+    - In the repeated hour of a fall-back day the local time is ambiguous; pick the occurrence
+      closer to the current RTC (one subtraction).
+    - **Zone check:** `rpcd` compares the phone's local time with our UTC clock: the difference,
+      rounded to 15 minutes, is the phone's UTC offset. If it does not match the offset of
+      `/etc/TZ`, the clock is **not** stepped (an hour's error would be 15° of longitude), and a
+      notice (`notify_post`, category `info`) says "Phone is in UTC+n, Flipper in UTC+m: change
+      the zone?" with two choices: open the zone settings, or "set the clock anyway" (for a clock
+      that really is an hour off). This happens, for example, after a trip. If the RTC is not valid
+      (backup domain lost, `RTC_ISR.INITS` clear) there is nothing to compare, and the time is
+      converted with `/etc/TZ` and set.
+    - **No zone yet** (first boot, before the wizard set `/etc/TZ`): the received time is kept only
+      in `rpcd`'s RAM and offered to the wizard (Phase 18b) as "time from phone, zone: ?"; the
+      clock is set once the user picks the zone.
+    - **Small offsets are logged, not stepped.** The app's time has 1 s resolution and BLE adds
+      up to one connection interval, so its error is about ±1 s. If |offset| ≤ 2 s the clock is
+      left alone (a calibrated RTC is usually better than that, I.6) and the offset goes to
+      `/var/db/chrono` marked as quality `phone, ±1 s`; NTP (Phase 19) and a manual time-signal
+      check stay the precise sources. A larger offset steps the clock with `stime()`, which sends
+      `SIGRTC` so `timed` recomputes all timers (F.2, R7b.1) and logs the step to `/var/db/chrono`.
+    - The right to set the clock is narrow: `rpcd` is in group `clock`, which may call `stime()`;
+      it gets no other root right.
+    - `get_datetime` answers in local time (UTC converted with `/etc/TZ`), so the app shows the
+      same time as the Flipper's own clock.
+  - **Shared code with Phase 21.** The generated protobuf code (nanopb, `const` descriptors) and the
+    framing of the serial service (length-delimited `PB_Main`, the flow-control characteristic) live
+    in one shared library in flash, `libflipperpb` (R2b.9). `rpcd` uses it as the server, `flipinst`
+    (R21.2) as the client. One generated `.pb.c` per `.proto` file; a program links only what it uses.
+  - **RAM only while connected.** `bled` starts `rpcd` when a central subscribes to the serial
+    service and `rpcd` exits on disconnect; when no phone is connected the phone link costs 0 B. In
+    the "phone" profile (items 1–3) `rpcd` decodes one `PB_Main` at a time into a static buffer
+    (largest message: `storage_read` chunk, 512 B, as stock), target ≤ 4 KB including its stack,
+    measured in the PR. Streaming and input (item 4) may grow it to the 6–10 KB of R15.5.
+  - **Flash writes: none at runtime.** Time goes to the RTC registers; `/var/db/chrono` and the
+    notice are on the SD card; storage writes only touch `/ext`.
+  - **Responsiveness:** `rpcd` runs at normal user priority, below the interactive queue (rule 0.8);
+    a `storage_read` reply is sent in chunks so the UI never waits more than one chunk. Time sync
+    takes one message and a few hundred instructions of conversion.
 
 Acceptance:
 - AC15.1 The official mobile app connects, browses `/ext`, mirrors the screen and sends button presses.
 - AC15.2 qFlipper over USB does the same.
 - AC15.3 BLE remote (HID) works with a phone and a PC.
 - AC15.4 `make ramcheck`: SRAM1 static unchanged by BLE (±128 B); the FS cache is in the remaining SRAM2.
+- AC15.5 Phone link (R15.7): the official app on Android and iOS connects, shows the battery and
+  device info, and syncs the clock: with the Flipper in `CET-1CEST` and the phone in Warsaw, the RTC
+  holds UTC afterwards (`date -u` matches a reference within 2 s); with the phone in another zone the
+  clock is not stepped and the zone notice appears. Unimplemented requests return
+  `ERROR_NOT_IMPLEMENTED` and the app stays connected. `rpcd` is not running when no phone is
+  connected; RAM while connected ≤ 4 KB in the "phone" profile; no internal-flash erase counter
+  changes (R2b.11).
 
 Responsiveness: AC15.R No BLE disconnect over 30 min while the user browses menus and copies files; mobile-app button injection → screen update ≤ 100 ms over BLE (one connection interval); flash writes wait for CPU2's flash-activity grant (R0.8c).
 
@@ -2788,6 +2866,7 @@ RAM: kernel SRAM1 ≈ +1 KB (task stack + state), SRAM2 6–8 KB (taken from the
 | Bluetooth settings (on/off, forget devices, debug) | Part of `settings`, talking to `bled` over a pipe/socket-like device |
 | BLE remote (keyboard, media, mouse, TikTok/YouTube remotes) | `bleremote` app using the HID service of `bled` |
 | Mobile app pairing UI | `bled` UI hook in the launcher |
+| Mobile app connection (time sync, device info, file browsing) | `rpcd` "phone" profile, R15.7 |
 
 Acceptance: AC16.1 Pairing, unpairing and reconnect after reboot work with Android and iOS.
 AC16.R BLE remote keypress → host event ≤ 30 ms p99 (connection interval 7.5–15 ms).
@@ -3429,7 +3508,8 @@ USB cannot do it: both Flippers are USB devices only.
   1. connects as BLE central to the stock BLE serial service and pairs; the target shows a PIN,
      the user types it on ours (this is the target owner's consent);
   2. checks the RPC `protobuf_version` and refuses unknown versions; the `.proto` files come from
-     the stock tree (GPL, see the licence rule);
+     the stock tree (GPL, see the licence rule); the generated code is the
+     shared library `libflipperpb` that `rpcd` also uses (R15.7);
   3. writes a package in the stock updater format to the target's SD card with RPC `storage_write`:
      manifest, `firmware.dfu` with the MINIX image, the full BLE stack (R16.1.0) with its
      `radio_address` and CRC, plus the MINIX files that live on the SD card;
@@ -3536,5 +3616,6 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (owner discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
+| Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
