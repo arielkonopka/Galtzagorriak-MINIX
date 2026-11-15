@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- `/dev/mem` and `/dev/kmem` read only where the board has memory (RAM, flash below CPU2's, ROM/OTP) and write only RAM: `dd if=/dev/mem` past the end is a read error instead of a kernel panic.
 - (T11, R2b.11) The run-time text cache erases at most 32 flash pages a day (`pkg budget`, `fcache_budget=` in `/etc/rc.conf`); `free -v` shows the erase counts.
 - (Phase 2b, AC2b.5) Power cuts during installs, tested in QEMU (`tools/powercut.py`): a cut inside a directory record no longer blocks every later install, and a cut during compaction no longer loses installed programs.
 - (Phase 2b, R2b.7) The installed-programs directory no longer stays full after base upgrades: compaction drops dead records whose text a live record still has.
