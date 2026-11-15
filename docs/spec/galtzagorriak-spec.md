@@ -1008,8 +1008,9 @@ section sets the rules for all of them.
 ### M.1 Rules for every canary
 
 - **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
-  types, never accepts writes, never pairs or bonds, never transmits on a radio except the minimum
-  of its role (advertising for the BLE bait, the tag answers of the NFC bait). It never jams,
+  types, never accepts writes, never keeps a pairing beyond the session (the BLE honeypot of
+  R16.5.6 pairs, with keys in RAM only), never transmits on a radio except the minimum of its
+  role (advertising for the BLE bait, the tag answers of the NFC bait). It never jams,
   deauthenticates or replays.
 - **Never impersonate a real product or credential.** Baits use our own IDs (G.1), a random NFC
   UID and generic names; no payment, transit or access-card emulation, no other vendor's IDs.
@@ -2915,8 +2916,35 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - every service and characteristic discovery, read, write (refused with "write not
     permitted", value logged as hex, at most 32 B) and notification subscription;
   - **pairing requests:** IO capabilities, bonding flag, Secure Connections, key size. The canary
-    then answers "Pairing Failed: pairing not supported"; it never bonds;
+    then answers "Pairing Failed: pairing not supported" (unless the honeypot of R16.5.6 is on);
   - disconnect reason and the reconnect rhythm.
+- **R16.5.6 Honeypot (owner idea 2026-11-15; off by default, a switch in the app):** the bait
+  accepts pairing and watches what the central does once it trusts the device.
+  - Pairing as the central asks, with Just Works or a passkey shown on the Flipper's screen; the
+    log records the method, Secure Connections or legacy pairing, key size and which keys each
+    side distributes. Legacy (non-SC) pairing is flagged as weak.
+  - **Keys never leave RAM:** LTK, IRK and CSRK live in `bled`'s session state and are wiped
+    (zeroed) when the session ends or the app exits. Nothing goes to the SD bond file (R16.1.2) or
+    to CPU2's flash. If the installed stack cannot keep a bond without writing its own flash
+    (check with the R15.4 findings), the honeypot pairs **without bonding** (Bonding_Flags = 0):
+    the link is still encrypted, but the central distributes no identity key and cannot
+    reconnect encrypted later. The app says which of the two modes is in use.
+  - After pairing it logs: reads and writes to characteristics marked "encrypted" or
+    "authenticated" (a second `const` GATT section that only opens after pairing, e.g. a fake
+    "settings" and "firmware version" characteristic), notification subscriptions, writes that
+    look like commands (hex, at most 32 B each), and attempts at an unknown handle or service.
+  - **Identity behind the random address:** when the central distributes its IRK and identity
+    address, the log shows that the random address it used belongs to that identity, and later
+    reconnects in the same session that resolve to it are marked "same device". The IRK itself is
+    never written to the log; the identity address is stored hashed if the privacy setting
+    (M.1) says so.
+  - Reconnect behaviour: how soon and how often the central comes back, and whether it tries to
+    re-encrypt with the session keys.
+  - Personas for the honeypot add a generic "Keyboard" (HID-over-GATT Report Map from `const`,
+    never sends a key: the M.1 rule holds) and a generic "Smart lock" (writes to its "unlock"
+    characteristic are logged and acknowledged with an error).
+  - Security: R16.5.5 holds (RPC and serial off), so a paired stranger reaches only the fake GATT
+    table. The honeypot ends after 30 min or on Back, and every link is then disconnected.
 - **R16.5.2 Scan requests:** where the stack reports received scan requests (Bluetooth 5 "LE Scan
   Request Received" with extended advertising; check the ST stack), the bait also lists **active
   scanners** nearby that never connect. If not supported, the line is hidden.
@@ -2938,8 +2966,15 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - AC16.5.2 An iPhone and a Linux `bluetoothctl` connect; the guess names both.
   - AC16.5.3 (full stack) A second Flipper running a proximity-advertisement spam app triggers the
     flood alarm within 10 s; an AirTag carried for 30 min triggers the tracker alert.
-  - AC16.5.4 No bond is ever stored (the bond file on SD, R16.1.2, is unchanged).
-- RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared); app ≈ 4 KB while running.
+  - AC16.5.4 No bond is ever stored (the bond file on SD, R16.1.2, is unchanged; CPU2 flash
+    unchanged, read back by FUS checksum or the stack's NVM counters), also after a honeypot
+    session.
+  - AC16.5.5 Honeypot: an Android phone pairs (passkey on screen), reads the encrypted
+    characteristic and writes to it; the log shows the pairing method, the key distribution, the
+    resolved identity, and the write. After the app exits, the phone's next connection attempt
+    fails to re-encrypt (keys gone), and a RAM dump of `bled` holds no non-zero key bytes.
+- RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared) + ≈ 100 B session keys
+  in the honeypot; app ≈ 4 KB while running.
   Flash ≈ 6 KB app, `bled` +2 KB.
 
 ## Phase 17: Trust: U2F, signed packages, updater, option bytes
