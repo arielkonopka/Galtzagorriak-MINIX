@@ -7,6 +7,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 ## Unreleased
 
 - The LCD backlight dims 10 % a second from 5 s before its timeout (default 15 s, spec #89) and then fades out (0.5 s); the next key or button brings it back at once (when it is off, that press only turns it on). Reading `/dev/backlight` ends after its 4-byte state.
+- CI gates: flash pages erased in the QEMU M2 run are checked against `flipper/flash-budget.txt` (`tools/flashcheck.py`), the power-cut test (`tools/powercut.py`) and the latency trace build run on every PR, and a `pr-rules` check asks for the CHANGELOG line and the manual update (labels `no-changelog`, `no-manual`); the toolchain's .deb files are cached.
 
 ## 0.1.1 (2026-11-15): tasks and fixes after Phase 1
 

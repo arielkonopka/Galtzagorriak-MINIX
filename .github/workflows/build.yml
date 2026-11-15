@@ -2,6 +2,14 @@
 # in QEMU.  Every push and PR gets the images as a workflow artifact; a
 # tag vX.Y.Z also attaches them to the GitHub release of that tag.
 # The user manual (docs/manual/install.md) says where to download them.
+#
+# Hard gates (a red check blocks the merge):
+#   ramcheck    static RAM of every image <= flipper/ram-budget.txt
+#   flashcheck  flash pages erased in the M2 run <= flipper/flash-budget.txt
+#   M2          the QEMU self-test passes
+#   latbuild    the latency trace build (spec R0.8e, make latcheck) compiles
+#   powercut    power cuts during installs (AC2b.5, tools/powercut.py)
+# L1-L10 themselves need the device: QEMU's timing is not the Flipper's.
 name: build
 
 on:
@@ -26,11 +34,7 @@ jobs:
         with:
           fetch-depth: 0          # tools/gzbuild.py: git describe --tags
 
-      - name: Install the toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-arm-none-eabi python3-pil \
-            xfonts-base qemu-system-arm
+      - uses: ./.github/actions/toolchain
 
       - name: Build the Flipper images
         run: make BOARD=flipper -j"$(nproc)" minix card base-flash base pkgs
@@ -43,6 +47,12 @@ jobs:
           make -j"$(nproc)" INIT=m2 minix disk
           make INIT=m2 minix-run | tee m2.log
           grep -q 'M2 USER PASS' m2.log
+
+      - name: Flash erase budget (M2)
+        run: python3 -I tools/flashcheck.py flash-budget.txt m2 m2.log
+
+      - name: Latency trace build compiles (R0.8e)
+        run: make BOARD=flipper -j"$(nproc)" latcheck
 
       - name: Collect the images
         run: |
@@ -57,9 +67,27 @@ jobs:
           path: out/
           retention-days: 30
 
+  # AC2b.5: every erase and the edges of every write of two installs are
+  # cut, in both modes (52 QEMU boots, about a minute on 4 cores).
+  powercut:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: flipper
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/toolchain
+      - name: Build for QEMU
+        run: make -j"$(nproc)" minix disk
+      - name: Power cuts during installs
+        run: python3 -I tools/powercut.py -j"$(nproc)"
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, powercut]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
