@@ -417,7 +417,8 @@ void hal_fc_budget(unsigned pages, unsigned upday) { fc_budget = pages & 0xFF; }
  * up to the made-up SFSA. */
 #define RAM_RANGES	{ 0x20000000u, 0x20030000u }
 #define ROM_SPANS \
-	if ((n = span_in(addr, len, 0, l[HAL_FL_SFSA])) != 0) return n;
+	sfsa = 0x00090000; /* hal_flash_layout's made-up SFSA */ \
+	if ((n = span_in(addr, len, 0, sfsa)) != 0) return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
 {
@@ -428,14 +429,13 @@ static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
 uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 {
 	static const uint32_t ram[][2] = { RAM_RANGES };
-	uint32_t l[HAL_FL_N], n;
+	uint32_t sfsa, n;	/* no layout table: the MEMORY task's stack */
 	unsigned i;
 
 	for (i = 0; i < sizeof ram / sizeof ram[0]; i++)
 		if ((n = span_in(addr, len, ram[i][0], ram[i][1])) != 0)
 			return n;
 	if (write) return 0;		/* flash and ROM only read */
-	hal_flash_layout(l);
 	ROM_SPANS
 	return 0;
 }
