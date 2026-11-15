@@ -458,10 +458,19 @@ combines signals and is honest about each one's strength in its UI:
 |---|---|---|---|
 | Wi-Fi scan for camera vendors and setup SSIDs | Optional ESP32 Wi-Fi devboard on the GPIO header, over the UART (R6.5) | Most hidden cameras sold today are Wi-Fi IP cameras. A passive scan lists access points and stations; MAC vendor prefixes (OUI) and SSID patterns of camera makers and cheap camera modules mark suspects. Cameras with a randomised MAC, or recording to SD without Wi-Fi, are not seen | **Strong** (best option) |
 | BLE scan | CPU2 in observer (scanning) role | Some cameras advertise over BLE during setup, or use BLE-capable modules. Scanning likely needs the full BLE stack (light = peripheral only; confirm with R2b.10 and the stack notes) | Medium |
-| Sub-GHz RSSI sweep | CC1101 | Finds transmitters at 300–348, 387–464, 779–928 MHz. Analog spy cameras mostly use 1.2, 2.4 or 5.8 GHz, which the CC1101 can't receive, so this rarely finds a camera; it does find other hidden transmitters (bugs, trackers on 433/868 MHz) | Weak for cameras |
+| Sub-GHz RSSI sweep | CC1101 | Finds transmitters at 300–348, 387–464, 779–928 MHz. Analog spy cameras mostly use 1.2, 2.4 or 5.8 GHz, which the CC1101 can't receive. It does find other hidden transmitters (bugs, trackers on 433/868 MHz) and the **cellular uplink of 4G/GSM cameras** in LTE band 20 (832–862 MHz) and band 8 / GSM-900 (880–915 MHz), with the user's own phones in airplane mode (R9.1.3) | Weak for Wi-Fi/analog cameras; **medium** for SIM (4G/GSM) cameras |
 | Infrared receiver (built in) | 38 kHz demodulating IR receiver with automatic gain | Its output is digital (a 38 kHz burst or not) and its gain adapts, so it can't measure light intensity. Night-vision LEDs (850/940 nm) shine continuously, so it can't see them. At most it flags modulated IR nearby | Very weak; hint only |
 | **IR intensity meter** (R9.1.7) | External IR photodiode on a header ADC pin (a part costing about 1 €) | Measures IR level directly: finds night-vision illuminators in a dark room, and in active glint mode (the Flipper's IR LED + synchronous detection) finds camera lenses by their reflection | **Strong** for night-vision cameras and lenses at close range |
+| Wi-Fi motion correlation (R9.1.8) | ESP32 devboard in monitor mode | A camera's compressed video stream grows when something moves in front of it. The devboard counts bytes per station (frame lengths are visible even in encrypted networks the user is not part of); the user stands still, then waves, and a station whose uplink follows the movement is watching the room | **Strongest** for Wi-Fi cameras |
+| Analog 2.4/5.8 GHz receiver (R9.1.9) | Optional module: RX5808 (5.8 GHz, analog RSSI output to an ADC pin) or nRF24L01+ (2.4 GHz, RPD bit) | Finds analog video transmitters the CC1101 can't hear. The nRF24 sees all 2.4 GHz energy (Wi-Fi, BLE too), so it is an energy meter, not a camera detector | Strong for analog cameras |
 | Lens glint helper | RGB LED and the user's eyes, or the user's phone camera | Strobes the LED while the user looks along it for a lens reflection; the help screen also explains the phone-camera trick (many phone cameras show night-vision IR LEDs as purple light). Guidance, not detection | Guide |
+
+**The Flipper's IR LEDs can't be used as a light sensor** (checked on the schematic, 2026-11-15, see
+`reports/camfind-detection-analysis.md` in the project files): the three VSMY14940 LEDs run from `SYS`
+through 39 Ω each to the drain of an N-MOSFET (DMN2058UW); the MCU (PB9, no ADC) drives only the
+gate. Neither LED terminal reaches an MCU pin, so their photovoltage can't be read without a
+hardware change. The built-in receiver's output lands on PA0, which has an ADC input, but the
+TSOP75338 output is digital, so that doesn't help either.
 
 Scope rule: `camfind` only listens. It never connects, deauthenticates or jams; the ESP32
 firmware for it implements passive scanning only.
@@ -2059,7 +2068,8 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
 
 - **R9.1.1** Wi-Fi via the ESP32 devboard: a small passive-scan firmware for the devboard (part of
   this project, GPL) speaks a line protocol on the UART: `AP <bssid> <rssi> <ch> <ssid>` and
-  `STA <mac> <rssi> <ch> <bssid>` per sighting, `CH <n>` to lock a channel for locating. Channel
+  `STA <mac> <rssi> <ch> <bssid>` per sighting, `CH <n>` to lock a channel for locating, and
+  `RATE <mac> <bytes/s> <frames/s>` every 250 ms for the station followed by `TRACK <mac>` (R9.1.8). Channel
   hopping and sniffing run on the ESP32; the Flipper only reads lines.
 - **R9.1.2** Scoring: the MAC prefix is looked up in a `const` sorted table of camera and camera-
   module vendors (3-byte OUI + vendor index; ≈ 300 entries ≈ 1.5 KB of flash, generated from the
@@ -2068,6 +2078,12 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   (random) MACs are shown as "unknown". Three levels: likely camera, IoT module, other.
 - **R9.1.3** Sub-GHz sweep: steps across the CC1101 bands, keeps the peak RSSI per channel, and lists
   steady carriers above the noise floor (uses the frequency-analyzer code of Phase 9).
+  - **Cellular mode:** sweeps only LTE band 20 uplink (832–862 MHz) and band 8 / GSM-900 uplink
+    (880–915 MHz) at the widest RX filter, with peak hold and a burst counter per 1 MHz step. The
+    app first asks the user to put their own phones in airplane mode; repeated bursts then mean a
+    cellular transmitter in the room (SIM cameras upload on motion, so walking in triggers them).
+    It can't decode LTE and can't see bands 3/7; the front end's filters reduce sensitivity off
+    the 868–915 MHz path, which is fine at 1–3 m (to measure on hardware).
 - **R9.1.4** IR hint and lens-glint strobe as in F.5, clearly labelled as weak.
 - **R9.1.5** Locate mode ("hot/cold"): pick one device; the Flipper locks the radio to it (ESP32
   channel lock, or the CC1101 frequency) and maps smoothed RSSI to beep pitch and rate and to
@@ -2085,7 +2101,9 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   measure intensity, see F.5):
   - Sensor: an IR photodiode with a daylight-blocking filter (e.g. BPV10NF, SFH 203 FA, BPW34 with a
     940 nm-pass filter) from 3.3 V (header pin 9) through 100 kΩ–1 MΩ to an ADC-capable header pin
-    (default pin 7 = PC3; pins 2, 3, 4, 15, 16 also have ADC inputs), or a phototransistor with a
+    (default pin 7 = PC3; pins 3, 4, 15, 16 also have ADC inputs; pin 2 = PA7 has one too but is
+    the stock firmware's external IR transmitter pin, so the app warns when it is chosen), or a
+    phototransistor with a
     10–47 kΩ load. A 2–3 cm black tube over the sensor narrows its view so it points.
   - Driver: `/dev/adc` (added to R6.4; header ADC pins only). Steady level uses the ADC's
     **hardware oversampling** (up to 256×) so one 16-bit result replaces 256 samples in RAM; the
@@ -2098,7 +2116,10 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   - **Active glint mode:** the Flipper's own IR LED sends 940 nm pulses at a few kHz and the meter
     measures only the reflected part in step with them (synchronous detection, rejects ambient
     light). A camera lens reflects light back towards its source much more than a wall does, so
-    a lens shows as a sharp peak while sweeping, even with the camera's own IR off.
+    a lens shows as a sharp peak while sweeping, even with the camera's own IR off. Day cameras
+    help further: their IR-cut filter is a dichroic mirror that reflects 940 nm rather than
+    absorbing it. The IR LEDs and the GPIO header are both on the top edge, so emitter and sensor
+    are nearly coaxial, as retro-reflection needs.
   - **Point and sweep procedure** (shown as help in the app):
     1. Turn the room lights off and close the curtains (night-vision IR LEDs switch on in the dark,
        and ambient IR goes down).
@@ -2116,6 +2137,30 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
     3 m in a dark room, and a camera lens with its IR off gives a clear peak in active glint mode
     at 1 m.
   - RAM: 256 B DMA buffer in `camfind` while the meter runs; kernel ≤ +16 B for `/dev/adc`.
+- **R9.1.8 Wi-Fi motion correlation** (owner approval 2026-11-15; needs the devboard):
+  - The devboard firmware counts, per station, data-frame bytes and frames it transmits (monitor
+    mode, all frames, encrypted or not; length and transmitter address are always readable).
+  - "Test this device" on a listed station sends `TRACK <mac>` and locks its channel. The app
+    shows "stand still" for 10 s, then "wave your hand / walk in front of likely spots" for 10 s,
+    twice. It compares the uplink rate in the move windows with the still windows (ratio of
+    medians, and the correlation of the per-250 ms rate with the window pattern). A ratio ≥ 2 in
+    both rounds marks the station "watches this room", the strongest result `camfind` has.
+  - The classic ESP32 sees 2.4 GHz only; 5 GHz cameras need an ESP32-C5 or a Linux module with a
+    monitor-mode adapter speaking the same line protocol.
+  - Prior art: research on detecting hidden Wi-Fi cameras by the causality between user motion and
+    traffic (e.g. SnoopDog), and on locating hidden IoT devices by their traffic (e.g. Lumos).
+  - AC9.1.5 A Wi-Fi camera streaming to a cloud service, in a WPA2 network the devboard is not
+    part of, is marked "watches this room" by the test; a phone idling in the same network is not.
+  - RAM: two 40-entry rate rings (2 × 40 × 2 B) + counters ≈ 200 B in `camfind` while testing.
+- **R9.1.9 Optional 2.4/5.8 GHz modules** (analog video transmitters):
+  - RX5808 (5.8 GHz FPV receiver): tuned over its 3-wire interface on header GPIO, RSSI output
+    to an ADC pin through `/dev/adc`; sweeps the 40 standard FPV channels (Bands A, B, E, F, R)
+    and the locate mode works on the strongest one.
+  - nRF24L01+ (2.4 GHz) on SPI: RPD (power > −64 dBm) per 1 MHz channel, many sweeps summed into
+    a histogram. Shown as "2.4 GHz energy", not as cameras.
+  - Unverified idea: the STM32WB55's own radio test commands (BLE stack, R16.1.0) may give RSSI on
+    2402–2480 MHz without any module; check the stack's ACI HAL test commands in Phase 16.
+  - RAM: one sweep row (40 × 1 B or 80 × 1 B) in `camfind` while in use.
 
 ### 9.2 Radio canaries: Sub-GHz, 125 kHz, infrared (section M)
 
