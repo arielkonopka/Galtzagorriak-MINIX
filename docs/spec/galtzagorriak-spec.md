@@ -1665,6 +1665,17 @@ infrared, iButton, low-power modes.
     OTG boost, ship-mode power-off) on I2C1, exposed as `/dev/power` (read: a status record;
     `ioctl`: OTG on/off, power-off).
   - Low battery sends `SIGPWR` to INIT.
+  - **Battery profiles** (owner, 2026-11-15): `full` (charge to the stock 4.208 V) and `care`
+    (charge to ~4.0 V, about 80 %, for a Flipper kept on a charger, e.g. desk mode), chosen in
+    settings and kept in an RTC backup register (0 B RAM, no flash write). Only the end-of-charge
+    voltage (`VREG`) changes; the stock firmware already sets it the same way.
+  - **The charging current is never raised** (owner, 2026-11-15): `ICHG`, the input limit and ICO
+    stay at the stock values. The kernel may only lower or pause charging, never speed it up:
+    - pause while Sub-GHz transmits (as stock: the charger's switching disturbs the radio);
+    - pause outside 0–45 °C by the BQ27220 temperature (the board has no battery thermistor on the
+      charger's TS pin, so the charger cannot do it itself).
+  - `/dev/power` shows the charge state, current, time to full, the profile and the source
+    (charger vs computer, from USB enumeration, as R11.2).
 - **R6.2 RTC.** LSE RTC holding **UTC** (section I): `time()` reads it directly and `stime()`
   writes it (R2d.5); the century and last-seen year in a backup register, the 2100-02-29 fix-up
   and the backup register map (I.3); `RTC_CALR` smooth calibration exposed to the clock settings
