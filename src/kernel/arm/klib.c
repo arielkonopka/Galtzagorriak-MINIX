@@ -470,8 +470,7 @@ unsigned exc;
   int irq;
   irq_handler_t handler;
 
-  if (exc == EXC_SYSTICK) {
-	hal_wdt_kick();			/* the clock still ticks: alive */
+  if (exc == EXC_SYSTICK) {		/* the watchdog: clock task */
 	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
   }
   if (exc == EXC_PENDSV) {		/* raised by the idle task */
@@ -652,6 +651,8 @@ int how;
 
   lock();
   clock_stop();
+  if (how != RBT_PANIC && how != RBT_MONITOR)
+	hal_dev_mode(0);	/* an orderly end: a user's board again */
   if (how == RBT_PANIC) printf("System halted after panic.\n");
   else if (how == RBT_HALT) printf("System halted.\n");
   if (how == RBT_MONITOR) {

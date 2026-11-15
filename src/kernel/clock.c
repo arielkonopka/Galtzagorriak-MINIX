@@ -49,6 +49,9 @@
 #include <minix/callnr.h>
 #include <minix/com.h>
 #include "proc.h"
+#if (CHIP == ARM_CM)
+#include "hal.h"
+#endif
 
 /* Constant definitions. */
 #define MILLISEC         100	/* how often to call the scheduler (msec) */
@@ -139,6 +142,9 @@ PUBLIC void clock_task()
   while (TRUE) {
      receive(ANY, &mc);		/* go get a message */
      opcode = mc.m_type;	/* extract the function code */
+#if (CHIP == ARM_CM)
+     hal_wdt_kick();		/* the clock task runs: nothing hogs the CPU */
+#endif
 
      lock();
      realtime += pending_ticks;	/* transfer ticks from low level handler */
@@ -516,6 +522,12 @@ int irq;
 #endif
 
   if (next_alarm <= now ||
+#if (CHIP == ARM_CM)
+      /* At least every 32 ticks (0.53 s): the clock task kicks the
+       * watchdog (R4a.4); no state needed, now - ticks was the last tick.
+       */
+      ((now - ticks) ^ now) & ~(clock_t) 31 ||
+#endif
 #if (SHADOWING == 1) && (CHIP == ARM_CM)
       /* A shadowed process can only run after the clock task swapped it
        * in; do not make it wait for the end of a quantum (on an idle

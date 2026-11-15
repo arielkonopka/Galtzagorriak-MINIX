@@ -146,6 +146,8 @@ struct kstack {
 #define MI_KSTACKS	1
 #define MI_TRACE	2	/* m1_i1 = 1/0: report memory use at exit */
 #define MI_FCACHE	3	/* flash text cache: struct fcinfo to m1_p1 */
+#define MI_RESET	5	/* reply: cause of the last reset (RCC_CSR >> 24),
+			 * 0x100: dev mode (a watchdog reset goes to DFU) */
 #define MI_INSTALL	4	/* root: m1_p1 path, m1_i1 its length, m1_i3 0:
 			 * install its text in flash, 1: remove it */
 
