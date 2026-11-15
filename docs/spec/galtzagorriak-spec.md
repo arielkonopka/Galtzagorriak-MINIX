@@ -17,6 +17,10 @@ request to make flash writes as rare as possible. Background: the project report
 Addition (2026-11-15): 11.2 (USB canary app, owner request), R19.9 (IP over an external IrDA
 module with PPP, optional SD package) and an external USB host chip in Deferred. Then section M
 (canary family) with 9.2, 14.2 and 16.5 (owner request: "various canaries, Bluetooth too").
+Addition (2026-11-15): Phase 19 rewritten (lwIP as a low-priority `udrv` driver, `/dev/tcp` +
+BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with frequency hopping on
+CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
+report `tcpip-stack-analysis.md` (Polish, not in the repo).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -351,7 +355,7 @@ goes into the system image; user flash goes into the installed region.
 
 | Chip | Firmware? | What we can change | Use |
 |---|---|---|---|
-| CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.6), within the kernel's band and duty-cycle limits (R8.2) |
+| CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.11, with frequency hopping), within the kernel's band and duty-cycle limits (R8.2) |
 | ST25R3916 (NFC) | None: register-configured | Modes NFC-A/B/F/V reader, card emulation, NFC-DEP (P2P), transparent mode | All NFC features. IP over NFC is not worth it |
 | CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" chosen at install time. Switching stacks is a FUS operation: slow, wears flash, and a failure leaves the radio unusable until repaired with qFlipper. Not something to switch at run time |
 
@@ -359,7 +363,7 @@ Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is th
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
 region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
-for central and GATT client apps; R19.7 for Thread or Zigbee).
+for central and GATT client apps; R19.13 for Thread or Zigbee).
 
 ---
 
@@ -1071,7 +1075,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 17 | Trust: U2F, signed packages [9], updater, option bytes (deferred item) | |
 | 18 | App ports VI: U2F, catalog, porting guide, CI | parity |
 | 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
-| 19 | Networking: lwIP over USB and BLE (19a can start right after 10) | |
+| 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
@@ -1547,7 +1551,8 @@ RAM budget: **0 B**. Each process loses 32 B of its own gap to the heap guard; t
   This is the safety condition for A.6. The MPU does not check DMA.
 - **R4b.6 `poll()`.**
   - FS gains `poll(fds, n, timeout)` over pipes, ttys and character devices, with a new
-    `DEV_SELECT` request to device tasks (TTY, flipdev, and each new driver).
+    `DEV_SELECT` request to device tasks (TTY, flipdev, and each new driver), and to `udrv`
+    drivers such as `inet` (R19.4).
   - RAM: per process one small poll record in FS (≈ 16 B × 16).
 - **R4b.7 Pulse engine.** One kernel module for IR, LF RFID and async Sub-GHz:
   - **capture:** timer input capture (both edges) → circular DMA of 16-bit durations straight into
@@ -3042,49 +3047,88 @@ zone table ≈ 3 KB, city table ≈ 6 KB.
 
 ---
 
-## Phase 19: Networking: a small TCP/IP stack over USB and Bluetooth
+## Phase 19: Networking: a small TCP/IP stack over USB, a Wi-Fi module and weak links
 
-**Goal:** IP connectivity to a PC or phone over the links the Flipper has, with RAM spent only
-while the network is up.
-**Depends on:** 10 (second CDC interface), 4b; 19c needs 15.
+**Goal:** IP connectivity to a PC, a Wi-Fi network or a second Flipper over the links the Flipper
+has, with RAM spent only while the network is up. Decided by the owner (2026-11-15) from the
+project report `tcpip-stack-analysis.md` (Polish, not in the repo), sections 1–12 and 13b–14.
+**Depends on:** 4b (`poll()`, R4b.6), 10 (second CDC interface); 19c needs 15; 19g needs 16
+(full BLE stack, R16.1.0); 19d needs 8.
+
+**Scope (owner, 2026-11-15):** the Flipper is a gadget (door intercom, TV remote and the like), not
+a network host. **No TLS/SSL on the Flipper**: an app that needs it runs it alone, as an exclusive
+app with nothing else heavy running, or leaves it to the Wi-Fi module. No SSH server. No kernel threads for
+networking (the stack is one event loop).
 
 **Stack choice (comparison):**
 
 | Option | RAM while up | Flash | API | Verdict |
 |---|---:|---:|---|---|
-| MINIX 2 `inet` (in the tree, 15.9 k lines) | 20 KB+ even when tuned (128 × 512 B buffers by default on 32-bit, 20 TCP connections, 32 IP fds); Ethernet only | ~60 KB | MINIX `/dev/tcp`, `/dev/udp`, `/dev/ip` + ioctls, used by the tree's `telnet`, `ftp`, `ping`, `ifconfig`, `tcpd` | Too big as is |
-| **lwIP** (BSD-3) in a MINIX server | **8–12 KB**: 4 KB heap, 3+2 pool pbufs at MTU 1280, 4 TCP and 4 UDP PCBs, small ARP/ND tables | 40–50 KB (IPv4 + IPv6, TCP, UDP, ICMP, DHCP, DNS, SLIP; 6LoWPAN optional) | Raw API inside the server; MINIX `/dev/tcp`-compatible front end on top (≈ 6 KB) so the existing MINIX commands work | **Recommended** |
-| uIP | 2–3 KB | ~15 KB | Single packet buffer, protothreads; no real socket model | Only if 8 KB can't be found |
+| MINIX 2 `inet` (in the tree, 15.9 k lines) | ~66 KB as shipped (`BUF512_NR` 128 on 32-bit); 16–20 KB tuned; IPv4 only, Ethernet only, no DHCP | ~60 KB | MINIX `/dev/tcp`, `/dev/udp`, `/dev/ip` + `NWIO*` ioctls, used by the tree's `telnet`, `ftp`, `ping`, `ifconfig`, `tcpd` | Keep its **ABI and commands**, not its engine. Plan B only. (MINIX 3.4 also replaced it with lwIP.) |
+| **lwIP 2.2.x** (BSD-3), `NO_SYS=1`, raw API | **≈ 9–10 KB** IPv4, MTU 576; **≈ 14–15 KB** with IPv6, MTU 1280 | 35–50 KB | Raw API in one event loop; MINIX `/dev/tcp` front end on top | **Chosen** |
+| lwIP netconn / socket API | +4–8 KB | +10 KB | blocking sockets on lwIP threads | No: needs kernel threads and duplicates `/dev/tcp` |
+| uIP, picoTCP, others | — | — | — | No (uIP: one-segment window; picoTCP: unmaintained) |
 
 **Requirements:**
-- **R19.1** `inet` server (lwIP core) as an on-demand server process (started by `devd` on the
-  first open of `/dev/tcp`, `/dev/udp`, `/dev/ip`; exits when idle with no sockets), presenting
-  the MINIX 2 network device API, so `ping`, `telnet`, `ftp`, `ifconfig`, `tcpd` from `src/commands`
-  build and run.
+- **R19.1** `inet` (lwIP core, `NO_SYS=1`) is a **`udrv`/`devd` driver process**, not a classic
+  MINIX server:
+  - `devd` starts it on the first open of `/dev/tcp`, `/dev/udp` or `/dev/ip`; it exits when idle
+    with no open descriptors (AC19.3);
+  - it runs in a queue **below the interactive queue**; FS is never blocked on it, because `udrv`
+    answers callers with SUSPEND and REVIVEs them later (PORTING.md, userspace drivers);
+  - one `receive()` loop handles FS requests, frames from the link drivers and the lwIP timer;
+  - the 250 ms lwIP timer runs only while a PCB exists, so an idle network does not wake the CPU
+    from Stop2.
 - **R19.2** Lean memory (A.6):
-  - fixed small pbuf pools in the server's data segment, no `malloc` after start;
-  - MTU 1280 (the IPv6 minimum), MSS accordingly;
-  - TCP window 2 × MSS.
-  Received frames are copied once, by the USB or BLE transport, straight from the USB PMA or the
-  IPCC buffer into a pool pbuf in the server (R4b.5). There is no kernel network buffer.
-- **R19.3** (19a) **SLIP over the second USB CDC-ACM** interface: works with `slattach` on Linux and
-  BSD. No new USB class code; fastest to deliver.
-- **R19.4** (19b) **USB CDC-NCM** (with CDC-ECM as a fallback descriptor) in the composite device:
-  native on Linux, macOS and Windows 11. No RNDIS: Microsoft deprecated it and it has had security issues.
-  - Frames are assembled from 64 B packets directly into the server's pbuf.
-  - Kernel RAM ≈ 64 B; flash ≈ 5 KB.
-- **R19.5** (19c) **Bluetooth:** SLIP framing over the BLE serial GATT service of `bled` (works with
-  any central that can bridge it; a small host script on Linux and an Android companion are enough).
-  - BLE IPSP / RFC 7668 (6LoWPAN over L2CAP CoC) is optional. It needs L2CAP CoC, which the
-    light stack may not offer (check ST's stack feature list), and few phones support it.
-- **R19.6** (19d, optional) **IP over CC1101** between two Flippers: packet mode, SLIP framing, low
-  rate, always inside the R8.2 band and duty-cycle limits.
-- **R19.7** (19e, owner decision) **802.15.4 / Thread** by switching CPU2 to an ST Thread stack, or to
-  a concurrent BLE + Thread stack:
-  - Thread gives native IPv6/6LoWPAN mesh to Thread border routers;
-  - CPU1 sees IPv6 packets over IPCC and attaches them as an lwIP netif.
-  Cost: a larger CPU2 stack (flash, section E) and 2–4 KB more SRAM2 for IPCC buffers. Same FUS
-  caveats.
+  - fixed pbuf pools in the server's data segment, no `malloc` after start;
+  - default build: **IPv4 only, MTU 576**; IPv6 with MTU 1280 is a build option (`NET_IPV6=1`),
+    for link-local use over USB;
+  - 4 TCP and 4 UDP PCBs, TCP window and send buffer 2 × MSS;
+  - received frames are copied once, by the link driver, into a pool pbuf (R4b.5). There is no
+    kernel network buffer.
+- **R19.3** ABI and API:
+  - the system ABI stays MINIX 2's `/dev/tcp`, `/dev/udp`, `/dev/ip` and `<net/gen/*.h>` `NWIO*`
+    ioctls, so the tree's `ping`, `telnet`, `telnetd`, `ftp`, `ftpd`, `ifconfig`, `tcpd` build;
+  - one addition: `NWIOTCPLISTEN` takes a backlog (at most 2), so a server does not lose a
+    connection between two accepts;
+  - **libc** (shared, XIP, 0 B RAM per process) gains a thin BSD sockets layer over that ABI:
+    `socket`, `bind`, `connect`, `listen`, `accept`, `send`/`recv`, `sendto`/`recvfrom`,
+    `getsockname`, `setsockopt` (`TCP_NODELAY`, `SO_REUSEADDR`), `getaddrinfo` over a small DNS
+    resolver. Flash ≈ 3–5 KB. Berry's `socket` module (7c) uses it;
+  - sockets are not added to FS as a new file type.
+- **R19.4** `poll()` on network descriptors: `inet` answers `DEV_SELECT` (R4b.6) for readable,
+  writable and connection-ready. The tree's `telnet` and `telnetd` are changed from one forked
+  process per direction to one process with `poll()` (a fork costs a ≈ 15 KB shadow copy here).
+- **R19.5** (19a) **SLIP over the second USB CDC-ACM** interface: `slattach` on Linux and BSD.
+  Development link; no new USB class code.
+- **R19.6** (19b) **USB Ethernet: CDC-ECM and CDC-NCM** as two configurations of the composite
+  device (Linux and macOS take ECM, Windows 10 1903+/11 takes NCM). No RNDIS.
+  - ECM: one Ethernet frame per USB transfer, streamed from the 64 B packets straight into a pool
+    pbuf; kernel RAM ≈ 64 B.
+  - NCM: the NDP table may follow the datagrams, so a whole NTB is received before it is parsed;
+    `dwNtbOutMaxSize` 2048, the NTB buffer is two pool pbufs in `inet` (not kernel RAM).
+  - Kernel flash ≈ 5 KB.
+  - `inet` serves addresses itself: a **one-lease DHCP server** (≈ 1–2 KB flash, ≈ 50 B RAM) and an
+    **mDNS responder** for `<hostname>.local` (`/etc/hostname`). With `NET_IPV6=1`, link-local
+    IPv6 + mDNS also works with no DHCP.
+  - Internet over USB needs NAT on the PC (Linux masquerade, macOS Internet Sharing, Windows ICS).
+    The user manual documents it; the Flipper does not route.
+  - Main use: a **web interface for the gadget**: lwIP `httpd` with static pages in flash (XIP,
+    0 B RAM), dynamic parts as small CGI-style handlers returning TSV or JSON Lines (section K):
+    reminders, alarms, settings, files on the SD card.
+- **R19.7** (19e) **Internet through an external Wi-Fi module** on a GPIO header UART (USART1 on pins 13/14 or LPUART1 on 15/16; LPUART1 when the IrDA module of R19.9 holds USART1). Two
+  supported kinds, one `/dev/tcp` for programs:
+  - **a Linux module (owner has one): PPP over the UART** (R19.10). The module runs `pppd` and NAT
+    and is the Flipper's router; TLS, if ever needed, runs there. No extra code on the Flipper
+    beyond PPP. Preferred.
+  - **an ESP32 devboard: offload mode.** The ESP32 runs TCP/IP, SNTP and TLS; a daemon on the
+    Flipper (`wifid`, ≈ 1–2 KB RAM, no lwIP) maps `/dev/tcp` to its text protocol (ESP-AT, or a
+    small own firmware that also carries the `camfind` scan of R9.1.1; one firmware for both).
+  - Time sync: SNTP (lwIP `sntp`, ≈ 100 B, or the module's own) sets the RTC, never flash.
+  - `pkg get` over plain HTTP is acceptable: integrity comes from the R17.2 signature.
+- **R19.8** (19c) **Bluetooth to a phone or PC:** SLIP or PPP framing over the BLE serial GATT
+  service of `bled` (a small host script on Linux, an Android companion). BLE IPSP / RFC 7668 is
+  **not planned**: phones do not expose it to apps.
 - **R19.9** (19f, optional, **SD package** `net-irda`; owner decision 2026-11-15) **IP over infrared
   with an external IrDA module:**
   - The built-in IR receiver is a 38 kHz demodulator and cannot see IrDA SIR pulses, so this
@@ -3093,8 +3137,8 @@ while the network is up.
     **0 B** of kernel RAM beyond the normal UART driver. USART1 is shared with the GPIO UART
     bridge; the usual ownership rule applies (`EBUSY` with the owner's name).
   - Framing is **PPP** with Van Jacobson header compression (lwIP `PPP_SUPPORT`, `VJ_SUPPORT`, 4 VJ
-    slots), not SLIP: LCP echo detects a broken link and IPCP assigns the addresses. The same PPP
-    code MAY later replace SLIP on R19.6 (CC1101) and serve `pppd` over the CDC port.
+    slots), not SLIP: LCP echo detects a broken link and IPCP assigns the addresses. It uses the
+    common PPP code of R19.10.
   - Peers: a second Flipper, or a PC through a plain USB-UART adapter with the same module (the PC
     runs `pppd` on a serial port). No IrLAP/IrLMP/IrLAN stack: Linux removed its IrDA subsystem in
     4.17, so a full stack would have nobody to talk to.
@@ -3105,23 +3149,81 @@ while the network is up.
   - Acceptance: AC19.9 Two Flippers with modules ~1 m apart `ping` each other and copy a 10 KB file
     with `ftp` and a matching `cksum`; the same against Linux `pppd` through a USB-UART adapter.
   - Background: project report `tcpip-stack-analysis.md` §13 (Polish, not in the repo).
-- **R19.8** Security defaults:
+- **R19.10** **PPP as the common framing for weak serial links** (Wi-Fi module UART, BLE serial,
+  CC1101, the IrDA link of R19.9): lwIP PPP with LCP echo, IPCP, CHAP and **Van
+  Jacobson header compression** (4 slots, not the default 16). RAM ≈ 1–1.5 KB over lwIP; flash
+  ≈ 20–25 KB. SLIP stays only for R19.5.
+- **R19.11** (19d) **PPP over CC1101 between two Flippers, with frequency hopping:**
+  - a thin MAC under PPP: packets ≤ 255 B (FIFO refilled from the interrupt), hardware CRC,
+    optional FEC with interleaving, CCA before transmit, short link-level acks;
+  - **TDD slots** (50–100 ms) with a master and a slave; the master's packets carry the slot
+    number; ≈ 1 ms guard per slot;
+  - **fast hop:** at link start every channel is calibrated once and `FSCAL3/2/1` stored
+    (3 B per channel, TI DN505); a hop writes `CHANNR` + the three values and strobes: ≈ 90 µs
+    instead of ≈ 0.8 ms. Recalibrate in a gap after a large temperature change or every few
+    minutes. The table lives in RAM only;
+  - hop sequence from the pairing key (a permutation from AES-CTR on `AES1`); acquisition waits
+    on one channel (worst case channels × slot length); 3 empty slots → reacquire;
+  - **adaptive hopping:** both sides keep RSSI and loss per channel; the master broadcasts an 8 B
+    bad-channel map and the sequence skips those channels;
+  - the hop is done in the kernel PHY (A.1) from a hardware timer interrupt (≈ 10–20 µs of SPI
+    every slot); the channel table and statistics are in a pinned buffer of the link process
+    (R4b.5), the kernel holds ≤ 48 B of slot state;
+  - R8.2 is applied by validating the whole hop table at arm time (every channel inside the
+    region's band) and locking `CHANNR`/`FREQ*` to the hop path; the duty-cycle counter sums
+    transmit time over all channels of the sub-band. **In the EU hopping does not raise the
+    duty budget** (433 MHz ≈ 480 B/s, 868.0–868.6 MHz ≈ 48 B/s average); the region table may
+    instead use LBT + AFA where the band rules allow it. US 902–928 MHz (FCC 15.247) allows real
+    FHSS without a duty limit. The exact EU figures are checked against the current ERC/REC
+    70-03 and EN 300 220 before they enter the table;
+  - the link and `/dev/nfc` exclude each other while the link is up (shared SPI); other users of
+    the bus get it between slots (as R0.8b);
+  - delivery order: one channel + FEC + CCA, then LBT + channel change, then full FHSS with AFH.
+    Each step works on its own.
+- **R19.12** (19g) **Flipper-to-Flipper BLE Ethernet bridge** (owner idea, 2026-11-15): two
+  Flippers, each a USB ECM/NCM device (R19.6) to its own PC, carry Ethernet frames between them
+  over a **BLE L2CAP CoC** channel (full BLE stack, R16.1.0). The PC with Internet does NAT for
+  the other one.
+  - The bridge forwards frames at layer 2 between the USB function and the CoC channel; it does
+    not need `inet` (a small `brd` process, two frame buffers of 1.5 KB, MTU 1500).
+  - The BLE link is bonded and encrypted before any frame passes (R19.14).
+  - Throughput is what BLE gives (tens of KB/s); the user manual says so.
+- **R19.13** (old R19.7) **802.15.4 / Thread** on CPU2: owner decision, after Phase 15 (Deferred).
+  CPU1 would attach IPv6 packets from IPCC as an lwIP netif; cost 2–4 KB more SRAM2.
+- **R19.14** Security defaults:
   - no listening services unless enabled in `/etc/rc.net`;
-  - `telnetd`/`ftpd` only on the USB link and only with the root password set (R3.4);
+  - each listening socket is bound to one interface; `telnetd`/`ftpd` only on the USB link
+    (never Wi-Fi, BLE or radio) and only with the root password set (R3.4);
   - every daemon runs as its own user;
-  - the BLE link is encrypted (bonded) before IP is allowed over it.
+  - BLE and CC1101 links are paired and encrypted before IP or frames pass;
+  - no internal-flash writes at run time (DHCP lease, ARP/ND, calibration, hop tables: RAM only;
+    `/etc/rc.net` and Wi-Fi credentials on the SD card).
 
 Acceptance:
-- AC19.1 `ping` both ways over SLIP and over NCM; `telnet` from Linux to the Flipper's `telnetd`;
-  `ftp` file transfer of 1 MB with a matching `cksum`.
+- AC19.1 `ping` both ways over SLIP and over ECM (Linux) and NCM (Windows 11); `telnet` from Linux
+  to the Flipper's `telnetd`; `ftp` of 1 MB with a matching `cksum`.
 - AC19.2 Throughput over NCM ≥ 300 KB/s (USB FS with 64 B packets).
 - AC19.3 With the network idle and no sockets, `inet` has exited and `free` shows the RAM back.
-- AC19.4 Over BLE: `ping` from a Linux host through the GATT serial bridge.
+- AC19.4 The PC gets an address by DHCP and opens `http://<hostname>.local/` from the Flipper's
+  `httpd`.
+- AC19.5 A test program using only the BSD sockets layer connects, accepts two clients in a row
+  and waits on a socket, `/dev/buttons` and a timer with one `poll()`.
+- AC19.6 With a Linux Wi-Fi module on the UART: `ping` to an Internet host through PPP + NAT;
+  SNTP sets the RTC.
+- AC19.7 Two Flippers over CC1101 (R19.11): `telnet` session with VJ compression; with one channel
+  jammed by a test transmitter the link stays up and that channel is marked bad; the duty
+  counter never exceeds the region limit.
+- AC19.8 Over BLE: `ping` from Linux through the GATT serial bridge (19c); two PCs `ping` each
+  other through two Flippers on L2CAP CoC (19g).
 
-Responsiveness: AC19.R While a 1 MB TCP transfer runs over NCM, L1 and L2 hold (`inet` runs below the interactive queue).
+Responsiveness: AC19.R While a 1 MB TCP transfer runs over NCM, and while the CC1101 link hops,
+L1 and L2 hold (`inet` runs below the interactive queue; hop interrupts ≤ 20 µs).
 
-RAM budget: kernel ≤ +100 B; `inet` 8–12 KB only while running. Flash: ≈ 50 KB (`inet`) + 5 KB
-kernel (NCM), in the installed region (or the run-time cache if networking is rarely used).
+RAM budget: kernel ≤ +150 B (ECM ≈ 64 B, hop slot state ≤ 48 B); `inet` ≈ 9–10 KB (IPv4) or
+≈ 14–15 KB (IPv6) only while running, PPP +1–1.5 KB, hop table ≈ 0.4 KB in the link process,
+`brd` ≈ 4 KB while bridging, `wifid` ≈ 1–2 KB. Flash: ≈ 40–50 KB (`inet`) + 20–25 KB (PPP) + 5 KB
+kernel (USB Ethernet), in the installed region (or the run-time cache if networking is rarely
+used).
 
 ---
 
@@ -3188,7 +3290,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the owner confirms.
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
-- Thread or Zigbee on CPU2 (R19.7): owner decision, after Phase 15.
+- Thread or Zigbee on CPU2 (R19.13): owner decision, after Phase 15.
 - A FAP binary loader: not planned; apps are ported from source (D.2).
 - External USB host chip (e.g. MAX3421E, SPI on GPIO pins 2/3/5, CS 4, INT 7; owner idea
   2026-11-15): would let the Flipper enumerate a device plugged into it (a pendrive or a cable
@@ -3229,7 +3331,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
 | A9 (FPU) | 5 (R5.7) |
-| TCP/IP over USB and BLE; IrDA + PPP as an optional SD package (owner decision) | 19, R19.9 |
+| TCP/IP over USB, Wi-Fi module, BLE, CC1101 (FHSS); IrDA + PPP as an optional SD package (owner decision) | 19, R19.9 |
 | M8, A6, A8, M9, A11, M10, A5 | 20a (parts pulled into 4b and 6) |
 | M6, M7, M13, M12, A4 | 20b |
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
