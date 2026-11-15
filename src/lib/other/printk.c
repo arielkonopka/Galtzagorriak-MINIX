@@ -24,9 +24,9 @@ void printk(const char *fmt, ...)
 	enum { LONG, INT } intsize;
 	int fill;
 	int width, max, len, base;
-	static char X2C_tab[]= "0123456789ABCDEF";
-	static char x2c_tab[]= "0123456789abcdef";
-	char *x2c;
+	static const char X2C_tab[]= "0123456789ABCDEF";
+	static const char x2c_tab[]= "0123456789abcdef";
+	const char *x2c;
 	char *p;
 	long i;
 	unsigned long u;

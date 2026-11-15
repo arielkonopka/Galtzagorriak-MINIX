@@ -76,12 +76,14 @@ enum { J_IDLE, J_RESERVE, J_ERASE, J_PROGRAM, J_RECORD, J_COMPACT,
 PRIVATE struct {			/* packed: MM's static RAM (rule 0.1) */
   unsigned char state;
   unsigned char fd;		/* the program file, kept open by exec */
-  unsigned char unformatted;	/* no valid directory yet */
+  unsigned char unformatted:1;	/* no valid directory yet */
+  unsigned char dir:1;		/* active directory page (0, 1) */
   unsigned char page;		/* first reserved page; compaction: next
 				 * record (they are never needed together) */
   unsigned short toff, owner;	/* text offset in the file; owner (key) */
   unsigned long size, crc;	/* the text, key */
   unsigned long done;		/* bytes erased/programmed, records */
+  unsigned long vcrc;		/* CRC-32 of the flash copy so far */
 } job;
 #define JOB_ADDR	(fc_base + (unsigned long) job.page * PAGE)
 
@@ -90,16 +92,15 @@ PRIVATE struct {			/* packed: MM's static RAM (rule 0.1) */
  * time).  Nothing is written to count. */
 #define NRUNS		8
 #define RUNS_TO_CACHE	3
-PRIVATE struct {
-  unsigned long crc;
-  unsigned short owner;
-  unsigned char runs, pad;
-} runs[NRUNS];
+#define RMAX		15		/* count in the low 4 bits; RMAX: never cache
+				 * (its copy did not match its key) */
+#define RKEY(crc, owner)	(((crc) ^ (owner) * 0x9E3779B1UL) & ~RMAX)
+PRIVATE unsigned long runs[NRUNS];	/* RKEY | count; 0: free.  A rare
+					 * key collision only caches early */
 #define fc_unformatted	job.unformatted
 
 PRIVATE unsigned long fc_base, fc_size;	/* region; 0: no cache */
-PRIVATE int fc_dir;			/* active directory page (0, 1) */
-PRIVATE unsigned long fc_seq;
+#define fc_dir	job.dir
 #define fc_gen	(((unsigned long *) DIRADDR(fc_dir))[1])	/* from its header */
 PRIVATE unsigned char used[MAXPAGES / 8];
 
@@ -116,6 +117,29 @@ FORWARD _PROTOTYPE( unsigned long fc_find_run, (unsigned long npages)	);
 FORWARD _PROTOTYPE( int fc_reserve, (void)				);
 FORWARD _PROTOTYPE( int fc_compact_step, (void)				);
 FORWARD _PROTOTYPE( void fc_alarm, (int ticks)				);
+
+/*===========================================================================*
+ *				crc32					     *
+ *===========================================================================*/
+PRIVATE unsigned long crc32_more(crc, p, n)	/* zlib's CRC-32, as elf2mnx */
+unsigned long crc;		/* 0xFFFFFFFF to start; ~result at the end */
+const unsigned char *p;
+unsigned long n;
+{
+  static const unsigned long t[16] = {
+	0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC, 0x76DC4190,
+	0x6B6B51F4, 0x4DB26158, 0x5005713C, 0xEDB88320, 0xF00F9344,
+	0xD6D6A3E8, 0xCB61B38C, 0x9B64C2B0, 0x86D3D2D4, 0xA00AE278,
+	0xBDBDF21C
+  };
+
+  while (n-- > 0) {
+	crc ^= *p++;
+	crc = (crc >> 4) ^ t[crc & 15];
+	crc = (crc >> 4) ^ t[crc & 15];
+  }
+  return(crc);
+}
 
 /*===========================================================================*
  *				fc_format				     *
@@ -172,11 +196,20 @@ PUBLIC void fc_init()
 	fc_alarm(START_TICKS);
 	return;
   }
+}
+
+PRIVATE unsigned long fc_nextseq()	/* for a new record: from the dir */
+{
+  struct fcrec *r;
+  unsigned long seq = 0;
+  int i;
+
   for (i = 0; i < NREC; i++) {
 	r = RECP(fc_dir, i);
-	if (!FREE_SLOT(r) && r->seq != 0xFFFFFFFFUL && r->seq >= fc_seq)
-		fc_seq = r->seq + 1;
+	if (!FREE_SLOT(r) && r->seq != 0xFFFFFFFFUL && r->seq >= seq)
+		seq = r->seq + 1;
   }
+  return(seq);
 }
 
 /*===========================================================================*
@@ -262,19 +295,18 @@ PUBLIC int fc_ran(crc, owner)
 unsigned long crc, owner;
 {
 /* An uncached program ran from RAM once more: is it time to cache it? */
+  unsigned long key = RKEY(crc, owner);
   int i, k = 0;
 
   for (i = 0; i < NRUNS; i++) {
-	if (runs[i].runs != 0 && runs[i].crc == crc
-				&& runs[i].owner == (unsigned short) owner) {
-		if (runs[i].runs < 255) runs[i].runs++;
-		return(runs[i].runs >= RUNS_TO_CACHE);
+	if ((runs[i] & RMAX) != 0 && (runs[i] & ~RMAX) == key) {
+		if ((runs[i] & RMAX) == RMAX) return(FALSE);	/* banned */
+		if ((runs[i] & RMAX) < RMAX - 1) runs[i]++;
+		return((runs[i] & RMAX) >= RUNS_TO_CACHE);
 	}
-	if (runs[i].runs < runs[k].runs) k = i;	/* the least run */
+	if ((runs[i] & RMAX) < (runs[k] & RMAX)) k = i;	/* the least run */
   }
-  runs[k].crc = crc;
-  runs[k].owner = (unsigned short) owner;
-  runs[k].runs = 1;
+  runs[k] = key | 1;
   return(RUNS_TO_CACHE <= 1);
 }
 
@@ -344,6 +376,7 @@ PUBLIC void fc_step()
 	if (job.done == npages * PAGE) {
 		job.state = J_PROGRAM;
 		job.done = 0;
+		job.vcrc = 0xFFFFFFFFUL;
 	}
 	break;
   case J_PROGRAM:			/* STEP_BYTES per step, via mbuf */
@@ -357,22 +390,38 @@ PUBLIC void fc_step()
 	for (i = n; i < (int) ((n + 7) & ~7); i++) mbuf[i] = (char) 0xFF;
 	r = sys_flash(FL_WRITE, JOB_ADDR + job.done, mbuf,
 			(unsigned) ((n + 7) & ~7), NULL, NULL);
+	/* what the flash holds now, for the check before the record */
+	job.vcrc = crc32_more(job.vcrc,
+		(const unsigned char *) (JOB_ADDR + job.done), n);
 	job.done += n;
 	if (job.done == job.size) job.state = J_RECORD;
 	break;
   case J_RECORD:			/* now it can be found */
+	/* Only the text the key names: a file rewritten during the copy,
+	 * or a bad write, gives another CRC and is not recorded. */
+	if (~job.vcrc != job.crc) {
+		/* never again for this key: a header CRC that does not match
+		 * its text would otherwise erase and program the same pages
+		 * on every run (flash wear, owner rule on flash writes) */
+		for (i = 0; i < NRUNS; i++)
+			if ((runs[i] & ~RMAX) == RKEY(job.crc,
+					(unsigned long) job.owner))
+				runs[i] |= RMAX;
+		r = EIO;
+		break;
+	}
 	for (i = 0; i < NREC; i++)
 		if (FREE_SLOT(RECP(fc_dir, i))) break;
 	if (i == NREC) { r = EAGAIN; break; }
 	rec[0] = job.crc; rec[1] = job.size; rec[2] = JOB_ADDR;
-	rec[3] = fc_seq++; rec[4] = job.owner; rec[5] = 0xFFFFFFFFUL;
+	rec[3] = fc_nextseq(); rec[4] = job.owner; rec[5] = 0xFFFFFFFFUL;
 	r = sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
 						sizeof(rec), NULL, NULL);
 	job.state = J_IDLE;
 	close(job.fd);
 	for (i = 0; i < NRUNS; i++)		/* counted no more */
-		if (runs[i].crc == job.crc
-				&& runs[i].owner == job.owner) runs[i].runs = 0;
+		if ((runs[i] & ~RMAX) == RKEY(job.crc,
+				(unsigned long) job.owner)) runs[i] = 0;
 	return;
   }
   if (r != OK) {			/* give up; it is cached next time */
@@ -443,10 +492,12 @@ int bufsize;			/* its size, a multiple of 8 */
 							NULL, NULL) != OK)
 			return(0);
   }
+  if (~crc32_more(0xFFFFFFFFUL, (const unsigned char *) addr, size) != crc)
+	return(0);			/* changed while read, or bad write */
   for (i = 0; i < NREC; i++)
 	if (FREE_SLOT(RECP(fc_dir, i))) break;
   if (i == NREC) return(0);
-  rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_seq++;
+  rec[0] = crc; rec[1] = size; rec[2] = addr; rec[3] = fc_nextseq();
   rec[4] = owner; rec[5] = 0xFFFFFFFFUL;
   if (sys_flash(FL_WRITE, (unsigned long) RECP(fc_dir, i), rec,
 					sizeof(rec), NULL, NULL) != OK)
