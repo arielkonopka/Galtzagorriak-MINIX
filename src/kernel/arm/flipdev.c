@@ -10,7 +10,8 @@
  *				blocks until there is one, unless O_NONBLOCK
  *	minor 2  /dev/backlight	write: one byte, brightness 0..255; three:
  *				and the idle timeout in seconds (LE, 0:
- *				never; default 300).  Off when idle, on at
+ *				never; default 15; dimmed 10 % after 2/3 of
+ *				it).  Off when idle, on at
  *				any key or button; kept over resets.
  *				read: the state, 4 bytes (hal.h HAL_BL_*)
  *	minor 3  /dev/led	write: three bytes, red green blue 0..255
@@ -138,6 +139,8 @@ FORWARD _PROTOTYPE( int ir_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void bl_apply, (void) );
+FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
+FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
@@ -164,7 +167,7 @@ PUBLIC void flipdev_task()
 
   last_buttons = hal_buttons();
   {	/* the backlight as it was set before the reset, and on */
-	u32_t st = hal_bl_state() & ~HAL_BL_OFF;
+	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_DIM);
 
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
@@ -418,20 +421,42 @@ int count;
  *===========================================================================*/
 PRIVATE void bl_apply()
 {
-/* The backlight goes off after the idle timeout (owner, 2026-11-15:
- * 5 minutes; 0 = never) and on again at any key or button (k_input).
+/* After 2/3 of the idle timeout the backlight dims by 10 %, after all of
+ * it it fades out in 0.5 s (owner, 2026-11-15: 15 s, dimmed from 10 s;
+ * 0 = never), and it comes back at once at any key or button (k_input).
  * The setting and the state live in an RTC backup register (no RAM). */
   u32_t st = hal_bl_state();
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
-  int idle = t != 0 && get_uptime() - k_input >= t;
+  int want = bl_want(st, get_uptime());
+  unsigned lv = HAL_BL_LEVEL(st), dim = lv - lv / 10;
 
-  if (idle && !(st & HAL_BL_OFF)) {
-	hal_backlight_fade(HAL_BL_LEVEL(st), 500);	/* off softly, 0.5 s */
-	hal_bl_state_set(st | HAL_BL_OFF);
-  } else if (!idle && (st & HAL_BL_OFF)) {
-	hal_backlight(HAL_BL_LEVEL(st));	/* on at once */
-	hal_bl_state_set(st & ~HAL_BL_OFF);
+  if (want == 2 && !(st & HAL_BL_OFF)) {
+	hal_backlight_fade(st & HAL_BL_DIM ? dim : lv, 0, 500);
+	hal_bl_state_set((st & ~HAL_BL_DIM) | HAL_BL_OFF);
+  } else if (want == 1 && !(st & (HAL_BL_DIM | HAL_BL_OFF))) {
+	hal_backlight_fade(lv, dim, 500);
+	hal_bl_state_set(st | HAL_BL_DIM);
+  } else if (want == 0 && (st & (HAL_BL_DIM | HAL_BL_OFF))) {
+	hal_backlight(lv);			/* on at once */
+	hal_bl_state_set(st & ~(HAL_BL_DIM | HAL_BL_OFF));
   }
+}
+
+PRIVATE int bl_want(st, now)	/* 0 on, 1 dimmed, 2 off */
+u32_t st;
+clock_t now;
+{
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
+
+  if (t == 0) return(0);
+  if (now - k_input >= t) return(2);
+  if (now - k_input >= t / 3 * 2) return(1);
+  return(0);
+}
+
+PRIVATE int bl_state(st)	/* what bl_apply last did */
+u32_t st;
+{
+  return(st & HAL_BL_OFF ? 2 : st & HAL_BL_DIM ? 1 : 0);
 }
 
 
@@ -504,12 +529,8 @@ PUBLIC void flipdev_tick()
 		interrupt(PRINTER);
 	}
   }
-  {	/* the backlight's idle timeout: the task does the I2C (bl_apply) */
-	clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
-
-	if ((t != 0 && uptime_irq() - k_input >= t) != ((st & HAL_BL_OFF) != 0))
-		interrupt(PRINTER);
-  }
+  /* the backlight's idle timeout: the task does the I2C (bl_apply) */
+  if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
   if (changed == 0) return;
   k_input = uptime_irq();		/* no background flash work now */
   /* With the backlight off, a press only turns it on (owner): neither it
