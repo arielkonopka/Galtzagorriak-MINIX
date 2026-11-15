@@ -70,21 +70,9 @@ struct fcrec {
 #define STEP_BYTES	256		/* programmed per step (~2.7 ms) */
 #define START_TICKS	(5 * HZ)	/* first step after boot */
 
-/* The one copy in progress, if any. */
-enum { J_IDLE, J_RESERVE, J_ERASE, J_PROGRAM, J_RECORD, J_COMPACT,
-	J_COMPACT_COPY, J_COMPACT_DROP };
-PRIVATE struct {			/* packed: MM's static RAM (rule 0.1) */
-  unsigned char state;
-  unsigned char fd;		/* the program file, kept open by exec */
-  unsigned char unformatted:1;	/* no valid directory yet */
-  unsigned char dir:1;		/* active directory page (0, 1) */
-  unsigned char page;		/* first reserved page; compaction: next
-				 * record (they are never needed together) */
-  unsigned short toff, owner;	/* text offset in the file; owner (key) */
-  unsigned long size, crc;	/* the text, key */
-  unsigned long done;		/* bytes erased/programmed, records */
-  unsigned long vcrc;		/* CRC-32 of the flash copy so far */
-} job;
+/* The one copy in progress, if any (struct mmjob, type.h). */
+PUBLIC struct mmjob mjob;
+#define job	mjob
 #define JOB_ADDR	(fc_base + (unsigned long) job.page * PAGE)
 
 /* Programs run from RAM, counted: one is copied to the cache only after
@@ -322,6 +310,7 @@ unsigned long size, crc, owner;
 /* Note a program to copy to the cache; returns TRUE if the job keeps fd
  * (and closes it when done).  One at a time: if a copy is going on, this
  * one is cached on a later run. */
+  if (J_INSTALLING(job.state)) (void) fc_lend();	/* its pkg died? */
   if (fc_size == 0 || size == 0 || job.state != J_IDLE || toff > 0xFFFF
 	|| fd > 255) return(FALSE);
   if ((size + PAGE - 1) / PAGE > fc_size / PAGE - DIRPAGES) return(FALSE);
@@ -348,7 +337,7 @@ PUBLIC void fc_step()
   unsigned long npages, n, rec[6], b, z;
   int r = OK, i, k;
 
-  if (fc_size == 0) return;
+  if (fc_size == 0 || J_INSTALLING(job.state)) return;	/* fc_return */
   if ((fc_unformatted || job.state != J_IDLE)
 		&& sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK) {
 	fc_alarm(STEP_TICKS);
@@ -467,6 +456,7 @@ int bufsize;			/* its size, a multiple of 8 */
 
   if (fc_size == 0 || fc_unformatted || size == 0
 		|| npages > fc_size / PAGE - DIRPAGES) return(0);
+  if (J_INSTALLING(job.state)) return(0);	/* an install has the job */
   if (job.state != J_IDLE) close(job.fd);	/* drop that copy */
   job.state = J_IDLE;
 
@@ -615,6 +605,37 @@ int ticks;
   m.CLOCK_PROC_NR = MM_PROC_NR;
   m.DELTA_TICKS = (long) ticks;
   (void) sendrec(CLOCK, &m);
+}
+
+
+/*===========================================================================*
+ *				fc_lend					     *
+ *===========================================================================*/
+PUBLIC int fc_lend()
+{
+/* An install wants the job (finst.c): a cache copy in progress is dropped
+ * (the program is cached on a later run), and so is an install whose
+ * caller is gone.  EBUSY: another process is installing. */
+  struct mproc *rmp = &mproc[job.owner];
+
+  if (J_INSTALLING(job.state) && (rmp->mp_flags & IN_USE)
+			&& (unsigned long) rmp->mp_pid == job.vcrc)
+	return(EBUSY);
+  if (job.state != J_IDLE) close(job.fd);
+  job.state = J_IDLE;
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				fc_return				     *
+ *===========================================================================*/
+PUBLIC void fc_return()
+{
+/* The install is over (its fd closed by finst.c): the cache's work, if
+ * any was waiting, goes on. */
+  job.state = J_IDLE;
+  if (fc_size != 0 && fc_unformatted) fc_alarm(STEP_TICKS);
 }
 
 

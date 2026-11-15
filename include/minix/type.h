@@ -149,7 +149,9 @@ struct kstack {
 #define MI_RESET	5	/* reply: cause of the last reset (RCC_CSR >> 24),
 			 * 0x100: dev mode (a watchdog reset goes to DFU) */
 #define MI_INSTALL	4	/* root: m1_p1 path, m1_i1 its length, m1_i3 0:
-			 * install its text in flash, 1: remove it */
+			 * install its text in flash (reply 1: call again
+			 * with m1_i3 4, one flash step each, until not 1),
+			 * 1: remove it, 2: bind, 3: count unbound */
 
 /* sys_flash() operations. */
 #define FL_INFO		0	/* cache region: base, size; with addr: */
