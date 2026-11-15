@@ -14,6 +14,13 @@ a read-only ROM image with the user's changes on the SD card), R2b.11–R2b.12 (
 write budget, rebinding by SHA-256) and BLE bonds kept on the SD card (R15.4, R16.1.2); owner
 request to make flash writes as rare as possible. Background: the project report `hybrid-fs-overlay-analysis.md` (Polish, not in the repo)
 (a Linux-style overlay file system was considered and rejected).
+Addition (2026-11-15): 11.2 (USB canary app, owner request), R19.9 (IP over an external IrDA
+module with PPP, optional SD package) and an external USB host chip in Deferred. Then section M
+(canary family) with 9.2, 14.2 and 16.5 (owner request: "various canaries, Bluetooth too").
+Addition (2026-11-15): Phase 19 rewritten (lwIP as a low-priority `udrv` driver, `/dev/tcp` +
+BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with frequency hopping on
+CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
+report `tcpip-stack-analysis.md` (Polish, not in the repo).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -348,7 +355,7 @@ goes into the system image; user flash goes into the installed region.
 
 | Chip | Firmware? | What we can change | Use |
 |---|---|---|---|
-| CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.6), within the kernel's band and duty-cycle limits (R8.2) |
+| CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.11, with frequency hopping), within the kernel's band and duty-cycle limits (R8.2) |
 | ST25R3916 (NFC) | None: register-configured | Modes NFC-A/B/F/V reader, card emulation, NFC-DEP (P2P), transparent mode | All NFC features. IP over NFC is not worth it |
 | CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" chosen at install time. Switching stacks is a FUS operation: slow, wears flash, and a failure leaves the radio unusable until repaired with qFlipper. Not something to switch at run time |
 
@@ -356,7 +363,7 @@ Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is th
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
 region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
-for central and GATT client apps; R19.7 for Thread or Zigbee).
+for central and GATT client apps; R19.13 for Thread or Zigbee).
 
 ---
 
@@ -460,7 +467,7 @@ Scope rule: `camfind` only listens. It never connects, deauthenticates or jams; 
 firmware for it implements passive scanning only.
 
 **Other gadget ideas (suggestions only, not scheduled):**
-- **Tracker detector:** BLE scan for Find My, SmartTag and Tile-style trackers that stay near you
+- **Tracker detector:** (now scheduled as part of the BLE canary, R16.5.4) BLE scan for Find My, SmartTag and Tile-style trackers that stay near you
   over time, with the same hot/cold locate (needs the BLE scan of 16.3).
 - **Weather and sensor display:** decode your own 433/868 MHz weather stations and sensors
   (temperature, humidity, rain) on the Sub-GHz decoders, shown as a small dashboard.
@@ -990,6 +997,58 @@ counters in `free -v`.
 
 ---
 
+## M. Canaries: what is something trying to do with my Flipper? (owner request, 2026-11-15)
+
+Owner request: "various canaries, Bluetooth too". A **canary** is a gadget app (F.5) that sits on
+one interface, lets the other side act, and shows and logs what it tried: a USB port that
+enumerates, a phone that connects over Bluetooth and probes services, a reader that powers up an
+NFC field in your pocket, a jammer on 433 MHz. The USB canary (11.2) is the first member; this
+section sets the rules for all of them.
+
+### M.1 Rules for every canary
+
+- **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
+  types, never accepts writes, never keeps a pairing beyond the session (the BLE honeypot of
+  R16.5.6 pairs, with keys in RAM only and no retained bond), never transmits on a radio beyond
+  its role (advertising for the BLE bait, the tag answers of the NFC bait). The canary only ever
+  observes what comes to it: beyond accepting a pairing it performs no action on the other device,
+  never reaches out to pair with one, and never jams, deauthenticates, floods or replays.
+- **Never impersonate a real product or credential.** Baits use our own IDs (G.1), a random NFC
+  UID and generic names; no payment, transit or access-card emulation, no other vendor's IDs.
+- **The verdict is honest:** "nothing happened during this session" is not "this is safe", and a
+  fingerprint is labelled as a guess. The raw log is always kept.
+- **RAM only while running.** Each canary is a module of one app `canary` (GUI modules, section K),
+  so only the active one is in RAM; common code (event ring, summary, log writer, alert) is a small
+  shared library. Hot paths run in the driver (G.3 option B) with event rings lent by the FS cache.
+- **Logs on the SD card only:** `/ext/apps_data/canary/<kind>/YYYYMMDD-HHMMSS.tsv` (TSV, K), one
+  header line (kind, persona, verdict, guess) and one line per event. **No internal flash writes**
+  (rule L). Rules tables (host and tracker signatures, AIDs) are `const`, plus an optional
+  `rules.tsv` on SD.
+- **Pocket mode** for canaries that are useful unattended (NFC field, Sub-GHz jammer, BLE
+  trackers): the app parks (12d) and the alert service (F.2) vibrates on a trigger. Where the chip
+  can watch on its own (ST25R3916 field wake-up, CC1101 carrier sense on a GDO interrupt) the
+  canary uses tier 3 ("runs in the radio chip or USB driver"), so the CPU sleeps between events.
+- **Privacy:** logs hold other people's addresses and names; they stay on the card, and the app has
+  "delete all canary logs". Addresses can be stored hashed (setting).
+- **Responsiveness:** an event costs the driver ≤ 5 µs in its interrupt; L1 holds under a flood.
+
+### M.2 The family
+
+| Canary (module) | Interface and role | What it shows | Needs | Phase |
+|---|---|---|---|---|
+| `usb` | USB device, passive personas | power only / enumerates / configures / uses; descriptor and class requests; host guess | 10, 11.1 | **11.2** |
+| `ble` | BLE peripheral bait + observer | who connects, which GATT services and characteristics they discover, read and write; pairing requests and their capabilities; advertising floods; trackers that follow you | 15; observer parts need the full stack (R16.1.0) | **16.5** |
+| `nfc` | 13.56 MHz field detector + tag bait | a reader field appeared (pocket alarm); what the reader asks: anticollision, RATS, SELECT of which AIDs (payment, transit, access) | 13 | **14.2** |
+| `rfid` | 125 kHz field detector | an LF reader field, its frequency and polling rhythm | 8 | **9.2** |
+| `subghz` | CC1101 receive only | bursts per band (frequency, RSSI, length, decoded protocol if known), new repeating transmitters, **jamming alarm** (continuous high RSSI) | 8 | **9.2** |
+| `ir` | IR receiver | remote codes sent around you, decoded protocol | 6 | **9.2** |
+| `wifi` (optional) | ESP32 devboard, passive scan (as `camfind`) | deauthentication floods, probe requests, evil-twin SSIDs (same name, new BSSID) | 9.1 firmware | 9.2 (optional) |
+
+Out of scope: canaries that need to transmit to provoke the other side (active probing) and
+anything that breaks a link to see the reaction.
+
+---
+
 ## Roadmap: phase order
 
 Phases are ordered by what the next one needs, and by the stock features they unlock. Old numbers
@@ -1018,7 +1077,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 17 | Trust: U2F, signed packages [9], updater, option bytes (deferred item) | |
 | 18 | App ports VI: U2F, catalog, porting guide, CI | parity |
 | 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
-| 19 | Networking: lwIP over USB and BLE (19a can start right after 10) | |
+| 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
@@ -1494,7 +1553,8 @@ RAM budget: **0 B**. Each process loses 32 B of its own gap to the heap guard; t
   This is the safety condition for A.6. The MPU does not check DMA.
 - **R4b.6 `poll()`.**
   - FS gains `poll(fds, n, timeout)` over pipes, ttys and character devices, with a new
-    `DEV_SELECT` request to device tasks (TTY, flipdev, and each new driver).
+    `DEV_SELECT` request to device tasks (TTY, flipdev, and each new driver), and to `udrv`
+    drivers such as `inet` (R19.4).
   - RAM: per process one small poll record in FS (≈ 16 B × 16).
 - **R4b.7 Pulse engine.** One kernel module for IR, LF RFID and async Sub-GHz:
   - **capture:** timer input capture (both edges) → circular DMA of 16-bit durations straight into
@@ -2057,6 +2117,41 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
     at 1 m.
   - RAM: 256 B DMA buffer in `camfind` while the meter runs; kernel ≤ +16 B for `/dev/adc`.
 
+### 9.2 Radio canaries: Sub-GHz, 125 kHz, infrared (section M)
+
+**Depends on:** 6 (IR), 8 (Sub-GHz, LF RFID), 7b (alert service), 12d for pocket mode.
+
+- **R9.2.1 `subghz` canary:** receive only. Watches one band or hops a list of presets (433.92,
+  868.35, 315, 915 MHz and the user's list), dwell ≥ 50 ms per preset. Each burst above the noise
+  floor becomes an event: frequency, peak RSSI, length, and the decoded protocol and fields when a
+  Phase 9 decoder recognises it.
+  - "New repeating transmitter": the same decoded ID or the same burst shape seen ≥ 3 times in
+    10 min and not seen in the last session.
+  - **Jamming alarm:** RSSI above a threshold for ≥ 2 s on one preset (e.g. while you lock a car);
+    the threshold is learned from the first 10 s of the noise floor.
+  - Pocket mode: CC1101 carrier sense (CS) on a GDO interrupt wakes the CPU (M.1, tier 3).
+- **R9.2.2 `rfid` canary:** the LF front end's comparator capture (pulse engine, R4b.7) measures an
+  external 125 kHz-band field: frequency (to ±1 kHz), on time, polling period. Shows "reader
+  field 125.0 kHz, polls every 300 ms". It never answers (no emulation). Exclusive with NFC on the
+  shared pin, as usual.
+- **R9.2.3 `ir` canary:** the IR receiver logs every frame with its decoded protocol, address and
+  command (Phase 7 codecs), or the raw timing when unknown; a counter per (protocol, address)
+  shows "something keeps sending Samsung power".
+- **R9.2.4 `wifi` canary (optional, ESP32 devboard):** the passive-scan firmware of R9.1.1 gains
+  `DEAUTH <bssid> <count/s>`, `PROBE <mac> <ssid>` and the evil-twin rule (an SSID seen with a new
+  BSSID and a different security mode). Passive only, like `camfind`.
+- Acceptance:
+  - AC9.2.1 A 433.92 MHz weather station shows as a repeating transmitter within 10 min; a
+    signal generator (or a second Flipper's carrier test, inside R8.2 limits) held 3 s triggers the
+    jamming alarm, also in pocket mode with the screen off.
+  - AC9.2.2 A stock Flipper in LF read mode, and an access-control reader, show as a 125 kHz
+    field with a polling period that matches a scope measurement within 10 %.
+  - AC9.2.3 A TV remote's key presses appear decoded.
+- Responsiveness: AC9.2.R L1 holds while the Sub-GHz canary hops presets.
+- RAM: app module ≈ 3 KB while running (event list of 32 entries, noise-floor table per preset);
+  kernel 0 B new (pulse engine and CC1101 state exist); in pocket mode only the parked app's
+  swap-out remains (12d).
+
 ## Phase 10: USB device classes
 
 **Depends on:** 4b.
@@ -2126,6 +2221,106 @@ RAM: app ≈ 4 KB. Flash: ≈ 15 KB installed.
 - RAM: kernel ≤ +64 B static (shared with 14.1 and 16.2 via the mode `union`); 0 B user; 512 B
   borrowed from the FS cache only during IR/Sub-GHz modes. Flash ≈ +8 KB kernel, ≈ 4 KB installed
   (`usbmode`).
+
+### 11.2 USB canary: what does this port try to do? (owner request, 2026-11-15)
+
+The first canary of section M; the M.1 rules apply. It is the `usb` module of the `canary` app.
+
+**Goal:** plug the Flipper into a USB port the owner does not trust (a hotel or airport charger, a
+car, a kiosk, a stranger's computer) and see what the port tries to do, without the Flipper ever
+doing anything back. Module `usb` of the `canary` app (section M), group `usb`.
+
+The STM32WB55 USB is device-only, so the canary watches the **host** side of a link. Watching a
+device plugged into the Flipper (a pendrive, a "charging cable" with a chip inside) needs an
+external USB host chip; see Deferred (MAX3421E).
+
+- **R11.2.1 Verdict levels,** shown on screen as they are reached, with the time since attach:
+  1. **Power only:** VBUS present, no bus reset and no SOF within 3 s. Where the BQ25896 charger
+     reports its BC1.2 result (`VBUS_STAT`: SDP, CDP, DCP, non-standard), show it; whether the
+     charger sees D+/D− on this board is checked against the schematic, and the line is left out
+     if it does not.
+  2. **Host alive:** bus reset and SOF seen, no SETUP (a host that powers the port but never
+     enumerates).
+  3. **Enumerates:** the device descriptor was read; the address was set.
+  4. **Configures:** `SET_CONFIGURATION` received, so a driver on the host wants to use the device.
+  5. **Uses the function:** traffic on a non-control endpoint of the presented persona (R11.2.3).
+- **R11.2.2 Trace:** every SETUP packet is recorded as 8 B + a 4 B millisecond timestamp, together
+  with bus resets, suspend/resume and the first SOF. Also kept: string descriptor indexes and
+  language IDs asked for, Microsoft OS descriptor requests (string `0xEE`, vendor requests),
+  device-qualifier and BOS requests, `wLength` of the first `GET_DESCRIPTOR(DEVICE)`, and the
+  number of re-enumerations. The app shows a live list (newest first) and a summary screen.
+- **R11.2.3 Personas** (chosen in the app before arming; each is a `const` descriptor set with our
+  own IDs, G.1):
+  - `bare` (default): one vendor-specific interface (class `0xFF`), so no host driver binds. Pure
+    observation of enumeration.
+  - `storage`: a mass-storage device with a small read-only medium generated from `const` data
+    (an empty FAT12 volume). Logs which SCSI commands and which sectors the host reads, i.e.
+    whether it mounts and scans the medium on its own. WRITE commands fail with "write protected"
+    and are logged.
+  - `keyboard`: a HID keyboard that never sends a key. Logs `SET_IDLE`, `SET_PROTOCOL` and LED
+    output reports (some hosts set Num Lock on attach).
+  - `serial`: a CDC-ACM port. Logs `SET_LINE_CODING`, `SET_CONTROL_LINE_STATE` (DTR: something
+    opened the port) and the first 64 B the host writes, shown as hex.
+  - `network` (after Phase 19b): a CDC-NCM/ECM interface that never answers. Logs EtherType and,
+    for DHCP and DNS packets, the requested options and names, decoded from the first frame
+    bytes only. Hosts often send their own host name in DHCP option 12; it is shown as found.
+  The canary never sends data on a function endpoint except what the class requires to stay
+  enumerated (CSW status replies, the empty HID report, NCM notifications). It never types,
+  never answers network traffic, never accepts writes.
+- **R11.2.4 Host fingerprint (a guess, labelled as one):** request order and the early `wLength`
+  values differ between hosts (for example Windows asks for 64 B of the device descriptor first
+  and for MS OS descriptors; Linux asks for the full 18 B and for the device qualifier). Matching
+  is a scored table:
+  - built-in rules in a `const` table;
+  - optional extra rules in `/ext/apps_data/canary/usb/rules.tsv` (K, TSV), so new traces add
+    rules without a rebuild;
+  - the result is shown as "looks like: Windows 10/11 (score 7/9)" or "unknown"; the raw trace is
+    always kept, because the guess can be wrong or deliberately spoofed.
+  The first built-in rules come from traces recorded on Windows, Linux, macOS, Android and a
+  plain charger, saved under `tests/canary/usb/` in the PR that adds them.
+- **R11.2.5 No console in this profile (security).** Every other USB profile keeps the CDC console
+  (G.1); the canary profile **drops it** (G.3 "mode without the console"), so an untrusted host
+  never sees a shell. When the app exits, the previous profile is re-enumerated.
+- **R11.2.6 Implementation (G.3 option B):** control-request handling for the personas and the
+  trace recorder run in the device task. Trace entries go into a ring in one 512 B block lent by
+  the FS cache for the session (42 entries), like the IR and Sub-GHz modes. The app drains the
+  ring, keeps the summary, and writes the log. Mode state shares the G.3 `union`.
+- **R11.2.7 Bounds (I2):** every host-supplied `wIndex`, `wLength`, LBA and transfer length is
+  checked before use; the storage persona's medium is `const` and has no write path. A fuzzer run
+  from a Linux host (raw control requests through `libusb`, random SCSI CDBs) runs for 1 h per
+  persona with no crash, hang or out-of-range read.
+- **R11.2.8 Log:** on Back (or after 10 min), the session is written to
+  `/ext/apps_data/canary/usb/YYYYMMDD-HHMMSS.tsv`: one header line with the verdict, persona and
+  fingerprint, then one line per event. SD only; **no internal flash write** at any point (rule
+  L). With no SD card, the session stays on screen only.
+- **R11.2.9 Power:** with `bare` and verdict 1, the app can be left running as a charging-port
+  check; the backlight follows the normal timeout.
+
+Acceptance:
+- AC11.2.1 A USB charger gives verdict 1; a Linux PC gives verdict 4 with `bare`, and its trace
+  matches `usbmon` captured on the PC for the same session.
+- AC11.2.2 With `storage`, a Windows and a Linux PC that auto-mount show their reads of the boot
+  sector and FAT in the log; `dd of=/dev/sdX` from Linux fails with a write-protect error and is
+  logged.
+- AC11.2.3 With `serial`, `screen /dev/ttyACM0 115200` on Linux shows up as DTR set, line coding
+  115200 8N1 and the typed bytes; no shell prompt appears on the host.
+- AC11.2.4 The fingerprint names Windows, Linux, macOS and Android correctly on the recorded
+  reference traces, and says "unknown" for a charger.
+- AC11.2.5 The fuzzer of R11.2.7 passes.
+- AC11.2.6 A full session leaves the internal-flash write counters unchanged (R2b.11 counters).
+
+Responsiveness: AC11.2.R A SETUP packet is recorded in the USB interrupt in ≤ 5 µs; the list on
+screen updates within 100 ms of an event; L1 holds while a host floods control requests.
+
+RAM: kernel ≤ +32 B static (in the mode `union`); 512 B lent by the FS cache while armed; app
+≈ 3 KB only while running. Flash ≈ +3 KB kernel (personas, recorder), ≈ 6 KB app (installed, or
+run from the SD card).
+
+**Notes for the system manual:** what each verdict means in plain words ("this port only gives
+power" … "a program on that computer opened the serial port"); that the fingerprint is a guess;
+how to read the TSV log; that the canary never sends keystrokes, files or network replies and
+hides the console; that a malicious host can still lie about itself, so "power only" means "did
+nothing during this session", not "is safe".
 
 ---
 
@@ -2467,6 +2662,30 @@ Responsiveness: see AC13.R; the NFC app's screens meet L1.
 - RAM: kernel within the shared mode `union` (≤ 64 B); helper ≈ 4 KB only while MIFARE Classic
   commands are used.
 
+### 14.2 NFC canary: who reads me? (section M)
+
+- **R14.2.1 Field detector:** the ST25R3916 external-field detection (and its low-power wake-up
+  mode) reports "a reader field appeared" with time and duration. Pocket mode (M.1, tier 3): the
+  chip watches alone and the CPU wakes only on a field; the alert vibrates. This is the "is
+  something reading my pocket" alarm.
+- **R14.2.2 Tag bait (optional, chosen in the app):** the Flipper answers as a **blank generic tag**
+  with a random UID: NFC Forum Type 4 (ISO 14443-4) that returns "file not found" to every
+  SELECT, or Type 2 with an empty NDEF area. It logs: anticollision, RATS and its parameters,
+  each SELECT by AID with a name from a `const` table (e.g. `2PAY.SYS.DDF01` = a payment terminal
+  looking for cards, transit and access AIDs), READ/WRITE attempts (writes refused), and the field
+  timing. It never emulates a real card (M.1).
+- **R14.2.3 Reader guess:** from the AID order and RATS parameters: "looks like: payment terminal",
+  "phone (Android/iOS) reading NDEF", "access reader". Labelled as a guess.
+- **R14.2.4** Frames are parsed in the kernel NFC fast path (as 14.1), bounds-checked (I2); events
+  go into a 512 B ring lent by the FS cache.
+- Acceptance:
+  - AC14.2.1 A phone with NFC on, held to the Flipper in pocket mode, wakes it and vibrates
+    within 300 ms; the log shows the field and the NDEF read.
+  - AC14.2.2 With the bait, a payment terminal in test mode (or `pcsc`/libnfc script imitating
+    one) shows the PPSE SELECT; no SELECT gets a non-error answer.
+  - AC14.2.3 Idle current in pocket mode is within 20 % of normal idle (record the numbers).
+- RAM: kernel ≤ +32 B (mode `union`), 512 B lent while armed; app ≈ 3 KB only while running.
+
 ---
 
 ## Phase 15: Bluetooth LE and RPC
@@ -2688,6 +2907,105 @@ GATT write sent ≤ 150 ms + one connection interval.
 RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running); `sbctl`
 ≈ 3 KB while open, 0 B in the background (≈ 2 KB for < 1 s per poll). Flash: ≈ 10 KB installed.
 
+### 16.5 BLE canary: who connects and what do they probe? (section M, owner request 2026-11-15)
+
+- **R16.5.1 Bait (peripheral; works with the light stack):** `bled` advertises a connectable
+  device with a generic name chosen in the app ("Speaker", "Lock", "Sensor" or the user's text),
+  a random static address, and a small fake GATT table from `const` data (Device Information,
+  Battery, and one vendor-specific service with our own UUID). It logs per connection:
+  - the central's address and address type, connection parameters, MTU request, PHY updates;
+  - every service and characteristic discovery, read, write (refused with "write not
+    permitted", value logged as hex, at most 32 B) and notification subscription;
+  - **pairing requests:** IO capabilities, bonding flag, Secure Connections, key size. The canary
+    then answers "Pairing Failed: pairing not supported" (unless the honeypot of R16.5.6 is on);
+  - disconnect reason and the reconnect rhythm.
+- **R16.5.6 Honeypot (owner idea 2026-11-15; off by default, a switch in the app):** the bait
+  accepts pairing and watches what the central does once it trusts the device.
+  - Pairing as the central asks, with Just Works or a passkey shown on the Flipper's screen; the
+    log records the method, Secure Connections or legacy pairing, key size and which keys each
+    side distributes. Legacy (non-SC) pairing is flagged as weak.
+  - **Keys are never used again:** LTK, IRK and CSRK live in `bled`'s session state and are wiped
+    (zeroed) when the session ends or the app exits. Nothing goes to the SD bond file (R16.1.2) or
+    to CPU2's flash; the only copy that can outlive the session is the optional analysis export
+    below. If the installed stack cannot keep a bond without writing its own flash
+    (check with the R15.4 findings), the honeypot pairs **without bonding** (Bonding_Flags = 0):
+    the link is still encrypted, but the central distributes no identity key and cannot
+    reconnect encrypted later. The app says which of the two modes is in use.
+  - After pairing it logs: reads and writes to characteristics marked "encrypted" or
+    "authenticated" (a second `const` GATT section that only opens after pairing, e.g. a fake
+    "settings" and "firmware version" characteristic), notification subscriptions, writes that
+    look like commands (hex, at most 32 B each), and attempts at an unknown handle or service.
+  - **Identity behind the random address:** when the central distributes its IRK and identity
+    address, the log shows that the random address it used belongs to that identity, and later
+    reconnects in the same session that resolve to it are marked "same device". The IRK itself is
+    never written to the event log (only to the key export below, if enabled); the identity address is stored hashed if the privacy setting
+    (M.1) says so.
+  - Reconnect behaviour: how soon and how often the central comes back, and whether it tries to
+    re-encrypt with the session keys.
+  - **Key export for analysis (owner decision 2026-11-15; a second switch, off by default):** at
+    session end the session's keys (LTK, EDIV/Rand, IRK, CSRK, both addresses) are written to
+    `/ext/apps_data/canary/ble/keys/YYYYMMDD-HHMMSS.keys` before RAM is zeroed. Use: decrypting a
+    sniffer capture of the same session (Wireshark, the Nordic sniffer) and studying the central.
+    The file **never grants anything, ever:**
+    - `bled` loads bonds from `/etc/flipper/bt.keys` only; it has no code path that reads
+      `/ext/apps_data/canary/`, and its bond loader rejects any file whose first line is the
+      export header `# canary-ble-keys v1 ANALYSIS ONLY` (so a copied or renamed export fails too);
+    - no tool converts an export into a bond, and any later bond-import tool must refuse the header;
+    - the file is mode 0600, owned by the canary's uid, not by `bled`'s;
+    - the honeypot's own identity is new each session (fresh random static address and IRK), so
+      exported keys match no device the Flipper will ever present again.
+    The app warns that the file lets anyone who has it decrypt that session's capture and
+    recognise the central's identity address later, and offers "delete all canary logs" (M.1).
+  - Personas for the honeypot are idle devices that pair and then do nothing but watch, each a
+    `const` GATT table with our own IDs (M.1):
+    - **Phone:** a generic phone-style peer (Device Information, Battery, a Current Time and a
+      generic "notification" service) that answers reads but originates nothing. Many centrals
+      probe a phone for contacts, messages or pairing-for-transfer; all of it is logged.
+    - **Keyboard:** HID-over-GATT with a `const` Report Map but **never sends a key report**; logs
+      `SET_PROTOCOL`, LED/output reports and any attempt to drive it.
+    - **Mouse:** HID-over-GATT mouse that **never sends a movement or button report**; logs the
+      host's HOGP setup.
+    - **Smart lock** (optional): writes to its "unlock" characteristic are logged and acknowledged
+      with an error.
+    None of them ever acts: the M.1 rule (answer only the protocol minimum, never type, move,
+    notify or drive) holds for every persona.
+  - Security: R16.5.5 holds (RPC and serial off), so a paired stranger reaches only the fake GATT
+    table. The honeypot ends after 30 min or on Back, and every link is then disconnected.
+- **R16.5.2 Scan requests:** where the stack reports received scan requests (Bluetooth 5 "LE Scan
+  Request Received" with extended advertising; check the ST stack), the bait also lists **active
+  scanners** nearby that never connect. If not supported, the line is hidden.
+- **R16.5.3 Central guess:** from the discovery order, MTU value and pairing capabilities: "looks
+  like: iPhone", "Android", "Windows", "a BLE scanner app". Labelled as a guess.
+- **R16.5.4 Observer (full stack, R16.1.0; shares the 16.3 scan):**
+  - **Advertising flood:** counts proximity-pairing advertisements (Apple Continuity, Google Fast
+    Pair, Microsoft Swift Pair) from changing random addresses; above a rate (e.g. > 20 new
+    addresses per 10 s) it shows "advertising spam nearby" with its type.
+  - **Tracker detector** (the F.5 idea, now scheduled): AirTag/Find My, SmartTag and Tile-style
+    advertisements whose payload keeps showing up near you over ≥ 30 min across ≥ 2 places or
+    movements (accelerometer-free heuristic: the RSSI of other devices changed), with the 16.3
+    hot/cold locate. Pocket mode with the alert (M.1).
+- **R16.5.5** The canary owns `bled` while armed: the RPC and serial services are off, so a
+  stranger connecting to the bait never reaches RPC (`EBUSY` for apps that need `bled`).
+- Acceptance:
+  - AC16.5.1 nRF Connect on Android connects to the bait; the log lists its discovery, a read, a
+    refused write and a refused pairing request with the IO capabilities the phone sent.
+  - AC16.5.2 An iPhone and a Linux `bluetoothctl` connect; the guess names both.
+  - AC16.5.3 (full stack) A second Flipper running a proximity-advertisement spam app triggers the
+    flood alarm within 10 s; an AirTag carried for 30 min triggers the tracker alert.
+  - AC16.5.4 No bond is ever stored (the bond file on SD, R16.1.2, is unchanged; CPU2 flash
+    unchanged, read back by FUS checksum or the stack's NVM counters), also after a honeypot
+    session.
+  - AC16.5.5 Honeypot: an Android phone pairs (passkey on screen), reads the encrypted
+    characteristic and writes to it; the log shows the pairing method, the key distribution, the
+    resolved identity, and the write. After the app exits, the phone's next connection attempt
+    fails to re-encrypt (keys gone), and a RAM dump of `bled` holds no non-zero key bytes.
+  - AC16.5.6 With key export on, the `.keys` file decrypts a sniffer capture of the session in
+    Wireshark. Copying it to `/etc/flipper/bt.keys` (as root) and restarting `bled` gives a load
+    error and no bond.
+- RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared) + ≈ 100 B session keys
+  in the honeypot; app ≈ 4 KB while running.
+  Flash ≈ 6 KB app, `bled` +2 KB.
+
 ## Phase 17: Trust: U2F, signed packages, updater, option bytes
 
 **Depends on:** 15 (CPU2 enclave), 3.
@@ -2793,66 +3111,183 @@ zone table ≈ 3 KB, city table ≈ 6 KB.
 
 ---
 
-## Phase 19: Networking: a small TCP/IP stack over USB and Bluetooth
+## Phase 19: Networking: a small TCP/IP stack over USB, a Wi-Fi module and weak links
 
-**Goal:** IP connectivity to a PC or phone over the links the Flipper has, with RAM spent only
-while the network is up.
-**Depends on:** 10 (second CDC interface), 4b; 19c needs 15.
+**Goal:** IP connectivity to a PC, a Wi-Fi network or a second Flipper over the links the Flipper
+has, with RAM spent only while the network is up. Decided by the owner (2026-11-15) from the
+project report `tcpip-stack-analysis.md` (Polish, not in the repo), sections 1–12 and 13b–14.
+**Depends on:** 4b (`poll()`, R4b.6), 10 (second CDC interface); 19c needs 15; 19g needs 16
+(full BLE stack, R16.1.0); 19d needs 8.
+
+**Scope (owner, 2026-11-15):** the Flipper is a gadget (door intercom, TV remote and the like), not
+a network host. **No TLS/SSL on the Flipper**: an app that needs it runs it alone, as an exclusive
+app with nothing else heavy running, or leaves it to the Wi-Fi module. No SSH server. No kernel threads for
+networking (the stack is one event loop).
 
 **Stack choice (comparison):**
 
 | Option | RAM while up | Flash | API | Verdict |
 |---|---:|---:|---|---|
-| MINIX 2 `inet` (in the tree, 15.9 k lines) | 20 KB+ even when tuned (128 × 512 B buffers by default on 32-bit, 20 TCP connections, 32 IP fds); Ethernet only | ~60 KB | MINIX `/dev/tcp`, `/dev/udp`, `/dev/ip` + ioctls, used by the tree's `telnet`, `ftp`, `ping`, `ifconfig`, `tcpd` | Too big as is |
-| **lwIP** (BSD-3) in a MINIX server | **8–12 KB**: 4 KB heap, 3+2 pool pbufs at MTU 1280, 4 TCP and 4 UDP PCBs, small ARP/ND tables | 40–50 KB (IPv4 + IPv6, TCP, UDP, ICMP, DHCP, DNS, SLIP; 6LoWPAN optional) | Raw API inside the server; MINIX `/dev/tcp`-compatible front end on top (≈ 6 KB) so the existing MINIX commands work | **Recommended** |
-| uIP | 2–3 KB | ~15 KB | Single packet buffer, protothreads; no real socket model | Only if 8 KB can't be found |
+| MINIX 2 `inet` (in the tree, 15.9 k lines) | ~66 KB as shipped (`BUF512_NR` 128 on 32-bit); 16–20 KB tuned; IPv4 only, Ethernet only, no DHCP | ~60 KB | MINIX `/dev/tcp`, `/dev/udp`, `/dev/ip` + `NWIO*` ioctls, used by the tree's `telnet`, `ftp`, `ping`, `ifconfig`, `tcpd` | Keep its **ABI and commands**, not its engine. Plan B only. (MINIX 3.4 also replaced it with lwIP.) |
+| **lwIP 2.2.x** (BSD-3), `NO_SYS=1`, raw API | **≈ 9–10 KB** IPv4, MTU 576; **≈ 14–15 KB** with IPv6, MTU 1280 | 35–50 KB | Raw API in one event loop; MINIX `/dev/tcp` front end on top | **Chosen** |
+| lwIP netconn / socket API | +4–8 KB | +10 KB | blocking sockets on lwIP threads | No: needs kernel threads and duplicates `/dev/tcp` |
+| uIP, picoTCP, others | — | — | — | No (uIP: one-segment window; picoTCP: unmaintained) |
 
 **Requirements:**
-- **R19.1** `inet` server (lwIP core) as an on-demand server process (started by `devd` on the
-  first open of `/dev/tcp`, `/dev/udp`, `/dev/ip`; exits when idle with no sockets), presenting
-  the MINIX 2 network device API, so `ping`, `telnet`, `ftp`, `ifconfig`, `tcpd` from `src/commands`
-  build and run.
+- **R19.1** `inet` (lwIP core, `NO_SYS=1`) is a **`udrv`/`devd` driver process**, not a classic
+  MINIX server:
+  - `devd` starts it on the first open of `/dev/tcp`, `/dev/udp` or `/dev/ip`; it exits when idle
+    with no open descriptors (AC19.3);
+  - it runs in a queue **below the interactive queue**; FS is never blocked on it, because `udrv`
+    answers callers with SUSPEND and REVIVEs them later (PORTING.md, userspace drivers);
+  - one `receive()` loop handles FS requests, frames from the link drivers and the lwIP timer;
+  - the 250 ms lwIP timer runs only while a PCB exists, so an idle network does not wake the CPU
+    from Stop2.
 - **R19.2** Lean memory (A.6):
-  - fixed small pbuf pools in the server's data segment, no `malloc` after start;
-  - MTU 1280 (the IPv6 minimum), MSS accordingly;
-  - TCP window 2 × MSS.
-  Received frames are copied once, by the USB or BLE transport, straight from the USB PMA or the
-  IPCC buffer into a pool pbuf in the server (R4b.5). There is no kernel network buffer.
-- **R19.3** (19a) **SLIP over the second USB CDC-ACM** interface: works with `slattach` on Linux and
-  BSD. No new USB class code; fastest to deliver.
-- **R19.4** (19b) **USB CDC-NCM** (with CDC-ECM as a fallback descriptor) in the composite device:
-  native on Linux, macOS and Windows 11. No RNDIS: Microsoft deprecated it and it has had security issues.
-  - Frames are assembled from 64 B packets directly into the server's pbuf.
-  - Kernel RAM ≈ 64 B; flash ≈ 5 KB.
-- **R19.5** (19c) **Bluetooth:** SLIP framing over the BLE serial GATT service of `bled` (works with
-  any central that can bridge it; a small host script on Linux and an Android companion are enough).
-  - BLE IPSP / RFC 7668 (6LoWPAN over L2CAP CoC) is optional. It needs L2CAP CoC, which the
-    light stack may not offer (check ST's stack feature list), and few phones support it.
-- **R19.6** (19d, optional) **IP over CC1101** between two Flippers: packet mode, SLIP framing, low
-  rate, always inside the R8.2 band and duty-cycle limits.
-- **R19.7** (19e, owner decision) **802.15.4 / Thread** by switching CPU2 to an ST Thread stack, or to
-  a concurrent BLE + Thread stack:
-  - Thread gives native IPv6/6LoWPAN mesh to Thread border routers;
-  - CPU1 sees IPv6 packets over IPCC and attaches them as an lwIP netif.
-  Cost: a larger CPU2 stack (flash, section E) and 2–4 KB more SRAM2 for IPCC buffers. Same FUS
-  caveats.
-- **R19.8** Security defaults:
+  - fixed pbuf pools in the server's data segment, no `malloc` after start;
+  - default build: **IPv4 only, MTU 576**; IPv6 with MTU 1280 is a build option (`NET_IPV6=1`),
+    for link-local use over USB;
+  - 4 TCP and 4 UDP PCBs, TCP window and send buffer 2 × MSS;
+  - received frames are copied once, by the link driver, into a pool pbuf (R4b.5). There is no
+    kernel network buffer.
+- **R19.3** ABI and API:
+  - the system ABI stays MINIX 2's `/dev/tcp`, `/dev/udp`, `/dev/ip` and `<net/gen/*.h>` `NWIO*`
+    ioctls, so the tree's `ping`, `telnet`, `telnetd`, `ftp`, `ftpd`, `ifconfig`, `tcpd` build;
+  - one addition: `NWIOTCPLISTEN` takes a backlog (at most 2), so a server does not lose a
+    connection between two accepts;
+  - **libc** (shared, XIP, 0 B RAM per process) gains a thin BSD sockets layer over that ABI:
+    `socket`, `bind`, `connect`, `listen`, `accept`, `send`/`recv`, `sendto`/`recvfrom`,
+    `getsockname`, `setsockopt` (`TCP_NODELAY`, `SO_REUSEADDR`), `getaddrinfo` over a small DNS
+    resolver. Flash ≈ 3–5 KB. Berry's `socket` module (7c) uses it;
+  - sockets are not added to FS as a new file type.
+- **R19.4** `poll()` on network descriptors: `inet` answers `DEV_SELECT` (R4b.6) for readable,
+  writable and connection-ready. The tree's `telnet` and `telnetd` are changed from one forked
+  process per direction to one process with `poll()` (a fork costs a ≈ 15 KB shadow copy here).
+- **R19.5** (19a) **SLIP over the second USB CDC-ACM** interface: `slattach` on Linux and BSD.
+  Development link; no new USB class code.
+- **R19.6** (19b) **USB Ethernet: CDC-ECM and CDC-NCM** as two configurations of the composite
+  device (Linux and macOS take ECM, Windows 10 1903+/11 takes NCM). No RNDIS.
+  - ECM: one Ethernet frame per USB transfer, streamed from the 64 B packets straight into a pool
+    pbuf; kernel RAM ≈ 64 B.
+  - NCM: the NDP table may follow the datagrams, so a whole NTB is received before it is parsed;
+    `dwNtbOutMaxSize` 2048, the NTB buffer is two pool pbufs in `inet` (not kernel RAM).
+  - Kernel flash ≈ 5 KB.
+  - `inet` serves addresses itself: a **one-lease DHCP server** (≈ 1–2 KB flash, ≈ 50 B RAM) and an
+    **mDNS responder** for `<hostname>.local` (`/etc/hostname`). With `NET_IPV6=1`, link-local
+    IPv6 + mDNS also works with no DHCP.
+  - Internet over USB needs NAT on the PC (Linux masquerade, macOS Internet Sharing, Windows ICS).
+    The user manual documents it; the Flipper does not route.
+  - Main use: a **web interface for the gadget**: lwIP `httpd` with static pages in flash (XIP,
+    0 B RAM), dynamic parts as small CGI-style handlers returning TSV or JSON Lines (section K):
+    reminders, alarms, settings, files on the SD card.
+- **R19.7** (19e) **Internet through an external Wi-Fi module** on a GPIO header UART (USART1 on pins 13/14 or LPUART1 on 15/16; LPUART1 when the IrDA module of R19.9 holds USART1). Two
+  supported kinds, one `/dev/tcp` for programs:
+  - **a Linux module (owner has one): PPP over the UART** (R19.10). The module runs `pppd` and NAT
+    and is the Flipper's router; TLS, if ever needed, runs there. No extra code on the Flipper
+    beyond PPP. Preferred.
+  - **an ESP32 devboard: offload mode.** The ESP32 runs TCP/IP, SNTP and TLS; a daemon on the
+    Flipper (`wifid`, ≈ 1–2 KB RAM, no lwIP) maps `/dev/tcp` to its text protocol (ESP-AT, or a
+    small own firmware that also carries the `camfind` scan of R9.1.1; one firmware for both).
+  - Time sync: SNTP (lwIP `sntp`, ≈ 100 B, or the module's own) sets the RTC, never flash.
+  - `pkg get` over plain HTTP is acceptable: integrity comes from the R17.2 signature.
+- **R19.8** (19c) **Bluetooth to a phone or PC:** SLIP or PPP framing over the BLE serial GATT
+  service of `bled` (a small host script on Linux, an Android companion). BLE IPSP / RFC 7668 is
+  **not planned**: phones do not expose it to apps.
+- **R19.9** (19f, optional, **SD package** `net-irda`; owner decision 2026-11-15) **IP over infrared
+  with an external IrDA module:**
+  - The built-in IR receiver is a 38 kHz demodulator and cannot see IrDA SIR pulses, so this
+    needs an IrDA transceiver module (e.g. Vishay TFDU/TFBS family) on GPIO pins 13/14 (USART1).
+  - USART1's hardware IrDA SIR encoder/decoder (`IREN`) does the pulse shaping: 9.6–115.2 kbit/s,
+    **0 B** of kernel RAM beyond the normal UART driver. USART1 is shared with the GPIO UART
+    bridge; the usual ownership rule applies (`EBUSY` with the owner's name).
+  - Framing is **PPP** with Van Jacobson header compression (lwIP `PPP_SUPPORT`, `VJ_SUPPORT`, 4 VJ
+    slots), not SLIP: LCP echo detects a broken link and IPCP assigns the addresses. It uses the
+    common PPP code of R19.10.
+  - Peers: a second Flipper, or a PC through a plain USB-UART adapter with the same module (the PC
+    runs `pppd` on a serial port). No IrLAP/IrLMP/IrLAN stack: Linux removed its IrDA subsystem in
+    4.17, so a full stack would have nobody to talk to.
+  - Packaging: built as a separate package installed on the SD card (`pkg install net-irda`), not
+    part of the base image; `pkg install --flash` stays possible for owners who use it a lot.
+  - Cost: flash ≈ 20–25 KB (PPP + VJ, in the package); RAM ≈ 1–1.5 KB inside `inet` while the link
+    is up; no internal flash writes at run time.
+  - Acceptance: AC19.9 Two Flippers with modules ~1 m apart `ping` each other and copy a 10 KB file
+    with `ftp` and a matching `cksum`; the same against Linux `pppd` through a USB-UART adapter.
+  - Background: project report `tcpip-stack-analysis.md` §13 (Polish, not in the repo).
+- **R19.10** **PPP as the common framing for weak serial links** (Wi-Fi module UART, BLE serial,
+  CC1101, the IrDA link of R19.9): lwIP PPP with LCP echo, IPCP, CHAP and **Van
+  Jacobson header compression** (4 slots, not the default 16). RAM ≈ 1–1.5 KB over lwIP; flash
+  ≈ 20–25 KB. SLIP stays only for R19.5.
+- **R19.11** (19d) **PPP over CC1101 between two Flippers, with frequency hopping:**
+  - a thin MAC under PPP: packets ≤ 255 B (FIFO refilled from the interrupt), hardware CRC,
+    optional FEC with interleaving, CCA before transmit, short link-level acks;
+  - **TDD slots** (50–100 ms) with a master and a slave; the master's packets carry the slot
+    number; ≈ 1 ms guard per slot;
+  - **fast hop:** at link start every channel is calibrated once and `FSCAL3/2/1` stored
+    (3 B per channel, TI DN505); a hop writes `CHANNR` + the three values and strobes: ≈ 90 µs
+    instead of ≈ 0.8 ms. Recalibrate in a gap after a large temperature change or every few
+    minutes. The table lives in RAM only;
+  - hop sequence from the pairing key (a permutation from AES-CTR on `AES1`); acquisition waits
+    on one channel (worst case channels × slot length); 3 empty slots → reacquire;
+  - **adaptive hopping:** both sides keep RSSI and loss per channel; the master broadcasts an 8 B
+    bad-channel map and the sequence skips those channels;
+  - the hop is done in the kernel PHY (A.1) from a hardware timer interrupt (≈ 10–20 µs of SPI
+    every slot); the channel table and statistics are in a pinned buffer of the link process
+    (R4b.5), the kernel holds ≤ 48 B of slot state;
+  - R8.2 is applied by validating the whole hop table at arm time (every channel inside the
+    region's band) and locking `CHANNR`/`FREQ*` to the hop path; the duty-cycle counter sums
+    transmit time over all channels of the sub-band. **In the EU hopping does not raise the
+    duty budget** (433 MHz ≈ 480 B/s, 868.0–868.6 MHz ≈ 48 B/s average); the region table may
+    instead use LBT + AFA where the band rules allow it. US 902–928 MHz (FCC 15.247) allows real
+    FHSS without a duty limit. The exact EU figures are checked against the current ERC/REC
+    70-03 and EN 300 220 before they enter the table;
+  - the link and `/dev/nfc` exclude each other while the link is up (shared SPI); other users of
+    the bus get it between slots (as R0.8b);
+  - delivery order: one channel + FEC + CCA, then LBT + channel change, then full FHSS with AFH.
+    Each step works on its own.
+- **R19.12** (19g) **Flipper-to-Flipper BLE Ethernet bridge** (owner idea, 2026-11-15): two
+  Flippers, each a USB ECM/NCM device (R19.6) to its own PC, carry Ethernet frames between them
+  over a **BLE L2CAP CoC** channel (full BLE stack, R16.1.0). The PC with Internet does NAT for
+  the other one.
+  - The bridge forwards frames at layer 2 between the USB function and the CoC channel; it does
+    not need `inet` (a small `brd` process, two frame buffers of 1.5 KB, MTU 1500).
+  - The BLE link is bonded and encrypted before any frame passes (R19.14).
+  - Throughput is what BLE gives (tens of KB/s); the user manual says so.
+- **R19.13** (old R19.7) **802.15.4 / Thread** on CPU2: owner decision, after Phase 15 (Deferred).
+  CPU1 would attach IPv6 packets from IPCC as an lwIP netif; cost 2–4 KB more SRAM2.
+- **R19.14** Security defaults:
   - no listening services unless enabled in `/etc/rc.net`;
-  - `telnetd`/`ftpd` only on the USB link and only with the root password set (R3.4);
+  - each listening socket is bound to one interface; `telnetd`/`ftpd` only on the USB link
+    (never Wi-Fi, BLE or radio) and only with the root password set (R3.4);
   - every daemon runs as its own user;
-  - the BLE link is encrypted (bonded) before IP is allowed over it.
+  - BLE and CC1101 links are paired and encrypted before IP or frames pass;
+  - no internal-flash writes at run time (DHCP lease, ARP/ND, calibration, hop tables: RAM only;
+    `/etc/rc.net` and Wi-Fi credentials on the SD card).
 
 Acceptance:
-- AC19.1 `ping` both ways over SLIP and over NCM; `telnet` from Linux to the Flipper's `telnetd`;
-  `ftp` file transfer of 1 MB with a matching `cksum`.
+- AC19.1 `ping` both ways over SLIP and over ECM (Linux) and NCM (Windows 11); `telnet` from Linux
+  to the Flipper's `telnetd`; `ftp` of 1 MB with a matching `cksum`.
 - AC19.2 Throughput over NCM ≥ 300 KB/s (USB FS with 64 B packets).
 - AC19.3 With the network idle and no sockets, `inet` has exited and `free` shows the RAM back.
-- AC19.4 Over BLE: `ping` from a Linux host through the GATT serial bridge.
+- AC19.4 The PC gets an address by DHCP and opens `http://<hostname>.local/` from the Flipper's
+  `httpd`.
+- AC19.5 A test program using only the BSD sockets layer connects, accepts two clients in a row
+  and waits on a socket, `/dev/buttons` and a timer with one `poll()`.
+- AC19.6 With a Linux Wi-Fi module on the UART: `ping` to an Internet host through PPP + NAT;
+  SNTP sets the RTC.
+- AC19.7 Two Flippers over CC1101 (R19.11): `telnet` session with VJ compression; with one channel
+  jammed by a test transmitter the link stays up and that channel is marked bad; the duty
+  counter never exceeds the region limit.
+- AC19.8 Over BLE: `ping` from Linux through the GATT serial bridge (19c); two PCs `ping` each
+  other through two Flippers on L2CAP CoC (19g).
 
-Responsiveness: AC19.R While a 1 MB TCP transfer runs over NCM, L1 and L2 hold (`inet` runs below the interactive queue).
+Responsiveness: AC19.R While a 1 MB TCP transfer runs over NCM, and while the CC1101 link hops,
+L1 and L2 hold (`inet` runs below the interactive queue; hop interrupts ≤ 20 µs).
 
-RAM budget: kernel ≤ +100 B; `inet` 8–12 KB only while running. Flash: ≈ 50 KB (`inet`) + 5 KB
-kernel (NCM), in the installed region (or the run-time cache if networking is rarely used).
+RAM budget: kernel ≤ +150 B (ECM ≈ 64 B, hop slot state ≤ 48 B); `inet` ≈ 9–10 KB (IPv4) or
+≈ 14–15 KB (IPv6) only while running, PPP +1–1.5 KB, hop table ≈ 0.4 KB in the link process,
+`brd` ≈ 4 KB while bridging, `wifid` ≈ 1–2 KB. Flash: ≈ 40–50 KB (`inet`) + 20–25 KB (PPP) + 5 KB
+kernel (USB Ethernet), in the installed region (or the run-time cache if networking is rarely
+used).
 
 ---
 
@@ -2919,8 +3354,13 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the owner confirms.
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
-- Thread or Zigbee on CPU2 (R19.7): owner decision, after Phase 15.
+- Thread or Zigbee on CPU2 (R19.13): owner decision, after Phase 15.
 - A FAP binary loader: not planned; apps are ported from source (D.2).
+- External USB host chip (e.g. MAX3421E, SPI on GPIO pins 2/3/5, CS 4, INT 7; owner idea
+  2026-11-15): would let the Flipper enumerate a device plugged into it (a pendrive or a cable
+  with a chip inside) and report what it claims to be, e.g. a "charging cable" that is really a
+  HID keyboard. The reverse of the 11.2 canary. Not scheduled; needs the module and a small host
+  stack (control transfers and descriptor parsing only).
 
 ## Traceability
 
@@ -2943,6 +3383,9 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Native app: Bluetooth adapter for BLE mice and keyboards (owner request) | 16.1 |
 | Native app: Storz & Bickel vaporizer remote `sbctl` (owner request; no device firmware update) | 16.4 |
 | USB peripheral modes: RFID, iButton, IR, Sub-GHz / NFC reader / BT dongle (owner request) | 11.1 / 14.1 / 16.2, section G |
+| USB canary: what an unknown host port tries to do (owner request) | 11.2 |
+| Canary family: rules and table; BLE, NFC, Sub-GHz, 125 kHz, IR, Wi-Fi canaries (owner request) | section M; 16.5, 14.2, 9.2 |
+| External USB host chip (MAX3421E) for inspecting plugged-in devices (idea) | Deferred |
 | nRF24 module for 2.4 GHz dongle mice (optional, not confirmed) | G.3 question 3, deferred |
 | Sub-GHz, LF RFID | 8 |
 | USB HID, mass storage, CDC | 10 |
@@ -2952,7 +3395,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
 | A9 (FPU) | 5 (R5.7) |
-| TCP/IP over USB and BLE | 19 |
+| TCP/IP over USB, Wi-Fi module, BLE, CC1101 (FHSS); IrDA + PPP as an optional SD package (owner decision) | 19, R19.9 |
 | M8, A6, A8, M9, A11, M10, A5 | 20a (parts pulled into 4b and 6) |
 | M6, M7, M13, M12, A4 | 20b |
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
