@@ -114,7 +114,13 @@ extern unsigned hal_disk_mhz;		/* bus clock for disk data */
 void hal_flash_region(uint32_t *base, uint32_t *size);	/* the text cache */
 /* The whole layout (Phase 2b): l[HAL_FL_N] */
 enum { HAL_FL_SFSA, HAL_FL_INST, HAL_FL_INST_SIZE, HAL_FL_CACHE,
-       HAL_FL_CACHE_SIZE, HAL_FL_N };
+       HAL_FL_CACHE_SIZE, HAL_FL_ROM, HAL_FL_ROM_SIZE, HAL_FL_N };
+/* The default settings image (/dev/rom, spec L.2): at a fixed place, right
+ * after the installed region's two directory pages, so that make
+ * base-flash can put it there; installs never use those pages. */
+#define HAL_ROM_OFF	(2 * 4096u)
+#define HAL_ROM_SIZE	(32 * 1024u)
+uint32_t hal_rom_base(void);	/* the same, without the layout table */
 void hal_flash_layout(uint32_t *l);
 /* /dev/mem and /dev/kmem: how many of the len bytes from addr can be read
  * (write: written) without a bus fault; 0: none (outside every range). */

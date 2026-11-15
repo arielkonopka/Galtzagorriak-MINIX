@@ -351,11 +351,17 @@ unsigned long npages;
 /* First fit: npages free pages in a row. */
   unsigned long a, end, size;
 
+  unsigned long rb, rs;
+
   if (in_region(&size) != OK) return(0);
   if (size > 256 * PAGE) size = 256 * PAGE;	/* mjob.page is a byte */
   end = in_base + size;
+  a = in_base + DIRPAGES * PAGE;
+  /* not the settings image (/dev/rom, L.2) after the directories */
+  if (sys_flash(FL_INFO, FL_LAYOUT_ROM, NULL, 0, &rb, &rs) == OK
+						&& rb == a) a += rs;
 
-  for (a = in_base + DIRPAGES * PAGE; a + npages * PAGE <= end; a += PAGE)
+  for (; a + npages * PAGE <= end; a += PAGE)
 	if (!in_used(a, npages * PAGE)) return(a);
   return(0);
 }

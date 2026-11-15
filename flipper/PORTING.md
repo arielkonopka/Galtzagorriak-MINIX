@@ -525,6 +525,31 @@ the rest ran from RAM.  With the default: 6 pages, 4 programs.  That the
 count survives a reboot is checked on the Flipper (QEMU has no backup
 registers).
 
+T12 / L.2, the default settings in ROM (2026-11-15, QEMU): `make
+base-flash` builds `rom.img` (a read-only MINIX file system, 32 KB, from
+`rootfs/rom.proto`: `/etc` as built, plus the default `rc.conf`, which is
+not put on the card) and puts it into `minix-base.bin` at a fixed place:
+right after the installed region's two directory pages (0x08032000 on
+the Flipper).  It is written only by DFU:
+- installs start after it;
+- the kernel refuses MM's erases and writes there (EROFS);
+- `/dev/rom` (memory driver, block 1/6) serves it and cannot be opened
+  or mounted for writing.
+
+`/etc/rc` mounts it read-only on `/rom`, and reads `rc.conf` from the
+card first, else from `/rom`.  Without the image (a plain `minix.bin`)
+the mount fails quietly.  The base package's postinst adds `/rom`,
+`/dev/rom` and the mount line on older cards.
+
+RAM: kernel -8 B.  `/dev/random` and `/dev/zero` need no geometry entry
+(they have no end), and `/dev/rom` takes one of their two slots.  The
+random generator's 64-byte buffer moved into a function of its own:
+mounting `/dev/rom` is the first block-device use of the MEMORY task
+(do_vrdwt + m_schedule), and with the buffer in `m_schedule` its
+256-byte stack overflowed (panic in QEMU).  On a card the image takes
+one of the 8 super blocks and one mount.  Flash: 32 KB of the installed
+region, written at DFU time only.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

@@ -12,3 +12,14 @@ grep '^EDITOR=' /etc/profile >/dev/null || {
 	echo 'VISUAL=mined	export VISUAL' >> /etc/profile
 	echo "base: /etc/profile now sets EDITOR and VISUAL to mined"
 }
+# Cards made before T12 lack /rom, /dev/rom and its mount in /etc/rc (the
+# default settings in internal flash, spec L.2).  The mount fails quietly
+# until a minix-base.bin with the settings image is flashed.
+test -d /rom || mkdir /rom
+test -b /dev/rom || mknod /dev/rom b 1 6
+grep '/dev/rom' /etc/rc >/dev/null || {
+	(echo '/^>\/etc\/utmp/a'; echo ''
+	 echo '# The default settings, read-only from internal flash (spec L.2).'
+	 echo 'mount /dev/rom /rom -r >/dev/null 2>&1'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
+	echo "base: /etc/rc now mounts the default settings on /rom"
+}

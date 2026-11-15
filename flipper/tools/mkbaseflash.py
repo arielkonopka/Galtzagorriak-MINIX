@@ -2,7 +2,7 @@
 """Build programs into the installed region of a flash image (spec Phase 2b,
 R2b.6, make base-flash).
 
-Usage: mkbaseflash.py system.bin out.bin FLASH_BASE REGION_OFFSET prog.aout ...
+Usage: mkbaseflash.py system.bin out.bin FLASH_BASE REGION_OFFSET [--rom=rom.img] prog.aout ...
 
 out.bin is system.bin padded to REGION_OFFSET (the installed region, which
 starts right after the 192 KB system image on every layout), then the
@@ -33,7 +33,15 @@ NREC = (PAGE - HDR) // REC
 SEED = 0x424E4947          # "GINB"
 A_SEP = 0x20
 
+ROM_SIZE = 32 * 1024       # hal.h HAL_ROM_SIZE: after the directories
+
 system, out, flash, region, *progs = sys.argv[1:]
+rom = b""
+if progs and progs[0].startswith("--rom="):   # the settings image (L.2)
+    rom = open(progs.pop(0)[6:], "rb").read()
+    if len(rom) > ROM_SIZE:
+        sys.exit(f"mkbaseflash: the settings image is {len(rom)} bytes, "
+                 f"more than {ROM_SIZE}")
 flash, region = int(flash, 0), int(region, 0)
 image = bytearray(open(system, "rb").read())
 if len(image) > region:
@@ -46,7 +54,7 @@ image += b"\xff" * (region - len(image))
 directory = bytearray(b"\xff" * PAGE)
 struct.pack_into("<II", directory, 0, SEED, 1)
 texts = bytearray()
-addr = flash + region + 2 * PAGE
+addr = flash + region + 2 * PAGE + ROM_SIZE   # installs skip the ROM too
 for seq, path in enumerate(progs):
     data = open(path, "rb").read()
     if data[0:2] != b"\x01\x03" or not data[2] & A_SEP:
@@ -62,7 +70,8 @@ for seq, path in enumerate(progs):
     print(f"  {path.rsplit('/', 1)[-1]:10s} at {addr:#010x}, {a_text} bytes")
     addr += pages * PAGE
 
-image += directory + b"\xff" * PAGE + texts
+image += directory + b"\xff" * PAGE + rom + b"\xff" * (ROM_SIZE - len(rom))
+image += texts
 # whole double words only (see mkflash.py)
 image += b"\xff" * (-len(image) % 8)
 with open(out, "wb") as f:

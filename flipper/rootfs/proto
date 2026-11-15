@@ -26,6 +26,7 @@ d--755 0 0
       mem c--640 0 0 1 1
       kmem c--640 0 0 1 2
       ram b--600 0 0 1 0
+      rom b--644 0 0 1 6
       hd0 b--600 0 0 3 0
       hd1 b--600 0 0 3 1
       hd2 b--600 0 0 3 2
@@ -49,6 +50,8 @@ d--755 0 0
    usr d--755 0 0
    $
    home d--755 0 0
+   $
+   rom d--755 0 0
    $
    lib d--755 0 0
       pwdauth -u-755 0 0 @BINDIR@/pwdauth

@@ -42,7 +42,7 @@ BAD = re.compile(rb"not erased|damaged|panic|does not read back")
 
 
 class Run:
-	def __init__(self, n, mode):
+	def __init__(self, n, mode, image="minix.bin"):
 		self.dir = tempfile.mkdtemp(prefix="powercut")
 		os.makedirs(os.path.join(self.dir, "build/qemu/minix"))
 		subprocess.check_call(["cp", "--sparse=always",	# 4 GB, 2 MB used
@@ -50,7 +50,7 @@ class Run:
 			os.path.join(self.dir, "build/qemu/minix/disk.img")])
 		cmd = QEMU + [
 		    "-device", "loader,file=%s,addr=0" %
-				os.path.abspath(os.path.join(MB, "minix.bin")),
+				os.path.abspath(os.path.join(MB, image)),
 		    "-device", "loader,addr=0x%x,data=%d,data-len=4" % (CFG, n),
 		    "-device", "loader,addr=0x%x,data=%d,data-len=4" %
 							(CFG + 4, mode)]
