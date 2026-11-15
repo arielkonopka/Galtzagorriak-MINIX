@@ -87,6 +87,7 @@ FORWARD _PROTOTYPE( int in_clock_set, (void)				);
 #define MAGIC(d)	(((unsigned long *) DIRADDR(d))[0])
 #define GEN(d)		(((unsigned long *) DIRADDR(d))[1])
 #define UNBOUND(r)	((r)->id == 0xFFFFFFFFUL && (r)->ctime == 0xFFFFFFFFUL)
+#define HEADCRC		256	/* bytes of text under the record's CRC */
 #define BINDING(s)	((unsigned long) (s)->st_ino << 16 \
 					| ((unsigned long) (s)->st_dev & 0xFFFF))
 
@@ -223,13 +224,21 @@ PUBLIC void in_init()
 /*===========================================================================*
  *				in_lookup				     *
  *===========================================================================*/
-PUBLIC unsigned long in_lookup(s, size)
+PUBLIC unsigned long in_lookup(s, size, fd, toff)
 struct stat *s;			/* the program file */
 unsigned long size;		/* its text size */
+int fd;				/* the file, open */
+unsigned long toff;		/* where its text starts in it */
 {
-/* Where the installed text for this file is, or 0 (R2b.4). */
+/* Where the installed text for this file is, or 0 (R2b.4).  The binding
+ * (dev, ino, ctime) and the size must match, and the CRC-32 of the first
+ * HEADCRC bytes of the text (#58): a new file that got an old program's
+ * inode number and ctime (a clock that was not set) is not taken for it.
+ * Records made before the CRC have flags = all ones: binding only.  The
+ * file position is put back for exec. */
   struct inrec *r, *best = NULL;
-  unsigned long id = BINDING(s);
+  unsigned long id = BINDING(s), crc, n, k;
+  unsigned char b[64];		/* MM's stack: small pieces */
   int i;
 
   if (in_st == 0 || in_dir > 1) return(0);
@@ -240,7 +249,18 @@ unsigned long size;		/* its text size */
 	    && r->size == size && (best == NULL || r->seq > best->seq))
 		best = r;
   }
-  return(best != NULL ? best->addr : 0);
+  if (best == NULL) return(0);
+  if (best->flags == 0xFFFFFFFFUL) return(best->addr);
+  n = size < HEADCRC ? size : HEADCRC;
+  crc = 0xFFFFFFFFUL;
+  if (lseek(fd, (off_t) toff, SEEK_SET) < 0) return(0);
+  for (; n > 0; n -= k) {		/* the same block exec read: cached */
+	k = n < sizeof(b) ? n : sizeof(b);
+	if (read(fd, (char *) b, (unsigned) k) != (int) k) break;
+	crc = crc32_more(crc, b, k);
+  }
+  (void) lseek(fd, (off_t) toff, SEEK_SET);
+  return(n == 0 && ~crc == best->flags ? best->addr : 0);
 }
 
 /*===========================================================================*
@@ -269,6 +289,36 @@ unsigned long addr;
 		&& ((unsigned long) rmp->mp_seg[T].mem_phys << CLICK_SHIFT)
 								== addr)
 		return(TRUE);
+  return(FALSE);
+}
+
+PRIVATE int in_stale(r)		/* is r's file gone or replaced? */
+struct inrec *r;
+{
+/* R2b.12, #58: ask FS about the inode of r's binding.  Only a definite
+ * "no" counts (the device mounted, the inode free or with another ctime):
+ * a device that is not mounted (another card, /usr not yet) keeps it. */
+  message m;
+
+  if (UNBOUND(r)) return(FALSE);
+  m.m1_i1 = (int) (r->id & 0xFFFF);
+  m.m1_i2 = (int) (r->id >> 16);
+  m.m1_i3 = (int) r->ctime;
+  return(_taskcall(FS_PROC_NR, INOCHK, &m) == 0);
+}
+
+PRIVATE int in_held(i)		/* a current live record for i's text? */
+int i;
+{
+  struct inrec *r = RECP(in_dir, i), *q;
+  int j;
+
+  for (j = 0; j < NREC; j++) {
+	q = RECP(in_dir, j);
+	if (FREE_SLOT(q)) break;
+	if (j != i && LIVE(q) && q->addr == r->addr && !in_stale(q))
+		return(TRUE);
+  }
   return(FALSE);
 }
 
@@ -311,6 +361,12 @@ PRIVATE int in_compact()
 	 * record, and the dead one of every running program (sh, getty,
 	 * ...) would otherwise stay until the directory is full for good */
 	if (!LIVE(r) && (!in_running(r->addr) || in_covered(i))) continue;
+	/* a live record whose file is gone (rm + tar x, a restored card:
+	 * pkg bind gave the text a new record) is not copied either -
+	 * unless a process runs from it and no current record has the
+	 * text (then its pages must stay used) */
+	if (LIVE(r) && in_stale(r)
+		&& (!in_running(r->addr) || in_held(i))) continue;
 	memcpy(rec, r, REC);
 	to = (unsigned long) RECP(d, j);
 	if (sys_flash(FL_WRITE, to, rec, 40, NULL, NULL) != OK
@@ -538,7 +594,10 @@ struct stat *s;
 	if (FREE_SLOT(r)) break;
 	if (WHOLE(r) && r->seq >= rec[12]) rec[12] = r->seq + 1;
   }
-  rec[13] = 0xFFFFFFFFUL;
+  /* flags: CRC-32 of the text's start, from the flash (in_lookup) */
+  rec[13] = ~crc32_more(0xFFFFFFFFUL, (const unsigned char *) addr,
+				size < HEADCRC ? size : (unsigned long) HEADCRC);
+  if (rec[13] == 0xFFFFFFFFUL) rec[13] = 0xFFFFFFFEUL;	/* all ones: none */
   r = RECP(in_dir, i);
   if (sys_flash(FL_WRITE, (unsigned long) r, rec, sizeof(rec), NULL, NULL)
 								!= OK)

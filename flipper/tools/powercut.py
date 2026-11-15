@@ -109,6 +109,11 @@ B = "cp /bin/cksum /tmp/p; sync; pkg flash /tmp/p"
 FILL = ("for i in 1 2 3 4 5 6 7 8 9 10; do for j in 1 2 3; do "
 	"cp /bin/od /tmp/p; pkg flash /tmp/p; cp /bin/cksum /tmp/p; "
 	"pkg flash /tmp/p; done; done; sync")
+# --compact: a file that is never changed again, installed late in the
+# directory (compaction copies it last): its record must survive any cut.
+# /tmp/p's records may go: each install of it follows a cp (new ctime),
+# so the old record is stale and compaction drops it (R2b.12).
+KEEP = "cp /bin/sum /tmp/k; sync; pkg flash /tmp/k"
 STEPS = [A, B]
 
 
@@ -135,7 +140,7 @@ def one(n, mode, expect):
 			where = str(int(m.group(1), 16)) if m else "?"
 			if not r.login():
 				return (n, mode, "no login after the cut", where)
-		if len(STEPS) > 2:		# --compact: no record lost
+		if len(STEPS) > 2:		# --compact: /tmp/k's record kept
 			r.send("free -v | tail -1; echo @@end@@")
 			m = r.wait(rb"installed programs: (\d+)", 20)
 			if m is None or int(m.group(1)) < 1:
@@ -199,7 +204,7 @@ def main():
 	ap.add_argument("cuts", nargs="*")
 	a = ap.parse_args()
 	if a.compact:
-		STEPS[:] = [A, B, FILL, A, B]
+		STEPS[:] = [A, B, FILL, KEEP, A, B]
 
 	expect, ops = reference()
 	print("reference: od %r, cksum %r, sum %r; traced %d erases and "
