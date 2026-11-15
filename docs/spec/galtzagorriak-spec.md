@@ -2893,6 +2893,15 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
 Confirmed by the owner (2026-11-14): wanted. The protocol core comes early as task T6
 (`docs/spec/next-tasks.md`); the BLE and UI parts follow Phase 16.
 
+Target devices (owner, 2026-11-15): the owner has a **Venty**, so the qvap driver (Venty, and
+Veazy, which uses the same protocol) is the first and the reference: it is verified on the
+owner's device and all acceptance tests run on it. Volcano and Crafty stay in the design and
+their tables are written, but they are marked "unverified" until someone tests them on real
+hardware. The model table is the extension point, so a new model is a table plus tests.
+Venty notes: it does not report the current temperature (only target, boost and superboost
+offsets, heater mode, battery, charger, auto-off countdown), so the main screen shows the target
+and the "setpoint reached" flag, and "Notify when ready" uses that flag (status byte 14, bit 1).
+
 Owner request: port the vendor's Web Bluetooth app (app.storz-bickel.com, v3.4.1) as a native app
 that controls the owner's own Volcano Hybrid, Venty, Veazy or Crafty/Crafty+ with the Flipper as
 BLE central. The vendor code is proprietary and is **not** copied: the protocol comes from the

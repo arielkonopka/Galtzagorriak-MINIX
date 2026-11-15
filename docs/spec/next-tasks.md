@@ -47,6 +47,7 @@ Spec: 16.4. The BLE parts wait for Phases 15–16 (R16.1.0 decided: full stack),
 - `flipper/apps/sbctl/sbproto.c/.h`: pure C, no I/O, no malloc. Model tables in `const` (flash): Volcano, qvap (Venty/Veazy), Crafty. Functions: detect model from advertised name; encode a request (set target, heater, pump, boost mode, brightness, auto-off with the Crafty security-code write first, find-my) into a list of (characteristic UUID, bytes, with/without response); decode a notification or read into one `struct sb_state` (≤ 64 B). Temperature limits per model enforced in the encoder (R16.4.7).
 - Host unit tests (`make -C flipper/apps/sbctl test` with the host compiler): golden byte vectors per model for every request and for sample status packets, including the Venty "0x8000 = not reported" case and the Crafty "ready" bit 0x0100.
 - Protocol source: the MIT library `storzandbickel-ble` 0.1.25 (`protocol.py`), not the vendor's JS. Credit it in the file header; GPLv3 project, MIT is compatible.
+- Priority (owner, 2026-11-15): the owner has a **Venty**. Write and test the qvap model (Venty/Veazy) first: connect sequence (0x02, 0x1D, 0x30/0x06), 0x01 status decode and write masks, 0x06 settings, 0x0D find-my. Volcano and Crafty tables go in too but are marked `/* unverified */` in the table and in the test names.
 - No UI and no `bled` code yet. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
 
 ## T7. Own version: Galtzagorriak 0.1.0 (owner decision 2026-11-14): small, after T1–T5, may go alongside T6
