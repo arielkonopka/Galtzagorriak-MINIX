@@ -40,6 +40,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "mproc.h"
+#include "gzbuild.h"		/* GZ_BUILD_EPOCH: the clock is set after it */
 
 #if (CHIP == ARM_CM)
 
@@ -67,6 +68,8 @@ struct inrec {
 /* The only RAM: region base | active directory page (0, 1; 2: none yet),
  * 0: no region.  The size and the next seq are looked up when installing. */
 PRIVATE unsigned long in_st;
+
+FORWARD _PROTOTYPE( int in_clock_set, (void)				);
 
 #define in_base		(in_st & ~3UL)
 #define in_dir		((int) (in_st & 3))
@@ -515,6 +518,7 @@ struct stat *s;
   unsigned long rec[14];
   int i;
 
+  if (!in_clock_set()) return(EAGAIN);	/* no binding with a bad clock */
   for (i = 0; i < NREC; i++)
 	if (FREE_SLOT(RECP(in_dir, i))) break;
   if (i >= NREC) {			/* directory full: compact once */
@@ -544,6 +548,22 @@ struct stat *s;
 }
 
 /*===========================================================================*
+ *				in_clock_set				     *
+ *===========================================================================*/
+PRIVATE int in_clock_set()
+{
+/* A binding is (dev, ino, ctime): with the clock not set (the RTC does not
+ * run: every boot starts at 1970) ctimes repeat between boots, and a new
+ * file could get an old program's binding.  So no new bindings then: the
+ * programs run from RAM (spec I.1, #58).  Set: not before this commit. */
+  message m;
+
+  m.m_type = GET_TIME;
+  if (sendrec(CLOCK, &m) != OK) return(FALSE);
+  return((unsigned long) m.NEW_TIME >= GZ_BUILD_EPOCH);
+}
+
+/*===========================================================================*
  *				in_install				     *
  *===========================================================================*/
 PRIVATE int in_install(fd, s)
@@ -564,6 +584,7 @@ struct stat *s;
   if ((i = in_check(fd, s, &hdr)) != OK) return(i);
   size = (unsigned long) hdr.a_text;
   if (in_has(s, size)) return(OK);		/* nothing to write */
+  if (!in_clock_set()) return(EAGAIN);	/* before any page is written */
   if (in_writable() != OK) return(EIO);
 
   /* The same text already there (an alias): only a record. */
@@ -673,6 +694,7 @@ struct stat *s;
 	printf("install: built-in text at %lx is damaged\n", addr);
 	return(EIO);
   }
+  if (!in_clock_set()) return(EAGAIN);	/* see in_clock_set */
   if (in_writable() != OK) return(EIO);	/* may move the records */
   if ((r = in_same(size, sha, S_UNBOUND)) == NULL)	/* an alias */
 	return(in_record(addr, size, sha, s));

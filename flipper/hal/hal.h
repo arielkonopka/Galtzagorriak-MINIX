@@ -154,6 +154,9 @@ void hal_dfu_request(void) __attribute__((noreturn));
 void hal_dev_mode(int on);
 int hal_dev(void);
 const char *hal_reset_cause(void);	/* of the last reset */
+/* The RTC's time, seconds since 1970 (UTC, spec I.1); 0: it is not running
+ * or was never set.  Read once at boot (the clock task). */
+uint32_t hal_rtc_time(void);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
 void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));
