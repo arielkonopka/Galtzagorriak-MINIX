@@ -139,6 +139,7 @@ static uint32_t semihost(uint32_t op, void *arg)
 #define SYS_SEEK	0x0A
 #define SYS_FLEN	0x0C
 #define SYS_EXIT_EXTENDED 0x20
+#define SYS_TIME	0x11
 #define OPEN_RW_BINARY	3		/* fopen mode "r+b" (7 would be "w+b": truncates!) */
 
 /* SYS_EXIT_EXTENDED: QEMU exits with the given status. */
@@ -443,6 +444,9 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 	ROM_SPANS
 	return 0;
 }
+
+/* QEMU: the host's clock, seconds since 1970 (semihosting). */
+uint32_t hal_rtc_time(void) { return semihost(SYS_TIME, 0); }
 
 /* No infrared in QEMU. */
 int hal_ir_irq(void) { return -1; }

@@ -550,6 +550,21 @@ mounting `/dev/rom` is the first block-device use of the MEMORY task
 one of the 8 super blocks and one mount.  Flash: 32 KB of the installed
 region, written at DFU time only.
 
+Minimal I.1, the wall clock from the RTC (2026-11-15, #58): at boot the
+clock task sets `boot_time` from the RTC (`hal_rtc_time()`).  The STM32's
+BCD calendar is read once (years 2000-2099, UTC); it keeps running on the
+battery with the stock firmware's settings.  QEMU takes the host's time
+(semihosting).  Without a running RTC the result is 0, so the clock
+starts at 1970 as before, and every boot would repeat the same ctimes.
+An installed program's binding is (dev, ino, ctime), so a new file could
+then get an old program's binding.  MM therefore makes no new bindings
+while the clock is before the build's commit (`GZ_BUILD_EPOCH`):
+`pkg flash`/`install --flash`/`bind` say "the clock is not set (RTC)",
+before any page is written, and the program runs from RAM.  QEMU: `date`
+shows the host's time and installs work; after `date 0101700000` an
+install is refused and the region is unchanged.  The full model (time()
+from the RTC, the century register) is still Phase 2d.  RAM 0 B.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile
