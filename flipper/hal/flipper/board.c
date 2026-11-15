@@ -1166,21 +1166,44 @@ void hal_ir_tx_stop(void)
  *===========================================================================*/
 /* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
  * else from the LSI (on anyway for the watchdog; then the clock error
- * check, which wants more than HCLK/32, is off).  CPU2 is not started,
- * so no semaphore. */
+ * check, which wants more than HCLK/32, is off).
+ * CPU2 (the radio stack) shares the RNG and the 48 MHz clock choice: ST's
+ * convention (AN5289, hw_conf.h) is hardware semaphore 0 around the RNG
+ * and 5 around the CLK48 setting.  CPU2 is not started yet, so they are
+ * always free; when CPU2 holds one, hal_random() fails at once (-1, the
+ * caller gives a short read) instead of waiting (Phase 4a, #2 review). */
+#define SEM_RNG		0
+#define SEM_CLK48	5
+
+static int sem_take(int n)		/* 1-step lock: 0 if ours */
+{
+	return HSEM->RLR[n] == (HSEM_RLR_LOCK | HSEM_CR_COREID_CURRENT) ? 0 : -1;
+}
+
+static void sem_give(int n)
+{
+	HSEM->R[n] = HSEM_CR_COREID_CURRENT;	/* lock bit 0: release */
+}
+
 int hal_random(uint32_t *w)
 {
 	static int on;
 	uint32_t n;
+	int r = 0;
 
 	if (!on) {
-		RCC->AHB3ENR |= RCC_AHB3ENR_RNGEN;
+		RCC->AHB3ENR |= RCC_AHB3ENR_RNGEN | RCC_AHB3ENR_HSEMEN;
 		(void) RCC->AHB3ENR;
+		if (sem_take(SEM_CLK48) < 0) return -1;
 		RCC->CCIPR &= ~RCC_CCIPR_RNGSEL;		/* CLK48 */
 		if (!(RCC->CR & RCC_CR_PLLSAI1RDY)) {
 			RCC->CCIPR |= 1u << RCC_CCIPR_RNGSEL_Pos;	/* LSI */
 			RNG->CR |= RNG_CR_CED;
 		}
+		sem_give(SEM_CLK48);
+	}
+	if (sem_take(SEM_RNG) < 0) return -1;
+	if (!on) {
 		RNG->CR |= RNG_CR_RNGEN;
 		on = 1;
 	}
@@ -1191,11 +1214,13 @@ int hal_random(uint32_t *w)
 			RNG->CR &= ~RNG_CR_RNGEN;
 			RNG->SR = 0;
 			RNG->CR |= RNG_CR_RNGEN;
-			return -1;
+			r = -1;
+			break;
 		}
 	}
-	*w = RNG->DR;
-	return 0;
+	if (r == 0) *w = RNG->DR;
+	sem_give(SEM_RNG);
+	return r;
 }
 
 /*===========================================================================*
