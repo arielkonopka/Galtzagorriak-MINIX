@@ -171,6 +171,10 @@ responsiveness regressions, **(4)** owner requests, **(5)** polish. T-tasks that
 milestone's path wait for a gap instead of interleaving (this is the main change from the first
 two days).
 
+**Requirements closed (owner, 2026-11-15 23:51 Warsaw):** the scope is the spec as merged at
+#95. The lanes are in use from M1: issues #99–#104, tracking issue #105, rules in `next-tasks.md`
+"Lanes and milestones".
+
 **Scope gate (R lane):** new ideas from the owner are welcome and still go into the spec at once,
 but each one gets a milestone tag (M1–M9). Only ideas tagged with the current milestone become
 next-tasks; the rest wait. This keeps the backlog growing without moving the critical path.
