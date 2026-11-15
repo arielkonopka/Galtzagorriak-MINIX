@@ -291,6 +291,7 @@ _PROTOTYPE( void wreboot, (int how)					);
 _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
+_PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */
 _PROTOTYPE( void restart, (void)					);
 /* arm/cons.c */

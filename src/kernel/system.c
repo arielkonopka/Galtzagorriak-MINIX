@@ -314,9 +314,11 @@ message *m_ptr;
   if (m_ptr->m_source != MM_PROC_NR) return(EPERM);
   /* Background work only when nobody waits: the CPU stalls for every
    * erase (22 ms) and double word (85 us), and a page erase cannot be
-   * split (T4, L5). */
+   * split (T4, L5); nor while an infrared frame goes out, whose marks
+   * the stall would stretch (its writer waits, so it is not ready). */
   if ((m_ptr->m1_i1 & FL_BG) && (rdy_head[USER_Q] != NIL_PROC
-			|| get_uptime() - k_input < (clock_t) HZ))
+			|| get_uptime() - k_input < (clock_t) HZ
+			|| ir_busy()))
 	return(EAGAIN);
   if (op == FL_WRITE) {
 	src = umap(proc_addr(MM_PROC_NR), D, (vir_bytes) m_ptr->m1_p1,
