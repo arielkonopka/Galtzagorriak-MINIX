@@ -63,6 +63,25 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
 
+/* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
+ * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
+ * new level (0 = carrier seen, "mark").  Transmit: hal_ir_carrier()
+ * switches the carrier (hal_ir_freq: frequency, duty in %); a timer
+ * interrupt (hal_ir_tx_irq) at the end of every mark and space, started by
+ * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
+ * all in microseconds (spec R6.6). */
+int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
+void hal_ir_rx_on(int on);
+int hal_ir_rx_edge(void);
+void hal_ir_carrier(int on);
+void hal_ir_freq(unsigned hz, unsigned duty);
+int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
+void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);
+int hal_ir_tx_ack(void);		/* the timer's interrupt: 1 if real */
+void hal_ir_tx_next(uint32_t us);
+void hal_ir_tx_stop(void);
+uint32_t hal_cycles(void);
+
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
  * hal_usb_poll() runs the USB stack and belongs in the USB interrupt. */
 int hal_usb_init(void);
@@ -99,7 +118,6 @@ void hal_flash_layout(uint32_t *l);
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);
 extern uint32_t hal_flash_sr;	/* status of the last failure */
-extern uint32_t hal_flash_dbg[5];
 
 /* Stop the machine.  QEMU exits with the given status (semihosting); the
  * Flipper parks the CPU. */

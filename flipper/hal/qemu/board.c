@@ -274,7 +274,6 @@ void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b;
 uint32_t hal_flash_sr;
 uint32_t hal_disk_errors;
 unsigned hal_disk_mhz;
-uint32_t hal_flash_dbg[5];
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
@@ -311,3 +310,16 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	while (len-- > 0) *d++ = *s++;
 	return 0;
 }
+
+/* No infrared in QEMU. */
+int hal_ir_irq(void) { return -1; }
+void hal_ir_rx_on(int on) { (void) on; }
+int hal_ir_rx_edge(void) { return 1; }
+void hal_ir_carrier(int on) { (void) on; }
+void hal_ir_freq(unsigned hz, unsigned duty) { (void) hz; (void) duty; }
+int hal_ir_tx_irq(void) { return -1; }
+void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }
+int hal_ir_tx_ack(void) { return 0; }
+void hal_ir_tx_next(uint32_t us) { (void) us; }
+void hal_ir_tx_stop(void) { }
+uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */

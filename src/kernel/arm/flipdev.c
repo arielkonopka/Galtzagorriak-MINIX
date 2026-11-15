@@ -20,6 +20,22 @@
  *				  0 low, 1 high (output), 2 input, 3 input
  *				  with pull-up, 4 with pull-down, 5 off
  *				read: one byte per pin, '0' or '1', from pin 0
+ *	minor 7  /dev/ir	infrared, "raw" timings: 32-bit little endian
+ *				durations in microseconds, mark first, then
+ *				space, mark, ... (an odd count).
+ *				read: one frame that starts while the read
+ *				waits (it ends after 30 ms without carrier),
+ *				up to the buffer; blocks
+ *				write: up to 2048 durations (each <= 1 s),
+ *				38 kHz with a third on, or a first word with
+ *				bit 31 set: bits 0-19 the carrier in Hz
+ *				(10000..60000), 20-26 the duty in % (0: 33);
+ *				the writer waits until the frame is sent
+ *
+ * Infrared is interrupt driven (spec R6.6, rule 0.8): marks and spaces are
+ * timed by a timer interrupt that switches the carrier, the receiver's
+ * edges by its EXTI interrupt; this task only moves durations between the
+ * caller and two small rings (96 bytes), and nobody busy-waits.
  *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
@@ -40,7 +56,8 @@
 #define VIBRO_MINOR	4
 #define SPK_MINOR	5
 #define GPIO_MINOR	6
-#define LAST_MINOR	6
+#define LAST_MINOR	7
+#define IR_MINOR	7
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -55,12 +72,52 @@ PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
 PRIVATE unsigned last_buttons;
 
-/* Notes being played (/dev/speaker), timed by flipdev_tick(). */
-PRIVATE u16_t note_hz[NNOTES], note_ticks[NNOTES];
+/* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
+ * memory holds the infrared rings while /dev/ir is in use (one or the
+ * other: EBUSY), so they cost no RAM. */
+#define IR_RXQ		32		/* receive ring (power of 2) */
+#define IR_TXQ		64		/* transmit ring (power of 2: u8 indices) */
+PRIVATE union {
+  struct { u16_t hz[NNOTES], ticks[NNOTES]; } sp;
+  struct { u16_t rxq[IR_RXQ], txq[IR_TXQ]; } ir;
+} sbuf;
+#define note_hz		sbuf.sp.hz
+#define note_ticks	sbuf.sp.ticks
+#define ir_rxq		sbuf.ir.rxq
+#define ir_txq		sbuf.ir.txq
 PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 					 * done */
 PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
+
+/* Infrared (/dev/ir).  Durations in the rings are 16 bits: microseconds
+ * below 32768, else bit 15 and units of 64 us (up to 2 s). */
+#define IR_TX_MAX	2048		/* durations per write */
+#define IR_FREQ_FLAG	0x80000000UL	/* first word: carrier, not a time */
+#define IR_HZ		38000
+#define IR_DUTY		33
+#define IR_GAP_MS	30		/* silence that ends a frame */
+#define IR_START	0x0000		/* rx ring markers */
+#define IR_END		0xFFFF
+#define IR_ENC(us)	((us) < 0x8000 ? (u16_t) ((us) ? (us) : 1) \
+				: (u16_t) (0x8000 | ((us) >> 6)))
+/* IR_DEC uses v twice: never pass it an expression with side effects */
+#define IR_DEC(v)	((v) & 0x8000 ? (u32_t) ((v) & 0x7FFF) << 6 : (u32_t) (v))
+
+PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
+PRIVATE volatile u8_t tx_h, tx_t;
+PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
+PRIVATE volatile u32_t rx_last;		/* hal_cycles() of the last edge */
+PRIVATE volatile u8_t ir_rd;		/* a reader waits */
+PRIVATE u8_t ir_started;		/* its frame began */
+PRIVATE volatile u8_t tx_on, tx_done, tx_err;
+PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
+PRIVATE u16_t ir_count, ir_got, tx_count;
+PRIVATE volatile u16_t tx_seg;		/* segments started (by the timer) */
+PRIVATE u16_t tx_total, tx_fetch;	/* durations; next one to fetch */
+PRIVATE vir_bytes ir_vir, tx_vir;	/* reader's buffer; first duration */
+#define CYC_US		(hal_cpu_hz() / 1000000)	/* cycles per us */
+#define RING_N(h, t)	((u8_t) ((h) - (t)))	/* entries in a ring */
 
 /* A process blocked in a read of /dev/buttons. */
 PRIVATE int rd_waiting;
@@ -72,6 +129,12 @@ FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
+FORWARD _PROTOTYPE( int ir_int, (int irq)				);
+FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
+FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
+FORWARD _PROTOTYPE( void ir_fill, (void)				);
+FORWARD _PROTOTYPE( void ir_drain, (void)				);
+FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
  * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
@@ -94,6 +157,16 @@ PUBLIC void flipdev_task()
   int r;
 
   last_buttons = hal_buttons();
+  if ((r = hal_ir_irq()) >= 0) {
+	put_irq_handler(r, ir_int);
+	hal_ir_rx_on(1);
+	enable_irq(r);
+  }
+  if ((r = hal_ir_tx_irq()) >= 0) {
+	hal_ir_tx_stop();			/* whatever ran before us */
+	put_irq_handler(r, ir_tx_int);
+	enable_irq(r);
+  }
 
   while (TRUE) {
 	receive(ANY, &fm);
@@ -115,6 +188,11 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (ir_rd && ir_proc == fm.PROC_NR) ir_rd = FALSE;
+		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
+			ir_stop_tx();
+			tx_on = FALSE;
+		}
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
 			note_i = note_n;
@@ -206,6 +284,7 @@ message *m_ptr;
 
 	if (m_ptr->m_type != DEV_WRITE || count % 4 != 0) return(EINVAL);
 	if (sp_waiting) return(EIO);		/* one tune at a time */
+	if (ir_rd || tx_on) return(EBUSY);	/* sbuf holds the IR rings */
 	if (count > (int) sizeof(nb)) count = sizeof(nb);
 	phys_copy(user, vir2phys(nb), (phys_bytes) count);
 	n = count / 4;
@@ -245,6 +324,23 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case IR_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) return(ir_write(m_ptr, user, count));
+	if (count < 4) return(EINVAL);
+	if (hal_ir_irq() < 0) return(ENXIO);
+	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
+	if (ir_rd) return(EIO);			/* one reader at a time */
+	if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
+	rx_t = rx_h;				/* nothing old */
+	ir_caller = m_ptr->m_source;
+	ir_proc = m_ptr->PROC_NR;
+	ir_vir = (vir_bytes) m_ptr->ADDRESS;
+	ir_count = count & ~3;
+	ir_got = 0;
+	ir_started = FALSE;
+	ir_rd = TRUE;
+	return(SUSPEND);
 
   case BL_MINOR:
   case LED_MINOR:
@@ -301,6 +397,14 @@ PRIVATE void do_hardint()
 	sp_waiting = FALSE;
 	reply(REVIVE, sp_caller, sp_proc, sp_count);
   }
+  if (rx_h != rx_t || rx_over) ir_drain();	/* received durations */
+  if (tx_on) {
+	if (tx_done) {				/* the frame is out */
+		tx_on = FALSE;
+		reply(REVIVE, tx_caller, tx_proc, tx_err ? EIO : tx_count);
+	} else
+		ir_fill();
+  }
   if (!rd_waiting || ev_head == ev_tail) return;
   rd_waiting = FALSE;
   LAT_EVENT(LE_BREPLY, rd_proc);
@@ -332,7 +436,18 @@ PUBLIC void flipdev_tick()
 		interrupt(PRINTER);
 	}
   }
+  if (rx_active && rx_level == 1
+		&& hal_cycles() - rx_last > IR_GAP_MS * 1000 * CYC_US) {
+	rx_active = FALSE;			/* silence: the frame is over */
+	if (ir_rd) {
+		if (RING_N(rx_h, rx_t) < IR_RXQ)
+			ir_rxq[rx_h++ % IR_RXQ] = IR_END;
+		else rx_over = TRUE;
+		interrupt(PRINTER);
+	}
+  }
   if (changed == 0) return;
+  k_input = uptime_irq();		/* no background flash work now */
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
 	if (ev_head - ev_tail < NEVENTS) {
@@ -429,4 +544,224 @@ PRIVATE void lc_newline()
 		colbits >>= 8;
 	}
   }
+}
+
+
+/*===========================================================================*
+ *				ir_int					     *
+ *===========================================================================*/
+PRIVATE int ir_int(irq)
+int irq;
+{
+/* An edge from the infrared receiver: queue the time since the last one
+ * (a frame starts with a mark after a silence). */
+  u32_t now = hal_cycles(), us;
+  int level = hal_ir_rx_edge();
+  u16_t v;
+
+  if (level == rx_level) return 1;	/* glitch, nothing changed */
+  rx_level = level;
+  if (!rx_active) {
+	if (level != 0) return 1;
+	rx_active = TRUE;
+	v = IR_START;
+  } else {
+	us = (now - rx_last) / CYC_US;
+	if (us > 0x7FFE0) us = 0x7FFE0;
+	v = IR_ENC(us);
+  }
+  rx_last = now;
+  if (!ir_rd) return 1;			/* nobody reads: sbuf is not ours */
+  if (RING_N(rx_h, rx_t) < IR_RXQ) ir_rxq[rx_h++ % IR_RXQ] = v;
+  else rx_over = TRUE;			/* the task was too slow */
+  if (RING_N(rx_h, rx_t) >= IR_RXQ / 2) interrupt(PRINTER);
+  return 1;
+}
+
+
+/*===========================================================================*
+ *				ir_drain				     *
+ *===========================================================================*/
+PRIVATE void ir_drain()
+{
+/* Move received durations to a waiting reader; without one they go. */
+  phys_bytes user;
+  u32_t d;
+  u16_t v;
+
+  while (rx_t != rx_h) {
+	v = ir_rxq[rx_t % IR_RXQ];
+	rx_t++;
+	if (!ir_rd) continue;
+	if (v == IR_START) {		/* a frame begins: it is the reader's */
+		ir_started = TRUE;
+		ir_got = 0;
+		continue;
+	}
+	if (!ir_started || ir_got >= ir_count) continue;
+	if (v == IR_END) {
+		ir_rd = FALSE;
+		reply(REVIVE, ir_caller, ir_proc, ir_got);
+		continue;
+	}
+	d = IR_DEC(v);
+	if ((user = numap(ir_proc, ir_vir + ir_got, (vir_bytes) 4)) == 0) {
+		ir_rd = FALSE;
+		reply(REVIVE, ir_caller, ir_proc, EFAULT);
+		continue;
+	}
+	phys_copy(vir2phys(&d), user, (phys_bytes) 4);
+	ir_got += 4;
+  }
+  if (rx_over) {			/* durations were lost */
+	rx_over = FALSE;
+	if (ir_rd && ir_started) {
+		ir_rd = FALSE;
+		reply(REVIVE, ir_caller, ir_proc, EIO);
+	}
+  }
+}
+
+
+/*===========================================================================*
+ *				ir_write				     *
+ *===========================================================================*/
+PRIVATE int ir_write(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+/* Check the frame, fill the transmit ring and start the pulse engine; the
+ * writer waits (SUSPEND) and is revived when the last space is over. */
+  u32_t d[16], hz = IR_HZ, duty = IR_DUTY, first_us, next_us;
+  int i, j, k, n, first = 0;
+
+  if (hal_ir_tx_irq() < 0) return(ENXIO);
+  if (count % 4 != 0 || count == 0) return(EINVAL);
+  if (tx_on) return(EIO);			/* one frame at a time */
+  if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
+  n = count / 4;
+  if (n > IR_TX_MAX + 1) return(EINVAL);
+  for (i = 0; i < n; i += 16) {			/* check everything first */
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(user + i * 4, vir2phys(d), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		if (i + j == 0 && (d[0] & IR_FREQ_FLAG)) {
+			hz = d[0] & 0xFFFFF;
+			duty = (d[0] >> 20) & 0x7F;
+			if (duty == 0) duty = IR_DUTY;
+			if (hz < 10000 || hz > 60000 || duty > 90)
+				return(EINVAL);
+			first = 1;
+		} else if (d[j] == 0 || d[j] > 1000000)
+			return(EINVAL);		/* 0, or over a second */
+	}
+  }
+  if ((n - first) % 2 == 0 || n - first > IR_TX_MAX) return(EINVAL);
+
+  tx_caller = m_ptr->m_source;
+  tx_proc = m_ptr->PROC_NR;
+  tx_vir = (vir_bytes) m_ptr->ADDRESS + first * 4;
+  tx_count = count;
+  tx_total = n - first;
+  tx_fetch = 0;
+  tx_h = tx_t = 0;
+  tx_done = tx_err = FALSE;
+  tx_on = TRUE;
+  ir_fill();
+  if (tx_h == tx_t) {
+	tx_on = FALSE;
+	return(EFAULT);
+  }
+  hal_ir_freq(hz, duty);
+  first_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
+  tx_t++;
+  next_us = first_us;
+  if (tx_total > 1) {
+	next_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
+	tx_t++;
+  }
+  tx_seg = 1;
+  hal_ir_carrier(1);				/* the first mark */
+  hal_ir_tx_start(first_us, next_us);
+  return(SUSPEND);
+}
+
+
+/*===========================================================================*
+ *				ir_fill					     *
+ *===========================================================================*/
+PRIVATE void ir_fill()
+{
+/* Top up the transmit ring from the writer (its image may have moved:
+ * numap every time). */
+  phys_bytes user;
+  u32_t d;
+
+  while (tx_fetch < tx_total && RING_N(tx_h, tx_t) < IR_TXQ) {
+	if ((user = numap(tx_proc, tx_vir + tx_fetch * 4, (vir_bytes) 4)) == 0)
+		break;
+	phys_copy(user, vir2phys(&d), (phys_bytes) 4);
+	ir_txq[tx_h % IR_TXQ] = IR_ENC(d);
+	tx_h++;
+	tx_fetch++;
+  }
+}
+
+
+/*===========================================================================*
+ *				ir_tx_int				     *
+ *===========================================================================*/
+PRIVATE int ir_tx_int(irq)
+int irq;
+{
+/* A mark or space is over: the next one (already loaded) starts now. */
+  int update = hal_ir_tx_ack();
+
+  if (!tx_on || tx_done) {			/* nothing to send: off */
+	hal_ir_tx_stop();
+	return 1;
+  }
+  if (!update) return 1;			/* not the timer's update */
+  if (tx_seg >= tx_total) {			/* the last one ended */
+	ir_stop_tx();
+	tx_done = TRUE;
+	interrupt(PRINTER);
+	return 1;
+  }
+  hal_ir_carrier((tx_seg & 1) == 0);		/* even: mark */
+  tx_seg++;
+  if (tx_seg < tx_total) {			/* load the one after */
+	if (tx_t == tx_h) {			/* the task was too slow */
+		ir_stop_tx();
+		tx_err = tx_done = TRUE;
+		interrupt(PRINTER);
+		return 1;
+	}
+	hal_ir_tx_next(IR_DEC(ir_txq[tx_t % IR_TXQ]));
+	tx_t++;
+	if (RING_N(tx_h, tx_t) == IR_TXQ / 2 && tx_fetch < tx_total)
+		interrupt(PRINTER);		/* half empty: refill */
+  }
+  return 1;
+}
+
+
+/*===========================================================================*
+ *				ir_busy					     *
+ *===========================================================================*/
+PUBLIC int ir_busy()
+{
+/* A frame is going out: no background flash work now (system.c). */
+  return tx_on;
+}
+
+
+/*===========================================================================*
+ *				ir_stop_tx				     *
+ *===========================================================================*/
+PRIVATE void ir_stop_tx()
+{
+  hal_ir_tx_stop();
+  hal_ir_carrier(0);
 }

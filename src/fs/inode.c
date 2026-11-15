@@ -84,7 +84,10 @@ register struct inode *rip;	/* pointer to inode to be released */
  * return it to the pool of available inodes.
  */
 
+  int unnamed;
+
   if (rip == NIL_INODE) return;	/* checking here is easier than in caller */
+  unnamed = rip->i_pipe == I_PIPE && (rip->i_nlinks & BYTE) == 0;
   if (--rip->i_count == 0) {	/* i_count == 0 means no one is using it now */
 	if ((rip->i_nlinks & BYTE) == 0) {
 		/* i_nlinks == 0 means free the inode. */
@@ -96,6 +99,7 @@ register struct inode *rip;	/* pointer to inode to be released */
 		if (rip->i_pipe == I_PIPE) truncate(rip);
 	}
 	rip->i_pipe = NO_PIPE;  /* should always be cleared */
+	if (unnamed) rip->i_dirt = CLEAN;	/* never on the disk (T9) */
 	if (rip->i_dirt == DIRTY) rw_inode(rip, WRITING);
   }
 }
@@ -240,6 +244,14 @@ int rw_flag;			/* READING or WRITING */
   d1_inode *dip;
   d2_inode *dip2;
   block_t b, offset;
+
+  /* An unnamed pipe lives only in memory: its inode is never read back,
+   * and writing it would only cost SD writes (T9). */
+  if (rw_flag == WRITING && rip->i_pipe == I_PIPE
+				&& (rip->i_nlinks & BYTE) == 0) {
+	rip->i_dirt = CLEAN;
+	return;
+  }
 
   /* Get the block where the inode resides. */
   sp = get_super(rip->i_dev);	/* get pointer to super block */

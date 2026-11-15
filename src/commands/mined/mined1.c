@@ -411,6 +411,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #if __STDC__
 #include <stdarg.h>
 #else
@@ -420,6 +421,9 @@
 extern int errno;
 int ymax = YMAX;
 int screenmax = SCREENMAX;
+int xbreak = XMAX;		/* last column + 1 shown; from the terminal */
+int split_lines;		/* lines longer than MAX_CHARS - 1, split (B1) */
+static FLAG hangup = FALSE;	/* SIGHUP came: the terminal is gone (B7) */
 
 
 /*
@@ -463,7 +467,10 @@ int WT()
   register LINE *line;
   register long count = 0L;	/* Nr of chars written */
   char file[LINE_LEN];		/* Buffer for new file name */
+  char tmp[LINE_LEN + 8];	/* <dir>/.<name>.tmp */
+  struct stat st;
   int fd;				/* Filedescriptor of file */
+  int have, inplace;
 
   if (modified == FALSE) {
 	error ("Write not necessary.", NIL_PTR);
@@ -476,7 +483,24 @@ int WT()
   		return ERRORS;
   	copy_string(file_name, file);		/* Save file name */
   }
-  if ((fd = creat(file_name, 0644)) < 0) {	/* Empty file */
+  /* Write a new file next to the old one and rename it over it, so a full
+   * card leaves the original intact (B8).  A file of another owner or with
+   * other links is written in place, as before (rename would change its
+   * owner or break the links). */
+  have = stat(file_name, &st) == 0;
+  inplace = have && (st.st_uid != geteuid() || st.st_nlink > 1
+						|| !S_ISREG(st.st_mode));
+  fd = -1;
+  if (!inplace && tmp_name(tmp, sizeof(tmp), file_name) == FINE) {
+	(void) unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL,
+					have ? (st.st_mode & 07777) : 0644);
+  }
+  if (fd < 0) {
+	inplace = TRUE;
+	fd = creat(file_name, 0644);		/* Empty file */
+  }
+  if (fd < 0) {
   	error("Cannot create ", file_name);
   	writable = FALSE;
   	return ERRORS;
@@ -502,16 +526,52 @@ int WT()
   if (count > 0L && flush_buffer(fd) == ERRORS)
   	count = -1L;
 
-  (void) close(fd);
+  if (close(fd) < 0) count = -1L;
 
-  if (count == -1L)
+  if (count == -1L) {
+	if (!inplace) {
+		(void) unlink(tmp);
+		error("Write failed, ", "the file is unchanged");
+	}
   	return ERRORS;
+  }
+  if (!inplace) {
+	if (have) (void) chmod(tmp, st.st_mode & 07777);
+	if (rename(tmp, file_name) < 0) {
+		(void) unlink(tmp);
+		error("Cannot replace ", file_name);
+		return ERRORS;
+	}
+  }
 
   modified = FALSE;
   rpipe = FALSE;		/* File name is now assigned */
 
 /* Display how many chars (and lines) were written */
   fstatus("Wrote", count);
+  return FINE;
+}
+
+/*
+ * Tmp_name() makes <dir>/.<name>.tmp for file, or returns ERRORS if it does
+ * not fit.
+ */
+int tmp_name(buf, size, file)
+char *buf;
+int size;
+char *file;
+{
+  char *slash = NIL_PTR, *p;
+  int dlen, flen = length_of(file);
+
+  for (p = file; *p != '\0'; p++)
+	if (*p == '/') slash = p;
+  dlen = slash == NIL_PTR ? 0 : slash - file + 1;
+  if (flen + 6 >= size) return ERRORS;
+  for (p = buf; p < buf + dlen; p++) *p = file[p - buf];
+  *p++ = '.';
+  copy_string(p, file + dlen);
+  copy_string(p + flen - dlen, ".tmp");
   return FINE;
 }
 
@@ -599,14 +659,14 @@ FLAG statfl;
   int ret = FINE;
   char buf[LINE_LEN];
   register char *p = buf;
+  int room;
 
   *p++ = ' ';
-  if (s1 != NIL_PTR)
-	while (*p = *s1++)
-		p++;
-  if (s2 != NIL_PTR)
-	while (*p = *s2++)
-		p++;
+  /* B4: bounded; s1 (often a file name) gives way, so that s2 (the
+   * question, e.g. " has been modified. Save? (y/n)") always shows */
+  room = sizeof(buf) - 3 - (s2 == NIL_PTR ? 0 : length_of(s2));
+  p = shown(p, buf + (room > 8 ? room : 8), s1);
+  p = shown(p, buf + sizeof(buf) - 2, s2);
   *p++ = ' ';
   *p++ = 0;
 
@@ -645,6 +705,27 @@ FLAG statfl;
   if (ret != FINE)
   	clear_status();
   return ret;
+}
+
+/*
+ * Shown() copies s to p, at most up to end, with control characters (C0,
+ * DEL, C1 such as 0x9B = CSI) as '?': a file name must not drive the
+ * terminal (B9).  It returns the new end.
+ */
+char *shown(p, end, s)
+register char *p;
+char *end;
+register char *s;
+{
+  register int c;
+
+  if (s == NIL_PTR) return p;
+  while (*s != '\0' && p < end) {
+	c = *s++ & 0377;
+	*p++ = (c < ' ' || c == 0177 || (c >= 0200 && c < 0240)) ? '?' : c;
+  }
+  *p = '\0';
+  return p;
 }
 
 /*
@@ -860,9 +941,9 @@ int nx, ny;
 
   tputs(tgoto(CM, nx, ny), 0, _putchar);
 #else
-  char text_buffer[10];
+  char text_buffer[16];
 
-  build_string(text_buffer, pos_string, ny+1, nx+1);
+  build_string(text_buffer, sizeof(text_buffer), pos_string, ny+1, nx+1);
   string_print(text_buffer);
 #endif /* UNIX */
 }
@@ -886,12 +967,73 @@ int getchar()
   return (_getchar() & 0377);
 #else
   char c;
+  int n;
 
-  if (read(input_fd, &c, 1) != 1 && quit == FALSE)
-  	panic("Can't read one char from fd #0");
-
-  return c & 0377;
+  for (;;) {
+	if ((n = read(input_fd, &c, 1)) == 1) return c & 0377;
+	if (n < 0 && errno == EINTR && hangup == FALSE) {
+		if (quit == TRUE) return '\0';	/* ^\: the caller sees quit */
+		continue;
+	}
+	/* End of file, EIO or SIGHUP: the terminal is gone (USB or BLE
+	 * unplugged).  Save the work without asking and leave (B7). */
+	hang_up();
+  }
 #endif /* UNIX */
+}
+
+/*
+ * Catch SIGHUP: the next read sees it.
+ */
+void catch_hup(sig)
+int sig;
+{
+  hangup = TRUE;
+}
+
+/*
+ * Emergency_save() writes the text, if modified, to <file>.save or
+ * $HOME/mined.save, mode 0600, without any prompt.  Returns FINE, or ERRORS
+ * if nothing could be saved.
+ */
+int emergency_save()
+{
+  char name[LINE_LEN + 16];
+  char *home;
+  register LINE *line;
+  int fd, len, ok = FINE;
+
+  if (modified == FALSE || header == NIL_LINE) return FINE;
+  if (file_name[0] != '\0' && length_of(file_name) + 6 < sizeof(name))
+	build_string(name, sizeof(name), "%s.save", file_name);
+  else if ((home = getenv("HOME")) != NIL_PTR
+			&& length_of(home) + 12 < sizeof(name))
+	build_string(name, sizeof(name), "%s/mined.save", home);
+  else
+	copy_string(name, "/tmp/mined.save");
+  (void) unlink(name);
+  if ((fd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0600)) < 0)
+	return ERRORS;
+  for (line = header->next; line != tail; line = line->next) {
+	if ((line->shift_count & DUMMY) && line->next == tail
+					&& line->text[0] == '\n')
+		continue;
+	len = length_of(line->text);
+	if (write(fd, line->text, len) != len) { ok = ERRORS; break; }
+  }
+  if (close(fd) < 0) ok = ERRORS;
+  return ok;
+}
+
+/*
+ * Hang_up(): the terminal is gone.  Save and exit; nothing is asked.
+ */
+void hang_up()
+{
+  (void) emergency_save();
+  (void) unlink(yank_file);
+  raw_mode(OFF);
+  exit(1);
 }
 
 /*
@@ -991,13 +1133,18 @@ FLAG clear_line;			/* Clear to eoln if TRUE */
   		textp++;
   	}
   	else {
-		if (*textp >= '\01' && *textp <= '\037') {
+		if ((*textp & 0377) < ' ' || (*textp & 0377) == 0177
+		    || ((*textp & 0377) >= 0200 && (*textp & 0377) < 0240)) {
+			/* C0 as ^X, DEL as ^?, C1 (0x80-0x9F, e.g. 0x9B =
+			 * CSI) as reverse '@'..'_': never raw (B9) */
 #ifdef UNIX
 			tputs(SO, 0, _putchar);
 #else
 			string_print (rev_video);
 #endif /* UNIX */
-  			putchar(*textp++ + '\100');
+			putchar((*textp & 0377) == 0177 ? '?'
+						: ((*textp & 037) + '\100'));
+			textp++;
 #ifdef UNIX
 			tputs(SE, 0, _putchar);
 #else
@@ -1058,7 +1205,8 @@ int fd;
   	exit(1);
   
   clear_buffer();
-  build_string(text_buffer, "Command aborted: %s (File incomplete)",
+  build_string(text_buffer, sizeof(text_buffer),
+		"Command aborted: %s (File incomplete)",
   		            (errno == ENOSPC || errno == -ENOSPC) ?
   			    "No space on device" : "Write error");
   error(text_buffer, NIL_PTR);
@@ -1147,16 +1295,18 @@ register char *message;
 
 #ifdef UNIX
   tputs(CL, 0, _putchar);
-  build_string(text_buffer, "%s\nError code %d\n", message, errno);
+  build_string(text_buffer, sizeof(text_buffer), "%s\nError code %d\n",
+							message, errno);
 #else
-  build_string(text_buffer, "%s%s\nError code %d\n", enter_string, message, errno);
+  build_string(text_buffer, sizeof(text_buffer), "%s%s\nError code %d\n",
+					enter_string, message, errno);
 #endif /* UNIX */
   (void) write(STD_OUT, text_buffer, length_of(text_buffer));
 
-  if (loading == FALSE)
-  	XT();			/* Check if file can be saved */
-  else
-  	(void) unlink(yank_file);
+  /* Save without asking: a prompt could panic again (B7). */
+  if (loading == FALSE && emergency_save() == FINE && modified == TRUE)
+	(void) write(STD_OUT, "Text saved to <file>.save\n", 26);
+  (void) unlink(yank_file);
   raw_mode(OFF);
 
 #ifdef UNIX
@@ -1192,25 +1342,38 @@ char *p;
 
 /* The mapping between input codes and functions. */
 
-void (*key_map[256])() = {       /* map ASCII characters to functions */
-   /* 000-017 */ MA, BL, MP, YA, SD, RD, MN, IF, DPC, S, S, DT, LR, S, DNW,LIB,
-   /* 020-037 */ DPW, WB, GR, SH, DLN, SU, VI, XWT, XT, PT, EL, ESC, I, GOTO,
-		 HIGH, LOW,
-   /* 040-057 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 060-077 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 100-117 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 120-137 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 140-157 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 160-177 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, DCC,
-   /* 200-217 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 220-237 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 240-257 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 260-277 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 300-317 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 320-337 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 340-357 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
-   /* 360-377 */ S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S,
+/* The functions the keys call (RAM: a pointer each, relocated at exec)
+ * and, for every input byte, the index of its function in flash: 256 bytes
+ * instead of a 1 KB table of pointers in RAM (T8). */
+void (* const key_func[])() = {
+  MA,  BL,  MP,  YA,  SD,  RDM,  MN,  IF,  DPC,  S,
+  DT,  LR,  DNW,  LIB,  DPW,  WB,  GR,  SH,  DLN,  SU,
+  VI,  XWT,  XT,  PT,  EL,  ESC,  I,  GOTO,  HIGH,  LOW,
+  DCC,  UP,  DN,  RT,  LF,  HO,  EF,  FS,  SF,  SR,
+  PU,  PD,
 };
+enum { K_MA, K_BL, K_MP, K_YA, K_SD, K_RDM, K_MN, K_IF, K_DPC, K_S, K_DT, K_LR, K_DNW, K_LIB, K_DPW, K_WB, K_GR, K_SH, K_DLN, K_SU, K_VI, K_XWT, K_XT, K_PT, K_EL, K_ESC, K_I, K_GOTO, K_HIGH, K_LOW, K_DCC, K_UP, K_DN, K_RT, K_LF, K_HO, K_EF, K_FS, K_SF, K_SR, K_PU, K_PD };
+
+static const unsigned char key_idx[256] = {	/* map bytes to key_func[] */
+   /* 000 */ 0,1,2,3,4,5,6,7,8,9,9,10,11,9,12,13,
+   /* 020 */ 14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,
+   /* 040 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 060 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 100 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 120 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 140 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 160 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,8,
+   /* 200 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 220 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 240 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 260 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 300 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 320 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 340 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   /* 360 */ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+};
+#define KEY(c)		key_func[key_idx[(c) & 0377]]
+
 
 int nlines;			/* Number of lines in file */
 LINE *header;			/* Head of line list */
@@ -1250,7 +1413,7 @@ char   *blank_line = "\033[K";		/* Clear line to end */
  * Yank variables.
  */
 FLAG yank_status = NOT_VALID;		/* Status of yank_file */
-char yank_file[] = "/tmp/mined.XXXXXX";
+char yank_file[24] = "/tmp/mined.XXXXXXXX";	/* scratch_file() names it */
 long chars_saved;			/* Nr of chars in buffer */
 
 /*
@@ -1338,7 +1501,9 @@ char *file;
 
   if (fd >= 0) {
   	status_line("Reading ", file);
-  	while ((len = get_line(fd, text_buffer)) != ERRORS) {
+  	split_lines = 0;
+  	while ((len = get_line(fd, text_buffer, sizeof(text_buffer)))
+								!= ERRORS) {
   		line = line_insert(line, text_buffer, len);
   		nr_of_chars += (long) len;
   	}
@@ -1347,6 +1512,9 @@ char *file;
   	clear_buffer();		/* Clear output buffer */
   	cur_line = header->next;
   	fstatus("Read", nr_of_chars);
+  	if (split_lines > 0)
+		status_line(num_out((long) split_lines),
+				" long lines split (more than 1023 chars)");
   	(void) close(fd);		/* Close file */
   }
   else					/* Just install a "\n" */
@@ -1366,15 +1534,18 @@ char *file;
  * Get_line reads one line from filedescriptor fd. If EOF is reached on fd,
  * get_line() returns ERRORS, else it returns the length of the string.
  */
-int get_line(fd, buffer)
+int get_line(fd, buffer, size)
 int fd;
 register char *buffer;
+int size;			/* of buffer: a line gets at most size - 2 chars
+				 * and the '\n'; a longer one is split (B1) */
 {
   static char *last = NIL_PTR;
   static char *current = NIL_PTR;
   static int read_chars;
   register char *cur_pos = current;
   char *begin = buffer;
+  char *end = buffer + size - 2;
 
   do {
   	if (cur_pos == last) {
@@ -1385,6 +1556,11 @@ register char *buffer;
   	}
 	if (*cur_pos == '\0')
 		*cur_pos = ' ';
+	if (buffer == end && *cur_pos != '\n') {
+		*buffer++ = '\n';	/* the rest is the next line */
+		split_lines++;
+		break;
+	}
   } while ((*buffer++ = *cur_pos++) != '\n');
 
   current = cur_pos;
@@ -1428,7 +1604,6 @@ char *argv[];
 /* mined is the Minix editor. */
 
   register int index;		/* Index in key table */
-  struct winsize winsize;
 
 #ifdef UNIX
   get_term();
@@ -1437,9 +1612,9 @@ char *argv[];
 #else
   string_print(enter_string);			/* Hello world */
 #endif /* UNIX */
-  if (ioctl(STD_OUT, TIOCGWINSZ, &winsize) == 0 && winsize.ws_row != 0) {
-	ymax = winsize.ws_row - 1;
-	screenmax = ymax - 1;
+  if (argc > 1 && length_of(argv[1]) >= LINE_LEN) {	/* B2 */
+	write(2, "mined: file name too long\n", 26);
+	exit(1);
   }
 
   if (!isatty(0)) {		/* Reading from pipe */
@@ -1451,6 +1626,8 @@ char *argv[];
 	modified = TRUE;	/* Set modified so he can write */
 	open_device();
   }
+  term_size(FALSE);		/* V3: from TIOCGWINSZ, or ask the terminal */
+  signal(SIGHUP, catch_hup);	/* B7 */
 
   raw_mode(ON);			/* Set tty to appropriate mode */
 
@@ -1474,7 +1651,7 @@ char *argv[];
   	if (quit == TRUE)
   		abort_mined();
   	else {			/* Call the function for this key */
-  		(*key_map[index])(index);
+  		(*KEY(index))(index);
   		flush();       /* Flush output (if any) */
   		if (quit == TRUE)
   			quit = FALSE;
@@ -1514,6 +1691,86 @@ void RD()
 }
 
 /*
+ * RDM (^E): measure the terminal again (it may have been resized), then
+ * redraw.
+ */
+void RDM()
+{
+  term_size(TRUE);
+  reset(top_line, y);
+  RD();
+}
+
+/*
+ * Term_size() sets xbreak, ymax and screenmax from the terminal (V3).  A
+ * size of 0 (the Flipper's tty starts so) or force: ask the terminal with
+ * a cursor position report and store the answer with TIOCSWINSZ; no answer
+ * within 0.2 s: 80x24.  Columns are capped at 80 (the line buffers).
+ */
+void term_size(force)
+FLAG force;
+{
+  struct winsize ws;
+  int rows = 0, cols = 0;
+
+  if (ioctl(STD_OUT, TIOCGWINSZ, &ws) == 0) {
+	rows = ws.ws_row;
+	cols = ws.ws_col;
+  }
+  if (force == TRUE || rows == 0 || cols == 0) {
+	if (ask_size(&rows, &cols) == FINE) {
+		ws.ws_row = rows;
+		ws.ws_col = cols;
+		ws.ws_xpixel = ws.ws_ypixel = 0;
+		(void) ioctl(STD_OUT, TIOCSWINSZ, &ws);
+	} else if (rows == 0 || cols == 0) {
+		rows = 24;
+		cols = 80;
+	}
+  }
+  if (rows < 3) rows = 3;
+  if (cols < 20) cols = 20;
+  ymax = rows - 1;
+  screenmax = ymax - 1;
+  xbreak = (cols > XMAX + 1 ? XMAX + 1 : cols) - 1;
+}
+
+/*
+ * Ask_size(): ESC 7, ESC [ 999;999 H, ESC [ 6 n, read ESC [ r ; c R with a
+ * 0.2 s timeout, ESC 8.
+ */
+int ask_size(rows, cols)
+int *rows, *cols;
+{
+  struct termios old, t;
+  char buf[24];
+  int n = 0, r = 0, c = 0, i;
+
+  if (tcgetattr(input_fd, &old) < 0) return ERRORS;
+  t = old;
+  t.c_lflag &= ~(ICANON | ECHO);
+  t.c_cc[VMIN] = 0;
+  t.c_cc[VTIME] = 2;
+  (void) tcsetattr(input_fd, TCSANOW, &t);
+  (void) write(STD_OUT, "\0337\033[999;999H\033[6n", 16);
+  while (n < sizeof(buf) - 1 && read(input_fd, &buf[n], 1) == 1)
+	if (buf[n++] == 'R') break;
+  (void) write(STD_OUT, "\0338", 2);
+  (void) tcsetattr(input_fd, TCSANOW, &old);
+  buf[n] = '\0';
+  for (i = 0; i < n && buf[i] != '['; i++) ;
+  for (i++; i < n && buf[i] >= '0' && buf[i] <= '9'; i++)
+	r = r * 10 + buf[i] - '0';
+  if (i >= n || buf[i] != ';') return ERRORS;
+  for (i++; i < n && buf[i] >= '0' && buf[i] <= '9'; i++)
+	c = c * 10 + buf[i] - '0';
+  if (i >= n || buf[i] != 'R' || r == 0 || c == 0) return ERRORS;
+  *rows = r;
+  *cols = c;
+  return FINE;
+}
+
+/*
  * Ignore this keystroke.
  */
 void I()
@@ -1536,80 +1793,53 @@ void XT()
   exit(0);
 }
 
+/*
+ * Escfunc() reads the rest of an escape sequence (c follows the ESC) and
+ * returns the function for it (V1).  One parser for CSI (ESC [) and SS3
+ * (ESC O), both cursor-key modes of VT100/xterm/PuTTY/minicom: parameter
+ * and intermediate bytes are read up to the final byte (0x40-0x7E), so an
+ * unknown key is dropped whole instead of inserting letters.
+ */
+static const struct esckey {
+  char intro;			/* '[' (CSI), 'O' (SS3), 0: either */
+  char final;
+  char num;			/* first parameter for '~' keys */
+  unsigned char func;		/* index in key_func[] */
+} esckeys[] = {
+  { 0, 'A', 0, K_UP }, { 0, 'B', 0, K_DN }, { 0, 'C', 0, K_RT }, { 0, 'D', 0, K_LF },
+  { 0, 'H', 0, K_HO }, { 0, 'F', 0, K_EF },		/* Home, End */
+  { 0, 'P', 0, K_FS }, { 0, 'Q', 0, K_SF },		/* PF1, PF2 */
+  { 0, 'R', 0, K_SR }, { 0, 'S', 0, K_MA },		/* PF3, PF4 */
+  { '[', '~', 1, K_HO }, { '[', '~', 7, K_HO },		/* Home */
+  { '[', '~', 4, K_EF }, { '[', '~', 8, K_EF },		/* End */
+  { '[', '~', 2, K_I },					/* Insert */
+  { '[', '~', 3, K_DCC },					/* Delete */
+  { '[', '~', 5, K_PU }, { '[', '~', 6, K_PD },		/* PgUp, PgDn */
+};
+
 void (*escfunc(c))()
 int c;
 {
-#if (CHIP == M68000)
-#ifndef COMPAT
-  int ch;
-#endif
-#endif
-  if (c == '[') {
-	/* Start of ASCII escape sequence. */
-	c = getchar();
-#if (CHIP == M68000)
-#ifndef COMPAT
-	if ((c >= '0') && (c <= '9')) ch = getchar();
-	/* ch is either a tilde or a second digit */
-#endif
-#endif
-	switch (c) {
-	case 'H': return(HO);
-	case 'A': return(UP);
-	case 'B': return(DN);
-	case 'C': return(RT);
-	case 'D': return(LF);
-#if (CHIP == M68000)
-#ifndef COMPAT
-	/* F1 = ESC [ 1 ~ */
-	/* F2 = ESC [ 2 ~ */
-	/* F3 = ESC [ 3 ~ */
-	/* F4 = ESC [ 4 ~ */
-	/* F5 = ESC [ 5 ~ */
-	/* F6 = ESC [ 6 ~ */
-	/* F7 = ESC [ 17 ~ */
-	/* F8 = ESC [ 18 ~ */
-	case '1': 
-	 	  switch (ch) {
-		  case '~': return(SF);
-		  case '7': (void) getchar(); return(MA);
-		  case '8': (void) getchar(); return(CTL);
-                  }
-	case '2': return(SR);
-	case '3': return(PD);
-	case '4': return(PU);
-	case '5': return(FS);
-	case '6': return(EF);
-#endif
-#endif
-#if (CHIP == INTEL)
-	case 'G': return(FS);
-	case 'S': return(SR);
-	case 'T': return(SF);
-	case 'U': return(PD);
-	case 'V': return(PU);
-	case 'Y': return(EF);
-#endif
+  int b, num = 0, first = TRUE, n, k;
+
+  if (c != '[' && c != 'O') return(I);
+  for (n = 0; n < 16; n++) {
+	b = getchar();
+	if (quit == TRUE) return(I);
+	if (b >= '0' && b <= '9') {
+		if (first) num = num * 10 + b - '0';
+		continue;
 	}
-	return(I);
+	if (b == ';') { first = FALSE; continue; }
+	if (b >= 0x20 && b <= 0x3F) continue;	/* parameters, intermediates */
+	if (b < 0x40 || b > 0x7E) return(I);	/* not a sequence after all */
+	for (k = 0; k < sizeof(esckeys) / sizeof(esckeys[0]); k++)
+		if (esckeys[k].final == b
+		    && (esckeys[k].intro == 0 || esckeys[k].intro == c)
+		    && (b != '~' || esckeys[k].num == num))
+			return(key_func[esckeys[k].func]);
+	return(I);				/* unknown: dropped whole */
   }
-#if (CHIP == M68000)
-#ifdef COMPAT
-  if (c == 'O') {
-	/* Start of ASCII function key escape sequence. */
-	switch (getchar()) {
-	case 'P': return(SF);
-	case 'Q': return(SR);
-	case 'R': return(PD);
-	case 'S': return(PU);
-	case 'T': return(FS);
-	case 'U': return(EF);
-	case 'V': return(MA);
-	case 'W': return(CTL);
-	}
-    }
-#endif
-#endif
   return(I);
 }
 
@@ -1626,15 +1856,17 @@ void ESC()
 
   index = getchar();
   while (index >= '0' && index <= '9' && quit == FALSE) {
-  	count *= 10;
-  	count += index - '0';
+  	if (count < 100000000) {	/* no int overflow (T8) */
+  		count *= 10;
+  		count += index - '0';
+  	}
   	index = getchar();
   }
   if (count == 0) {
 	count = 1;
 	func = escfunc(index);
   } else {
-	func = key_map[index];
+	func = KEY(index);
 	if (func == ESC)
 		func = escfunc(getchar());
   }
@@ -1718,12 +1950,14 @@ FLAG writefl, changed;
   		count += length_of(line->text);
 
   if (yank_status != NOT_VALID)	/* Append buffer info */
-  	build_string(yank_msg, " Buffer: %D char%s.", chars_saved,
+  	build_string(yank_msg, sizeof(yank_msg), " Buffer: %D char%s.",
+					chars_saved,
 						(chars_saved == 1L) ? "" : "s");
   else
   	yank_msg[0] = '\0';
 
-  build_string(msg, "%s %s%s%s %d line%s %D char%s.%s Line %d", message,
+  build_string(msg, sizeof(msg), "%s %s%s%s %d line%s %D char%s.%s Line %d",
+		    message,
   		    (rpipe == TRUE && *message != '[') ? "standard input" : basename(file),
   		    (changed == TRUE) ? "*" : "",
   		    (writefl == FALSE) ? " (Readonly)" : "",
@@ -1743,16 +1977,18 @@ FLAG writefl, changed;
  * %s indicates an argument string, %d indicated an argument number.
  */
 #if __STDC__
-void build_string(char *buf, char *fmt, ...)
+void build_string(char *buf, int size, char *fmt, ...)
 {
 #else
-void build_string(buf, fmt, va_alist)
+void build_string(buf, size, fmt, va_alist)
 char *buf, *fmt;
+int size;			/* of buf: what does not fit is cut (B4) */
 va_dcl
 {
 #endif
   va_list argptr;
   char *scanp;
+  char *end = buf + size - 1;
 
 #if __STDC__
   va_start(argptr, fmt);
@@ -1776,12 +2012,13 @@ va_dcl
   		default :
   			scanp = "";
   		}
-  		while (*buf++ = *scanp++)
-  			;
-  		buf--;
+  		while (*scanp != '\0' && buf < end)
+  			*buf++ = *scanp++;
   	}
-  	else
+  	else if (buf < end)
   		*buf++ = *fmt++;
+  	else
+  		fmt++;
   }
   va_end(argptr);
   *buf = '\0';
@@ -1838,8 +2075,10 @@ int *result;
 
 /* Convert input to a decimal number */
   while (index >= '0' && index <= '9' && quit == FALSE) {
-  	count *= 10;
-  	count += index - '0';
+  	if (count < 100000000) {	/* no int overflow (T8) */
+  		count *= 10;
+  		count += index - '0';
+  	}
   	index = getchar();
   }
 
@@ -1870,6 +2109,7 @@ FLAG clearfl;
   	flush();
   	switch (c = getchar()) {
   		case '\b' :		/* Erase previous char */
+  		case '\177' :		/* (both keys, V2) */
   			if (ptr > inbuf) {
   				ptr--;
 #ifdef UNIX
@@ -1896,7 +2136,8 @@ FLAG clearfl;
   			/* If inbuf is empty clear status_line */
   			return (ptr == inbuf && clearfl == TRUE) ? NO_INPUT :FINE;
   		default :		/* Only read ASCII chars */
-  			if ((c >= ' ' && c <= '~') || c == '\t') {
+  			if (((c >= ' ' && c <= '~') || c == '\t')
+  			    && ptr < inbuf + LINE_LEN - 1) {	/* B3 */
   				*ptr++ = c;
   				*ptr = '\0';
   				if (c == '\t')
