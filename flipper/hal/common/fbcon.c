@@ -109,5 +109,5 @@ void fbcon_flush(void)
 {
 	if (!dirty) return;
 	dirty = 0;
-	hal_lcd_flush(fb);
+	if (hal_lcd_flush(fb) < 0) dirty = 1;	/* SPI2 busy: the next flush */
 }
