@@ -47,6 +47,7 @@ Spec: 16.4. The BLE parts wait for Phases 15–16 (R16.1.0 decided: full stack),
 - `flipper/apps/sbctl/sbproto.c/.h`: pure C, no I/O, no malloc. Model tables in `const` (flash): Volcano, qvap (Venty/Veazy), Crafty. Functions: detect model from advertised name; encode a request (set target, heater, pump, boost mode, brightness, auto-off with the Crafty security-code write first, find-my) into a list of (characteristic UUID, bytes, with/without response); decode a notification or read into one `struct sb_state` (≤ 64 B). Temperature limits per model enforced in the encoder (R16.4.7).
 - Host unit tests (`make -C flipper/apps/sbctl test` with the host compiler): golden byte vectors per model for every request and for sample status packets, including the Venty "0x8000 = not reported" case and the Crafty "ready" bit 0x0100.
 - Protocol source: the MIT library `storzandbickel-ble` 0.1.25 (`protocol.py`), not the vendor's JS. Credit it in the file header; GPLv3 project, MIT is compatible.
+- Priority (owner, 2026-11-15): the owner has a **Venty**. Write and test the qvap model (Venty/Veazy) first: connect sequence (0x02, 0x1D, 0x30/0x06), 0x01 status decode and write masks, 0x06 settings, 0x0D find-my. Volcano and Crafty tables go in too but are marked `/* unverified */` in the table and in the test names.
 - No UI and no `bled` code yet. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
 
 ## T7. Own version: Galtzagorriak 0.1.0 (owner decision 2026-11-14): small, after T1–T5, may go alongside T6
@@ -117,6 +118,20 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - L.3–L.6: `cfopen()` in libc, `cfcat`, `settings reset/diff`; switch `/etc/rc`, the launcher and `/etc/setup` to it. The launcher menu item can wait for the Settings app.
 - Acceptance ACL.1–ACL.3. RAM: 0 B static. Flash writes: only at `base-flash`/DFU.
 - BLE bonds on the SD card (R15.4) are done in Phase 15, not here.
+
+## T13. `camfind` core and the ESP32 scan firmware (owner request 2026-11-15 20:23 Warsaw): after T1–T5, may go alongside T6
+Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/dev/adc`), 8 (CC1101) and 7b (GUI), which are not done, so this task does the parts that need none of them, the same way T6 does for `sbctl`.
+- `flipper/apps/camfind/cfcore.c/.h`: pure C, no I/O, no malloc, caller owns all state.
+  - Line parser for the devboard protocol (`AP`, `STA`, `RATE`, R9.1.1), robust to garbage and cut lines.
+  - Scoring (R9.1.2): `const` sorted OUI table (3-byte prefix + vendor index) built by `tools/mkoui.py` from the IEEE registry CSV plus a hand-kept camera-maker list in the repo; SSID patterns; locally administered MAC → "unknown". Levels: likely camera / IoT module / other.
+  - Motion correlation (R9.1.8): the still/move window test on 250 ms rate samples, ratio of medians and correlation; verdict "watches this room" when ≥ 2 in both rounds.
+  - Locate mapping (R9.1.5): smoothed RSSI → pitch, beep rate, bar; reference on OK.
+  - Goertzel on ADC blocks (R9.1.7): steady vs 50/60/100/120 Hz vs kHz PWM.
+  - Sub-GHz tables (R9.1.3): band steps and the cellular mode (LTE B20 832–862, B8/GSM 880–915 MHz), peak hold and burst counter on an RSSI stream.
+- Host unit tests (`make -C flipper/apps/camfind test`, host compiler): parser fuzz cases, OUI lookups, a recorded or synthetic camera rate trace that passes the motion test and a phone trace that fails it, Goertzel on synthetic signals, burst counter on a synthetic RSSI trace.
+- `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). R9.2.4 (`wifi` canary) extends this same firmware later.
+- No UI, no drivers yet. RAM on target: 0 B (code in flash, state owned by the caller; budgets in R9.1.x apply when the app is built). Flash ≈ 6 KB for the core + ≈ 1.5 KB OUI table.
+- Hardware facts for later (from the 2026-11-15 schematic check): IR TX LEDs are not readable by the MCU; header ADC pins 3, 4, 7, 15, 16 (pin 2 = external IR TX).
 
 ## Still open from reviews
 - IR (#46, merged 2026-11-15 by owner decision; supersedes #6/#7): **win back the kernel +64 B** (budget 15168 → 15104). Also `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it).

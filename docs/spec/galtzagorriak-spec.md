@@ -458,10 +458,19 @@ combines signals and is honest about each one's strength in its UI:
 |---|---|---|---|
 | Wi-Fi scan for camera vendors and setup SSIDs | Optional ESP32 Wi-Fi devboard on the GPIO header, over the UART (R6.5) | Most hidden cameras sold today are Wi-Fi IP cameras. A passive scan lists access points and stations; MAC vendor prefixes (OUI) and SSID patterns of camera makers and cheap camera modules mark suspects. Cameras with a randomised MAC, or recording to SD without Wi-Fi, are not seen | **Strong** (best option) |
 | BLE scan | CPU2 in observer (scanning) role | Some cameras advertise over BLE during setup, or use BLE-capable modules. Scanning likely needs the full BLE stack (light = peripheral only; confirm with R2b.10 and the stack notes) | Medium |
-| Sub-GHz RSSI sweep | CC1101 | Finds transmitters at 300–348, 387–464, 779–928 MHz. Analog spy cameras mostly use 1.2, 2.4 or 5.8 GHz, which the CC1101 can't receive, so this rarely finds a camera; it does find other hidden transmitters (bugs, trackers on 433/868 MHz) | Weak for cameras |
+| Sub-GHz RSSI sweep | CC1101 | Finds transmitters at 300–348, 387–464, 779–928 MHz. Analog spy cameras mostly use 1.2, 2.4 or 5.8 GHz, which the CC1101 can't receive. It does find other hidden transmitters (bugs, trackers on 433/868 MHz) and the **cellular uplink of 4G/GSM cameras** in LTE band 20 (832–862 MHz) and band 8 / GSM-900 (880–915 MHz), with the user's own phones in airplane mode (R9.1.3) | Weak for Wi-Fi/analog cameras; **medium** for SIM (4G/GSM) cameras |
 | Infrared receiver (built in) | 38 kHz demodulating IR receiver with automatic gain | Its output is digital (a 38 kHz burst or not) and its gain adapts, so it can't measure light intensity. Night-vision LEDs (850/940 nm) shine continuously, so it can't see them. At most it flags modulated IR nearby | Very weak; hint only |
 | **IR intensity meter** (R9.1.7) | External IR photodiode on a header ADC pin (a part costing about 1 €) | Measures IR level directly: finds night-vision illuminators in a dark room, and in active glint mode (the Flipper's IR LED + synchronous detection) finds camera lenses by their reflection | **Strong** for night-vision cameras and lenses at close range |
+| Wi-Fi motion correlation (R9.1.8) | ESP32 devboard in monitor mode | A camera's compressed video stream grows when something moves in front of it. The devboard counts bytes per station (frame lengths are visible even in encrypted networks the user is not part of); the user stands still, then waves, and a station whose uplink follows the movement is watching the room | **Strongest** for Wi-Fi cameras |
+| Analog 2.4/5.8 GHz receiver (R9.1.9) | Optional module: RX5808 (5.8 GHz, analog RSSI output to an ADC pin) or nRF24L01+ (2.4 GHz, RPD bit) | Finds analog video transmitters the CC1101 can't hear. The nRF24 sees all 2.4 GHz energy (Wi-Fi, BLE too), so it is an energy meter, not a camera detector | Strong for analog cameras |
 | Lens glint helper | RGB LED and the user's eyes, or the user's phone camera | Strobes the LED while the user looks along it for a lens reflection; the help screen also explains the phone-camera trick (many phone cameras show night-vision IR LEDs as purple light). Guidance, not detection | Guide |
+
+**The Flipper's IR LEDs can't be used as a light sensor** (checked on the schematic, 2026-11-15, see
+`reports/camfind-detection-analysis.md` in the project files): the three VSMY14940 LEDs run from `SYS`
+through 39 Ω each to the drain of an N-MOSFET (DMN2058UW); the MCU (PB9, no ADC) drives only the
+gate. Neither LED terminal reaches an MCU pin, so their photovoltage can't be read without a
+hardware change. The built-in receiver's output lands on PA0, which has an ADC input, but the
+TSOP75338 output is digital, so that doesn't help either.
 
 Scope rule: `camfind` only listens. It never connects, deauthenticates or jams; the ESP32
 firmware for it implements passive scanning only.
@@ -1079,6 +1088,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
+| 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
 before Phase 3). From Phase 5 on,
@@ -2059,7 +2069,8 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
 
 - **R9.1.1** Wi-Fi via the ESP32 devboard: a small passive-scan firmware for the devboard (part of
   this project, GPL) speaks a line protocol on the UART: `AP <bssid> <rssi> <ch> <ssid>` and
-  `STA <mac> <rssi> <ch> <bssid>` per sighting, `CH <n>` to lock a channel for locating. Channel
+  `STA <mac> <rssi> <ch> <bssid>` per sighting, `CH <n>` to lock a channel for locating, and
+  `RATE <mac> <bytes/s> <frames/s>` every 250 ms for the station followed by `TRACK <mac>` (R9.1.8). Channel
   hopping and sniffing run on the ESP32; the Flipper only reads lines.
 - **R9.1.2** Scoring: the MAC prefix is looked up in a `const` sorted table of camera and camera-
   module vendors (3-byte OUI + vendor index; ≈ 300 entries ≈ 1.5 KB of flash, generated from the
@@ -2068,6 +2079,12 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   (random) MACs are shown as "unknown". Three levels: likely camera, IoT module, other.
 - **R9.1.3** Sub-GHz sweep: steps across the CC1101 bands, keeps the peak RSSI per channel, and lists
   steady carriers above the noise floor (uses the frequency-analyzer code of Phase 9).
+  - **Cellular mode:** sweeps only LTE band 20 uplink (832–862 MHz) and band 8 / GSM-900 uplink
+    (880–915 MHz) at the widest RX filter, with peak hold and a burst counter per 1 MHz step. The
+    app first asks the user to put their own phones in airplane mode; repeated bursts then mean a
+    cellular transmitter in the room (SIM cameras upload on motion, so walking in triggers them).
+    It can't decode LTE and can't see bands 3/7; the front end's filters reduce sensitivity off
+    the 868–915 MHz path, which is fine at 1–3 m (to measure on hardware).
 - **R9.1.4** IR hint and lens-glint strobe as in F.5, clearly labelled as weak.
 - **R9.1.5** Locate mode ("hot/cold"): pick one device; the Flipper locks the radio to it (ESP32
   channel lock, or the CC1101 frequency) and maps smoothed RSSI to beep pitch and rate and to
@@ -2085,7 +2102,9 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   measure intensity, see F.5):
   - Sensor: an IR photodiode with a daylight-blocking filter (e.g. BPV10NF, SFH 203 FA, BPW34 with a
     940 nm-pass filter) from 3.3 V (header pin 9) through 100 kΩ–1 MΩ to an ADC-capable header pin
-    (default pin 7 = PC3; pins 2, 3, 4, 15, 16 also have ADC inputs), or a phototransistor with a
+    (default pin 7 = PC3; pins 3, 4, 15, 16 also have ADC inputs; pin 2 = PA7 has one too but is
+    the stock firmware's external IR transmitter pin, so the app warns when it is chosen), or a
+    phototransistor with a
     10–47 kΩ load. A 2–3 cm black tube over the sensor narrows its view so it points.
   - Driver: `/dev/adc` (added to R6.4; header ADC pins only). Steady level uses the ADC's
     **hardware oversampling** (up to 256×) so one 16-bit result replaces 256 samples in RAM; the
@@ -2098,7 +2117,10 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
   - **Active glint mode:** the Flipper's own IR LED sends 940 nm pulses at a few kHz and the meter
     measures only the reflected part in step with them (synchronous detection, rejects ambient
     light). A camera lens reflects light back towards its source much more than a wall does, so
-    a lens shows as a sharp peak while sweeping, even with the camera's own IR off.
+    a lens shows as a sharp peak while sweeping, even with the camera's own IR off. Day cameras
+    help further: their IR-cut filter is a dichroic mirror that reflects 940 nm rather than
+    absorbing it. The IR LEDs and the GPIO header are both on the top edge, so emitter and sensor
+    are nearly coaxial, as retro-reflection needs.
   - **Point and sweep procedure** (shown as help in the app):
     1. Turn the room lights off and close the curtains (night-vision IR LEDs switch on in the dark,
        and ambient IR goes down).
@@ -2116,6 +2138,30 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
     3 m in a dark room, and a camera lens with its IR off gives a clear peak in active glint mode
     at 1 m.
   - RAM: 256 B DMA buffer in `camfind` while the meter runs; kernel ≤ +16 B for `/dev/adc`.
+- **R9.1.8 Wi-Fi motion correlation** (owner approval 2026-11-15; needs the devboard):
+  - The devboard firmware counts, per station, data-frame bytes and frames it transmits (monitor
+    mode, all frames, encrypted or not; length and transmitter address are always readable).
+  - "Test this device" on a listed station sends `TRACK <mac>` and locks its channel. The app
+    shows "stand still" for 10 s, then "wave your hand / walk in front of likely spots" for 10 s,
+    twice. It compares the uplink rate in the move windows with the still windows (ratio of
+    medians, and the correlation of the per-250 ms rate with the window pattern). A ratio ≥ 2 in
+    both rounds marks the station "watches this room", the strongest result `camfind` has.
+  - The classic ESP32 sees 2.4 GHz only; 5 GHz cameras need an ESP32-C5 or a Linux module with a
+    monitor-mode adapter speaking the same line protocol.
+  - Prior art: research on detecting hidden Wi-Fi cameras by the causality between user motion and
+    traffic (e.g. SnoopDog), and on locating hidden IoT devices by their traffic (e.g. Lumos).
+  - AC9.1.5 A Wi-Fi camera streaming to a cloud service, in a WPA2 network the devboard is not
+    part of, is marked "watches this room" by the test; a phone idling in the same network is not.
+  - RAM: two 40-entry rate rings (2 × 40 × 2 B) + counters ≈ 200 B in `camfind` while testing.
+- **R9.1.9 Optional 2.4/5.8 GHz modules** (analog video transmitters):
+  - RX5808 (5.8 GHz FPV receiver): tuned over its 3-wire interface on header GPIO, RSSI output
+    to an ADC pin through `/dev/adc`; sweeps the 40 standard FPV channels (Bands A, B, E, F, R)
+    and the locate mode works on the strongest one.
+  - nRF24L01+ (2.4 GHz) on SPI: RPD (power > −64 dBm) per 1 MHz channel, many sweeps summed into
+    a histogram. Shown as "2.4 GHz energy", not as cameras.
+  - Unverified idea: the STM32WB55's own radio test commands (BLE stack, R16.1.0) may give RSSI on
+    2402–2480 MHz without any module; check the stack's ACI HAL test commands in Phase 16.
+  - RAM: one sweep row (40 × 1 B or 80 × 1 B) in `camfind` while in use.
 
 ### 9.2 Radio canaries: Sub-GHz, 125 kHz, infrared (section M)
 
@@ -2848,6 +2894,15 @@ change with the full stack, as stated above. Flash: ≈ +2 KB kernel, ≈ 12 KB 
 Confirmed by the owner (2026-11-14): wanted. The protocol core comes early as task T6
 (`docs/spec/next-tasks.md`); the BLE and UI parts follow Phase 16.
 
+Target devices (owner, 2026-11-15): the owner has a **Venty**, so the qvap driver (Venty, and
+Veazy, which uses the same protocol) is the first and the reference: it is verified on the
+owner's device and all acceptance tests run on it. Volcano and Crafty stay in the design and
+their tables are written, but they are marked "unverified" until someone tests them on real
+hardware. The model table is the extension point, so a new model is a table plus tests.
+Venty notes: it does not report the current temperature (only target, boost and superboost
+offsets, heater mode, battery, charger, auto-off countdown), so the main screen shows the target
+and the "setpoint reached" flag, and "Notify when ready" uses that flag (status byte 14, bit 1).
+
 Owner request: port the vendor's Web Bluetooth app (app.storz-bickel.com, v3.4.1) as a native app
 that controls the owner's own Volcano Hybrid, Venty, Veazy or Crafty/Crafty+ with the Flipper as
 BLE central. The vendor code is proprietary and is **not** copied: the protocol comes from the
@@ -2894,6 +2949,11 @@ Requirements:
   Crafty 40–210 °C) and are enforced before any write.
 - **R16.4.8** Before implementation, the UUIDs and packet layouts are confirmed on real hardware
   (`nRF Connect` or `bluetoothctl` GATT dump); Veazy in particular. Differences go into the report.
+  Venty: verified on the owner's device (2026-11-15, nRF Connect): name prefix `S&B VY`, service
+  `00000000-5354-4f52-5a26-4249434b454c` with one characteristic `00000001-…` (notify, write,
+  write without response, CCCD 0x2902), works without bonding. It also has the standard Device
+  Information service 0x180A, which `sbctl` reads for model and firmware. Command bytes are
+  checked on the device once the BLE parts exist.
 
 Acceptance:
 - AC16.4.1 On each owned model: connect, set the target, heater on/off, (Volcano) pump on/off,
@@ -3349,6 +3409,78 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 
 ---
 
+## Phase 21: Install MINIX on another Flipper (owner request, 2026-11-15)
+
+**Depends on:** 16 (BLE central with passkey pairing, full stack R16.1.0), 17 (signed image R17.2,
+updater image format R17.3), 18b (first-boot wizard on the target). Last phase, after 20.
+Analysis: `reports/flipper-to-flipper-install-analysis.md` in the project files (2026-11-15).
+
+Goal: a MINIX Flipper installs MINIX on a second Flipper (the owner may buy one), with no PC.
+USB cannot do it: both Flippers are USB devices only.
+
+- **R21.1 Fresh image, never a copy.** The installer writes the signed release image from our SD
+  card (the R17.3 file), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
+  and passwords, settings and installed packages are ours. The signature (R17.2) is checked before
+  the first byte goes out. The target starts in the first-boot wizard (18b).
+- **R21.2 (21a, main path) Over BLE, acting as the stock mobile app.** Stock firmware takes firmware
+  updates over BLE RPC (`rpc_storage.c` writes files to its SD card, `rpc_system.c`
+  `system_update_request` starts the stock updater), and the stock updater swaps the CPU2 stack
+  through FUS itself. The `flipinst` app:
+  1. connects as BLE central to the stock BLE serial service and pairs; the target shows a PIN,
+     the user types it on ours (this is the target owner's consent);
+  2. checks the RPC `protobuf_version` and refuses unknown versions; the `.proto` files come from
+     the stock tree (GPL, see the licence rule);
+  3. writes a package in the stock updater format to the target's SD card with RPC `storage_write`:
+     manifest, `firmware.dfu` with the MINIX image, the full BLE stack (R16.1.0) with its
+     `radio_address` and CRC, plus the MINIX files that live on the SD card;
+  4. sends `system_update_request`; the stock updater installs the stack, then MINIX, and resets.
+  On first boot MINIX sets its own option bytes (the stock updater forces stock `ob.data`).
+  The build produces this package (`make stock-update-pkg`); the same package also works by moving
+  the SD card into a stock Flipper and opening `update.fuf` in Archive (no radio).
+- **R21.3 (21b, rescue) SWD over 3 wires**, for a target whose firmware is broken or has no SD card:
+  our pin 2 (PA7) to target pin 10 (SWCLK), pin 3 (PA6) to pin 12 (SWDIO), GND to GND; 3V3 and 5V
+  are not connected (both have their own battery). The header has no NRST.
+  - Stock turns SWD off (pins analog) unless *Settings → System → Debug* is ON, also in stock DFU.
+    The owner accepted this step (2026-11-15). Plan B: poll SWD during the window after a reset.
+  - After attaching: halt, `DEMCR.VC_CORERESET`, `AIRCR.SYSRESETREQ`, so no target code runs;
+    freeze the watchdogs in DBGMCU; check `DBGMCU_IDCODE` 0x495, the Flipper OTP magic, `SFSA`, OB.
+  - If the CPU2 stack has to change: first a small flash-resident radio installer that drives FUS
+    like the stock updater and keeps SWD on, then the system image (the full stack does not fit next
+    to a finished MINIX). Optional variant: that installer receives the rest over BLE, so the cable is
+    needed for a few seconds only.
+  - Write order: erase page 0 first, program it last, so an interrupted run leaves no code to start
+    and can simply be repeated over SWD.
+  - Never write RDP level 2 (0xCC); stop on RDP1/WRP and ask; never touch `SFSA`, `SBRV`, `ESE`,
+    `C2OPT`. Clear `OPTVERR` first (errata 2.2.9). Detach before the final reset (RDP1 blocks flash
+    reads while a debugger is attached).
+  - SWD transactions run in batches inside the GPIO driver (one message per batch, not per bit),
+    in slices of at most 1 ms, below the interactive queue. Free-DAP or Black Magic Probe code may be
+    reused.
+  - Optional backup of the target's CPU1 flash (≈ 860 KB) to our SD card before erasing.
+- **R21.4 SWD on MINIX is off by default** (owner, 2026-11-15: it is a protection): pins analog from
+  the first instructions of the reset handler, a root-only setting turns it on (kept in an RTC backup
+  register, no flash write per boot). Real readout protection is RDP1 (R17.4); ROM DFU by a held button
+  stays as the recovery path (AC17.3).
+- **R21.5** MINIX to MINIX uses the same BLE path with MINIX's own RPC (`rpcd`, Phase 15) and the
+  signed image; no stock updater is involved.
+
+Acceptance:
+- AC21.1 A stock Flipper with a charged battery and an SD card becomes a MINIX Flipper over BLE with
+  no cable, including the full BLE stack; the target shows the wizard.
+- AC21.2 Pulling power from either Flipper at a random point of 21a or 21b leaves the target
+  recoverable by running the installer again (21a: the stock updater resumes; 21b: SWD).
+- AC21.3 A tampered image is refused before anything is written; an RDP2 write cannot be produced.
+- AC21.4 Nothing from our own flash (keys, `/etc/shadow`, settings) appears on the target.
+
+Responsiveness: AC21.R L1 and L2 hold during the whole transfer (BLE is on CPU2; SWD runs in ≤ 1 ms
+slices below the interactive queue).
+
+RAM: kernel 0 B; `flipinst` ≈ 3–5 KB while running (RPC buffer, nanopb), 0 B after exit; SWD batch
+buffer 512 B only while 21b runs. Flash writes on our Flipper: none (reads from SD only; the
+optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and the SWD primitive.
+
+---
+
 ## Deferred (decided 2026-11-14)
 
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
@@ -3404,4 +3536,5 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (owner discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
+| Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
