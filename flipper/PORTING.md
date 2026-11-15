@@ -625,6 +625,25 @@ R2b.12, rebinding by content, and the exec guard (2026-11-15, QEMU; the
   old header-first order it still catches 13 of 22.  RAM 0 B (kernel,
   MM, FS).
 
+T4b step 1, the SD card's busy wait (2026-11-15, Flipper): after a write
+the card programs for up to ~9 ms, and `sd_wait_ready` polled it all
+that time in the disk task: the last cause of infrared underruns (R0.8b
+above).  Now every 64 polled bytes (~40 us) the card is deselected (it
+goes on programming; SD spec, SPI mode), the other kernel tasks run
+(`hal_disk_yield` → `task_yield`), and the speed is set again before the
+card is selected (the LCD shares SPI2).
+- Infrared, 1000 durations of 100 us, while `cat /bin/* > /home/root/b2;
+  sync` ran in a loop: 0 of 80 frames failed (before: 13 of 130 with
+  reads alone).
+- 671,643 bytes written to `/home` and read back with the same
+  checksum, 9 times.
+- A 650 KB write plus `sync` takes about 5 s.
+- What is left: user processes still wait while the disk task polls a
+  transfer or yields to other tasks only.  L5 during the writes: max
+  2.2 s, 1.8 s of it in tasks, the disk task's longest slice 16.7 ms.
+  Step 2: SPI2 DMA with the task blocked on the transfer-complete
+  interrupt, and the busy wait on the clock.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

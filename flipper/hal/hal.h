@@ -100,6 +100,9 @@ int hal_usb_peekc(void);		/* the same byte, left in place */
 int hal_disk_init(void);		/* (re)detect and initialise the card */
 uint32_t hal_disk_sectors(void);	/* capacity, valid after init */
 int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf);
+/* Provided by the kernel's disk task: let the other tasks run while the
+ * card is busy (it is deselected meanwhile). */
+void hal_disk_yield(void);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 
