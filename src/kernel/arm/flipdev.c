@@ -365,7 +365,7 @@ message *m_ptr;
 
 		bl_apply();		/* a key that just came: on first */
 		st = hal_bl_state();
-
+		if (m_ptr->POSITION != 0) return(0);	/* EOF after it */
 		if (count < 4) return(EINVAL);
 		phys_copy(vir2phys(&st), user, (phys_bytes) 4);
 		return(4);
