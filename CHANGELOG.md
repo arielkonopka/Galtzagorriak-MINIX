@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (Phase 2b, R2b.7) The installed-programs directory no longer stays full after base upgrades: compaction drops dead records whose text a live record still has.
 - (R0.8b) The SD task lets other kernel tasks run after every 1 KB, so an infrared frame no longer fails while the card is read; kernel 288 B smaller.
 - (Phase 4a) The RNG and its clock choice are taken with the hardware semaphores CPU2 uses (ready for the radio stack).
 - (T8 follow-up) `mined`: one allocation per line, runs in 12 KB; a paste or file insert that does not fit stops with a message instead of ending the editor; old cards get `EDITOR`/`VISUAL` from the base package.

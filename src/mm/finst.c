@@ -254,6 +254,20 @@ unsigned long addr;
   return(FALSE);
 }
 
+PRIVATE int in_covered(i)	/* another record for record i's text? */
+int i;
+{
+  struct inrec *r = RECP(in_dir, i), *q;
+  int j;
+
+  for (j = 0; j < NREC; j++) {
+	q = RECP(in_dir, j);
+	if (FREE_SLOT(q)) break;
+	if (j != i && q->addr == r->addr && (LIVE(q) || j < i)) return(TRUE);
+  }
+  return(FALSE);
+}
+
 PRIVATE int in_compact()
 {
 /* Copy the live records to the other directory page, the new active one:
@@ -269,8 +283,12 @@ PRIVATE int in_compact()
   for (i = j = 0; i < NREC; i++) {
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if (!LIVE(r) && !in_running(r->addr)) continue;
-	/* dead ones still run from keep their pages until they exit */
+	/* dead ones still run from keep their pages until they exit -
+	 * unless another record (live, or an earlier dead one) covers the
+	 * same text: an upgrade that leaves a text unchanged gives it a new
+	 * record, and the dead one of every running program (sh, getty,
+	 * ...) would otherwise stay until the directory is full for good */
+	if (!LIVE(r) && (!in_running(r->addr) || in_covered(i))) continue;
 	memcpy(rec, r, REC);
 	to = (unsigned long) RECP(d, j);
 	if (sys_flash(FL_WRITE, to, rec, 40, NULL, NULL) != OK

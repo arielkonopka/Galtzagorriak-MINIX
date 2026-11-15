@@ -425,6 +425,18 @@ stack high-water marks (the kernel marks their stacks at load): MM 428
 of 1024 bytes after boot and login, 588 after the bind with its
 compaction; FS 516 of 2048.
 
+Installed-region compaction (2026-11-15, Flipper): after a few base
+upgrades, `pkg flash` of any program said "No space left on device"
+with 188 KB free.  The directory (63 records) was full, and compaction
+freed nothing.  It kept every dead record whose pages a process still
+ran from.  But an upgrade that leaves a text unchanged gives it a new
+live record at the same pages, so every upgrade left a dead duplicate
+of each running program (sh, getty, login, launcher, update...), kept
+for good.  Now compaction drops a dead record when another record
+(live, or an earlier dead one) has the same text address: the first
+install after that worked again.  RAM 0 B; flash: one compaction (two
+directory pages) as before.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile
