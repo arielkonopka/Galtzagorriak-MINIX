@@ -1,2 +1,6 @@
 # Time zone: the Flipper keeps UTC.
 TZ=GMT0	export TZ
+
+# The editor (T8): mined, memory-safe, VT100 keys; ed is still there.
+EDITOR=mined	export EDITOR
+VISUAL=mined	export VISUAL

@@ -6,7 +6,10 @@
 .EX "ls \(enl | mined" "Use \fImined\fR as a pager to inspect listing"
 .PP
 \fIMined\fR is a simple screen editor.
-At any instant, a window of 24 lines is visible on the screen.
+At any instant, a window as tall as the terminal is visible on the screen
+(the size comes from the terminal; if it is not known, mined asks the terminal
+for it, and assumes 80\(mu24 if there is no answer; the Console app on the
+Flipper's LCD makes it 32\(mu10).
 The current position in the file is shown by the cursor.
 Ordinary characters typed in are inserted at the cursor.
 Control characters and keys on the numeric keypad (at the right-hand side
@@ -138,9 +141,9 @@ commands are as follows.
 .ti -1.25i
 \fBMODIFYING TEXT\fR
 .ti -1.0i
-\fBDel key\fR	Delete the character under the cursor
+\fBDelete key\fR	Delete the character under the cursor (ESC [ 3 ~)
 .ti -1.0i
-\fBBackspace\fR	Delete the character to left of the cursor
+\fBBackspace\fR	Delete the character to left of the cursor (both 0x08 and 0x7F)
 .ti -1.0i
 \fBCTRL-N\fR	Delete the next word
 .ti -1.0i
@@ -168,11 +171,13 @@ commands are as follows.
 .ti -1.25i
 \fBMISCELLANEOUS\fR
 .ti -1.0i
-\fBnumeric +\fR	Search forward (prompts for regular expression)
+\fBPF1\fR	Display the file status
 .ti -1.0i
-\fBnumeric \(mi\fR	Search backward (prompts for regular expression)
+\fBPF2\fR	Search forward (prompts for regular expression)
 .ti -1.0i
-\fBnumeric 5\fR	Display the file status
+\fBPF3\fR	Search backward (prompts for regular expression)
+.ti -1.0i
+\fBPF4\fR	Set the mark (as CTRL-@)
 .ti -1.0i
 \fBCTRL-]\fR	Go to specific line
 .ti -1.0i
@@ -188,11 +193,29 @@ commands are as follows.
 .ti -1.0i
 \fBCTRL-\\\fR	Abort whatever the editor was doing and wait for command
 .ti -1.0i
-\fBCTRL-E\fR	Erase screen and redraw it
+\fBCTRL-E\fR	Measure the terminal again, erase the screen and redraw it
 .ti -1.0i
 \fBCTRL-V\fR	Visit (edit) a new file
 .in -1.25i
 
+.SS "Galtzagorriak"
+.PP
+The keys are read as VT100/xterm sequences in both cursor-key modes (as sent
+by xterm, PuTTY and minicom); Home and End are also ESC [ 1 ~ / ESC [ 4 ~ and
+ESC O H / ESC O F; an unknown sequence is ignored as a whole.
+A line holds at most 1023 characters; a longer line in a file is split when
+it is read, and the status line says how many were split.
+A prompt takes at most 79 characters (the bell rings).
+Control characters, DEL and the C1 bytes 0x80\(en0x9F are shown in reverse
+video, never sent to the terminal as they are; so are those in file names.
+The file is written to \fI.name.tmp\fR in the same directory and renamed
+over the old one, so an error (e.g. a full card) leaves the old version
+intact; a file of another owner, or with other links, is written in place.
+The buffer of CTRL-C/CTRL-K is a file \fI/tmp/mined.\fR\fIxxxxxxxx\fR (a random
+name, mode 0600, made anew for every copy).
+If the terminal goes away (the USB or Bluetooth link drops) while the text is
+modified, it is written to \fIfile\fR\fB.save\fR (or \fB$HOME/mined.save\fR),
+mode 0600, without asking, and mined exits.
 .SS "Author"
 .PP
 \fIMined\fR was designed by Andy Tanenbaum and written by Michiel Huisjes.
