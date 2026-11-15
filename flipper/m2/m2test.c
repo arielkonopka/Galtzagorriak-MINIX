@@ -221,9 +221,13 @@ int main(int argc, char **argv)
 			execl("/bin/m2test", argv0, "child-exec", (char *) NULL);
 			_exit(99);
 		}
-		check(pid > 0 && pid != me && marker == 5678
-			&& wait(&st) == pid && WIFEXITED(st)
-			&& WEXITSTATUS(st) == 7, "vfork + exec + wait");
+		{
+			int seen = marker, w = pid > 0 ? wait(&st) : -1;
+
+			check(pid > 0 && pid != me && seen == 5678 && w == pid
+				&& WIFEXITED(st) && WEXITSTATUS(st) == 7,
+						"vfork + exec + wait");
+		}
 		pid = vfork();
 		if (pid == 0) _exit(5);
 		check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
