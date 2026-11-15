@@ -1009,10 +1009,10 @@ section sets the rules for all of them.
 
 - **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
   types, never accepts writes, never keeps a pairing beyond the session (the BLE honeypot of
-  R16.5.6/R16.5.7 pair, with keys in RAM only and no retained bond), never transmits on a radio
-  beyond its role (advertising for the BLE bait, the tag answers of the NFC bait, the pairing the
-  active honeypot of R16.5.7 initiates against an allow-listed target). It never jams,
-  deauthenticates, floods or replays.
+  R16.5.6 pairs, with keys in RAM only and no retained bond), never transmits on a radio beyond
+  its role (advertising for the BLE bait, the tag answers of the NFC bait). The canary only ever
+  observes what comes to it: beyond accepting a pairing it performs no action on the other device,
+  never reaches out to pair with one, and never jams, deauthenticates, floods or replays.
 - **Never impersonate a real product or credential.** Baits use our own IDs (G.1), a random NFC
   UID and generic names; no payment, transit or access-card emulation, no other vendor's IDs.
 - **The verdict is honest:** "nothing happened during this session" is not "this is safe", and a
@@ -2961,37 +2961,6 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
     characteristic are logged and acknowledged with an error).
   - Security: R16.5.5 holds (RPC and serial off), so a paired stranger reaches only the fake GATT
     table. The honeypot ends after 30 min or on Back, and every link is then disconnected.
-- **R16.5.7 Active honeypot (central; owner idea 2026-11-15; off by default, two confirmations, the
-  most dangerous mode):** instead of waiting to be found, the canary scans for devices that are
-  **in pairing mode** (connectable, undirected, or showing a Just-Works / Fast-Pair / Continuity
-  "pair me" payload: headphones, speakers, keyboards, fitness bands), tries to pair with one, and
-  then observes it as the honeypot does.
-  - **Authorization gate (hard):** this mode is for devices the owner owns or is authorized to
-    test. It is behind a separate "I own or may test these devices" confirmation each session, a
-    bold on-screen warning, and an **allow-list** of target addresses/names the owner enters
-    first; "pair anything nearby" needs a second, explicit toggle and is never the default. The
-    manual states plainly that pairing with someone else's device without permission may be
-    illegal.
-  - **Still only observes.** After pairing it does what R16.5.6 does: discovers the GATT table,
-    logs services, reads readable characteristics once, subscribes to notifications, and records
-    what the device sends. It **does not drive the device**: no audio, no HID injection, no
-    writes except a single logged no-op where a write is the only way to learn a characteristic's
-    behaviour (and only to a characteristic the device marks writable). It never takes a device
-    away from its real owner's phone beyond the pairing it performs, and it disconnects and
-    **removes the pairing** at session end.
-  - **Keys:** exactly as R16.5.6 — RAM only, wiped at end, optional analysis-only export to
-    `/ext/apps_data/canary/ble/keys/` under the same "never grants anything" rules.
-  - **Rate and politeness:** one target at a time; on a failed or refused pairing it backs off and
-    does not retry a device more than 3 times; it never floods or spams connection requests
-    (that would be an attack, out of scope, M).
-  - **Use:** understanding what a cheap BLE gadget exposes once trusted (does the speaker's app
-    key sit in a readable characteristic? does the band hand over its data?), on the owner's own
-    hardware or an authorized test bench.
-  - Needs the full BLE stack (central + pairing initiator, R16.1.0), which the `btbridge` central
-    (16.1) already requires.
-  - Acceptance: AC16.5.7 With an allow-listed pair of the owner's own earbuds in pairing mode, the
-    canary pairs, logs their GATT table and a notification, then unpairs; a non-allow-listed device
-    in range is not touched (no connection in a sniffer capture).
 - **R16.5.2 Scan requests:** where the stack reports received scan requests (Bluetooth 5 "LE Scan
   Request Received" with extended advertising; check the ST stack), the bait also lists **active
   scanners** nearby that never connect. If not supported, the line is hidden.
