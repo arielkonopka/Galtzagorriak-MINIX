@@ -24,7 +24,7 @@ Windows, use WSL or a Linux machine: `flsend` (section 7) needs a POSIX serial p
 
 | Package (Debian/Ubuntu) | Needed for |
 |---|---|
-| `gcc-arm-none-eabi`, `make`, `git` | building the system |
+| `gcc-arm-none-eabi`, `make`, `git` | building the system (not needed if you download the images) |
 | `python3`, `python3-pil`, `xfonts-base` | the build tools; Pillow and the X11 6x10 font are needed when the build redraws the boot screen, which a fresh clone can trigger |
 | `dfu-util` | writing the firmware into the Flipper's flash |
 | a serial terminal (`screen`, `picocom`, `minicom`) | logging in over USB |
@@ -40,14 +40,27 @@ one), run the flash command with `sudo`.
 
 ## 2. Getting the images
 
-There are **no prebuilt images to download yet**: the v0.1.0 release on GitHub has no files
-attached, and it is far behind the main branch. Build from source:
+### Downloading the images
+
+GitHub builds the images for every change (workflow `build`, `.github/workflows/build.yml`):
+
+- **A release** (tag `vX.Y.Z`): open *Releases* on the GitHub page of the project; the release
+  has the files of the table below attached, with `SHA256SUMS`. Releases made before the
+  workflow existed (v0.1.0) have no files.
+- **The newest main branch**: open *Actions* → *build*, choose the newest green run on `main`,
+  and download the artifact `galtzagorriak-flipper-...` at the bottom of the page (a zip; you
+  must be logged in to GitHub). Artifacts are kept for 30 days.
+
+Check the files after unpacking: `sha256sum -c SHA256SUMS`.
+
+### Building them yourself
 
     git clone https://github.com/arielkonopka/Galtzagorriak-MINIX.git
     cd Galtzagorriak-MINIX/flipper
     make BOARD=flipper minix card base-flash base
 
-This takes a minute or two and writes, under `build/flipper/minix/`:
+This takes a minute or two and writes, under `build/flipper/minix/` (the downloads hold the
+same files, without the directories):
 
 | File | Size (approx.) | What it is |
 |---|---|---|
