@@ -12,7 +12,12 @@
 PUBLIC struct latinfo lat;
 PRIVATE unsigned long lock_cyc;
 PRIVATE int rev_proc = -1000;
-PRIVATE unsigned long rev_cyc;
+PRIVATE unsigned long rev_cyc, rev_rep;	/* REVIVE seen; FS replied */
+PRIVATE unsigned long rev_fl;		/* flash_n at the reply */
+PRIVATE int last_run = -1000;		/* the process entered last */
+PRIVATE unsigned long last_cyc, win[4];	/* when; the open window's parts */
+PRIVATE unsigned long win_big;		/* its longest slice */
+PRIVATE int win_big_proc;
 
 PRIVATE unsigned long long lcd_wanted;	/* procs whose next frame counts */
 PRIVATE int lcd_after_btn;		/* the next frame after a button */
@@ -64,15 +69,68 @@ int proc_nr;
 {
   rev_proc = proc_nr;
   rev_cyc = CYCCNT;
+  rev_rep = 0;
+}
+
+PUBLIC void lat_reply(rp)		/* FS sends to rp */
+struct proc *rp;
+{
+  unsigned long d;
+
+  if (proc_number(rp) != rev_proc || rev_rep != 0) return;
+  rev_rep = CYCCNT;
+  rev_fl = lat.flash_n;
+  win[0] = win[1] = win[2] = win[3] = 0;
+  win_big = 0;
+  d = rev_rep - rev_cyc;
+  if (d > lat.rev_fs_max) lat.rev_fs_max = d;
+  if (rp->p_shadow != 0) lat.rev_shadow_n++;
+}
+
+PUBLIC void lat_flip(end, bytes)	/* an image swap starts/ends */
+int end;
+unsigned long bytes;
+{
+  static unsigned long t0;
+  unsigned long d;
+
+  if (!end) { t0 = CYCCNT; return; }
+  d = CYCCNT - t0;
+  lat.flip_n++;
+  if (d > lat.flip_max) { lat.flip_max = d; lat.flip_bytes = bytes; }
 }
 
 PUBLIC void lat_run(rp)			/* restart is entering rp */
 struct proc *rp;
 {
-  unsigned long d;
+  unsigned long d, q, now = CYCCNT;
+  int prev = last_run, c;
 
+  /* the time since the last entry went to the process entered then */
+  if (rev_rep != 0) {
+	c = prev < 0 ? 0 : prev == MM_PROC_NR ? 1 : prev == FS_PROC_NR ? 2 : 3;
+	d = now - (last_cyc - rev_rep < now - rev_rep ? last_cyc : rev_rep);
+	win[c] += d;
+	if (d > win_big) { win_big = d; win_big_proc = prev; }
+  }
+  last_cyc = now;
+  last_run = proc_number(rp);
   if (proc_number(rp) != rev_proc) return;
   rev_proc = -1000;
+  q = CYCCNT - rev_rep;
+  if (rev_rep != 0 && q > lat.hz / 10000) {	/* over 100 us */
+	lat.rev_q_slow++;
+	if (lat.flash_n != rev_fl) lat.rev_q_slow_flash++;
+  }
+  if (rev_rep != 0 && q > lat.rev_q_max) {
+	lat.rev_q_max = q;
+	lat.rev_q_prev = prev;
+	lat.rev_q_flash = lat.flash_n - rev_fl;
+	for (c = 0; c < 4; c++) lat.rev_q_who[c] = win[c];
+	lat.rev_q_big = win_big;
+	lat.rev_q_big_proc = win_big_proc;
+  }
+  rev_rep = 0;
   d = CYCCNT - rev_cyc;
   if (d > lat.rev_max) lat.rev_max = d;
   lat.rev_sum += d;
@@ -105,5 +163,10 @@ PUBLIC void lat_clear()
 {
   lat.mask_max = lat.rev_max = lat.rev_sum = lat.rev_n = 0;
   lat.flash_max = lat.flash_n = 0;
+  lat.rev_fs_max = lat.rev_q_max = lat.rev_shadow_n = 0;
+  lat.flip_max = lat.flip_n = lat.flip_bytes = 0;
+  lat.rev_q_flash = lat.rev_q_slow = lat.rev_q_slow_flash = 0;
+  lat.rev_q_prev = 0;
+  lat.hz = hal_cpu_hz();
 }
 #endif /* LATTRACE */
