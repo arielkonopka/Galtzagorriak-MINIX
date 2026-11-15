@@ -119,7 +119,7 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - Acceptance ACL.1–ACL.3. RAM: 0 B static. Flash writes: only at `base-flash`/DFU.
 - BLE bonds on the SD card (R15.4) are done in Phase 15, not here.
 
-## T13. `camfind` core and the ESP32 scan firmware (owner request 2026-11-15 20:23 Warsaw): after T1–T5, may go alongside T6
+## T13. `camfind` core (owner request 2026-11-15 20:23 Warsaw): core DONE, #75 merged (dcfd0db); the ESP32 firmware moved to "Deferred to the end" (#78)
 Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/dev/adc`), 8 (CC1101) and 7b (GUI), which are not done, so this task does the parts that need none of them, the same way T6 does for `sbctl`.
 - `flipper/apps/camfind/cfcore.c/.h`: pure C, no I/O, no malloc, caller owns all state.
   - Line parser for the devboard protocol (`AP`, `STA`, `RATE`, R9.1.1), robust to garbage and cut lines.
@@ -129,14 +129,74 @@ Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/d
   - Goertzel on ADC blocks (R9.1.7): steady vs 50/60/100/120 Hz vs kHz PWM.
   - Sub-GHz tables (R9.1.3): band steps and the cellular mode (LTE B20 832–862, B8/GSM 880–915 MHz), peak hold and burst counter on an RSSI stream.
 - Host unit tests (`make -C flipper/apps/camfind test`, host compiler): parser fuzz cases, OUI lookups, a recorded or synthetic camera rate trace that passes the motion test and a phone trace that fails it, Goertzel on synthetic signals, burst counter on a synthetic RSSI trace.
-- `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). R9.2.4 (`wifi` canary) extends this same firmware later.
+- `esp32/camscan/`: moved to "Deferred to the end" below (owner decision 2026-11-15, #78).
 - No UI, no drivers yet. RAM on target: 0 B (code in flash, state owned by the caller; budgets in R9.1.x apply when the app is built). Flash ≈ 6 KB for the core + ≈ 1.5 KB OUI table.
 - Hardware facts for later (from the 2026-11-15 schematic check): IR TX LEDs are not readable by the MCU; header ADC pins 3, 4, 7, 15, 16 (pin 2 = external IR TX).
 
+## T14. Power management, part 1 (owner request 2026-11-15 22:33 Warsaw): T14a any time, T14b–T14d in order
+Source: the power budget analysis of 2026-11-15. **Analysis, code places and the PR plan with on-device tests: `docs/spec/power-plan.md`** (owner: the agent tests each PR on the Flipper). The facts each step needs are copied here. Spec: R6.1, R6.8, R4b.2, F.3, R20a.4; these steps pull them forward and correct F.3. Responsiveness first: no step may make L1–L10 worse (`lat` before/after in PORTING.md). No run-time flash writes and no option-byte writes in any step.
+
+Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_hal_rtc.c`, `furi_hal_os.c`, `scripts/ob.data`):
+- Power tree: BAT → BQ25896 BATFET → SYS. SYS → LM3281 (always on) → 3.3V (MCU, LCD, CC1101, ST25R3916 logic, buttons). SYS → second LM3281 with EN = **PA3 (PERIPH_POWER**, 10k pull-up, so on by default) → ext3.3V: **microSD and header pin 9 only**. SYS → FAN48610 5 V boost (always on) for the NFC/RFID board. TSOP75338 IR receiver on SYS through 10 Ω (0.35 mA, always on, no control). BAT → RS3221 LDO → **MCU VBAT** (RTC and backup registers survive power-off).
+- **BUTTON_BACK (PC13) is also the BQ25896 QON input.** The charger INT and the gauge GPOUT are not routed to the MCU (test pads only): USB plug and low battery must be polled over I2C.
+- EXTI lines in use or reserved: buttons 3 (OK, PH3), 6 (Down, PC6), 10 (Up), 11 (Left), 12 (Right), 13 (Back); IR RX PA0 (0), CC1101 GDO0 PA1 (1), NFC IRQ PA2 (2), iButton PB14 (14). Header pins with a free EXTI line: only PA4 and PA7.
+- Stock option bytes have `IWDGSTOP=1`: the IWDG keeps counting in Stop2. Our IWDG is 2 s.
+- Stock idle current is 1.5 mA (Flipper blog, FW 0.82). Battery 2100 mAh.
+
+### T14a. Zero-RAM power fixes at boot (small, any time)
+- Enable the SMPS in step-down mode after the clock setup (stock: `LL_PWR_SMPS_SetMode(LL_PWR_SMPS_STEP_DOWN)` in `furi_hal_power_init`; read RM0434 for the SMPS clock source and the order against the PLL). Halves the run current.
+- Park the radios: SPI1 pins, CC1101 CS (PD0) and NFC CS (PE4) high. CC1101: `SRES` strobe, wait for CHIP_RDYn, then `SPWD` (after a power-on reset it sits in IDLE at ~1.7 mA). ST25R3916: direct command `SET_DEFAULT`, then op-control register 0 (power-down). Use the stock register values (`furi_hal_subghz_init/sleep`, `furi_hal_nfc_init` + `furi_hal_nfc_low_power_mode_start`; GPL, fine).
+- Unused pins to analog mode; `DBGMCU` stop/standby clocks off unless the debug flag is set.
+- Acceptance: CC1101 `MARCSTATE` read back = SLEEP and ST25R3916 op-control = 0 at the end of `hal_init`; QEMU board unaffected; idle current before/after in PORTING.md if a meter is at hand (otherwise say so).
+- RAM: 0 B. Flash: about +300 B.
+
+### T14b. EXTI buttons, tickless idle, Stop2 (R6.8, R4b.2, R20a.4)
+- Buttons on EXTI (lines above), debounce only while a button is down. `flipdev_tick` stops polling buttons.
+- LPTIM1 on the LSE as the one-shot wake timer. Before sleeping, `idle_task` computes the next due time (clock alarms, `REVIVE`/ms timers, the backlight timeout), arms LPTIM1 and stops SysTick; after waking it adds the slept time to the uptime and `realtime` and restarts SysTick.
+- **Sleep blocker:** a 32-bit mask in the kernel (4 B). A driver sets its bit while it needs fast clocks (SPI/I2C/DMA transfer, pulse engine armed, speaker PWM, USB attached, UART console active). Stop2 only when the mask is 0 and nothing is runnable; otherwise WFI as today.
+- Stop2 entry/exit as stock `furi_hal_power_deep_sleep` (without the CPU2 semaphores, CPU2 is not started): PLL → HSE → HSI16 with `STOPWUCK=1`, `LPMS=Stop2` (also write `PWR_C2CR1.LPMS` as stock does), `SLEEPDEEP`, `WFI`; after: HSI16 → HSE → PLL, RTC shadow resync. **Serve a button interrupt on HSI16 at once** and finish the HSE/PLL switch afterwards, so the crystal start-up never adds to L1.
+- **Watchdog:** without touching option bytes. Either reprogram the IWDG to its longest period (LSI/256, 4095 ≈ 32 s; wait for PVU/RVU) before a long sleep and back to 2 s after waking, with LPTIM1 waking every ~25 s to kick it; or always wake every ~1.5 s. Pick one and say which.
+- Statistics (≤ 16 B): time in Stop2, number of wakes per source; printed by `/dev/power` (T14c) or a `lat` line.
+- Acceptance: AC6.R (button wake meets L1: ≤ 50 ms max, measure p99/max over 100 presses from Stop2), the clock does not drift more than the LSE over 1 h of idle, the IWDG never fires in 8 h of idle, USB console still works (USB attached blocks Stop2), QEMU path unchanged (QEMU has no Stop2: WFI only).
+- RAM: kernel ≤ +24 B. Flash ≈ +1.5 KB.
+
+### T14c. `/dev/power` and real power-off with alarm wake (R6.1, F.3, AC6.1, AC6.2)
+- BQ27220 and BQ25896 drivers on I2C1 (stock `lib/drivers/bq27220.c`, `bq25896.c`). `/dev/power` read: SoC %, voltage, current, temperature, charging state, VBUS, plus the T14b statistics. Charger ADC **one-shot on demand**, not continuous (stock leaves it continuous).
+- Polling (no interrupt lines): every 1 s while the screen is lit, every few minutes in Stop2 (SYSDWN → `SIGPWR` to INIT; USB plugged → start the USB stack). No flash writes below a low-voltage threshold.
+- **Battery profiles (R6.1, owner 2026-11-15):** `full` / `care` (end-of-charge voltage 4.208 V / ~4.0 V via `VREG`, as stock `bq25896_set_vreg_voltage`), kept in an RTC backup register. **Do not change `ICHG`, the input current limit or ICO** (owner: do not touch the charging current); only pause charging while Sub-GHz transmits and outside 0–45 °C (gauge temperature).
+- **Power-off = BQ25896 ship mode**, as stock `furi_hal_power_off`: enable the RTC alarm output (Alarm A, open-drain, active low) **on PC13**, **switch ext3.3V on** (stock: "shutting down with ext 3V3 off is causing LSE to stop"), short vibro, then the ship-mode command. With USB attached ship mode cannot cut SYS: sleep instead.
+- **Alarm while off:** the RTC (on VBAT) pulls PC13 = Back = charger QON, the charger turns the BATFET on and the Flipper boots. This replaces F.3's "Standby or Shutdown". At boot, read the wake reason (RTC ALRAF, backup register) **before** reading boot key combos (Back looks pressed until the flag is cleared), then turn the alarm output off and send `SIGRTC` as F.2 says.
+- **Boot lead for alarms (owner, 2026-11-15):** a start from off takes QON (~1 s) + L10, so at power-off `timed` arms Alarm A **early** by the boot lead and keeps the real due time in an RTC backup register (0 B RAM). After the boot `timed` waits for the real time, so the alarm rings on the second, not seconds late. The boot lead is measured at each start from off (RTC time at the first frame minus the alarm time, plus a 2 s margin) and kept in the same backup register; first default 10 s. `Missed` (F.2) applies only if the boot ends after the real time.
+- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on.
+- RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
+
+### T14d. Screen-off state and peripheral power (after T14b)
+- Backlight: **default idle timeout 15 s** (owner 2026-11-15: 5 min is too long). The code default is still 300 (`hal_bl_state()` fallback in `flipper/hal/flipper/board.c`, comments in `flipdev.c` and `cmds/backlight.c`): change it to 15. Optional dim stage before off (off by default) with the LP5562 engine ramp from #81 (0 B RAM). Separate timeouts on battery and on USB.
+- LCD power save (display off + all points on: the ST7567 keeps its RAM) a few minutes after the backlight goes off, on battery only; any button leaves power save with no redraw. Desk mode (R7b.2) keeps the LCD on.
+- SD card power: with the screen off and the card idle for N minutes (no open writes, cache flushed, card not busy), switch ext3.3V off (PA3). Start re-initialising the card at the first button press, in parallel with the backlight ramp, so the ~300 ms card start is hidden. Header pin 9 also loses 3V3 then: never cut it while `/dev/gpio` has a user or 3V3 output is enabled.
+- Acceptance: the first frame after a key in screen-off meets L1; opening an app from the SD card after a power-cut meets its L6 budget, or the PR says by how much it misses; idle current with screen off recorded.
+- RAM: 0 B (a few bits in existing flags). Flash ≈ +1 KB.
+
+Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
+
+## T15. Power management app `power` (spec R7.1; owner request 2026-11-15): after T14c
+- A GUI app in `flipper/gui/` (like `lights.c`), launcher entry "Power". Screens: battery (%, V, mA with sign, °C, health, charge state, time to full/empty, charger or computer), profile `full`/`care`, backlight (level, timeout on battery / on USB, dim stage on/off), screen-off delay, SD power-off delay, sleep statistics (Stop2 share, wakes per source), Power off (shows "N alarms armed, they will ring"), Reboot.
+- All settings through `ioctl` on `/dev/power` and `/dev/backlight` into RTC backup registers (no flash writes); add any new register to the map in PORTING.md.
+- Tests on the Flipper (agent): AC7.0 (each setting takes effect at once and survives power-off); the battery screen matches `cat /dev/power`; L6 for opening the app and L1 for every key; app RAM recorded.
+- RAM: 0 B static; app ≈ 2 KB while open. Flash ≈ 4 KB.
+
 ## Still open from reviews
-- IR (#46, merged 2026-11-15 by owner decision; supersedes #6/#7): **win back the kernel +64 B** (budget 15168 → 15104). Also `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it).
-- mined (#45): one allocation per line so `CHMEM_mined` fits 12 KB; `EDITOR`/`VISUAL` for existing cards via the base postinst.
-- Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
-- T2 (#24, merged by owner decision 2026-11-14: responsiveness first): **win back the MM +68 B** (`runs[]` + `job`). Options: 4-byte `runs[]` entries (28-bit key from crc^owner + 4-bit count), one shared hex table, trim `hole[]`. Also **check the flash copy before `J_RECORD`** (SHA-256 as in finst.c, or the text CRC), so a file rewritten during the copy never lands in the cache under the old key.
-- Phase 2b (#37/#38): AC2b.R1 (L6 from the installed region), AC2b.R2 (`lat` during a 50 KB install), AC2b.5 (power-cut test), MM stack high-water after bind + compaction (estimated 500–600 of 1024 B), first-boot bind time in PORTING.md; old cards need `pkg bind /bin/*` in `/etc/rc` (have pkg/update add it, or document it).
+- IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
+- R2b.12 (#72): measure L9 during a forced installed-region compaction on the Flipper (it now asks FS `INOCHK` per record) and write the number in PORTING.md. Optional: `in_lookup`'s head-CRC check uses 2 `lseek` + 4 x 64 B `read` per exec; one 256 B read into a buffer free during exec would halve the FS round trips if L6 shows it.
+- I.1 (#70): the stock firmware keeps the RTC in local time; spec I.1 wants UTC. Fix with the time-zone setting (18b wizard / `setup tz`); until then `date` is off by the zone offset (bindings are not affected).
+- Backlight (#81), polish: fade **on** as well as off (owner wish: no snapping). Off fades in 0.5 s by LP5562 engine 1; add a short up-ramp (about 150 ms) on wake with the same engine program.
+- base postinst (#79), nit: `chmod 755 /rom` runs on every install and may print EROFS when /rom is mounted; make it quiet or run it only after `mkdir`.
+- Flipper `NR_SUPERS` is 4 and full since T12 (root, /rom, /usr, /home): any further mount needs a fifth slot (RAM) or an on-demand /rom.
+
+## Deferred to the end (owner decision 2026-11-15, #78): Wi-Fi / ESP32 devboard work
+The owner cannot find the Wi-Fi devboard for now. Everything that needs it or ESP-IDF waits until the rest of the plan is done (roadmap Phase 22):
+- `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). The Flipper-side parser and motion test are already in `cfcore` (#75).
+- R9.2.4 `wifi` canary (extends the same firmware).
+- R19.7 ESP32 offload mode (Wi-Fi module networking). Phase 19 parts that do not need the devboard (USB, BLE, CC1101, a Linux module on the UART) keep their place.
+- `camfind` v1 ships without Wi-Fi meanwhile (AC9.1.3: "Wi-Fi unavailable", the other scans run).

@@ -431,9 +431,13 @@ provides them as small shared services, so each new app is only its UI plus a fe
 - In Run and Stop2 the RTC alarm wakes the CPU directly (R6.8). The ST7567 LCD keeps its image with
   the CPU stopped, so a desk clock updates once a minute from the RTC wake-up timer and sleeps in
   between.
-- **Off with alarms armed.** If the power-off path keeps the RTC domain powered (AC6.2 checks it),
-  power-off uses Standby or Shutdown with RTC Alarm A as wake source; the device boots (L10) and
-  `timed` rings. If it does not, the power-off menu warns "N alarms armed: sleep instead?".
+- **Off with alarms armed.** Power-off is the BQ25896 ship mode (BATFET off); the RTC stays powered
+  from VBAT (its own LDO from the battery). Before ship mode the RTC alarm output (Alarm A,
+  open-drain) is enabled on PC13, which is also the charger's QON input: at the alarm the charger
+  turns power back on, the device boots (L10) and `timed` rings. INIT reads the wake reason before
+  the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
+  takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
+  (owner, 2026-11-15). Details in next-tasks T14c.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
@@ -1081,7 +1085,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 7b | Time services and first native apps: interval reminder, alarm clock, Self Test (section F); GPIO sensors: thermo-hygrometer, sonar (7b.4, section H); more native apps get 7b.N subsections | apps that act at a set time |
 | 7c | Scripting runtime: Berry (owner decision) with bindings to sensors, timers, alerts, GPIO and radios | script apps |
 | 8 | Sub-GHz and LF RFID drivers | |
-| 9 | App ports II: Sub-GHz, 125 kHz RFID; gadget: hidden camera finder v1 (Wi-Fi devboard, Sub-GHz, IR meter, 9.1) | |
+| 9 | App ports II: Sub-GHz, 125 kHz RFID; gadget: hidden camera finder v1 (Sub-GHz, IR meter, 9.1; its Wi-Fi devboard part is in Phase 22) | |
 | 10 | USB composite classes: HID, mass storage, second CDC | BadUSB, 19a |
 | 11 | App ports III: BadUSB, USB mass storage; USB reader modes for RFID, iButton, IR, Sub-GHz (11.1, section G) | |
 | 12 | Swapping to the SD card [5] | RAM headroom for NFC/BLE |
@@ -1095,6 +1099,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 | 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
+| 22 | Wi-Fi / ESP32 devboard work, deferred to the end (owner decision 2026-11-15): `camfind`'s devboard firmware (R9.1.1, R9.1.8), the `wifi` canary (R9.2.4), ESP32 offload mode (R19.7) | Wi-Fi scans |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
 before Phase 3). From Phase 5 on,
@@ -1660,6 +1665,17 @@ infrared, iButton, low-power modes.
     OTG boost, ship-mode power-off) on I2C1, exposed as `/dev/power` (read: a status record;
     `ioctl`: OTG on/off, power-off).
   - Low battery sends `SIGPWR` to INIT.
+  - **Battery profiles** (owner, 2026-11-15): `full` (charge to the stock 4.208 V) and `care`
+    (charge to ~4.0 V, about 80 %, for a Flipper kept on a charger, e.g. desk mode), chosen in
+    settings and kept in an RTC backup register (0 B RAM, no flash write). Only the end-of-charge
+    voltage (`VREG`) changes; the stock firmware already sets it the same way.
+  - **The charging current is never raised** (owner, 2026-11-15): `ICHG`, the input limit and ICO
+    stay at the stock values. The kernel may only lower or pause charging, never speed it up:
+    - pause while Sub-GHz transmits (as stock: the charger's switching disturbs the radio);
+    - pause outside 0–45 °C by the BQ27220 temperature (the board has no battery thermistor on the
+      charger's TS pin, so the charger cannot do it itself).
+  - `/dev/power` shows the charge state, current, time to full, the profile and the source
+    (charger vs computer, from USB enumeration, as R11.2).
 - **R6.2 RTC.** LSE RTC holding **UTC** (section I): `time()` reads it directly and `stime()`
   writes it (R2d.5); the century and last-seen year in a backup register, the 2100-02-29 fix-up
   and the backup register map (I.3); `RTC_CALR` smooth calibration exposed to the clock settings
@@ -1686,10 +1702,39 @@ infrared, iButton, low-power modes.
     (interrupts masked ≤ 70 µs per slot via BASEPRI);
   - slave emulation (presence, ROM reply) on EXTI + timer;
   - Cyfral/Metakom via the comparator and the pulse engine.
-- **R6.8 Power modes** (old R7.4):
+- **R6.8 Power modes** (old R7.4; power analysis 2026-11-15, owner: "add power optimisation to
+  the plan"; agent steps in next-tasks T14a–d):
   - EXTI buttons;
   - tickless idle;
-  - Stop2 with LPTIM1 wake when nothing is runnable, USB is not active and no stream is armed.
+  - Stop2 with LPTIM1 wake when nothing is runnable, USB is not active and no stream is armed;
+  - **boot fixes (0 B RAM):** SMPS in step-down mode; CC1101 put to `SPWD` and ST25R3916 to
+    power-down at boot (after a power-on reset the CC1101 idles at ~1.7 mA); unused pins analog;
+    debug clocks in Stop off unless the debug flag is set;
+  - **sleep blocker:** one 32-bit kernel mask, a bit per driver that needs fast clocks (transfer in
+    progress, pulse engine armed, speaker PWM, USB attached, UART console). Stop2 only at 0;
+  - **watchdog:** the stock option bytes keep the IWDG running in Stop2 (`IWDGSTOP=1`). Handled in
+    software (longest IWDG period plus an LPTIM kick, or a short periodic wake), never by writing
+    option bytes;
+  - **Stop2 only**: Standby and Shutdown are not used for sleep. The board floor (IR receiver on
+    SYS 0.35 mA, LCD, regulators) stays either way, and they lose RAM. Power-off is ship mode (F.3);
+  - **wake sources and the EXTI map:** buttons 3, 6, 10–13; IR RX PA0 (0), CC1101 GDO0 PA1 (1), NFC
+    IRQ PA2 (2), iButton PB14 (14), RTC and LPTIM1 internal. Header pins with a free line: PA4 and
+    PA7 only; edge events on the other header pins (R6.4) use timer capture or polling and block
+    Stop2 while armed;
+  - **no interrupt lines** from the charger (INT) or the gauge (GPOUT): USB plug and low battery are
+    polled over I2C, every 1 s while the screen is lit and every few minutes in Stop2;
+  - statistics: time in Stop2 and wakes per source (≤ 16 B), shown by `/dev/power`.
+- **R6.9 Peripheral power policy** (power analysis 2026-11-15):
+  - backlight: default idle timeout **15 s** (owner, 2026-11-15; 5 min was too long); an optional
+    dim stage before off (off by default), by the LP5562 engine ramp; separate timeouts on battery
+    and on USB;
+  - **screen-off state:** LCD power save (the ST7567 keeps its RAM, no redraw on wake) a few minutes
+    after the backlight goes off, on battery; desk mode (R7b.2) keeps the LCD on;
+  - SD card: ext3.3V (PA3) off when the screen is off and the card idle (cache flushed, no open
+    writes); re-initialisation starts at the first key press, hidden behind the backlight ramp. Never
+    while `/dev/gpio` uses header 3V3 (pin 9 shares the rail);
+  - charger ADC one-shot on demand (stock leaves it continuous); 5 V OTG off when unused;
+  - below a low-voltage threshold: no flash writes; SYSDWN sends `SIGPWR` and INIT powers off.
 
 Acceptance:
 - AC6.1 `cat /dev/power` matches the stock firmware's battery screen within 2 %; power-off and
@@ -1699,11 +1744,14 @@ Acceptance:
   a reflector) reproduces the timings within ±5 %.
 - AC6.4 Reading a DS1990A gives its ROM; emulation is accepted by a reader (or a second Flipper running stock).
 - AC6.5 Idle current with the launcher on screen and the backlight off is lower than before this
-  phase (record the numbers).
+  phase (record the numbers). Targets: ≤ 1.5 mA (stock) after R6.8, ≤ 0.6 mA with the screen-off
+  state and the SD rail off (R6.9). Measured with an external meter on the battery leads (the
+  gauge's 1 mA resolution is too coarse).
+- AC6.6 8 h idle in Stop2: no watchdog reset, clock error within the LSE tolerance.
 
 Responsiveness: AC6.R Waking from Stop2 by a button meets L1 (≤ 50 ms max including clock restart); speaker and vibro never delay input (L2).
 
-RAM budget: kernel ≤ +300 B in total (R6.1–R6.8). Flash: ≈ +12 KB kernel.
+RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
 
 ---
 
@@ -1715,12 +1763,28 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.8). Flash: ≈ +12 KB kernel.
 |---|---|---|
 | Archive (file browser) | `archive` app, POSIX files under `/home/flipper`; starts the matching app per file type (`.ir`, `.ibtn`, `.sub`, `.rfid`, `.nfc`, `.txt`) | Uses `libfuri` FileBrowser |
 | Settings (display, sound, LED, time, power, storage, about, system) | `settings` app as root-group `operator` writing `/etc/flipper/*.conf`; `/dev/power`, `/dev/backlight` | Storage info via `df`; "format SD" disabled while mounted |
-| Power (battery info, power off, reboot) | Part of `settings` plus a status-bar battery from the launcher | `/dev/power` |
+| Power (battery info, power off, reboot) | Native app `power` (R7.1) plus a status-bar battery from the launcher | `/dev/power`, `/dev/backlight` |
 | Infrared | `infrared` app, group `ir`; stock `lib/infrared` codecs + universal remote DBs from SD | Stock worker thread → pulse engine + cooperative thread |
 | iButton | `ibutton` app, group `ibutton`; stock `lib/ibutton` + `lib/one_wire` with HAL stubs on `/dev/ibutton` | Timing stays in the kernel (R6.7) |
 | GPIO (pin control, USB-UART bridge, 5 V) | `gpio` app, groups `gpio` and `usb` | Bridge via R6.5 |
 
+- **R7.1 Power management app `power`** (owner, 2026-11-15): one place for everything in R6.1,
+  R6.8 and R6.9, so nobody needs the shell for it:
+  - battery screen: charge %, voltage, current (+ charging / − discharging), temperature, health,
+    charge state, estimated time to full or to empty, charger or computer;
+  - battery profile `full` / `care` (R6.1);
+  - backlight brightness and timeouts on battery and on USB, optional dim stage;
+  - screen-off delay (LCD power save) and SD power-off delay (R6.9), each with "never";
+  - sleep statistics: share of time in Stop2, wakes per source since boot, so a program that keeps
+    the Flipper awake is visible;
+  - power off (says how many alarms are armed and that they will still ring, F.3) and reboot.
+  Settings live in RTC backup registers through `ioctl` on `/dev/power` and `/dev/backlight` (no
+  flash writes, survive power-off). Runs as group `operator`. GUI as the other system apps
+  (`flipper/gui` today, `libfuri` later). RAM: one app process only while open (~2 KB); 0 B static.
+
 Acceptance:
+- AC7.0 Every setting in `power` takes effect at once, survives a power-off, and matches what
+  `cat /dev/power` and `backlight` report.
 - AC7.1 Each app opens and saves files compatible with stock: files saved by stock firmware 1.x
   load, and files saved here load on stock.
 - AC7.2 The IR universal remote for TVs works on at least 3 brands.
@@ -1793,7 +1857,7 @@ Infrastructure (section F):
 
 Responsiveness:
 - AC7b.R1 From RTC alarm to first sound: ≤ 500 ms from Run or Stop2 (wake, INIT fork, `timed`,
-  `alert`); ≤ L10 + 1 s from power-off.
+  `alert`); from power-off the alarm rings within 1 s of its time (boot lead, F.3).
 - AC7b.R2 Alert buttons meet L1; the preempted app redraws ≤ 150 ms after dismiss.
 - AC7b.R3 An alert never masks interrupts or holds the scheduler beyond rule 0.8 (L3, L4 unchanged
   while an alarm rings).
@@ -2040,6 +2104,11 @@ data; 0 between timer events. Flash: interpreter ≈ 40–60 KB shared, bindings
   - comparator + pulse engine capture (read);
   - DMA-driven pull-pin modulation from a user buffer (emulate, T5577 write);
   - exclusive with `/dev/nfc` because of the shared NFC-IRQ/RFID-pull pin.
+- **R8.5 Wake-on-radio** (power analysis 2026-11-15): the CC1101 WOR mode (RC-timed RX sniffs,
+  GDO0 → EXTI1) wakes the CPU from Stop2 when a matching packet or carrier arrives; the sleep
+  blocker stays clear. Use: a 433/868 MHz doorbell, gate remote or sensor as a notification
+  source (~tens to hundreds of µA instead of ~16 mA for full RX). Duty cycle and RC calibration
+  as the datasheet requires; `ioctl` on `/dev/subghz`.
 
 Acceptance:
 - AC8.1 A transmit request at a frequency outside the table fails with `EPERM`, even when written
@@ -2719,7 +2788,8 @@ Responsiveness: see AC13.R; the NFC app's screens meet L1.
 - **R14.2.1 Field detector:** the ST25R3916 external-field detection (and its low-power wake-up
   mode) reports "a reader field appeared" with time and duration. Pocket mode (M.1, tier 3): the
   chip watches alone and the CPU wakes only on a field; the alert vibrates. This is the "is
-  something reading my pocket" alarm.
+  something reading my pocket" alarm. The same detector (NFC IRQ PA2 → EXTI2) can wake the
+  Flipper from Stop2 on a phone tap (R6.8 wake sources).
 - **R14.2.2 Tag bait (optional, chosen in the app):** the Flipper answers as a **blank generic tag**
   with a random UID: NFC Forum Type 4 (ISO 14443-4) that returns "file not found" to every
   SELECT, or Type 2 with an empty NDEF area. It logs: anticollision, RATS and its parameters,
@@ -2919,6 +2989,10 @@ Requirements:
   devices on power-up is automatic when "bridge on boot" is set.
 - **R16.1.7** Power: while bridged, USB is active, so the CPU does not enter Stop2 (R6.8); the
   bridge is powered by the PC. On battery without USB, the bridge is off.
+- **R16.1.8** BLE and Stop2 (power analysis 2026-11-15): once CPU2 runs, Stop2 entry and exit use
+  the stock HSEM protocol (RCC and entry-stop semaphores, `PWR_C2CR1.LPMS`, as stock
+  `furi_hal_power_deep_sleep`). Unlike stock, MINIX does not need CPU2 to sleep, and advertises
+  only on demand (app, pairing, phone link), slow interval (1–2.5 s) after 30 s fast.
 
 Acceptance:
 - AC16.1.1 A BLE mouse (e.g. any "BT 5.0" office mouse) and a BLE keyboard pair, then move,
@@ -3450,6 +3524,11 @@ R4b.9 and R20a.4 (EXTI, tickless, Stop2) into R6.8.
   - `CMD59` with the SPI hardware CRC16;
   - the CRC unit for `pkg get`;
   - SHOULD: SPI DMA, with an SPI2 owner flag shared by SD, LCD and swap.
+- **R20a.5 Power tuning and measurement** (power analysis 2026-11-15): measure every component
+  state on the device (external meter), wake latency from each source, and the battery scenarios
+  of the analysis (idle, light use, desk clock, gadget day); fold the numbers into the manual.
+  Wake sources that cost nothing extra become features: IR remote wake (the TSOP is always
+  powered), phone-tap wake (R14.2.1), wake-on-radio (R8.5).
 - **R20a.4 [M10, A5]** (pulled forward into R6.8 power modes and R4b.2 LPTIM1; what remains
   here is tuning and measurement)
   - EXTI interrupts for the buttons, with debounce;

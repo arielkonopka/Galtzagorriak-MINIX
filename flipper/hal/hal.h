@@ -44,6 +44,16 @@ void hal_lcd_init(void);
 int hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes; -1: the SD
 					 * card has SPI2 now, draw again later */
 void hal_backlight(unsigned level);	/* 0 (off) .. 255; on after lcd_init */
+void hal_backlight_fade(unsigned from, unsigned ms);	/* to 0, by the LED driver */
+/* The backlight's settings, kept over resets (Flipper: RTC backup register
+ * 15; no RAM): bit 27 off by the idle timeout, bits 16-23 the brightness,
+ * bits 0-15 the timeout in seconds (0: never).  hal_bl_state() gives the
+ * defaults (255, 300 s) when nothing valid is stored. */
+#define HAL_BL_OFF		0x08000000u
+#define HAL_BL_LEVEL(s)		((s) >> 16 & 0xFF)
+#define HAL_BL_TIMEOUT(s)	((s) & 0xFFFF)
+uint32_t hal_bl_state(void);
+void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
 
 /* Buttons: bitmask of currently pressed keys. */

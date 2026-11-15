@@ -8,6 +8,9 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 - (T4b, step 2) SD card data moves by DMA while the disk task sleeps: programs keep running during card I/O (waits during writes: max 77 ms, was 2.2 s).
 - (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
+- (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
+- The LCD backlight fades out (0.5 s) after 5 minutes without a key and on at the next key or button (that press only turns it on); `backlight [LEVEL [SECONDS]]` sets brightness and timeout (kept over resets). Base 3.55.
+- The base package's postinst checks its edits of `/etc/rc` and says so when one failed (seen once: `ed` crashed during an upgrade).
 - (T13) `camfind` core, host-tested: the devboard line parser, camera/IoT scoring with an OUI table from the IEEE registry, Wi-Fi motion correlation, locate mapping, IR modulation (Goertzel) and the Sub-GHz/cellular sweep tables.
 - (T12, L.3-L.4) Settings fall back to their defaults in `/rom`: `cfopen()` in libc, `cfcat`, `settings diff|reset`; the launcher's app list and the motd use them. Base 3.53.
 - (T11, R2b.12) `pkg bind` rebinds programs copied back (new inode) to the text already in flash; compaction drops records whose file is gone (FS `INOCHK`); exec also checks a CRC of the start of an installed program's text. Base 3.52.

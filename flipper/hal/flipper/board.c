@@ -436,7 +436,50 @@ static int lp5562_init(void)
 
 void hal_backlight(unsigned level)
 {
+	/* at once: the white channel back under I2C control (a fade may have
+	 * left it with engine 1), the engine stopped, then the level */
+	lp5562_write(0x70, 0x00);	/* LED map: all direct */
+	lp5562_write(0x01, 0x00);	/* op mode: engines disabled */
+	lp5562_write(0x00, 0xC0);	/* enable: CHIP_EN, LOG_EN, engines hold */
 	lp5562_write(0x0E, level > 255 ? 255 : level);
+}
+
+/* Fade the backlight from `from` to 0 in about `ms` milliseconds, done by
+ * the LP5562's engine 1 on its own: no CPU, no I2C while it runs.  The
+ * program and register sequence follow the stock firmware
+ * (lib/drivers/lp5562.c, lp5562_execute_ramp; GPL-3): set PWM, ramp down
+ * half the way, loop once more, end.  hal_backlight() takes it back. */
+void hal_backlight_fade(unsigned from, unsigned ms)
+{
+	uint8_t prog[1 + 32];
+	uint16_t w[4];
+	unsigned diff = from > 255 ? 255 : from, step, pre = 0, i;
+	uint32_t t0;
+
+	if (diff < 2) { hal_backlight(0); return; }
+	step = ms * 2 / diff;		/* 0.49 ms units (stock arithmetic) */
+	if (step > 0x3F) { step /= 32; pre = 1; }	/* 15.6 ms units */
+	if (step == 0) step = 1;
+	if (step > 0x3F) step = 0x3F;
+	w[0] = 0x4000 | diff;				/* set PWM */
+	w[1] = (pre << 14) | (step << 8) | 0x80 | ((diff / 2) & 0x7F);	/* down */
+	w[2] = 0xA001 | ((2 - 1) << 7);		/* loop to 1, twice */
+	w[3] = 0xC000;				/* end */
+
+	lp5562_write(0x70, 0x00);	/* direct while loading */
+	lp5562_write(0x01, 0x10);	/* engine 1: load program */
+	t0 = DWT->CYCCNT;
+	while (DWT->CYCCNT - t0 < hal_cpu_hz() / 10000) ;	/* 100 us */
+	prog[0] = 0x10;			/* engine 1's program memory */
+	for (i = 0; i < 16; i++) {	/* big-endian words, the rest zero */
+		prog[1 + 2 * i] = i < 4 ? w[i] >> 8 : 0;
+		prog[2 + 2 * i] = i < 4 ? w[i] & 0xFF : 0;
+	}
+	(void) i2c1_write(LP5562_ADDR, prog, sizeof prog);
+	lp5562_write(0x01, 0x20);	/* engine 1: run */
+	lp5562_write(0x00, 0xC0 | 0x20);	/* enable: engine 1 runs */
+	lp5562_write(0x70, 0x40);	/* white from engine 1 */
+	lp5562_write(0x0E, 0);		/* the direct value afterwards */
 }
 
 void hal_led(unsigned r, unsigned g, unsigned b)
@@ -524,19 +567,21 @@ static void sd_select(int on)
  * measured, see PORTING.md R0.8b) it is deselected now and then - it goes
  * on programming (SD spec, SPI mode) - and the other kernel tasks run
  * (hal_disk_yield, the disk task's task_yield; they may use SPI2 for the
- * LCD meanwhile, so the speed is set again).  Only called by the disk
+ * LCD meanwhile, so the speed in use is set again).  Only called by the disk
  * task. */
 static int sd_wait_ready(void)
 {
 	uint32_t start = DWT->CYCCNT;
 	unsigned n = 0;
+	/* the speed in use: also the slow one while the card is initialised */
+	unsigned code = (SPI2->CR1 & SPI_CR1_BR) >> SPI_CR1_BR_Pos;
 
 	while (spi2_xfer(0xFF) != 0xFF) {
 		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
 		if (++n % 64 == 0) {		/* ~40 us of polling */
 			sd_select(0);
 			hal_disk_yield();
-			spi2_speed(sd_fast);
+			spi2_speed(code);
 			sd_select(1);
 		}
 	}
@@ -1177,6 +1222,24 @@ uint32_t hal_rtc_time(void)
 		+ ((tr >> 20 & 3) * 10 + (tr >> 16 & 15)) * 3600
 		+ ((tr >> 12 & 7) * 10 + (tr >> 8 & 15)) * 60
 		+ (tr >> 4 & 7) * 10 + (tr & 15));
+}
+
+/* The backlight's settings (hal.h): BKP15R, magic 0xB in the top nibble
+ * (register map in PORTING.md). */
+#define BL_REG		(RTC->BKP15R)
+#define BL_MAGIC	0xB0000000u
+
+uint32_t hal_bl_state(void)
+{
+	uint32_t r = BL_REG;	/* the RTC's APB clock is on (hal_early_boot) */
+
+	if ((r & 0xF0000000u) != BL_MAGIC) return 255u << 16 | 300u;
+	return r & 0x0FFFFFFFu;
+}
+
+void hal_bl_state_set(uint32_t st)
+{
+	bkp_set(&BL_REG, BL_MAGIC | (st & 0x0FFFFFFFu));
 }
 
 int hal_reset_bits(void)

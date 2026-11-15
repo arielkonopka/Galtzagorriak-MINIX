@@ -276,6 +276,10 @@ int hal_usb_peekc(void) { return -1; }
 void hal_backlight(unsigned level) { (void) level; }
 int hal_disk_dma_irq(void) { return -1; }	/* QEMU: semihosting, no DMA */
 void hal_disk_dma_ack(void) { }
+void hal_backlight_fade(unsigned from, unsigned ms) { (void) from; (void) ms; }
+static uint32_t bl_state = 255u << 16 | 300u;	/* QEMU: no backup register */
+uint32_t hal_bl_state(void) { return bl_state; }
+void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
 
 

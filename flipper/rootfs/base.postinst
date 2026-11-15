@@ -3,7 +3,10 @@
 grep 'pkg bind' /etc/rc >/dev/null || {
 	(echo '/^update/i'; echo '# Programs built into the firmware (make base-flash): bind them at boot.'
 	 echo 'pkg bind /bin/*'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
-	echo "base: /etc/rc now runs pkg bind /bin/* at boot"
+	if grep 'pkg bind' /etc/rc >/dev/null
+	then echo "base: /etc/rc now runs pkg bind /bin/* at boot"
+	else echo "base: could not add pkg bind to /etc/rc; run pkg install again"
+	fi
 }
 # Cards made before T8 lack EDITOR/VISUAL in /etc/profile (mined is the
 # default editor); /etc/profile is not replaced by an upgrade.
@@ -16,10 +19,14 @@ grep '^EDITOR=' /etc/profile >/dev/null || {
 # default settings in internal flash, spec L.2).  The mount fails quietly
 # until a minix-base.bin with the settings image is flashed.
 test -d /rom || mkdir /rom
-test -b /dev/rom || mknod /dev/rom b 1 6
+test -b /dev/rom || mknod /dev/rom b 1 6 || echo "base: could not make /dev/rom"
+chmod 755 /rom
 grep '/dev/rom' /etc/rc >/dev/null || {
 	(echo '/^>\/etc\/utmp/a'; echo ''
 	 echo '# The default settings, read-only from internal flash (spec L.2).'
 	 echo 'mount /dev/rom /rom -r >/dev/null 2>&1'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
-	echo "base: /etc/rc now mounts the default settings on /rom"
+	if grep '/dev/rom' /etc/rc >/dev/null
+	then echo "base: /etc/rc now mounts the default settings on /rom"
+	else echo "base: could not add the /rom mount to /etc/rc; run pkg install again"
+	fi
 }
