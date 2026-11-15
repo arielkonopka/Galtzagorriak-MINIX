@@ -11,7 +11,9 @@
 # T2 follow-up: printk hex tables const (kernel -36, MM -32, FS -36 B),
 # runs[] 4-byte entries, cache seq from the directory: MM back to 10172.
 # T4: kernel -12 B (hal_flash_dbg gone, +4 B k_input).
-kernel    160    14944  15104
+# Hardware #9 (infrared, R6.6 pulse engine): kernel +64 B of state; its
+# rings share the speaker's note buffer (spec budget: about 64 B).
+kernel    164    15004  15168
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172

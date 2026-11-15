@@ -954,6 +954,139 @@ int hal_gpio_read(unsigned pin)
 }
 
 /*===========================================================================*
+ *				Infrared				     *
+ *===========================================================================*/
+/* As on the stock firmware: the receiver (TSOP, active low, own pull-up)
+ * on PA0, here through EXTI line 0 on both edges; the LED driver on PB9,
+ * TIM1 channel 3N (AF1), PWM at the carrier frequency.  Carrier off: the
+ * channel is forced inactive (the LED is dark at low level).  Marks and
+ * spaces are timed by TIM2 (the "pulse engine", spec R6.6): 1 MHz, the
+ * next duration preloaded, so the interrupt only switches the carrier and
+ * a late interrupt never adds up. */
+#define IR_CARRIER_HZ	38000u
+
+static uint32_t ir_period = 0, ir_on;	/* carrier, in timer clocks */
+
+uint32_t hal_cycles(void)
+{
+	return DWT->CYCCNT;
+}
+
+int hal_ir_irq(void)
+{
+	return EXTI0_IRQn;
+}
+
+void hal_ir_rx_on(int on)
+{
+	if (on) {
+		gpio_cfg(GPIOA, 0, MODE_IN, PULL_NONE, 0);
+		SYSCFG->EXTICR[0] &= ~SYSCFG_EXTICR1_EXTI0;	/* port A */
+		EXTI->RTSR1 |= EXTI_RTSR1_RT0;
+		EXTI->FTSR1 |= EXTI_FTSR1_FT0;
+		EXTI->PR1 = EXTI_PR1_PIF0;
+		EXTI->IMR1 |= EXTI_IMR1_IM0;
+	} else {
+		EXTI->IMR1 &= ~EXTI_IMR1_IM0;
+		EXTI->PR1 = EXTI_PR1_PIF0;
+	}
+}
+
+int hal_ir_rx_edge(void)
+{
+	EXTI->PR1 = EXTI_PR1_PIF0;
+	return gpio_get(GPIOA, 0);
+}
+
+void hal_ir_freq(unsigned hz, unsigned duty)
+{
+	ir_period = SystemCoreClock / hz;
+	ir_on = ir_period * duty / 100;
+}
+
+void hal_ir_carrier(int on)
+{
+	static int ready;
+
+	if (!ready) {
+		RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+		(void) RCC->APB2ENR;
+		TIM1->CR1 = 0;
+		TIM1->PSC = 0;
+		if (ir_period == 0) hal_ir_freq(IR_CARRIER_HZ, 33);
+		TIM1->ARR = ir_period - 1;
+		TIM1->CCR3 = ir_on;
+		TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
+		TIM1->CCER = TIM_CCER_CC3NE;
+		TIM1->BDTR = TIM_BDTR_MOE;
+		TIM1->EGR = TIM_EGR_UG;
+		TIM1->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
+		gpio_set(GPIOB, 9, 0);
+		gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
+		ready = 1;
+	}
+	if (on) {				/* preloaded, taken by UG */
+		TIM1->ARR = ir_period - 1;
+		TIM1->CCR3 = ir_on;
+	}
+	/* PWM mode 1 (110) or forced inactive (100); start a fresh period
+	 * so every mark begins with a whole carrier cycle */
+	TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
+		| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
+	if (on) TIM1->EGR = TIM_EGR_UG;
+}
+
+int hal_ir_tx_irq(void)
+{
+	return TIM2_IRQn;
+}
+
+void hal_ir_tx_start(uint32_t first_us, uint32_t next_us)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = first_us - 1;
+	TIM2->CNT = 0;
+	TIM2->EGR = TIM_EGR_UG;			/* PSC and ARR now */
+	TIM2->SR = 0;
+	TIM2->CR1 = TIM_CR1_ARPE | TIM_CR1_URS;
+	TIM2->ARR = next_us - 1;		/* preload: the segment after */
+	TIM2->DIER = TIM_DIER_UIE;
+	TIM2->CR1 |= TIM_CR1_CEN;
+}
+
+int hal_ir_tx_ack(void)
+{
+	/* Clear the update flag at once and read it back: cleared only at
+	 * the end, it is still set when the handler returns and the
+	 * interrupt comes again - a spurious second step. */
+	uint32_t sr = TIM2->SR;
+
+	TIM2->SR = 0;				/* every flag, whoever set it */
+	(void) TIM2->SR;
+	return (sr & TIM_SR_UIF) != 0;
+}
+
+void hal_ir_tx_next(uint32_t us)
+{
+	TIM2->ARR = us - 1;			/* taken at the next update */
+}
+
+void hal_ir_tx_stop(void)
+{
+	/* Also at start: the ROM DFU loader starts the image without a reset
+	 * and may leave a timer running with its interrupts on. */
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->SR = 0;
+}
+
+/*===========================================================================*
  *				Random numbers				     *
  *===========================================================================*/
 /* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
