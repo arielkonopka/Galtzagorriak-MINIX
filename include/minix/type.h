@@ -155,6 +155,9 @@ struct kstack {
 #define FL_LAYOUT_SFSA	2	/*   where CPU2's flash starts */
 #define FL_ERASE	1	/* erase the page at addr */
 #define FL_WRITE	2	/* program len bytes at addr */
+#define FL_BG		0x10	/* or'ed in: background work, EAGAIN while a
+				 * user process waits for the CPU or a key or
+				 * button came in the last second (T4) */
 
 /* Flash text cache summary (MEMINFO, MI_FCACHE). */
 struct fcinfo {

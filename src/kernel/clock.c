@@ -255,6 +255,14 @@ PUBLIC clock_t get_uptime()
 }
 
 
+#if (CHIP == ARM_CM)
+PUBLIC clock_t uptime_irq()	/* get_uptime() in the clock interrupt */
+{
+  return(realtime + pending_ticks);
+}
+#endif
+
+
 /*===========================================================================*
  *				do_get_time				     *
  *===========================================================================*/
