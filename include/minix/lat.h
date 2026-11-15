@@ -31,6 +31,17 @@ struct latinfo {
   unsigned long rev_max, rev_sum, rev_n;	/* REVIVE -> process runs */
   unsigned long boot_lcd_ms;	/* boot to the first frame from a process */
   unsigned long flash_max, flash_n;	/* longest flash operation (L9) */
+  /* L5 in parts (T4): REVIVE -> FS's reply sent, reply -> process runs;
+   * revived processes that were shadowed at the reply; image swaps */
+  unsigned long rev_fs_max, rev_q_max, rev_shadow_n;
+  unsigned long flip_max, flip_n, flip_bytes;	/* longest swap, its size */
+  long rev_q_prev;		/* at the longest reply -> run: who ran last */
+  unsigned long rev_q_flash;	/*   flash operations in between */
+  unsigned long rev_q_slow, rev_q_slow_flash;	/* > 100 us; with flash */
+  unsigned long rev_q_who[4];	/* longest reply -> run: cycles spent in
+				 * tasks, MM, FS, other processes */
+  long rev_q_big_proc;		/*   its longest single slice: whose */
+  unsigned long rev_q_big;	/*   and how long */
   struct latevent ring[LAT_RING];
 };
 

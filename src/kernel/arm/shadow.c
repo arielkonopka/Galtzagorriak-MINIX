@@ -143,7 +143,13 @@ struct proc *p;			/* a runnable, shadowed process */
   if (p_ready) lock_unready(p);
   if (r_ready) lock_unready(r);
 
+#if LATTRACE
+  lat_flip(0, 0UL);
+#endif
   flipclicks(p->p_map[D].mem_phys, p->p_shadow, image_clicks(p));
+#if LATTRACE
+  lat_flip(1, (unsigned long) image_clicks(p) << CLICK_SHIFT);
+#endif
   r->p_shadow = p->p_shadow;
   p->p_shadow = 0;
   p->p_nflips++;
