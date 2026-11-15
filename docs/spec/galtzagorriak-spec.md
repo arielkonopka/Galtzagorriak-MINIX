@@ -1768,23 +1768,45 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
 | iButton | `ibutton` app, group `ibutton`; stock `lib/ibutton` + `lib/one_wire` with HAL stubs on `/dev/ibutton` | Timing stays in the kernel (R6.7) |
 | GPIO (pin control, USB-UART bridge, 5 V) | `gpio` app, groups `gpio` and `usb` | Bridge via R6.5 |
 
-- **R7.1 Power management app `power`** (owner, 2026-11-15): one place for everything in R6.1,
-  R6.8 and R6.9, so nobody needs the shell for it:
-  - battery screen: charge %, voltage, current (+ charging / − discharging), temperature, health,
-    charge state, estimated time to full or to empty, charger or computer;
-  - battery profile `full` / `care` (R6.1);
-  - backlight brightness and timeouts on battery and on USB, optional dim stage;
-  - screen-off delay (LCD power save) and SD power-off delay (R6.9), each with "never";
-  - sleep statistics: share of time in Stop2, wakes per source since boot, so a program that keeps
-    the Flipper awake is visible;
-  - power off (says how many alarms are armed and that they will still ring, F.3) and reboot.
-  Settings live in RTC backup registers through `ioctl` on `/dev/power` and `/dev/backlight` (no
-  flash writes, survive power-off). Runs as group `operator`. GUI as the other system apps
-  (`flipper/gui` today, `libfuri` later). RAM: one app process only while open (~2 KB); 0 B static.
+- **R7.1 Power management app `power`** (owner, 2026-11-15): the user controls **how deeply and
+  how soon the device powers down**, and every other power knob that is safe and makes sense to
+  expose. Stock has none of this (only backlight time and a "legacy sleep" debug switch).
+  - **Profiles** as a quick choice, each a set of the knobs below: `performance` (light sleep only,
+    long timeouts), `balanced` (default), `saver` (short timeouts, SD off early, BLE on demand, auto
+    power-off), `custom` (any knob changed). A profile can be picked for battery and another for USB.
+  - **Sleep depth:** deepest idle state allowed: `light` (WFI only, for debugging or measurement),
+    `deep` (Stop2, default). Shown with what it costs (mA, from R20a.5 numbers).
+  - **Idle ladder**, each step with its own delay or "never", always in this order: backlight dim →
+    backlight off → screen off (LCD power save) → SD card power off → **automatic power-off** (ship
+    mode, after N hours without a key; never while USB is connected or a background job runs).
+    Armed alarms still ring after an automatic power-off (F.3).
+  - **Low battery:** power off below N % (default: when the gauge says SYSDWN); warn at M %.
+  - **Wake sources:** which buttons wake the device (all, or only Back/OK as a pocket mode against
+    accidental presses); IR remote wake, phone-tap (NFC field) wake and wake-on-radio on/off (R8.5,
+    R14.2.1, R20a.5). RTC alarms always wake and cannot be turned off here.
+  - **Radios:** BLE off / on demand / always visible (R16.1.8).
+  - **Peripherals:** 5 V on the header: off, on, or "off when idle"; header 3V3 off with the SD rail
+    or always on (for a module that must stay powered); status LED notifications on/off and
+    brightness.
+  - **Battery:** profile `full` / `care` (R6.1); the charging current is not a setting.
+  - **Who keeps it awake:** live list of the sleep-blocker bits and the processes holding the
+    devices behind them, sleep statistics (Stop2 share, wakes per source), battery screen (%, V,
+    mA with sign, °C, health, charge state, time to full or to empty, charger or computer).
+  - **Actions:** power off (says how many alarms are armed and that they will ring), reboot.
+  - Limits: no setting may break L1 (≤ 50 ms) or stop alarms; settings that cost responsiveness are
+    not offered (e.g. no lower CPU clock).
+  - Storage: live values packed in free RTC backup registers (`ioctl` on `/dev/power` and
+    `/dev/backlight`), mirrored to the settings file on the SD card (section L) so they survive a
+    battery disconnect; **never internal flash**. The kernel applies them (it owns the idle ladder
+    and the wake sources); the app only edits them. Group `operator`. GUI as the other system apps
+    (`flipper/gui` now, `libfuri` later). RAM: ~2 KB while open, 0 B static beyond the registers.
+  - Command-line twin `pm` (same `ioctl`s, `-t` output per K.1) for scripts and the shell.
 
 Acceptance:
-- AC7.0 Every setting in `power` takes effect at once, survives a power-off, and matches what
-  `cat /dev/power` and `backlight` report.
+- AC7.0 Every setting in `power` takes effect at once, survives a power-off and a battery
+  disconnect (from the SD copy), and matches what `pm` and `cat /dev/power` report. With
+  `saver` the measured idle current is lower than with `balanced`; automatic power-off happens at
+  the set time and an alarm armed before it still rings.
 - AC7.1 Each app opens and saves files compatible with stock: files saved by stock firmware 1.x
   load, and files saved here load on stock.
 - AC7.2 The IR universal remote for TVs works on at least 3 brands.
