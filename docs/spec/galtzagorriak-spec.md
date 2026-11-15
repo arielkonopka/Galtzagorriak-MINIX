@@ -2956,9 +2956,19 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
       exported keys match no device the Flipper will ever present again.
     The app warns that the file lets anyone who has it decrypt that session's capture and
     recognise the central's identity address later, and offers "delete all canary logs" (M.1).
-  - Personas for the honeypot add a generic "Keyboard" (HID-over-GATT Report Map from `const`,
-    never sends a key: the M.1 rule holds) and a generic "Smart lock" (writes to its "unlock"
-    characteristic are logged and acknowledged with an error).
+  - Personas for the honeypot are idle devices that pair and then do nothing but watch, each a
+    `const` GATT table with our own IDs (M.1):
+    - **Phone:** a generic phone-style peer (Device Information, Battery, a Current Time and a
+      generic "notification" service) that answers reads but originates nothing. Many centrals
+      probe a phone for contacts, messages or pairing-for-transfer; all of it is logged.
+    - **Keyboard:** HID-over-GATT with a `const` Report Map but **never sends a key report**; logs
+      `SET_PROTOCOL`, LED/output reports and any attempt to drive it.
+    - **Mouse:** HID-over-GATT mouse that **never sends a movement or button report**; logs the
+      host's HOGP setup.
+    - **Smart lock** (optional): writes to its "unlock" characteristic are logged and acknowledged
+      with an error.
+    None of them ever acts: the M.1 rule (answer only the protocol minimum, never type, move,
+    notify or drive) holds for every persona.
   - Security: R16.5.5 holds (RPC and serial off), so a paired stranger reaches only the fake GATT
     table. The honeypot ends after 30 min or on Back, and every link is then disconnected.
 - **R16.5.2 Scan requests:** where the stack reports received scan requests (Bluetooth 5 "LE Scan
