@@ -1669,8 +1669,10 @@ infrared, iButton, low-power modes.
     (charge to ~4.0 V, about 80 %, for a Flipper kept on a charger, e.g. desk mode), chosen in
     settings and kept in an RTC backup register (0 B RAM, no flash write). Only the end-of-charge
     voltage (`VREG`) changes; the stock firmware already sets it the same way.
-  - **The charging current is never raised** (owner, 2026-11-15): `ICHG`, the input limit and ICO
-    stay at the stock values. The kernel may only lower or pause charging, never speed it up:
+  - **The charging current stays within the manufacturer's limits** (owner, 2026-11-15): `ICHG`,
+    the input limit and ICO default to the stock values (charger default ≈ 2 A, about 1C) and are
+    never raised above them. The only user choice is **gentle charging** (battery care, R7.1):
+    `ICHG` lowered to ≈ 1 A (0.5C), slower but cooler. Besides that the kernel may only pause:
     - pause while Sub-GHz transmits (as stock: the charger's switching disturbs the radio);
     - pause outside 0–45 °C by the BQ27220 temperature (the board has no battery thermistor on the
       charger's TS pin, so the charger cannot do it itself).
@@ -1788,7 +1790,8 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
   - **Peripherals:** 5 V on the header: off, on, or "off when idle"; header 3V3 off with the SD rail
     or always on (for a module that must stay powered); status LED notifications on/off and
     brightness.
-  - **Battery:** profile `full` / `care` (R6.1); the charging current is not a setting.
+  - **Battery care:** end-of-charge profile `full` / `care` and **gentle charging** on/off (≈ 1 A
+    instead of the stock ≈ 2 A; R6.1). Nothing can set a current above the stock value.
   - **Who keeps it awake:** live list of the sleep-blocker bits and the processes holding the
     devices behind them, sleep statistics (Stop2 share, wakes per source), battery screen (%, V,
     mA with sign, °C, health, charge state, time to full or to empty, charger or computer).
