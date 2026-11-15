@@ -344,7 +344,27 @@ def test_b10_substitute():
           toobig and clean(m))
 
 
-for t in [test_a1_long_lines, test_a2_long_inputs, test_a3_regex,
+def test_inline_text():
+    """One allocation per line: text grows out of its room, shrinks back."""
+    d = tmpdir()
+    write(d, "g", b"ab\ncd\n")
+    m = Mined(["g"], d)
+    m.keys(b"123456789" * 3)                                # grow line 1
+    m.keys(b"\x7f" * 26)                                     # shrink again
+    m.keys(ESC + b"[B", b"Q", CTRL["W"])       # line 2 (same column), in place
+    m.quit(b"n")
+    check("T8f line text grows past its room and shrinks back",
+          read(d, "g") == b"1ab\ncQd\n" and clean(m), repr(read(d, "g")))
+    write(d, "g", b"x\n" * 200)
+    m = Mined(["g"], d)
+    m.keys(CTRL["R"], b"x\r", b"yyyyyyyyyyyyyyyy\r")         # all grow
+    m.keys(CTRL["R"], b"y*\r", b"z\r")                        # all shrink
+    m.keys(CTRL["W"])
+    m.quit(b"n")
+    check("T8f substitute grows and shrinks 200 lines",
+          read(d, "g") == b"z\n" * 200 and clean(m), repr(read(d, "g")[:40]))
+
+for t in [test_inline_text, test_a1_long_lines, test_a2_long_inputs, test_a3_regex,
           test_a4_clipboard, test_a5_hangup, test_a6_full, test_a7_controls,
           test_a8_keys, test_a9_size, test_b10_substitute]:
     t()

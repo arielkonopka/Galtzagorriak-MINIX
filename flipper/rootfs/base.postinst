@@ -5,3 +5,10 @@ grep 'pkg bind' /etc/rc >/dev/null || {
 	 echo 'pkg bind /bin/*'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
 	echo "base: /etc/rc now runs pkg bind /bin/* at boot"
 }
+# Cards made before T8 lack EDITOR/VISUAL in /etc/profile (mined is the
+# default editor); /etc/profile is not replaced by an upgrade.
+grep '^EDITOR=' /etc/profile >/dev/null || {
+	echo 'EDITOR=mined	export EDITOR' >> /etc/profile
+	echo 'VISUAL=mined	export VISUAL' >> /etc/profile
+	echo "base: /etc/profile now sets EDITOR and VISUAL to mined"
+}
