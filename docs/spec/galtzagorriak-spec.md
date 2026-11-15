@@ -1088,6 +1088,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
+| 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
 before Phase 3). From Phase 5 on,
@@ -3408,6 +3409,78 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 
 ---
 
+## Phase 21: Install MINIX on another Flipper (owner request, 2026-11-15)
+
+**Depends on:** 16 (BLE central with passkey pairing, full stack R16.1.0), 17 (signed image R17.2,
+updater image format R17.3), 18b (first-boot wizard on the target). Last phase, after 20.
+Analysis: `reports/flipper-to-flipper-install-analysis.md` in the project files (2026-11-15).
+
+Goal: a MINIX Flipper installs MINIX on a second Flipper (the owner may buy one), with no PC.
+USB cannot do it: both Flippers are USB devices only.
+
+- **R21.1 Fresh image, never a copy.** The installer writes the signed release image from our SD
+  card (the R17.3 file), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
+  and passwords, settings and installed packages are ours. The signature (R17.2) is checked before
+  the first byte goes out. The target starts in the first-boot wizard (18b).
+- **R21.2 (21a, main path) Over BLE, acting as the stock mobile app.** Stock firmware takes firmware
+  updates over BLE RPC (`rpc_storage.c` writes files to its SD card, `rpc_system.c`
+  `system_update_request` starts the stock updater), and the stock updater swaps the CPU2 stack
+  through FUS itself. The `flipinst` app:
+  1. connects as BLE central to the stock BLE serial service and pairs; the target shows a PIN,
+     the user types it on ours (this is the target owner's consent);
+  2. checks the RPC `protobuf_version` and refuses unknown versions; the `.proto` files come from
+     the stock tree (GPL, see the licence rule);
+  3. writes a package in the stock updater format to the target's SD card with RPC `storage_write`:
+     manifest, `firmware.dfu` with the MINIX image, the full BLE stack (R16.1.0) with its
+     `radio_address` and CRC, plus the MINIX files that live on the SD card;
+  4. sends `system_update_request`; the stock updater installs the stack, then MINIX, and resets.
+  On first boot MINIX sets its own option bytes (the stock updater forces stock `ob.data`).
+  The build produces this package (`make stock-update-pkg`); the same package also works by moving
+  the SD card into a stock Flipper and opening `update.fuf` in Archive (no radio).
+- **R21.3 (21b, rescue) SWD over 3 wires**, for a target whose firmware is broken or has no SD card:
+  our pin 2 (PA7) to target pin 10 (SWCLK), pin 3 (PA6) to pin 12 (SWDIO), GND to GND; 3V3 and 5V
+  are not connected (both have their own battery). The header has no NRST.
+  - Stock turns SWD off (pins analog) unless *Settings → System → Debug* is ON, also in stock DFU.
+    The owner accepted this step (2026-11-15). Plan B: poll SWD during the window after a reset.
+  - After attaching: halt, `DEMCR.VC_CORERESET`, `AIRCR.SYSRESETREQ`, so no target code runs;
+    freeze the watchdogs in DBGMCU; check `DBGMCU_IDCODE` 0x495, the Flipper OTP magic, `SFSA`, OB.
+  - If the CPU2 stack has to change: first a small flash-resident radio installer that drives FUS
+    like the stock updater and keeps SWD on, then the system image (the full stack does not fit next
+    to a finished MINIX). Optional variant: that installer receives the rest over BLE, so the cable is
+    needed for a few seconds only.
+  - Write order: erase page 0 first, program it last, so an interrupted run leaves no code to start
+    and can simply be repeated over SWD.
+  - Never write RDP level 2 (0xCC); stop on RDP1/WRP and ask; never touch `SFSA`, `SBRV`, `ESE`,
+    `C2OPT`. Clear `OPTVERR` first (errata 2.2.9). Detach before the final reset (RDP1 blocks flash
+    reads while a debugger is attached).
+  - SWD transactions run in batches inside the GPIO driver (one message per batch, not per bit),
+    in slices of at most 1 ms, below the interactive queue. Free-DAP or Black Magic Probe code may be
+    reused.
+  - Optional backup of the target's CPU1 flash (≈ 860 KB) to our SD card before erasing.
+- **R21.4 SWD on MINIX is off by default** (owner, 2026-11-15: it is a protection): pins analog from
+  the first instructions of the reset handler, a root-only setting turns it on (kept in an RTC backup
+  register, no flash write per boot). Real readout protection is RDP1 (R17.4); ROM DFU by a held button
+  stays as the recovery path (AC17.3).
+- **R21.5** MINIX to MINIX uses the same BLE path with MINIX's own RPC (`rpcd`, Phase 15) and the
+  signed image; no stock updater is involved.
+
+Acceptance:
+- AC21.1 A stock Flipper with a charged battery and an SD card becomes a MINIX Flipper over BLE with
+  no cable, including the full BLE stack; the target shows the wizard.
+- AC21.2 Pulling power from either Flipper at a random point of 21a or 21b leaves the target
+  recoverable by running the installer again (21a: the stock updater resumes; 21b: SWD).
+- AC21.3 A tampered image is refused before anything is written; an RDP2 write cannot be produced.
+- AC21.4 Nothing from our own flash (keys, `/etc/shadow`, settings) appears on the target.
+
+Responsiveness: AC21.R L1 and L2 hold during the whole transfer (BLE is on CPU2; SWD runs in ≤ 1 ms
+slices below the interactive queue).
+
+RAM: kernel 0 B; `flipinst` ≈ 3–5 KB while running (RPC buffer, nanopb), 0 B after exit; SWD batch
+buffer 512 B only while 21b runs. Flash writes on our Flipper: none (reads from SD only; the
+optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and the SWD primitive.
+
+---
+
 ## Deferred (decided 2026-11-14)
 
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
@@ -3463,4 +3536,5 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (owner discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
+| Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
