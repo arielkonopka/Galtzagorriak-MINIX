@@ -9,6 +9,11 @@ Addition (2026-11-14): Phase 12d–12f (background-app tiers, park/hibernate API
 placement, swap without a card, manual notes; owner request).
 Addition (2026-11-14): section J (own versioning: Galtzagorriak 0.x on a MINIX 2.0.0 base, ABI
 number, tags and CHANGELOG; owner decision).
+Addition (2026-11-15): section L (no file data in internal flash; base-system default settings in
+a read-only ROM image with the user's changes on the SD card), R2b.11–R2b.12 (run-time cache
+write budget, rebinding by SHA-256) and BLE bonds kept on the SD card (R15.4, R16.1.2); owner
+request to make flash writes as rare as possible. Background: the project report `hybrid-fs-overlay-analysis.md` (Polish, not in the repo)
+(a Linux-style overlay file system was considered and rejected).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -924,6 +929,65 @@ part of the base system so scripts and settings can be edited on the device.
 For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
 C, Berry or shell, and the `mined` key table.
 
+## L. Flash writes and default settings (owner request, 2026-11-15)
+
+The owner wants writes to internal flash as rare as possible and asked about a hybrid file
+system like Linux overlayfs (read-only layer in flash, changes on the SD card). Analysis:
+project report `hybrid-fs-overlay-analysis.md` (Polish, not in the repo). Decision: no overlay in FS. The whole file system,
+`/etc` included, is already on the SD card, so a changed setting never writes flash today. An
+overlay would add work to the FS core, slow lookups, break the `(dev, ino, ctime)` binding of
+installed programs, and make every `pkg install` rewrite shared metadata pages in flash.
+Instead:
+
+- **L.1 Rule: no file data in internal flash.** Internal flash holds only the system image,
+  the text of installed programs (Phase 2b), the run-time text cache (within R2b.11), and the
+  read-only ROM image of L.2, all written at build, DFU or install time. File contents that can
+  change at run time (settings, logs, keys, app data, swap) go to the SD card. A PR that breaks
+  this needs the owner's sign-off.
+- **L.2 Default settings in a ROM image.** The base system's default settings (`/etc` as built
+  from `flipper/rootfs`, and the defaults of the base apps) are built on the PC into a small
+  read-only MINIX FS image (target ≤ 32 KB) stored in the installed region by `make base-flash`
+  (DFU only; `pkg` never writes it).
+  - A memory-driver minor (`/dev/rom`, like the early `/dev/ram` root image in PORTING.md) serves
+    that flash range read-only as a block device, read in place (XIP) through the FS cache. FS is
+    unchanged.
+  - `/etc/rc` mounts it read-only on `/rom` first.
+  - RAM: 0 B static (one of the existing 8 super block slots, one mount).
+- **L.3 Changes go to the SD card, defaults stay in ROM.** Settings are read with a libc helper,
+  `FILE *cfopen(const char *path, const char *mode)`:
+  - for reading, open `path` (on the SD card); if it does not exist, open `/rom` + `path`;
+  - for writing, always the SD card path (create directories as needed);
+  - programs that read settings use it: `/etc/rc` (`rc.conf`), the launcher, `sensors.conf`
+    readers, `libfuri`'s `/int` mapping (R5.3), Berry's settings binding. Shell scripts use a
+    small `cfcat path` command with the same rule;
+  - deleting the file on the card means "back to the default". No whiteouts are needed: for
+    settings, "missing" correctly means "default". To make a setting empty, write an empty file.
+- **L.4 Reset to defaults.** `settings reset [path...]` (and a launcher item, Settings > System >
+  Reset settings, with a confirmation) removes the given files, or every file under `/etc` that
+  also exists in `/rom/etc`, from the card. `settings diff` lists the files that differ from
+  their default.
+- **L.5 First boot** (`/etc/setup`, Phase 18b wizard) copies only what must be writable from the
+  start (`passwd`, `group`, `utmp`, `mtab`); everything else is read from `/rom` until the user
+  changes it. A damaged or replaced card therefore always comes back with working defaults.
+- **L.6 Package defaults** live with the package on the SD card (`/usr/lib/<pkg>/defaults`, same
+  `cfopen` fallback with that directory instead of `/rom`), so installing a package never writes
+  flash for its settings.
+- **L.7 Later, not scheduled:** booting without a card. The same `/rom` image, extended with
+  program files whose text is in the installed region (bound at build time, since the image's
+  `(dev, ino, ctime)` are fixed), could be the root file system when no card is present. Not
+  part of this work; it needs flash that R2b.9 has to free first.
+
+Acceptance:
+- ACL.1 Fresh card: `/etc/rc.conf` is not on the card, but `cfcat /etc/rc.conf` prints the
+  default from `/rom`; the system boots and the launcher works.
+- ACL.2 Change a setting in the launcher: the file appears on the card, and the flash erase
+  counters (R2b.11) don't change. `settings reset` brings back the default.
+- ACL.3 One day of normal use with nothing new installed: 0 internal-flash pages erased
+  (`free -v`).
+
+For the manual: where settings live, `cfopen`/`cfcat`, `settings reset/diff`, and the flash
+counters in `free -v`.
+
 ---
 
 ## Roadmap: phase order
@@ -1163,6 +1227,35 @@ Requirements:
     and they match what the stock firmware's "Settings > About" shows.
 - **R2b.8** `free -v` (or `pkg list -f`) shows the installed region's use, the cache's use, and
   `SFSA`.
+- **R2b.11 Run-time cache write budget** (owner request 2026-11-15, section L). On top of the
+  admission rule from T2 (a program is copied only after 3 runs from RAM):
+  - MM MUST NOT erase more than `FC_BUDGET` run-time cache pages per 24 h (default 32, the size
+    of the 128 KB cache, i.e. at most about one cycle per page per day: > 25 years at 10,000
+    cycles). When the budget is spent, programs keep running with their text in RAM; nothing
+    else changes;
+  - the counter and the start of its 24 h window SHOULD live in one free RTC backup register
+    (battery domain, 0 B RAM, survives a reset so a reboot loop can't reset the budget; take the
+    register from the map in PORTING.md, I.3). If no register is free: 4 B in MM, reset at boot;
+  - a total erase counter for the cache and one for the installed region (a backup register or
+    the directory header's generation word, whichever costs no RAM), shown by `free -v` (R2b.8)
+    as `flash: cache N pages erased (M today, budget B), installed K`;
+  - root can change `FC_BUDGET` with `svrctl` (`fcache budget 0` turns run-time caching off);
+    `/etc/rc` sets it from `fcache_budget=` in `rc.conf`.
+- **R2b.12 Rebind by content.** When a file no longer matches its record's `(dev, ino, ctime)`
+  (the card was restored from a copy, `/bin` was re-copied, `tar x` over the base system),
+  `pkg bind` MUST compare the file's text SHA-256 with the live records and, on a match, write a
+  new record with the new binding and mark the old one dead, instead of leaving exec to copy the
+  same text into the run-time cache. Cost: one hash per such program, only when `pkg bind` runs;
+  one 64 B record (no page erase unless the directory is full). `/etc/rc` keeps calling
+  `pkg bind /bin/*` at boot; files whose binding already matches are skipped without hashing.
+
+Acceptance (R2b.11, R2b.12):
+- AC2b.9 With `fcache_budget=2`, running five different uncached programs three times each erases
+  at most 2 cache pages that day (`free -v`); the rest run from RAM; after a reboot the count is
+  still 2 (backup register).
+- AC2b.10 `tar cf` of `/bin`, `rm`, `tar xf` back, reboot: `pkg bind` rebinds every base program
+  by hash, the run-time cache stays empty after a login plus `ls -l /bin` (as AC2b.1), and the
+  installed region's directory gets only new records (no text pages written).
 
 Erase-cycle budget:
 - Installing or upgrading a program erases its own pages once (a 20 KB program: 5 pages, one cycle
@@ -2397,7 +2490,14 @@ Responsiveness: see AC13.R; the NFC app's screens meet L1.
 - **R15.4** `bled` daemon, started on demand by `devd`:
   - GATT services: serial (for the mobile app), battery, device information, HID;
   - pairing with a PIN shown on the LCD;
-  - bonding data in CPU2's NVM.
+  - bonding data (owner request 2026-11-15, section L): **SHOULD not be kept in CPU2's flash.**
+    Configure the stack to keep its bonding database in RAM in SRAM2 (the area stock already
+    reserves for it) and save it to a file on the SD card, `/etc/flipper/bt.keys` (root-only,
+    0600), after pairing and on clean shutdown; load it when `bled` starts. Stock works this way
+    (`bt_keys_storage`); check on the installed stack (R2b.10) that this mode is available. If it
+    is not, the PR says how often the stack writes its NVM in normal use (rule on flash writes,
+    `next-tasks.md`). AC15.6: pairing a phone and reconnecting after a reboot changes no
+    internal-flash erase counter (R2b.11).
 - **R15.5** `rpcd`:
   - the stock protobuf RPC (nanopb) over the second USB CDC and over BLE serial;
   - storage list/read/write/delete, app start, screen streaming (from R4b.8 read), input
@@ -2457,8 +2557,9 @@ Requirements:
   pair/bond (LE Secure Connections; passkey shown on or typed into the Flipper as the device
   asks), GATT client discovery of the HID service, Report Map read, and notifications enabled on
   input reports. Multi-role: the mobile-app connection (peripheral) may stay up at the same time.
-- **R16.1.2** Bonding store in flash: the stack keeps bonds in its own NVM in CPU2's flash area
-  (as R15.4); `btbridge` keeps only the list of known devices (address, name, last used) in
+- **R16.1.2** Bonding store: the stack keeps bonds as R15.4 says (in SRAM2, saved to
+  `/etc/flipper/bt.keys` on the SD card; CPU2's flash only if R15.4 found that impossible);
+  `btbridge` keeps only the list of known devices (address, name, last used) in
   `/ext/apps_data/btbridge/devices`. No bond data in RAM when the app is closed.
 - **R16.1.3** USB presentation: the USB HID interface (R10.1) re-enumerates with the **device's
   own Report Map** as its report descriptor, so any HOGP device (mouse with extra buttons,
