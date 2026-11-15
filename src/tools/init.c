@@ -95,7 +95,7 @@ int main(void)
   sigaction(SIGABRT, &sa, NULL);
 
   /* Execute the /etc/rc file. */
-  if ((pid = fork()) != 0) {
+  if ((pid = vfork()) != 0) {	/* R2c.2: the child opens and execs */
 	/* Parent just waits. */
 	while (wait(NULL) != pid) {
 		if (gotabrt) reboot(RBT_HALT);

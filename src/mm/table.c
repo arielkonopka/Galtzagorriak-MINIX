@@ -71,7 +71,11 @@ _PROTOTYPE (int (* const call_vec[NCALLS]), (void) ) = {
 	no_sys,		/* 54 = ioctl	*/
 	no_sys,		/* 55 = fcntl	*/
 	no_sys,		/* 56 = (mpx)	*/
+#if (CHIP == ARM_CM)
+	do_vfork,	/* 57 = vfork (R2c.1) */
+#else
 	no_sys,		/* 57 = unused	*/
+#endif
 	no_sys,		/* 58 = unused	*/
 	do_exec,	/* 59 = execve	*/
 	no_sys,		/* 60 = umask	*/

@@ -96,8 +96,9 @@ static void run(struct app *ap)
 		return;
 	}
 	gui_close();			/* the app opens the devices itself */
-	if ((pid = fork()) == 0) {
-		gr = getgrnam("gui");
+	gr = getgrnam("gui");		/* before: stdio state is ours */
+	if ((pid = vfork()) == 0) {	/* R2c.2; the child only sets ids,
+					 * changes directory and execs */
 		if (pw->pw_uid != 0) {
 			if (setgid(gr != NULL ? gr->gr_gid : pw->pw_gid) < 0
 			    || setuid(pw->pw_uid) < 0)

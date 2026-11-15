@@ -41,6 +41,7 @@ static	char	*signame[] = {
 
 _PROTOTYPE(static int forkexec, (struct op *t, int *pin, int *pout, int act, char **wp, int *pforked ));
 _PROTOTYPE(static int parent, (void));
+_PROTOTYPE(static int vforkable, (struct ioword **iopp));
 _PROTOTYPE(int iosetup, (struct ioword *iop, int pipein, int pipeout ));
 _PROTOTYPE(static void echo, (char **wp ));
 _PROTOTYPE(static struct op **find1case, (struct op *t, char *w ));
@@ -250,7 +251,7 @@ int *pforked;
 	register int f;
 	char *cp;
 	struct ioword **iopp;
-	int resetsig;
+	int resetsig, vforked;
 	char **owp;
 
 	owp = wp;
@@ -277,15 +278,35 @@ int *pforked;
 	}
 	t->words = wp;
 	f = act;
+	vforked = 0;
 	if (shcom == NULL && (f & FEXEC) == 0) {
-		i = parent();
+		/* A simple external command: vfork (R2c.2), no image copy.
+		 * The child runs in our memory until exec, so it must not
+		 * touch our state: no assignments, no here-documents, no
+		 * substitutions in redirections; our globals it changes are
+		 * put back below; and it never returns from here (_exit). */
+		int canv = t->type == TCOM && owp != NULL && *owp == NULL
+						&& vforkable(t->ioact);
+		int s_talking = talking, s_intr = intr, s_execflg = execflg;
+		struct brkcon *s_brklist = brklist;
+
+		i = canv ? vfork() : parent();
 		if (i != 0) {
+			if (canv) {
+				talking = s_talking;
+				intr = s_intr;
+				execflg = s_execflg;
+				brklist = s_brklist;
+				if (i == -1)
+					warn("try again");
+			}
 			if (i == -1)
 				return(rv);
 			if (pin != NULL)
 				closepipe(pin);
 			return(pout==NULL? setstatus(waitfor(i,0)): 0);
 		}
+		vforked = canv;
 		if (talking) {
 			signal(SIGINT, SIG_IGN);
 			signal(SIGQUIT, SIG_IGN);
@@ -293,7 +314,8 @@ int *pforked;
 		}
 		talking = 0;
 		intr = 0;
-		(*pforked)++;
+		if (!vforked)
+			(*pforked)++;
 		brklist = 0;
 		execflg = 0;
 	}
@@ -322,8 +344,11 @@ int *pforked;
 			return(-1);
 		}
 		while (*iopp)
-			if (iosetup(*iopp++, pin!=NULL, pout!=NULL))
+			if (iosetup(*iopp++, pin!=NULL, pout!=NULL)) {
+				if (vforked)
+					_exit(1);	/* not back into our frames */
 				return(rv);
+			}
 	}
 	if (shcom)
 		return(setstatus((*shcom)(t)));
@@ -340,10 +365,34 @@ int *pforked;
 		exit(0);
 	cp = rexecve(wp[0], wp, makenv());
 	prs(wp[0]); prs(": "); warn(cp);
+	if (vforked)
+		_exit(exstat);		/* not exit(): stdio and traps are ours */
 	if (!execflg)
 		trap[0] = NULL;
 	leave();
 	/* NOTREACHED */
+}
+
+/*
+ * Redirections a vfork child may do: plain files and dups, names without
+ * substitutions (evalstr would run a command for `...`).
+ */
+static int
+vforkable(iopp)
+register struct ioword **iopp;
+{
+	register char *cp;
+
+	if (iopp == NULL)
+		return(1);
+	for (; *iopp != NULL; iopp++) {
+		if ((*iopp)->io_flag & IOHERE)
+			return(0);
+		for (cp = (*iopp)->io_name; cp != NULL && *cp != '\0'; cp++)
+			if (*cp == '`' || *cp == '$')
+				return(0);
+	}
+	return(1);
 }
 
 /*

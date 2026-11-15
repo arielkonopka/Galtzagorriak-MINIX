@@ -104,6 +104,9 @@ _PROTOTYPE( int execve, (const char *_path, char *const _argv[],
 						char *const _envp[])	);
 _PROTOTYPE( int execvp, (const char *_file, char *const _argv[])	);
 _PROTOTYPE( pid_t fork, (void)						);
+#ifdef _MINIX
+_PROTOTYPE( pid_t vfork, (void)					);
+#endif
 _PROTOTYPE( long fpathconf, (int _fd, int _name)			);
 _PROTOTYPE( char *getcwd, (char *_buf, size_t _size)			);
 _PROTOTYPE( gid_t getegid, (void)					);

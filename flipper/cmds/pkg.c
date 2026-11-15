@@ -72,8 +72,8 @@ static int run(const char *dir, char *const argv[])
 	int st;
 
 	fflush(stdout);
-	if ((pid = fork()) < 0) die("cannot fork:", strerror(errno));
-	if (pid == 0) {
+	if ((pid = vfork()) < 0) die("cannot fork:", strerror(errno));
+	if (pid == 0) {			/* vfork: only chdir, open, dup, exec */
 		if (dir != NULL && chdir(dir) < 0) _exit(127);
 		if (strcmp(argv[0], "/bin/tar") == 0) {	/* "Made directory" */
 			close(1);
@@ -187,14 +187,14 @@ static int file_list(const char *archive, const char *listpath)
 
 	sprintf(raw, "%s.raw", listpath);
 	fflush(stdout);
-	if ((pid = fork()) < 0) return -1;
-	if (pid == 0) {
+	argv[0] = "/bin/tar"; argv[1] = "tf"; argv[2] = (char *) archive;
+	argv[3] = NULL;
+	if ((pid = vfork()) < 0) return -1;
+	if (pid == 0) {			/* vfork: only creat, dup, exec */
 		if ((fd = creat(raw, 0600)) < 0) _exit(127);
 		dup2(fd, 1);
 		dup2(fd, 2);		/* MINIX tar lists on stderr */
 		close(fd);
-		argv[0] = "/bin/tar"; argv[1] = "tf"; argv[2] = (char *) archive;
-		argv[3] = NULL;
 		execv(argv[0], argv);
 		_exit(127);
 	}

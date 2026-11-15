@@ -54,5 +54,9 @@ EXTERN struct mproc {
 #define	TRACED		0100	/* set if process is to be traced */
 #define STOPPED		0200	/* set if process stopped for tracing */
 #define SIGSUSPENDED 	0400	/* set by SIGSUSPEND system call */
+#define VFORKED		01000	/* a vfork child: runs in its parent's memory
+				 * until exec or exit (R2c.1) */
+#define VFORKING	02000	/* waits in vfork for that child; signals to
+				 * it wait too (its stack is in use) */
 
 #define NIL_MPROC ((struct mproc *) 0)

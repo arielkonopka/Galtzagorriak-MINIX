@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (Phase 2c) `vfork`: the shell, init, the launcher and pkg start programs without copying themselves first, so commands still start when memory is short (`vfork(2)`). Base 3.56.
 ## 0.1.1 (2026-11-15): tasks and fixes after Phase 1
 
 Tasks T2, T4, T7, T8, T9, T11, T12, T13 (core) and T4b steps 1-2, parts of Phases 2b and 4a, infrared,

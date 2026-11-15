@@ -402,6 +402,12 @@ int signo;			/* signal to send to process (1 to _NSIG) */
 	stop_proc(rmp, signo);	/* a signal causes it to stop */
 	return;
   }
+  /* A vfork parent waits for its child, which runs on its stack: the
+   * signal waits too (vfork_done delivers it). */
+  if (rmp->mp_flags & VFORKING) {
+	sigaddset(&rmp->mp_sigpending, signo);
+	return;
+  }
   /* Some signals are ignored by default. */
   if (sigismember(&rmp->mp_ignore, signo)) return; 
 
