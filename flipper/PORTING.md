@@ -401,6 +401,28 @@ text gets only a new record, no page is written.  Older cards need the
 `pkg bind /bin/*` line in /etc/rc added by hand (the base package does not
 carry /etc).
 
+T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
+the root device with their data in ordinary cache blocks; counted in
+QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile
+/etc/passwd`, then `sync`:
+
+| | to /dev/null | through `\| wc` |
+|---|---|---|
+| before | 7 writes (atime of the inodes) | 76 writes: the pipe's data blocks, its inode, the bitmaps |
+| after | 7 | 9 (the two bitmap blocks once) |
+
+Why: (1) evicting any dirty block calls flushall(), which writes every
+dirty block of the device, unread pipe data included; (2) a pipe's
+blocks stayed dirty after they were read, and after the pipe was closed
+and its zones freed; (3) the pipe's inode was written at creation and
+at close.  Now: (1) get_block evicts the oldest clean block and a dirty
+one only when every free buffer is dirty; (2) forget_zone() marks a
+zone's cached blocks clean when a pipe has been read empty and when any
+zone is freed (also saves the writes of a file deleted before the
+next sync); (3) an unnamed pipe's inode is never written.  Pipe data
+still goes to the card if it is evicted unread with every buffer dirty,
+or if `update` syncs while a pipe holds data.  RAM: 0 B.
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.
