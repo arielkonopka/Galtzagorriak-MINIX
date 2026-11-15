@@ -119,7 +119,7 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - Acceptance ACL.1–ACL.3. RAM: 0 B static. Flash writes: only at `base-flash`/DFU.
 - BLE bonds on the SD card (R15.4) are done in Phase 15, not here.
 
-## T13. `camfind` core and the ESP32 scan firmware (owner request 2026-11-15 20:23 Warsaw): after T1–T5, may go alongside T6
+## T13. `camfind` core (owner request 2026-11-15 20:23 Warsaw): core DONE, #75 merged (dcfd0db); the ESP32 firmware moved to "Deferred to the end" (#78)
 Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/dev/adc`), 8 (CC1101) and 7b (GUI), which are not done, so this task does the parts that need none of them, the same way T6 does for `sbctl`.
 - `flipper/apps/camfind/cfcore.c/.h`: pure C, no I/O, no malloc, caller owns all state.
   - Line parser for the devboard protocol (`AP`, `STA`, `RATE`, R9.1.1), robust to garbage and cut lines.
@@ -129,14 +129,22 @@ Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/d
   - Goertzel on ADC blocks (R9.1.7): steady vs 50/60/100/120 Hz vs kHz PWM.
   - Sub-GHz tables (R9.1.3): band steps and the cellular mode (LTE B20 832–862, B8/GSM 880–915 MHz), peak hold and burst counter on an RSSI stream.
 - Host unit tests (`make -C flipper/apps/camfind test`, host compiler): parser fuzz cases, OUI lookups, a recorded or synthetic camera rate trace that passes the motion test and a phone trace that fails it, Goertzel on synthetic signals, burst counter on a synthetic RSSI trace.
-- `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). R9.2.4 (`wifi` canary) extends this same firmware later.
+- `esp32/camscan/`: moved to "Deferred to the end" below (owner decision 2026-11-15, #78).
 - No UI, no drivers yet. RAM on target: 0 B (code in flash, state owned by the caller; budgets in R9.1.x apply when the app is built). Flash ≈ 6 KB for the core + ≈ 1.5 KB OUI table.
 - Hardware facts for later (from the 2026-11-15 schematic check): IR TX LEDs are not readable by the MCU; header ADC pins 3, 4, 7, 15, 16 (pin 2 = external IR TX).
 
 ## Still open from reviews
-- IR (#46, merged 2026-11-15 by owner decision; supersedes #6/#7): **win back the kernel +64 B** (budget 15168 → 15104). Also `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it).
-- mined (#45): one allocation per line so `CHMEM_mined` fits 12 KB; `EDITOR`/`VISUAL` for existing cards via the base postinst.
-- Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
-- T2 (#24, merged by owner decision 2026-11-14: responsiveness first): **win back the MM +68 B** (`runs[]` + `job`). Options: 4-byte `runs[]` entries (28-bit key from crc^owner + 4-bit count), one shared hex table, trim `hole[]`. Also **check the flash copy before `J_RECORD`** (SHA-256 as in finst.c, or the text CRC), so a file rewritten during the copy never lands in the cache under the old key.
-- Phase 2b (#37/#38): AC2b.R1 (L6 from the installed region), AC2b.R2 (`lat` during a 50 KB install), AC2b.5 (power-cut test), MM stack high-water after bind + compaction (estimated 500–600 of 1024 B), first-boot bind time in PORTING.md; old cards need `pkg bind /bin/*` in `/etc/rc` (have pkg/update add it, or document it).
+- IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
+- R2b.12 (#72): measure L9 during a forced installed-region compaction on the Flipper (it now asks FS `INOCHK` per record) and write the number in PORTING.md. Optional: `in_lookup`'s head-CRC check uses 2 `lseek` + 4 x 64 B `read` per exec; one 256 B read into a buffer free during exec would halve the FS round trips if L6 shows it.
+- I.1 (#70): the stock firmware keeps the RTC in local time; spec I.1 wants UTC. Fix with the time-zone setting (18b wizard / `setup tz`); until then `date` is off by the zone offset (bindings are not affected).
+- Backlight (#81), polish: fade **on** as well as off (owner wish: no snapping). Off fades in 0.5 s by LP5562 engine 1; add a short up-ramp (about 150 ms) on wake with the same engine program.
+- base postinst (#79), nit: `chmod 755 /rom` runs on every install and may print EROFS when /rom is mounted; make it quiet or run it only after `mkdir`.
+- Flipper `NR_SUPERS` is 4 and full since T12 (root, /rom, /usr, /home): any further mount needs a fifth slot (RAM) or an on-demand /rom.
+
+## Deferred to the end (owner decision 2026-11-15, #78): Wi-Fi / ESP32 devboard work
+The owner cannot find the Wi-Fi devboard for now. Everything that needs it or ESP-IDF waits until the rest of the plan is done (roadmap Phase 22):
+- `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). The Flipper-side parser and motion test are already in `cfcore` (#75).
+- R9.2.4 `wifi` canary (extends the same firmware).
+- R19.7 ESP32 offload mode (Wi-Fi module networking). Phase 19 parts that do not need the devboard (USB, BLE, CC1101, a Linux module on the UART) keep their place.
+- `camfind` v1 ships without Wi-Fi meanwhile (AC9.1.3: "Wi-Fi unavailable", the other scans run).

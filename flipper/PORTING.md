@@ -104,6 +104,7 @@ Without the buttons (2026-11-14):
   | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
+  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 300) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
@@ -643,6 +644,28 @@ card is selected (the LCD shares SPI2).
   2.2 s, 1.8 s of it in tasks, the disk task's longest slice 16.7 ms.
   Step 2: SPI2 DMA with the task blocked on the transfer-complete
   interrupt, and the busy wait on the clock.
+
+Backlight idle timeout (owner request 2026-11-15): the LCD backlight goes
+off after 5 minutes without a key or button (USB console keys count
+too) and comes back at the next one.
+- The clock tick only compares `k_input` with the timeout and wakes the
+  device task on a change; the task does the LP5562's I2C (`bl_apply`).
+- Brightness, timeout and state live in RTC backup register 15, so
+  they are kept over resets: 0 B of RAM.
+- `backlight [LEVEL [SECONDS]]` shows or sets them through
+  `/dev/backlight`: a 3-byte write sets the timeout, and a read gives
+  the state.  A settings app can use the same device later.
+- Off softly: the LP5562's engine 1 fades the white channel from the
+  current level to 0 in about 0.5 s on its own (no CPU, no I2C while it
+  runs; the program and register sequence of the stock firmware's
+  `lp5562_execute_ramp`).  On at once: `hal_backlight` gives the channel
+  back to direct control, stops the engine and sets the level.  Owner,
+  on the Flipper: "naprawdę super".
+- With the light off, a press only turns it on (owner): neither that
+  press nor anything else reaches the apps until every button is up.
+  The flag is the top bit of flipdev's `last_buttons`, so no RAM.
+- Flipper: `backlight 255 10; sleep 15; backlight` → "now off (idle)";
+  `sleep 1; backlight` after a key → "now on".
 
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
