@@ -89,10 +89,6 @@ u32_t *basep, *sizep;		/* region (all ops) */
 	if (reported++ < 4)
 		printf("flash: %s 0x%x failed, SR 0x%x\n",
 			op == FL_ERASE ? "erase" : "write", addr, hal_flash_sr);
-	if (reported <= 4)
-		printf("flash: now SR %x CR %x RCC_CR %x OPTR %x SFR %x\n",
-			hal_flash_dbg[0], hal_flash_dbg[1], hal_flash_dbg[2],
-			hal_flash_dbg[3], hal_flash_dbg[4]);
 	return(EIO);
   }
   return(OK);

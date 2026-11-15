@@ -176,6 +176,8 @@ message *m_ptr;			/* pointer to message buffer */
 #if LATTRACE
   if (istaskp(caller_ptr) && m_ptr->m_type == REVIVE)
 	lat_revive(m_ptr->REP_PROC_NR);
+  if (proc_number(caller_ptr) == FS_PROC_NR && dest >= 0)
+	lat_reply(proc_addr(dest));
 #endif
 
   /* User processes are only allowed to send to FS and MM.  Check for this. */

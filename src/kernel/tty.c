@@ -45,6 +45,10 @@
  */
 
 #include "kernel.h"
+#if (CHIP == ARM_CM)
+#include <minix/gzversion.h>
+#include <gzbuild.h>
+#endif
 #include <termios.h>
 #if ENABLE_SRCCOMPAT || ENABLE_BINCOMPAT
 #include <sgtty.h>
@@ -142,7 +146,11 @@ PUBLIC void tty_task()
   /* Initialize the terminal lines. */
   for (tp = FIRST_TTY; tp < END_TTY; tp++) tty_init(tp);
 
-  /* Display the Minix startup banner. */
+  /* Display the startup banner. */
+#if (CHIP == ARM_CM)
+  printf("%s %s%s (based on %s), ABI %d\n", GZ_NAME, GZ_RELEASE, GZ_BUILD,
+						GZ_BASE, GZ_ABI);
+#endif
   printf("Minix %s.%s  Copyright 1997 Prentice-Hall, Inc.\n\n",
 						OS_RELEASE, OS_VERSION);
 

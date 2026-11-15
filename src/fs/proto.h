@@ -14,6 +14,7 @@ _PROTOTYPE( struct buf *get_block, (Dev_t dev, block_t block,int only_search));
 _PROTOTYPE( void invalidate, (Dev_t device)				);
 _PROTOTYPE( void put_block, (struct buf *bp, int block_type)		);
 _PROTOTYPE( void rw_block, (struct buf *bp, int rw_flag)		);
+_PROTOTYPE( void forget_zone, (Dev_t dev, zone_t z, int scale)		);
 _PROTOTYPE( void rw_scattered, (Dev_t dev,
 			struct buf **bufq, int bufqsize, int rw_flag)	);
 

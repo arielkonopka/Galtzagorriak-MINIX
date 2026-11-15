@@ -51,7 +51,7 @@ int rw_flag;			/* READING or WRITING */
   off_t bytes_left, f_size, position;
   unsigned int off, cum_io;
   int op, oflags, r, chunk, usr, seg, block_spec, char_spec;
-  int regular, partial_pipe = 0, partial_cnt = 0;
+  int regular, partial_pipe = 0, partial_cnt = 0, i;
   dev_t dev;
   mode_t mode_word;
   struct filp *wf;
@@ -168,7 +168,11 @@ int rw_flag;			/* READING or WRITING */
 	}
   } else {
 	if (rip->i_pipe == I_PIPE && position >= rip->i_size) {
-		/* Reset pipe pointers. */
+		/* Reset pipe pointers.  What was in it has been read: it
+		 * need not be written to the disk (T9). */
+		for (i = 0; i < V1_NR_DZONES; i++)
+			forget_zone(rip->i_dev, rip->i_zone[i],
+					get_super(rip->i_dev)->s_log_zone_size);
 		rip->i_size = 0;	/* no data left */
 		position = 0;		/* reset reader(s) */
 		if ( (wf = find_filp(rip, W_BIT)) != NIL_FILP) wf->filp_pos =0;

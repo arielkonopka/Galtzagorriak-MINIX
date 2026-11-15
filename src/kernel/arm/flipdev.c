@@ -333,6 +333,7 @@ PUBLIC void flipdev_tick()
 	}
   }
   if (changed == 0) return;
+  k_input = uptime_irq();		/* no background flash work now */
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
 	if (ev_head - ev_tail < NEVENTS) {

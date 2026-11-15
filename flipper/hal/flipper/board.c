@@ -1085,7 +1085,6 @@ void hal_flash_region(uint32_t *base, uint32_t *size)
 }
 
 uint32_t hal_flash_sr;			/* SR of the last failure, for the log */
-uint32_t hal_flash_dbg[5];
 
 /* A page erase takes about 22 ms, a double word 82 us (DS11929); give up
  * after a few hundred ms instead of hanging with interrupts masked. */
@@ -1144,11 +1143,6 @@ static void flash_done(void)
 {
 	uint32_t acr = FLASH->ACR & (FLASH_ACR_ICEN | FLASH_ACR_DCEN);
 
-	hal_flash_dbg[0] = FLASH->SR;
-	hal_flash_dbg[1] = FLASH->CR;
-	hal_flash_dbg[2] = RCC->CR;
-	hal_flash_dbg[3] = FLASH->OPTR;
-	hal_flash_dbg[4] = FLASH->SFR;
 	/* FLASH_CR is not writable while the controller is busy (bus error) */
 	if (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) return;
 	FLASH->CR |= FLASH_CR_LOCK;

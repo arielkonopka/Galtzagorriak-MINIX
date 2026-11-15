@@ -17,6 +17,7 @@
 
 #include "mm.h"
 #include <sys/stat.h>
+#include <minix/gzversion.h>
 #include <minix/callnr.h>
 #include <a.out.h>
 #include <signal.h>
@@ -331,6 +332,9 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 #endif
 #if (CHIP == ARM_CM)
   if (hdr.a_cpu != A_ARMCM) return(ENOEXEC);
+  /* Built for another ABI (spec J.3): 0 is a program from before the
+   * stamp, ABI 1.  Refused before anything is allocated. */
+  if (hdr.a_version != 0 && hdr.a_version != GZ_ABI) return(ENOEXEC);
 #endif
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
 
