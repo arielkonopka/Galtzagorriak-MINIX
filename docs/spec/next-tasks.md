@@ -133,6 +133,50 @@ Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/d
 - No UI, no drivers yet. RAM on target: 0 B (code in flash, state owned by the caller; budgets in R9.1.x apply when the app is built). Flash ≈ 6 KB for the core + ≈ 1.5 KB OUI table.
 - Hardware facts for later (from the 2026-11-15 schematic check): IR TX LEDs are not readable by the MCU; header ADC pins 3, 4, 7, 15, 16 (pin 2 = external IR TX).
 
+## T14. Power management, part 1 (owner request 2026-11-15 22:33 Warsaw): T14a any time, T14b–T14d in order
+Source: the power budget analysis of 2026-11-15 (project report `power-budget-analysis.md`). The facts each step needs are copied here. Spec: R6.1, R6.8, R4b.2, F.3, R20a.4; these steps pull them forward and correct F.3. Responsiveness first: no step may make L1–L10 worse (`lat` before/after in PORTING.md). No run-time flash writes and no option-byte writes in any step.
+
+Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_hal_rtc.c`, `furi_hal_os.c`, `scripts/ob.data`):
+- Power tree: BAT → BQ25896 BATFET → SYS. SYS → LM3281 (always on) → 3.3V (MCU, LCD, CC1101, ST25R3916 logic, buttons). SYS → second LM3281 with EN = **PA3 (PERIPH_POWER**, 10k pull-up, so on by default) → ext3.3V: **microSD and header pin 9 only**. SYS → FAN48610 5 V boost (always on) for the NFC/RFID board. TSOP75338 IR receiver on SYS through 10 Ω (0.35 mA, always on, no control). BAT → RS3221 LDO → **MCU VBAT** (RTC and backup registers survive power-off).
+- **BUTTON_BACK (PC13) is also the BQ25896 QON input.** The charger INT and the gauge GPOUT are not routed to the MCU (test pads only): USB plug and low battery must be polled over I2C.
+- EXTI lines in use or reserved: buttons 3 (OK, PH3), 6 (Down, PC6), 10 (Up), 11 (Left), 12 (Right), 13 (Back); IR RX PA0 (0), CC1101 GDO0 PA1 (1), NFC IRQ PA2 (2), iButton PB14 (14). Header pins with a free EXTI line: only PA4 and PA7.
+- Stock option bytes have `IWDGSTOP=1`: the IWDG keeps counting in Stop2. Our IWDG is 2 s.
+- Stock idle current is 1.5 mA (Flipper blog, FW 0.82). Battery 2100 mAh.
+
+### T14a. Zero-RAM power fixes at boot (small, any time)
+- Enable the SMPS in step-down mode after the clock setup (stock: `LL_PWR_SMPS_SetMode(LL_PWR_SMPS_STEP_DOWN)` in `furi_hal_power_init`; read RM0434 for the SMPS clock source and the order against the PLL). Halves the run current.
+- Park the radios: SPI1 pins, CC1101 CS (PD0) and NFC CS (PE4) high. CC1101: `SRES` strobe, wait for CHIP_RDYn, then `SPWD` (after a power-on reset it sits in IDLE at ~1.7 mA). ST25R3916: direct command `SET_DEFAULT`, then op-control register 0 (power-down). Use the stock register values (`furi_hal_subghz_init/sleep`, `furi_hal_nfc_init` + `furi_hal_nfc_low_power_mode_start`; GPL, fine).
+- Unused pins to analog mode; `DBGMCU` stop/standby clocks off unless the debug flag is set.
+- Acceptance: CC1101 `MARCSTATE` read back = SLEEP and ST25R3916 op-control = 0 at the end of `hal_init`; QEMU board unaffected; idle current before/after in PORTING.md if a meter is at hand (otherwise say so).
+- RAM: 0 B. Flash: about +300 B.
+
+### T14b. EXTI buttons, tickless idle, Stop2 (R6.8, R4b.2, R20a.4)
+- Buttons on EXTI (lines above), debounce only while a button is down. `flipdev_tick` stops polling buttons.
+- LPTIM1 on the LSE as the one-shot wake timer. Before sleeping, `idle_task` computes the next due time (clock alarms, `REVIVE`/ms timers, the backlight timeout), arms LPTIM1 and stops SysTick; after waking it adds the slept time to the uptime and `realtime` and restarts SysTick.
+- **Sleep blocker:** a 32-bit mask in the kernel (4 B). A driver sets its bit while it needs fast clocks (SPI/I2C/DMA transfer, pulse engine armed, speaker PWM, USB attached, UART console active). Stop2 only when the mask is 0 and nothing is runnable; otherwise WFI as today.
+- Stop2 entry/exit as stock `furi_hal_power_deep_sleep` (without the CPU2 semaphores, CPU2 is not started): PLL → HSE → HSI16 with `STOPWUCK=1`, `LPMS=Stop2` (also write `PWR_C2CR1.LPMS` as stock does), `SLEEPDEEP`, `WFI`; after: HSI16 → HSE → PLL, RTC shadow resync. **Serve a button interrupt on HSI16 at once** and finish the HSE/PLL switch afterwards, so the crystal start-up never adds to L1.
+- **Watchdog:** without touching option bytes. Either reprogram the IWDG to its longest period (LSI/256, 4095 ≈ 32 s; wait for PVU/RVU) before a long sleep and back to 2 s after waking, with LPTIM1 waking every ~25 s to kick it; or always wake every ~1.5 s. Pick one and say which.
+- Statistics (≤ 16 B): time in Stop2, number of wakes per source; printed by `/dev/power` (T14c) or a `lat` line.
+- Acceptance: AC6.R (button wake meets L1: ≤ 50 ms max, measure p99/max over 100 presses from Stop2), the clock does not drift more than the LSE over 1 h of idle, the IWDG never fires in 8 h of idle, USB console still works (USB attached blocks Stop2), QEMU path unchanged (QEMU has no Stop2: WFI only).
+- RAM: kernel ≤ +24 B. Flash ≈ +1.5 KB.
+
+### T14c. `/dev/power` and real power-off with alarm wake (R6.1, F.3, AC6.1, AC6.2)
+- BQ27220 and BQ25896 drivers on I2C1 (stock `lib/drivers/bq27220.c`, `bq25896.c`). `/dev/power` read: SoC %, voltage, current, temperature, charging state, VBUS, plus the T14b statistics. Charger ADC **one-shot on demand**, not continuous (stock leaves it continuous).
+- Polling (no interrupt lines): every 1 s while the screen is lit, every few minutes in Stop2 (SYSDWN → `SIGPWR` to INIT; USB plugged → start the USB stack). No flash writes below a low-voltage threshold.
+- **Power-off = BQ25896 ship mode**, as stock `furi_hal_power_off`: enable the RTC alarm output (Alarm A, open-drain, active low) **on PC13**, **switch ext3.3V on** (stock: "shutting down with ext 3V3 off is causing LSE to stop"), short vibro, then the ship-mode command. With USB attached ship mode cannot cut SYS: sleep instead.
+- **Alarm while off:** the RTC (on VBAT) pulls PC13 = Back = charger QON, the charger turns the BATFET on and the Flipper boots. This replaces F.3's "Standby or Shutdown". At boot, read the wake reason (RTC ALRAF, backup register) **before** reading boot key combos (Back looks pressed until the flag is cleared), then turn the alarm output off and send `SIGRTC` as F.2 says.
+- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper (record the delay from the alarm time to the first frame); Up+Back self test still works after a normal power-on.
+- RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
+
+### T14d. Screen-off state and peripheral power (after T14b)
+- Backlight: a dim stage before off (e.g. 10% after 30 s, off at the existing timeout, default stays 300 s as the owner set it), using the LP5562 engine ramp from #81 (0 B RAM). Separate defaults on battery and on USB.
+- LCD power save (display off + all points on: the ST7567 keeps its RAM) a few minutes after the backlight goes off, on battery only; any button leaves power save with no redraw. Desk mode (R7b.2) keeps the LCD on.
+- SD card power: with the screen off and the card idle for N minutes (no open writes, cache flushed, card not busy), switch ext3.3V off (PA3). Start re-initialising the card at the first button press, in parallel with the backlight ramp, so the ~300 ms card start is hidden. Header pin 9 also loses 3V3 then: never cut it while `/dev/gpio` has a user or 3V3 output is enabled.
+- Acceptance: the first frame after a key in screen-off meets L1; opening an app from the SD card after a power-cut meets its L6 budget, or the PR says by how much it misses; idle current with screen off recorded.
+- RAM: 0 B (a few bits in existing flags). Flash ≈ +1 KB.
+
+Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.

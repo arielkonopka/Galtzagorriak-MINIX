@@ -431,9 +431,11 @@ provides them as small shared services, so each new app is only its UI plus a fe
 - In Run and Stop2 the RTC alarm wakes the CPU directly (R6.8). The ST7567 LCD keeps its image with
   the CPU stopped, so a desk clock updates once a minute from the RTC wake-up timer and sleeps in
   between.
-- **Off with alarms armed.** If the power-off path keeps the RTC domain powered (AC6.2 checks it),
-  power-off uses Standby or Shutdown with RTC Alarm A as wake source; the device boots (L10) and
-  `timed` rings. If it does not, the power-off menu warns "N alarms armed: sleep instead?".
+- **Off with alarms armed.** Power-off is the BQ25896 ship mode (BATFET off); the RTC stays powered
+  from VBAT (its own LDO from the battery). Before ship mode the RTC alarm output (Alarm A,
+  open-drain) is enabled on PC13, which is also the charger's QON input: at the alarm the charger
+  turns power back on, the device boots (L10) and `timed` rings. INIT reads the wake reason before
+  the boot key combos (Back looks pressed until the flag is cleared). Details in next-tasks T14c.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
