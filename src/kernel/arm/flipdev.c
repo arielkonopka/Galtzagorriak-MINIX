@@ -426,10 +426,10 @@ PRIVATE void bl_apply()
   int idle = t != 0 && get_uptime() - k_input >= t;
 
   if (idle && !(st & HAL_BL_OFF)) {
-	hal_backlight(0);
+	hal_backlight_fade(HAL_BL_LEVEL(st), 500);	/* off softly, 0.5 s */
 	hal_bl_state_set(st | HAL_BL_OFF);
   } else if (!idle && (st & HAL_BL_OFF)) {
-	hal_backlight(HAL_BL_LEVEL(st));
+	hal_backlight(HAL_BL_LEVEL(st));	/* on at once */
 	hal_bl_state_set(st & ~HAL_BL_OFF);
   }
 }

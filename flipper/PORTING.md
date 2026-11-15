@@ -636,6 +636,12 @@ too) and comes back at the next one.
 - `backlight [LEVEL [SECONDS]]` shows or sets them through
   `/dev/backlight`: a 3-byte write sets the timeout, and a read gives
   the state.  A settings app can use the same device later.
+- Off softly: the LP5562's engine 1 fades the white channel from the
+  current level to 0 in about 0.5 s on its own (no CPU, no I2C while it
+  runs; the program and register sequence of the stock firmware's
+  `lp5562_execute_ramp`).  On at once: `hal_backlight` gives the channel
+  back to direct control, stops the engine and sets the level.  Owner,
+  on the Flipper: "naprawdę super".
 - With the light off, a press only turns it on (owner): neither that
   press nor anything else reaches the apps until every button is up.
   The flag is the top bit of flipdev's `last_buttons`, so no RAM.

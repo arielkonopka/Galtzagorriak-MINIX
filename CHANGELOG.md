@@ -6,7 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
-- The LCD backlight turns off after 5 minutes without a key and on at the next key or button (that press only turns it on); `backlight [LEVEL [SECONDS]]` sets brightness and timeout (kept over resets). Base 3.55.
+- The LCD backlight fades out (0.5 s) after 5 minutes without a key and on at the next key or button (that press only turns it on); `backlight [LEVEL [SECONDS]]` sets brightness and timeout (kept over resets). Base 3.55.
 - (T13) `camfind` core, host-tested: the devboard line parser, camera/IoT scoring with an OUI table from the IEEE registry, Wi-Fi motion correlation, locate mapping, IR modulation (Goertzel) and the Sub-GHz/cellular sweep tables.
 - (T12, L.3-L.4) Settings fall back to their defaults in `/rom`: `cfopen()` in libc, `cfcat`, `settings diff|reset`; the launcher's app list and the motd use them. Base 3.53.
 - (T11, R2b.12) `pkg bind` rebinds programs copied back (new inode) to the text already in flash; compaction drops records whose file is gone (FS `INOCHK`); exec also checks a CRC of the start of an installed program's text. Base 3.52.

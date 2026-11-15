@@ -273,6 +273,7 @@ int hal_usb_getc(void) { return -1; }
 int hal_usb_peekc(void) { return -1; }
 
 void hal_backlight(unsigned level) { (void) level; }
+void hal_backlight_fade(unsigned from, unsigned ms) { (void) from; (void) ms; }
 static uint32_t bl_state = 255u << 16 | 300u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }
 void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
