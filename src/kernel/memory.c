@@ -151,6 +151,15 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 
   /* Set up 'mem_phys' for /dev/mem, /dev/kmem, or /dev/ram */
   mem_phys = dv->dv_base + iop->io_position;
+#if (CHIP == ARM_CM)
+  /* Only where the board has memory: a hole or a peripheral would be a
+   * bus fault in this task, i.e. a panic (dd skip= reads from 0 on). */
+  if ((device == MEM_DEV || device == KMEM_DEV) && count > 0) {
+	count = (int) hal_mem_span((u32_t) mem_phys, (u32_t) count,
+						opcode == DEV_WRITE);
+	if (count == 0) return(iop->io_nbytes = EIO);
+  }
+#endif
 
   /* Book the number of bytes to be transferred in advance. */
   iop->io_nbytes -= count;
