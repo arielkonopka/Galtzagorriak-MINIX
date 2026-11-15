@@ -17,6 +17,13 @@ GitHub Actions runs these on every PR; a red check means the PR is not ready for
 - `pr-rules`: code changes add a `CHANGELOG.md` `Unreleased` line (skip: label `no-changelog`); user-visible changes touch `docs/manual/` or the PR description has a line `Manual: <why no change is needed>` (skip: label `no-manual`).
 - L1–L10 are **not** measured in CI: QEMU's timing is not the Flipper's. `lat` numbers on the device stay in PORTING.md as before.
 
+## Two workers (owner, 2026-11-15): the local agent and the GitHub Actions worker
+Two agents implement tasks in parallel: the owner's **local agent** (has the Flipper) and the **cloud worker** (`.github/workflows/claude-worker.yml`, instructions `.github/claude-worker.md`; no hardware). To never work on the same task:
+- The cloud worker only takes **GitHub issues labelled `claude-task`** by the owner, never tasks straight from this file. It labels the issue `claimed:cloud` when it starts.
+- The local agent, before starting a task, checks the open issues: a task whose issue is labelled `claude-task` or `claimed:cloud` is not its task. When it starts a task that has an issue, it labels that issue `claimed:local` (the cloud worker then ignores the issue and `@claude` comments on it).
+- Good cloud tasks: host-testable code (QEMU, `make`, unit tests), tools, docs, spec-to-code work without timing needs. Device work (radio, USB, SD timing, `lat` numbers) stays local; the cloud worker lists such checks under "Needs on-device test" in its PR, and the local agent runs them.
+- The cloud worker pushes a `claude/issue-N-…` branch; the owner or the review side opens the PR from it (one click on the link in the worker's comment), so CI runs. Reviews and squash-merges as for every PR. A fix on a PR: comment `@claude <what to fix>` (owner only).
+
 ## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
 - D/S: the whole range `[vir, vir+bytes)` must lie in `[D.mem_vir, S.mem_vir+S.mem_len)` (clicks). T: inside T.
