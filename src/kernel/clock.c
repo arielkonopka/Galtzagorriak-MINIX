@@ -84,7 +84,11 @@ PRIVATE watchdog_t watch_dog[NR_TASKS+NR_PROCS];
 
 /* Variables used by both clock task and synchronous alarm task */
 PRIVATE int syn_al_alive= TRUE; /* don't wake syn_alrm_task before inited*/
-PRIVATE int syn_table[NR_TASKS+NR_PROCS]; /* which tasks get CLOCK_INT*/
+/* Which processes get CLOCK_INT: one bit each (a 26-int table before, -100
+ * B RAM).  Set by the clock task, cleared by syn_alrm_task: tasks do not
+ * preempt each other and no interrupt handler touches it, so no lock. */
+PRIVATE u32_t syn_bits;
+typedef char syn_bits_fit[NR_TASKS+NR_PROCS <= 32 ? 1 : -1];
 
 /* Variables changed by interrupt handler */
 PRIVATE clock_t pending_ticks;	/* ticks seen by low level only */
@@ -372,7 +376,7 @@ PRIVATE void cause_alarm()
  */
   message mess;
 
-  syn_table[watchdog_proc + NR_TASKS]= TRUE;
+  syn_bits |= (u32_t) 1 << (watchdog_proc + NR_TASKS);
   if (!syn_al_alive) send (SYN_ALRM_TASK, &mess);
 }
 
@@ -393,18 +397,16 @@ PUBLIC void syn_alrm_task()
 
   message mess;
   int work_done;	/* ready to sleep ? */
-  int *al_ptr;		/* pointer in syn_table */
   int i;
 
   syn_al_alive= TRUE;
-  for (i= 0, al_ptr= syn_table; i<NR_TASKS+NR_PROCS; i++, al_ptr++)
-	*al_ptr= FALSE;
+  syn_bits= 0;
 
   while (TRUE) {
 	work_done= TRUE;
-	for (i= 0, al_ptr= syn_table; i<NR_TASKS+NR_PROCS; i++, al_ptr++)
-		if (*al_ptr) {
-			*al_ptr= FALSE;
+	for (i= 0; i<NR_TASKS+NR_PROCS; i++)
+		if (syn_bits & ((u32_t) 1 << i)) {
+			syn_bits &= ~((u32_t) 1 << i);
 			mess.m_type= CLOCK_INT;
 			send (i-NR_TASKS, &mess);
 			work_done= FALSE;
