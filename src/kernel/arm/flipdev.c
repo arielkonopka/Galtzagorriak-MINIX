@@ -243,7 +243,7 @@ message *m_ptr;
 		memset(fbuf, 0, sizeof(fbuf));	/* the console from now on */
 		lc_x = lc_y = lc_esc = 0;
 		lc_on = TRUE;
-		hal_lcd_flush(fbuf);
+		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	} else {
 		if (lc_on) {	/* a short frame must not leave console text
 				 * behind in fbuf for a later read */
@@ -252,7 +252,7 @@ message *m_ptr;
 		}
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
 		LAT_EVENT(LE_LCD, m_ptr->PROC_NR);
-		hal_lcd_flush(fbuf);
+		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	}
 	return(count);
 
@@ -389,9 +389,9 @@ PRIVATE void do_hardint()
  * show it. */
   int r;
 
-  if (lc_on && lc_dirty) {
+  if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
-	hal_lcd_flush(fbuf);
+	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
   }
   if (sp_waiting && note_i >= note_n) {		/* the tune is over */
 	sp_waiting = FALSE;
