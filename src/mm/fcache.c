@@ -92,7 +92,8 @@ PRIVATE struct {			/* packed: MM's static RAM (rule 0.1) */
  * time).  Nothing is written to count. */
 #define NRUNS		8
 #define RUNS_TO_CACHE	3
-#define RMAX		15		/* count in the low 4 bits */
+#define RMAX		15		/* count in the low 4 bits; RMAX: never cache
+				 * (its copy did not match its key) */
 #define RKEY(crc, owner)	(((crc) ^ (owner) * 0x9E3779B1UL) & ~RMAX)
 PRIVATE unsigned long runs[NRUNS];	/* RKEY | count; 0: free.  A rare
 					 * key collision only caches early */
@@ -299,7 +300,8 @@ unsigned long crc, owner;
 
   for (i = 0; i < NRUNS; i++) {
 	if ((runs[i] & RMAX) != 0 && (runs[i] & ~RMAX) == key) {
-		if ((runs[i] & RMAX) < RMAX) runs[i]++;
+		if ((runs[i] & RMAX) == RMAX) return(FALSE);	/* banned */
+		if ((runs[i] & RMAX) < RMAX - 1) runs[i]++;
 		return((runs[i] & RMAX) >= RUNS_TO_CACHE);
 	}
 	if ((runs[i] & RMAX) < (runs[k] & RMAX)) k = i;	/* the least run */
@@ -397,7 +399,17 @@ PUBLIC void fc_step()
   case J_RECORD:			/* now it can be found */
 	/* Only the text the key names: a file rewritten during the copy,
 	 * or a bad write, gives another CRC and is not recorded. */
-	if (~job.vcrc != job.crc) { r = EIO; break; }
+	if (~job.vcrc != job.crc) {
+		/* never again for this key: a header CRC that does not match
+		 * its text would otherwise erase and program the same pages
+		 * on every run (flash wear, owner rule on flash writes) */
+		for (i = 0; i < NRUNS; i++)
+			if ((runs[i] & ~RMAX) == RKEY(job.crc,
+					(unsigned long) job.owner))
+				runs[i] |= RMAX;
+		r = EIO;
+		break;
+	}
 	for (i = 0; i < NREC; i++)
 		if (FREE_SLOT(RECP(fc_dir, i))) break;
 	if (i == NREC) { r = EAGAIN; break; }
