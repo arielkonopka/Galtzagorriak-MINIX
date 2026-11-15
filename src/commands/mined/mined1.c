@@ -1322,6 +1322,8 @@ int bytes;
   char *p;
 
   p = malloc((unsigned) bytes);
+  if (p == NIL_PTR && soft_alloc == TRUE)
+	return NIL_PTR;			/* the caller stops what it does */
   if (p == NIL_PTR) {
 	if (loading == TRUE)
 		panic("File too big.");
@@ -1390,6 +1392,7 @@ FLAG modified = FALSE;		/* Set when file is modified */
 FLAG stat_visible;		/* Set if status_line is visible */
 FLAG writable;			/* Set if file cannot be written */
 FLAG loading;			/* Set if we are loading a file. */
+FLAG soft_alloc;		/* Out of memory is not fatal (file_insert). */
 FLAG quit = FALSE;		/* Set when quit character is typed */
 FLAG rpipe = FALSE;		/* Set if file should be read from stdin */
 int input_fd = 0;		/* Fd for command input */
@@ -1427,8 +1430,7 @@ void initialize()
 /* Delete the whole list */
   for (line = header->next; line != tail; line = next_line) {
   	next_line = line->next;
-  	free_space(line->text);
-  	free_space((char*)line);
+  	free_line(line);
   }
 
 /* header and tail should point to itself */
@@ -1588,13 +1590,42 @@ LINE *install_line(buffer, length)
 char *buffer;
 int length;
 {
-  register LINE *new_line = (LINE *) alloc(sizeof(LINE));
+  /* One allocation: the text follows the structure (T8 follow-up: a
+   * malloc'd block costs its header and alignment, twice per line before). */
+  register LINE *new_line = (LINE *) alloc(sizeof(LINE) + length + 1);
 
-  new_line->text = alloc(length + 1);
+  if (new_line == NIL_LINE) return NIL_LINE;	/* soft_alloc only */
+  new_line->text = INLINE_TEXT(new_line);
+  new_line->cap = length + 1;
   new_line->shift_count = 0;
   copy_string(new_line->text, buffer);
 
   return new_line;
+}
+
+/*
+ * Set_text() gives a line new text: in its own room if it fits, else in a
+ * separate block (freed with the line, or when the text changes again).
+ */
+int set_text(line, s)
+LINE *line;
+char *s;
+{
+  int n = length_of(s) + 1;
+  char *t = n <= line->cap ? INLINE_TEXT(line) : alloc(n);
+
+  if (t == NIL_PTR) return ERRORS;	/* soft_alloc: old text kept */
+  if (line->text != INLINE_TEXT(line)) free_space(line->text);
+  line->text = t;
+  copy_string(line->text, s);
+  return FINE;
+}
+
+void free_line(line)
+LINE *line;
+{
+  if (line->text != INLINE_TEXT(line)) free_space(line->text);
+  free_space((char *) line);
 }
 
 void main(argc, argv)

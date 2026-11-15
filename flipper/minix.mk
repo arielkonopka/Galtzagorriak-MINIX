@@ -275,7 +275,8 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill \
 		uname whoami yes printenv gpio beep ver
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
-CHMEM_mined  := 20480	# T8: heap ~2x the file (a malloc per line + its struct): ~8 KB files
+CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
+			# files to ~7 KB (~3.5 KB copying all of it); out of memory -> <file>.save
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_launcher := 4096
 CHMEM_console  := 4096

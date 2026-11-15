@@ -216,6 +216,11 @@ name, mode 0600, made anew for every copy).
 If the terminal goes away (the USB or Bluetooth link drops) while the text is
 modified, it is written to \fIfile\fR\fB.save\fR (or \fB$HOME/mined.save\fR),
 mode 0600, without asking, and mined exits.
+On the Flipper mined has 12 KB of memory; a file takes about 1.6 bytes per
+character, so files up to about 7 KB can be edited.  A CTRL-Y or CTRL-G
+that does not fit stops with "Out of memory, inserted only lines: N" and
+editing goes on.  Running out of memory while typing writes the text to
+\fIfile\fR\fB.save\fR as above and mined exits.
 .SS "Author"
 .PP
 \fIMined\fR was designed by Andy Tanenbaum and written by Michiel Huisjes.
