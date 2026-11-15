@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T12, L.3-L.4) Settings fall back to their defaults in `/rom`: `cfopen()` in libc, `cfcat`, `settings diff|reset`; the launcher's app list and the motd use them. Base 3.53.
 - (T12, L.2) The default settings are a read-only image in internal flash (`make base-flash`), mounted on `/rom` (`/dev/rom`); `/etc/rc` reads `rc.conf` from the card, else from `/rom`. Base 3.50.
 - `/dev/mem` and `/dev/kmem` read only where the board has memory (RAM, flash below CPU2's, ROM/OTP) and write only RAM: `dd if=/dev/mem` past the end is a read error instead of a kernel panic.
 - (T11, R2b.11) The run-time text cache erases at most 32 flash pages a day (`pkg budget`, `fcache_budget=` in `/etc/rc.conf`); `free -v` shows the erase counts.

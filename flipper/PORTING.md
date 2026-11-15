@@ -550,6 +550,29 @@ mounting `/dev/rom` is the first block-device use of the MEMORY task
 one of the 8 super blocks and one mount.  Flash: 32 KB of the installed
 region, written at DFU time only.
 
+T12 / L.3-L.4, settings read with a default (2026-11-15, QEMU):
+- `cfopen(path, mode)` in libc (`<stdio.h>`, `_MINIX`).  Reading opens
+  the card's file, else `/rom` + path.  Writing always goes to the card,
+  making the directories; `a`/`+` start from a copy of the default.
+  `cfcat path...` does the same for scripts.
+- The launcher reads `/etc/apps` with it, and `/etc/rc` prints the motd
+  with `cfcat`.  `rc.conf` is not on the card at all (ACL.1); `cfcat
+  /etc/rc.conf` prints the default.
+- `settings diff` lists the files under `/etc` that differ from
+  `/rom/etc`.  `settings reset [path...]` brings defaults back: the
+  card's copy is removed, except for files read directly at boot or
+  login (rc, ttytab, profile, fstab, setup, passwd, group), which get the
+  default copied over them.  A plain `reset` leaves passwd and group
+  alone.
+- QEMU: motd, rc.conf and rc changed, then `settings diff` showed the
+  three; `settings reset` removed motd and rc.conf, copied rc back, and
+  left passwd alone until it was named.  The flash counters stayed at 0
+  (ACL.2; the launcher's Settings menu waits for the Settings app).
+- L.5 is not done: the card image still carries its `/etc`.  With
+  `/rom` missing (a board flashed with plain `minix.bin`) a card without
+  `/etc/apps` would show no apps, so taking the files off the card
+  waits until `/rom` is always there.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile
