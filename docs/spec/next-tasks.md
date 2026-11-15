@@ -107,7 +107,8 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - No separate PR now; PRs in those phases name K.
 
 ## Still open from reviews
-- #6/#7 (IR): TX on the pulse engine (no busy-wait in a kernel task), and no 1–2 KB static `ir_buf`. Rebase on main first; both PRs conflict.
+- IR (#46, merged 2026-11-15 by owner decision; supersedes #6/#7): **win back the kernel +64 B** (budget 15168 → 15104). Also `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it).
+- mined (#45): one allocation per line so `CHMEM_mined` fits 12 KB; `EDITOR`/`VISUAL` for existing cards via the base postinst.
 - Phase 4a items from the #2 review: IWDG kicked from the clock task with ~2 s timeout, watchdog→DFU only in dev builds, reset cause kept. HSEM around the RNG before CPU2/BLE.
 - T2 (#24, merged by owner decision 2026-11-14: responsiveness first): **win back the MM +68 B** (`runs[]` + `job`). Options: 4-byte `runs[]` entries (28-bit key from crc^owner + 4-bit count), one shared hex table, trim `hole[]`. Also **check the flash copy before `J_RECORD`** (SHA-256 as in finst.c, or the text CRC), so a file rewritten during the copy never lands in the cache under the old key.
 - Phase 2b (#37/#38): AC2b.R1 (L6 from the installed region), AC2b.R2 (`lat` during a 50 KB install), AC2b.5 (power-cut test), MM stack high-water after bind + compaction (estimated 500–600 of 1024 B), first-boot bind time in PORTING.md; old cards need `pkg bind /bin/*` in `/etc/rc` (have pkg/update add it, or document it).
