@@ -1,0 +1,6 @@
+# Debian packages the build and the QEMU tests need (one per line).
+# Changing this file also renews the CI cache of their .deb files.
+gcc-arm-none-eabi
+python3-pil
+xfonts-base
+qemu-system-arm

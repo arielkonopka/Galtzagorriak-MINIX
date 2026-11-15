@@ -6,6 +6,8 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- CI gates: flash pages erased in the QEMU M2 run are checked against `flipper/flash-budget.txt` (`tools/flashcheck.py`), the power-cut test (`tools/powercut.py`) and the latency trace build run on every PR, and a `pr-rules` check asks for the CHANGELOG line and the manual update (labels `no-changelog`, `no-manual`); the toolchain's .deb files are cached.
+
 ## 0.1.1 (2026-11-15): tasks and fixes after Phase 1
 
 Tasks T2, T4, T7, T8, T9, T11, T12, T13 (core) and T4b steps 1-2, parts of Phases 2b and 4a, infrared,
