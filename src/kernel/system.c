@@ -104,6 +104,9 @@
 #include <minix/callnr.h>
 #include <minix/com.h>
 #include "proc.h"
+#if (CHIP == ARM_CM)
+#include "hal.h"
+#endif
 #if (CHIP == INTEL)
 #include "protect.h"
 #endif
@@ -353,6 +356,7 @@ message *m_ptr;			/* pointer to request message */
   phys_bytes dst;
   int t, n = 0, max;
 
+  if (m_ptr->m1_i2 == 0) return(hal_reset_bits());	/* MI_RESET */
   if (!isokprocn(m_ptr->PROC1)) return(EINVAL);
   max = m_ptr->m1_i2 / (int) sizeof(ks);
   for (t = -NR_TASKS; t < 0 && n < max; t++) {
