@@ -155,6 +155,26 @@ int main(int argc, char **argv)
 			"              max %6lu us\n", li.rev_n,
 			us(li.rev_sum / li.rev_n), us(li.rev_max));
 	} else printf("L5   REVIVE -> process runs             no samples\n");
+	if (li.rev_n > 0)
+		printf("     parts: to FS reply max %lu us, reply -> run max %lu"
+			" us; %lu revived while shadowed\n", us(li.rev_fs_max),
+			us(li.rev_q_max), li.rev_shadow_n);
+	if (li.rev_n > 0)
+		printf("     longest: proc %ld ran before, %lu flash ops in "
+			"between; %lu over 100 us, %lu of them with flash\n",
+			li.rev_q_prev, li.rev_q_flash, li.rev_q_slow,
+			li.rev_q_slow_flash);
+	if (li.rev_n > 0)
+		printf("     longest spent in: tasks %lu us, MM %lu us, FS %lu us,"
+			" processes %lu us\n", us(li.rev_q_who[0]),
+			us(li.rev_q_who[1]), us(li.rev_q_who[2]),
+			us(li.rev_q_who[3]));
+	if (li.rev_n > 0)
+		printf("     longest slice: proc %ld, %lu us\n",
+			li.rev_q_big_proc, us(li.rev_q_big));
+	if (li.flip_n > 0)
+		printf("     image swaps %lu, longest %lu us (%lu bytes)\n",
+			li.flip_n, us(li.flip_max), li.flip_bytes);
 	/* L6: exec -> a frame by the same process before it exits or
 	 * execs again (programs that never draw don't count) */
 	n = 0;

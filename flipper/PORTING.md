@@ -401,6 +401,53 @@ text gets only a new record, no page is written.  Older cards need the
 `pkg bind /bin/*` line in /etc/rc added by hand (the base package does not
 carry /etc).
 
+T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
+the root device with their data in ordinary cache blocks; counted in
+QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile
+/etc/passwd`, then `sync`:
+
+| | to /dev/null | through `\| wc` |
+|---|---|---|
+| before | 7 writes (atime of the inodes) | 76 writes: the pipe's data blocks, its inode, the bitmaps |
+| after | 7 | 9 (the two bitmap blocks once) |
+
+Why: (1) evicting any dirty block calls flushall(), which writes every
+dirty block of the device, unread pipe data included; (2) a pipe's
+blocks stayed dirty after they were read, and after the pipe was closed
+and its zones freed; (3) the pipe's inode was written at creation and
+at close.  Now: (1) get_block evicts the oldest clean block and a dirty
+one only when every free buffer is dirty; (2) forget_zone() marks a
+zone's cached blocks clean when a pipe has been read empty and when any
+zone is freed (also saves the writes of a file deleted before the
+next sync); (3) an unnamed pipe's inode is never written.  Pipe data
+still goes to the card if it is evicted unread with every buffer dirty,
+or if `update` syncs while a pipe holds data.  RAM: 0 B.
+T4 (2026-11-15, Flipper, latcheck kernel; lat now splits L5 into "to FS
+reply" and "reply -> run", and says who used the time in between):
+
+| Load | L5 before | L5 after |
+|---|---|---|
+| cksum of a 1.2 MB file in a loop, typing on the console | avg 37 us, max 37 us (27) | same |
+| launcher by hand (126 presses), cksum loop | avg 87 us, max 3.1 ms (248); the 3 ms all "reply -> run" | (needs the owner's hands again) |
+| copies of 8 programs run 3 times each (the cache copies them in the background), typing | max 22 ms; all 4 slow ones with a flash operation in between | flash: 0 of the slow ones; max 47 ms, of which 43 ms in kernel tasks, longest slice 12.5 ms in the SD task (WINCHESTER) |
+
+- The flash stalls: during an erase (22 ms) or a double word (85 us)
+  the CPU waits for the flash, handlers included.  The cache's
+  background steps now ask first (`FL_BG`): the system task answers
+  EAGAIN while a user process is ready or a key or button came in the
+  last second, and the step is tried a tick later.  Background writes
+  go one double word per call, so a waiting task gets the CPU after at
+  most ~85 us.  A page erase still cannot be split: it only starts when
+  nothing waits and nothing was typed for a second.
+- What remains is the SD driver: it polls SPI and the data token in the
+  disk task, and a kernel task keeps the CPU until it blocks - a
+  multi-block read for an exec held it for 12.5 ms.  Splitting the
+  transfer does not help while the task polls.  Fix (T4b, proposed):
+  SPI2 RX/TX by DMA with the transfer-complete interrupt, the token
+  wait on the clock, the task blocked in between.
+- Image swaps (unshadow, clock task) take up to 0.41 ms for 17 KB; no
+  revived process was shadowed in these runs.
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

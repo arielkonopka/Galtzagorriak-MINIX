@@ -10,7 +10,8 @@
 # Phase 2a: -4864 B (kernel -2744, MM -512, FS -624, INIT -984).
 # T2 follow-up: printk hex tables const (kernel -36, MM -32, FS -36 B),
 # runs[] 4-byte entries, cache seq from the directory: MM back to 10172.
-kernel    160    14956  15116
+# T4: kernel -12 B (hal_flash_dbg gone, +4 B k_input).
+kernel    160    14944  15104
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172

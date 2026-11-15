@@ -73,6 +73,7 @@ EXTERN _PROTOTYPE( void (*level0_func), (void) );
 EXTERN u8_t irq_slot[NR_IRQ_VECTORS];	/* 0: none, else slot + 1 */
 EXTERN irq_handler_t irq_handlers[NR_IRQ_HANDLERS];
 EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
+EXTERN clock_t k_input;		/* uptime of the last key or button (T4) */
 #endif
 
 #if (CHIP == M68000)
