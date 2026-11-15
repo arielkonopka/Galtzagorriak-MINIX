@@ -573,6 +573,58 @@ T12 / L.3-L.4, settings read with a default (2026-11-15, QEMU):
   `/etc/apps` would show no apps, so taking the files off the card
   waits until `/rom` is always there.
 
+Minimal I.1, the wall clock from the RTC (2026-11-15, #58): at boot the
+clock task sets `boot_time` from the RTC (`hal_rtc_time()`).  The STM32's
+BCD calendar is read once (years 2000-2099, UTC); it keeps running on the
+battery with the stock firmware's settings.  QEMU takes the host's time
+(semihosting).  Without a running RTC the result is 0, so the clock
+starts at 1970 as before, and every boot would repeat the same ctimes.
+An installed program's binding is (dev, ino, ctime), so a new file could
+then get an old program's binding.  MM therefore makes no new bindings
+while the clock is before the build's commit (`GZ_BUILD_EPOCH`):
+`pkg flash`/`install --flash`/`bind` say "the clock is not set (RTC)",
+before any page is written, and the program runs from RAM.  QEMU: `date`
+shows the host's time and installs work; after `date 0101700000` an
+install is refused and the region is unchanged.  The full model (time()
+from the RTC, the century register) is still Phase 2d.  RAM 0 B.
+
+R2b.12, rebinding by content, and the exec guard (2026-11-15, QEMU; the
+#58 decision):
+- `pkg bind` now goes through every file it is given (there was a shortcut
+  when no built-in record was unbound).  A file whose binding matches
+  costs one MM call, no hash; `pkg bind /bin/*` in QEMU still finishes
+  within the same second.  A file copied back with a new inode is
+  hashed, gets a new record for the text already in flash, and no page
+  is written.
+- The old record becomes stale.  FS answers a new MM-only call,
+  `INOCHK` (dev, ino, ctime): live, gone, or unknown when the device is
+  not mounted.  It only looks at the inode: a free inode is let go
+  without `put_inode`, which would free it again on the disk.
+  Compaction drops a live record only on a definite "gone", and only if
+  nothing runs from its text or a current record holds the same text.
+  No extra flash writes: the record is simply not copied.
+- QEMU, `ls`, `cat`, `cp` copied back under new inodes, 145/147/148:
+  - `pkg bind` → 21 live records (3 stale), no text page written;
+  - `ls` ran from flash;
+  - after one compaction → 19 records (18 + one test file).
+  When the inode was reused (same number, new ctime), the old record
+  was already killed by `in_old`.
+- Exec guard: the record's free `flags` word (the double word of `seq`,
+  so no extra write) holds the CRC-32 of the text's first 256 bytes,
+  taken from flash by `in_record` and by `mkbaseflash.py`.  Exec checks
+  it against the file, 4 x 64 bytes through the FS cache (the block exec
+  already read), and only then trusts the binding.  Records without it
+  (flags all ones) work as before.
+- QEMU, a ctime repeat forced with `date`: `fold` installed as /tmp/x
+  (inode 143, 2027-01-01 00:00), removed, `chown` (same text size,
+  5896 B) copied to /tmp/x, again inode 143 at 00:00.  It printed
+  chown's usage: the guard refused fold's text.
+- powercut `--compact` now checks a file that is never changed again
+  (/tmp/k).  /tmp/p's records may go: each install follows a `cp` (new
+  ctime), so the old record is stale.  Now 0 of 36; with compaction's
+  old header-first order it still catches 13 of 22.  RAM 0 B (kernel,
+  MM, FS).
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

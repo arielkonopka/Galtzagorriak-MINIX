@@ -24,6 +24,7 @@ ignored there: MM finds no binding for them and they run from the cache.
 """
 import hashlib
 import struct
+import zlib
 import sys
 
 PAGE = 4096
@@ -62,8 +63,12 @@ for seq, path in enumerate(progs):
     hdrlen = data[4]
     a_text = struct.unpack_from("<I", data, 8)[0]
     text = data[hdrlen:hdrlen + a_text]
+    # flags: CRC-32 of the text's first 256 bytes (exec checks it; #58)
+    head = zlib.crc32(text[:256]) & 0xFFFFFFFF
+    if head == 0xFFFFFFFF:
+        head = 0xFFFFFFFE              # all ones means "no CRC"
     rec = hashlib.sha256(text).digest() + struct.pack(
-        "<IIIIII", addr, a_text, 0xFFFFFFFF, 0xFFFFFFFF, seq, 0xFFFFFFFF)
+        "<IIIIII", addr, a_text, 0xFFFFFFFF, 0xFFFFFFFF, seq, head)
     directory[HDR + seq * REC:HDR + seq * REC + len(rec)] = rec
     pages = (a_text + PAGE - 1) // PAGE
     texts += text + b"\xff" * (pages * PAGE - a_text)

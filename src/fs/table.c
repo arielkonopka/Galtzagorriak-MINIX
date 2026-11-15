@@ -87,7 +87,11 @@ PUBLIC _PROTOTYPE (int (* const call_vector[NCALLS]), (void) ) = {
 	do_revive,	/* 67 = REVIVE	*/
 	no_sys,		/* 68 = TASK_REPLY	*/
 	no_sys,		/* 69 = unused */
+#if (CHIP == ARM_CM)
+	do_inochk,	/* 70 = INOCHK (from MM, R2b.12) */
+#else
 	no_sys,		/* 70 = unused */
+#endif
 	no_sys,		/* 71 = SIGACTION */
 	no_sys,		/* 72 = SIGSUSPEND */
 	no_sys,		/* 73 = SIGPENDING */

@@ -1076,6 +1076,36 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 	return 0;
 }
 
+/* The RTC calendar (BCD; the stock firmware keeps it running on the
+ * battery) in seconds since 1970, years 2000-2099.  Days from the civil
+ * date: Howard Hinnant's algorithm. */
+uint32_t hal_rtc_time(void)
+{
+	uint32_t tr, dr, y, m, d, era, yoe, doy, doe, i;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	if (!(RCC->BDCR & RCC_BDCR_RTCEN) || !(RCC->BDCR & RCC_BDCR_LSERDY)
+				|| !(RTC->ISR & RTC_ISR_INITS))
+		return 0;
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_RSF); i++) ;
+	tr = RTC->TR;			/* locks DR until it is read */
+	dr = RTC->DR;
+	y = 2000 + (dr >> 20 & 15) * 10 + (dr >> 16 & 15);
+	m = (dr >> 12 & 1) * 10 + (dr >> 8 & 15);
+	d = (dr >> 4 & 3) * 10 + (dr & 15);
+	if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+	if (m <= 2) y--;
+	era = y / 400;
+	yoe = y - era * 400;
+	doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+	doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return ((era * 146097 + doe - 719468) * 86400
+		+ ((tr >> 20 & 3) * 10 + (tr >> 16 & 15)) * 3600
+		+ ((tr >> 12 & 7) * 10 + (tr >> 8 & 15)) * 60
+		+ (tr >> 4 & 7) * 10 + (tr & 15));
+}
+
 int hal_reset_bits(void)
 {
 	return (int) (boot_reg() & (BOOT_DEV | BOOT_CAUSE));
