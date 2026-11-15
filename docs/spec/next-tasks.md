@@ -179,11 +179,14 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 
 Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
 
-## T15. Power management app `power` (spec R7.1; owner request 2026-11-15): after T14c
-- A GUI app in `flipper/gui/` (like `lights.c`), launcher entry "Power". Screens: battery (%, V, mA with sign, °C, health, charge state, time to full/empty, charger or computer), profile `full`/`care`, backlight (level, timeout on battery / on USB, dim stage on/off), screen-off delay, SD power-off delay, sleep statistics (Stop2 share, wakes per source), Power off (shows "N alarms armed, they will ring"), Reboot.
-- All settings through `ioctl` on `/dev/power` and `/dev/backlight` into RTC backup registers (no flash writes); add any new register to the map in PORTING.md.
-- Tests on the Flipper (agent): AC7.0 (each setting takes effect at once and survives power-off); the battery screen matches `cat /dev/power`; L6 for opening the app and L1 for every key; app RAM recorded.
-- RAM: 0 B static; app ≈ 2 KB while open. Flash ≈ 4 KB.
+## T15. Power management app `power` and `pm` (spec R7.1; owner request 2026-11-15): after T14c and T14d
+The owner wants the user to control **how deeply and how soon the device powers down**, and every other power knob that makes sense. Read R7.1 for the full list.
+- Kernel side first (small PR): a `struct pm_policy` packed into 2–3 free RTC backup registers (add them to the map in PORTING.md): sleep depth, idle-ladder delays (dim, backlight off, screen off, SD off, auto power-off), low-battery thresholds, wake-source mask (buttons, IR, NFC field, wake-on-radio), BLE mode, 5 V / 3V3 header mode, LED, battery profile, active profile per power source. `ioctl` get/set on `/dev/power`; the idle ladder and wake sources from T14b/T14d read it. List of sleep-blocker bits with the holding process for "who keeps it awake".
+- `pm` command (shell): `pm`, `pm profile saver`, `pm set screen-off 120`, `pm who`, `-t` output.
+- `power` GUI app in `flipper/gui/` (like `lights.c`), launcher entry "Power": battery screen, profile choice, each knob, "who keeps it awake", power off (with armed-alarm count), reboot.
+- Persistence: the registers, plus a copy in the SD settings file (section L) restored at boot if the registers lost their magic. No internal-flash writes.
+- Tests on the Flipper (agent): AC7.0; each wake-source switch really stops/starts that wake (e.g. pocket mode: Up does not wake, Back does); automatic power-off after a short test delay, then an alarm armed before it rings; `saver` vs `balanced` idle current recorded; L1 for every key in the app and from every sleep state; L6 for opening the app.
+- RAM: kernel ≤ +16 B (if the registers are not enough); app ≈ 2 KB while open. Flash ≈ 6 KB.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)

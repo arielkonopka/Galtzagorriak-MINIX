@@ -175,8 +175,12 @@ RAM: 0 B (flags in existing words). Flash ≈ +1 KB.
 - Every PR adds a "Power" block to PORTING.md: date, build, state, current, how measured.
 
 ## 4. After T14: the `power` app (T15, spec R7.1)
-One GUI app for battery info, profile, backlight, screen-off and SD delays, sleep statistics,
-power off and reboot. Settings in RTC backup registers, no flash writes.
+The user controls how deeply and how soon the device powers down (profiles; sleep depth; the idle
+ladder dim → backlight off → screen off → SD off → automatic power-off; wake sources incl. a pocket
+mode; radios; header power; battery profile), sees who keeps it awake, powers off and reboots. GUI
+app `power` plus the `pm` command. Settings in RTC backup registers with a copy on the SD card, no
+internal-flash writes. The T14 kernel code should read its thresholds from one policy struct from
+the start, so T15 only adds the editor.
 
 ## 5. Out of scope here
 CPU2/BLE low-power (Phase 16, R16.1.8), wake-on-radio (R8.5), phone-tap wake (R14.2.1), IR
