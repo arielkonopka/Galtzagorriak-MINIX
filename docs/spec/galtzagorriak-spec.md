@@ -14,6 +14,8 @@ a read-only ROM image with the user's changes on the SD card), R2b.11–R2b.12 (
 write budget, rebinding by SHA-256) and BLE bonds kept on the SD card (R15.4, R16.1.2); owner
 request to make flash writes as rare as possible. Background: the project report `hybrid-fs-overlay-analysis.md` (Polish, not in the repo)
 (a Linux-style overlay file system was considered and rejected).
+Addition (2026-11-15): 11.2 (USB canary app, owner request), R19.9 (IP over an external IrDA
+module with PPP, optional SD package) and an external USB host chip in Deferred.
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -2127,6 +2129,104 @@ RAM: app ≈ 4 KB. Flash: ≈ 15 KB installed.
   borrowed from the FS cache only during IR/Sub-GHz modes. Flash ≈ +8 KB kernel, ≈ 4 KB installed
   (`usbmode`).
 
+### 11.2 USB canary: what does this port try to do? (owner request, 2026-11-15)
+
+**Goal:** plug the Flipper into a USB port the owner does not trust (a hotel or airport charger, a
+car, a kiosk, a stranger's computer) and see what the port tries to do, without the Flipper ever
+doing anything back. Native app `usbcanary` (section F), group `usb`.
+
+The STM32WB55 USB is device-only, so the canary watches the **host** side of a link. Watching a
+device plugged into the Flipper (a pendrive, a "charging cable" with a chip inside) needs an
+external USB host chip; see Deferred (MAX3421E).
+
+- **R11.2.1 Verdict levels,** shown on screen as they are reached, with the time since attach:
+  1. **Power only:** VBUS present, no bus reset and no SOF within 3 s. Where the BQ25896 charger
+     reports its BC1.2 result (`VBUS_STAT`: SDP, CDP, DCP, non-standard), show it; whether the
+     charger sees D+/D− on this board is checked against the schematic, and the line is left out
+     if it does not.
+  2. **Host alive:** bus reset and SOF seen, no SETUP (a host that powers the port but never
+     enumerates).
+  3. **Enumerates:** the device descriptor was read; the address was set.
+  4. **Configures:** `SET_CONFIGURATION` received, so a driver on the host wants to use the device.
+  5. **Uses the function:** traffic on a non-control endpoint of the presented persona (R11.2.3).
+- **R11.2.2 Trace:** every SETUP packet is recorded as 8 B + a 4 B millisecond timestamp, together
+  with bus resets, suspend/resume and the first SOF. Also kept: string descriptor indexes and
+  language IDs asked for, Microsoft OS descriptor requests (string `0xEE`, vendor requests),
+  device-qualifier and BOS requests, `wLength` of the first `GET_DESCRIPTOR(DEVICE)`, and the
+  number of re-enumerations. The app shows a live list (newest first) and a summary screen.
+- **R11.2.3 Personas** (chosen in the app before arming; each is a `const` descriptor set with our
+  own IDs, G.1):
+  - `bare` (default): one vendor-specific interface (class `0xFF`), so no host driver binds. Pure
+    observation of enumeration.
+  - `storage`: a mass-storage device with a small read-only medium generated from `const` data
+    (an empty FAT12 volume). Logs which SCSI commands and which sectors the host reads, i.e.
+    whether it mounts and scans the medium on its own. WRITE commands fail with "write protected"
+    and are logged.
+  - `keyboard`: a HID keyboard that never sends a key. Logs `SET_IDLE`, `SET_PROTOCOL` and LED
+    output reports (some hosts set Num Lock on attach).
+  - `serial`: a CDC-ACM port. Logs `SET_LINE_CODING`, `SET_CONTROL_LINE_STATE` (DTR: something
+    opened the port) and the first 64 B the host writes, shown as hex.
+  - `network` (after Phase 19b): a CDC-NCM/ECM interface that never answers. Logs EtherType and,
+    for DHCP and DNS packets, the requested options and names, decoded from the first frame
+    bytes only. Hosts often send their own host name in DHCP option 12; it is shown as found.
+  The canary never sends data on a function endpoint except what the class requires to stay
+  enumerated (CSW status replies, the empty HID report, NCM notifications). It never types,
+  never answers network traffic, never accepts writes.
+- **R11.2.4 Host fingerprint (a guess, labelled as one):** request order and the early `wLength`
+  values differ between hosts (for example Windows asks for 64 B of the device descriptor first
+  and for MS OS descriptors; Linux asks for the full 18 B and for the device qualifier). Matching
+  is a scored table:
+  - built-in rules in a `const` table;
+  - optional extra rules in `/ext/apps_data/usbcanary/hosts.tsv` (K, TSV), so new traces add
+    rules without a rebuild;
+  - the result is shown as "looks like: Windows 10/11 (score 7/9)" or "unknown"; the raw trace is
+    always kept, because the guess can be wrong or deliberately spoofed.
+  The first built-in rules come from traces recorded on Windows, Linux, macOS, Android and a
+  plain charger, saved under `tests/usbcanary/` in the PR that adds them.
+- **R11.2.5 No console in this profile (security).** Every other USB profile keeps the CDC console
+  (G.1); the canary profile **drops it** (G.3 "mode without the console"), so an untrusted host
+  never sees a shell. When the app exits, the previous profile is re-enumerated.
+- **R11.2.6 Implementation (G.3 option B):** control-request handling for the personas and the
+  trace recorder run in the device task. Trace entries go into a ring in one 512 B block lent by
+  the FS cache for the session (42 entries), like the IR and Sub-GHz modes. The app drains the
+  ring, keeps the summary, and writes the log. Mode state shares the G.3 `union`.
+- **R11.2.7 Bounds (I2):** every host-supplied `wIndex`, `wLength`, LBA and transfer length is
+  checked before use; the storage persona's medium is `const` and has no write path. A fuzzer run
+  from a Linux host (raw control requests through `libusb`, random SCSI CDBs) runs for 1 h per
+  persona with no crash, hang or out-of-range read.
+- **R11.2.8 Log:** on Back (or after 10 min), the session is written to
+  `/ext/apps_data/usbcanary/YYYYMMDD-HHMMSS.tsv`: one header line with the verdict, persona and
+  fingerprint, then one line per event. SD only; **no internal flash write** at any point (rule
+  L). With no SD card, the session stays on screen only.
+- **R11.2.9 Power:** with `bare` and verdict 1, the app can be left running as a charging-port
+  check; the backlight follows the normal timeout.
+
+Acceptance:
+- AC11.2.1 A USB charger gives verdict 1; a Linux PC gives verdict 4 with `bare`, and its trace
+  matches `usbmon` captured on the PC for the same session.
+- AC11.2.2 With `storage`, a Windows and a Linux PC that auto-mount show their reads of the boot
+  sector and FAT in the log; `dd of=/dev/sdX` from Linux fails with a write-protect error and is
+  logged.
+- AC11.2.3 With `serial`, `screen /dev/ttyACM0 115200` on Linux shows up as DTR set, line coding
+  115200 8N1 and the typed bytes; no shell prompt appears on the host.
+- AC11.2.4 The fingerprint names Windows, Linux, macOS and Android correctly on the recorded
+  reference traces, and says "unknown" for a charger.
+- AC11.2.5 The fuzzer of R11.2.7 passes.
+- AC11.2.6 A full session leaves the internal-flash write counters unchanged (R2b.11 counters).
+
+Responsiveness: AC11.2.R A SETUP packet is recorded in the USB interrupt in ≤ 5 µs; the list on
+screen updates within 100 ms of an event; L1 holds while a host floods control requests.
+
+RAM: kernel ≤ +32 B static (in the mode `union`); 512 B lent by the FS cache while armed; app
+≈ 3 KB only while running. Flash ≈ +3 KB kernel (personas, recorder), ≈ 6 KB app (installed, or
+run from the SD card).
+
+**Notes for the system manual:** what each verdict means in plain words ("this port only gives
+power" … "a program on that computer opened the serial port"); that the fingerprint is a guess;
+how to read the TSV log; that the canary never sends keystrokes, files or network replies and
+hides the console; that a malicious host can still lie about itself, so "power only" means "did
+nothing during this session", not "is safe".
+
 ---
 
 ## Phase 12: Swapping to the SD card
@@ -2836,6 +2936,26 @@ while the network is up.
   - CPU1 sees IPv6 packets over IPCC and attaches them as an lwIP netif.
   Cost: a larger CPU2 stack (flash, section E) and 2–4 KB more SRAM2 for IPCC buffers. Same FUS
   caveats.
+- **R19.9** (19f, optional, **SD package** `net-irda`; owner decision 2026-11-15) **IP over infrared
+  with an external IrDA module:**
+  - The built-in IR receiver is a 38 kHz demodulator and cannot see IrDA SIR pulses, so this
+    needs an IrDA transceiver module (e.g. Vishay TFDU/TFBS family) on GPIO pins 13/14 (USART1).
+  - USART1's hardware IrDA SIR encoder/decoder (`IREN`) does the pulse shaping: 9.6–115.2 kbit/s,
+    **0 B** of kernel RAM beyond the normal UART driver. USART1 is shared with the GPIO UART
+    bridge; the usual ownership rule applies (`EBUSY` with the owner's name).
+  - Framing is **PPP** with Van Jacobson header compression (lwIP `PPP_SUPPORT`, `VJ_SUPPORT`, 4 VJ
+    slots), not SLIP: LCP echo detects a broken link and IPCP assigns the addresses. The same PPP
+    code MAY later replace SLIP on R19.6 (CC1101) and serve `pppd` over the CDC port.
+  - Peers: a second Flipper, or a PC through a plain USB-UART adapter with the same module (the PC
+    runs `pppd` on a serial port). No IrLAP/IrLMP/IrLAN stack: Linux removed its IrDA subsystem in
+    4.17, so a full stack would have nobody to talk to.
+  - Packaging: built as a separate package installed on the SD card (`pkg install net-irda`), not
+    part of the base image; `pkg install --flash` stays possible for owners who use it a lot.
+  - Cost: flash ≈ 20–25 KB (PPP + VJ, in the package); RAM ≈ 1–1.5 KB inside `inet` while the link
+    is up; no internal flash writes at run time.
+  - Acceptance: AC19.9 Two Flippers with modules ~1 m apart `ping` each other and copy a 10 KB file
+    with `ftp` and a matching `cksum`; the same against Linux `pppd` through a USB-UART adapter.
+  - Background: project report `tcpip-stack-analysis.md` §13 (Polish, not in the repo).
 - **R19.8** Security defaults:
   - no listening services unless enabled in `/etc/rc.net`;
   - `telnetd`/`ftpd` only on the USB link and only with the root password set (R3.4);
@@ -2921,6 +3041,11 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.7): owner decision, after Phase 15.
 - A FAP binary loader: not planned; apps are ported from source (D.2).
+- External USB host chip (e.g. MAX3421E, SPI on GPIO pins 2/3/5, CS 4, INT 7; owner idea
+  2026-11-15): would let the Flipper enumerate a device plugged into it (a pendrive or a cable
+  with a chip inside) and report what it claims to be, e.g. a "charging cable" that is really a
+  HID keyboard. The reverse of the 11.2 canary. Not scheduled; needs the module and a small host
+  stack (control transfers and descriptor parsing only).
 
 ## Traceability
 
@@ -2943,6 +3068,8 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Native app: Bluetooth adapter for BLE mice and keyboards (owner request) | 16.1 |
 | Native app: Storz & Bickel vaporizer remote `sbctl` (owner request; no device firmware update) | 16.4 |
 | USB peripheral modes: RFID, iButton, IR, Sub-GHz / NFC reader / BT dongle (owner request) | 11.1 / 14.1 / 16.2, section G |
+| USB canary: what an unknown host port tries to do (owner request) | 11.2 |
+| External USB host chip (MAX3421E) for inspecting plugged-in devices (idea) | Deferred |
 | nRF24 module for 2.4 GHz dongle mice (optional, not confirmed) | G.3 question 3, deferred |
 | Sub-GHz, LF RFID | 8 |
 | USB HID, mass storage, CDC | 10 |
@@ -2952,7 +3079,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
 | A9 (FPU) | 5 (R5.7) |
-| TCP/IP over USB and BLE | 19 |
+| TCP/IP over USB and BLE; IrDA + PPP as an optional SD package (owner decision) | 19, R19.9 |
 | M8, A6, A8, M9, A11, M10, A5 | 20a (parts pulled into 4b and 6) |
 | M6, M7, M13, M12, A4 | 20b |
 | Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
