@@ -18,8 +18,8 @@ MB	:= $(BUILD)/minix
 MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -fno-strict-aliasing \
 	   -fno-tree-loop-distribute-patterns -ffunction-sections -fdata-sections \
-	   -nostdinc -I$(MROOT)/include -isystem $(GCCINC) -Ihal -Ihal/common \
-	   -DMACHINE=FLIPPER $(filter -DBOARD_FLIPPER -DBOARD_QEMU,$(CFLAGS)) \
+	   -nostdinc -I$(MROOT)/include -I$(MB)/gen -isystem $(GCCINC) \
+	   -Ihal -Ihal/common -DMACHINE=FLIPPER $(filter -DBOARD_FLIPPER -DBOARD_QEMU,$(CFLAGS)) \
 	   -D_EM_WSIZE=4 -D_EM_PSIZE=4 -D_EM_LSIZE=4 -D__minix=1 \
 	   -Wall -Wno-parentheses -Wno-unused -Wno-implicit-int \
 	   -Wno-missing-braces -Wno-char-subscripts -Wno-pointer-sign \
@@ -94,6 +94,14 @@ KDIR	:= $(MROOT)/src/kernel
 KSRC	:= main.c proc.c system.c clock.c table.c memory.c tty.c driver.c \
 	   drvlib.c misc.c arm/klib.c arm/cons.c arm/shadow.c arm/nodev.c \
 	   arm/disk.c arm/flipdev.c arm/lat.c arm/mpx.S arm/flip.S
+# The build id (spec J.2): gzbuild.h, rewritten only when it changes.
+GZBUILD	:= $(MB)/gen/gzbuild.h
+.PHONY: gzbuild-check
+$(GZBUILD): gzbuild-check
+	@mkdir -p $(dir $@)
+	@python3 -I tools/gzbuild.py $@
+GZ_RELEASE = $(shell sed -n 's/.*define GZ_RELEASE[^"]*"\(.*\)".*/\1/p' \
+		$(MROOT)/include/minix/gzversion.h)
 KOBJ	:= $(KSRC:%=$(MB)/kernel/%.o) \
 	   $(filter-out %/main.o %/string.o,$(HAL_SRC:%.c=$(BUILD)/%.o))
 # (string routines come from libc.a: memops.S, ansi/memcmp.c, strlen.c)
@@ -224,7 +232,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat
+PORTCMDS := mkpart pkg free gpio beep lat ver
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
@@ -262,7 +270,7 @@ CHMEM_cp     := 8192	# cpdir /etc: 1.3 KB left of 6 KB (also rm -r, mv)
 # Small one-shot tools used < 1 KB of the default 6 KB.
 SMALLCMDS    := basename dirname echo cat cmp date id kill \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
-		uname whoami yes printenv gpio beep
+		uname whoami yes printenv gpio beep ver
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
@@ -308,7 +316,7 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 endef
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
-TESTS	:= sigret unaligned badreloc fcpoison mpufrag
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
@@ -335,6 +343,7 @@ BASE_VER := 3.44
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
+	   --os $(GZ_RELEASE) \
 	   -D "Galtzagorriak MINIX system programs" \
 	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
@@ -382,7 +391,12 @@ latcheck:
 	@echo "package; flash both, then run 'lat -w 30' while testing."
 
 # Static RAM of the system images against ram-budget.txt (spec rule 0.3).
-ramcheck: $(MB)/minix.bin
+# Version numbers and CHANGELOG.md agree (spec J.4); run with ramcheck.
+.PHONY: versioncheck
+versioncheck:
+	@python3 -I tools/versioncheck.py $(MROOT)/include/minix/gzversion.h \
+	   $(MROOT)/CHANGELOG.md
+ramcheck: $(MB)/minix.bin versioncheck
 	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
 	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
 card: $(MB)/card.img
@@ -402,3 +416,6 @@ minix-flash: $(MB)/minix.bin
 	dfu-util -a 0 -s 0x08000000:leave -D $<
 
 -include $(shell find $(MB) -name '*.d' 2>/dev/null)
+
+# Objects that print the build id.
+$(MB)/kernel/tty.c.o $(MB)/cmd/port/ver.o: $(GZBUILD)
