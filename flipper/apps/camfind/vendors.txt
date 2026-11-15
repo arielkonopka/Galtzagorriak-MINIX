@@ -1,0 +1,39 @@
+# camfind vendor list (spec R9.1.2), kept by hand.  tools/mkoui.py takes
+# every MA-L assignment of the IEEE registry whose organization name
+# matches a pattern below (case-insensitive regular expression) and puts
+# it into cfoui.c.  Kind: camera (camera makers: "likely camera") or
+# module (Wi-Fi chips and modules used in cheap cameras and other IoT:
+# "IoT module").  Generic makers of routers, phones and PCs (TP-Link,
+# Realtek, Silicon Labs, Murata, ...) are left out on purpose: they would
+# mark everything.
+#
+# kind    name        pattern
+camera    Hikvision   hikvision
+camera    Dahua       dahua
+camera    Uniview     uniview
+camera    Axis        ^axis communications
+camera    Hanwha      hanwha (vision|techwin)|samsung techwin
+camera    Ezviz       ezviz
+camera    Vivotek     vivotek
+camera    Mobotix     mobotix
+camera    Reolink     reolink
+camera    Wyze        wyze
+camera    Arlo        ^arlo technology
+camera    Ring        ^ring llc
+camera    Blink       ^blink by amazon|immedia semiconductor
+camera    Amcrest     amcrest
+camera    Lorex       lorex
+camera    Swann       swann
+camera    YI          xiaoyi
+camera    Imilab      imilab|chuangmi
+camera    Milesight   milesight
+camera    Avigilon    avigilon
+camera    Netatmo     netatmo
+module    Espressif   espressif
+module    AltoBeam    altobeam
+module    Fn-Link     fn-link
+module    Tuya        tuya
+module    Bouffalo    bouffalo
+module    HF          hi-flying|high-flying
+module    Ingenic     ^ingenic semiconductor
+module    Beken       beken
