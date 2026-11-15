@@ -508,12 +508,28 @@ static void sd_select(int on)
 	spi2_xfer(0xFF);	/* give the card clocks to release DO */
 }
 
+/* While the card is busy (programming after a write: up to ~9 ms
+ * measured, see PORTING.md R0.8b) it is deselected now and then - it goes
+ * on programming (SD spec, SPI mode) - and the other kernel tasks run
+ * (hal_disk_yield, the disk task's task_yield; they may use SPI2 for the
+ * LCD meanwhile, so the speed in use is set again).  Only called by the disk
+ * task. */
 static int sd_wait_ready(void)
 {
 	uint32_t start = DWT->CYCCNT;
+	unsigned n = 0;
+	/* the speed in use: also the slow one while the card is initialised */
+	unsigned code = (SPI2->CR1 & SPI_CR1_BR) >> SPI_CR1_BR_Pos;
 
-	while (spi2_xfer(0xFF) != 0xFF)
+	while (spi2_xfer(0xFF) != 0xFF) {
 		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
+		if (++n % 64 == 0) {		/* ~40 us of polling */
+			sd_select(0);
+			hal_disk_yield();
+			spi2_speed(code);
+			sd_select(1);
+		}
+	}
 	return 0;
 }
 

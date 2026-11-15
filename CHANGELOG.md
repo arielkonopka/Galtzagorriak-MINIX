@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
 - The LCD backlight fades out (0.5 s) after 5 minutes without a key and on at the next key or button (that press only turns it on); `backlight [LEVEL [SECONDS]]` sets brightness and timeout (kept over resets). Base 3.55.
 - The base package's postinst checks its edits of `/etc/rc` and says so when one failed (seen once: `ed` crashed during an upgrade).
 - (T13) `camfind` core, host-tested: the devboard line parser, camera/IoT scoring with an OUI table from the IEEE registry, Wi-Fi motion correlation, locate mapping, IR modulation (Goertzel) and the Sub-GHz/cellular sweep tables.
