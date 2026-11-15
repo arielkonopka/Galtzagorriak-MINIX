@@ -1,0 +1,80 @@
+# Build the Flipper images, check the RAM budget and run the M2 self-test
+# in QEMU.  Every push and PR gets the images as a workflow artifact; a
+# tag vX.Y.Z also attaches them to the GitHub release of that tag.
+# The user manual (docs/manual/install.md) says where to download them.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: flipper
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # tools/gzbuild.py: git describe --tags
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi python3-pil \
+            xfonts-base qemu-system-arm
+
+      - name: Build the Flipper images
+        run: make BOARD=flipper -j"$(nproc)" minix card base-flash base pkgs
+
+      - name: RAM budget and version check
+        run: make BOARD=flipper ramcheck
+
+      - name: QEMU self-test (M2)
+        run: |
+          make -j"$(nproc)" INIT=m2 minix disk
+          make INIT=m2 minix-run | tee m2.log
+          grep -q 'M2 USER PASS' m2.log
+
+      - name: Collect the images
+        run: |
+          mkdir -p ../out
+          cp build/flipper/minix/minix-base.bin build/flipper/minix/minix.bin \
+             build/flipper/minix/card.img build/flipper/minix/pkgs/*.tar ../out/
+          cd ../out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: galtzagorriak-flipper-${{ github.sha }}
+          path: out/
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: galtzagorriak-flipper-${{ github.sha }}
+          path: out
+      - name: Attach the images to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes "See CHANGELOG.md."
+          gh release upload "$TAG" out/* --clobber
