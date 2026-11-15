@@ -41,7 +41,8 @@ void hal_uart_rx_irq(int on);		/* receive interrupt on/off */
 #define LCD_W 128
 #define LCD_H 64
 void hal_lcd_init(void);
-void hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes */
+int hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes; -1: the SD
+					 * card has SPI2 now, draw again later */
 void hal_backlight(unsigned level);	/* 0 (off) .. 255; on after lcd_init */
 void hal_backlight_fade(unsigned from, unsigned ms);	/* to 0, by the LED driver */
 /* The backlight's settings, kept over resets (Flipper: RTC backup register
@@ -113,6 +114,12 @@ int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf);
 /* Provided by the kernel's disk task: let the other tasks run while the
  * card is busy (it is deselected meanwhile). */
 void hal_disk_yield(void);
+/* SD data by DMA (T4b): the kernel's disk task registers the interrupt
+ * hal_disk_dma_irq() (-1: none), calls hal_disk_dma_ack() in it and wakes
+ * itself; hal_disk_wait() (the kernel's) sleeps until then. */
+int hal_disk_dma_irq(void);
+void hal_disk_dma_ack(void);
+void hal_disk_wait(void);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 

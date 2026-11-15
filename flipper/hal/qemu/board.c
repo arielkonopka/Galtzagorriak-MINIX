@@ -96,7 +96,7 @@ static int fb_get(const uint8_t *fb, int x, int y)
 
 /* Render the 128x64 framebuffer at full resolution, 128x32 characters,
  * using UTF-8 half blocks (upper pixel, lower pixel per character cell). */
-void hal_lcd_flush(const uint8_t *fb)
+int hal_lcd_flush(const uint8_t *fb)
 {
 	static const char *const cell[4] = { " ", "▀", "▄", "█" };
 	const char *s;
@@ -116,6 +116,7 @@ void hal_lcd_flush(const uint8_t *fb)
 	kputc('+');
 	for (x = 0; x < LCD_W; x++) kputc('-');
 	kprintf("+\n");
+	return 0;
 }
 
 unsigned hal_buttons(void)
@@ -273,6 +274,8 @@ int hal_usb_getc(void) { return -1; }
 int hal_usb_peekc(void) { return -1; }
 
 void hal_backlight(unsigned level) { (void) level; }
+int hal_disk_dma_irq(void) { return -1; }	/* QEMU: semihosting, no DMA */
+void hal_disk_dma_ack(void) { }
 void hal_backlight_fade(unsigned from, unsigned ms) { (void) from; (void) ms; }
 static uint32_t bl_state = 255u << 16 | 300u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }

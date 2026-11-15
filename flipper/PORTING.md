@@ -645,6 +645,29 @@ card is selected (the LCD shares SPI2).
   Step 2: SPI2 DMA with the task blocked on the transfer-complete
   interrupt, and the busy wait on the clock.
 
+T4b step 2, SD data by DMA (2026-11-15, Flipper):
+- Each 512-byte data block of a read or write goes by DMA1, channel 1 =
+  SPI2 RX and channel 2 = SPI2 TX (DMAMUX requests 8 and 9, from ST's
+  `stm32wbxx_ll_dmamux.h`).  Bytes not wanted come from and go to the
+  HAL function's own stack.
+- The disk task sleeps meanwhile (`hal_disk_wait` = `receive(HARDWARE)`),
+  so user processes get the CPU.  The interrupt only switches itself
+  off; the HAL then checks the completion flag in the hardware, so a
+  stale wakeup just ends in polling.
+- The LCD shares SPI2: `hal_lcd_flush` returns -1 while the card is
+  selected (the SD chip-select pin is the flag, 0 B), and flipdev
+  draws that frame at the next tick (`lc_dirty`).
+- First tested on the unused swap partition only (DMA for its sectors
+  alone): 1.3 MB written and read back identical, twice.  Then on the
+  whole card: `/bin/*` checksum unchanged, 650 KB written to `/home` and
+  equal.
+- 4 MB read: 5 s by DMA, 6 s polled.  A CPU-bound `cksum` (2 s alone)
+  next to a 4 MB card read: 15 s with DMA, 24 s polled.
+- Infrared at 100 us durations during writes and syncs: 0 of 40 frames
+  failed.  L5 during them: max 77 ms, average 21 ms; with step 1 alone,
+  2.2 s and 48 ms.
+- RAM 0 B.
+
 Backlight idle timeout (owner request 2026-11-15): the LCD backlight goes
 off after 5 minutes without a key or button (USB console keys count
 too) and comes back at the next one.

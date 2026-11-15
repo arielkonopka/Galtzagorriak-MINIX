@@ -226,6 +226,56 @@ static void spi2_block(const uint8_t *out, uint8_t *in, unsigned len)
 	}
 }
 
+/* SD data blocks by DMA (T4b step 2): DMA1 channel 1 = SPI2 RX (DMAMUX
+ * request 8), channel 2 = SPI2 TX (request 9; numbers from ST's
+ * stm32wbxx_ll_dmamux.h).  The disk task sleeps meanwhile (hal_disk_wait,
+ * woken by the transfer-complete interrupt), so user processes run.  The
+ * bytes not wanted (a write's answers, a read's 0xFF) come from and go to
+ * this function's own stack, which stays while it waits.  After waking up,
+ * the flag is checked again in the hardware: an early or stale wakeup
+ * only ends in polling. */
+#define SD_DMA_RX	DMA1_Channel1
+#define SD_DMA_TX	DMA1_Channel2
+
+static void spi2_dma(const uint8_t *out, uint8_t *in, unsigned len)
+{
+	uint8_t sink = 0, ones = 0xFF;
+	uint32_t start = DWT->CYCCNT;
+
+	SD_DMA_RX->CCR = 0;
+	SD_DMA_TX->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF1 | DMA_IFCR_CGIF2;
+	SD_DMA_RX->CPAR = (uint32_t) &SPI2->DR;
+	SD_DMA_RX->CMAR = (uint32_t) (in != NULL ? in : &sink);
+	SD_DMA_RX->CNDTR = len;
+	SD_DMA_TX->CPAR = (uint32_t) &SPI2->DR;
+	SD_DMA_TX->CMAR = (uint32_t) (out != NULL ? out : &ones);
+	SD_DMA_TX->CNDTR = len;
+	SD_DMA_RX->CCR = (in != NULL ? DMA_CCR_MINC : 0) | DMA_CCR_PL_1
+		| (NVIC_GetEnableIRQ(DMA1_Channel1_IRQn) ? DMA_CCR_TCIE : 0);
+	SD_DMA_TX->CCR = DMA_CCR_DIR | (out != NULL ? DMA_CCR_MINC : 0)
+		| DMA_CCR_PL_1;
+	SPI2->CR2 |= SPI_CR2_RXDMAEN;		/* RX first (RM0434) */
+	SD_DMA_RX->CCR |= DMA_CCR_EN;
+	SD_DMA_TX->CCR |= DMA_CCR_EN;
+	SPI2->CR2 |= SPI_CR2_TXDMAEN;
+	if (SD_DMA_RX->CCR & DMA_CCR_TCIE) hal_disk_wait();
+	while (!(DMA1->ISR & DMA_ISR_TCIF1))	/* RX done: every byte is in */
+		if (ms_since(start) > 100) break;	/* 512 B take 0.26 ms */
+	SPI2->CR2 &= ~(SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN);
+	SD_DMA_RX->CCR = 0;
+	SD_DMA_TX->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF1 | DMA_IFCR_CGIF2;
+	(void) sink;
+}
+
+int hal_disk_dma_irq(void) { return DMA1_Channel1_IRQn; }
+
+void hal_disk_dma_ack(void)	/* the interrupt: off; the flag stays */
+{
+	SD_DMA_RX->CCR &= ~DMA_CCR_TCIE;
+}
+
 static void spi2_wait_idle(void)
 {
 	while (SPI2->SR & SPI_SR_FTLVL) ;
@@ -285,10 +335,14 @@ void hal_lcd_init(void)
 	if (lp5562_init() == 0) hal_backlight(255);
 }
 
-void hal_lcd_flush(const uint8_t *fb)
+int hal_lcd_flush(const uint8_t *fb)
 {
 	uint8_t addr[3];
 	unsigned page;
+
+	/* The SD card is selected: a transfer is open (its task may sleep in
+	 * the middle of it, T4b) and SPI2 is its.  The caller draws later. */
+	if (!(GPIOC->ODR & (1u << 12))) return -1;
 
 	for (page = 0; page < LCD_H / 8; page++) {
 		addr[0] = 0xB0 | page;		/* page address */
@@ -301,6 +355,7 @@ void hal_lcd_flush(const uint8_t *fb)
 		spi2_wait_idle();
 		LCD_CS(0);
 	}
+	return 0;
 }
 
 /*===========================================================================*
@@ -572,7 +627,7 @@ static int sd_read_data(uint8_t *buf, unsigned len)
 	while ((t = spi2_xfer(0xFF)) == 0xFF)
 		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
 	if (t != TOKEN_START) return -1;
-	spi2_block(NULL, buf, len);
+	spi2_dma(NULL, buf, len);
 	crc = (uint16_t) (spi2_xfer(0xFF) << 8);
 	crc |= spi2_xfer(0xFF);
 	return crc == crc16(buf, len) ? 0 : -2;
@@ -585,6 +640,10 @@ int hal_disk_init(void)
 	int i, v2;
 
 	sd_ready = 0;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	(void) RCC->AHB1ENR;
+	DMAMUX1_Channel0->CCR = 8;		/* DMA1 ch 1: SPI2_RX */
+	DMAMUX1_Channel1->CCR = 9;		/* DMA1 ch 2: SPI2_TX */
 	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);	/* card detect */
 	spi2_speed(SPI_DIV_SD_INIT);
 	SD_CS(0);
@@ -761,7 +820,7 @@ static int sd_write_data(uint8_t token, const uint8_t *p)
 
 	spi2_xfer(0xFF);
 	spi2_xfer(token);
-	spi2_block(p, NULL, HAL_SECTOR_SIZE);
+	spi2_dma(p, NULL, HAL_SECTOR_SIZE);
 	spi2_xfer(crc >> 8);
 	spi2_xfer(crc & 0xFF);
 	resp = spi2_xfer(0xFF) & 0x1F;

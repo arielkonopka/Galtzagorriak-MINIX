@@ -164,15 +164,47 @@ PUBLIC void hal_disk_yield()
   task_yield();
 }
 
+/*===========================================================================*
+ *				hal_disk_wait				     *
+ *===========================================================================*/
+PUBLIC void hal_disk_wait()
+{
+/* A DMA transfer runs (T4b): sleep until its interrupt, so the CPU goes
+ * to whoever is ready, user processes too.  The caller (the HAL) checks
+ * the hardware afterwards: a stale wakeup costs a little polling. */
+  message m;
+
+  receive(HARDWARE, &m);
+}
+
+
+PRIVATE int w_dma_int(irq)
+int irq;
+{
+  hal_disk_dma_ack();
+  interrupt(WINCHESTER);
+  return(1);
+}
+
 
 /*===========================================================================*
  *				w_init					     *
  *===========================================================================*/
+FORWARD _PROTOTYPE( int w_dma_int, (int irq) );
+
 PRIVATE int w_init()
 {
   struct wini *wn = &wini[0];
   unsigned long sectors;
 
+  {	/* SD data by DMA, the task asleep meanwhile (T4b step 2) */
+	int irq = hal_disk_dma_irq();
+
+	if (irq >= 0) {
+		put_irq_handler(irq, w_dma_int);
+		enable_irq(irq);
+	}
+  }
   if (hal_disk_init() != 0) {
 	printf("%s: no card\n", w_name());
 	return(ENXIO);
