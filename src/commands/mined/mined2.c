@@ -512,7 +512,8 @@ int len;
   register LINE *new_line;
 
 /* Allocate space for LINE structure and text */
-  new_line = install_line(string, len);
+  if ((new_line = install_line(string, len)) == NIL_LINE)
+  	return NIL_LINE;		/* soft_alloc: out of memory */
 
 /* Install the line into the double linked list */
   new_line->prev = line;
@@ -552,15 +553,17 @@ char *location, *string;
   	*bufp++ = *string++;
   *bufp = '\0';
   
-  if (*(string - 1) == '\n')		/* Insert a new line */
-  	(void) line_insert(line, location, length_of(location));
-  else					/* Append last part of line */
+  if (*(string - 1) == '\n') {		/* Insert a new line */
+  	if (line_insert(line, location, length_of(location)) == NIL_LINE)
+  		return ERRORS;		/* soft_alloc: line unchanged */
+  } else				/* Append last part of line */
   	copy_string(bufp, location);
 
 /* Install the new text in this line */
-  free_space(line->text);
-  line->text = alloc(length_of(text_buffer) + 1);
-  copy_string(line->text, text_buffer);
+  if (set_text(line, text_buffer) == ERRORS) {	/* soft_alloc */
+  	if (*(string - 1) == '\n') (void) line_delete(line->next);
+  	return ERRORS;
+  }
 
   return FINE;
 }
@@ -579,8 +582,7 @@ register LINE *line;
   line->next->prev = line->prev;
 
 /* Free allocated space */
-  free_space(line->text);
-  free_space((char*)line);
+  free_line(line);
 
 /* Decrement nlines */
   nlines--;
@@ -638,9 +640,7 @@ char *start_textp, *end_textp;
   	line_cnt++;
   }
   else {	/* Install new text */
-  	free_space(start_line->text);
-  	start_line->text = alloc(length_of(text_buffer) + 1);
-  	copy_string(start_line->text, text_buffer);
+  	set_text(start_line, text_buffer);
   }
 
 /* Fix screen. First check if line is shifted. Perhaps we should shift it back*/
@@ -731,24 +731,39 @@ FLAG old_pos;
   register int line_count = nlines;	/* Nr of lines inserted */
   LINE *page = cur_line;
   int ret = ERRORS;
+  FLAG lost = FALSE;			/* out of memory: inserted in part */
   
 /* Get the first piece of text (might be ended with a '\n') from fd */
   if (get_line(fd, line_buffer, sizeof(line_buffer)) == ERRORS)
   	return;				/* Empty file */
 
-/* Insert this text at the current location. */
-  if (insert(line, cur_text, line_buffer) == ERRORS)
+/* Insert this text at the current location.  Running out of memory stops
+ * the insert with a message instead of ending mined (T8 follow-up). */
+  soft_alloc = TRUE;
+  if (insert(line, cur_text, line_buffer) == ERRORS) {
+  	soft_alloc = FALSE;
+  	error("Out of memory: nothing inserted", NIL_PTR);
   	return;
+  }
 
 /* Repeat getting lines (and inserting lines) until EOF is reached */
   while ((ret = get_line(fd, line_buffer, sizeof(line_buffer))) != ERRORS
-							&& ret != NO_LINE)
-  	line = line_insert(line, line_buffer, ret);
+							&& ret != NO_LINE) {
+  	LINE *l = line_insert(line, line_buffer, ret);
+
+  	if (l == NIL_LINE) {
+  		ret = ERRORS;
+  		lost = TRUE;
+  		break;
+  	}
+  	line = l;
+  }
   
   if (ret == NO_LINE) {		/* Last line read not ended by a '\n' */
   	line = line->next;
-  	(void) insert(line, line->text, line_buffer);
+  	if (insert(line, line->text, line_buffer) == ERRORS) lost = TRUE;
   }
+  soft_alloc = FALSE;
 
 /* Calculate nr of lines added */
   line_count = nlines - line_count;
@@ -774,7 +789,10 @@ FLAG old_pos;
   }
 
 /* If nr of added line >= REPORT, print the count */
-  if (line_count >= REPORT)
+  if (lost == TRUE)
+  	status_line("Out of memory, inserted only lines: ",
+  					num_out((long) line_count));
+  else if (line_count >= REPORT)
   	status_line(num_out((long) line_count), " lines added.");
 }
 
@@ -1274,9 +1292,7 @@ char *replacement;		/* Contains replacement pattern */
   copy_string(textp, program->end_ptr);
 
 /* Free old line and install new one */
-  free_space(line->text);
-  line->text = alloc(length_of(text_buffer) + 1);
-  copy_string(line->text, text_buffer);
+  set_text(line, text_buffer);
 
   return(line->text + (textp - text_buffer));
 }

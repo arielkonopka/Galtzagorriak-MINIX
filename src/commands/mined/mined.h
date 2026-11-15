@@ -96,7 +96,10 @@ struct Line {
   struct Line *prev;
   char *text;
   unsigned char shift_count;
+  unsigned short cap;	/* bytes of text room right after this struct (one
+			 * allocation per line); text elsewhere if it grew */
 };
+#define INLINE_TEXT(l)	((char *) ((l) + 1))
 
 typedef struct Line LINE;
 
@@ -158,6 +161,7 @@ extern FLAG quit;			/* Set when quit character is typed */
 extern FLAG rpipe;		/* Set if file should be read from stdin */
 extern int input_fd;			/* Fd for command input */
 extern FLAG loading;			/* Set if we're loading a file */
+extern FLAG soft_alloc;		/* alloc() may fail (insert a file/paste) */
 extern int out_count;			/* Index in output buffer */
 extern char file_name[LINE_LEN];	/* Name of file in use */
 extern char text_buffer[MAX_CHARS];	/* Buffer for modifying text */
@@ -308,6 +312,8 @@ _PROTOTYPE(void catch_hup, (int sig ));
 _PROTOTYPE(int emergency_save, (void));
 _PROTOTYPE(void hang_up, (void));
 _PROTOTYPE(void RDM, (void));
+_PROTOTYPE(int set_text, (LINE *line, char *s));
+_PROTOTYPE(void free_line, (LINE *line));
 _PROTOTYPE(int rename, (const char *_old, const char *_new));
 _PROTOTYPE(void term_size, (FLAG force ));
 _PROTOTYPE(int ask_size, (int *rows, int *cols ));
