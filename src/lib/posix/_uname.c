@@ -16,6 +16,7 @@
 #include <string.h>
 #include <errno.h>
 #include <minix/config.h>
+#include <minix/gzversion.h>
 #include <minix/minlib.h>
 
 int uname(name) struct utsname *name;
@@ -39,9 +40,16 @@ int uname(name) struct utsname *name;
 	}
   }
 
+#if (CHIP == ARM_CM)
+  /* Galtzagorriak, with its MINIX base as the version (spec J.2). */
+  strcpy(name->sysname, GZ_NAME);
+  strcpy(name->release, GZ_RELEASE);
+  strcpy(name->version, GZ_BASE_VER);
+#else
   strcpy(name->sysname, "Minix");
   strcpy(name->release, OS_RELEASE);
   strcpy(name->version, OS_VERSION);
+#endif
 #if (CHIP == INTEL)
   name->machine[0] = 'i';
   strcpy(name->machine + 1, itoa(getprocessor()));

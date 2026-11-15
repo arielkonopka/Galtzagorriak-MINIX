@@ -151,8 +151,8 @@ void test3b()
 #if 0
   errno = -2000;		/* None of these calls set errno. */
   if (uname(&u) != 0) e(1);
-  if (strcmp(u.sysname, "MINIX") != 0
-	&& strcmp(u.sysname, "Minix") != 0) e(2);    /* only one defined */
+  if (strcmp(u.sysname, "MINIX") != 0 && strcmp(u.sysname, "Minix") != 0
+	&& strcmp(u.sysname, "Galtzagorriak") != 0) e(2);  /* spec J.2 */
 #endif
 }
 

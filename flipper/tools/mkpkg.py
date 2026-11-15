@@ -12,6 +12,8 @@ for a set-uid program, which is then owned by root).  Writes OUTDIR/NAME_VERSION
 POSIX ustar format that MINIX 2.0 tar understands (names < 100 chars).
 """
 import argparse
+import sys
+import struct
 import io
 import os
 import tarfile
@@ -43,11 +45,24 @@ def main():
     ap.add_argument("--postinst")
     ap.add_argument("--prerm")
     ap.add_argument("-o", "--outdir", default=".")
+    ap.add_argument("--os", help="Os: line, the release (base package)")
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
+    # Abi: the ABI of its programs (MINIX a.out, a_version; 0 = 1), or
+    # "any" for a package without programs (spec J.3).
+    abis = set()
+    for spec in a.files:
+        with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
+            h = f.read(8)
+        if len(h) == 8 and h[0:2] == b"\x01\x03":
+            abis.add(struct.unpack_from("<H", h, 6)[0] or 1)
+    if len(abis) > 1:
+        sys.exit(f"mkpkg: programs for different ABIs: {sorted(abis)}")
     control = (f"Package: {a.name}\nVersion: {a.version}\n"
                + (f"Depends: {a.depends}\n" if a.depends else "")
+               + f"Abi: {abis.pop() if abis else 'any'}\n"
+               + (f"Os: {a.os}\n" if a.os else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)
