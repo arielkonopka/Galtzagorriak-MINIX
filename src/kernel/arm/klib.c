@@ -473,7 +473,18 @@ unsigned exc;
   if (exc == EXC_SYSTICK) {		/* the watchdog: clock task */
 	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
   }
-  if (exc == EXC_PENDSV) {		/* raised by the idle task */
+  if (exc == EXC_PENDSV) {	/* raised by the idle task or task_yield() */
+	struct proc *rp = rdy_head[TASK_Q];
+
+	/* A running task that other tasks wait behind goes to the end of
+	 * the task queue (its context is saved by now). */
+	if (rp == proc_ptr && rp != NIL_PROC && rp->p_nextready != NIL_PROC) {
+		rdy_head[TASK_Q] = rp->p_nextready;
+		rdy_tail[TASK_Q]->p_nextready = rp;
+		rdy_tail[TASK_Q] = rp;
+		rp->p_nextready = NIL_PROC;
+		proc_ptr = rdy_head[TASK_Q];
+	}
 	shadow_kick();
 	return;
   }
@@ -512,6 +523,23 @@ phys_bytes source, dest, count;
 {
 /* Physical addresses are just addresses here. */
   memcpy((void *) dest, (void *) source, (size_t) count);
+}
+
+
+/*===========================================================================*
+ *				task_yield				     *
+ *===========================================================================*/
+PUBLIC void task_yield()
+{
+/* Tasks are never preempted by tasks: a long driver path calls this between
+ * pieces of its work (R0.8b, at most 4 KB), so that a task woken meanwhile
+ * (an infrared ring to refill, a button) runs first.  The caller must leave
+ * its device and shared state consistent: anything may run before it goes
+ * on.  PendSV saves its context, then irq_dispatch puts it last.
+ */
+  if (proc_ptr->p_nextready == NIL_PROC) return;	/* nobody waits */
+  SCB_ICSR = ICSR_PENDSVSET;
+  __asm volatile ("dsb; isb" : : : "memory");
 }
 
 

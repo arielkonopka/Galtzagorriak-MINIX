@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R0.8b) The SD task lets other kernel tasks run after every 1 KB, so an infrared frame no longer fails while the card is read; kernel 288 B smaller.
 - (Phase 4a) The RNG and its clock choice are taken with the hardware semaphores CPU2 uses (ready for the radio stack).
 - (T8 follow-up) `mined`: one allocation per line, runs in 12 KB; a paste or file insert that does not fit stops with a message instead of ending the editor; old cards get `EDITOR`/`VISUAL` from the base package.
 - USB console: output no longer stops for good after a refused packet; the console task never waits for a host that does not read (writers are suspended instead).
