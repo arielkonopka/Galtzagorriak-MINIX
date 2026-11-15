@@ -32,7 +32,8 @@ extern char *pos_string;	/* Absolute cursor positioning */
 
 #define XMAX		79		/* Maximum x coordinate starting at 0*/
 #define SCREENMAX	(YMAX - 1)	/* Number of lines displayed */
-#define XBREAK		(XMAX - 0)	/* Line shift at this coordinate */
+extern int xbreak;		/* from the terminal's width (term_size) */
+#define XBREAK		xbreak		/* Line shift at this coordinate */
 #define SHIFT_SIZE	25		/* Number of chars to shift */
 #define SHIFT_MARK	'!'		/* Char indicating line continues */
 #define MAX_CHARS	1024		/* Maximum chars on one line */
@@ -43,7 +44,8 @@ extern char *pos_string;	/* Absolute cursor positioning */
 #define LINE_END	(MAX_CHARS + 1)	/* Highest x-coordinate for line */
 
 #define LINE_LEN	(XMAX + 1)	/* Number of characters on line */
-#define SCREEN_SIZE	(XMAX * YMAX)	/* Size of I/O buffering */
+#define SCREEN_SIZE	512		/* Size of I/O buffering (RAM: a full
+					 * redraw takes about 4 writes) */
 #define BLOCK_SIZE	1024
 
 /* Return values of functions */
@@ -272,17 +274,11 @@ _PROTOTYPE(void raw_mode, (FLAG state ));
 _PROTOTYPE(void panic, (char *message ));
 _PROTOTYPE(char *alloc, (int bytes ));
 _PROTOTYPE(void free_space, (char *p ));
-/*
-#ifdef UNIX
-_PROTOTYPE(void (*key_map [128]), (void));
-#else
-_PROTOTYPE(void (*key_map [256]), (void));
-#endif
-*/
+/* key_func[] and key_idx[] (mined1.c) map input bytes to these. */
 _PROTOTYPE(void initialize, (void));
 _PROTOTYPE(char *basename, (char *path ));
 _PROTOTYPE(void load_file, (char *file ));
-_PROTOTYPE(int get_line, (int fd, char *buffer ));
+_PROTOTYPE(int get_line, (int fd, char *buffer, int size ));
 _PROTOTYPE(LINE *install_line, (char *buffer, int length ));
 _PROTOTYPE(void main, (int argc, char *argv []));
 _PROTOTYPE(void RD, (void));
@@ -294,7 +290,7 @@ _PROTOTYPE(int line_number, (void));
 _PROTOTYPE(void file_status, (char *message, long count, char *file, int lines,
 						 FLAG writefl, FLAG changed ));
 #if __STDC__
-void build_string(char *buf, char *fmt, ...);
+void build_string(char *buf, int size, char *fmt, ...);
 #else
 void build_string();
 #endif
@@ -306,6 +302,15 @@ _PROTOTYPE(int _getchar, (void));
 _PROTOTYPE(void _flush, (void));
 _PROTOTYPE(void _putchar, (int c ));
 _PROTOTYPE(void get_term, (void));
+_PROTOTYPE(int tmp_name, (char *buf, int size, char *file ));
+_PROTOTYPE(char *shown, (char *p, char *end, char *s ));
+_PROTOTYPE(void catch_hup, (int sig ));
+_PROTOTYPE(int emergency_save, (void));
+_PROTOTYPE(void hang_up, (void));
+_PROTOTYPE(void RDM, (void));
+_PROTOTYPE(int rename, (const char *_old, const char *_new));
+_PROTOTYPE(void term_size, (FLAG force ));
+_PROTOTYPE(int ask_size, (int *rows, int *cols ));
 
 /* mined2.c */
 
@@ -354,6 +359,7 @@ _PROTOTYPE(FLAG checkmark, (void));
 _PROTOTYPE(int legal, (void));
 _PROTOTYPE(void yank, (LINE *start_line, char *start_textp, LINE *end_line, char *end_textp, FLAG remove ));
 _PROTOTYPE(int scratch_file, (FLAG mode ));
+_PROTOTYPE(void scratch_name, (void));
 _PROTOTYPE(void SF, (void));
 _PROTOTYPE(void SR, (void));
 _PROTOTYPE(REGEX *get_expression, (char *message ));

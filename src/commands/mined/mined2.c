@@ -8,6 +8,15 @@
 
 #include "mined.h"
 #include <string.h>
+#include <errno.h>
+#include <time.h>
+
+/* Buffer to store outcome of compilation (512 entries, on the heap while
+ * compiling: RAM; compile()
+ * checks before every store, B5) */
+#define EXP_SIZE	512
+#define LIST_MAX	255		/* a [] length lives in the low byte */
+int *exp_buffer;		/* malloc'd for compile() only (RAM) */
 
 /*
  * Move one line up.
@@ -724,7 +733,7 @@ FLAG old_pos;
   int ret = ERRORS;
   
 /* Get the first piece of text (might be ended with a '\n') from fd */
-  if (get_line(fd, line_buffer) == ERRORS)
+  if (get_line(fd, line_buffer, sizeof(line_buffer)) == ERRORS)
   	return;				/* Empty file */
 
 /* Insert this text at the current location. */
@@ -732,7 +741,8 @@ FLAG old_pos;
   	return;
 
 /* Repeat getting lines (and inserting lines) until EOF is reached */
-  while ((ret = get_line(fd, line_buffer)) != ERRORS && ret != NO_LINE)
+  while ((ret = get_line(fd, line_buffer, sizeof(line_buffer))) != ERRORS
+							&& ret != NO_LINE)
   	line = line_insert(line, line_buffer, ret);
   
   if (ret == NO_LINE) {		/* Last line read not ended by a '\n' */
@@ -978,10 +988,11 @@ FLAG remove;				/* DELETE if text should be deleted */
 }
 
 /*
- * Scratch_file() creates a uniq file in /usr/tmp. If the file couldn't
- * be created other combinations of files are tried until a maximum
- * of MAXTRAILS times. After MAXTRAILS times, an error message is given
- * and ERRORS is returned.
+ * Scratch_file() opens the clipboard file (B6).  Writing: the old file is
+ * removed and a new one made with O_CREAT|O_EXCL, mode 0600, every time,
+ * so nothing planted by another user (a symlink, a file of theirs) is
+ * written to or read back.  The name, made once, has 8 hex digits from the
+ * hardware RNG (/dev/random), so it cannot be guessed in advance either.
  */
 
 #define MAXTRAILS	26
@@ -989,37 +1000,54 @@ FLAG remove;				/* DELETE if text should be deleted */
 int scratch_file(mode)
 FLAG mode;				/* Can be READ or WRITE permission */
 {
-  static int trials = 0;		/* Keep track of trails */
-  register char *y_ptr, *n_ptr;
-  int fd;				/* Filedescriptor to buffer */
+  int fd, trials;
 
-/* If yank_status == NOT_VALID, scratch_file is called for the first time */
-  if (yank_status == NOT_VALID && mode == WRITE) { /* Create new file */
-  	/* Generate file name. */
-	y_ptr = &yank_file[11];
-	n_ptr = num_out((long) getpid());
-	while ((*y_ptr = *n_ptr++) != '\0')
-		y_ptr++;
-	*y_ptr++ = 'a' + trials;
-	*y_ptr = '\0';
-  	/* Check file existence */
-  	if (access(yank_file, 0) == 0 || (fd = creat(yank_file, 0644)) < 0) {
-  		if (trials++ >= MAXTRAILS) {
-  			error("Unable to creat scratchfile.", NIL_PTR);
-  			return ERRORS;
-  		}
-  		else
-  			return scratch_file(mode);/* Have another go */
-  	}
+  if (mode == READ) {
+	if ((fd = open(yank_file, O_RDONLY)) < 0) {
+		yank_status = NOT_VALID;
+		return ERRORS;
+	}
+	clear_buffer();
+	return fd;
   }
-  else if ((mode == READ && (fd = open(yank_file, 0)) < 0) ||
-			(mode == WRITE && (fd = creat(yank_file, 0644)) < 0)) {
-  	yank_status = NOT_VALID;
-  	return ERRORS;
+  for (trials = 0; trials < MAXTRAILS; trials++) {
+	if (yank_status == NOT_VALID || trials > 0) {
+		if (trials == 0) (void) unlink(yank_file);
+		scratch_name();
+	} else
+		(void) unlink(yank_file);	/* our own, from last time */
+	if ((fd = open(yank_file, O_WRONLY | O_CREAT | O_EXCL, 0600)) >= 0) {
+		clear_buffer();
+		return fd;
+	}
+	if (errno != EEXIST) break;
   }
+  yank_status = NOT_VALID;
+  error("Unable to creat scratchfile.", NIL_PTR);
+  return ERRORS;
+}
 
-  clear_buffer();
-  return fd;
+/*
+ * Scratch_name() sets yank_file to /tmp/mined.<8 random hex digits>.
+ */
+void scratch_name()
+{
+  static char hex[] = "0123456789abcdef";
+  unsigned char r[4];
+  unsigned long v;
+  int fd, i;
+
+  v = (unsigned long) getpid() * 2654435761UL ^ (unsigned long) time(NULL);
+  if ((fd = open("/dev/random", O_RDONLY)) >= 0) {
+	if (read(fd, (char *) r, 4) == 4)
+		v ^= (unsigned long) r[0] << 24 | (unsigned long) r[1] << 16
+				| (unsigned long) r[2] << 8 | r[3];
+	(void) close(fd);
+  }
+  copy_string(yank_file, "/tmp/mined.");
+  for (i = 0; i < 8; i++)
+	yank_file[11 + i] = hex[(v >> (28 - 4 * i)) & 15];
+  yank_file[19] = '\0';
 }
 
 /*  ========================================================================  *
@@ -1085,7 +1113,18 @@ char *message;
 
   if (exp_buf[0] != '\0') {		/* A new expr. is typed */
   	copy_string(typed_expression, exp_buf);/* Save expr. */
+  	if (program.status != REG_ERROR && program.result.expression)
+  		free_space((char *) program.result.expression);	/* was lost */
+  	program.result.expression = NIL_INT;
+  	if ((exp_buffer = (int *) malloc(EXP_SIZE * sizeof(int))) == NIL_INT) {
+  		error("Out of memory.", NIL_PTR);
+  		program.status = REG_ERROR;
+  		program.result.err_mess = "Out of memory.";
+  		return NIL_REG;
+  	}
   	compile(exp_buf, &program);	/* Compile new expression */
+  	free_space((char *) exp_buffer);
+  	exp_buffer = NIL_INT;
   }
 
   if (program.status == REG_ERROR) {	/* Error during compiling */
@@ -1137,7 +1176,8 @@ FLAG file;
   	return;
   
 /* Get substitution pattern */
-  build_string(mess_buf, "%s %s by:", mess_buf, typed_expression);
+  build_string(mess_buf, sizeof(mess_buf), "%s %s by:", mess_buf,
+							typed_expression);
   if (get_string(mess_buf, replacement, FALSE) == ERRORS)
   	return;
   
@@ -1172,8 +1212,8 @@ FLAG file;
   if (subs == 0L && quit == FALSE)
   	error("Pattern not found.", NIL_PTR);
   else if (lines >= REPORT || quit == TRUE) {
-  	build_string(mess_buf, "%s %D substitutions on %D lines.", mess_buf,
-								   subs, lines);
+  	build_string(mess_buf, sizeof(mess_buf),
+			"%s %D substitutions on %D lines.", mess_buf, subs, lines);
   	status_line(mess_buf, NIL_PTR);
   }
   else if (file == NOT_VALID && subs >= REPORT)
@@ -1208,10 +1248,11 @@ char *replacement;		/* Contains replacement pattern */
  * Replace the match by the substitution pattern. Each occurrence of '&' is
  * replaced by the original match. A \ escapes the next character.
  */
-  while (*subp != '\0' && textp < &text_buffer[MAX_CHARS]) {
+  while (*subp != '\0' && textp < &text_buffer[MAX_CHARS - 1]) {
   	if (*subp == '&') {		/* Replace the original match */
   		amp = program->start_ptr;
-  		while (amp < program->end_ptr && textp<&text_buffer[MAX_CHARS])
+  		while (amp < program->end_ptr
+				&& textp < &text_buffer[MAX_CHARS - 1])
   			*textp++ = *amp++;
   		subp++;
   	}
@@ -1222,7 +1263,8 @@ char *replacement;		/* Contains replacement pattern */
   	}
   }
 
-/* Check for line length not exceeding MAX_CHARS */
+/* Check for line length not exceeding MAX_CHARS (terminated first, B10) */
+  *textp = '\0';
   if (length_of(text_buffer) + length_of(program->end_ptr) >= MAX_CHARS) {
   	error("Substitution result: line too big", NIL_PTR);
   	return NIL_PTR;
@@ -1324,8 +1366,7 @@ LINE *match_line;
 /* Previous is the contents of the previous address (ptr) points to */
 #define previous(ptr)		(*((ptr) - 1))
 
-/* Buffer to store outcome of compilation */
-int exp_buffer[BLOCK_SIZE];
+#define EXP_ROOM(n)	(expression + (n) <= &exp_buffer[EXP_SIZE])
 
 /* Errors often used */
 char *too_long = "Regular expression too long";
@@ -1368,8 +1409,8 @@ REGEX *program;
   int *prev_char;			/* Pointer to previous compiled atom */
   int *acct_field;		/* Pointer to last BRACKET start */
   FLAG negate;			/* Negate flag for BRACKET */
-  char low_char;			/* Index for chars in BRACKET */
-  char c;
+  int low_char, high_char;	/* Range in BRACKET, as unsigned bytes */
+  int c;
 
 /* Check for begin of line */
   if (*pattern == '^') {
@@ -1386,7 +1427,11 @@ REGEX *program;
   }
 
   for (; ;) {
-  	switch (c = *pattern++) {
+  	if (!EXP_ROOM(2)) {		/* an atom and DONE */
+  		reg_error(too_long);
+  		return;
+  	}
+  	switch (c = *pattern++ & 0377) {
   	case '.' :
   		*expression++ = DOT;
   		break;
@@ -1412,7 +1457,7 @@ REGEX *program;
   		if (*pattern == '\0')
   			*expression++ = NORMAL + '\\';
   		else
-  			*expression++ = NORMAL + *pattern++;
+  			*expression++ = NORMAL + (*pattern++ & 0377);
   		break;
   	case '*' :
   		/*
@@ -1420,6 +1465,10 @@ REGEX *program;
   		 * begin of the list, and adjust the opcode.
   		 */
   		prev_char = expression - 1;
+  		if (prev_char < exp_buffer) {	/* "^*": a normal '*' */
+  			*expression++ = '*' + NORMAL;
+  			break;
+  		}
   		if (*prev_char & BRACKET)
   			*(expression - (*acct_field & LOW_BYTE))|= STAR;
   		else
@@ -1447,25 +1496,36 @@ REGEX *program;
   				reg_error("Missing ]");
   				return;
   			}
-  			if (*pattern == '\\')
+  			if (*pattern == '\\' && pattern[1] != '\0')
   				pattern++;
-  			*expression++ = *pattern++;
-  			if (*pattern == '-') {
+  			if (!EXP_ROOM(2) || expression - acct_field >= LIST_MAX) {
+  				reg_error(expression - acct_field >= LIST_MAX
+  					? "List too long" : too_long);
+  				return;
+  			}
+  			low_char = *pattern++ & 0377;
+  			*expression++ = low_char;
+  			if (*pattern == '-' && pattern[1] != ']'
+  						&& pattern[1] != '\0') {
   						/* Make list of chars */
-  				low_char = previous(pattern);
   				pattern++;	/* Skip '-' */
-  				if (low_char++ > *pattern) {
+  				high_char = *pattern++ & 0377;
+  				if (low_char > high_char) {
   					reg_error("Bad range in [a-z]");
   					return;
   				}
-  				/* Build list */
-  				while (low_char <= *pattern)
-  					*expression++ = low_char++;
-  				pattern++;
-  			}
-  			if (expression >= &exp_buffer[BLOCK_SIZE]) {
-  				reg_error(too_long);
-  				return;
+  				/* Build list, checking before each store */
+  				while (++low_char <= high_char) {
+  					if (!EXP_ROOM(2)) {
+  						reg_error(too_long);
+  						return;
+  					}
+  					if (expression - acct_field >= LIST_MAX) {
+  						reg_error("List too long");
+  						return;
+  					}
+  					*expression++ = low_char;
+  				}
   			}
   		}
   		pattern++;			/* Skip ']' */
@@ -1486,10 +1546,6 @@ REGEX *program;
   		break;
   	default :
   		*expression++ = c + NORMAL;
-  	}
-  	if (expression == &exp_buffer[BLOCK_SIZE]) {
-  		reg_error(too_long);
-  		return;
   	}
   }
   /* NOTREACHED */
@@ -1622,9 +1678,9 @@ int *expression;
   	switch (opcode) {
   	case NORMAL :
   		if (star_fl)
-  			while (*string++ == c)	/* Skip all matches */
-  				;
-  		else if (*string++ != c)
+  			while ((*string++ & 0377) == (c & 0377))
+  				;		/* Skip all matches */
+  		else if ((*string++ & 0377) != (c & 0377))
   			return NO_MATCH;
   		break;
   	case DOT :
@@ -1701,7 +1757,7 @@ int opcode;
   if (c == '\0' || c == '\n')	/* End of string, never matches */
   	return NO_MATCH;
   while (list_length-- > 1) {	/* > 1, don't check acct_field */
-  	if ((*list & LOW_BYTE) == c)
+  	if ((*list & LOW_BYTE) == (c & 0377))
   		return (opcode & NEGATE) ? NO_MATCH : MATCH;
   	list++;
   }

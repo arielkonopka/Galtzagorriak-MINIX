@@ -43,7 +43,7 @@ d--755 0 0
       hostname.file ---644 0 0 rootfs/etc/hostname.file
       apps ---644 0 0 rootfs/etc/apps
    $
-   tmp d--777 0 0
+   tmp d--1777 0 0
    $
    usr d--755 0 0
    $

@@ -233,11 +233,13 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver
+# The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
+EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(GUIAPPS)
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su
@@ -273,11 +275,16 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill \
 		uname whoami yes printenv gpio beep ver
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
+CHMEM_mined  := 20480	# T8: heap ~2x the file (a malloc per line + its struct): ~8 KB files
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
+MINED_SRC := mined1.c mined2.c
+$(MB)/cmd/mined/%.o: $(MROOT)/src/commands/mined/%
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -298,6 +305,7 @@ $(MB)/cmd/%.o: $(MROOT)/src/commands/simple/%.c
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
+OBJS_mined = $(MINED_SRC:%=$(MB)/cmd/mined/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
@@ -339,7 +347,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.45
+BASE_VER := 3.46
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

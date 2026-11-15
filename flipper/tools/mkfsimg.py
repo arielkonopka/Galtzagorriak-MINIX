@@ -19,7 +19,8 @@ PROTO uses the format of MINIX mkfs(1):
        $
     $
 
-Mode strings: type (- d c b), setuid (- u), setgid (- g), octal perms.
+Mode strings: type (- d c b), setuid (- u), setgid (- g), octal perms
+(3 digits, or 4 with the sticky bit: d--1777).
 Host paths are relative to --root (default: the PROTO's directory).
 
 --mbr also writes a whole-disk image with an MBR and the file system as
@@ -179,7 +180,8 @@ class FS:
 
 
 def parse_mode(s):
-    if len(s) != 6 or s[0] not in TYPES:
+    # 3 or 4 octal digits: "d--1777" sets the sticky bit (B6, R3.7)
+    if len(s) not in (6, 7) or s[0] not in TYPES:
         raise SystemExit(f"bad mode {s!r}")
     mode = TYPES[s[0]] | int(s[3:], 8)
     if s[1] == "u":
