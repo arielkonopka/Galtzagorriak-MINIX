@@ -149,8 +149,9 @@ RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### PR 4 — T14d: screen-off state, SD rail, backlight dim stage (`t14d-screen-off`)
 Changes:
-- Backlight: dim stage (10 % after 30 s) before off at the existing timeout (default stays 300 s),
-  by the LP5562 engine ramp (#81 code); also the short up-ramp on wake (open item from #81).
+- Backlight: default idle timeout **15 s** (owner; change the 300 fallback in `hal_bl_state()`),
+  optional dim stage before off (off by default) by the LP5562 engine ramp (#81 code); also the
+  short up-ramp on wake (open item from #81).
 - LCD power save (ST7567: display off + all points on; RAM kept) N minutes after the backlight
   went off, on battery only; leave it on any key, no redraw. Desk mode keeps it on.
 - SD: with the screen off and the card idle N minutes (cache flushed, no open writes, not busy),
@@ -173,6 +174,10 @@ RAM: 0 B (flags in existing words). Flash ≈ +1 KB.
 - Without a meter: battery-SoC drop over 24 h idle (coarse) plus the Stop2 statistics.
 - Every PR adds a "Power" block to PORTING.md: date, build, state, current, how measured.
 
-## 4. Out of scope here
+## 4. After T14: the `power` app (T15, spec R7.1)
+One GUI app for battery info, profile, backlight, screen-off and SD delays, sleep statistics,
+power off and reboot. Settings in RTC backup registers, no flash writes.
+
+## 5. Out of scope here
 CPU2/BLE low-power (Phase 16, R16.1.8), wake-on-radio (R8.5), phone-tap wake (R14.2.1), IR
 remote wake (R20a.5).

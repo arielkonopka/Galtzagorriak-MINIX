@@ -1725,8 +1725,9 @@ infrared, iButton, low-power modes.
     polled over I2C, every 1 s while the screen is lit and every few minutes in Stop2;
   - statistics: time in Stop2 and wakes per source (≤ 16 B), shown by `/dev/power`.
 - **R6.9 Peripheral power policy** (power analysis 2026-11-15):
-  - backlight: a dim stage (e.g. 10 % after 30 s) before off at the idle timeout, by the LP5562
-    engine ramp; separate defaults on battery and on USB;
+  - backlight: default idle timeout **15 s** (owner, 2026-11-15; 5 min was too long); an optional
+    dim stage before off (off by default), by the LP5562 engine ramp; separate timeouts on battery
+    and on USB;
   - **screen-off state:** LCD power save (the ST7567 keeps its RAM, no redraw on wake) a few minutes
     after the backlight goes off, on battery; desk mode (R7b.2) keeps the LCD on;
   - SD card: ext3.3V (PA3) off when the screen is off and the card idle (cache flushed, no open
@@ -1762,12 +1763,28 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
 |---|---|---|
 | Archive (file browser) | `archive` app, POSIX files under `/home/flipper`; starts the matching app per file type (`.ir`, `.ibtn`, `.sub`, `.rfid`, `.nfc`, `.txt`) | Uses `libfuri` FileBrowser |
 | Settings (display, sound, LED, time, power, storage, about, system) | `settings` app as root-group `operator` writing `/etc/flipper/*.conf`; `/dev/power`, `/dev/backlight` | Storage info via `df`; "format SD" disabled while mounted |
-| Power (battery info, power off, reboot) | Part of `settings` plus a status-bar battery from the launcher | `/dev/power` |
+| Power (battery info, power off, reboot) | Native app `power` (R7.1) plus a status-bar battery from the launcher | `/dev/power`, `/dev/backlight` |
 | Infrared | `infrared` app, group `ir`; stock `lib/infrared` codecs + universal remote DBs from SD | Stock worker thread → pulse engine + cooperative thread |
 | iButton | `ibutton` app, group `ibutton`; stock `lib/ibutton` + `lib/one_wire` with HAL stubs on `/dev/ibutton` | Timing stays in the kernel (R6.7) |
 | GPIO (pin control, USB-UART bridge, 5 V) | `gpio` app, groups `gpio` and `usb` | Bridge via R6.5 |
 
+- **R7.1 Power management app `power`** (owner, 2026-11-15): one place for everything in R6.1,
+  R6.8 and R6.9, so nobody needs the shell for it:
+  - battery screen: charge %, voltage, current (+ charging / − discharging), temperature, health,
+    charge state, estimated time to full or to empty, charger or computer;
+  - battery profile `full` / `care` (R6.1);
+  - backlight brightness and timeouts on battery and on USB, optional dim stage;
+  - screen-off delay (LCD power save) and SD power-off delay (R6.9), each with "never";
+  - sleep statistics: share of time in Stop2, wakes per source since boot, so a program that keeps
+    the Flipper awake is visible;
+  - power off (says how many alarms are armed and that they will still ring, F.3) and reboot.
+  Settings live in RTC backup registers through `ioctl` on `/dev/power` and `/dev/backlight` (no
+  flash writes, survive power-off). Runs as group `operator`. GUI as the other system apps
+  (`flipper/gui` today, `libfuri` later). RAM: one app process only while open (~2 KB); 0 B static.
+
 Acceptance:
+- AC7.0 Every setting in `power` takes effect at once, survives a power-off, and matches what
+  `cat /dev/power` and `backlight` report.
 - AC7.1 Each app opens and saves files compatible with stock: files saved by stock firmware 1.x
   load, and files saved here load on stock.
 - AC7.2 The IR universal remote for TVs works on at least 3 brands.

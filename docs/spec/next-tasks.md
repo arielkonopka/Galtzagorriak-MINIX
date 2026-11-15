@@ -171,13 +171,19 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 - RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### T14d. Screen-off state and peripheral power (after T14b)
-- Backlight: a dim stage before off (e.g. 10% after 30 s, off at the existing timeout, default stays 300 s as the owner set it), using the LP5562 engine ramp from #81 (0 B RAM). Separate defaults on battery and on USB.
+- Backlight: **default idle timeout 15 s** (owner 2026-11-15: 5 min is too long). The code default is still 300 (`hal_bl_state()` fallback in `flipper/hal/flipper/board.c`, comments in `flipdev.c` and `cmds/backlight.c`): change it to 15. Optional dim stage before off (off by default) with the LP5562 engine ramp from #81 (0 B RAM). Separate timeouts on battery and on USB.
 - LCD power save (display off + all points on: the ST7567 keeps its RAM) a few minutes after the backlight goes off, on battery only; any button leaves power save with no redraw. Desk mode (R7b.2) keeps the LCD on.
 - SD card power: with the screen off and the card idle for N minutes (no open writes, cache flushed, card not busy), switch ext3.3V off (PA3). Start re-initialising the card at the first button press, in parallel with the backlight ramp, so the ~300 ms card start is hidden. Header pin 9 also loses 3V3 then: never cut it while `/dev/gpio` has a user or 3V3 output is enabled.
 - Acceptance: the first frame after a key in screen-off meets L1; opening an app from the SD card after a power-cut meets its L6 budget, or the PR says by how much it misses; idle current with screen off recorded.
 - RAM: 0 B (a few bits in existing flags). Flash ≈ +1 KB.
 
 Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
+
+## T15. Power management app `power` (spec R7.1; owner request 2026-11-15): after T14c
+- A GUI app in `flipper/gui/` (like `lights.c`), launcher entry "Power". Screens: battery (%, V, mA with sign, °C, health, charge state, time to full/empty, charger or computer), profile `full`/`care`, backlight (level, timeout on battery / on USB, dim stage on/off), screen-off delay, SD power-off delay, sleep statistics (Stop2 share, wakes per source), Power off (shows "N alarms armed, they will ring"), Reboot.
+- All settings through `ioctl` on `/dev/power` and `/dev/backlight` into RTC backup registers (no flash writes); add any new register to the map in PORTING.md.
+- Tests on the Flipper (agent): AC7.0 (each setting takes effect at once and survives power-off); the battery screen matches `cat /dev/power`; L6 for opening the app and L1 for every key; app RAM recorded.
+- RAM: 0 B static; app ≈ 2 KB while open. Flash ≈ 4 KB.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
