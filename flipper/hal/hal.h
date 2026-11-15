@@ -46,12 +46,13 @@ void hal_backlight(unsigned level);	/* 0 (off) .. 255; on after lcd_init */
 void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 					 * by the LED driver on its own */
 /* The backlight's settings, kept over resets (Flipper: RTC backup register
- * 15; no RAM): bit 27 off by the idle timeout, bit 26 dimmed (10 % down
- * after 2/3 of it), bits 16-23 the brightness, bits 0-15 the timeout in
- * seconds (0: never).  hal_bl_state() gives the defaults (255, 15 s) when
- * nothing valid is stored. */
+ * 15; no RAM): bit 27 off by the idle timeout, bits 24-26 the dimming step
+ * (10 % less each second in the last 5 s before it), bits 16-23 the
+ * brightness, bits 0-15 the timeout in seconds (0: never).  hal_bl_state()
+ * gives the defaults (255, 15 s) when nothing valid is stored. */
 #define HAL_BL_OFF		0x08000000u
-#define HAL_BL_DIM		0x04000000u
+#define HAL_BL_STEP(s)		((s) >> 24 & 7)
+#define HAL_BL_STEPS		0x07000000u
 #define HAL_BL_LEVEL(s)		((s) >> 16 & 0xFF)
 #define HAL_BL_TIMEOUT(s)	((s) & 0xFFFF)
 uint32_t hal_bl_state(void);

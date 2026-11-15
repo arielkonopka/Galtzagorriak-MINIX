@@ -10,8 +10,8 @@
  *				blocks until there is one, unless O_NONBLOCK
  *	minor 2  /dev/backlight	write: one byte, brightness 0..255; three:
  *				and the idle timeout in seconds (LE, 0:
- *				never; default 15; dimmed 10 % after 2/3 of
- *				it).  Off when idle, on at
+ *				never; default 15; 10 % dimmer each second of
+ *				its last 5).  Off when idle, on at
  *				any key or button; kept over resets.
  *				read: the state, 4 bytes (hal.h HAL_BL_*)
  *	minor 3  /dev/led	write: three bytes, red green blue 0..255
@@ -75,6 +75,8 @@ PRIVATE message fm;
 /* Button events, filled by flipdev_tick() at interrupt level. */
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
+#define BL_DIMS		5	/* seconds of dimming, 10 % each */
+#define BL_GONE		7	/* bl_want: off */
 PRIVATE unsigned last_buttons;	/* and SWALLOW: a press woke the light */
 #define SWALLOW		0x80000000u
 
@@ -167,7 +169,7 @@ PUBLIC void flipdev_task()
 
   last_buttons = hal_buttons();
   {	/* the backlight as it was set before the reset, and on */
-	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_DIM);
+	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS);
 
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
@@ -421,42 +423,46 @@ int count;
  *===========================================================================*/
 PRIVATE void bl_apply()
 {
-/* After 2/3 of the idle timeout the backlight dims by 10 %, after all of
- * it it fades out in 0.5 s (owner, 2026-11-15: 15 s, dimmed from 10 s;
+/* In the last 5 s of the idle timeout the backlight dims by 10 % a second,
+ * then it fades out in 0.5 s (owner, 2026-11-15: 15 s, so from 10 s on;
  * 0 = never), and it comes back at once at any key or button (k_input).
- * The setting and the state live in an RTC backup register (no RAM). */
+ * The ramps run in the LED driver.  The setting and the state live in an
+ * RTC backup register (no RAM). */
   u32_t st = hal_bl_state();
-  int want = bl_want(st, get_uptime());
-  unsigned lv = HAL_BL_LEVEL(st), dim = lv - lv / 10;
+  int want = bl_want(st, get_uptime()), cur = bl_state(st);
+  unsigned lv = HAL_BL_LEVEL(st);
 
-  if (want == 2 && !(st & HAL_BL_OFF)) {
-	hal_backlight_fade(st & HAL_BL_DIM ? dim : lv, 0, 500);
-	hal_bl_state_set((st & ~HAL_BL_DIM) | HAL_BL_OFF);
-  } else if (want == 1 && !(st & (HAL_BL_DIM | HAL_BL_OFF))) {
-	hal_backlight_fade(lv, dim, 500);
-	hal_bl_state_set(st | HAL_BL_DIM);
-  } else if (want == 0 && (st & (HAL_BL_DIM | HAL_BL_OFF))) {
+  if (want == cur) return;
+  st &= ~(HAL_BL_STEPS | HAL_BL_OFF);
+  if (want == BL_GONE) {
+	hal_backlight_fade(lv - lv * cur / 10, 0, 500);	/* out, 0.5 s */
+	hal_bl_state_set(st | HAL_BL_OFF);
+  } else if (want > 0 && cur != BL_GONE) {
+	hal_backlight_fade(lv - lv * cur / 10, lv - lv * want / 10, 200);
+	hal_bl_state_set(st | (u32_t) want << 24);
+  } else if (want == 0) {
 	hal_backlight(lv);			/* on at once */
-	hal_bl_state_set(st & ~(HAL_BL_DIM | HAL_BL_OFF));
+	hal_bl_state_set(st);
   }
 }
 
-PRIVATE int bl_want(st, now)	/* 0 on, 1 dimmed, 2 off */
+PRIVATE int bl_want(st, now)	/* 0 on, 1..5 dimmed, BL_GONE off */
 u32_t st;
 clock_t now;
 {
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input;
 
   if (t == 0) return(0);
-  if (now - k_input >= t) return(2);
-  if (now - k_input >= t / 3 * 2) return(1);
+  if (idle >= t) return(BL_GONE);
+  if (t > BL_DIMS * HZ && idle >= t - BL_DIMS * HZ)
+	return((int) ((idle - (t - BL_DIMS * HZ)) / HZ) + 1);
   return(0);
 }
 
 PRIVATE int bl_state(st)	/* what bl_apply last did */
 u32_t st;
 {
-  return(st & HAL_BL_OFF ? 2 : st & HAL_BL_DIM ? 1 : 0);
+  return(st & HAL_BL_OFF ? BL_GONE : (int) HAL_BL_STEP(st));
 }
 
 
