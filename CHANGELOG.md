@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T11, R2b.12) `pkg bind` rebinds programs copied back (new inode) to the text already in flash; compaction drops records whose file is gone (FS `INOCHK`); exec also checks a CRC of the start of an installed program's text. Base 3.52.
 - (I.1, minimal) The clock starts from the RTC at boot (QEMU: the host's time); while it is not set, no program is bound to internal flash (bindings use ctimes). Base 3.51.
 - (T12, L.2) The default settings are a read-only image in internal flash (`make base-flash`), mounted on `/rom` (`/dev/rom`); `/etc/rc` reads `rc.conf` from the card, else from `/rom`. Base 3.50.
 - `/dev/mem` and `/dev/kmem` read only where the board has memory (RAM, flash below CPU2's, ROM/OTP) and write only RAM: `dd if=/dev/mem` past the end is a read error instead of a kernel panic.

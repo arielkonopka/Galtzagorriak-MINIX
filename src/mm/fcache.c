@@ -109,7 +109,7 @@ FORWARD _PROTOTYPE( void fc_alarm, (int ticks)				);
 /*===========================================================================*
  *				crc32					     *
  *===========================================================================*/
-PRIVATE unsigned long crc32_more(crc, p, n)	/* zlib's CRC-32, as elf2mnx */
+PUBLIC unsigned long crc32_more(crc, p, n)	/* zlib's CRC-32, as elf2mnx */
 unsigned long crc;		/* 0xFFFFFFFF to start; ~result at the end */
 const unsigned char *p;
 unsigned long n;

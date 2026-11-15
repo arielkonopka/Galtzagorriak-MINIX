@@ -143,7 +143,8 @@ PUBLIC int do_exec()
    * under their owner (S12, R1.4).  Others run with their text in RAM. */
   if (ft == SEPARATE && !(s_buf.st_mode & (S_IWGRP | S_IWOTH))) {
 	/* Installed by root first (R2b.4), then the run-time cache. */
-	fc_text = in_lookup(&s_buf, (unsigned long) text_bytes);
+	fc_text = in_lookup(&s_buf, (unsigned long) text_bytes, fd,
+						(unsigned long) text_off);
 	if (fc_text == 0) fc_text = fc_lookup(text_crc, (unsigned long) text_bytes,
 					(unsigned long) s_buf.st_uid);
 	fc_new = (fc_text == 0);	/* to be cached once it runs */
