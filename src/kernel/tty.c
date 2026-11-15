@@ -48,6 +48,9 @@
 #if (CHIP == ARM_CM)
 #include <minix/gzversion.h>
 #include <gzbuild.h>
+#if (CHIP == ARM_CM)
+#include "hal.h"
+#endif
 #endif
 #include <termios.h>
 #if ENABLE_SRCCOMPAT || ENABLE_BINCOMPAT
@@ -150,6 +153,8 @@ PUBLIC void tty_task()
 #if (CHIP == ARM_CM)
   printf("%s %s%s (based on %s), ABI %d\n", GZ_NAME, GZ_RELEASE, GZ_BUILD,
 						GZ_BASE, GZ_ABI);
+  printf("reset: %s%s\n", hal_reset_cause(),
+	hal_dev() ? "; dev mode: a watchdog reset goes to DFU" : "");
 #endif
   printf("Minix %s.%s  Copyright 1997 Prentice-Hall, Inc.\n\n",
 						OS_RELEASE, OS_VERSION);

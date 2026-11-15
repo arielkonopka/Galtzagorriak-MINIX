@@ -178,6 +178,10 @@ int hal_random(uint32_t *w)
 	return 0;
 }
 void hal_dfu_request(void) { hal_halt(0); }
+void hal_dev_mode(int on) { (void) on; }
+int hal_dev(void) { return 0; }
+int hal_reset_bits(void) { return 0x08; }	/* BORRSTF: power on */
+const char *hal_reset_cause(void) { return "power on"; }
 
 /* The "SD card" is a disk image file on the host, see QEMU_DISK. */
 #ifndef QEMU_DISK

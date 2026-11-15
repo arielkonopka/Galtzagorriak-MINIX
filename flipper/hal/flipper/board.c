@@ -789,12 +789,45 @@ unsigned hal_buttons(void)
  * no globals here. */
 #define SYSMEM_BASE 0x1FFF0000u
 
+/* RTC backup register 19 (kept over resets and, with the battery, power
+ * off; stock firmware uses the low registers): "GZ" in the top half, the
+ * dev bit, and the reset flags of the last reset (RCC_CSR >> 24).  The
+ * dev bit is set by "reboot -d" and cleared by a normal reboot or halt:
+ * only on a board being developed does a watchdog reset go to DFU; on a
+ * user's board it boots normally (review of #2, R4a.4). */
+#define BOOT_REG	(RTC->BKP19R)
+#define BOOT_MAGIC	0x475A0000u
+#define BOOT_DEV	0x100u
+#define BOOT_CAUSE	0xFFu
+
+static uint32_t boot_reg(void)		/* no globals: early boot */
+{
+	uint32_t r;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	r = BOOT_REG;
+	return (r & 0xFFFF0000u) == BOOT_MAGIC ? r : BOOT_MAGIC;
+}
+
+static void boot_reg_set(uint32_t r)
+{
+	PWR->CR1 |= PWR_CR1_DBP;		/* backup domain writable */
+	BOOT_REG = r;
+	(void) BOOT_REG;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
 void hal_early_boot(void)
 {
 	const volatile uint32_t *sysmem = (const volatile uint32_t *) SYSMEM_BASE;
 	volatile uint32_t settle;
-	uint32_t sp, pc;
+	uint32_t sp, pc, csr = RCC->CSR, br = boot_reg();
 	int left;
+
+	/* Keep the cause of this reset (not after the ROM loader's jump,
+	 * which is no reset: its flags were cleared). */
+	if ((csr >> 24) != 0) br = (br & ~BOOT_CAUSE) | (csr >> 24);
 
 	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOBEN;
 	(void) RCC->AHB2ENR;
@@ -811,19 +844,20 @@ void hal_early_boot(void)
 	/* DFU without the buttons: asked for by hal_dfu_request() ("reboot
 	 * -d"), or after the watchdog reset a hung or panicked kernel - a
 	 * new image that fails comes back to DFU by itself. */
-	if (*HAL_BOOT_WORD == HAL_BOOT_DFU || (RCC->CSR & RCC_CSR_IWDGRSTF)) {
+	if (*HAL_BOOT_WORD == HAL_BOOT_DFU) br |= BOOT_DEV;
+	if (*HAL_BOOT_WORD == HAL_BOOT_DFU
+			|| ((csr & RCC_CSR_IWDGRSTF) && (br & BOOT_DEV))) {
 		*HAL_BOOT_WORD = 0;
-		RCC->CSR |= RCC_CSR_RMVF;
 		left = 1;
 	}
+	boot_reg_set(br);
+	if (left) RCC->CSR |= RCC_CSR_RMVF;
 	if (!left) {
 		/* ST's DFU loader starts the new image ("leave") with a jump,
 		 * not a reset, and leaves the flash controller with CFGBSY
 		 * stuck: no erase or program until a reset (the flash text
 		 * cache would stay off).  Reset once - not again if the last
 		 * reset was this one. */
-		uint32_t csr = RCC->CSR;
-
 		RCC->CSR = csr | RCC_CSR_RMVF;	/* clear the reset flags */
 		if ((FLASH->SR & FLASH_SR_CFGBSY) && !(csr & RCC_CSR_SFTRSTF))
 			NVIC_SystemReset();
@@ -885,15 +919,18 @@ void hal_halt(int status)
 /*===========================================================================*
  *				Watchdog, DFU request			     *
  *===========================================================================*/
-/* IWDG on the 32 kHz LSI: /256 = 125 Hz, 1250 counts = 10 s.  Kicked from
- * the clock tick (and hal_halt); interrupts are never masked that long.
- * A system reset stops it again (software watchdog option). */
+/* IWDG on the 32 kHz LSI: /64 = 500 Hz, 1000 counts = 2 s (R4a.4).  Kicked
+ * by the clock task, which the clock interrupt wakes at least every 32
+ * ticks: a kernel task that never gives the CPU back, or an interrupt
+ * storm, starves it and the board resets.  hal_halt() keeps kicking after
+ * a halt, not after a panic (the reset comes 2 s later).  A system reset
+ * stops the watchdog again (software watchdog option). */
 void hal_wdt_start(void)
 {
 	IWDG->KR = 0xCCCC;			/* start (and LSI) */
 	IWDG->KR = 0x5555;			/* unlock PR, RLR */
-	IWDG->PR = 6;				/* /256 */
-	IWDG->RLR = 1250;
+	IWDG->PR = 4;				/* /64 */
+	IWDG->RLR = 1000;
 	while (IWDG->SR & (IWDG_SR_PVU | IWDG_SR_RVU)) ;
 	IWDG->KR = 0xAAAA;
 }
@@ -901,6 +938,37 @@ void hal_wdt_start(void)
 void hal_wdt_kick(void)
 {
 	IWDG->KR = 0xAAAA;
+}
+
+void hal_dev_mode(int on)
+{
+	uint32_t br = boot_reg();
+
+	boot_reg_set(on ? br | BOOT_DEV : br & ~BOOT_DEV);
+}
+
+int hal_dev(void)
+{
+	return (boot_reg() & BOOT_DEV) != 0;
+}
+
+int hal_reset_bits(void)
+{
+	return (int) (boot_reg() & (BOOT_DEV | BOOT_CAUSE));
+}
+
+const char *hal_reset_cause(void)
+{
+	uint32_t c = boot_reg() << 24;		/* back to RCC_CSR bits */
+
+	if (c & RCC_CSR_IWDGRSTF) return "watchdog";
+	if (c & RCC_CSR_WWDGRSTF) return "window watchdog";
+	if (c & RCC_CSR_LPWRRSTF) return "low power";
+	if (c & RCC_CSR_BORRSTF) return "power on";
+	if (c & RCC_CSR_SFTRSTF) return "software";
+	if (c & RCC_CSR_OBLRSTF) return "option bytes";
+	if (c & RCC_CSR_PINRSTF) return "reset pin";
+	return "unknown";
 }
 
 void hal_dfu_request(void)

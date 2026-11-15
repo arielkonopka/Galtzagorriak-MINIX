@@ -88,10 +88,26 @@ Without the buttons (2026-11-14):
 - `reboot -d` (root) restarts into ST's ROM DFU loader (RBT_MONITOR: there
   is no boot monitor; hal_dfu_request() leaves a magic word at 0x20000000,
   the 8 bytes the RAM map skips, and resets; hal_early_boot() sees it).
-- Independent watchdog, 10 s, kicked from the clock tick: a kernel that
-  hangs - or panics (hal_halt() stops kicking after a panic, so the
-  message still gets out over USB) - resets, and a watchdog reset goes to
-  DFU.  Tested with a kernel spinning at boot: DFU after 11 s.
+- Independent watchdog, 2 s (R4a.4, Phase 4a, 2026-11-15), kicked by the
+  clock *task*; the clock interrupt wakes it at least every 32 ticks
+  (0.53 s).  Tasks are never preempted by tasks, so a kernel task that
+  never gives the CPU back, an interrupt storm, or a panic (hal_halt()
+  stops kicking, the message still gets out over USB) resets the board.
+  A halt keeps kicking.  Before this the ISR kicked it: a task stuck in
+  `for(;;)` with interrupts on never reset.
+- Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
+  a dev bit and the reset flags of the last reset.  `reboot -d` sets the
+  dev bit, a normal reboot or halt clears it.  Dev bit set: watchdog reset
+  -> DFU (a broken new image comes back by itself).  Clear (a user's
+  board): it boots normally, as the stock firmware does.  `ver` prints
+  the cause (`reset: watchdog`, `software`, `power on`, ...; MEMINFO
+  MI_RESET) and "dev mode"; the boot banner too, but USB is not up yet.
+  After DFU + flashing the cause reads "software" (the loader's jump is
+  followed by one reset, see hal_early_boot).
+  Tested (AC4a.4) with a temporary `for(;;)` in the flipdev task: dev
+  mode: DFU after 2.3 s; user mode: normal boot after ~1.5 s,
+  `reset: watchdog`.  No false reset during a 700 KB base install, a
+  650 KB SD read through a pipe and `pkg bind /bin/*`.
 - ^G on the console beeps (speaker PB8, TIM16 CH1), e.g.
   `echo 7 | tr 7 '\007'` - to call someone to the device.
 

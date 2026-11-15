@@ -316,6 +316,7 @@ PUBLIC int do_meminfo()
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fi)));
   }
   if (mm_in.m1_i2 == MI_INSTALL) return(do_install());
+  if (mm_in.m1_i2 == MI_RESET) return(sys_kstacks(who, (char *) 0, 0));
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);
