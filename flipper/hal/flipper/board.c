@@ -1388,13 +1388,19 @@ void hal_flash_layout(uint32_t *l)
 		/* no room: neither region is used */
 		l[HAL_FL_INST] = l[HAL_FL_INST_SIZE] = 0;
 		l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+		l[HAL_FL_ROM] = l[HAL_FL_ROM_SIZE] = 0;
 		return;
 	}
+	l[HAL_FL_ROM] = inst + HAL_ROM_OFF;
+	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 	l[HAL_FL_CACHE] = top - HAL_CACHE_SIZE;
 	l[HAL_FL_CACHE_SIZE] = HAL_CACHE_SIZE;
 	l[HAL_FL_INST] = inst;
 	l[HAL_FL_INST_SIZE] = top - HAL_CACHE_SIZE - inst;
 }
+
+/* For the MEMORY task, whose stack has no room for the layout table. */
+uint32_t hal_rom_base(void) { return FLASH_BASE + HAL_SYS_IMAGE + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

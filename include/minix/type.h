@@ -161,6 +161,7 @@ struct kstack {
 #define FL_LAYOUT_INST	1	/*   the installed-programs region */
 #define FL_LAYOUT_SFSA	2	/*   where CPU2's flash starts */
 #define FL_COUNTS	3	/*   pages erased in all: cache, installed */
+#define FL_LAYOUT_ROM	5	/*   the settings image (/dev/rom, L.2) */
 #define FL_BUDGET	4	/*   cache: budget, erased today; len = new
 				 *   budget + 1 sets it (R2b.11) */
 #define FL_ERASE	1	/* erase the page at addr */

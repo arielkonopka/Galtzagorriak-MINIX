@@ -48,12 +48,15 @@ u32_t *basep, *sizep;		/* region (all ops) */
   u32_t ctrl;
   int r;
 
-  if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA)) {
+  if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA
+						|| addr == FL_LAYOUT_ROM)) {
 	u32_t l[HAL_FL_N];		/* Phase 2b */
 
 	hal_flash_layout(l);
-	*basep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST] : l[HAL_FL_SFSA];
-	*sizep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST_SIZE] : 0;
+	*basep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST]
+		: addr == FL_LAYOUT_ROM ? l[HAL_FL_ROM] : l[HAL_FL_SFSA];
+	*sizep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST_SIZE]
+		: addr == FL_LAYOUT_ROM ? l[HAL_FL_ROM_SIZE] : 0;
 	return(OK);
   }
   if (op == FL_INFO && (addr == FL_COUNTS || addr == FL_BUDGET)) {
@@ -74,6 +77,11 @@ u32_t *basep, *sizep;		/* region (all ops) */
 		hal_flash_layout(l);
 		b = l[HAL_FL_INST];
 		n = l[HAL_FL_INST_SIZE];
+		/* the settings image is written by DFU only (L.2) */
+		if (addr - l[HAL_FL_ROM] < l[HAL_FL_ROM_SIZE]
+		    || (op == FL_WRITE && addr < l[HAL_FL_ROM]
+				&& addr + len > l[HAL_FL_ROM]))
+			return(EROFS);
 	}
 	if (addr < b || addr - b >= n) return(EINVAL);
 	if (op == FL_WRITE && (len > n - (addr - b) || len % 8 != 0))

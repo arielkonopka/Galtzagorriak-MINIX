@@ -212,10 +212,16 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
 	      test
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
-		      tools/mkbaseflash.py
+		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
 	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x30000 \
-	   $(BASE_FLASH:%=$(MB)/bin/%)
+	   --rom=$(MB)/rom.img $(BASE_FLASH:%=$(MB)/bin/%)
+
+# The default settings image (spec L.2): /etc as built, read-only, 32 KB;
+# in minix-base.bin after the installed region's directories (/dev/rom).
+$(MB)/rom.img: rootfs/rom.proto tools/mkfsimg.py $(wildcard rootfs/etc/*)
+	@mkdir -p $(MB)
+	python3 -I tools/mkfsimg.py rootfs/rom.proto $@ --root .
 .PHONY: base-flash
 base-flash: $(MB)/minix-base.bin
 
@@ -348,7 +354,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.49
+BASE_VER := 3.50
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

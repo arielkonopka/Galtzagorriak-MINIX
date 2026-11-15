@@ -287,7 +287,11 @@ void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 	l[HAL_FL_INST_SIZE] = 0x00030000;
 	l[HAL_FL_CACHE] = 0x00060000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
+	l[HAL_FL_ROM] = 0x00030000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
+
+uint32_t hal_rom_base(void) { return 0x00030000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

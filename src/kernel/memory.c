@@ -22,16 +22,27 @@
 
 #if (CHIP == ARM_CM)
 #include "hal.h"
-#define NR_RAMS            6	/* + /dev/random, /dev/zero */
+#define NR_RAMS            7	/* + /dev/random, /dev/zero, /dev/rom */
+/* /dev/random and /dev/zero need no geometry (they have no end): five
+ * entries, /dev/rom in the fifth (static RAM, rule 0.1). */
+#define NR_GEOM            5
+#define GEOM(d)	((d) == ROM_DEV ? 4 : (d) == RANDOM_DEV || (d) == ZERO_DEV \
+							? NULL_DEV : (d))
 #else
 #define NR_RAMS            4	/* number of RAM-type devices */
+#define NR_GEOM            NR_RAMS
+#define GEOM(d)	(d)
 #endif
 
-PRIVATE struct device m_geom[NR_RAMS];	/* Base and size of each RAM disk */
+PRIVATE struct device m_geom[NR_GEOM];	/* Base and size of each RAM disk */
 PRIVATE int m_device;		/* current device */
 
 FORWARD _PROTOTYPE( struct device *m_prepare, (int device) );
 FORWARD _PROTOTYPE( int m_schedule, (int proc_nr, struct iorequest_s *iop) );
+#if (CHIP == ARM_CM)
+FORWARD _PROTOTYPE( int m_random, (int device, int opcode, phys_bytes user_phys,
+						struct iorequest_s *iop) );
+#endif
 FORWARD _PROTOTYPE( int m_do_open, (struct driver *dp, message *m_ptr) );
 FORWARD _PROTOTYPE( void m_init, (void) );
 FORWARD _PROTOTYPE( int m_ioctl, (struct driver *dp, message *m_ptr) );
@@ -73,8 +84,51 @@ int device;
   if (device < 0 || device >= NR_RAMS) return(NIL_DEV);
   m_device = device;
 
-  return(&m_geom[device]);
+  return(&m_geom[GEOM(device)]);
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				m_random				     *
+ *===========================================================================*/
+PRIVATE int __attribute__((noinline)) m_random(device, opcode, user_phys, iop)
+int device, opcode;
+phys_bytes user_phys;
+struct iorequest_s *iop;
+{
+/* /dev/random and /dev/zero.  A function of its own: its buffer stays off
+ * the MEMORY task's small stack for every other device (/dev/rom is read
+ * by FS as a block device: do_vrdwt + m_schedule). */
+  int done = FALSE, count = iop->io_nbytes;
+
+  if (opcode == DEV_WRITE) {	/* accepted and dropped */
+	iop->io_nbytes -= count;
+	return(OK);
+  }
+  if (device == ZERO_DEV) {
+	memset((void *) user_phys, 0, (size_t) count);
+	iop->io_nbytes -= count;
+	return(OK);
+  }
+  while (count > 0) {		/* the hardware generator */
+	u32_t w[16];
+	int i, n = count < (int) sizeof(w) ? count : (int) sizeof(w);
+
+	for (i = 0; i < (n + 3) / 4; i++)
+		if (hal_random(&w[i]) < 0) {
+			if (!done) return(iop->io_nbytes = EIO);
+			return(OK);	/* a short read */
+		}
+	phys_copy(vir2phys(w), user_phys, (phys_bytes) n);
+	user_phys += n;
+	count -= n;
+	iop->io_nbytes -= n;
+	done = TRUE;
+  }
+  return(OK);
+}
+#endif
 
 
 /*===========================================================================*
@@ -95,7 +149,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 
   /* Get minor device number and check for /dev/null. */
   device = m_device;
-  dv = &m_geom[device];
+  dv = &m_geom[GEOM(device)];
 
   /* Determine address where data is to go or to come from. */
   user_phys = opcode == DEV_WRITE	/* a source may be constant */
@@ -105,49 +159,25 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 						(vir_bytes) iop->io_nbytes);
   if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
 
+#if (CHIP == ARM_CM)
+  if (device == RANDOM_DEV || device == ZERO_DEV)	/* no end */
+	return(m_random(device, opcode, user_phys, iop));
+  /* /dev/rom: the default settings in flash (L.2), read only */
+  if (device == ROM_DEV && opcode == DEV_WRITE)
+	return(iop->io_nbytes = EROFS);
+#endif
+
   if (device == NULL_DEV) {
 	/* /dev/null: Black hole. */
 	if (opcode == DEV_WRITE) iop->io_nbytes = 0;
 	count = 0;
   } else {
-	/* /dev/mem, /dev/kmem, or /dev/ram: Check for EOF */
+	/* /dev/mem, /dev/kmem, /dev/ram or /dev/rom: Check for EOF */
 	if (iop->io_position >= dv->dv_size) return(OK);
 	count = iop->io_nbytes;
 	if (iop->io_position + count > dv->dv_size)
 		count = dv->dv_size - iop->io_position;
   }
-
-#if (CHIP == ARM_CM)
-  if (device == RANDOM_DEV || device == ZERO_DEV) {
-	int done = FALSE;
-
-	if (opcode == DEV_WRITE) {	/* accepted and dropped */
-		iop->io_nbytes -= count;
-		return(OK);
-	}
-	if (device == ZERO_DEV) {
-		memset((void *) user_phys, 0, (size_t) count);
-		iop->io_nbytes -= count;
-		return(OK);
-	}
-	while (count > 0) {		/* the hardware generator */
-		u32_t w[16];
-		int i, n = count < (int) sizeof(w) ? count : (int) sizeof(w);
-
-		for (i = 0; i < (n + 3) / 4; i++)
-			if (hal_random(&w[i]) < 0) {
-				if (!done) return(iop->io_nbytes = EIO);
-				return(OK);	/* a short read */
-			}
-		phys_copy(vir2phys(w), user_phys, (phys_bytes) n);
-		user_phys += n;
-		count -= n;
-		iop->io_nbytes -= n;
-		done = TRUE;
-	}
-	return(OK);
-  }
-#endif
 
   /* Set up 'mem_phys' for /dev/mem, /dev/kmem, or /dev/ram */
   mem_phys = dv->dv_base + iop->io_position;
@@ -179,6 +209,10 @@ message *m_ptr;
  */
 
   if (m_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+#if (CHIP == ARM_CM)
+  /* /dev/rom is never opened or mounted for writing (L.2) */
+  if (m_device == ROM_DEV && (m_ptr->COUNT & W_BIT)) return(EROFS);
+#endif
 
 #if (CHIP == INTEL)
   if (m_device == MEM_DEV || m_device == KMEM_DEV)
@@ -214,8 +248,9 @@ PRIVATE void m_init()
 #if (CHIP == M68000) || (CHIP == ARM_CM)
   m_geom[MEM_DEV].dv_size = MEM_BYTES;
 #if (CHIP == ARM_CM)
-  m_geom[RANDOM_DEV].dv_size = 0xFFFFFFFF;	/* no end */
-  m_geom[ZERO_DEV].dv_size = 0xFFFFFFFF;
+  /* /dev/rom: where make base-flash put the settings image (L.2) */
+  m_geom[GEOM(ROM_DEV)].dv_base = hal_rom_base();
+  m_geom[GEOM(ROM_DEV)].dv_size = HAL_ROM_SIZE;
 #endif
 #else /* !(CHIP == M68000) */
 #error /* memory limit not set up */
@@ -291,7 +326,8 @@ PRIVATE void m_geometry(entry)
 struct partition *entry;
 {
   /* Memory devices don't have a geometry, but the outside world insists. */
-  entry->cylinders = (m_geom[m_device].dv_size >> SECTOR_SHIFT) / (64 * 32);
+  entry->cylinders = (m_geom[GEOM(m_device)].dv_size >> SECTOR_SHIFT)
+							/ (64 * 32);
   entry->heads = 64;
   entry->sectors = 32;
 }
