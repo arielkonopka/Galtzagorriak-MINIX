@@ -6,10 +6,17 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+## 0.1.1 (2026-11-15): tasks and fixes after Phase 1
+
+Tasks T2, T4, T7, T8, T9, T11, T12, T13 (core) and T4b steps 1-2, parts of Phases 2b and 4a, infrared,
+the backlight timeout, the first chapter of the user manual and CI with downloadable images.
+No phase is complete yet, so the minor number stays (spec J.1). ABI 1 (unchanged). Base package 3.55.
+Static RAM (ramcheck): kernel 14768 B, MM 10172 B, FS 27196 B, init 764 B.
+Images: attached to the GitHub release `v0.1.1`; install as in `docs/manual/install.md`.
+
 - GitHub Actions workflow `build`: every push and PR builds the Flipper images, runs `ramcheck` and the QEMU M2 self-test; images are a download (artifact), and a `v*` tag attaches them to its release.
 - The user manual starts in `docs/manual/`: installation, first boot, updating, recovery and returning to the stock firmware (`install.md`).
 - (T4b, step 2) SD card data moves by DMA while the disk task sleeps: programs keep running during card I/O (waits during writes: max 77 ms, was 2.2 s).
-- (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
 - (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
 - The LCD backlight fades out (0.5 s) after 5 minutes without a key and on at the next key or button (that press only turns it on); `backlight [LEVEL [SECONDS]]` sets brightness and timeout (kept over resets). Base 3.55.
 - The base package's postinst checks its edits of `/etc/rc` and says so when one failed (seen once: `ed` crashed during an upgrade).
