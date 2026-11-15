@@ -691,6 +691,45 @@ back at the next key.  Default 15 s, so dimming from 10 s on.
 - Flipper: `backlight 255 10; sleep 15; backlight` → "now off (idle)";
   `sleep 1; backlight` after a key → "now on".
 
+Phase 2c, vfork (2026-11-15, QEMU and Flipper):
+- MM's `VFORK` (call 57): the child runs in the parent's memory and on
+  its stack, and the parent waits in MM until the child's exec or exit
+  (`vfork_done`).  There is no shadow buffer and no image copy.
+  - The kernel's `mkshadow` copies nothing for it (c2 = 0).
+  - At the child's exec or exit, MM keeps the region `rmshadow` hands
+    back: it is the parent's.
+- With shadowing, vfork happens only when no other process shares the
+  parent's addresses (a background subshell); otherwise it is a plain
+  fork, because the group's shadow swaps would move the image from
+  under the child.
+- Signals to the waiting parent are delivered when it goes on.  A fork
+  or vfork from the child fails with EAGAIN.
+- libc `vfork` is assembly: the message lives below the stack pointer
+  across the trap only, and the return address stays in `lr`.  The
+  error path tail-calls `__vfork_err`.
+- Users (R2c.2):
+  - `sh`, for simple external commands only: no assignments, no
+    here-documents, no substitutions in redirections.  The globals the
+    child changes are put back, and every error path in the child ends
+    in `_exit`.
+  - `init` for `/etc/rc`.  Its getty start stays a fork, because that
+    child forks again.
+  - the launcher, with `getgrnam` moved before the call;
+  - `pkg`'s `run()` and its `tar tf`.
+  - `getty` does not fork.
+  - Man page `vfork(2)` lists what the child may do (R2c.3).
+- Tests:
+  - m2test: vfork + exec + wait, vfork + _exit + wait, 20 vforks in a
+    row (AC2c.3).
+  - QEMU, the same load of background shells: on main `free` and `cat`
+    failed with "not found" (no room for the shadow copy); with vfork
+    they ran with 16 KB free.
+  - Flipper: `ls -l /bin | sort | wc` (AC2c.1) works.
+  - 50 `ls /` take about 1 s with no image swaps; each fork + exec
+    used to cost two shadow copies of the shell (~0.4 ms each for
+    17 KB, AC2c.R).
+- RAM 0 B.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

@@ -64,6 +64,7 @@
 #define SIGRETURN	  75
 
 #define REBOOT		  76
+#define VFORK		  57	/* to MM: fork without a copy (R2c.1, ARM_CM) */
 #define MEMINFO		  69	/* to MM: free memory and largest hole */
 #define INOCHK		  70	/* to FS, from MM only: is (dev, ino, ctime) a
 				 * live file? (R2b.12, ARM_CM) */

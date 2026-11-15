@@ -25,6 +25,8 @@ _PROTOTYPE( struct mproc *find_share, (struct mproc *mp_ign, Ino_t ino,
 
 /* forkexit.c */
 _PROTOTYPE( int do_fork, (void)						);
+_PROTOTYPE( int do_vfork, (void)					);
+_PROTOTYPE( void vfork_done, (struct mproc *rmc)			);
 _PROTOTYPE( int do_mm_exit, (void)					);
 _PROTOTYPE( int do_waitpid, (void)					);
 _PROTOTYPE( void mm_exit, (struct mproc *rmp, int exit_status)		);

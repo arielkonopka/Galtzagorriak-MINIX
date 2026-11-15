@@ -230,6 +230,34 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 				&& WEXITSTATUS(st) == 7, "fork + exec + wait");
 
+	{	/* vfork (R2c.1): the child runs in our memory until exec or
+		 * _exit; we wait, then go on with its pid */
+		volatile int marker = 1234;
+		char *argv0 = "m2test";
+		pid_t me = getpid();
+
+		pid = vfork();
+		if (pid == 0) {
+			marker = 5678;		/* our memory: we see it */
+			execl("/bin/m2test", argv0, "child-exec", (char *) NULL);
+			_exit(99);
+		}
+		check(pid > 0 && pid != me && marker == 5678
+			&& wait(&st) == pid && WIFEXITED(st)
+			&& WEXITSTATUS(st) == 7, "vfork + exec + wait");
+		pid = vfork();
+		if (pid == 0) _exit(5);
+		check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+			&& WEXITSTATUS(st) == 5 && getpid() == me,
+						"vfork + _exit + wait");
+		for (marker = 0; marker < 20; marker++) {	/* no leak */
+			pid = vfork();
+			if (pid == 0) _exit(0);
+			if (pid < 0 || wait(&st) != pid) break;
+		}
+		check(marker == 20, "vfork 20 times");
+	}
+
 	finish();
 	return 0;
 }

@@ -26,11 +26,77 @@
 PRIVATE pid_t next_pid = INIT_PID+1;	/* next pid to be assigned */
 
 FORWARD _PROTOTYPE (void cleanup, (register struct mproc *child) );
+FORWARD _PROTOTYPE (int fork_proc, (int vfork) );
 
 /*===========================================================================*
  *				do_fork					     *
  *===========================================================================*/
 PUBLIC int do_fork()
+{
+  /* A vfork child may only exec or exit (R2c.3): its memory is its
+   * parent's, and a fork would make a shadow group out of the two. */
+  if (mp->mp_flags & VFORKED) return(EAGAIN);
+  return(fork_proc(FALSE));
+}
+
+
+/*===========================================================================*
+ *				do_vfork				     *
+ *===========================================================================*/
+PUBLIC int do_vfork()
+{
+/* vfork (R2c.1): the child runs in the parent's memory, on its stack, and
+ * the parent waits until the child's exec or exit - no shadow buffer, no
+ * image copy.  With shadowing only when the parent's addresses have no
+ * other user (a background subshell): the shadow swaps of such a group
+ * would move the image from under the child.  Then it is a plain fork.
+ */
+#if (SHADOWING == 1)
+  struct mproc *q;
+
+  if (mp->mp_flags & VFORKED) return(EAGAIN);	/* as do_fork */
+  for (q = &mproc[0]; q < &mproc[NR_PROCS]; q++)
+	if (q != mp && (q->mp_flags & IN_USE)
+			&& q->mp_seg[D].mem_phys == mp->mp_seg[D].mem_phys)
+		return(fork_proc(FALSE));
+  return(fork_proc(TRUE));
+#else
+  return(fork_proc(FALSE));
+#endif
+}
+
+
+/*===========================================================================*
+ *				vfork_done				     *
+ *===========================================================================*/
+PUBLIC void vfork_done(rmc)
+struct mproc *rmc;		/* the child: it exec'd or exits */
+{
+/* A vfork child leaves its parent's memory: the parent goes on, with the
+ * child's pid, and gets the signals that waited meanwhile. */
+  struct mproc *rmp;
+  int i;
+
+  if (!(rmc->mp_flags & VFORKED)) return;
+  rmc->mp_flags &= ~VFORKED;
+  rmp = &mproc[rmc->mp_parent];
+  rmp->mp_flags &= ~VFORKING;
+  reply(rmc->mp_parent, rmc->mp_pid, 0, NIL_PTR);
+  for (i = 1; i < _NSIG; i++)
+	if (sigismember(&rmp->mp_sigpending, i)
+			&& !sigismember(&rmp->mp_sigmask, i)
+			&& (rmp->mp_flags & IN_USE) && !(rmp->mp_flags & HANGING)) {
+		sigdelset(&rmp->mp_sigpending, i);
+		sig_proc(rmp, i);
+	}
+}
+
+
+/*===========================================================================*
+ *				fork_proc				     *
+ *===========================================================================*/
+PRIVATE int fork_proc(vfork)
+int vfork;			/* vfork: no copy, the parent waits */
 {
 /* The process pointed to by 'mp' has forked.  Create a child process. */
 
@@ -55,7 +121,8 @@ PUBLIC int do_fork()
 #if (SHADOWING == 0)
   prog_bytes = (phys_bytes) prog_clicks << CLICK_SHIFT;
 #endif
-  if ( (child_base = alloc_mem(prog_clicks)) == NO_MEM) return(ENOMEM);
+  if (!vfork && (child_base = alloc_mem(prog_clicks)) == NO_MEM)
+	return(ENOMEM);
 
 #if (SHADOWING == 0)
   /* Create a copy of the parent's core image for the child. */
@@ -111,6 +178,12 @@ PUBLIC int do_fork()
 
   /* Reply to child to wake it up. */
   reply(child_nr, 0, 0, NIL_PTR);
+  if (vfork) {			/* the parent waits for the child */
+	rmc->mp_flags |= VFORKED;
+	mp->mp_flags |= VFORKING;
+	dont_reply = TRUE;
+	return(OK);
+  }
   return(next_pid);		 /* child's pid */
 }
 
@@ -162,7 +235,9 @@ int exit_status;		/* the process' exit status (for parent) */
   tell_fs(EXIT, proc_nr, 0, 0);  /* file system can free the proc slot */
   sys_xit(rmp->mp_parent, proc_nr, &base, &size);
 #if (SHADOWING == 1)
-  free_mem(base, size);
+  /* a vfork child's memory is its parent's: kept, the parent goes on */
+  if (rmp->mp_flags & VFORKED) vfork_done(rmp);
+  else free_mem(base, size);
 #endif
 
 #if (SHADOWING == 0)

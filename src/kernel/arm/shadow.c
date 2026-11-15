@@ -16,7 +16,8 @@
  *
  * A group is identified by the click address of its data segment.
  *
- * mkshadow()  - from SYS_FORK: the child shares the parent's addresses.
+ * mkshadow()  - from SYS_FORK: the child shares the parent's addresses
+ *               (vfork: without a shadow, the parent waits).
  * unshadow()  - from the clock task: make a shadowed process resident.
  * rmshadow()  - from SYS_XIT and SYS_FRESH (exec): the process leaves its
  *               group; returns the memory MM must now free.
@@ -109,6 +110,12 @@ phys_clicks c2;			/* fresh memory from MM, image_clicks() big */
  */
   phys_clicks n = image_clicks(parent);
 
+  if (c2 == 0) {		/* vfork (R2c.1): the child runs in the
+				 * parent's image, the parent waits in MM; no
+				 * other member (MM checked), so no swaps */
+	child->p_shadow = 0;
+	return;
+  }
   if (parent->p_shadow == 0) {
 	copyclicks(parent->p_map[D].mem_phys, c2, n);
 	parent->p_shadow = c2;	/* parent is blocked in fork(): no queue */

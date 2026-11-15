@@ -263,6 +263,7 @@ PUBLIC int do_exec()
 #endif
   sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
 #if (CHIP == ARM_CM)
+  vfork_done(rmp);		/* a vfork parent goes on (R2c.1) */
   if (reloc_bad) {		/* relocation refused: never run it */
 	printf("exec: %s: bad relocation, killed\n", basename);
 	sig_proc(rmp, SIGKILL);
@@ -547,7 +548,7 @@ unsigned long fc_text;		/* the text in the flash cache, or 0 */
 #if (SHADOWING == 1)
   sys_fresh(who, rmp->mp_seg, (phys_clicks)(data_bytes >> CLICK_SHIFT),
 			&base, &size);
-  free_mem(base, size);
+  if (!(rmp->mp_flags & VFORKED)) free_mem(base, size);	/* parent's */
 #endif
 #if (CHIP == ARM_CM)
   if (mem_trace) mem_paint(rmp);

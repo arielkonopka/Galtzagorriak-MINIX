@@ -1,0 +1,80 @@
+.TH VFORK 2 "November 15, 2026" "Galtzagorriak MINIX"
+.UC 4
+.SH NAME
+vfork \- create a process without copying the caller
+.SH SYNOPSIS
+.nf
+.ft B
+#include <unistd.h>
+
+pid_t vfork(void)
+.ft R
+.fi
+.SH DESCRIPTION
+.B Vfork
+creates a new process like
+.BR fork (2),
+but does not copy the caller.  The child runs in the parent's memory and on
+its stack, and the parent is suspended until the child calls
+.BR execve (2)
+or
+.BR _exit (2).
+Then the parent goes on and
+.B vfork
+returns the child's pid to it; in the child it returns 0.
+.PP
+On the Flipper there is no MMU: a
+.B fork
+keeps a shadow copy of the caller's data and stack until the child execs.
+.B Vfork
+needs neither the copy nor the memory for it, so a program can still be
+started when memory is short.  If the caller's addresses are shared with
+another process already (a background subshell), the call is an ordinary
+.BR fork .
+.PP
+Because the child uses the parent's memory, between
+.B vfork
+and
+.B exec
+it may only call
+.BR exec *,
+.BR _exit ,
+.BR dup2 ,
+.BR close ,
+.BR open ,
+.BR chdir ,
+.BR setuid ,
+.BR setgid ,
+.BR setsid
+and
+.BR signal ,
+and change only its own local variables.  It must not return from the
+function that called
+.BR vfork ,
+call
+.BR exit (3)
+(that flushes the parent's stdio buffers),
+.BR malloc ,
+or anything else that changes global data.  A
+.B fork
+or
+.B vfork
+in the child fails with EAGAIN.  Signals sent to the parent meanwhile are
+delivered when it goes on.
+.SH "RETURN VALUE"
+As for
+.BR fork (2).
+.SH ERRORS
+As for
+.BR fork (2).
+.SH "SEE ALSO"
+.BR fork (2),
+.BR execve (2),
+.BR _exit (2).
+.SH NOTES
+Used by
+.BR sh (1)
+for simple commands (no assignments, no here documents), and by
+.BR init ,
+the launcher and
+.BR pkg .
