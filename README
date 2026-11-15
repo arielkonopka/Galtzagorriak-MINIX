@@ -57,6 +57,9 @@ Needs arm-none-eabi-gcc, python3, and qemu-system-arm or dfu-util.
 
 INSTALLING ON THE FLIPPER
 
+The full guide (backup, first boot, updates, recovery, back to stock) is
+docs/manual/install.md.  In short:
+
 1. SD card: write the card image to the WHOLE card (this erases it):
 
      make BOARD=flipper minix card

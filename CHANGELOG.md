@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- The user manual starts in `docs/manual/`: installation, first boot, updating, recovery and returning to the stock firmware (`install.md`).
 - (T4b, step 2) SD card data moves by DMA while the disk task sleeps: programs keep running during card I/O (waits during writes: max 77 ms, was 2.2 s).
 - (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
 - (T4b, step 1) While the SD card is busy after a write, the disk task deselects it and lets the other kernel tasks run: infrared and buttons no longer wait for card writes.
