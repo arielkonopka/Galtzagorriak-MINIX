@@ -2923,9 +2923,10 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - Pairing as the central asks, with Just Works or a passkey shown on the Flipper's screen; the
     log records the method, Secure Connections or legacy pairing, key size and which keys each
     side distributes. Legacy (non-SC) pairing is flagged as weak.
-  - **Keys never leave RAM:** LTK, IRK and CSRK live in `bled`'s session state and are wiped
+  - **Keys are never used again:** LTK, IRK and CSRK live in `bled`'s session state and are wiped
     (zeroed) when the session ends or the app exits. Nothing goes to the SD bond file (R16.1.2) or
-    to CPU2's flash. If the installed stack cannot keep a bond without writing its own flash
+    to CPU2's flash; the only copy that can outlive the session is the optional analysis export
+    below. If the installed stack cannot keep a bond without writing its own flash
     (check with the R15.4 findings), the honeypot pairs **without bonding** (Bonding_Flags = 0):
     the link is still encrypted, but the central distributes no identity key and cannot
     reconnect encrypted later. The app says which of the two modes is in use.
@@ -2936,10 +2937,24 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - **Identity behind the random address:** when the central distributes its IRK and identity
     address, the log shows that the random address it used belongs to that identity, and later
     reconnects in the same session that resolve to it are marked "same device". The IRK itself is
-    never written to the log; the identity address is stored hashed if the privacy setting
+    never written to the event log (only to the key export below, if enabled); the identity address is stored hashed if the privacy setting
     (M.1) says so.
   - Reconnect behaviour: how soon and how often the central comes back, and whether it tries to
     re-encrypt with the session keys.
+  - **Key export for analysis (owner decision 2026-11-15; a second switch, off by default):** at
+    session end the session's keys (LTK, EDIV/Rand, IRK, CSRK, both addresses) are written to
+    `/ext/apps_data/canary/ble/keys/YYYYMMDD-HHMMSS.keys` before RAM is zeroed. Use: decrypting a
+    sniffer capture of the same session (Wireshark, the Nordic sniffer) and studying the central.
+    The file **never grants anything, ever:**
+    - `bled` loads bonds from `/etc/flipper/bt.keys` only; it has no code path that reads
+      `/ext/apps_data/canary/`, and its bond loader rejects any file whose first line is the
+      export header `# canary-ble-keys v1 ANALYSIS ONLY` (so a copied or renamed export fails too);
+    - no tool converts an export into a bond, and any later bond-import tool must refuse the header;
+    - the file is mode 0600, owned by the canary's uid, not by `bled`'s;
+    - the honeypot's own identity is new each session (fresh random static address and IRK), so
+      exported keys match no device the Flipper will ever present again.
+    The app warns that the file lets anyone who has it decrypt that session's capture and
+    recognise the central's identity address later, and offers "delete all canary logs" (M.1).
   - Personas for the honeypot add a generic "Keyboard" (HID-over-GATT Report Map from `const`,
     never sends a key: the M.1 rule holds) and a generic "Smart lock" (writes to its "unlock"
     characteristic are logged and acknowledged with an error).
@@ -2973,6 +2988,9 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
     characteristic and writes to it; the log shows the pairing method, the key distribution, the
     resolved identity, and the write. After the app exits, the phone's next connection attempt
     fails to re-encrypt (keys gone), and a RAM dump of `bled` holds no non-zero key bytes.
+  - AC16.5.6 With key export on, the `.keys` file decrypts a sniffer capture of the session in
+    Wireshark. Copying it to `/etc/flipper/bt.keys` (as root) and restarting `bled` gives a load
+    error and no bond.
 - RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared) + ≈ 100 B session keys
   in the honeypot; app ≈ 4 KB while running.
   Flash ≈ 6 KB app, `bled` +2 KB.
