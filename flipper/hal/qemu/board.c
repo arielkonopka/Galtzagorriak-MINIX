@@ -298,21 +298,98 @@ void hal_flash_region(uint32_t *base, uint32_t *size)
 	*size = l[HAL_FL_CACHE_SIZE];
 }
 
+/* Like the STM32WB's flash, a double word may be programmed only when it
+ * is erased (or with zeros: the "dead" marks); otherwise PROGERR.
+ *
+ * Power-cut test (AC2b.5, tools/powercut.py): the words at CUT_CFG are
+ * loaded by QEMU (-device loader,data=...) and survive a system reset,
+ * like the region itself.  CUT_CFG[0] = N: the Nth operation on the
+ * installed-programs region since boot (1 = the first; an erase or one
+ * double word) is cut: CUT_CFG[1] 0 = not done at all, 1 = half done (half
+ * the page erased, or only the first word of the double word written);
+ * then the machine resets.  CUT_CFG[2] = CUT_DONE afterwards, so the cut
+ * happens once.  N = 0xFFFFFFFF: print every erase and directory write
+ * with its number instead (to choose N). */
+#define CUT_CFG		((volatile uint32_t *) 0x0008FFF0)	/* unused */
+#define CUT_DONE	0x43555421u	/* "!TUC" */
+static uint32_t cut_ops;
+
+static void cut_say(const char *s, uint32_t a, uint32_t b)	/* small */
+{
+	int i;
+
+	while (*s) hal_uart_putc(*s++);
+	for (i = 28; i >= 0; i -= 4) hal_uart_putc("0123456789abcdef"[a >> i & 15]);
+	hal_uart_putc(' ');
+	for (i = 28; i >= 0; i -= 4) hal_uart_putc("0123456789abcdef"[b >> i & 15]);
+	hal_uart_putc(']');
+	hal_uart_putc('\n');
+}
+
+static int cut_here(uint32_t addr, int erase)	/* 1: cut now */
+{
+	uint32_t l[HAL_FL_N];
+
+	hal_flash_layout(l);
+	if (addr < l[HAL_FL_INST] || addr >= l[HAL_FL_INST] + l[HAL_FL_INST_SIZE]
+			|| CUT_CFG[0] == 0 || CUT_CFG[2] == CUT_DONE)
+		return 0;
+	cut_ops++;
+	if (CUT_CFG[0] == 0xFFFFFFFFu) {
+		if (erase || addr < l[HAL_FL_INST] + 2 * HAL_FLASH_PAGE)
+			cut_say(erase ? "[flashop erase " : "[flashop write ",
+							cut_ops, addr);
+		return 0;
+	}
+	return cut_ops == CUT_CFG[0];
+}
+
+static void cut_power(void)
+{
+	CUT_CFG[2] = CUT_DONE;
+	cut_say("\n[power cut at flash op ", cut_ops, 0);
+	*(volatile uint32_t *) 0xE000ED0C = 0x05FA0004u;	/* SYSRESETREQ */
+	for (;;) ;
+}
+
 int hal_flash_erase(uint32_t page_addr)
 {
 	uint32_t *p = (uint32_t *) page_addr;
-	unsigned i;
+	unsigned i, n = HAL_FLASH_PAGE / 4;
 
-	for (i = 0; i < HAL_FLASH_PAGE / 4; i++) p[i] = 0xFFFFFFFFu;
+	if (cut_here(page_addr, 1)) {
+		if (CUT_CFG[1]) for (i = 0; i < n / 2; i++) p[i] = 0xFFFFFFFFu;
+		cut_power();
+	}
+	for (i = 0; i < n; i++) p[i] = 0xFFFFFFFFu;
 	return 0;
 }
 
 int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 {
 	const uint8_t *s = src;
-	uint8_t *d = (uint8_t *) dst;
+	volatile uint32_t *d;
+	uint32_t w0, w1;
 
-	while (len-- > 0) *d++ = *s++;
+	if (dst % 8 != 0 || len % 8 != 0) return -1;
+	for (; len > 0; len -= 8, dst += 8, s += 8) {
+		memcpy(&w0, s, 4);
+		memcpy(&w1, s + 4, 4);
+		if (w0 == 0xFFFFFFFFu && w1 == 0xFFFFFFFFu) continue;
+		d = (volatile uint32_t *) dst;
+		if ((d[0] != 0xFFFFFFFFu || d[1] != 0xFFFFFFFFu)
+				&& (w0 != 0 || w1 != 0)) {
+			cut_say("[flash: double word not erased ", dst, 0);
+			hal_flash_sr = 0x8;			/* PROGERR */
+			return -1;
+		}
+		if (cut_here(dst, 0)) {
+			if (CUT_CFG[1]) d[0] = w0;
+			cut_power();
+		}
+		d[0] = w0;
+		d[1] = w1;
+	}
 	return 0;
 }
 
