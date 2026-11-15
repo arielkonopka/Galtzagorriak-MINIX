@@ -214,3 +214,10 @@ The owner cannot find the Wi-Fi devboard for now. Everything that needs it or ES
 - R9.2.4 `wifi` canary (extends the same firmware).
 - R19.7 ESP32 offload mode (Wi-Fi module networking). Phase 19 parts that do not need the devboard (USB, BLE, CC1101, a Linux module on the UART) keep their place.
 - `camfind` v1 ships without Wi-Fi meanwhile (AC9.1.3: "Wi-Fi unavailable", the other scans run).
+
+## Lanes and milestones (owner, 2026-11-15 23:51 Warsaw): the strategy in practice
+The order of work is `docs/spec/strategy.md`. **Requirements are closed** as of 2026-11-15: the spec's phases 0–22 are the scope. New ideas still go into the spec, but with a milestone tag (M1–M9), and only the current milestone's items become tasks.
+- Every task of the current milestone has a GitHub issue with a lane label: `lane:cloud` (GitHub Actions worker, QEMU-testable) or `lane:local` (the local agent, needs the Flipper), plus the milestone label (`M1`, …). The tracking issue of the milestone lists them in order.
+- **Current milestone: M1 Foundation** (Phases 2a, 2b, 2c, 2d; ABI 2; ≈ 0.5.0), tracking issue #105. Cloud: #99 2d (first), #100 R2a.5 (parallel), #101 2c and #102 R2b.9 (after #99). Local: #103 T14a, #104 T14b (R4b.2 ms timer), then the "Needs on-device test" checks of the cloud PRs.
+- Local agent priority inside a milestone: (1) what the other lane waits for (device checks, timer API), (2) the milestone's `lane:local` issues, (3) responsiveness regressions, (4) owner requests, (5) polish. T-tasks not in the milestone wait for a gap.
+- Directory ownership (to avoid conflicts): local owns `src/kernel/arm/`, `flipper/hal/`, the kernel device tasks, `flipper/m0/`, radio code; cloud owns `src/lib/`, `src/commands/`, `src/mm/`, `src/fs/`, `flipper/tools/`, `flipper/tests/`, pure-logic app cores, `docs/manual/`. A PR that crosses the line says so in its first line.
