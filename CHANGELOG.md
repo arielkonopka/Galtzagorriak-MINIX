@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T2 follow-up) The flash text cache records a program only after its flash copy matches the text's CRC; MM back to its RAM budget, kernel and FS 36 B smaller.
 - (T7) Version strings: `uname` reports Galtzagorriak, boot banner, `ver`, ABI stamp in programs and packages.
 
 ## 0.1.0 (2026-11-14): Phase 1 complete
