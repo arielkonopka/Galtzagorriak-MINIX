@@ -238,7 +238,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir
+PORTCMDS := mkpart pkg free gpio beep lat ver ir cfcat settings
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
@@ -276,7 +276,7 @@ CHMEM_find   := 10240	# 6 KB: "can't read directory" already at /etc
 CHMEM_du     := 8192	# 6 KB: did not descend at all
 CHMEM_cp     := 8192	# cpdir /etc: 1.3 KB left of 6 KB (also rm -r, mv)
 # Small one-shot tools used < 1 KB of the default 6 KB.
-SMALLCMDS    := basename dirname echo cat cmp date id kill \
+SMALLCMDS    := basename dirname echo cat cmp date id kill cfcat \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
 		uname whoami yes printenv gpio beep ver
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
