@@ -65,3 +65,5 @@
 
 #define REBOOT		  76
 #define MEMINFO		  69	/* to MM: free memory and largest hole */
+#define INOCHK		  70	/* to FS, from MM only: is (dev, ino, ctime) a
+				 * live file? (R2b.12, ARM_CM) */

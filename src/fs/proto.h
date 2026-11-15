@@ -80,6 +80,7 @@ _PROTOTYPE( int do_fcntl, (void)					);
 _PROTOTYPE( int do_fork, (void)						);
 _PROTOTYPE( int do_exec, (void)						);
 _PROTOTYPE( int do_revive, (void)					);
+_PROTOTYPE( int do_inochk, (void)					);
 _PROTOTYPE( int do_set, (void)						);
 _PROTOTYPE( int do_sync, (void)						);
 

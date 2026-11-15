@@ -23,6 +23,7 @@
 #include "file.h"
 #include "fproc.h"
 #include "inode.h"
+#include "super.h"
 #include "dev.h"
 #include "param.h"
 
@@ -341,3 +342,35 @@ PUBLIC int do_revive()
   dont_reply = TRUE;		/* don't reply to the TTY task */
   return(OK);
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				do_inochk				     *
+ *===========================================================================*/
+PUBLIC int do_inochk()
+{
+/* From MM only (R2b.12): is inode m1_i2 on device m1_i1 a live file with
+ * ctime m1_i3?  1 yes, 0 no (free, or another file now), ENODEV: the
+ * device is not mounted (unknown; MM keeps its record).  Read only: the
+ * inode is looked at and let go without being written or freed. */
+  struct super_block *sp;
+  struct inode *rip;
+  dev_t dev = (dev_t) m.m1_i1;
+  int r;
+
+  if (who != MM_PROC_NR) return(EPERM);
+  for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+	if (sp->s_dev == dev && dev != NO_DEV) break;
+  if (sp == &super_block[NR_SUPERS]) return(ENODEV);
+  if (m.m1_i2 < 1 || (ino_t) m.m1_i2 > sp->s_ninodes) return(0);
+  if ((rip = get_inode(dev, m.m1_i2)) == NIL_INODE) return(ENODEV);
+  r = (rip->i_nlinks & BYTE) != 0 && (rip->i_mode & I_TYPE) == I_REGULAR
+	&& rip->i_ctime == (time_t) m.m1_i3;
+  if (rip->i_count == 1 && (rip->i_nlinks & BYTE) == 0)
+	rip->i_count = 0;	/* a free inode: put_inode would free it */
+  else
+	put_inode(rip);		/* in use or linked: as usual (clean) */
+  return(r);
+}
+#endif

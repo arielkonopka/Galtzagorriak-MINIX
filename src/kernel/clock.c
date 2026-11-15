@@ -657,6 +657,11 @@ PRIVATE void init_clock()
 /* Program SysTick to interrupt HZ times a second from the core clock.  The
  * SysTick exception is dispatched like an IRQ, see arm/intr.c.
  */
+  /* The wall clock from the RTC (spec I.1; the full model with time()
+   * from the RTC comes later).  0 when it does not run: "not set", and
+   * MM then makes no new installed-program bindings (their ctimes would
+   * repeat between boots). */
+  boot_time = (time_t) hal_rtc_time();
   put_irq_handler(CLOCK_IRQ, clock_handler);
   SYST_CSR = 0;
   SYST_RVR = cpu_hz / HZ - 1;

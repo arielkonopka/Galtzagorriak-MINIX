@@ -39,7 +39,7 @@ test -n "$fcache_budget" && pkg budget $fcache_budget >/dev/null
 # Flush the buffer cache to the SD card every 30 seconds.
 update &
 
-cat /etc/motd
+cfcat /etc/motd 2>/dev/null
 
 # The main screen: replaces the boot screen on the LCD (runs as root, starts
 # the apps from /etc/apps with their own user rights).

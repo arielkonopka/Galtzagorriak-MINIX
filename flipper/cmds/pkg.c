@@ -266,6 +266,12 @@ static int flash_files(char **v, int n, int op)
 
 	for (i = 0; i < n; i++) {
 		if ((e = flash_op(v[i], op)) == 0) continue;
+		if (e == -EAGAIN) {
+			fprintf(stderr, "pkg: %s: the clock is not set (RTC): "
+				"it runs from RAM\n", v[i]);
+			r = 1;
+			continue;
+		}
 		fprintf(stderr, "pkg: %s: %s\n", v[i], strerror(-e));
 		r = 1;
 	}
@@ -277,13 +283,19 @@ static int flash_files(char **v, int n, int op)
 static int bind(char **v, int n)
 {
 	message m;
-	int i, done = 0;
+	int i, e, done = 0;
 
-	m.m1_i2 = MI_INSTALL;
-	m.m1_i3 = 3;				/* how many to bind? */
-	if (_syscall(MM, MEMINFO, &m) <= 0) return 0;
+	/* Every file, also when no built-in record is unbound: a file that
+	 * was copied back (new inode) is rebound to its text by SHA-256
+	 * (R2b.12).  A file whose binding matches costs one call, no hash. */
+	(void) m;
 	for (i = 0; i < n; i++)
-		if (flash_op(v[i], 2) == 0) done++;
+		if ((e = flash_op(v[i], 2)) == 0) done++;
+		else if (e == -EAGAIN) {	/* say it once, not per file */
+			printf("pkg: the clock is not set (RTC): built-in "
+				"programs run from RAM until it is\n");
+			return 0;
+		}
 	if (done > 0) printf("pkg: %d built-in programs bound\n", done);
 	return 0;
 }
