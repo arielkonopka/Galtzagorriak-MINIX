@@ -1043,6 +1043,8 @@ int hal_ir_tx_irq(void)
 
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us)
 {
+	if (first_us == 0) first_us = 1;	/* ARR 0 - 1: 71 minutes */
+	if (next_us == 0) next_us = 1;
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
 	(void) RCC->APB1ENR1;
 	TIM2->CR1 = 0;
@@ -1050,8 +1052,13 @@ void hal_ir_tx_start(uint32_t first_us, uint32_t next_us)
 	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
 	TIM2->ARR = first_us - 1;
 	TIM2->CNT = 0;
+	/* URS before UG: the load sets no update flag.  Cleared right after
+	 * the UG instead it was still set when the interrupt was enabled, and
+	 * the first mark ended after 4 us. */
+	TIM2->CR1 = TIM_CR1_URS;
 	TIM2->EGR = TIM_EGR_UG;			/* PSC and ARR now */
 	TIM2->SR = 0;
+	NVIC_ClearPendingIRQ(TIM2_IRQn);
 	TIM2->CR1 = TIM_CR1_ARPE | TIM_CR1_URS;
 	TIM2->ARR = next_us - 1;		/* preload: the segment after */
 	TIM2->DIER = TIM_DIER_UIE;
@@ -1072,7 +1079,7 @@ int hal_ir_tx_ack(void)
 
 void hal_ir_tx_next(uint32_t us)
 {
-	TIM2->ARR = us - 1;			/* taken at the next update */
+	TIM2->ARR = us ? us - 1 : 0;		/* taken at the next update */
 }
 
 void hal_ir_tx_stop(void)

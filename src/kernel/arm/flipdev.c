@@ -101,6 +101,7 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define IR_END		0xFFFF
 #define IR_ENC(us)	((us) < 0x8000 ? (u16_t) ((us) ? (us) : 1) \
 				: (u16_t) (0x8000 | ((us) >> 6)))
+/* IR_DEC uses v twice: never pass it an expression with side effects */
 #define IR_DEC(v)	((v) & 0x8000 ? (u32_t) ((v) & 0x7FFF) << 6 : (u32_t) (v))
 
 PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
@@ -632,7 +633,7 @@ int count;
 {
 /* Check the frame, fill the transmit ring and start the pulse engine; the
  * writer waits (SUSPEND) and is revived when the last space is over. */
-  u32_t d[16], hz = IR_HZ, duty = IR_DUTY, first_us;
+  u32_t d[16], hz = IR_HZ, duty = IR_DUTY, first_us, next_us;
   int i, j, k, n, first = 0;
 
   if (hal_ir_tx_irq() < 0) return(ENXIO);
@@ -673,11 +674,16 @@ int count;
 	return(EFAULT);
   }
   hal_ir_freq(hz, duty);
-  first_us = IR_DEC(ir_txq[tx_t++ % IR_TXQ]);
+  first_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
+  tx_t++;
+  next_us = first_us;
+  if (tx_total > 1) {
+	next_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
+	tx_t++;
+  }
   tx_seg = 1;
   hal_ir_carrier(1);				/* the first mark */
-  hal_ir_tx_start(first_us, tx_total > 1 ? IR_DEC(ir_txq[tx_t++ % IR_TXQ])
-								: first_us);
+  hal_ir_tx_start(first_us, next_us);
   return(SUSPEND);
 }
 
