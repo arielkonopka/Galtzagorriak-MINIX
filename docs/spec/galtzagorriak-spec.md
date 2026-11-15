@@ -15,7 +15,8 @@ write budget, rebinding by SHA-256) and BLE bonds kept on the SD card (R15.4, R1
 request to make flash writes as rare as possible. Background: the project report `hybrid-fs-overlay-analysis.md` (Polish, not in the repo)
 (a Linux-style overlay file system was considered and rejected).
 Addition (2026-11-15): 11.2 (USB canary app, owner request), R19.9 (IP over an external IrDA
-module with PPP, optional SD package) and an external USB host chip in Deferred.
+module with PPP, optional SD package) and an external USB host chip in Deferred. Then section M
+(canary family) with 9.2, 14.2 and 16.5 (owner request: "various canaries, Bluetooth too").
 Addition (2026-11-15): Phase 19 rewritten (lwIP as a low-priority `udrv` driver, `/dev/tcp` +
 BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with frequency hopping on
 CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
@@ -466,7 +467,7 @@ Scope rule: `camfind` only listens. It never connects, deauthenticates or jams; 
 firmware for it implements passive scanning only.
 
 **Other gadget ideas (suggestions only, not scheduled):**
-- **Tracker detector:** BLE scan for Find My, SmartTag and Tile-style trackers that stay near you
+- **Tracker detector:** (now scheduled as part of the BLE canary, R16.5.4) BLE scan for Find My, SmartTag and Tile-style trackers that stay near you
   over time, with the same hot/cold locate (needs the BLE scan of 16.3).
 - **Weather and sensor display:** decode your own 433/868 MHz weather stations and sensors
   (temperature, humidity, rain) on the Sub-GHz decoders, shown as a small dashboard.
@@ -993,6 +994,56 @@ Acceptance:
 
 For the manual: where settings live, `cfopen`/`cfcat`, `settings reset/diff`, and the flash
 counters in `free -v`.
+
+---
+
+## M. Canaries: what is something trying to do with my Flipper? (owner request, 2026-11-15)
+
+Owner request: "various canaries, Bluetooth too". A **canary** is a gadget app (F.5) that sits on
+one interface, lets the other side act, and shows and logs what it tried: a USB port that
+enumerates, a phone that connects over Bluetooth and probes services, a reader that powers up an
+NFC field in your pocket, a jammer on 433 MHz. The USB canary (11.2) is the first member; this
+section sets the rules for all of them.
+
+### M.1 Rules for every canary
+
+- **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
+  types, never accepts writes, never pairs or bonds, never transmits on a radio except the minimum
+  of its role (advertising for the BLE bait, the tag answers of the NFC bait). It never jams,
+  deauthenticates or replays.
+- **Never impersonate a real product or credential.** Baits use our own IDs (G.1), a random NFC
+  UID and generic names; no payment, transit or access-card emulation, no other vendor's IDs.
+- **The verdict is honest:** "nothing happened during this session" is not "this is safe", and a
+  fingerprint is labelled as a guess. The raw log is always kept.
+- **RAM only while running.** Each canary is a module of one app `canary` (GUI modules, section K),
+  so only the active one is in RAM; common code (event ring, summary, log writer, alert) is a small
+  shared library. Hot paths run in the driver (G.3 option B) with event rings lent by the FS cache.
+- **Logs on the SD card only:** `/ext/apps_data/canary/<kind>/YYYYMMDD-HHMMSS.tsv` (TSV, K), one
+  header line (kind, persona, verdict, guess) and one line per event. **No internal flash writes**
+  (rule L). Rules tables (host and tracker signatures, AIDs) are `const`, plus an optional
+  `rules.tsv` on SD.
+- **Pocket mode** for canaries that are useful unattended (NFC field, Sub-GHz jammer, BLE
+  trackers): the app parks (12d) and the alert service (F.2) vibrates on a trigger. Where the chip
+  can watch on its own (ST25R3916 field wake-up, CC1101 carrier sense on a GDO interrupt) the
+  canary uses tier 3 ("runs in the radio chip or USB driver"), so the CPU sleeps between events.
+- **Privacy:** logs hold other people's addresses and names; they stay on the card, and the app has
+  "delete all canary logs". Addresses can be stored hashed (setting).
+- **Responsiveness:** an event costs the driver ≤ 5 µs in its interrupt; L1 holds under a flood.
+
+### M.2 The family
+
+| Canary (module) | Interface and role | What it shows | Needs | Phase |
+|---|---|---|---|---|
+| `usb` | USB device, passive personas | power only / enumerates / configures / uses; descriptor and class requests; host guess | 10, 11.1 | **11.2** |
+| `ble` | BLE peripheral bait + observer | who connects, which GATT services and characteristics they discover, read and write; pairing requests and their capabilities; advertising floods; trackers that follow you | 15; observer parts need the full stack (R16.1.0) | **16.5** |
+| `nfc` | 13.56 MHz field detector + tag bait | a reader field appeared (pocket alarm); what the reader asks: anticollision, RATS, SELECT of which AIDs (payment, transit, access) | 13 | **14.2** |
+| `rfid` | 125 kHz field detector | an LF reader field, its frequency and polling rhythm | 8 | **9.2** |
+| `subghz` | CC1101 receive only | bursts per band (frequency, RSSI, length, decoded protocol if known), new repeating transmitters, **jamming alarm** (continuous high RSSI) | 8 | **9.2** |
+| `ir` | IR receiver | remote codes sent around you, decoded protocol | 6 | **9.2** |
+| `wifi` (optional) | ESP32 devboard, passive scan (as `camfind`) | deauthentication floods, probe requests, evil-twin SSIDs (same name, new BSSID) | 9.1 firmware | 9.2 (optional) |
+
+Out of scope: canaries that need to transmit to provoke the other side (active probing) and
+anything that breaks a link to see the reaction.
 
 ---
 
@@ -2064,6 +2115,41 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
     at 1 m.
   - RAM: 256 B DMA buffer in `camfind` while the meter runs; kernel ≤ +16 B for `/dev/adc`.
 
+### 9.2 Radio canaries: Sub-GHz, 125 kHz, infrared (section M)
+
+**Depends on:** 6 (IR), 8 (Sub-GHz, LF RFID), 7b (alert service), 12d for pocket mode.
+
+- **R9.2.1 `subghz` canary:** receive only. Watches one band or hops a list of presets (433.92,
+  868.35, 315, 915 MHz and the user's list), dwell ≥ 50 ms per preset. Each burst above the noise
+  floor becomes an event: frequency, peak RSSI, length, and the decoded protocol and fields when a
+  Phase 9 decoder recognises it.
+  - "New repeating transmitter": the same decoded ID or the same burst shape seen ≥ 3 times in
+    10 min and not seen in the last session.
+  - **Jamming alarm:** RSSI above a threshold for ≥ 2 s on one preset (e.g. while you lock a car);
+    the threshold is learned from the first 10 s of the noise floor.
+  - Pocket mode: CC1101 carrier sense (CS) on a GDO interrupt wakes the CPU (M.1, tier 3).
+- **R9.2.2 `rfid` canary:** the LF front end's comparator capture (pulse engine, R4b.7) measures an
+  external 125 kHz-band field: frequency (to ±1 kHz), on time, polling period. Shows "reader
+  field 125.0 kHz, polls every 300 ms". It never answers (no emulation). Exclusive with NFC on the
+  shared pin, as usual.
+- **R9.2.3 `ir` canary:** the IR receiver logs every frame with its decoded protocol, address and
+  command (Phase 7 codecs), or the raw timing when unknown; a counter per (protocol, address)
+  shows "something keeps sending Samsung power".
+- **R9.2.4 `wifi` canary (optional, ESP32 devboard):** the passive-scan firmware of R9.1.1 gains
+  `DEAUTH <bssid> <count/s>`, `PROBE <mac> <ssid>` and the evil-twin rule (an SSID seen with a new
+  BSSID and a different security mode). Passive only, like `camfind`.
+- Acceptance:
+  - AC9.2.1 A 433.92 MHz weather station shows as a repeating transmitter within 10 min; a
+    signal generator (or a second Flipper's carrier test, inside R8.2 limits) held 3 s triggers the
+    jamming alarm, also in pocket mode with the screen off.
+  - AC9.2.2 A stock Flipper in LF read mode, and an access-control reader, show as a 125 kHz
+    field with a polling period that matches a scope measurement within 10 %.
+  - AC9.2.3 A TV remote's key presses appear decoded.
+- Responsiveness: AC9.2.R L1 holds while the Sub-GHz canary hops presets.
+- RAM: app module ≈ 3 KB while running (event list of 32 entries, noise-floor table per preset);
+  kernel 0 B new (pulse engine and CC1101 state exist); in pocket mode only the parked app's
+  swap-out remains (12d).
+
 ## Phase 10: USB device classes
 
 **Depends on:** 4b.
@@ -2136,9 +2222,11 @@ RAM: app ≈ 4 KB. Flash: ≈ 15 KB installed.
 
 ### 11.2 USB canary: what does this port try to do? (owner request, 2026-11-15)
 
+The first canary of section M; the M.1 rules apply. It is the `usb` module of the `canary` app.
+
 **Goal:** plug the Flipper into a USB port the owner does not trust (a hotel or airport charger, a
 car, a kiosk, a stranger's computer) and see what the port tries to do, without the Flipper ever
-doing anything back. Native app `usbcanary` (section F), group `usb`.
+doing anything back. Module `usb` of the `canary` app (section M), group `usb`.
 
 The STM32WB55 USB is device-only, so the canary watches the **host** side of a link. Watching a
 device plugged into the Flipper (a pendrive, a "charging cable" with a chip inside) needs an
@@ -2182,12 +2270,12 @@ external USB host chip; see Deferred (MAX3421E).
   and for MS OS descriptors; Linux asks for the full 18 B and for the device qualifier). Matching
   is a scored table:
   - built-in rules in a `const` table;
-  - optional extra rules in `/ext/apps_data/usbcanary/hosts.tsv` (K, TSV), so new traces add
+  - optional extra rules in `/ext/apps_data/canary/usb/rules.tsv` (K, TSV), so new traces add
     rules without a rebuild;
   - the result is shown as "looks like: Windows 10/11 (score 7/9)" or "unknown"; the raw trace is
     always kept, because the guess can be wrong or deliberately spoofed.
   The first built-in rules come from traces recorded on Windows, Linux, macOS, Android and a
-  plain charger, saved under `tests/usbcanary/` in the PR that adds them.
+  plain charger, saved under `tests/canary/usb/` in the PR that adds them.
 - **R11.2.5 No console in this profile (security).** Every other USB profile keeps the CDC console
   (G.1); the canary profile **drops it** (G.3 "mode without the console"), so an untrusted host
   never sees a shell. When the app exits, the previous profile is re-enumerated.
@@ -2200,7 +2288,7 @@ external USB host chip; see Deferred (MAX3421E).
   from a Linux host (raw control requests through `libusb`, random SCSI CDBs) runs for 1 h per
   persona with no crash, hang or out-of-range read.
 - **R11.2.8 Log:** on Back (or after 10 min), the session is written to
-  `/ext/apps_data/usbcanary/YYYYMMDD-HHMMSS.tsv`: one header line with the verdict, persona and
+  `/ext/apps_data/canary/usb/YYYYMMDD-HHMMSS.tsv`: one header line with the verdict, persona and
   fingerprint, then one line per event. SD only; **no internal flash write** at any point (rule
   L). With no SD card, the session stays on screen only.
 - **R11.2.9 Power:** with `bare` and verdict 1, the app can be left running as a charging-port
@@ -2572,6 +2660,30 @@ Responsiveness: see AC13.R; the NFC app's screens meet L1.
 - RAM: kernel within the shared mode `union` (≤ 64 B); helper ≈ 4 KB only while MIFARE Classic
   commands are used.
 
+### 14.2 NFC canary: who reads me? (section M)
+
+- **R14.2.1 Field detector:** the ST25R3916 external-field detection (and its low-power wake-up
+  mode) reports "a reader field appeared" with time and duration. Pocket mode (M.1, tier 3): the
+  chip watches alone and the CPU wakes only on a field; the alert vibrates. This is the "is
+  something reading my pocket" alarm.
+- **R14.2.2 Tag bait (optional, chosen in the app):** the Flipper answers as a **blank generic tag**
+  with a random UID: NFC Forum Type 4 (ISO 14443-4) that returns "file not found" to every
+  SELECT, or Type 2 with an empty NDEF area. It logs: anticollision, RATS and its parameters,
+  each SELECT by AID with a name from a `const` table (e.g. `2PAY.SYS.DDF01` = a payment terminal
+  looking for cards, transit and access AIDs), READ/WRITE attempts (writes refused), and the field
+  timing. It never emulates a real card (M.1).
+- **R14.2.3 Reader guess:** from the AID order and RATS parameters: "looks like: payment terminal",
+  "phone (Android/iOS) reading NDEF", "access reader". Labelled as a guess.
+- **R14.2.4** Frames are parsed in the kernel NFC fast path (as 14.1), bounds-checked (I2); events
+  go into a 512 B ring lent by the FS cache.
+- Acceptance:
+  - AC14.2.1 A phone with NFC on, held to the Flipper in pocket mode, wakes it and vibrates
+    within 300 ms; the log shows the field and the NDEF read.
+  - AC14.2.2 With the bait, a payment terminal in test mode (or `pcsc`/libnfc script imitating
+    one) shows the PPSE SELECT; no SELECT gets a non-error answer.
+  - AC14.2.3 Idle current in pocket mode is within 20 % of normal idle (record the numbers).
+- RAM: kernel ≤ +32 B (mode `union`), 512 B lent while armed; app ≈ 3 KB only while running.
+
 ---
 
 ## Phase 15: Bluetooth LE and RPC
@@ -2792,6 +2904,43 @@ GATT write sent ≤ 150 ms + one connection interval.
 
 RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running); `sbctl`
 ≈ 3 KB while open, 0 B in the background (≈ 2 KB for < 1 s per poll). Flash: ≈ 10 KB installed.
+
+### 16.5 BLE canary: who connects and what do they probe? (section M, owner request 2026-11-15)
+
+- **R16.5.1 Bait (peripheral; works with the light stack):** `bled` advertises a connectable
+  device with a generic name chosen in the app ("Speaker", "Lock", "Sensor" or the user's text),
+  a random static address, and a small fake GATT table from `const` data (Device Information,
+  Battery, and one vendor-specific service with our own UUID). It logs per connection:
+  - the central's address and address type, connection parameters, MTU request, PHY updates;
+  - every service and characteristic discovery, read, write (refused with "write not
+    permitted", value logged as hex, at most 32 B) and notification subscription;
+  - **pairing requests:** IO capabilities, bonding flag, Secure Connections, key size. The canary
+    then answers "Pairing Failed: pairing not supported"; it never bonds;
+  - disconnect reason and the reconnect rhythm.
+- **R16.5.2 Scan requests:** where the stack reports received scan requests (Bluetooth 5 "LE Scan
+  Request Received" with extended advertising; check the ST stack), the bait also lists **active
+  scanners** nearby that never connect. If not supported, the line is hidden.
+- **R16.5.3 Central guess:** from the discovery order, MTU value and pairing capabilities: "looks
+  like: iPhone", "Android", "Windows", "a BLE scanner app". Labelled as a guess.
+- **R16.5.4 Observer (full stack, R16.1.0; shares the 16.3 scan):**
+  - **Advertising flood:** counts proximity-pairing advertisements (Apple Continuity, Google Fast
+    Pair, Microsoft Swift Pair) from changing random addresses; above a rate (e.g. > 20 new
+    addresses per 10 s) it shows "advertising spam nearby" with its type.
+  - **Tracker detector** (the F.5 idea, now scheduled): AirTag/Find My, SmartTag and Tile-style
+    advertisements whose payload keeps showing up near you over ≥ 30 min across ≥ 2 places or
+    movements (accelerometer-free heuristic: the RSSI of other devices changed), with the 16.3
+    hot/cold locate. Pocket mode with the alert (M.1).
+- **R16.5.5** The canary owns `bled` while armed: the RPC and serial services are off, so a
+  stranger connecting to the bait never reaches RPC (`EBUSY` for apps that need `bled`).
+- Acceptance:
+  - AC16.5.1 nRF Connect on Android connects to the bait; the log lists its discovery, a read, a
+    refused write and a refused pairing request with the IO capabilities the phone sent.
+  - AC16.5.2 An iPhone and a Linux `bluetoothctl` connect; the guess names both.
+  - AC16.5.3 (full stack) A second Flipper running a proximity-advertisement spam app triggers the
+    flood alarm within 10 s; an AirTag carried for 30 min triggers the tracker alert.
+  - AC16.5.4 No bond is ever stored (the bond file on SD, R16.1.2, is unchanged).
+- RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared); app ≈ 4 KB while running.
+  Flash ≈ 6 KB app, `bled` +2 KB.
 
 ## Phase 17: Trust: U2F, signed packages, updater, option bytes
 
@@ -3171,6 +3320,7 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 | Native app: Storz & Bickel vaporizer remote `sbctl` (owner request; no device firmware update) | 16.4 |
 | USB peripheral modes: RFID, iButton, IR, Sub-GHz / NFC reader / BT dongle (owner request) | 11.1 / 14.1 / 16.2, section G |
 | USB canary: what an unknown host port tries to do (owner request) | 11.2 |
+| Canary family: rules and table; BLE, NFC, Sub-GHz, 125 kHz, IR, Wi-Fi canaries (owner request) | section M; 16.5, 14.2, 9.2 |
 | External USB host chip (MAX3421E) for inspecting plugged-in devices (idea) | Deferred |
 | nRF24 module for 2.4 GHz dongle mice (optional, not confirmed) | G.3 question 3, deferred |
 | Sub-GHz, LF RFID | 8 |
