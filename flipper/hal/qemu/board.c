@@ -267,6 +267,7 @@ int hal_usb_irq(void) { return -1; }
 void hal_usb_poll(void) { }
 int hal_usb_connected(void) { return 0; }
 unsigned hal_usb_write(const void *buf, unsigned n) { (void) buf; return n; }
+unsigned hal_usb_room(void) { return 512; }
 int hal_usb_getc(void) { return -1; }
 int hal_usb_peekc(void) { return -1; }
 
