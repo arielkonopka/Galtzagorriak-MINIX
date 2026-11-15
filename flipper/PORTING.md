@@ -437,6 +437,28 @@ for good.  Now compaction drops a dead record when another record
 install after that worked again.  RAM 0 B; flash: one compaction (two
 directory pages) as before.
 
+AC2b.R1/R2 (2026-11-15, Flipper, latcheck kernel):
+- R1, programs from the installed region: the launcher's L6 (exec to
+  its first frame) is 9.7 ms.  `ls /` and `sh -c :` run 50 times in
+  at most 1-2 s, so at most 40 ms per run, fork included.
+- R2, before: `pkg flash` was one MM call per program (erase and program
+  the whole text, ~0.4-1 s), and every fork, exec and wait queued
+  behind it.  40 execs took 3 s during a 49 KB install and 1 s
+  without it.
+- R2, now: an install that writes runs as MM's flash job, one step per
+  call (`MI_INSTALL` op 4: a page erase or 256 bytes, each compared with
+  the file as it is programmed).  `pkg` calls again until the job is
+  done, and MM serves everybody else in between.  The record is written
+  last, after a check that the file's ctime has not changed and a
+  SHA-256 of the flash copy.  During a 105 KB install (14 programs,
+  3 s) the launcher's L6 was at most 10.9 ms (4 samples), and L9 at
+  most 21.95 ms (one page erase).
+- RAM: 0 B.  The install borrows the cache's job (struct mmjob); a cache
+  copy in progress is dropped and redone on a later run.  An install
+  whose `pkg` died is dropped by the next install or cache copy.
+- Flash writes: unchanged (the same pages and record per program).
+- L1 during an install still needs the owner's hands (buttons).
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

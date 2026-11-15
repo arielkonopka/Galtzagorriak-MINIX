@@ -226,16 +226,24 @@ static void make_parents(char *path)
 
 /* Install a program's text in internal flash (op 0) or remove it (op 1):
  * MM checks it (root, a file only root/bin could write), writes it once
- * and reads it back (spec Phase 2b, R2b.5).  Returns 0 or -errno. */
+ * and reads it back (spec Phase 2b, R2b.5).  An install that writes
+ * answers 1: then op 4 does one flash step per call (a page erase or 256
+ * bytes), so that MM serves exec and the rest in between (AC2b.R2).
+ * Returns 0 or -errno. */
 static int flash_op(const char *path, int op)
 {
 	message m;
+	int r;
 
 	m.m1_p1 = (char *) path;
 	m.m1_i1 = strlen(path) + 1;
 	m.m1_i2 = MI_INSTALL;
 	m.m1_i3 = op;
-	return _syscall(MM, MEMINFO, &m) < 0 ? -errno : 0;
+	while ((r = _syscall(MM, MEMINFO, &m)) == 1) {
+		m.m1_i2 = MI_INSTALL;
+		m.m1_i3 = 4;
+	}
+	return r < 0 ? -errno : 0;
 }
 
 static int is_program(const char *path)	/* separate I&D a.out? */
