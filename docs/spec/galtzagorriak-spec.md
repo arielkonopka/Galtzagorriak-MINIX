@@ -2948,6 +2948,11 @@ Requirements:
   Crafty 40–210 °C) and are enforced before any write.
 - **R16.4.8** Before implementation, the UUIDs and packet layouts are confirmed on real hardware
   (`nRF Connect` or `bluetoothctl` GATT dump); Veazy in particular. Differences go into the report.
+  Venty: verified on the owner's device (2026-11-15, nRF Connect): name prefix `S&B VY`, service
+  `00000000-5354-4f52-5a26-4249434b454c` with one characteristic `00000001-…` (notify, write,
+  write without response, CCCD 0x2902), works without bonding. It also has the standard Device
+  Information service 0x180A, which `sbctl` reads for model and firmware. Command bytes are
+  checked on the device once the BLE parts exist.
 
 Acceptance:
 - AC16.4.1 On each owned model: connect, set the target, heater on/off, (Volcano) pump on/off,
