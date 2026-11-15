@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- USB console: output no longer stops for good after a refused packet; the console task never waits for a host that does not read (writers are suspended instead).
 - (Phase 4a, R4a.4) Watchdog 2 s, kicked by the clock task (a hung kernel task now resets); a watchdog reset goes to DFU only after `reboot -d` (dev mode), otherwise the board boots normally; `ver` shows the reset cause.
 - (Hardware #9, R6.6) Infrared: `/dev/ir` and `ir` (all stock protocols, remote files); send timed by TIM2 interrupts, no busy-wait, kernel +64 B.
 - (T8) `mined` is the default editor: memory-safe (B1-B10), VT100/xterm keys, terminal size detection, `.save` when the terminal goes away, safe writes.

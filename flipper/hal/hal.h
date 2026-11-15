@@ -89,6 +89,7 @@ int hal_usb_irq(void);
 void hal_usb_poll(void);
 int hal_usb_connected(void);		/* host has the port open (DTR) */
 unsigned hal_usb_write(const void *buf, unsigned n);	/* bytes queued */
+unsigned hal_usb_room(void);		/* ring room; nobody listening: all */
 int hal_usb_getc(void);			/* -1 if nothing received */
 int hal_usb_peekc(void);		/* the same byte, left in place */
 
