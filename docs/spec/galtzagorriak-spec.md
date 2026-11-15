@@ -2967,7 +2967,7 @@ networking (the stack is one event loop).
   - Main use: a **web interface for the gadget**: lwIP `httpd` with static pages in flash (XIP,
     0 B RAM), dynamic parts as small CGI-style handlers returning TSV or JSON Lines (section K):
     reminders, alarms, settings, files on the SD card.
-- **R19.7** (19e) **Internet through an external Wi-Fi module** on the GPIO header UART. Two
+- **R19.7** (19e) **Internet through an external Wi-Fi module** on a GPIO header UART (USART1 on pins 13/14 or LPUART1 on 15/16; LPUART1 when the IrDA module of R19.9 holds USART1). Two
   supported kinds, one `/dev/tcp` for programs:
   - **a Linux module (owner has one): PPP over the UART** (R19.10). The module runs `pppd` and NAT
     and is the Flipper's router; TLS, if ever needed, runs there. No extra code on the Flipper
