@@ -7,6 +7,9 @@ The usual gates apply: `ramcheck` (0 B unless stated), QEMU `M2 USER PASS`, and 
 ## Standing rule (owner, 2026-11-14 20:41Z): few flash writes at run time
 When optimizing RAM or flash, keep **run-time** writes to internal flash to a minimum. Writes at build or install time (`make base-flash`, `pkg install --flash`, Phase 2b installed region) are allowed, but should **also be as rare as possible**: only write pages whose contents changed (compare before erase), append instead of rewriting, and don't compact or reformat unless space runs out. Every PR that writes flash at run time must say how often it writes in normal use and why that write can't happen at build or install time. Reviews check this.
 
+## Standing rule (owner, 2026-11-15 22:01Z): docs follow behaviour
+The user manual lives in `docs/manual/` (start: `install.md`). A PR that changes something a user sees or does (a command, its options or output, a file or setting in `/etc`, the SD card layout, a build target or image name, the flashing, update or recovery steps, the launcher or an app, a hardware feature that starts or stops working) updates the matching manual chapter **in the same PR**, or says in its description why no change is needed. A feature still only in the spec stays marked **(planned)** in the manual until its PR lands; that PR removes the mark. If no chapter covers the feature yet, a short note in the PR description is enough; the review side turns those notes into chapters. Reviews check this together with the `CHANGELOG.md` `Unreleased` line.
+
 ## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
 - D/S: the whole range `[vir, vir+bytes)` must lie in `[D.mem_vir, S.mem_vir+S.mem_len)` (clicks). T: inside T.
@@ -195,6 +198,7 @@ The owner wants the user to control **how deeply and how soon the device powers 
 - I.1 (#70): the stock firmware keeps the RTC in local time; spec I.1 wants UTC. Fix with the time-zone setting (18b wizard / `setup tz`); until then `date` is off by the zone offset (bindings are not affected).
 - Backlight (#81), polish: fade **on** as well as off (owner wish: no snapping). Off fades in 0.5 s by LP5562 engine 1; add a short up-ramp (about 150 ms) on wake with the same engine program.
 - base postinst (#79), nit: `chmod 755 /rom` runs on every install and may print EROFS when /rom is mounted; make it quiet or run it only after `mkdir`.
+- Build (found while writing `docs/manual/install.md`): in a fresh clone `art/galtzagorri.png` can be newer than the committed `hal/common/splash.c`, so `make` regenerates it and then needs Pillow and `/usr/share/fonts/X11/misc/6x10-ISO8859-1.pcf.gz` (xfonts-base); without them the build fails. Make the splash rule opt-in (e.g. `make splash`) so a normal build needs neither; then drop them from the manual's prerequisites.
 - Flipper `NR_SUPERS` is 4 and full since T12 (root, /rom, /usr, /home): any further mount needs a fifth slot (RAM) or an on-demand /rom.
 
 ## Deferred to the end (owner decision 2026-11-15, #78): Wi-Fi / ESP32 devboard work
