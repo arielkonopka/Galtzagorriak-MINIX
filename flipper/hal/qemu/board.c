@@ -393,6 +393,26 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	return 0;
 }
 
+/* Flash erase accounting (R2b.11): QEMU has no backup registers; these
+ * words live as long as the machine (QEMU RAM, not the Flipper's). */
+static uint32_t fc_total[2], fc_today, fc_budget = HAL_FC_BUDGET;
+
+int hal_fc_erase_ok(int cache, unsigned upday)
+{
+	if (!cache) { fc_total[1]++; return 1; }
+	if (fc_today >= fc_budget) return 0;
+	fc_today++;
+	fc_total[0]++;
+	return 1;
+}
+
+void hal_fc_counts(uint32_t *c, unsigned upday)
+{
+	c[0] = fc_total[0]; c[1] = fc_total[1]; c[2] = fc_today; c[3] = fc_budget;
+}
+
+void hal_fc_budget(unsigned pages, unsigned upday) { fc_budget = pages & 0xFF; }
+
 /* No infrared in QEMU. */
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }

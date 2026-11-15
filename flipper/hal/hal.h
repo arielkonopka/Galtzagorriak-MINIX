@@ -116,6 +116,17 @@ void hal_flash_region(uint32_t *base, uint32_t *size);	/* the text cache */
 enum { HAL_FL_SFSA, HAL_FL_INST, HAL_FL_INST_SIZE, HAL_FL_CACHE,
        HAL_FL_CACHE_SIZE, HAL_FL_N };
 void hal_flash_layout(uint32_t *l);
+/* Flash erase accounting (R2b.11), kept in RTC backup registers (no RAM):
+ * hal_fc_erase_ok() is asked before every erase, cache = 1 for the
+ * run-time cache (0: installed programs); it counts the erase and says 0
+ * when today's cache budget is spent.  hal_fc_counts(): c[0] cache pages
+ * erased in all, c[1] installed, c[2] cache today, c[3] the budget.
+ * hal_fc_budget(): set the daily budget (0-255 pages).  upday: days of
+ * uptime, the day when the RTC is not running. */
+int hal_fc_erase_ok(int cache, unsigned upday);
+void hal_fc_counts(uint32_t *c, unsigned upday);
+void hal_fc_budget(unsigned pages, unsigned upday);
+#define HAL_FC_BUDGET	32	/* the default: one cycle a day of a 128 KB cache */
 int hal_flash_erase(uint32_t page_addr);
 int hal_flash_write(uint32_t dst, const void *src, unsigned len);
 extern uint32_t hal_flash_sr;	/* status of the last failure */

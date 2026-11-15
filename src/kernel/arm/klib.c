@@ -26,6 +26,9 @@ FORWARD _PROTOTYPE( void load_boot_images, (void) );
 /*===========================================================================*
  *				arm_flash				     *
  *===========================================================================*/
+/* Days of uptime: the erase budget's day when the RTC is not running. */
+#define UPDAY	((unsigned) (get_uptime() / ((clock_t) HZ * 86400)))
+
 PUBLIC int arm_flash(op, addr, src, len, basep, sizep)
 int op;				/* FL_INFO, FL_ERASE or FL_WRITE */
 u32_t addr;			/* flash address */
@@ -53,6 +56,15 @@ u32_t *basep, *sizep;		/* region (all ops) */
 	*sizep = addr == FL_LAYOUT_INST ? l[HAL_FL_INST_SIZE] : 0;
 	return(OK);
   }
+  if (op == FL_INFO && (addr == FL_COUNTS || addr == FL_BUDGET)) {
+	u32_t c[4];			/* R2b.11: backup registers */
+
+	if (addr == FL_BUDGET && len != 0) hal_fc_budget(len - 1, UPDAY);
+	hal_fc_counts(c, UPDAY);
+	*basep = addr == FL_COUNTS ? c[0] : c[3];
+	*sizep = addr == FL_COUNTS ? c[1] : c[2];
+	return(OK);
+  }
   hal_flash_region(basep, sizep);
   if (op == FL_INFO) return(OK);
   {	/* the cache or the installed programs (Phase 2b); only MM calls */
@@ -66,6 +78,10 @@ u32_t *basep, *sizep;		/* region (all ops) */
 	if (addr < b || addr - b >= n) return(EINVAL);
 	if (op == FL_WRITE && (len > n - (addr - b) || len % 8 != 0))
 		return(EINVAL);
+	/* every erase counted; the cache's within its daily budget
+	 * (R2b.11): when spent, MM keeps the text in RAM */
+	if (op == FL_ERASE && !hal_fc_erase_ok(b == *basep, UPDAY))
+		return(ENOSPC);
   }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 

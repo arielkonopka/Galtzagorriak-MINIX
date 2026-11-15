@@ -148,6 +148,9 @@ struct kstack {
 #define MI_FCACHE	3	/* flash text cache: struct fcinfo to m1_p1 */
 #define MI_RESET	5	/* reply: cause of the last reset (RCC_CSR >> 24),
 			 * 0x100: dev mode (a watchdog reset goes to DFU) */
+#define MI_FCBUDGET	6	/* struct fccount to m1_p1; m1_i1 >= 0 (root):
+			 * the run-time cache's erase budget, pages a
+			 * day (R2b.11; 0: no caching) */
 #define MI_INSTALL	4	/* root: m1_p1 path, m1_i1 its length, m1_i3 0:
 			 * install its text in flash (reply 1: call again
 			 * with m1_i3 4, one flash step each, until not 1),
@@ -157,6 +160,9 @@ struct kstack {
 #define FL_INFO		0	/* cache region: base, size; with addr: */
 #define FL_LAYOUT_INST	1	/*   the installed-programs region */
 #define FL_LAYOUT_SFSA	2	/*   where CPU2's flash starts */
+#define FL_COUNTS	3	/*   pages erased in all: cache, installed */
+#define FL_BUDGET	4	/*   cache: budget, erased today; len = new
+				 *   budget + 1 sets it (R2b.11) */
 #define FL_ERASE	1	/* erase the page at addr */
 #define FL_WRITE	2	/* program len bytes at addr */
 #define FL_BG		0x10	/* or'ed in: background work, EAGAIN while a
@@ -174,6 +180,13 @@ struct fcinfo {
   unsigned long inst_used;	/* bytes in pages of installed programs */
   int inst_entries;		/* programs installed */
   unsigned long sfsa;		/* CPU2's flash starts here */
+};
+
+struct fccount {		/* MI_FCBUDGET (R2b.11) */
+  unsigned long erased;		/* run-time cache pages erased in all */
+  unsigned long inst_erased;	/* installed-region pages erased in all */
+  unsigned long today;		/* cache pages erased today */
+  unsigned long budget;		/* the cache's daily budget, pages */
 };
 #endif
 
