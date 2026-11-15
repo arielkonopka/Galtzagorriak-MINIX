@@ -389,24 +389,28 @@ void hal_backlight(unsigned level)
 	lp5562_write(0x0E, level > 255 ? 255 : level);
 }
 
-/* Fade the backlight from `from` to 0 in about `ms` milliseconds, done by
- * the LP5562's engine 1 on its own: no CPU, no I2C while it runs.  The
- * program and register sequence follow the stock firmware
- * (lib/drivers/lp5562.c, lp5562_execute_ramp; GPL-3): set PWM, ramp down
- * half the way, loop once more, end.  hal_backlight() takes it back. */
-void hal_backlight_fade(unsigned from, unsigned ms)
+/* Fade the backlight down from `from` to `to` in about `ms` milliseconds,
+ * done by the LP5562's engine 1 on its own: no CPU, no I2C while it runs;
+ * the engine holds the end value.  The program and register sequence
+ * follow the stock firmware (lib/drivers/lp5562.c, lp5562_execute_ramp;
+ * GPL-3): set PWM, ramp down half the way, loop once more, end.
+ * hal_backlight() takes it back. */
+void hal_backlight_fade(unsigned from, unsigned to, unsigned ms)
 {
 	uint8_t prog[1 + 32];
 	uint16_t w[4];
-	unsigned diff = from > 255 ? 255 : from, step, pre = 0, i;
+	unsigned diff, step, pre = 0, i;
 	uint32_t t0;
 
-	if (diff < 2) { hal_backlight(0); return; }
+	if (from > 255) from = 255;
+	if (to >= from) { hal_backlight(to); return; }
+	diff = from - to;
+	if (diff < 2) { hal_backlight(to); return; }
 	step = ms * 2 / diff;		/* 0.49 ms units (stock arithmetic) */
 	if (step > 0x3F) { step /= 32; pre = 1; }	/* 15.6 ms units */
 	if (step == 0) step = 1;
 	if (step > 0x3F) step = 0x3F;
-	w[0] = 0x4000 | diff;				/* set PWM */
+	w[0] = 0x4000 | from;				/* set PWM */
 	w[1] = (pre << 14) | (step << 8) | 0x80 | ((diff / 2) & 0x7F);	/* down */
 	w[2] = 0xA001 | ((2 - 1) << 7);		/* loop to 1, twice */
 	w[3] = 0xC000;				/* end */
@@ -424,7 +428,7 @@ void hal_backlight_fade(unsigned from, unsigned ms)
 	lp5562_write(0x01, 0x20);	/* engine 1: run */
 	lp5562_write(0x00, 0xC0 | 0x20);	/* enable: engine 1 runs */
 	lp5562_write(0x70, 0x40);	/* white from engine 1 */
-	lp5562_write(0x0E, 0);		/* the direct value afterwards */
+	lp5562_write(0x0E, to);		/* the direct value afterwards */
 }
 
 void hal_led(unsigned r, unsigned g, unsigned b)
@@ -1158,7 +1162,7 @@ uint32_t hal_bl_state(void)
 {
 	uint32_t r = BL_REG;	/* the RTC's APB clock is on (hal_early_boot) */
 
-	if ((r & 0xF0000000u) != BL_MAGIC) return 255u << 16 | 300u;
+	if ((r & 0xF0000000u) != BL_MAGIC) return 255u << 16 | 15u;
 	return r & 0x0FFFFFFFu;
 }
 
