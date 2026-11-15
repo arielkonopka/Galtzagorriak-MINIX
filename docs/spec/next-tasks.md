@@ -10,6 +10,20 @@ When optimizing RAM or flash, keep **run-time** writes to internal flash to a mi
 ## Standing rule (owner, 2026-11-15 22:01Z): docs follow behaviour
 The user manual lives in `docs/manual/` (start: `install.md`). A PR that changes something a user sees or does (a command, its options or output, a file or setting in `/etc`, the SD card layout, a build target or image name, the flashing, update or recovery steps, the launcher or an app, a hardware feature that starts or stops working) updates the matching manual chapter **in the same PR**, or says in its description why no change is needed. A feature still only in the spec stays marked **(planned)** in the manual until its PR lands; that PR removes the mark. If no chapter covers the feature yet, a short note in the PR description is enough; the review side turns those notes into chapters. Reviews check this together with the `CHANGELOG.md` `Unreleased` line.
 
+## CI gates (owner, 2026-11-15): what GitHub checks on every PR
+GitHub Actions runs these on every PR; a red check means the PR is not ready for review. Run them locally before pushing when you can.
+- `build`: Flipper images; `make BOARD=flipper ramcheck` (hard gate, `flipper/ram-budget.txt`); QEMU `M2 USER PASS`; **flashcheck**: the flash pages erased during the M2 run must not exceed `flipper/flash-budget.txt` (`python3 tools/flashcheck.py flash-budget.txt m2 m2.log`). The budget is a ratchet: lower it in the PR that saves erases, raise it only with the reason in the same commit (the flash-writes rule above). `make BOARD=flipper latcheck` must compile.
+- `powercut`: `tools/powercut.py` (AC2b.5) in QEMU, all cut points.
+- `pr-rules`: code changes add a `CHANGELOG.md` `Unreleased` line (skip: label `no-changelog`); user-visible changes touch `docs/manual/` or the PR description has a line `Manual: <why no change is needed>` (skip: label `no-manual`).
+- L1–L10 are **not** measured in CI: QEMU's timing is not the Flipper's. `lat` numbers on the device stay in PORTING.md as before.
+
+## Two workers (owner, 2026-11-15): the local agent and the GitHub Actions worker
+Two agents implement tasks in parallel: the owner's **local agent** (has the Flipper) and the **cloud worker** (`.github/workflows/claude-worker.yml`, instructions `.github/claude-worker.md`; no hardware). To never work on the same task:
+- The cloud worker only takes **GitHub issues labelled `claude-task`** by the owner, never tasks straight from this file. It labels the issue `claimed:cloud` when it starts.
+- The local agent, before starting a task, checks the open issues: a task whose issue is labelled `claude-task` or `claimed:cloud` is not its task. When it starts a task that has an issue, it labels that issue `claimed:local` (the cloud worker then ignores the issue and `@claude` comments on it).
+- Good cloud tasks: host-testable code (QEMU, `make`, unit tests), tools, docs, spec-to-code work without timing needs. Device work (radio, USB, SD timing, `lat` numbers) stays local; the cloud worker lists such checks under "Needs on-device test" in its PR, and the local agent runs them.
+- The cloud worker pushes a `claude/issue-N-…` branch; the owner or the review side opens the PR from it (one click on the link in the worker's comment), so CI runs. Reviews and squash-merges as for every PR. A fix on a PR: comment `@claude <what to fix>` (owner only).
+
 ## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
 - D/S: the whole range `[vir, vir+bytes)` must lie in `[D.mem_vir, S.mem_vir+S.mem_len)` (clicks). T: inside T.
@@ -207,3 +221,19 @@ The owner cannot find the Wi-Fi devboard for now. Everything that needs it or ES
 - R9.2.4 `wifi` canary (extends the same firmware).
 - R19.7 ESP32 offload mode (Wi-Fi module networking). Phase 19 parts that do not need the devboard (USB, BLE, CC1101, a Linux module on the UART) keep their place.
 - `camfind` v1 ships without Wi-Fi meanwhile (AC9.1.3: "Wi-Fi unavailable", the other scans run).
+
+## Lanes and milestones (owner, 2026-11-15 23:51 Warsaw): the strategy in practice
+The order of work is `docs/spec/strategy.md`. **Requirements are closed** as of 2026-11-15: the spec's phases 0–22 are the scope. New ideas still go into the spec, but with a milestone tag (M1–M9), and only the current milestone's items become tasks.
+- Every task of the current milestone has a GitHub issue with a lane label: `lane:cloud` (GitHub Actions worker, QEMU-testable) or `lane:local` (the local agent, needs the Flipper), plus the milestone label (`M1`, …). The tracking issue of the milestone lists them in order.
+- **Current milestone: M1 Foundation** (Phases 2a, 2b, 2c, 2d; ABI 2; ≈ 0.5.0), tracking issue #105. Cloud: #99 2d (first), #100 R2a.5 (parallel), #101 2c and #102 R2b.9 (after #99). Local: #103 T14a, #104 T14b (R4b.2 ms timer), then the "Needs on-device test" checks of the cloud PRs.
+- Local agent priority inside a milestone: (1) what the other lane waits for (device checks, timer API), (2) the milestone's `lane:local` issues, (3) responsiveness regressions, (4) owner requests, (5) polish. T-tasks not in the milestone wait for a gap.
+- Directory ownership (to avoid conflicts): local owns `src/kernel/arm/`, `flipper/hal/`, the kernel device tasks, `flipper/m0/`, radio code; cloud owns `src/lib/`, `src/commands/`, `src/mm/`, `src/fs/`, `flipper/tools/`, `flipper/tests/`, pure-logic app cores, `docs/manual/`. A PR that crosses the line says so in its first line.
+
+## Autonomy (owner, 2026-11-15 23:55 Warsaw): never wait for the local agent
+The owner wants maximum autonomy. The cloud lane and the review side keep working when the local agent is away (no connection, owner asleep).
+- **The local agent counts as away** when it has pushed or opened no PR for 2 h, or has not answered a review question for 2 h. Nobody needs to announce it.
+- **While it is away the review side:** keeps up to **2** `lane:cloud` issues of the current milestone running (adds `claude-task` from the owner's account, in the issue order of the tracking issue); when the milestone has no cloud issue left, opens the next milestone's cloud issues early (strategy.md section 4: Phase 3, `poll()` core, `libfuri` R5.1–R5.2, `fam2pkg`, Berry VM, stock protocol decoders, manual chapters); reviews and squash-merges cloud PRs as usual.
+- **Code part of `lane:local` work** may also go to the cloud worker when it can be written and checked in QEMU or on the host (e.g. a driver's protocol logic, a timer API with a QEMU backend). It merges only **off by default** or with no change on the Flipper path, and its PR lists the device steps under "Needs on-device test".
+- **Never without the local agent:** enabling a new hardware path by default, option bytes, CPU2/FUS, anything whose acceptance is a `lat` number, a current reading or RF.
+- **Device-check backlog:** every "Needs on-device test" of a merged PR is a checkbox in the issue labelled `device-checks`. When the local agent is back it does that list first (priority 1 above), then its `lane:local` issues.
+- Cost guard: at most 2 cloud worker runs at a time; a cloud issue that fails twice goes back to the owner with what blocked it.

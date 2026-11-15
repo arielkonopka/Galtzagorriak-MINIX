@@ -1,0 +1,32 @@
+# Documentation rules for PRs (docs/spec/next-tasks.md): CHANGELOG line and
+# user manual.  Runs again when the description or the labels change, so a
+# "Manual:" line or a skip label turns it green without a new push.
+name: pr-rules
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - name: CHANGELOG and manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ github.event.pull_request.body }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          export FILES=$(gh api "repos/$GH_REPO/pulls/$PR/files" --paginate -q '.[].filename')
+          export LABELS=$(jq -r '.[]' <<<"$LABELS_JSON")
+          .github/scripts/pr-rules.sh
