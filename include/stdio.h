@@ -155,6 +155,7 @@ _PROTOTYPE (FILE *fdopen, (int _fildes, const char *_types) );
 #ifdef _MINIX
 _PROTOTYPE(FILE *popen, (const char *_command, const char *_type));
 _PROTOTYPE(int pclose, (FILE *_stream));
+_PROTOTYPE(FILE *cfopen, (const char *_path, const char *_mode));	/* L.3 */
 #endif
 
 #endif /* _STDIO_H */

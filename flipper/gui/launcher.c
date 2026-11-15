@@ -39,7 +39,8 @@ static void load_apps(void)
 	char line[128], *a, *b;
 
 	napps = 0;
-	if ((f = fopen("/etc/apps", "r")) == NULL) return;
+	/* the card's copy, else the default in /rom (spec L.3) */
+	if ((f = cfopen("/etc/apps", "r")) == NULL) return;
 	while (napps < MAXAPPS && fgets(line, sizeof line, f) != NULL) {
 		line[strcspn(line, "\n")] = 0;
 		if (line[0] == '#' || line[0] == 0) continue;
