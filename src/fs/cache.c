@@ -69,8 +69,12 @@ int only_search;		/* if NO_READ, don't read, else act normal */
 	}
   }
 
-  /* Desired block is not on available chain.  Take oldest block ('front'). */
+  /* Desired block is not on available chain.  Take the oldest clean block,
+   * else the oldest ('front'): a dirty one costs a write - and flushall()
+   * writes every dirty block, pipe data not yet read included (T9). */
   if ((bp = front) == NIL_BUF) panic("all buffers in use", NR_BUFS);
+  while (bp != NIL_BUF && bp->b_dirt == DIRTY) bp = bp->b_next;
+  if (bp == NIL_BUF) bp = front;
   rm_lru(bp);
 
   /* Remove the block that was just taken from its hash chain. */
@@ -242,6 +246,32 @@ zone_t numb;				/* zone to be returned */
   bit = (bit_t) (numb - (sp->s_firstdatazone - 1));
   free_bit(sp, ZMAP, bit);
   if (bit < sp->s_zsearch) sp->s_zsearch = bit;
+  forget_zone(dev, numb, sp->s_log_zone_size);	/* its data is not needed */
+}
+
+
+/*===========================================================================*
+ *				forget_zone				     *
+ *===========================================================================*/
+PUBLIC void forget_zone(dev, z, scale)
+dev_t dev;
+zone_t z;
+int scale;			/* log2 blocks per zone */
+{
+/* The contents of zone z are of no use any more (freed, or pipe data that
+ * has been read): blocks of it in the cache need not go to the disk (T9:
+ * pipes never write their data to the SD card; deleted files neither).
+ */
+  register struct buf *bp;
+  block_t b = (block_t) z << scale, e = b + ((block_t) 1 << scale);
+
+  if (z == NO_ZONE) return;
+  for (; b < e; b++)
+	for (bp = buf_hash[(int) b & HASH_MASK]; bp != NIL_BUF; bp = bp->b_hash)
+		if (bp->b_blocknr == b && bp->b_dev == dev) {
+			bp->b_dirt = CLEAN;
+			break;
+		}
 }
 
 
