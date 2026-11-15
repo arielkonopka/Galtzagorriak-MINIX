@@ -145,6 +145,10 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 	user_phys += count;
 	nbytes -= count;
 	iop->io_nbytes -= count;
+	/* The card is deselected: other tasks first (R0.8b), also between
+	 * the requests of a scatter (an exec's text read in one piece
+	 * starved the infrared ring) */
+	task_yield();
   }
   rp->p_physio = FALSE;
   return(OK);

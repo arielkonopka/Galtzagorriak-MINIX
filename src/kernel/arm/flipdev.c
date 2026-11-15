@@ -740,8 +740,10 @@ int irq;
 	}
 	hal_ir_tx_next(IR_DEC(ir_txq[tx_t % IR_TXQ]));
 	tx_t++;
-	if (RING_N(tx_h, tx_t) == IR_TXQ / 2 && tx_fetch < tx_total)
-		interrupt(PRINTER);		/* half empty: refill */
+	/* a quarter gone: refill, so that the task may come up to 48
+	 * durations late (an SD piece, other tasks: R0.8b) */
+	if (RING_N(tx_h, tx_t) == IR_TXQ * 3 / 4 && tx_fetch < tx_total)
+		interrupt(PRINTER);
   }
   return 1;
 }

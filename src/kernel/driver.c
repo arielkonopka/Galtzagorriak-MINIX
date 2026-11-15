@@ -186,6 +186,37 @@ message *m_ptr;		/* pointer to read or write message */
  * status in the vector.
  */
 
+#if (CHIP == ARM_CM)
+/* One request at a time, read from and written back to FS's vector (FS
+ * never moves).  No static copy: a driver that lets other tasks run between
+ * pieces of its work (task_yield, R0.8b) cannot have its vector overwritten
+ * by another driver task meanwhile.  Its finish step has nothing to do.
+ */
+  struct iorequest_s io;
+  unsigned nr_requests, request;
+  int r = OK;
+  phys_bytes user_iovec_phys;
+
+  nr_requests = m_ptr->COUNT;
+  if (nr_requests > NR_IOREQS)
+	panic("FS passed too big an I/O vector", nr_requests);
+  user_iovec_phys = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+			 (vir_bytes) (nr_requests * sizeof io));
+  if (user_iovec_phys == 0)
+	panic("FS passed a bad I/O vector", (int) m_ptr->ADDRESS);
+  if ((*dp->dr_prepare)(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+
+  for (request = 0; request < nr_requests; request++) {
+	phys_copy(user_iovec_phys + request * sizeof io, vir2phys(&io),
+						(phys_bytes) sizeof io);
+	r = (*dp->dr_schedule)(m_ptr->PROC_NR, &io);
+	phys_copy(vir2phys(&io), user_iovec_phys + request * sizeof io,
+						(phys_bytes) sizeof io);
+	if (r != OK) break;
+  }
+  if (r == OK) (void) (*dp->dr_finish)();
+  return(OK);
+#else
   struct iorequest_s *iop;
   static struct iorequest_s iovec[NR_IOREQS];
   phys_bytes iovec_phys;
@@ -220,6 +251,7 @@ message *m_ptr;		/* pointer to read or write message */
   phys_copy(iovec_phys, user_iovec_phys,
 			    (phys_bytes) nr_requests * sizeof iovec[0]);
   return(OK);
+#endif
 }
 
 

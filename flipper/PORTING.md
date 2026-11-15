@@ -472,6 +472,34 @@ reply" and "reply -> run", and says who used the time in between):
 - Image swaps (unshadow, clock task) take up to 0.41 ms for 17 KB; no
   revived process was shadowed in these runs.
 
+Other kernel tasks behind the SD task (R0.8b, 2026-11-15): tasks never
+preempt tasks, so a woken task (flipdev refilling the infrared ring,
+answering a button) waited for a whole SD request or scatter.  Test: an
+infrared frame of 1000 durations sent in a loop during
+`cat /bin/* | cksum` (652 KB from the card).  The ring holds 64
+durations and asked for a refill when half empty.
+
+| Durations | main | now |
+|---|---|---|
+| 600 us (refill margin 19 ms, now 29 ms) | 1 of 5 frames failed (EIO, ring underrun) | 0 of 74 |
+| 100 us (margin 3.2 ms, now 4.8 ms), a stress test | 15 of 15 failed | 13 of 130 failed |
+
+- The disk task calls `task_yield()` after every 1 KB piece, with the
+  card deselected (the LCD shares SPI2 and sets its own speed): PendSV
+  saves its context and puts it behind the other ready tasks.
+- flipdev asks for a refill when a quarter of the ring is gone, not
+  half: the task may come 48 durations late.
+- `do_vrdwt` works on FS's vector one request at a time instead of a
+  static copy, which another driver task could overwrite during the
+  yield: kernel -288 B.
+- What still fails at 100 us, measured: a 1 KB read takes at most
+  1.34 ms, but a 1 KB write up to 8.9 ms, almost all of it
+  `sd_wait_ready` polling while the card programs (inodes written by
+  `sync` during the reads).  Every remaining underrun had such a write.
+  That busy-wait belongs to T4b: release the card's select while it is
+  busy and wait on the clock, the task blocked.
+- User processes still wait for the polled transfer (T4b).
+
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.

@@ -259,6 +259,7 @@ _PROTOTYPE( void unlock, (void)						);
 _PROTOTYPE( void phys_copy, (phys_bytes source, phys_bytes dest,
 		phys_bytes count)					);
 _PROTOTYPE( void idle_task, (void)					);
+_PROTOTYPE( void task_yield, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp)	);
