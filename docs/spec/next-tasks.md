@@ -106,6 +106,18 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - The desktop and module protocol (K.2–K.4) is implemented with Phase 5 (`libfuri`, launcher) and 7c (Berry `gui`, `pipe`, `tsv` modules); alarms stay on `timed` + `alert` (F.2).
 - No separate PR now; PRs in those phases name K.
 
+## T11. Fewer run-time flash writes (spec R2b.11, R2b.12; owner request 2026-11-15): after T1–T5
+- R2b.11: run-time cache erase budget per 24 h (`FC_BUDGET`, default 32 pages), counter in a free RTC backup register (0 B RAM; add it to the register map in PORTING.md), total erase counters, `free -v` line, `svrctl` + `fcache_budget=` in `rc.conf`.
+- R2b.12: `pkg bind` rebinds a stale record by SHA-256 instead of letting exec re-copy the text.
+- Acceptance AC2b.9, AC2b.10. RAM: 0 B (4 B in MM only if no backup register is free; say so in the PR).
+- Report in PORTING.md: flash pages erased in one day of normal use (target 0).
+
+## T12. Default settings in ROM, changes on the SD card (spec section L): after T11
+- L.2: `mkfsimg.py` builds the read-only `/rom` image from `flipper/rootfs/etc` (≤ 32 KB), `make base-flash` places it in the installed region; memory-driver minor `/dev/rom` (read-only, XIP); `/etc/rc` mounts it on `/rom`.
+- L.3–L.6: `cfopen()` in libc, `cfcat`, `settings reset/diff`; switch `/etc/rc`, the launcher and `/etc/setup` to it. The launcher menu item can wait for the Settings app.
+- Acceptance ACL.1–ACL.3. RAM: 0 B static. Flash writes: only at `base-flash`/DFU.
+- BLE bonds on the SD card (R15.4) are done in Phase 15, not here.
+
 ## Still open from reviews
 - IR (#46, merged 2026-11-15 by owner decision; supersedes #6/#7): **win back the kernel +64 B** (budget 15168 → 15104). Also `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it).
 - mined (#45): one allocation per line so `CHMEM_mined` fits 12 KB; `EDITOR`/`VISUAL` for existing cards via the base postinst.
