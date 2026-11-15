@@ -417,6 +417,33 @@ void hal_fc_counts(uint32_t *c, unsigned upday)
 
 void hal_fc_budget(unsigned pages, unsigned upday) { fc_budget = pages & 0xFF; }
 
+/* /dev/mem ranges: the 192 KB of RAM MINIX uses and SSRAM1 (its "flash")
+ * up to the made-up SFSA. */
+#define RAM_RANGES	{ 0x20000000u, 0x20030000u }
+#define ROM_SPANS \
+	sfsa = 0x00090000; /* hal_flash_layout's made-up SFSA */ \
+	if ((n = span_in(addr, len, 0, sfsa)) != 0) return n;
+
+static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
+{
+	if (addr < lo || addr >= hi) return 0;
+	return len < hi - addr ? len : hi - addr;
+}
+
+uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
+{
+	static const uint32_t ram[][2] = { RAM_RANGES };
+	uint32_t sfsa, n;	/* no layout table: the MEMORY task's stack */
+	unsigned i;
+
+	for (i = 0; i < sizeof ram / sizeof ram[0]; i++)
+		if ((n = span_in(addr, len, ram[i][0], ram[i][1])) != 0)
+			return n;
+	if (write) return 0;		/* flash and ROM only read */
+	ROM_SPANS
+	return 0;
+}
+
 /* No infrared in QEMU. */
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }

@@ -1040,6 +1040,42 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 	bkp_set(&FC_REG, (r & ~0x0FF00000u) | (uint32_t) (pages & 0xFF) << 20);
 }
 
+/* /dev/mem ranges: SRAM1 and the SRAM2 parts MINIX uses (the rest may be
+ * CPU2's secure SRAM); flash up to CPU2's (SFSA), also at its alias at 0;
+ * the ROM loader and the OTP area.  Anything else (holes, peripherals,
+ * CPU2's areas) is refused instead of a bus fault in the MEMORY task. */
+#define RAM_RANGES	{ 0x20000000u, 0x20030000u }, \
+			{ 0x20030000u, 0x20032800u }, \
+			{ 0x20038000u, 0x2003A800u }
+#define ROM_SPANS \
+	sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE; \
+	if ((n = span_in(addr, len, FLASH_BASE, sfsa)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0, sfsa - FLASH_BASE)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x1FFF0000u, 0x1FFF7400u)) != 0) \
+		return n;
+
+static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
+{
+	if (addr < lo || addr >= hi) return 0;
+	return len < hi - addr ? len : hi - addr;
+}
+
+uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
+{
+	static const uint32_t ram[][2] = { RAM_RANGES };
+	uint32_t sfsa, n;	/* no layout table: the MEMORY task's stack */
+	unsigned i;
+
+	for (i = 0; i < sizeof ram / sizeof ram[0]; i++)
+		if ((n = span_in(addr, len, ram[i][0], ram[i][1])) != 0)
+			return n;
+	if (write) return 0;		/* flash and ROM only read */
+	ROM_SPANS
+	return 0;
+}
+
 int hal_reset_bits(void)
 {
 	return (int) (boot_reg() & (BOOT_DEV | BOOT_CAUSE));
