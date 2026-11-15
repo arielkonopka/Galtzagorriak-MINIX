@@ -210,12 +210,39 @@ PRIVATE void load_boot_images()
 	memcpy((void *) bi->data_start, (void *) bi->data_load, bi->data_size);
 	memset((char *) bi->data_start + bi->data_size, 0,
 					bi->bss_size + bi->stack_size);
+	if (i < 2) {		/* MM, FS: no heap; mark the stack (free -k) */
+		reg_t *w = (reg_t *) (bi->data_start + bi->data_size
+							+ bi->bss_size);
+		reg_t *e = (reg_t *) ((char *) w + bi->stack_size);
+
+		w = (reg_t *) (((phys_bytes) w + 3) & ~(phys_bytes) 3);
+		while (w < e) *w++ = STACK_GUARD;
+	}
 	boot_image[i] = bi;
 	p = bi->text_start + bi->text_size;
 	p = (p + CLICK_SIZE - 1) & ~(phys_bytes) (CLICK_SIZE - 1);
   }
 }
 
+
+/*===========================================================================*
+ *				server_stack_used			     *
+ *===========================================================================*/
+PUBLIC unsigned server_stack_used(t, sizep)
+int t;				/* MM or FS (marked in arm_load) */
+unsigned *sizep;
+{
+/* The high-water mark of a server's stack, gap included (free -k). */
+  struct boot_image *bi = boot_image[t];
+  reg_t *w = (reg_t *) ((bi->data_start + bi->data_size + bi->bss_size + 3)
+							& ~(phys_bytes) 3);
+  reg_t *end = (reg_t *) (bi->data_start + bi->data_size + bi->bss_size
+							+ bi->stack_size);
+
+  *sizep = bi->stack_size;
+  while (w < end && *w == STACK_GUARD) w++;
+  return((char *) end - (char *) w);
+}
 
 /*===========================================================================*
  *				arm_proc_layout				     *

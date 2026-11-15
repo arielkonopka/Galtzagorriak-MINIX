@@ -18,7 +18,7 @@ static void kstacks(void)
 {
 	message m;
 	struct kstack ks[24];
-	int n, i, size = 0, used = 0;
+	int n, i, size = 0, used = 0, srv = 0;
 
 	m.m1_p1 = (char *) ks;
 	m.m1_i1 = (int) sizeof ks;
@@ -29,12 +29,18 @@ static void kstacks(void)
 	}
 	printf("kernel task stacks:\n");
 	for (i = 0; i < n; i++) {
+		if (srv == 1) printf("server stacks (with the brk gap):\n");
 		printf("  %-8.8s %5u of %5u bytes used\n", ks[i].name,
 			ks[i].used, ks[i].size);
+		if (srv) { srv++; continue; }
 		size += ks[i].size;
 		used += ks[i].used;
+		if (strcmp(ks[i].name, "(irq)") == 0) {	/* servers follow */
+			printf("  total    %5d of %5d bytes used\n", used, size);
+			srv = 1;
+		}
 	}
-	printf("  total    %5d of %5d bytes used\n", used, size);
+	if (!srv) printf("  total    %5d of %5d bytes used\n", used, size);
 }
 
 int main(int argc, char **argv)

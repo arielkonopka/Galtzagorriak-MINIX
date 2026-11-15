@@ -380,6 +380,18 @@ message *m_ptr;			/* pointer to request message */
 	phys_copy(vir2phys(&ks), dst, (phys_bytes) sizeof(ks));
 	n++;
   }
+  for (t = 0; t < 2 && n < max; t++) {	/* then MM and FS (arm_load) */
+	unsigned size;
+
+	ks.used = server_stack_used(t, &size);
+	ks.size = size;
+	strncpy(ks.name, t == 0 ? "MM" : "FS", sizeof(ks.name));
+	dst = umap(proc_addr(m_ptr->PROC1), D,
+		(vir_bytes) (m_ptr->m1_p1 + n * sizeof(ks)), sizeof(ks));
+	if (dst == 0) return(EFAULT);
+	phys_copy(vir2phys(&ks), dst, (phys_bytes) sizeof(ks));
+	n++;
+  }
   return(n);
 }
 #endif
