@@ -636,6 +636,9 @@ too) and comes back at the next one.
 - `backlight [LEVEL [SECONDS]]` shows or sets them through
   `/dev/backlight`: a 3-byte write sets the timeout, and a read gives
   the state.  A settings app can use the same device later.
+- With the light off, a press only turns it on (owner): neither that
+  press nor anything else reaches the apps until every button is up.
+  The flag is the top bit of flipdev's `last_buttons`, so no RAM.
 - Flipper: `backlight 255 10; sleep 15; backlight` → "now off (idle)";
   `sleep 1; backlight` after a key → "now on".
 

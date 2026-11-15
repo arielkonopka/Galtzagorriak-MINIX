@@ -74,7 +74,8 @@ PRIVATE message fm;
 /* Button events, filled by flipdev_tick() at interrupt level. */
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
-PRIVATE unsigned last_buttons;
+PRIVATE unsigned last_buttons;	/* and SWALLOW: a press woke the light */
+#define SWALLOW		0x80000000u
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
  * memory holds the infrared rings while /dev/ir is in use (one or the
@@ -476,7 +477,9 @@ PUBLIC void flipdev_tick()
 /* Called by the clock interrupt handler: sample the buttons, queue the
  * changes, wake the task if somebody is waiting.
  */
-  unsigned now = hal_buttons(), changed = now ^ last_buttons, b;
+  unsigned now = hal_buttons(), b;
+  unsigned changed = (now ^ last_buttons) & ~SWALLOW;
+  u32_t st = hal_bl_state();
 
   if (lc_dirty && ++lc_wait >= LC_TICKS) {
 	lc_wait = 0;
@@ -502,7 +505,6 @@ PUBLIC void flipdev_tick()
 	}
   }
   {	/* the backlight's idle timeout: the task does the I2C (bl_apply) */
-	u32_t st = hal_bl_state();
 	clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ;
 
 	if ((t != 0 && uptime_irq() - k_input >= t) != ((st & HAL_BL_OFF) != 0))
@@ -510,6 +512,13 @@ PUBLIC void flipdev_tick()
   }
   if (changed == 0) return;
   k_input = uptime_irq();		/* no background flash work now */
+  /* With the backlight off, a press only turns it on (owner): neither it
+   * nor anything else reaches the apps until every button is up again. */
+  if ((st & HAL_BL_OFF) && (now & changed)) last_buttons |= SWALLOW;
+  if (last_buttons & SWALLOW) {
+	last_buttons = now == 0 ? 0 : now | SWALLOW;
+	return;
+  }
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
 	if (ev_head - ev_tail < NEVENTS) {
