@@ -24,6 +24,7 @@
 #define SYST_CSR	(*(volatile uint32_t *) 0xE000E010)
 #define SYST_RVR	(*(volatile uint32_t *) 0xE000E014)
 #define SYST_CVR	(*(volatile uint32_t *) 0xE000E018)
+#define SYST_SHPR3	(*(volatile uint32_t *) 0xE000ED20)	/* SysTick: 31:24 */
 
 volatile uint32_t hal_ms;
 void (*hal_tick_hook)(void);
@@ -43,6 +44,12 @@ void hal_init(void)
 	UART_BAUDDIV = CPU_HZ / 115200;
 	UART_CTRL = 0x3;		/* TX and RX enable */
 
+	/* Lowest priority first, like CMSIS SysTick_Config() on the Flipper:
+	 * the kernel's cstart() runs this with only BASEPRI masking, and a
+	 * tick at priority 0 before it stops SysTick again entered the kernel
+	 * with proc_ptr == NULL (zeroed the vectors, lockup).  QEMU's SysTick
+	 * runs on host time, so a busy host hit that window (powercut in CI). */
+	SYST_SHPR3 = (SYST_SHPR3 & 0x00FFFFFFu) | 0xFF000000u;
 	SYST_RVR = CPU_HZ / 1000 - 1;
 	SYST_CVR = 0;
 	SYST_CSR = 0x7;			/* CPU clock, interrupt, enable */

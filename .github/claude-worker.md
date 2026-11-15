@@ -39,7 +39,13 @@ If the change touches installs or the flash region, also run
 `make -j"$(nproc)" minix disk && python3 -I tools/powercut.py -j"$(nproc)"`.
 You have no Flipper. Anything that needs the device (L1–L10 with `lat`, radio,
 USB, SD timing) goes into the PR description under "Needs on-device test", with
-the exact steps, for the owner's local agent.
+the exact steps, for the owner's local agent; after the merge they become
+checkboxes in the open issue labelled `device-checks` (#109).
+A change on the Flipper path that only the device can accept (a new hardware
+path, a driver) merges **off by default** (or with no change on the Flipper
+path) until the local agent has run those checks. Never: option bytes,
+CPU2/FUS, enabling a hardware path by default ("Autonomy" in
+`docs/spec/next-tasks.md`).
 
 ## Finish
 - Add one line under `Unreleased` in `CHANGELOG.md`. Update the matching chapter of
