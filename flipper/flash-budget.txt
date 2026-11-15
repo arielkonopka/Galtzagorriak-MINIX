@@ -1,0 +1,11 @@
+# Flash erases allowed in the QEMU tests (rule: as few flash writes as
+# possible, above all at run time).  tools/flashcheck.py compares the
+# "M2 FLASH erased" line of the M2 self-test with these numbers and fails
+# CI when a count is higher.  A count is a ratchet: lower it when a change
+# saves erases; raise it only with a reason in the same commit.
+#
+# test  region  pages   (measured)
+# M2 runs one program three times, so the run-time text cache (T2) stores
+# it once.  Measured on main 4e30d0c, 2026-11-15: cache 3, inst 0.
+m2      cache   3
+m2      inst    0

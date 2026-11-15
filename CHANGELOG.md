@@ -6,7 +6,10 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
-- (Phase 2c) `vfork`: the shell, init, the launcher and pkg start programs without copying themselves first, so commands still start when memory is short (`vfork(2)`). Base 3.56.
+- (Phase 2c) `vfork`: the shell, init, the launcher and pkg start programs without copying themselves first, so commands still start when memory is short (`vfork(2)`). Base 3.58.
+- The LCD backlight dims 10 % a second from 5 s before its timeout (default 15 s, spec #89) and then fades out (0.5 s); the next key or button brings it back at once (when it is off, that press only turns it on). Reading `/dev/backlight` ends after its 4-byte state.
+- A second worker in GitHub Actions (`claude-worker`): the owner labels an issue `claude-task` (or writes `@claude` in a comment) and Claude Code implements it on a branch, checked with the same build, ramcheck, M2 and flash gates; coordination with the local agent by the labels `claimed:cloud` / `claimed:local` (`docs/spec/next-tasks.md`).
+- CI gates: flash pages erased in the QEMU M2 run are checked against `flipper/flash-budget.txt` (`tools/flashcheck.py`), the power-cut test (`tools/powercut.py`) and the latency trace build run on every PR, and a `pr-rules` check asks for the CHANGELOG line and the manual update (labels `no-changelog`, `no-manual`); the toolchain's .deb files are cached.
 
 ## 0.1.1 (2026-11-15): tasks and fixes after Phase 1
 

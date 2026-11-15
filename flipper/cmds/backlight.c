@@ -4,7 +4,9 @@
  * Usage:	backlight			show the settings and the state
  *		backlight LEVEL [SECONDS]	brightness 0..255; off after that
  *						many seconds without a key or
- *						button (0: never; default 300)
+ *						button (0: never; default 15;
+ *						10 % dimmer each second of
+ *						the last 5)
  *
  * The kernel turns the light off after the timeout and on again at any
  * key or button; the settings are kept over resets (an RTC backup
@@ -17,6 +19,7 @@
 #include <unistd.h>
 
 #define BL_OFF		0x08000000UL	/* as hal.h HAL_BL_* */
+#define BL_STEP(s)	((s) >> 24 & 7)
 #define BL_LEVEL(s)	((s) >> 16 & 0xFF)
 #define BL_TIMEOUT(s)	((s) & 0xFFFF)
 
@@ -58,6 +61,9 @@ int main(int argc, char **argv)
 	printf("brightness %lu, ", BL_LEVEL(st));
 	if (BL_TIMEOUT(st) == 0) printf("never off");
 	else printf("off after %lu s without a key", BL_TIMEOUT(st));
-	printf("; now %s\n", st & BL_OFF ? "off (idle)" : "on");
+	if (st & BL_OFF) printf("; now off (idle)\n");
+	else if (BL_STEP(st)) printf("; now dimmed %lu %% (idle)\n",
+						100 - 10 * BL_STEP(st));
+	else printf("; now on\n");
 	return 0;
 }

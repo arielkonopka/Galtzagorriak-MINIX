@@ -2,8 +2,10 @@
  * relocated executable, argv/environ, malloc/brk, signals (kernel signal
  * frame + sigreturn), fork/wait (shadowing), pipes and exec from a child.
  */
+#include <lib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <minix/callnr.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -67,8 +69,27 @@ static void handler(int sig)
 	got_sig = sig;
 }
 
+/* Flash pages erased since boot (R2b.11 counters), for CI's flashcheck:
+ * the whole M2 run must not erase more than flipper/flash-budget.txt. */
+static void flash_report(void)
+{
+	message m;
+	struct fccount fc;
+
+	m.m1_p1 = (char *) &fc;
+	m.m1_i1 = -1;			/* read only */
+	m.m1_i2 = MI_FCBUDGET;
+	if (_syscall(MM, MEMINFO, &m) != 0) {
+		printf("M2 FLASH unknown\n");
+		return;
+	}
+	printf("M2 FLASH erased cache=%lu inst=%lu\n", fc.erased,
+							fc.inst_erased);
+}
+
 static void finish(void)
 {
+	flash_report();
 	printf(fails == 0 ? "M2 USER PASS\n" : "M2 USER FAIL\n");
 	fflush(stdout);
 #ifdef BOARD_QEMU

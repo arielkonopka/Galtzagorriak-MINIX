@@ -104,7 +104,7 @@ Without the buttons (2026-11-14):
   | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
-  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 300) |
+  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 15) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
@@ -668,9 +668,10 @@ T4b step 2, SD data by DMA (2026-11-15, Flipper):
   2.2 s and 48 ms.
 - RAM 0 B.
 
-Backlight idle timeout (owner request 2026-11-15): the LCD backlight goes
-off after 5 minutes without a key or button (USB console keys count
-too) and comes back at the next one.
+Backlight idle timeout (owner request 2026-11-15): without a key or
+button (USB console keys count too) the LCD backlight dims by 10 % a
+second in the last 5 s of the idle timeout, then fades out; it comes
+back at the next key.  Default 15 s, so dimming from 10 s on.
 - The clock tick only compares `k_input` with the timeout and wakes the
   device task on a change; the task does the LP5562's I2C (`bl_apply`).
 - Brightness, timeout and state live in RTC backup register 15, so

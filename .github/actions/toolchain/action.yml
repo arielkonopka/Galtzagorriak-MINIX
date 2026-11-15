@@ -1,0 +1,39 @@
+# Install the toolchain (packages.txt).  The .deb files are kept in the
+# Actions cache, keyed on the runner image version and the package list,
+# so most runs skip "apt-get update" and the downloads (about 50 s).
+name: toolchain
+description: Install gcc-arm-none-eabi, QEMU and the build helpers, from a .deb cache when possible
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/gz-debs
+        key: debs-v1-${{ steps.key.outputs.image }}-${{ hashFiles('.github/actions/toolchain/packages.txt') }}
+
+    - shell: bash
+      env:
+        HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        pkgs=$(grep -v '^#' "$GITHUB_ACTION_PATH/packages.txt" | xargs)
+        debs=~/.cache/gz-debs
+        if [ "$HIT" = true ] && ls "$debs"/*.deb >/dev/null 2>&1 &&
+           sudo dpkg -i "$debs"/*.deb >/dev/null; then
+          echo "toolchain: installed from the cache"
+        else
+          echo "toolchain: no usable cache, downloading"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq -f
+          sudo apt-get install -y -qq --download-only $pkgs
+          mkdir -p "$debs"
+          cp /var/cache/apt/archives/*.deb "$debs"/ 2>/dev/null || true
+          sudo apt-get install -y -qq $pkgs
+        fi
+        arm-none-eabi-gcc --version | head -1
+        qemu-system-arm --version | head -1
