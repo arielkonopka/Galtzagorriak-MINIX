@@ -155,6 +155,7 @@ PRIVATE vir_bytes rd_vir;
 
 FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
@@ -673,6 +674,8 @@ message *m_ptr;
 	/* fall through */
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
+	if (m_ptr->DEVICE == LED_MINOR && count != 3)
+		return(led_text(user, count));
 	if (count > 3) count = 3;
 	phys_copy(user, vir2phys(buf), (phys_bytes) count);
 	if (m_ptr->DEVICE == BL_MINOR) {
@@ -691,6 +694,40 @@ message *m_ptr;
 	return(count);
   }
   return(ENXIO);
+}
+
+
+/*===========================================================================*
+ *				led_text				     *
+ *===========================================================================*/
+PRIVATE int led_text(user, count)
+phys_bytes user;
+int count;
+{
+/* R7b.5: "PATTERN COLOUR" or "off", one line ("echo blink red >/dev/led").
+ * Three bytes stay the binary R, G, B. */
+  static const char cname[7][8] = { "blue", "green", "cyan", "red",
+				    "magenta", "yellow", "white" };
+  char line[24], *col;
+  int n, c, i;
+
+  n = count < (int) sizeof(line) - 1 ? count : (int) sizeof(line) - 1;
+  phys_copy(user, vir2phys(line), (phys_bytes) n);
+  while (n > 0 && (line[n-1] == '\n' || line[n-1] == ' ')) n--;
+  line[n] = 0;
+  if (n == 3 && line[0] == 'o' && line[1] == 'f' && line[2] == 'f') {
+	hal_led(0, 0, 0);
+	return(count);
+  }
+  for (col = line; *col != 0 && *col != ' '; col++) ;
+  if (*col == 0) return(EINVAL);
+  *col++ = 0;
+  for (c = 0; c < 7; c++) {
+	for (i = 0; col[i] == cname[c][i] && col[i] != 0; i++) ;
+	if (col[i] == cname[c][i]) break;
+  }
+  if (c == 7 || hal_led_pattern(line, (unsigned) c + 1) < 0) return(EINVAL);
+  return(count);
 }
 
 

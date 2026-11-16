@@ -60,6 +60,10 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
+/* R7b.5: a named pattern (blink, fast, double, pulse) run by the LED
+ * driver on its own, in the colours of rgb (bit 2 red, 1 green, 0 blue);
+ * hal_led() stops it.  0, or -1: no such pattern. */
+int hal_led_pattern(const char *name, unsigned rgb);
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
  * with no redraw.  -1: the SD card has the bus, try again later. */

@@ -303,6 +303,7 @@ static uint32_t bl_state = 255u << 16 | 15u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }
 void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+int hal_led_pattern(const char *name, unsigned rgb) { (void) name; return (rgb & 7) ? 0 : -1; }
 
 
 /* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */

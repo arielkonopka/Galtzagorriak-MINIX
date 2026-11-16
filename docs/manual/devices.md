@@ -40,3 +40,27 @@ takes one fresh measurement (16 samples averaged, corrected with the chip's fact
 calibration), usually in a few milliseconds while the reference settles, and the converter and
 the reference are switched off again afterwards. Continuous sampling and an app with a
 voltmeter screen are **(planned)** (spec R6.4, later parts).
+
+## The status LED (`/dev/led`)
+
+The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.
+
+Three bytes set red, green and blue directly (0–255 each). A text line starts a blinking
+pattern that the LED driver chip runs on its own, so the CPU can sleep meanwhile:
+
+```
+echo blink red >/dev/led
+echo pulse blue >/dev/led
+echo off >/dev/led
+```
+
+| pattern | what it does                                  |
+|---------|-----------------------------------------------|
+| `blink` | a 0.1 s flash about once a second             |
+| `fast`  | flashes about five times a second             |
+| `double`| two short flashes, then a pause of about 1.6 s|
+| `pulse` | fades in and out, about every 2 s             |
+
+Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`. An unknown pattern or
+colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
+stops the pattern; the screen's backlight does not. The pattern stops with a reset.

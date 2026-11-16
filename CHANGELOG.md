@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R7b.5) LED patterns: `echo blink red >/dev/led` (also `fast`, `double`, `pulse`; colours red, green, blue, yellow, cyan, magenta, white; `off`) runs the pattern in the LED driver chip itself, with the CPU free to sleep. Setting the screen backlight no longer resets the LED chip's engines and channel map.
 - Security review, weekly run 1 (`docs/security/2026-11-16-fs.md`): a damaged file system on the SD card no longer stops the whole system: a bad zone number in an indirect block reads as a hole, freeing an already free zone or inode only prints "run fsck", and a super block whose bit maps do not cover its inodes and zones is refused at mount instead of corrupting the inode table. QEMU test `tools/fsdamage.py`.
 - (R4b.9) SD transfers check their CRC16 with the STM32WB's CRC unit instead of in software (a 512-byte sector: ~150 instead of ~10 000 cycles), after a self-test at start; on a mismatch the software CRC stays.
 - The LCD is written at 8 MHz instead of 4 (a frame in about 1 ms instead of 2: the CPU is free sooner for everything else).
