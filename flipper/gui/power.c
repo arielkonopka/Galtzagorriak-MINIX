@@ -9,7 +9,7 @@
  * reads only every 10 s.  With USB plugged in there is no idle reading.
  *
  * Keys wait blocking; alarm() brings the refresh (the read gives EINTR).
- * Back quits.
+ * Back quits; other keys do nothing yet (the rest of T15 adds the menu).
  */
 #include <sys/types.h>
 #include <fcntl.h>
@@ -22,10 +22,9 @@
 
 #define BL_OFF		0x08000000L	/* /dev/backlight state: off (hal.h) */
 #define IDLE_AFTER	30		/* s with the light off */
-#define DSG		0x0001		/* BatteryStatus: discharging */
 
 struct gauge {
-	int soc, mv, ma, avg, sby, temp;
+	int soc, mv, ma, avg, sby, temp, usb;
 	unsigned flags;
 };
 
@@ -44,9 +43,9 @@ static int gauge(struct gauge *g)
 	close(fd);
 	if (n <= 0) return -1;
 	line[n] = 0;
-	return sscanf(line, "soc=%d mv=%d ma=%d avg=%d sby=%d temp=%d flags=0x%x",
-		&g->soc, &g->mv, &g->ma, &g->avg, &g->sby, &g->temp,
-		&g->flags) == 7 ? 0 : -1;
+	return sscanf(line, "soc=%d mv=%d ma=%d avg=%d sby=%d temp=%d flags=0x%x"
+		" usb=%d", &g->soc, &g->mv, &g->ma, &g->avg, &g->sby, &g->temp,
+		&g->flags, &g->usb) == 8 ? 0 : -1;
 }
 
 static int light_off(void)
@@ -75,7 +74,8 @@ int main(void)
 		off = light_off();
 		if (!off) off_since = 0;
 		else if (off_since == 0) off_since = now;
-		usb = ok && (g.ma >= 0 || !(g.flags & DSG));
+		/* a USB host, or charging from a power supply */
+		usb = ok && (g.usb || g.ma > 0);
 		if (ok && off && !usb && now - off_since >= IDLE_AFTER) {
 			idle = g.avg;
 			idle_at = now;
@@ -96,8 +96,8 @@ int main(void)
 				g.mv % 1000, g.temp / 10,
 				(g.temp < 0 ? -g.temp : g.temp) % 10);
 			gui_center(38, line, 0);
-			gui_center(45, g.flags & DSG ? "on battery" : "charging",
-									0);
+			gui_center(45, g.ma > 0 ? "charging" : usb ? "on USB"
+							: "on battery", 0);
 			if (usb) {
 				strcpy(line, "USB: unplug to measure");
 			} else if (!have_idle) {
@@ -118,8 +118,10 @@ int main(void)
 		}
 		gui_flush();
 
+		/* The next refresh by the alarm; a key other than Back changes
+		 * nothing, so it waits on (no gauge read, no frame). */
 		alarm(off ? 10 : 1);
-		k = gui_key();
+		while ((k = gui_key()) != 0 && k != KEY_BACK) ;
 		alarm(0);
 		if (k == KEY_BACK) break;
 	}

@@ -219,7 +219,8 @@ Not yet: the 5 V header supply (charger/OTG over I2C), a buttons
 "input" device beyond /dev/buttons.
 
 Minor 8, `/dev/power` (T15a): the BQ27220 fuel gauge on I2C1 (0x55),
-read only, one text line per open (`soc= mv= ma= avg= sby= temp= flags=`),
+read only, one text line per open (`soc= mv= ma= avg= sby= temp= flags=
+usb=`; usb: a USB host, the bus not suspended),
 read on demand in the task (7 two-byte reads, no static RAM); EIO on a bus
 error, ENXIO without a gauge (QEMU).  Nothing is ever written to the gauge
 (its data memory is flash; the stock firmware configured it).  The
@@ -837,6 +838,20 @@ durations and asked for a refill when half empty.
 To redo: make BOARD=flipper latcheck, flash build/flipper-lat/minix/minix.bin
 and install its base package, mknod /dev/lat c 6 15, then lat -c and
 lat -w SECONDS while testing.  lat prints min/median/p99/max.
+
+## Power (idle current, spec T14, T15a)
+
+Read with the Power app (gauge AverageCurrent after the backlight has been
+off for 30 s or more; the gauge counts in whole mA, so this is coarse):
+
+| Date | Build | Idle | Notes |
+|---|---|---|---|
+| 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
+
+Not measured: the build before T14a (#112) and the stock firmware's
+battery screen for comparison (each needs two more flashes; no meter on
+the battery leads at hand).  T14d (screen off, SD off) is next for the
+remaining draw.
 
 ## Status
 

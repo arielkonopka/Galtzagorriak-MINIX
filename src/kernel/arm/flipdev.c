@@ -247,11 +247,13 @@ PUBLIC void flipdev_task()
  *				power_read				     *
  *===========================================================================*/
 /* /dev/power (T15a): the BQ27220's standard values as one text line,
- *	soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181
+ *	soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181 usb=0
  * read now, on the task stack (no static RAM): % of charge, mV, mA (signed,
  * < 0 discharging), the gauge's average and standby current, 0.1 C, the
- * raw BatteryStatus.  The gauge is never written.  T14c adds fields at
- * the end. */
+ * raw BatteryStatus, and whether a USB host is there (the bus not
+ * suspended; the gauge's DSG flag says nothing below its discharge
+ * threshold, tens of mA).  The gauge is never written.  T14c adds fields
+ * at the end. */
 PRIVATE const u8_t pw_cmd[7] = {
   HAL_GAUGE_SOC, HAL_GAUGE_VOLT, HAL_GAUGE_CURRENT, HAL_GAUGE_AVG,
   HAL_GAUGE_STANDBY, HAL_GAUGE_TEMP, HAL_GAUGE_STATUS
@@ -262,7 +264,7 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[72], d[6];
+  char line[96], d[6];
   const char *k = pw_key;
   int i, j, n = 0, v;
 
@@ -283,7 +285,8 @@ int count;
 	do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
 	while (j > 0) line[n++] = d[--j];
   }
-  line[n++] = '\n';
+  for (k = " usb=0\n"; *k != 0; k++) line[n++] = *k;
+  if (hal_usb_awake()) line[n - 2] = '1';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
