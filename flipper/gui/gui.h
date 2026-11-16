@@ -27,6 +27,7 @@ void gui_fill(int x0, int y0, int x1, int y1, int on);
 void gui_frame(int x0, int y0, int x1, int y1);
 int gui_text(int x, int y, const char *s, int inverse);	/* pixels used */
 void gui_center(int y, const char *s, int inverse);
+int gui_text_big(int x, int y, const char *s, int k);	/* k times larger */
 void gui_title(const char *s);		/* inverse bar on the top line */
 void gui_flush(void);
 int gui_key(void);			/* next key press (blocking) */

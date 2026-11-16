@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T15a) Battery on the screen: `/dev/power` (the BQ27220 fuel gauge, read only: charge, voltage, current, average and standby current, temperature, USB) and a **Power** app in the launcher with the current now and the idle current (`docs/manual/power.md`). Base 3.59 (its postinst adds `/dev/power` and the launcher entry on older cards).
 - (T14b) Deep sleep when idle: with nothing to do and no USB cable, the Flipper stops its clocks (Stop2) and wakes on a button or its timer (at most about 1 s later); buttons now interrupt instead of being sampled on the clock tick, debounced by a new millisecond timer (LPTIM1). `lat` shows the time in Stop2 and why it was not taken. The UART console on the header loses input while asleep: keep USB attached to use it.
 - (T14a) Less current at idle: the core runs from the SMPS step-down converter, and the Sub-GHz and NFC chips sleep from boot (they idled with their crystals running).
 - QEMU board: SysTick starts at the lowest priority, so a tick during early boot can no longer enter the kernel before the first process (it locked up about 1 boot in 30 on a busy host: the random `powercut` failures in CI). The Flipper already did this.
