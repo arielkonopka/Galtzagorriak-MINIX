@@ -236,6 +236,47 @@ static void wrap_test(void)
 }
 #endif
 
+/* Phase 3: the sticky bit (R3.7, AC3.5) and snprintf (R3.6). */
+static void phase3_tests(void)
+{
+	struct stat sb;
+	char b[8];
+	int fd, st, r1, r2, ok1;
+	pid_t pid;
+
+	r1 = snprintf(b, sizeof b, "%d-%s", 42, "ab");
+	ok1 = r1 == 5 && strcmp(b, "42-ab") == 0;
+	r2 = snprintf(b, sizeof b, "%s", "0123456789");
+	check(ok1 && r2 == -1 && strcmp(b, "0123456") == 0,
+		"snprintf: stores at most n - 1, -1 when cut (R3.6)");
+
+	fd = creat("/tmp/rootfile", 0666);
+	if (fd >= 0) close(fd);
+	(void) rmdir("/tmp/sticky");
+	r1 = mkdir("/tmp/sticky", 0777) == 0 && chmod("/tmp/sticky", 01777) == 0
+		&& stat("/tmp/sticky", &sb) == 0 && (sb.st_mode & 07777) == 01777;
+	(void) rmdir("/tmp/sticky");
+	pid = fork();
+	if (pid == 0) {
+		int a, c, d;
+
+		setgid(99);
+		setuid(9999);			/* nobody */
+		a = unlink("/tmp/rootfile") == -1 && errno == EPERM;
+		c = rename("/tmp/rootfile", "/tmp/nobodys") == -1
+							&& errno == EPERM;
+		d = (fd = creat("/tmp/nobodys", 0644)) >= 0 && close(fd) == 0
+		    && rename("/tmp/nobodys", "/tmp/nobodys2") == 0
+		    && unlink("/tmp/nobodys2") == 0;
+		_exit(a && c && d ? 0 : 1);
+	}
+	check(stat("/tmp", &sb) == 0 && (sb.st_mode & 01000) != 0 && r1
+		&& pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0 && unlink("/tmp/rootfile") == 0,
+		"sticky /tmp: nobody cannot rm or mv root's file, "
+		"may its own (AC3.5)");
+}
+
 static void finish(void)
 {
 	flash_report();
@@ -517,6 +558,7 @@ int main(int argc, char **argv)
 		check(marker == 20, "vfork 20 times");
 	}
 
+	phase3_tests();
 	time_tests();
 	finish();
 	return 0;
