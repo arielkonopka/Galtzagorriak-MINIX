@@ -144,6 +144,12 @@ unsigned hal_buttons(void)
 	return qemu_fake_buttons;
 }
 
+int hal_buttons_fake(unsigned mask)
+{
+	qemu_fake_buttons = mask;
+	return 0;
+}
+
 /* ARM semihosting call (requires -semihosting-config enable=on). */
 static uint32_t semihost(uint32_t op, void *arg)
 {
@@ -303,6 +309,7 @@ static uint32_t bl_state = 255u << 16 | 15u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }
 void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+void hal_led_get(unsigned char rgb[3]) { rgb[0] = rgb[1] = rgb[2] = 0; }
 
 
 /* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */
