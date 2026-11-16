@@ -92,6 +92,35 @@ as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns th
 for half a second and returns the times between the changes of the tag's signal, in µs, as
 32-bit numbers. Writing blank T5577 fobs and emulating a tag are **(planned)**.
 
+## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
+
+The Flipper's real-time clock keeps UTC on the battery, also while the Flipper is off. Setting
+the time (`date`) now writes it too, so the time survives a reset and power-off, and every
+program reads the time from it.
+
+Alarm A of the clock is for the timers and the alarm clock (spec F.2, coming with `timed`); the
+`rtc` command is the tool underneath, for root and the group `timers`:
+
+```
+rtc                 # the alarm, the boot lead, how this boot started, the calibration
+rtc alarm +600      # in 10 minutes
+rtc alarm off
+rtc lead 12         # a switched-off Flipper is started 12 s before the alarm
+rtc cal -20         # 19 ppm slower (about 1.6 s a day)
+```
+
+- When the alarm fires, INIT gets `SIGRTC` and runs `/usr/lib/timed` if it is installed (also
+  once at every boot, and after the time is set).
+- **Alarm while off.** If the Flipper is switched off (`halt`, on battery) with an alarm set,
+  the clock switches it on again, *lead* seconds early so it has finished booting by then (first
+  10 s). `rtc` then says "this boot: by the alarm". On USB power the Flipper does not really
+  switch off (the charger keeps it on), so this only works on battery.
+- An alarm at most 27 days ahead; further ones fail with "Invalid argument" (timed arms the
+  nearest one and moves on).
+- The calibration is kept by the clock itself, also while off. One step is 0.954 ppm, about
+  0.08 s a day; positive runs faster. Measure the drift against a good clock over some days.
+
+
 ## The status LED (`/dev/led`)
 
 The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.
