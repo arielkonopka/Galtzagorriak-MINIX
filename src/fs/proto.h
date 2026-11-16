@@ -153,7 +153,8 @@ _PROTOTYPE( int do_tims, (void)						);
 _PROTOTYPE( int do_utime, (void)					);
 
 /* utility.c */
-_PROTOTYPE( time_t clock_time, (void)					);
+_PROTOTYPE( ftime32_t clock_time, (void)				);
+_PROTOTYPE( time_t wall_time, (void)					);
 _PROTOTYPE( unsigned conv2, (int norm, int w)				);
 _PROTOTYPE( long conv4, (int norm, long x)				);
 _PROTOTYPE( int fetch_name, (char *path, int len, int flag)		);

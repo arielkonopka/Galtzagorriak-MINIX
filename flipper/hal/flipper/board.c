@@ -195,6 +195,119 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 }
 
 /*===========================================================================*
+ *			Sub-GHz receive (R8.1, part 1)			     *
+ *===========================================================================*/
+/* The CC1101 as a receiver only: the stock firmware's OOK 650 kHz preset
+ * (lib/subghz/devices/cc1101_configs.c; GPL), a frequency in the stock
+ * bands, the RF path switch as stock (PC4 and GDO2), RX, and the RSSI.
+ * There is no transmit here at all: no STX strobe and no PA table write;
+ * transmitting comes with the kernel's band limits (R8.2). */
+static const uint8_t cc_rx_regs[] = {
+	0x02, 0x0D,	/* IOCFG0: GDO0 async serial data */
+	0x03, 0x07,	/* FIFOTHR */
+	0x08, 0x32,	/* PKTCTRL0: async, continuous */
+	0x0B, 0x06,	/* FSCTRL1: IF 152 kHz */
+	0x14, 0x00,	/* MDMCFG0 */
+	0x13, 0x00,	/* MDMCFG1 */
+	0x12, 0x30,	/* MDMCFG2: ASK/OOK, no preamble/sync */
+	0x11, 0x32,	/* MDMCFG3 */
+	0x10, 0x17,	/* MDMCFG4: RX bandwidth 650 kHz */
+	0x18, 0x18,	/* MCSM0: calibrate from idle to RX */
+	0x19, 0x18,	/* FOCCFG */
+	0x1D, 0x91,	/* AGCCTRL0 */
+	0x1C, 0x00,	/* AGCCTRL1 */
+	0x1B, 0x07,	/* AGCCTRL2 */
+	0x20, 0xFB,	/* WORCTRL */
+	0x21, 0xB6,	/* FREND1 */
+};
+
+static uint8_t cc_xfer2(uint8_t a, uint8_t v)	/* address byte, data byte */
+{
+	uint8_t r;
+
+	(void) cc_ready();			/* CS low, CHIP_RDYn */
+	(void) spi1_xfer(a);
+	r = spi1_xfer(v);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	return r;
+}
+
+static void cc_strobe(uint8_t s)
+{
+	(void) cc_ready();
+	(void) spi1_xfer(s);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+}
+
+static int cc_band(uint32_t hz)		/* stock's bands: 315 433 868, or -1 */
+{
+	if (hz >= 299999755u && hz <= 348000335u) return 315;
+	if (hz >= 386999938u && hz <= 464000000u) return 433;
+	if (hz >= 778999847u && hz <= 928000000u) return 868;
+	return -1;
+}
+
+long hal_subghz_rx(uint32_t hz)
+{
+	uint32_t w;
+	unsigned i;
+	int band = cc_band(hz);
+
+	if (band < 0) return -1;
+	w = (uint32_t) (((uint64_t) hz << 16) / 26000000u);	/* 26 MHz xtal */
+	gpio_cfg(GPIOC, 4, MODE_OUT, PULL_NONE, 0);	/* RF switch 0 */
+	spi1_on(0);
+	/* Already set up (a sweep retunes): only idle, frequency, path, RX,
+	 * about 1 ms instead of 3. */
+	if (cc_xfer2(0x10 | 0x80, 0) != 0x17 || cc_xfer2(0x08 | 0x80, 0) != 0x32) {
+		cc_strobe(0x30);			/* SRES */
+		(void) cc_ready();
+		CC_CS(0);
+		for (i = 0; i < sizeof cc_rx_regs; i += 2)
+			(void) cc_xfer2(cc_rx_regs[i], cc_rx_regs[i + 1]);
+	} else
+		cc_strobe(0x36);			/* SIDLE first */
+	(void) cc_xfer2(0x0D, (uint8_t) (w >> 16));	/* FREQ2..0 */
+	(void) cc_xfer2(0x0E, (uint8_t) (w >> 8));
+	(void) cc_xfer2(0x0F, (uint8_t) w);
+	/* the path, as stock furi_hal_subghz_set_path */
+	gpio_set(GPIOC, 4, band != 433);
+	(void) cc_xfer2(0x00, band == 315 ? 0x2F : 0x2F | 0x40);	/* IOCFG2 */
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x34);				/* SRX (calibrates) */
+	spi1_off();
+	return (long) (((uint64_t) w * 26000000u) >> 16);
+}
+
+int hal_subghz_rssi(uint32_t *hz)	/* dBm, or HAL_SUBGHZ_OFF */
+{
+	uint8_t st, f2, f1, f0;
+	int raw;
+
+	spi1_on(0);
+	st = cc_xfer2(0x35 | 0xC0, 0) & 0x1F;		/* MARCSTATE */
+	raw = (int8_t) cc_xfer2(0x34 | 0xC0, 0);		/* RSSI */
+	f2 = cc_xfer2(0x0D | 0x80, 0);
+	f1 = cc_xfer2(0x0E | 0x80, 0);
+	f0 = cc_xfer2(0x0F | 0x80, 0);
+	spi1_off();
+	*hz = (uint32_t) ((((uint64_t) f2 << 16 | f1 << 8 | f0) * 26000000u) >> 16);
+	if (st != 0x0D) return HAL_SUBGHZ_OFF;		/* not in RX */
+	return raw / 2 - 74;			/* datasheet: RSSI offset 74 dB */
+}
+
+void hal_subghz_off(void)
+{
+	spi1_on(0);
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x39);				/* SPWD: asleep */
+	spi1_off();
+	gpio_set(GPIOC, 4, 0);
+}
+
+/*===========================================================================*
  *				Clocks					     *
  *===========================================================================*/
 /* HSE 32 MHz / M 2 = 16 MHz PLL input, * N 8 = 128 MHz VCO, / R 2 = 64 MHz.
@@ -814,6 +927,13 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 	lp5562_write(0x02, b);
 }
 
+void hal_led_get(unsigned char rgb[3])
+{
+	if (i2c1_read(LP5562_ADDR, 0x04, &rgb[0], 1) < 0) rgb[0] = 0;
+	if (i2c1_read(LP5562_ADDR, 0x03, &rgb[1], 1) < 0) rgb[1] = 0;
+	if (i2c1_read(LP5562_ADDR, 0x02, &rgb[2], 1) < 0) rgb[2] = 0;
+}
+
 /*===========================================================================*
  *				microSD card (SPI mode)			     *
  *===========================================================================*/
@@ -1364,6 +1484,12 @@ unsigned hal_mt_ack(void)
 	LPTIM1->ICR = f;
 	return (f & LPTIM_ISR_CMPM ? HAL_MT_MATCH : 0)
 				| (f & LPTIM_ISR_CMPOK ? HAL_MT_READY : 0);
+}
+
+int hal_buttons_fake(unsigned mask)
+{
+	(void) mask;
+	return -1;			/* real buttons only */
 }
 
 unsigned hal_buttons(void)

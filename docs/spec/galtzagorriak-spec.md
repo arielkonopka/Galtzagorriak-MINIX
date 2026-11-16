@@ -2561,9 +2561,13 @@ nothing during this session", not "is safe".
 
 ## Phase 12: Swapping to the SD card
 
-**Goal:** idle processes give their RAM back. Swapped data is confidential and tamper-evident.
-**Depends on:** Phase 1 (R1.4 especially), Phase 3 (R3.1 RNG). Phase 2a SHOULD come first
-(it frees `w_buf`, or this phase decides to keep it as the crypto buffer).
+**Goal:** idle processes give their RAM back. With 12b, swapped data is also confidential and
+tamper-evident.
+**Two steps (owner decision, 2026-11-16):** swap ships **first unencrypted, as an option**
+(12a, 12d, 12e with R12.28), and encryption (12b) is added later as a separate step. The plain step
+needs no RNG and no AES1 driver, so it can start right after M1.
+**Depends on:** Phase 1 (R1.4 especially). Phase 2a SHOULD come first (it frees `w_buf`, or 12b
+decides to keep it as the crypto buffer). Only 12b depends on Phase 3 (R3.1 RNG).
 Design rationale: report Part 4.
 
 ### 12a. Swap processes blocked in MM
@@ -2610,7 +2614,23 @@ Design rationale: report Part 4.
   - none of these may ever write into its range.
 - **R12.8** `free -v` lists swapped processes and the slot use.
 
-### 12b. Encryption (MUST be in place before swap is enabled by default)
+- **R12.28 Plain swap first (owner decision, 2026-11-16).** Until 12b lands, swap runs
+  unencrypted and only when asked for:
+  - `/etc/rc.conf` has `swap=off|plain|crypt`. Before 12b the default is `off`, and `crypt` is
+    refused with a console warning (treated as `off`). After 12b the default becomes `crypt`, and
+    `plain` stays available as an option;
+  - integrity in `plain` mode: the slot header holds a **CRC-32 of the image** in the place of the
+    GCM tag, computed by the STM32 CRC unit (0 B RAM; software CRC-32 in the QEMU build). A
+    mismatch or read error on swap-in kills the process (SIGKILL), as R12.12. This catches card
+    corruption, not a deliberate attacker;
+  - confidentiality in `plain` mode: set-uid/set-gid images and packages whose manifest says
+    `Secret: yes` are **not eligible** (R12.3 gets this extra condition), so their RAM never
+    reaches the card in clear. `passwd` and `su` are such images;
+  - the slot layout (R12.2) is the same in both modes, so 12b changes no on-card format (nothing
+    in swap survives a reboot anyway);
+  - `free -v` shows the mode (`swap: plain` / `swap: crypt`).
+
+### 12b. Encryption (later, separate step; MUST be in place before swap is on by default)
 
 - **R12.9** AES1 driver (kernel, used by the WINCHESTER task):
   - AES-GCM;
@@ -2676,7 +2696,8 @@ background work must either be very small or be swapped cleverly. Each backgroun
   - the blob holds **no pointers** (offsets and ids only), so the new process may live anywhere:
     this is the relocation answer for tier 1;
   - a blob is not encrypted: apps MUST NOT put secrets in it (keys go to the CPU2 enclave, R17.1).
-    A secret-holding app uses tier 2, whose image is encrypted (12b);
+    A secret-holding app uses tier 2 with `Secret: yes`; its image is encrypted with
+    `swap=crypt` (12b) and stays in RAM with `swap=plain` (R12.28);
   - an SD write of ≤ 4 KB goes through the FS cache as idle work; 0 flash writes.
 - **R12.19 Park API** (in `libapp` and in the `libfuri` main loop):
   - `app_park(const struct app_wake *wake)` blocks the process in `sigsuspend()` with the given
@@ -2777,8 +2798,10 @@ background work must either be very small or be swapped cleverly. Each backgroun
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
   "parked" (2) and "runs in the radio chip or USB driver" (3). Which built-in apps use which tier.
 - The Running list: what `in RAM`, `on SD` and `waiting for memory` mean, and how to end an app.
-- Swap is on the SD card only, encrypted with a key that is new at every boot. Nothing swapped
-  survives a reboot, and removing the card ends the swapped apps.
+- Swap is on the SD card only. First it ships unencrypted and off by default (`swap=plain` turns
+  it on, with a checksum against card errors; apps marked `Secret: yes` and set-uid programs are
+  never swapped). Later `swap=crypt` (12b) encrypts it with a key that is new at every boot and
+  becomes the default. Nothing swapped survives a reboot, and removing the card ends the swapped apps.
 - How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
@@ -2799,6 +2822,9 @@ Acceptance criteria:
 - AC12.6 A kill of a swapped process frees its slot without reading it; 100 swap cycles in a loop leave
   free memory and slot use unchanged.
 - AC12.7 No regression in AC1.x and AC3.x tests.
+- AC12.13 `swap=plain` (R12.28): AC12.1, AC12.5, AC12.6 and AC12.10–AC12.12 pass; flipping one
+  byte of a swapped slot kills the process on swap-in (CRC-32); a `Secret: yes` test app and a
+  set-uid image are never swapped. AC12.3 and AC12.4 apply to `swap=crypt` only.
 - AC12.8 Tier 1: `tests/hibernate` saves a 1 KB blob, exits, is resumed by a timer and by the
   launcher, and gets the same blob back at a different load address; `/var/hib` is empty after.
 - AC12.9 Tier 2: a stock port (e.g. the Sub-GHz frequency analyzer without an open stream, or the

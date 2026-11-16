@@ -1,7 +1,6 @@
 # Buttons and gestures
 
-**(planned)** (spec R6.10, task T16). This chapter describes button gestures that work in every
-app. Until T16 is merged they do nothing.
+This chapter describes button gestures that work in every app (spec R6.10).
 
 ## Backlight gestures
 

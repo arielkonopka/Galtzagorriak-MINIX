@@ -139,9 +139,19 @@ void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
 
+long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
+int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
+void hal_subghz_off(void) { }
+
 unsigned hal_buttons(void)
 {
 	return qemu_fake_buttons;
+}
+
+int hal_buttons_fake(unsigned mask)
+{
+	qemu_fake_buttons = mask;
+	return 0;
 }
 
 /* ARM semihosting call (requires -semihosting-config enable=on). */
@@ -303,6 +313,7 @@ static uint32_t bl_state = 255u << 16 | 15u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }
 void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+void hal_led_get(unsigned char rgb[3]) { rgb[0] = rgb[1] = rgb[2] = 0; }
 
 
 /* Flash text cache.  QEMU's "flash" (SSRAM1 at 0) is RAM: copy. */

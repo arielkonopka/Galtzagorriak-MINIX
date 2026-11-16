@@ -23,6 +23,7 @@ _PROTOTYPE( void aha_scsi_task, (void)					);
 _PROTOTYPE( void clock_task, (void)					);
 _PROTOTYPE( void clock_stop, (void)					);
 _PROTOTYPE( clock_t get_uptime, (void)					);
+_PROTOTYPE( void force_timeout, (void)					);
 _PROTOTYPE( unsigned server_stack_used, (int t, unsigned *sizep)	);
 _PROTOTYPE( clock_t uptime_irq, (void)					);
 _PROTOTYPE( clock_t clock_idle, (void)					);
@@ -301,6 +302,7 @@ _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
