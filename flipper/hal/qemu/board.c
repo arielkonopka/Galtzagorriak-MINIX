@@ -375,6 +375,10 @@ static int cut_here(uint32_t addr, int erase)	/* 1: cut now */
 
 static void cut_power(void)
 {
+	/* the MPU stays on during flash operations (R4a.3) and only the
+	 * target is writable: off for this test hook's own word */
+	*(volatile uint32_t *) 0xE000ED94 = 0;		/* MPU_CTRL */
+	__asm volatile ("dsb; isb");
 	CUT_CFG[2] = CUT_DONE;
 	cut_say("\n[power cut at flash op ", cut_ops, 0);
 	*(volatile uint32_t *) 0xE000ED0C = 0x05FA0004u;	/* SYSRESETREQ */
