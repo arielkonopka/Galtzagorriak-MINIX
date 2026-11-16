@@ -30,3 +30,11 @@ grep '/dev/rom' /etc/rc >/dev/null || {
 	else echo "base: could not add the /rom mount to /etc/rc; run pkg install again"
 	fi
 }
+# Cards made before T15a lack /dev/power (the fuel gauge, read only) and
+# the Power app on the launcher; /etc/apps is not replaced by an upgrade.
+test -c /dev/power || { mknod /dev/power c 6 8 && chmod 444 /dev/power; } ||
+	echo "base: could not make /dev/power"
+grep '^Power:' /etc/apps >/dev/null || {
+	echo 'Power:nobody:/bin/power' >> /etc/apps
+	echo "base: the launcher now has Power"
+}

@@ -218,6 +218,13 @@ the device: GPIO levels with pull-up/down and as outputs; tone timing.
 Not yet: the 5 V header supply (charger/OTG over I2C), a buttons
 "input" device beyond /dev/buttons.
 
+Minor 8, `/dev/power` (T15a): the BQ27220 fuel gauge on I2C1 (0x55),
+read only, one text line per open (`soc= mv= ma= avg= sby= temp= flags=`),
+read on demand in the task (7 two-byte reads, no static RAM); EIO on a bus
+error, ENXIO without a gauge (QEMU).  Nothing is ever written to the gauge
+(its data memory is flash; the stock firmware configured it).  The
+`power` app shows it (docs/manual/power.md).
+
 Notes: Bluetooth needs SRAM2 shared with CPU2 and the IPCC mailbox, so it
 changes the memory plan: the 10 KB SRAM2a/2b areas currently hold the FS
 buffer cache (fs/buf.h, ld/server.ld) and part of it must go to the radio. Sub-GHz
