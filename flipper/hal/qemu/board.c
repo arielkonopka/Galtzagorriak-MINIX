@@ -39,10 +39,13 @@ __attribute__((weak)) void SysTick_Handler(void)
 	if (hal_tick_hook) hal_tick_hook();
 }
 
+static void mt_init(void);
+
 void hal_init(void)
 {
 	UART_BAUDDIV = CPU_HZ / 115200;
 	UART_CTRL = 0x3;		/* TX and RX enable */
+	mt_init();
 
 	/* Lowest priority first, like CMSIS SysTick_Config() on the Flipper:
 	 * the kernel's cstart() runs this with only BASEPRI masking, and a
@@ -479,12 +482,71 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 /* No infrared in QEMU. */
 int hal_btn_irq(int i) { (void) i; return -1; }
 void hal_btn_arm(int on) { (void) on; }
-int hal_mt_irq(void) { return -1; }
-unsigned hal_mt_now(void) { return 0; }
-void hal_mt_set(unsigned due) { (void) due; }
-unsigned hal_mt_cmp(void) { return 0; }
-unsigned hal_mt_ack(void) { return 0; }
 int hal_stop2(void) { return -1; }
+int hal_can_stop2(void) { return 0; }
+
+/* The ms timer (R4b.2) on the board's CMSDK APB timers, so that it works
+ * in QEMU as on the Flipper (LPTIM1): TIMER0 runs free with a period of
+ * 2 s = 65536 clocks of 32768 Hz, giving the 16-bit count; TIMER1 counts
+ * down to the compare (IRQ 9, one-shot).  LPTIM1's "compare written"
+ * interrupt is pended by hand at once. */
+#define TIMER0		0x40000000u
+#define TIMER1		0x40001000u
+#define T_REG(t, o)	(*(volatile uint32_t *) ((t) + (o)))
+#define T_CTRL(t)	T_REG(t, 0x0)	/* 1 enable, 8 interrupt enable */
+#define T_VALUE(t)	T_REG(t, 0x4)
+#define T_RELOAD(t)	T_REG(t, 0x8)
+#define T_INT(t)	T_REG(t, 0xC)	/* read: status; write 1: clear */
+#define MT_PERIOD	(2u * CPU_HZ)	/* 2 s: 65536 clocks */
+#define MT_IRQ		9
+#define NVIC_ISPR0	(*(volatile uint32_t *) 0xE000E200u)
+static unsigned mt_cmp, mt_ready;
+
+static void mt_init(void)
+{
+	T_RELOAD(TIMER0) = MT_PERIOD - 1;
+	T_VALUE(TIMER0) = MT_PERIOD - 1;
+	T_CTRL(TIMER0) = 1;
+	T_CTRL(TIMER1) = 0;
+}
+
+int hal_mt_irq(void) { return MT_IRQ; }
+
+unsigned hal_mt_now(void)
+{
+	uint32_t c = MT_PERIOD - 1 - T_VALUE(TIMER0);	/* < 50 000 000 */
+
+	return (c / 3125) * 4096 / 1000;	/* x 65536 / 50 000 000 */
+}
+
+void hal_mt_set(unsigned due)
+{
+	unsigned d = (due - hal_mt_now()) & 0xFFFF;
+
+	mt_cmp = due & 0xFFFF;
+	T_CTRL(TIMER1) = 0;
+	T_RELOAD(TIMER1) = d * 763 + 1;	/* 762.9 cycles a clock: never early */
+	T_VALUE(TIMER1) = d * 763 + 1;
+	T_INT(TIMER1) = 1;
+	T_CTRL(TIMER1) = 1 | 8;
+	mt_ready = 1;
+	NVIC_ISPR0 = 1u << MT_IRQ;
+}
+
+unsigned hal_mt_cmp(void) { return mt_cmp; }
+
+unsigned hal_mt_ack(void)
+{
+	unsigned f = mt_ready ? HAL_MT_READY : 0;
+
+	mt_ready = 0;
+	if (T_INT(TIMER1) & 1) {
+		T_INT(TIMER1) = 1;
+		T_CTRL(TIMER1) = 0;		/* one-shot */
+		f |= HAL_MT_MATCH;
+	}
+	return f;
+}
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }
