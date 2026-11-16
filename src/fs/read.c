@@ -377,9 +377,11 @@ int index;			/* index into *bp */
 
   if (zone != NO_ZONE &&
 		(zone < (zone_t) sp->s_firstdatazone || zone >= sp->s_zones)) {
-	printf("Illegal zone number %ld in indirect block, index %d\n",
-	       (long) zone, index);
-	panic("check file system", NO_NUM);
+	/* A damaged file system halted the whole system here (security
+	 * review 2026-11-16, F1): the entry is a hole now, run fsck. */
+	printf("Illegal zone number %ld in indirect block, index %d: "
+		"run fsck\n", (long) zone, index);
+	zone = NO_ZONE;
   }
   return(zone);
 }
