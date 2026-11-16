@@ -84,10 +84,12 @@ then
 	chgrp gui /dev/subghzraw 2>/dev/null
 	chmod 660 /dev/subghzraw 2>/dev/null
 fi
-# Cards made before R6.5 lack /dev/rfid (a 125 kHz tag's signal).
+# Cards made before R6.5 lack /dev/rfid (a 125 kHz tag's signal); test
+# builds of R6.5 made it minor 15, which is /dev/lat: made again each time.
+rm -f /dev/rfid
 if test ! -r /dev/rfid
 then
-	mknod /dev/rfid c 6 15 || echo "base: could not make /dev/rfid"
+	mknod /dev/rfid c 6 16 || echo "base: could not make /dev/rfid"
 	chgrp gui /dev/rfid 2>/dev/null
 	chmod 660 /dev/rfid 2>/dev/null
 fi

@@ -73,8 +73,9 @@
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
 #define RTC_MINOR	13	/* the RTC alarm, calibration (R6.2, R7b.1) */
 #define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
-#define RFID_MINOR	15	/* a 125 kHz tag's signal, timed (R6.5) */
-#define LAST_MINOR	15
+#define RFID_MINOR	16	/* a 125 kHz tag's signal, timed (R6.5) */
+			/* (15 is /dev/lat, include/minix/lat.h) */
+#define LAST_MINOR	16
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
