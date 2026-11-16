@@ -1115,6 +1115,11 @@ void hal_mt_set(unsigned due)
 	LPTIM1->CMP = due & 0xFFFF;
 }
 
+unsigned hal_mt_cmp(void)
+{
+	return LPTIM1->CMP & 0xFFFF;
+}
+
 unsigned hal_mt_ack(void)
 {
 	uint32_t f = LPTIM1->ISR & (LPTIM_ISR_CMPM | LPTIM_ISR_CMPOK);

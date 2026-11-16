@@ -501,7 +501,9 @@ unsigned ms;			/* 1..999; 0 disarms */
 
 PRIVATE void mt_program()
 {
-  unsigned now, d, best = 0x8000;
+/* The earliest due time into the compare, if it is not there already:
+ * every write brings an interrupt, which comes back here. */
+  unsigned now, d, best = 0x8000, due = 0;
   int c;
 
   if (mt.wr || mt.on == 0) return;
@@ -510,9 +512,11 @@ PRIVATE void mt_program()
 	if (!(mt.on & (1 << c))) continue;
 	d = (u16_t) (mt.at[c] - now);
 	if (d >= 0x8000) d = 0;			/* overdue */
-	if (d < best) best = d;
+	if (d < best) { best = d; due = mt.at[c]; }
   }
-  hal_mt_set(now + (best < MT_MIN ? MT_MIN : best));
+  if (best < MT_MIN) due = now + MT_MIN;
+  else if (hal_mt_cmp() == due) return;
+  hal_mt_set(due);
   mt.wr = TRUE;
 }
 

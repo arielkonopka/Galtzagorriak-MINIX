@@ -84,6 +84,7 @@ void hal_btn_arm(int on);
 int hal_mt_irq(void);
 unsigned hal_mt_now(void);
 void hal_mt_set(unsigned due);
+unsigned hal_mt_cmp(void);		/* the compare as last set */
 unsigned hal_mt_ack(void);
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:

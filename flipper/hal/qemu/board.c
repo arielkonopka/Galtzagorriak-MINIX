@@ -477,6 +477,7 @@ void hal_btn_arm(int on) { (void) on; }
 int hal_mt_irq(void) { return -1; }
 unsigned hal_mt_now(void) { return 0; }
 void hal_mt_set(unsigned due) { (void) due; }
+unsigned hal_mt_cmp(void) { return 0; }
 unsigned hal_mt_ack(void) { return 0; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
