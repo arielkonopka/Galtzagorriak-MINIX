@@ -670,6 +670,8 @@ int hal_charger_set(int what, int on)
 	case HAL_CHG_GENTLE:	s = on ? s | 2 : s & ~2u; break;
 	case HAL_CHG_OTG:	/* 5 V on the header; not kept over a reset */
 		return charger_rmw(0x03, 0x20, on ? 0x20 : 0);
+	case HAL_CHG_PAUSE:	/* the kernel's temperature rule */
+		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
 	default:		return -1;
 	}
 	bkp_set(&CHG_REG, CHG_MAGIC | s);

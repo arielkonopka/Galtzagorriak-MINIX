@@ -264,6 +264,7 @@ _PROTOTYPE( void task_yield, (void)					);
 _PROTOTYPE( void mt_init, (void)						);
 _PROTOTYPE( void mt_arm, (int client, unsigned ms)			);
 _PROTOTYPE( void pm_vbus, (void)					);
+_PROTOTYPE( void pm_minute, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp)	);

@@ -95,6 +95,7 @@ int hal_charger_read(unsigned reg);
 #define HAL_CHG_CARE		1
 #define HAL_CHG_GENTLE		2
 #define HAL_CHG_OTG		3
+#define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
 int hal_charger_set(int what, int on);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).

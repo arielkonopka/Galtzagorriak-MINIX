@@ -161,6 +161,9 @@
  * and USB are asked directly (flipdev_idle, bell_ticks, hal_usb_awake). */
 #define PM_DISK         0x01	/* an SD DMA transfer runs */
 #define PM_VBUS         0x02	/* power on VBUS, the USB bus asleep (pm_vbus) */
+#define PM_LOWBAT  0x80000000	/* not a blocker: battery low, no new flash
+				 * erases (pm_minute) */
+#define PM_BLOCKERS 0x7FFFFFFF
 
 #endif /* (CHIP == ARM_CM) */
 
