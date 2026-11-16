@@ -6,7 +6,6 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
-- (R7b.5) LED patterns: `echo blink red >/dev/led` (also `fast`, `double`, `pulse`; colours red, green, blue, yellow, cyan, magenta, white or `#rrggbb`; `off`) runs the pattern in the LED driver chip itself, with the CPU free to sleep. Setting the screen backlight no longer resets the LED chip's engines and channel map.
 - Security (U1): `exec` clears every register of the old program before the new one starts (r0-r8 and r10-r12 used to carry over, e.g. from a setuid program).
 - (R7b.5) LED patterns: `echo blink red >/dev/led` (also `fast`, `double`, `pulse`, and `rainbow`; colours red, green, blue, yellow, cyan, magenta, white or `#rrggbb`; `off`) runs the pattern in the LED driver chip itself, with the CPU free to sleep. Setting the screen backlight no longer resets the LED chip's engines and channel map.
 >>>>>>> origin/r7b5-led-patterns

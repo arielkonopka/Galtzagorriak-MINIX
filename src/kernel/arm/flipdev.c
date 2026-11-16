@@ -154,6 +154,7 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 /* IR_DEC uses v twice: never pass it an expression with side effects */
 #define IR_DEC(v)	((v) & 0x8000 ? (u32_t) ((v) & 0x7FFF) << 6 : (u32_t) (v))
 
+PRIVATE volatile u16_t rb;		/* the rainbow (R7b.5, see rb_step) */
 PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
 PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
@@ -192,7 +193,8 @@ PRIVATE const u8_t rb_col[RB_N][3] = {	/* PWM, white = 200:128:96 */
 	{ 200, 0, 0 }, { 200, 32, 0 }, { 200, 128, 0 },
 	{ 0, 128, 0 }, { 0, 0, 96 }, { 120, 0, 96 },
 };
-PRIVATE volatile u16_t rb;
+/* (rb, the rainbow's state, is declared next to the IR ring indices:
+ * there it fills their padding, 0 B) */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
