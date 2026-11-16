@@ -52,3 +52,10 @@ then
 	mknod /dev/adc c 6 10 || echo "base: could not make /dev/adc"
 	chmod 444 /dev/adc 2>/dev/null
 fi
+# Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
+if test ! -r /dev/adcs
+then
+	mknod /dev/adcs c 6 12 || echo "base: could not make /dev/adcs"
+	chgrp gui /dev/adcs 2>/dev/null
+	chmod 660 /dev/adcs 2>/dev/null
+fi

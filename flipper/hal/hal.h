@@ -147,6 +147,12 @@ int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
  * (VREF+, ~2500 mV) in mV, or -1 (no ADC). */
 #define HAL_ADC_OVER	(-2)
 int hal_adc_mv(int *mv);
+/* R6.4 part 2: n 12-bit samples of header pin `pin` (as hal_gpio; left
+ * analog) at `rate` Hz (100..100000) by DMA to the physical address dst
+ * (even); -1 if not possible.  Left: samples still to come (0: done). */
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n);
+unsigned hal_adc_stream_left(void);
+void hal_adc_stream_stop(void);
 
 /* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
  * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the

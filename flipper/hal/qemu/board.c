@@ -560,6 +560,9 @@ unsigned hal_mt_ack(void)
 	return f;
 }
 int hal_adc_mv(int *mv) { (void) mv; return -1; }
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (void) pin; (void) rate; (void) dst; (void) n; return -1; }
+unsigned hal_adc_stream_left(void) { return 0; }
+void hal_adc_stream_stop(void) { }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }
