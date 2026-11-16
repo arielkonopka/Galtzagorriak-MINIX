@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- The LCD is written at 8 MHz instead of 4 (a frame in about 1 ms instead of 2: the CPU is free sooner for everything else).
 - (R6.7, part 1) iButton: reading `/dev/ibutton` with a key on the contacts gives its 8-byte ROM (family, serial, CRC checked); no key: ENODEV. 1-Wire timing in the kernel with interrupts masked at most 70 µs per bit. Base 3.63.
 - (R4a.5, part) Flash ECC: an uncorrectable error stops the system with "flash ECC: uncorrectable error at ADDRESS" instead of an unexplained exception; a corrected single-bit error is reported in one line (a page wearing out).
 - (R4a.6) Stack overflow detection: a DWT watchpoint guards the kernel stack and the running task's stack; writing past either stops the system with "stack overflow in TASK" instead of corrupting memory silently.
