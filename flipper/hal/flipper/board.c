@@ -2375,11 +2375,12 @@ void hal_ir_freq(unsigned hz, unsigned duty)
 	ir_on = ir_period * duty / 100;
 }
 
+static int ir_ready;			/* TIM1 set up for the carrier; the
+					 * RFID field takes TIM1 and clears it */
+
 void hal_ir_carrier(int on)
 {
-	static int ready;
-
-	if (!ready) {
+	if (!ir_ready) {
 		RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
 		(void) RCC->APB2ENR;
 		TIM1->CR1 = 0;
@@ -2394,7 +2395,7 @@ void hal_ir_carrier(int on)
 		TIM1->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
 		gpio_set(GPIOB, 9, 0);
 		gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
-		ready = 1;
+		ir_ready = 1;
 	}
 	if (on) {				/* preloaded, taken by UG */
 		TIM1->ARR = ir_period - 1;
@@ -2609,6 +2610,104 @@ int hal_random(uint32_t *w)
 	if (r == 0) *w = RNG->DR;
 	sem_give(SEM_RNG);
 	return r;
+}
+
+/*===========================================================================*
+ *				LF RFID (R6.5)				     *
+ *===========================================================================*/
+/* Reading a 125 kHz tag, as the stock firmware does (furi_hal_rfid.c):
+ * the field from TIM1 channel 1N on PB13 (AF1), 125 kHz at half duty;
+ * the antenna's envelope on PC5 into COMP1 against half of VREFINT (high
+ * hysteresis), COMP1's output into TIM2 channel 4 (TIM2_OR TI4_RMP).
+ * PA2 (the antenna pull) and PB14 (iButton) low meanwhile, as stock.
+ * TI4 cannot reset the timer, so TIM2 runs free at 1 MHz and channel 4
+ * captures both edges: DMA1 channel 4 (DMAMUX request 31, TIM2_CH4)
+ * writes 32-bit timestamps into the reader's buffer; the kernel makes
+ * durations of them.  TIM1 and TIM2 are the IR transmitter's too: the
+ * kernel runs one at a time. */
+int hal_rfid_read(uint32_t dst, unsigned n)
+{
+	uint32_t t0;
+
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	ir_ready = 0;
+	gpio_set(GPIOA, 2, 0);				/* antenna not pulled */
+	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+	hal_ow_line(1);					/* iButton low */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	/* the field */
+	TIM1->CR1 = 0;
+	TIM1->PSC = 0;
+	TIM1->ARR = SystemCoreClock / 125000u - 1;
+	TIM1->CCR1 = SystemCoreClock / 125000u / 2;
+	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+	TIM1->CCMR2 = 0;
+	TIM1->CCER = TIM_CCER_CC1NE;
+	TIM1->BDTR = TIM_BDTR_MOE;
+	TIM1->EGR = TIM_EGR_UG;
+	TIM1->CR1 = TIM_CR1_CEN;
+	gpio_cfg(GPIOB, 13, MODE_AF, PULL_NONE, 1);	/* TIM1_CH1N */
+	/* the comparator */
+	COMP1->CSR = COMP_CSR_PWRMODE_0			/* medium speed */
+		| COMP_CSR_INMSEL_0 | COMP_CSR_SCALEN | COMP_CSR_BRGEN
+		| COMP_CSR_HYST_1 | COMP_CSR_HYST_0;	/* IO1 (PC5), VREFINT/2 */
+	COMP1->CSR |= COMP_CSR_EN;
+	t0 = DWT->CYCCNT;
+	while (DWT->CYCCNT - t0 < hal_cpu_hz() / 5000) ;	/* scaler: 200 us */
+	/* the capture */
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 31;			/* TIM2_CH4 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+							| DMA_CCR_EN;
+	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = 0;
+	TIM2->CCMR2 = 1u << TIM_CCMR2_CC4S_Pos;		/* IC4 on TI4 */
+	TIM2->CCER = TIM_CCER_CC4E | TIM_CCER_CC4P | TIM_CCER_CC4NP;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_CC4DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+void hal_rfid_stop(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR2 = 0;
+	TIM2->OR = 0;
+	TIM2->SR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 0;
+	COMP1->CSR = 0;
+	TIM1->CR1 = 0;
+	TIM1->CCER = 0;
+	TIM1->BDTR = 0;
+	ir_ready = 0;
+	gpio_set(GPIOB, 13, 0);				/* field off */
+	gpio_cfg(GPIOB, 13, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOA, 2, 1);				/* as stock's reset */
+	hal_ow_line(0);					/* iButton released */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
 }
 
 /*===========================================================================*

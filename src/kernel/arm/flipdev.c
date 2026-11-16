@@ -70,7 +70,8 @@
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
-#define LAST_MINOR	12
+#define RFID_MINOR	15	/* a 125 kHz tag's signal, timed (R6.5) */
+#define LAST_MINOR	15
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -156,6 +157,8 @@ PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
 PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
+PRIVATE u8_t pu_input;			/* 0 /dev/ir, 2 /dev/rfid */
+PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;
@@ -241,7 +244,10 @@ FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( int ir_rx_arm, (void)				);
+FORWARD _PROTOTYPE( int rfid_read, (message *m_ptr, phys_bytes user,
+							int count)	);
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
+FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -901,6 +907,10 @@ message *m_ptr;
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(power_read(user, count));
 
+  case RFID_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	return(rfid_read(m_ptr, user, count));
+
   case IR_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(ir_write(m_ptr, user, count));
 	if (count < 4) return(EINVAL);
@@ -912,6 +922,7 @@ message *m_ptr;
 	ir_buf = user;				/* count bytes, checked */
 	ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
 	ir_started = ir_done = ir_paused = FALSE;
+	pu_input = 0;
 	proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
 	ir_rd = TRUE;			/* first: TIM2's interrupt is the
 					 * transmitter's otherwise, and stops it */
@@ -1703,13 +1714,93 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
 {
   unsigned n = ir_count / 4 - hal_pulse_left();
 
-  hal_pulse_stop();			/* the DMA first, then the memory */
+  if (pu_input == 2) {			/* RFID: timestamps, made durations */
+	hal_rfid_stop();		/* the DMA first, then the memory */
+	lock();
+	mt_arm(MT_PULSE, 0);
+	unlock();
+	n = rf_durations(n);
+  } else hal_pulse_stop();
   lock();
   pm_busy &= ~PM_PULSE;
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
   ir_rd = FALSE;
   if (r != 1) reply(REVIVE, ir_caller, ir_proc, r == OK ? (int) n * 4 : r);
+}
+
+
+/*===========================================================================*
+ *				rfid_read				     *
+ *===========================================================================*/
+/* /dev/rfid (R6.5): a read turns the 125 kHz field on and gets the times
+ * between the changes of the tag's signal (the antenna's comparator), as
+ * /dev/ir's durations, for RF_MS or until the buffer is full; then the
+ * field goes off.  The level of the first one is not known (the decoder
+ * tries both). */
+#define RF_MS		500
+#define RF_POLL_MS	20
+
+PRIVATE int rfid_read(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+  if (count < 8) return(EINVAL);
+  if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
+  ir_caller = m_ptr->m_source;
+  ir_proc = m_ptr->PROC_NR;
+  ir_buf = user;
+  ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
+  ir_started = ir_done = ir_paused = FALSE;
+  pu_input = 2;
+  rf_polls = 0;
+  proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+  ir_rd = TRUE;
+  if (hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
+	ir_rd = FALSE;
+	proc_addr(ir_proc)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  lock();
+  pm_busy |= PM_PULSE;
+  mt_arm(MT_PULSE, RF_POLL_MS);
+  unlock();
+  return(SUSPEND);
+}
+
+PUBLIC void flipdev_pulse_poll()
+{
+/* The ms timer (interrupt): the RFID read's buffer is full, or its time
+ * is up, or look again. */
+  if (!ir_rd || pu_input != 2) return;
+  if (hal_pulse_left() == 0 || ++rf_polls >= RF_MS / RF_POLL_MS) {
+	ir_done = TRUE;
+	interrupt(PRINTER);
+  } else mt_arm(MT_PULSE, RF_POLL_MS);
+}
+
+PRIVATE unsigned rf_durations(n)
+unsigned n;			/* timestamps in the reader's buffer */
+{
+/* Durations between them, in place: n - 1 of them. */
+  u32_t t[16], prev = 0;
+  unsigned i, k, j;
+
+  if (n < 2) return(0);
+  phys_copy(ir_buf, vir2phys(&prev), (phys_bytes) 4);
+  for (i = 1; i < n; i += k) {
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(ir_buf + i * 4, vir2phys(t), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		u32_t cur = t[j];
+
+		t[j] = cur - prev;
+		prev = cur;
+	}
+	phys_copy(vir2phys(t), ir_buf + (i - 1) * 4, (phys_bytes) k * 4);
+  }
+  return(n - 1);
 }
 
 
@@ -1729,7 +1820,8 @@ int count;
   if (hal_ir_tx_irq() < 0) return(ENXIO);
   if (count % 4 != 0 || count == 0) return(EINVAL);
   if (tx_on) return(EIO);			/* one frame at a time */
-  if (ir_rd && ir_started) return(EBUSY);	/* TIM2 takes a frame in */
+  if (ir_rd && (ir_started || pu_input != 0))
+	return(EBUSY);				/* TIM2 takes a frame in */
   if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
