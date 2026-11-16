@@ -2604,8 +2604,26 @@ void hal_ir_freq(unsigned hz, unsigned duty)
 	ir_on = ir_period * duty / 100;
 }
 
-static int ir_ready;			/* TIM1 set up for the carrier; the
+static unsigned char ir_ready;			/* TIM1 set up for the carrier; the
 					 * RFID field takes TIM1 and clears it */
+static unsigned char ir_tgt;			/* 0 the IR LED, 1 the RFID antenna */
+
+/* The transmitter drives the IR LED (TIM1 CH3N, PB9) or, for writing a
+ * T5577 tag (R6.5), the 125 kHz antenna (TIM1 CH1N, PB13; PA2 high: the
+ * antenna not grounded, as stock t5577_start; iButton low). */
+void hal_ir_target(int rfid)
+{
+	if (rfid == ir_tgt && ir_ready) return;
+	ir_tgt = rfid;
+	ir_ready = 0;
+	if (rfid) {
+		gpio_set(GPIOA, 2, 1);
+		gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+		hal_ow_line(1);
+		gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
+		gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* JTDI */
+	}
+}
 
 void hal_ir_carrier(int on)
 {
@@ -2616,24 +2634,46 @@ void hal_ir_carrier(int on)
 		TIM1->PSC = 0;
 		if (ir_period == 0) hal_ir_freq(IR_CARRIER_HZ, 33);
 		TIM1->ARR = ir_period - 1;
-		TIM1->CCR3 = ir_on;
-		TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
-		TIM1->CCER = TIM_CCER_CC3NE;
+		if (ir_tgt) {
+			TIM1->CCR1 = ir_on;
+			TIM1->CCMR1 = (4u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+			TIM1->CCMR2 = 0;
+			TIM1->CCER = TIM_CCER_CC1NE;
+		} else {
+			TIM1->CCR3 = ir_on;
+			TIM1->CCMR1 = 0;
+			TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
+			TIM1->CCER = TIM_CCER_CC3NE;
+		}
 		TIM1->BDTR = TIM_BDTR_MOE;
 		TIM1->EGR = TIM_EGR_UG;
 		TIM1->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
-		gpio_set(GPIOB, 9, 0);
-		gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
+		if (ir_tgt) {
+			gpio_set(GPIOB, 13, 0);
+			gpio_cfg(GPIOB, 13, MODE_AF, PULL_NONE, 1);
+		} else {
+			gpio_set(GPIOB, 9, 0);
+			gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
+		}
 		ir_ready = 1;
 	}
 	if (on) {				/* preloaded, taken by UG */
 		TIM1->ARR = ir_period - 1;
-		TIM1->CCR3 = ir_on;
+		if (ir_tgt) TIM1->CCR1 = ir_on;
+		else TIM1->CCR3 = ir_on;
 	}
-	/* PWM mode 1 (110) or forced inactive (100); start a fresh period
-	 * so every mark begins with a whole carrier cycle */
-	TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
-		| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
+	/* The antenna (a series LC): a gap is the outputs off (MOE 0, the
+	 * pin floats), as stock's furi_hal_rfid_tim_read_pause; held low
+	 * the circuit stays closed and the field rings on.  The IR LED:
+	 * PWM mode 1 (110) or forced inactive (100).  Either way a fresh
+	 * period, so every mark begins with a whole carrier cycle. */
+	if (ir_tgt) {
+		TIM1->CCMR1 = (TIM1->CCMR1 & ~TIM_CCMR1_OC1M)
+			| (6u << TIM_CCMR1_OC1M_Pos);
+		TIM1->BDTR = on ? TIM_BDTR_MOE : 0;
+	} else
+		TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
+			| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
 	if (on) TIM1->EGR = TIM_EGR_UG;
 }
 
@@ -2888,6 +2928,8 @@ int hal_rfid_read(uint32_t dst, unsigned n)
 	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
 	hal_ow_line(1);					/* iButton low */
 	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* the carrier node:
+						 * after reset JTDI, pulled up */
 	/* the field */
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;

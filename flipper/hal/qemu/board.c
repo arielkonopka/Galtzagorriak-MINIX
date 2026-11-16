@@ -585,6 +585,7 @@ int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (voi
 unsigned hal_adc_stream_left(void) { return 0; }
 void hal_adc_stream_stop(void) { }
 void hal_ir_carrier(int on) { (void) on; }
+void hal_ir_target(int rfid) { (void) rfid; }
 void hal_ir_freq(unsigned hz, unsigned duty) { (void) hz; (void) duty; }
 int hal_ir_tx_irq(void) { return -1; }
 void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }

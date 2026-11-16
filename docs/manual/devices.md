@@ -90,7 +90,38 @@ also prints the timings, `-n N` makes up to N attempts of half a second (default
 tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
 as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns the 125 kHz field on
 for half a second and returns the times between the changes of the tag's signal, in µs, as
-32-bit numbers. Writing blank T5577 fobs and emulating a tag are **(planned)**.
+32-bit numbers.
+
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
+firmware does):
+
+```
+rfid write EM 00 DE AD BE EF
+written (T5577): EM4100 00 DE AD BE EF
+```
+
+Or copy one tag onto another, without typing the number:
+
+```
+rfid copy
+read EM4100 04 00 98 3D C5
+now put the blank one on
+written (T5577): EM4100 04 00 98 3D C5
+```
+
+The tag is read back afterwards; "not written" means a locked or password-protected tag (one
+written by another cloner may be), or a kind that cannot be written. Each round writes the tag
+both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), because a tag that
+wants a password only answers now and then.
+
+`-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
+word (some door entry systems try to overwrite a copy they find). Write the password down:
+changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
+unless `-pass` gives a new one). A tag written by another cloner may have a password you do
+not know; then it cannot be rewritten. `-lock` instead sets the chip's lock bit, which can
+never be undone by anyone, you included. A write to `/dev/rfid` is
+a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
+spaces. Emulating a tag is **(planned)**.
 
 ## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
 
