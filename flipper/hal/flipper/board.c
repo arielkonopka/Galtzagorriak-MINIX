@@ -2432,12 +2432,16 @@ void hal_ir_carrier(int on)
 		if (ir_tgt) TIM1->CCR1 = ir_on;
 		else TIM1->CCR3 = ir_on;
 	}
-	/* PWM mode 1 (110) or forced inactive (100); start a fresh period
-	 * so every mark begins with a whole carrier cycle */
-	if (ir_tgt)
+	/* The antenna (a series LC): a gap is the outputs off (MOE 0, the
+	 * pin floats), as stock's furi_hal_rfid_tim_read_pause; held low
+	 * the circuit stays closed and the field rings on.  The IR LED:
+	 * PWM mode 1 (110) or forced inactive (100).  Either way a fresh
+	 * period, so every mark begins with a whole carrier cycle. */
+	if (ir_tgt) {
 		TIM1->CCMR1 = (TIM1->CCMR1 & ~TIM_CCMR1_OC1M)
-			| ((on ? 6u : 4u) << TIM_CCMR1_OC1M_Pos);
-	else
+			| (6u << TIM_CCMR1_OC1M_Pos);
+		TIM1->BDTR = on ? TIM_BDTR_MOE : 0;
+	} else
 		TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
 			| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
 	if (on) TIM1->EGR = TIM_EGR_UG;
