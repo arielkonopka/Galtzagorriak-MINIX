@@ -88,6 +88,53 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 	@mkdir -p $(dir $@)
 	$(CC) $(MCFLAGS) $(PICFLAGS) -c $< -o $@
 
+# The shared C library in flash (spec Phase 2b, R2b.9; <minix/shlibc.h>,
+# tools/mkshlibc.py).  The libc-pic objects are linked once, at
+# SHLIBC_BASE (after the 192 KB system image, in minix.bin), and programs
+# call them through 12-byte stubs and the entry table, whose order is
+# frozen in libc.exports (append only; spec J.3).  Members whose
+# per-process data is big (password and group files, mtab, crypt, scanf,
+# the time zone code, the float conversion tables, regexp, math) stay
+# static, linked into the programs that use them, together with every
+# member that needs one of them.  SHLIBC=0: every program static, as before.
+SHLIBC	?= 1
+SHL	:= $(MB)/shlibc
+SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
+SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
+	   getttyent ctermid cuserid getlogin getpass popen fsversion \
+	   setlocale localeconv regexp regsub printk difftime hypot \
+	   asctime ctime ecvt localtime mktime strftime tzset ttyslot \
+	   scanf fscanf sscanf vscanf vsscanf
+SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
+LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
+	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))
+# _brksize: the library has its own (tab.S), which crtso-sh sets to _end.
+LIBCP_SHARED := $(filter-out $(LIBCP_STATIC) %/brksize.S.o,$(LIBCP_OBJ))
+$(SHL)/tab.S: libc.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	python3 -I tools/mkshlibc.py tab $< $@
+$(SHL)/tab.o: $(SHL)/tab.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+# No --gc-sections: every global function of the members is exported.
+$(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) ld/shlibc.ld
+	$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
+	   -Wl,-q -Wl,--defsym=SHLIBC_BASE=$(SHLIBC_BASE) -Tld/shlibc.ld \
+	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) \
+	   $(SHLIBC_GCC:%=-Wl,-u,%) -lgcc -o $@
+$(SHL)/libc.bin $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld &: \
+		$(SHL)/libc.elf libc.exports tools/mkshlibc.py
+	python3 -I tools/mkshlibc.py image $< libc.exports $(SHL)/libc.bin \
+	   $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld
+$(SHL)/stubs.o: $(SHL)/stubs.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+$(MB)/libc-static.a: $(LIBCP_STATIC) minix.mk
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+$(MB)/user/crtso-sh.o: $(MROOT)/src/lib/arm/rts/crtso.S
+	@mkdir -p $(dir $@)
+	$(CC) $(MCFLAGS) $(PICFLAGS) -DSHLIBC -c $< -o $@
+.PHONY: shlibc
+shlibc: $(SHL)/libc.bin
+
 #############################################################################
 # Kernel
 #############################################################################
@@ -198,12 +245,15 @@ $(MB)/.init-$(INIT):
 $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$(INIT)
 	$(call link_server,init,$(MB)/fs.elf)
 
+# The system image (192 KB at most), then the shared libc at 192 KB
+# (SHLIBC_BASE, 64 KB at most); the installed programs start at 256 KB
+# (hal_flash_layout(), R2b.1).
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
-		 tools/mkflash.py
-	python3 -I tools/mkflash.py $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@# The installed programs start 192 KB in (hal_flash_layout(), R2b.1).
-	@test $$(stat -c %s $@) -le 196608 || \
-	   { echo "$@ is over 192 KB: it would overlap the installed programs"; \
+		 tools/mkflash.py $(SHL)/libc.bin
+	python3 -I tools/mkflash.py --libc=0x30000,$(SHL)/libc.bin \
+	   $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
+	@test $$(stat -c %s $@) -le 262144 || \
+	   { echo "$@ is over 256 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
 # make base-flash: minix-base.bin = minix.bin with the programs used at boot
@@ -215,7 +265,7 @@ BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
-	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x30000 \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x40000 \
 	   --rom=$(MB)/rom.img $(BASE_FLASH:%=$(MB)/bin/%)
 
 # The default settings image (spec L.2): /etc as built, read-only, 32 KB;
@@ -323,6 +373,19 @@ $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
+ifeq ($(SHLIBC),1)
+# Against the shared libc: its stubs, then the static members it lacks.
+define user_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \
+		$(SHL)/stubs.o $(MB)/libc-static.a ld/user-shlibc.ld \
+		$(SHL)/shlibc-syms.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -Tld/user-shlibc.ld \
+	   -Wl,-Map=$$@.map $(MB)/user/crtso-sh.o $(call objs_of,$(1)) \
+	   $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $$@
+endef
+ELF2MNX_LIBC := --libc $(SHL)/libc.json
+else
 define user_prog
 $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 		ld/user-pic.ld
@@ -330,6 +393,7 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user-pic.ld -Wl,-Map=$$@.map \
 	   $(MB)/user/crtso.o $(call objs_of,$(1)) $(MB)/libc-pic.a -lgcc -o $$@
 endef
+endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck
@@ -372,9 +436,11 @@ base: $(BASEPKG)
 pkgs: $(PKGS)
 
 # Convert ELF -> MINIX a.out with the chmem value above (default 6 KB).
-$(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk
+$(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
+		$(if $(filter 1,$(SHLIBC)),$(SHL)/libc.json)
 	@mkdir -p $(dir $@)
-	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*))
+	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
+	   $(ELF2MNX_LIBC)
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the

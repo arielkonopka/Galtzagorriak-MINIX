@@ -106,6 +106,7 @@
 #include "proc.h"
 #if (CHIP == ARM_CM)
 #include "hal.h"
+#include <minix/shlibc.h>
 #endif
 #if (CHIP == INTEL)
 #include "protect.h"
@@ -917,10 +918,15 @@ register message *m_ptr;	/* pointer to request message */
 
 	src_phys = umap(proc_addr(src_proc), src_space, src_vir,
 			(vir_bytes) bytes);
-	/* The source may be a constant in the text segment (S13). */
+	/* The source may be a constant in the text segment (S13), or in
+	 * the shared libc (R2b.9). */
 	if (src_phys == 0 && src_space == D)
 		src_phys = umap(proc_addr(src_proc), T, src_vir,
 			(vir_bytes) bytes);
+#if (CHIP == ARM_CM)
+	if (src_phys == 0 && src_space == D)
+		src_phys = shlibc_src(src_vir, (vir_bytes) bytes);
+#endif
 #if (SHADOWING == 0)
 	}
 #endif
@@ -1355,8 +1361,34 @@ vir_bytes bytes;		/* # of bytes required */
   phys_bytes p = umap(proc_addr(proc_nr), D, vir_addr, bytes);
 
   if (p == 0) p = umap(proc_addr(proc_nr), T, vir_addr, bytes);
+#if (CHIP == ARM_CM)
+  if (p == 0) p = shlibc_src(vir_addr, bytes);
+#endif
   return(p);
 }
+
+
+#if (CHIP == ARM_CM)
+/*==========================================================================*
+ *				shlibc_src				    *
+ *==========================================================================*/
+PUBLIC phys_bytes shlibc_src(vir_addr, bytes)
+vir_bytes vir_addr;		/* address in the shared libc's flash */
+vir_bytes bytes;		/* # of bytes required */
+{
+/* The shared libc in flash (spec R2b.9) is code and constants that every
+ * process may read (MPU region 0): its strings - error messages, "/bin/sh"
+ * of system() - are passed to system calls like a program's own.  Only
+ * ever a source: the flash is never a copy's destination.
+ */
+  struct shlibc_hdr *h = SHLIBC_HDR;
+
+  if (h->sh_magic != SHLIBC_MAGIC || h->sh_size > SHLIBC_MAX) return(0);
+  if (vir_addr < SHLIBC_BASE || bytes > h->sh_size
+		|| vir_addr - SHLIBC_BASE > h->sh_size - bytes) return(0);
+  return((phys_bytes) vir_addr);
+}
+#endif
 
 
 #if (CHIP == INTEL)
