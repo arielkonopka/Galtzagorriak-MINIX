@@ -879,6 +879,13 @@ int hal_led_pattern(const char *name, unsigned rgb)
 	return 0;
 }
 
+void hal_led_get(unsigned char rgb[3])
+{
+	if (i2c1_read(LP5562_ADDR, 0x04, &rgb[0], 1) < 0) rgb[0] = 0;
+	if (i2c1_read(LP5562_ADDR, 0x03, &rgb[1], 1) < 0) rgb[1] = 0;
+	if (i2c1_read(LP5562_ADDR, 0x02, &rgb[2], 1) < 0) rgb[2] = 0;
+}
+
 /*===========================================================================*
  *				microSD card (SPI mode)			     *
  *===========================================================================*/
@@ -1429,6 +1436,12 @@ unsigned hal_mt_ack(void)
 	LPTIM1->ICR = f;
 	return (f & LPTIM_ISR_CMPM ? HAL_MT_MATCH : 0)
 				| (f & LPTIM_ISR_CMPOK ? HAL_MT_READY : 0);
+}
+
+int hal_buttons_fake(unsigned mask)
+{
+	(void) mask;
+	return -1;			/* real buttons only */
 }
 
 unsigned hal_buttons(void)

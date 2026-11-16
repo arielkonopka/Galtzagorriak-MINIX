@@ -15,7 +15,9 @@ struct utmp {
   char ut_host[16];		/* host name, when remote */
   short ut_pid;			/* process id */
   short int ut_type;		/* type of entry */
-  long ut_time;			/* login/logout time */
+  /* login/logout time, UTC, stored as unsigned 32 bits like ftime32_t
+   * (1970-2106, spec R2d.3) */
+  unsigned long ut_time;		/* timecheck: ok */
 };
 
 #define ut_name ut_user		/* for compatibility with other systems */

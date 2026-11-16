@@ -33,7 +33,14 @@ typedef int ssize_t;
 
 #ifndef _TIME_T
 #define _TIME_T
-typedef long time_t;		   /* time in sec since 1 Jan 1970 0000 GMT */
+typedef long long time_t;	/* seconds since 1 Jan 1970 0000 UTC, signed
+				 * 64-bit (spec R2d.1, ABI 2) */
+#endif
+
+#ifndef _FTIME32_T
+#define _FTIME32_T
+typedef unsigned long ftime32_t;	/* a time as stored (inodes, utmp):
+					 * unsigned 32-bit, 1970-2106 (I.2) */
 #endif
 
 #ifndef _CLOCK_T

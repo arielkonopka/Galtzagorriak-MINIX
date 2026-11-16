@@ -136,7 +136,7 @@ int uid;			/* user id */
   if (entry.ut_pid == 0) entry.ut_pid = getpid();
 
   entry.ut_type = USER_PROCESS;		/* we are past login... */
-  time(&entry.ut_time);
+  entry.ut_time = (unsigned long) time((time_t *) 0);	/* timecheck: ok (utmp: 32 bits) */
 
   /* Write a WTMP record. */
   if (err == 0) {

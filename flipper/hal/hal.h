@@ -56,7 +56,10 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 #define HAL_BL_STEP(s)		((s) >> 24 & 7)
 #define HAL_BL_STEPS		0x07000000u
 #define HAL_BL_LEVEL(s)		((s) >> 16 & 0xFF)
-#define HAL_BL_TIMEOUT(s)	((s) & 0xFFFF)
+#define HAL_BL_TIMEOUT(s)	((s) & 0x3FFF)	/* <= 16383 s (R6.10) */
+#define HAL_BL_MODE(s)		((s) >> 14 & 3)	/* R6.10: 0 auto, 1 forced off,
+						 * 2 forced on; cleared at boot */
+#define HAL_BL_MODES		0x0000C000u
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
@@ -64,6 +67,7 @@ void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
  * driver on its own, in the colours of rgb (bit 2 red, 1 green, 0 blue);
  * hal_led() stops it.  0, or -1: no such pattern. */
 int hal_led_pattern(const char *name, unsigned rgb);
+void hal_led_get(unsigned char rgb[3]);		/* as last set (I2C read) */
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
  * with no redraw.  -1: the SD card has the bus, try again later. */
@@ -77,6 +81,7 @@ int hal_lcd_save(int on);
 #define BTN_OK    0x10
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
+int hal_buttons_fake(unsigned mask);	/* QEMU tests: these held; -1 else */
 
 /* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
  * it, wait some microseconds (busy: only for the slot timing). */

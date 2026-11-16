@@ -160,10 +160,20 @@ The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, a
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
 
+**The clock keeps UTC.** Local time comes from the `TZ` variable, a POSIX rule; put it into
+`~/.profile`, for example for Central Europe:
+
+    TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ
+
+Without `TZ` the time shown is UTC. `date` prints local time, `date -u` UTC. To set the clock (as
+root): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
+(`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
+use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
+
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
-date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC
-holds; after the stock firmware that is your **local** time, but MINIX reads it as UTC, so
-`date` is off by your time-zone offset.
+date, time zone and location (spec Phase 18b), and `/etc/TZ` for the whole system. Until then the
+clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
+but MINIX reads it as UTC: set it once with `date -u ...Z`.
 
 ## 7. Installing apps and updating the system
 
@@ -180,6 +190,12 @@ On the Flipper: `pkg list`, `pkg info NAME`, `pkg files NAME`, `pkg remove NAME`
 ### Updating to a newer build without erasing the card
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
+
+(Not across an ABI change: the new system cannot run the old programs and the old `pkg` refuses
+the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
+(64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
+you need from `/home` first. `ver` and the *About* app show the ABI.)
+
 
 1. Build the new version (section 2).
 2. Send the new system package: `flipper/tools/flsend build/flipper/minix/pkgs/base_X.Y.tar`.
@@ -221,7 +237,7 @@ a hang just reboots the Flipper, like the stock firmware.
   lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
   power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
   [Power and battery](power.md).
-- The time zone is not handled yet (see section 6).
+- The time zone is set per user with `TZ` (section 6); there is no system-wide `/etc/TZ` yet.
 - The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).

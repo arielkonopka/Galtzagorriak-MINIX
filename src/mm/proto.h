@@ -21,7 +21,7 @@ _PROTOTYPE( int size_ok, (int file_type, vir_clicks tc, vir_clicks dc,
 /* exec.c */
 _PROTOTYPE( int do_exec, (void)						);
 _PROTOTYPE( struct mproc *find_share, (struct mproc *mp_ign, Ino_t ino,
-			Dev_t dev, time_t ctime)			);
+			Dev_t dev, ftime32_t ctime)			);
 
 /* forkexit.c */
 _PROTOTYPE( int do_fork, (void)						);

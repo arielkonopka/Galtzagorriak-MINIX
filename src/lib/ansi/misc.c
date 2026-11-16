@@ -17,7 +17,7 @@ struct timeval {
 
 struct timezone {
 	int	tz_minuteswest;	/* minutes west of Greenwich */
-	int	tz_dsttime;	/* type of dst correction */
+	int	tz_dsttime;	/* type of dst correction */ /* timecheck: ok */
 };
 
 int _gettimeofday(struct timeval *tp, struct timezone *tzp);
@@ -25,7 +25,7 @@ int _gettimeofday(struct timeval *tp, struct timezone *tzp);
 #elif	!defined(_POSIX_SOURCE) && !defined(__USG)
 #if	!defined(_MINIX)		/* MINIX has no ftime() */
 struct timeb {
-	long	time;
+	long	time;	/* timecheck: ok (not built: no ftime) */
 	unsigned short millitm;
 	short	timezone;
 	short	dstflag;
@@ -286,7 +286,7 @@ parseDate(register char *buf, register const char *p, struct dsttype *dstinfo)
 static const char *
 parseRule(register char *buf, register const char *p)
 {
-	long time;
+	long time;	/* timecheck: ok (a time of day) */
 	register const char *q;
 
 	if (!(p = parseDate(buf, p, &dststart))) return NULL;
