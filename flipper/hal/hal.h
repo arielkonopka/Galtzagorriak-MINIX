@@ -180,6 +180,7 @@ void hal_adc_stream_stop(void);
  * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
  * all in microseconds (spec R6.6). */
 void hal_ir_carrier(int on);
+void hal_ir_target(int rfid);		/* 0 IR LED, 1 the 125 kHz antenna */
 void hal_ir_freq(unsigned hz, unsigned duty);
 int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);

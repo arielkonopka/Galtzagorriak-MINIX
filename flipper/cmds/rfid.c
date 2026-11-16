@@ -4,6 +4,15 @@
  *					(as the stock app: 5 bytes, hex);
  *					-r: also the timings; up to TRIES
  *					reads of 0.5 s (default 4)
+ *		rfid write EM B0 B1 B2 B3 B4
+ *					make a blank T5577 tag (fob, card)
+ *					an EM4100 with that number, then
+ *					read it back
+ *
+ * Writing a T5577 is done by gaps in the 125 kHz field, with the stock
+ * firmware's timings (lib/lfrfid/tools/t5577.c, in carrier periods of
+ * 8 us): block 0 the configuration (EM4100: RF/64, Manchester, 2 blocks),
+ * blocks 1 and 2 the 64 bits as the tag sends them.
  *
  * /dev/rfid gives the times between the changes of the tag's signal (us,
  * 32-bit), the level of the first unknown.  EM4100 (EM4102, and blank
@@ -103,17 +112,136 @@ static int em_decode(int nd, unsigned char id[5])
 	return 0;
 }
 
+/* ---- writing a T5577 ---- */
+#define T_WAIT		400
+#define T_START_GAP	30
+#define T_WRITE_GAP	18
+#define T_DATA_0	24
+#define T_DATA_1	56
+#define T_PROGRAM	700
+#define T5577_EM4100	0x00148040UL	/* RF/64, Manchester, blocks 1-2 */
+
+static int nt;			/* durations in d[], field on first */
+
+static void put(int on, unsigned long tc)
+{
+	unsigned long us = tc * 8;
+
+	if (nt > 0 && ((nt - 1) & 1) == !on) {	/* the same state: longer */
+		d[nt - 1] += us;
+		return;
+	}
+	if (nt < MAXD) d[nt++] = us;
+}
+
+static void wbit(int b)
+{
+	put(1, b ? T_DATA_1 : T_DATA_0);
+	put(0, T_WRITE_GAP);
+}
+
+static void wreset(void)
+{
+	put(0, T_START_GAP);
+	wbit(1);
+	wbit(0);
+}
+
+static void wblock(int blk, unsigned long data)
+{
+	int i;
+
+	put(1, T_WAIT);
+	put(0, T_START_GAP);
+	wbit(1); wbit(0);			/* opcode 10: page 0 */
+	wbit(0);				/* not locked */
+	for (i = 31; i >= 0; i--) wbit((int) (data >> i) & 1);
+	for (i = 2; i >= 0; i--) wbit((blk >> i) & 1);
+	put(1, T_PROGRAM + T_WAIT);
+	wreset();
+}
+
+static int write_em(unsigned char id[5])
+{
+	unsigned char b[64];
+	unsigned long blk[2];
+	int r, c, p, i, fd, n, t;
+	unsigned char got[5];
+
+	for (i = 0; i < 9; i++) b[i] = 1;
+	for (r = 0; r < 10; r++) {
+		int nib = id[r / 2] >> (r % 2 ? 0 : 4) & 15;
+
+		p = 0;
+		for (c = 0; c < 4; c++) {
+			b[9 + r * 5 + c] = nib >> (3 - c) & 1;
+			p ^= b[9 + r * 5 + c];
+		}
+		b[9 + r * 5 + 4] = p;
+	}
+	for (c = 0; c < 4; c++) {
+		p = 0;
+		for (r = 0; r < 10; r++) p ^= b[9 + r * 5 + c];
+		b[59 + c] = p;
+	}
+	b[63] = 0;
+	blk[0] = blk[1] = 0;
+	for (i = 0; i < 64; i++) blk[i / 32] = blk[i / 32] << 1 | b[i];
+	nt = 0;
+	wblock(0, T5577_EM4100);
+	wblock(1, blk[0]);
+	wblock(2, blk[1]);
+	wreset();
+	put(1, T_WAIT);				/* odd: ends with the field */
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (write(fd, d, nt * 4) != nt * 4) {
+		perror("rfid: write");
+		return 1;
+	}
+	for (t = 0; t < 4; t++) {		/* read it back */
+		if ((n = read(fd, d, sizeof(d))) < 0) break;
+		if (em_decode(n / 4, got)) {
+			if (memcmp(got, id, 5) == 0) {
+				printf("written: EM4100 %02X %02X %02X %02X %02X\n",
+					id[0], id[1], id[2], id[3], id[4]);
+				return 0;
+			}
+			printf("the tag reads EM4100 %02X %02X %02X %02X %02X: "
+				"not written (locked, or not a T5577?)\n",
+				got[0], got[1], got[2], got[3], got[4]);
+			return 1;
+		}
+	}
+	printf("written, but it does not read back as EM4100\n");
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	int fd, n, i, tries = 4, raw = 0, t;
 	unsigned char id[5];
 
+	if (argc == 8 && strcmp(argv[1], "write") == 0
+				&& strcmp(argv[2], "EM") == 0) {
+		for (i = 0; i < 5; i++) {
+			char *e;
+			unsigned long v = strtoul(argv[3 + i], &e, 16);
+
+			if (*e != 0 || v > 255) goto use;
+			id[i] = (unsigned char) v;
+		}
+		return write_em(id);
+	}
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-r") == 0) raw = 1;
 		else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 			tries = atoi(argv[++i]);
 		else {
-			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n");
+use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
+				"       rfid write EM B0 B1 B2 B3 B4\n");
 			return 2;
 		}
 	}

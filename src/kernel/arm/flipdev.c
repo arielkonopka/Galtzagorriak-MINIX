@@ -158,7 +158,8 @@ PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
 PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 2 /dev/rfid */
-PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
+PRIVATE u8_t rf_polls;
+PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */			/* RFID: ms timer polls so far */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;
@@ -248,6 +249,7 @@ FORWARD _PROTOTYPE( int rfid_read, (message *m_ptr, phys_bytes user,
 							int count)	);
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
 FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
+FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -320,6 +322,7 @@ PUBLIC void flipdev_task()
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
+			if (tx_rfid) rfid_tx_off();
 		}
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
@@ -908,7 +911,15 @@ message *m_ptr;
 	return(power_read(user, count));
 
   case RFID_MINOR:
-	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	if (m_ptr->m_type == DEV_WRITE) {	/* field on/off times (T5577) */
+		if (ir_rd || tx_on) return(EBUSY);
+		int rr;
+
+		tx_rfid = TRUE;
+		rr = ir_write(m_ptr, user, count);
+		if (rr != SUSPEND) tx_rfid = FALSE;
+		return(rr);
+	}
 	return(rfid_read(m_ptr, user, count));
 
   case IR_MINOR:
@@ -1260,6 +1271,7 @@ PRIVATE void do_hardint()
   if (tx_on) {
 	if (tx_done) {				/* the frame is out */
 		tx_on = FALSE;
+		if (tx_rfid) rfid_tx_off();
 		if (ir_rd && ir_paused) {	/* the reader's capture again */
 			ir_paused = FALSE;
 			if (ir_rx_arm() < 0) ir_rx_end(EIO);
@@ -1780,6 +1792,14 @@ PUBLIC void flipdev_pulse_poll()
   } else mt_arm(MT_PULSE, RF_POLL_MS);
 }
 
+PRIVATE void rfid_tx_off()
+{
+/* A T5577 write is over: the field off, the transmitter the IR LED's. */
+  hal_rfid_stop();
+  hal_ir_target(0);
+  tx_rfid = FALSE;
+}
+
 PRIVATE unsigned rf_durations(n)
 unsigned n;			/* timestamps in the reader's buffer */
 {
@@ -1831,6 +1851,7 @@ int count;
 	phys_copy(user + i * 4, vir2phys(d), (phys_bytes) k * 4);
 	for (j = 0; j < k; j++) {
 		if (i + j == 0 && (d[0] & IR_FREQ_FLAG)) {
+			if (tx_rfid) return(EINVAL);	/* 125 kHz, fixed */
 			hz = d[0] & 0xFFFFF;
 			duty = (d[0] >> 20) & 0x7F;
 			if (duty == 0) duty = IR_DUTY;
@@ -1857,6 +1878,11 @@ int count;
 	tx_on = FALSE;
 	return(EFAULT);
   }
+  if (tx_rfid) {				/* R6.5: the 125 kHz field */
+	hz = 125000;
+	duty = 50;
+  }
+  hal_ir_target(tx_rfid);
   hal_ir_freq(hz, duty);
   first_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
   tx_t++;
