@@ -24,6 +24,9 @@ list and the app menu. Other programs extend it as **modules**:
 - **Alarms never depend on the desktop.** A module may edit alarm timers; ringing is always
   the C `alert` program (chapter 6).
 - Complex apps still take the whole screen, as today.
+- Every window the desktop draws for a module starts with the same black title bar as the
+  launcher and today's apps ([chapter 4.3](04-screen-apps.md#43-the-look-the-title-bar)); a
+  module only sends the title text.
 
 ## 7.2 The protocol (spec K.3)
 

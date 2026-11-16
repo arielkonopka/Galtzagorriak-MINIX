@@ -931,6 +931,13 @@ tiles, notification list, app menu), extended by modules.
   Modules only get events such as "item 2 selected", so button → pixel (L1) does not depend on a
   module being scheduled, swapped in or between GC cycles.
 - Complex apps may still take the whole screen as today (`libfuri`, Berry `gui` binding).
+- **Title bar convention (owner decision, 2026-11-16).** Every screen of the launcher, the
+  desktop, the apps and the module windows starts with the title bar the launcher and its apps
+  use today: a black bar across the full width of the top text row with the screen's name in
+  white, centred, in capitals (`gui_title()` in `flipper/gui/gui.c`). `libfuri` views, the Berry
+  `gui` binding and desktop `window` records draw the same bar, so the look stays one across C,
+  Berry and shell. Exceptions: the text console, full-screen content where a bar would hide
+  data (e.g. a picture viewer), and `alert` screens, which may invert the whole screen to stand out.
 
 **K.3 Desktop protocol (TSV lines).**
 - Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
