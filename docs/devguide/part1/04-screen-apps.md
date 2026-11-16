@@ -84,10 +84,30 @@ int main(void)
 To build it as a system app, put it in
 `flipper/gui/tally.c` and add `tally` to `GUIAPPS` in `flipper/minix.mk`; that links it with
 `gui.c`. The small built-in apps are the best further examples: `lights.c` (LED and backlight),
-`info.c` (About), `power.c` (a periodic refresh, 4.5), `console.c` (handing the screen to the
+`info.c` (About), `power.c` (a periodic refresh, 4.6), `console.c` (handing the screen to the
 text console).
 
-## 4.3 The launcher and `/etc/apps`
+## 4.3 The look: the title bar
+
+The launcher and every app share one visual convention, and it is a rule (owner decision
+2026-11-16, spec K.2): **each screen starts with the title bar**, a black bar across the full
+width of the top text row with the screen's name in white, centred, in capitals. Call
+`gui_title("NAME")` first after `gui_clear()`, and draw your content below it (from y = 8 on).
+
+- Use the app's launcher label as the title, in capitals (`TALLY`, `POWER`); a sub-screen may
+  use its own name (`SETTINGS`, `HISTORY`).
+- Keep the title short enough to fit with space around it (32 characters is the hard limit of
+  the row; aim for under 16).
+- Do not draw your own variant of the bar (another height, left-aligned text, a frame). If a
+  screen needs more in the bar, such as a page number, propose a `gui` library extension so all
+  apps get it the same way.
+- Exceptions: the text console, full-screen content that a bar would hide (a picture, a
+  graph that needs all 64 rows), and alert screens.
+
+The planned `libfuri` views, the Berry `gui` binding and the desktop's windows draw the same bar,
+so apps look alike whatever they are written in.
+
+## 4.4 The launcher and `/etc/apps`
 
 The launcher (`flipper/gui/launcher.c`) is started as root by `/etc/rc` and shows the entries of
 `/etc/apps`, one per line:
@@ -109,7 +129,7 @@ Tally:nobody:/usr/bin/tally
 - Manifests in packages (label, icon, category, uid, groups) that the launcher reads by itself
   are **(planned)** (spec R5.5, R5.6, F.2).
 
-## 4.4 The foreground app and the long Back press
+## 4.5 The foreground app and the long Back press
 
 When the launcher starts an app it makes it the **foreground app** with
 `ioctl(fd, FGIOCSET, &pid)` on `/dev/lcd` (`<minix/fg.h>`, spec R4b.8). From then on:
@@ -135,7 +155,7 @@ What that means for an app:
 
 When the app exits, the launcher clears the foreground and redraws its menu.
 
-## 4.5 Doing something while waiting for a key
+## 4.6 Doing something while waiting for a key
 
 `gui_key()` blocks, and a blocked process costs no CPU. To refresh the screen every few seconds
 without polling, use `alarm()`: the signal interrupts the wait, `gui_key()` returns 0, and the
@@ -166,7 +186,7 @@ Notes:
 - Never spin on `gui_key_nowait()` in a loop. It keeps the CPU out of its sleep states and steals
   time from everything else. It is meant for draining pending keys, not for waiting.
 
-## 4.6 Keeping an app quick
+## 4.7 Keeping an app quick
 
 The budgets of [chapter 1](01-platform.md#18-responsiveness-is-a-requirement-not-a-wish) apply.
 In practice:
@@ -184,7 +204,7 @@ In practice:
 - **Install it into flash** (`pkg install --flash`) when it is finished, so its text is not
   copied into RAM at every start.
 
-## 4.7 Shell scripts as screen apps
+## 4.8 Shell scripts as screen apps
 
 Any program can be in `/etc/apps`, including a shell script, but a shell costs about 12 KB and
 cannot draw text conveniently. Use scripts in the launcher for actions (toggle something, run a
