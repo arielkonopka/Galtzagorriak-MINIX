@@ -57,6 +57,16 @@
 #define EXC_MEMMANAGE	4
 #define EXC_BUSFAULT	5
 #define EXC_USAGEFAULT	6
+#define EXC_DEBUGMON	12	/* R4a.6: a DWT watchpoint hit */
+
+/* DWT comparators, watching stack guard words (R4a.6). */
+#define DEMCR		REG32(0xE000EDFC)
+#define DEMCR_TRCENA	(1u << 24)
+#define DEMCR_MON_EN	(1u << 16)
+#define DWT_COMP(n)	REG32(0xE0001020 + 16 * (n))
+#define DWT_MASK(n)	REG32(0xE0001024 + 16 * (n))
+#define DWT_FUNC(n)	REG32(0xE0001028 + 16 * (n))
+#define DWT_FUNC_WRITE	6	/* data address, write: debug event */
 #define EXC_SVCALL	11
 #define EXC_PENDSV	14
 #define EXC_IRQ0	16
