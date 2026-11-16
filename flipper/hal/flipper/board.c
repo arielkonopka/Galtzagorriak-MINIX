@@ -1922,6 +1922,8 @@ int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
 						| (4u << ADC_CFGR2_OVSS_Pos);
 	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
 	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
+	/* VREFINT before and after the pins, averaged: the buffer is still
+	 * settling right after VRR (seen: +-1.5 % between readings) */
 	if ((vref = adc_conv(0)) <= 0) { r = -1; goto off; }
 	for (pin = 0; pin < HAL_GPIO_PINS; pin++) {
 		ch = adc_ch[pin];
@@ -1938,6 +1940,7 @@ int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
 		mv[pin] = raw >= 4095 ? HAL_ADC_OVER : (int) (3600u * VREFINT_CAL
 				/ (unsigned) vref * (unsigned) raw / 4095u);
 	}
+	if ((raw = adc_conv(0)) > 0) vref = (vref + raw + 1) / 2;
 	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VREF+ */
 off:
 	if (ADC1->CR & ADC_CR_ADEN) {
