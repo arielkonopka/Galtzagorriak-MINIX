@@ -106,6 +106,8 @@ static int fb_get(const uint8_t *fb, int x, int y)
 
 /* Render the 128x64 framebuffer at full resolution, 128x32 characters,
  * using UTF-8 half blocks (upper pixel, lower pixel per character cell). */
+int hal_lcd_save(int on) { (void) on; return 0; }
+
 int hal_lcd_flush(const uint8_t *fb)
 {
 	static const char *const cell[4] = { " ", "▀", "▄", "█" };

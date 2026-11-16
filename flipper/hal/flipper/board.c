@@ -490,6 +490,17 @@ int hal_lcd_flush(const uint8_t *fb)
 	return 0;
 }
 
+int hal_lcd_save(int on)
+{
+	/* as u8g2's ST7567 power save (stock firmware's display driver) */
+	static const uint8_t save[] = { 0xAE, 0xA5 }, wake[] = { 0xA4, 0xAF };
+
+	if (!(GPIOC->ODR & (1u << 12))) return -1;	/* the SD's transfer */
+	if (on) lcd_cmds(save, sizeof save);
+	else lcd_cmds(wake, sizeof wake);
+	return 0;
+}
+
 /*===========================================================================*
  *				I2C1 ("power" bus) and LP5562		     *
  *===========================================================================*/
