@@ -115,9 +115,11 @@ both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), becaus
 wants a password only answers now and then.
 
 `-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
-word (some door entry systems try to overwrite a copy they find). Write the password down: it
-is needed to change the tag afterwards, and this version cannot send one yet. `-lock` instead
-sets the chip's lock bit, which can never be undone by anyone, you included. A write to `/dev/rfid` is
+word (some door entry systems try to overwrite a copy they find). Write the password down:
+changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
+unless `-pass` gives a new one). A tag written by another cloner may have a password you do
+not know; then it cannot be rewritten. `-lock` instead sets the chip's lock bit, which can
+never be undone by anyone, you included. A write to `/dev/rfid` is
 a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
 spaces. Emulating a tag is **(planned)**.
 

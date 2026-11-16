@@ -18,6 +18,10 @@
  *					to overwrite a copy they find).
  *					Write it down: it is needed to
  *					change the tag afterwards
+ *		  -with HEX		the password the tag has now, to
+ *					change a tag written with -pass (it
+ *					keeps the password unless -pass
+ *					gives a new one)
  *		  -lock			the T5577 lock bit instead: the
  *					blocks can then never be written
  *					again, by anyone, you included
@@ -167,6 +171,7 @@ static void wreset(void)
 
 static int wlock;			/* -lock: the T5577 lock bit */
 static unsigned long wpass;		/* -pass: its password, or 0 */
+static unsigned long wsend;		/* -with HEX: the one it has now */
 
 static void wblock(int blk, unsigned long data)
 {
@@ -175,6 +180,8 @@ static void wblock(int blk, unsigned long data)
 	put(1, T_WAIT);
 	put(0, T_START_GAP);
 	wbit(1); wbit(0);			/* opcode 10: page 0 */
+	if (wsend)				/* the tag's password first */
+		for (i = 31; i >= 0; i--) wbit((int) (wsend >> i) & 1);
 	wbit(wlock);				/* for ever, if set */
 	for (i = 31; i >= 0; i--) wbit((int) (data >> i) & 1);
 	for (i = 2; i >= 0; i--) wbit((blk >> i) & 1);
@@ -289,7 +296,8 @@ static int write_em(unsigned char id[5], int tries)
 		wblock(1, blk[0]);		/* the data first and the */
 		wblock(2, blk[1]);		/* config last: once PWD is */
 		if (wpass) wblock(7, wpass);	/* set, a write needs it */
-		wblock(0, T5577_EM4100 | (wpass ? T5577_PWD : 0));
+		wblock(0, T5577_EM4100
+			| (wpass || (wsend && !wlock) ? T5577_PWD : 0));
 		wreset();
 		if (send(fd) < 0) return 1;
 		if ((v = verify(fd, id, got)) == 1) {
@@ -368,6 +376,9 @@ int main(int argc, char **argv)
 			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
 				wpass = strtoul(argv[++i], &e, 16);
 				if (*e != 0 || wpass == 0) goto use;
+			} else if (strcmp(argv[i], "-with") == 0 && i + 1 < argc) {
+				wsend = strtoul(argv[++i], &e, 16);
+				if (*e != 0 || wsend == 0) goto use;
 			} else goto use;
 		}
 		if (tries < 1 || (wlock && wpass)) goto use;
@@ -391,9 +402,10 @@ int main(int argc, char **argv)
 			tries = atoi(argv[++i]);
 		else {
 use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
-				"       rfid write [-n N] [-pass HEX] [-lock]"
-				" EM B0 B1 B2 B3 B4\n"
-				"       rfid copy [-n N] [-pass HEX] [-lock]\n");
+				"       rfid write [-n N] [-pass HEX] "
+				"[-with HEX] [-lock] EM B0 B1 B2 B3 B4\n"
+				"       rfid copy [-n N] [-pass HEX] "
+				"[-with HEX] [-lock]\n");
 			return 2;
 		}
 	}
