@@ -173,6 +173,7 @@ FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int adc_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -278,12 +279,18 @@ PUBLIC void flipdev_task()
 /* /dev/subghz, receive only: write a frequency in Hz (the stock bands) to
  * listen there, "0" to stop; a read gives one line,
  *	rssi=-92 freq=433919830		or	off freq=433919830
+ * A read also samples the RSSI as fast as it can for SG_PEAK_MS (between
+ * samples the other tasks run; user processes wait, so it is short) and
+ * reports the peak: a remote's bursts are a few ms long, one sample would
+ * mostly miss them.
+ *	rssi=-92 peak=-41 freq=433919830
  * It keeps listening between commands (the shell opens and closes the
  * device for each); "0" puts it to sleep, and so does a minute without a
  * read (subghz_minute: ~15 mA in RX).  No transmit path. */
 PRIVATE u8_t sg_state;		/* SG_ON listening, SG_READ read lately */
 #define SG_ON		1
 #define SG_READ		2
+#define SG_PEAK_MS	30
 
 PUBLIC void subghz_minute()
 {
@@ -318,6 +325,17 @@ int count;
   return(count);
 }
 
+PRIVATE int sg_put(line, n, v)		/* a signed number */
+char *line;
+int n, v;
+{
+  if (v < 0) {
+	line[n++] = '-';
+	v = -v;
+  }
+  return(adc_put(line, n, v));
+}
+
 PRIVATE int subghz_read(user, count)
 phys_bytes user;
 int count;
@@ -325,21 +343,23 @@ int count;
   char line[40];
   const char *k;
   u32_t hz;
-  int rssi = hal_subghz_rssi(&hz), n = 0;
+  int rssi = hal_subghz_rssi(&hz), n = 0, peak, r;
+  u32_t t0 = hal_cycles();
 
   sg_state |= SG_READ;
   if (rssi == HAL_SUBGHZ_OFF) {
 	for (k = "off"; *k != 0; k++) line[n++] = *k;
   } else {
-	for (k = "rssi="; *k != 0; k++) line[n++] = *k;
-	n = adc_put(line, n, rssi < 0 ? -rssi : rssi);
-	if (rssi < 0) {			/* adc_put prints no sign */
-		int j;
-
-		for (j = n; j > 5; j--) line[j] = line[j - 1];
-		line[5] = '-';
-		n++;
+	peak = rssi;
+	while (hal_cycles() - t0 < SG_PEAK_MS * 1000u * CYC_US) {
+		task_yield();		/* the others first: no busy wait */
+		if ((r = hal_subghz_rssi(&hz)) > peak && r != HAL_SUBGHZ_OFF)
+			peak = r;
 	}
+	for (k = "rssi="; *k != 0; k++) line[n++] = *k;
+	n = sg_put(line, n, rssi);
+	for (k = " peak="; *k != 0; k++) line[n++] = *k;
+	n = sg_put(line, n, peak);
   }
   for (k = " freq="; *k != 0; k++) line[n++] = *k;
   n = adc_put(line, n, (int) hz);

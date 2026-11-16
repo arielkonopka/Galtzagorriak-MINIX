@@ -48,12 +48,13 @@ never transmits through this device.
 
 ```
 echo 433920000 > /dev/subghz    # listen at 433.92 MHz (in Hz)
-cat /dev/subghz                  # rssi=-95 freq=433919830
+cat /dev/subghz                  # rssi=-95 peak=-60 freq=433919830
 echo 0 > /dev/subghz             # stop
 ```
 
 Frequencies are those the stock firmware accepts: 300–348, 387–464 and 779–928 MHz; anything else
-is refused. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
+is refused. `peak` is the strongest of the samples taken during the read (about 30 ms), so short bursts of a
+remote are not missed. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
 signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
 radio keeps listening until `echo 0`, or until nobody has read it for about a minute (it draws
 about 15 mA while listening). A spectrum view and
