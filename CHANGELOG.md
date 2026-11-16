@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R6.4, part 1) `cat /dev/adc` shows the voltage in mV on the GPIO header pins with an ADC input (2, 3, 4, 7, 15, 16) that are left analog (`gpio N off`, the default), and the supply (VDDA): 16x hardware oversampling, calibrated by the chip's internal reference. Base 3.64.
 - (R6.3) Timed vibration: writing a number of milliseconds (2–999) to `/dev/vibro` buzzes that long, ended by the kernel's ms timer (also from Stop2), so the program need not wait; `0` and `1` still turn it off and on.
 - (R6.7, part 1) iButton: reading `/dev/ibutton` with a key on the contacts gives its 8-byte ROM (family, serial, CRC checked); no key: ENODEV. 1-Wire timing in the kernel with interrupts masked at most 70 µs per bit. Base 3.63.
 - (R4a.5, part) Flash ECC: an uncorrectable error stops the system with "flash ECC: uncorrectable error at ADDRESS" instead of an unexplained exception; a corrected single-bit error is reported in one line (a page wearing out).

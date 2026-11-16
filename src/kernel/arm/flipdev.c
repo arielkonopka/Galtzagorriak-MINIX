@@ -66,7 +66,8 @@
 #define IR_MINOR	7
 #define POWER_MINOR	8	/* the fuel gauge, read only (T15a) */
 #define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
-#define LAST_MINOR	9
+#define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
+#define LAST_MINOR	10
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -166,6 +167,7 @@ FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int ow_read_rom, (phys_bytes user) );
+FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -262,6 +264,54 @@ PUBLIC void flipdev_task()
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
   }
+}
+
+
+/*===========================================================================*
+ *				adc_read				     *
+ *===========================================================================*/
+/* /dev/adc (R6.4, part 1): one line with the header pins' voltages in mV,
+ *	pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=3297 vdda=3301
+ * "-": the pin is not left analog ("gpio N off", the default), so it is
+ * not measured.  PB3 and PB2 have no ADC input.  ~0.5 ms, on demand. */
+PRIVATE const char adc_names[HAL_GPIO_PINS][4] =
+	{ "pa7", "pa6", "pa4", "", "", "pc3", "pc1", "pc0" };
+
+PRIVATE int adc_put(line, n, v)
+char *line;
+int n, v;
+{
+  char d[6];
+  int j = 0;
+
+  if (v < 0) { line[n++] = '-'; return(n); }
+  do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+  while (j > 0) line[n++] = d[--j];
+  return(n);
+}
+
+PRIVATE int adc_read(user, count)
+phys_bytes user;
+int count;
+{
+  char line[80];
+  int mv[HAL_GPIO_PINS], vdda, i, n = 0;
+  const char *k;
+
+  if ((vdda = hal_adc_mv(mv)) < 0) return(ENXIO);
+  for (i = 0; i < HAL_GPIO_PINS; i++) {
+	if (adc_names[i][0] == 0) continue;
+	for (k = adc_names[i]; *k != 0; k++) line[n++] = *k;
+	line[n++] = '=';
+	n = adc_put(line, n, mv[i]);
+	line[n++] = ' ';
+  }
+  for (k = "vdda="; *k != 0; k++) line[n++] = *k;
+  n = adc_put(line, n, vdda);
+  line[n++] = '\n';
+  if (count > n) count = n;
+  phys_copy(vir2phys(line), user, (phys_bytes) count);
+  return(count);
 }
 
 
@@ -527,6 +577,11 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case ADC_MINOR:
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
+	return(adc_read(user, count));
 
   case IBUTTON_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);

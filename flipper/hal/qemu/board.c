@@ -558,6 +558,7 @@ unsigned hal_mt_ack(void)
 	}
 	return f;
 }
+int hal_adc_mv(int *mv) { (void) mv; return -1; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

@@ -1779,6 +1779,82 @@ int hal_gpio_read(unsigned pin)
 	return gpio_get(hdr[pin].port, hdr[pin].pin);
 }
 
+/* ADC on the header pins (R6.4, part 1: one-shot).  ADC1 channels of the
+ * eight pins (0: none, PB3/PB2), and VREFINT (channel 0) to know VDDA:
+ * its factory value was taken at 3.6 V (VREFINT_CAL, ST's LL header).
+ * Synchronous clock HCLK/4 (16 MHz), 92.5-cycle sampling, 16x hardware
+ * oversampling (result shifted back to 12 bits).  The ADC is powered only
+ * for the reading, then back in deep power-down. */
+static const uint8_t adc_ch[HAL_GPIO_PINS] = { 12, 11, 9, 0, 0, 4, 2, 1 };
+#define VREFINT_CAL	(*(const volatile uint16_t *) 0x1FFF75AAu)
+
+static int adc_wait(volatile uint32_t *reg, uint32_t bit, int set)
+{
+	uint32_t start = DWT->CYCCNT;
+
+	while (((*reg & bit) != 0) != set)
+		if (ms_since(start) > 2) return -1;
+	return 0;
+}
+
+static int adc_conv(unsigned ch)
+{
+	ADC1->SQR1 = ch << ADC_SQR1_SQ1_Pos;		/* one conversion */
+	ADC1->ISR = ADC_ISR_EOC;
+	ADC1->CR |= ADC_CR_ADSTART;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_EOC, 1) < 0) return -1;
+	return (int) (ADC1->DR & 0xFFF);
+}
+
+int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
+{
+	unsigned pin, ch;
+	int vref, raw, r = 0;
+
+	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN;
+	(void) RCC->AHB2ENR;
+	ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ADC_CCR_CKMODE)
+				| (3u << ADC_CCR_CKMODE_Pos) | ADC_CCR_VREFEN;
+	ADC1->CR &= ~ADC_CR_DEEPPWD;
+	ADC1->CR |= ADC_CR_ADVREGEN;
+	hal_ow_delay(25);			/* the regulator: 20 us */
+	ADC1->CR |= ADC_CR_ADCAL;
+	if (adc_wait(&ADC1->CR, ADC_CR_ADCAL, 0) < 0) { r = -1; goto off; }
+	ADC1->ISR = ADC_ISR_ADRDY;
+	ADC1->CR |= ADC_CR_ADEN;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_ADRDY, 1) < 0) { r = -1; goto off; }
+	ADC1->CFGR = 0;				/* 12 bits, right, single */
+	ADC1->CFGR2 = ADC_CFGR2_ROVSE | (3u << ADC_CFGR2_OVSR_Pos)
+						| (4u << ADC_CFGR2_OVSS_Pos);
+	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
+	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
+	if ((vref = adc_conv(0)) <= 0) { r = -1; goto off; }
+	for (pin = 0; pin < HAL_GPIO_PINS; pin++) {
+		ch = adc_ch[pin];
+		mv[pin] = -1;
+		/* only pins left analog ("off"): a reading never changes a
+		 * pin someone set up */
+		if (ch == 0 || ((hdr[pin].port->MODER >> (hdr[pin].pin * 2)) & 3)
+								!= MODE_ANALOG)
+			continue;
+		if ((raw = adc_conv(ch)) < 0) continue;
+		/* VDDA = 3600 * CAL / vref; mV = VDDA * raw / 4095 */
+		mv[pin] = (int) (3600u * VREFINT_CAL / (unsigned) vref
+						* (unsigned) raw / 4095u);
+	}
+	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VDDA */
+off:
+	if (ADC1->CR & ADC_CR_ADEN) {
+		ADC1->CR |= ADC_CR_ADDIS;
+		(void) adc_wait(&ADC1->CR, ADC_CR_ADEN, 0);
+	}
+	ADC1->CR &= ~ADC_CR_ADVREGEN;
+	ADC1->CR |= ADC_CR_DEEPPWD;
+	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
+	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
+	return r;
+}
+
 /*===========================================================================*
  *				Infrared				     *
  *===========================================================================*/

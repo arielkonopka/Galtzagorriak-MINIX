@@ -134,6 +134,9 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
        HAL_GPIO_IN_DOWN, HAL_GPIO_OFF };	/* OFF: analog, high impedance */
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
+/* R6.4: mV on each header pin left analog ("off") with an ADC input, -1
+ * for the others; returns VDDA in mV, or -1 (no ADC). */
+int hal_adc_mv(int *mv);
 
 /* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
  * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
