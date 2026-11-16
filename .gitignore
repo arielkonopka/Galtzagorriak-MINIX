@@ -2,3 +2,4 @@ flipper/build/
 # Remote codes, BadUSB scripts etc. from a stock-firmware SD card: each
 # user brings their own, they are not distributed with the system.
 flipper_assets/
+__pycache__/

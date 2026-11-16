@@ -199,6 +199,12 @@ int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us);
 int hal_pulse_ack(void);
 unsigned hal_pulse_left(void);
 void hal_pulse_stop(void);
+/* R6.5: reading a 125 kHz tag: the field on, the antenna's comparator
+ * captured on both edges, n 32-bit timestamps (us) by DMA into dst (the
+ * caller pins it; hal_pulse_left tells the words not yet written);
+ * hal_rfid_stop turns it all off.  -1: no reader. */
+int hal_rfid_read(uint32_t dst, unsigned n);
+void hal_rfid_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).

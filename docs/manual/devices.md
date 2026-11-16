@@ -76,6 +76,22 @@ radio keeps listening until `echo 0`, or until nobody has read it for about a mi
 about 15 mA while listening). A spectrum view and
 recording will build on this.
 
+## 125 kHz RFID tags (`rfid`, `/dev/rfid`)
+
+Hold a tag (a card, a key fob) flat against the middle of the Flipper's back:
+
+```
+rfid
+EM4100 04 00 98 3D C5
+```
+
+The number is the one the stock app shows and saves (`Data:` in its `.rfid` files). `rfid -r`
+also prints the timings, `-n N` makes up to N attempts of half a second (default 4). Without a
+tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
+as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns the 125 kHz field on
+for half a second and returns the times between the changes of the tag's signal, in µs, as
+32-bit numbers. Writing blank T5577 fobs and emulating a tag are **(planned)**.
+
 ## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
 
 The Flipper's real-time clock keeps UTC on the battery, also while the Flipper is off. Setting

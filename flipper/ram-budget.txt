@@ -36,7 +36,10 @@
 # kernel so far: +16 of its +64 B.
 # R4b.7 part 1 (IR receive by TIM2 capture + DMA): kernel -20 B: the
 # receive ring's state and its IRQ handler slot (8 slots again).
-kernel    160    14640  14800
+# R6.5 part 1 (/dev/rfid read): kernel +8 B: the RFID read's ms-timer
+# slot (2 B), the input kind and poll count (2 B), padding.  R6 budget
+# +300 B.
+kernel    160    14648  14808
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172
