@@ -199,6 +199,9 @@ FORWARD _PROTOTYPE( int adcs_read, (message *m_ptr, phys_bytes user, int count) 
 FORWARD _PROTOTYPE( void adcs_end, (int ok) );
 /* the ADC stream (R6.4 part 2, see adcs_read) */
 PRIVATE u32_t as_cfg;		/* rate << 4 | pin; 0: not set */
+/* (sg_state, the Sub-GHz receiver: SG_ON listening, SG_READ read lately;
+ * here, next to the stream's bytes, it costs no padding) */
+PRIVATE u8_t sg_state;
 PRIVATE u8_t as_proc;		/* the reader + 1, 0: none */
 PRIVATE u8_t as_caller, as_done;
 PRIVATE u16_t as_count;
@@ -320,7 +323,6 @@ PUBLIC void flipdev_task()
  * It keeps listening between commands (the shell opens and closes the
  * device for each); "0" puts it to sleep, and so does a minute without a
  * read (subghz_minute: ~15 mA in RX).  No transmit path. */
-PRIVATE u8_t sg_state;		/* SG_ON listening, SG_READ read lately */
 #define SG_ON		1
 #define SG_READ		2
 #define SG_PEAK_MS	30
