@@ -9,6 +9,7 @@ that brings them.
 2. [Power and battery](power.md): reading the battery current and the idle draw.
 3. [Hardware devices](devices.md): the `/dev` files for the Flipper's hardware (iButton, header pin voltages).
 4. [Buttons and gestures](buttons.md): holding two buttons to force the backlight off or on (planned).
+5. [The SD card](sdcard.md): power loss, the boot-time check and pulling the card out (planned).
 
 More chapters (using the launcher and apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in

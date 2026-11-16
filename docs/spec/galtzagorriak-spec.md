@@ -1075,6 +1075,215 @@ anything that breaks a link to see the reaction.
 
 ---
 
+## N. SD card: power loss and card removal (owner request, 2026-11-16)
+
+The owner asked whether MINIX has journaling. It has none: MINIX FS writes back through the
+buffer cache, `update` syncs every 30 s, and nothing records whether a file system was left in a
+consistent state. Only internal flash is power-cut safe today (`tools/powercut.py`). **Owner
+decision (2026-11-16): no journaling.** Instead a "cleanly unmounted" flag, `fsck` at boot only
+after an unclean end with its `-v` output on the Flipper's screen, and a sync before ship mode.
+The owner added (2026-11-16): the main threat is **someone pulling the card out while it is in
+use**, more than a flat battery. N.6 covers that.
+
+What can end the system without a sync, and what each case needs:
+
+| Event | Today | After this section |
+|---|---|---|
+| `halt`, power menu, automatic power-off (R7.1) | MM kills, FS `SYNC`, ship mode | same, and every file system is marked clean (N.1) |
+| Low battery (R6.1 `SIGPWR`, R7.1 SYSDWN) | `SIGPWR` to INIT, which ignores it | INIT does an orderly halt (N.5) |
+| Battery cut by its protection, brownout, Left+Back reset, watchdog, panic | unclean, never checked | unclean only if a write was in flight in the last ~30–60 s (N.2); then `fsck` at the next boot (N.3) |
+| Card pulled out | FS drops the buffers that fail to write, the system runs on with a missing root | writes stop, dirty buffers stay in RAM, "Put the card back" on the screen; the same card resumes with no loss (N.6) |
+
+### N.1 Two flag bits in the super block (0 B RAM)
+
+- The 16-bit `s_pad` field of the V2 super block (offset 18) becomes `s_flags`. Bit 0 **CLEAN**:
+  nothing was written since the file system was last consistent. Bit 1 **CHECK**: it was found
+  unclean and has not been checked since. These are the bits Linux's `minix` driver already uses
+  in the same field (`MINIX_VALID_FS` = 1, `MINIX_ERROR_FS` = 2) and bit 0 is MINIX 3's
+  `MFSFLAG_CLEAN`, so util-linux `fsck.minix` on a PC reads and sets them the same way. Old
+  readers ignore the field.
+- `mkfs`, `flipper/tools/mkfsimg.py` and `/etc/setup` write CLEAN = 1, CHECK = 0.
+- The FS never keeps its own copy of the on-disk bits: it changes them by read-modify-write of
+  block 1 through the buffer cache, written through at once. `fsck` writes the same block
+  through the block device, which goes through the same cache, so the two never disagree.
+  In-core state lives in spare bits of the in-core `s_pad` (bit 15 "written since the last
+  sync", bit 14 "CLEAN on disk"); these bits are masked out of every disk write. FS static
+  RAM: **+0 B**.
+- **Mount** (also the root at boot), read-write: if CLEAN is 0, set CHECK = 1 on disk at once
+  (one 1 KB SD write, only after an unclean end). Read-only mounts write nothing.
+- **First write** after the flag is CLEAN on disk: before any other block of that device goes
+  to the card, write CLEAN = 0 synchronously. The hook is the one write path in `cache.c`
+  (`rw_block` and `rw_scattered`, WRITING), so the order is guaranteed without touching the
+  callers.
+
+### N.2 Clean again when idle
+
+- In `do_sync` (called by `update` every 30 s, and by `sync`): a read-write file system whose
+  flag is not CLEAN on disk is marked CLEAN when (a) nothing was written to it since the
+  previous sync, (b) no buffer or in-core inode of it is dirty, and (c) no in-core inode of it
+  has `i_nlinks == 0` while it is on disk (an unlinked file still open; pipes are never on disk,
+  T9). So a file system becomes clean 30–60 s after its last write burst.
+- Cost: two 1 KB SD writes per write burst on that file system (CLEAN off, CLEAN on), none while
+  idle. A program that writes the card often (e.g. a statistics logger) should batch its writes
+  (every 15 min, or on clean shutdown) rather than writing each sample; the manual says so.
+- Effect: most of the time the card is clean. A power loss, reset or card removal while the
+  Flipper is idle needs no check at all.
+- **No atime writes on read** (needed for N.2 and N.3, and it saves SD writes on every `exec`):
+  a read sets `ATIME` in the in-core inode but no longer marks it dirty
+  (`src/fs/read.c`); the access time reaches the card only when the inode is written for
+  another reason. `stat` still shows it while the inode is in core.
+- **Orderly shutdown.** MM's `do_reboot` already sends `SYNC` after killing every process. It
+  now sends `SYNC` with a "shutdown" flag: FS flushes and marks every read-write file system
+  CLEAN unconditionally (CHECK stays as it is on disk). The SD driver already waits for the
+  card's busy signal after each write (`sd_wait_ready`), so when `SYNC` returns the data is in
+  the card. `hal_power_off` (ship mode) is only reached through `wreboot(RBT_HALT)`, after it.
+- The idle ladder's "SD card power off" step (R7.1) runs only after a sync with nothing dirty,
+  i.e. when the card is CLEAN.
+
+### N.3 `fsck` at boot, only when needed, on the screen
+
+- `fsck` (V2, `src/commands/simple/fsck.c`) is built, goes into the base flash image (it runs
+  before `/usr` is mounted; text XIP from flash) and gets new options:
+  - `-p` (preen): read the super block; if CLEAN = 1 and CHECK = 0, print nothing and exit 0
+    (one block read, ≈ 2 ms). Otherwise check and repair automatically (as `-a`).
+  - `-v`: verbose for a 32×10 LCD console: one header line (`fsck /dev/hd1 /: unclean`, plus
+    the last reset cause from `hal_reset_cause`, e.g. `(watchdog)`), the current phase with a
+    percentage updated in place at least once a second, one short line per repair, and a summary
+    (`fixed 3, left 0, 4.1 s`). Lines ≤ 32 characters.
+  - Exit status as BSD: 0 clean, 1 repaired, 2 root repaired (reboot now), 4 errors left,
+    8 could not check (no memory, read error). The existing `-a -r -l -s -c -i -z` stay.
+  - After a successful check: CHECK = 0; on an unmounted file system also CLEAN = 1.
+- `/etc/rc`, before anything else writes the card (before `printroot >/etc/mtab`):
+  1. `fsck -p -v /dev/hd1` (root, mounted). Exit 2: show the summary until a key or 10 s, then
+     `reboot` at once (BSD practice: the in-core FS state may be older than the repaired disk).
+     N.2's "no atime writes" keeps the in-core inodes clean at that point, so the reboot's sync
+     cannot write stale inodes back.
+  2. `fsck -p -v` on `/usr` and `/home` **before** mounting them (unmounted: no cache issues).
+  3. Exit 4 or 8 on `/usr` or `/home`: mount it read-only (`mount -r`) and say so; the launcher
+     shows a notice "Card has errors: run fsck" until the next clean check.
+- The output goes to the console, which is the LCD while the launcher has not started (boot
+  messages are already shown there). If anything was repaired the summary stays on screen until a
+  key or 5 s. The `/usr` and `/home` output is also appended to `/usr/adm/fsck.log` (kept under
+  16 KB) once `/usr` is mounted read-write. A root repair is shown on screen only: writing a log
+  to the root just before the reboot is what the reboot avoids.
+- **Skip:** holding Back during a `/usr` or `/home` check stops it; that file system is mounted
+  read-only with CHECK still set, so the next boot checks it again. The root check cannot be
+  skipped (it is small, N.4).
+- First boot after updating to this version: existing cards have `s_flags` = 0, so each file
+  system is checked once. CHANGELOG and manual say so.
+
+### N.4 `fsck` memory: bounded for any card below 4 GB
+
+Stock `fsck` keeps five bit maps and a link-count byte per inode in RAM. On the 3.8 GB card
+laid out by `/etc/setup` (1 KB blocks, 1 KB zones):
+
+| File system | Zones | Inodes | Stock `fsck` needs | After N.4 |
+|---|---|---|---|---|
+| `/` (`/dev/hd1`, 32 MB) | 32 K | ≤ 8 K | ≈ 19 KB | ≈ 12 KB, 1 pass |
+| `/usr` (`/dev/hd2`, 2 GB) | 2 M | 65 535 (`INODE_MAX`) | ≈ 600 KB (2 × 256 KB zone maps, 64 KB counts) | ≤ 64 KB, 4 zone passes |
+| `/home` (rest, ≈ 1.5–1.9 GB) | 1.5–1.9 M | 65 535 | ≈ 450–550 KB | ≤ 64 KB, 3–4 zone passes |
+
+About 106 KB is free at boot (nothing else runs before the launcher), so the stock program
+cannot check `/usr` or `/home` at all. Changes, all in `fsck`, no format change:
+- The `spec_imap`/`spec_zmap` maps are allocated only when `-i`/`-z` is given. The disk maps are
+  compared one 1 KB block at a time (`chkmap` streams), not loaded whole.
+- The link-count array covers only inodes up to the highest one in use in the disk inode map
+  (inodes are allocated from the bottom: a card with 5 000 files needs ≈ 5 KB). If that does not
+  fit, the tree walk is repeated per inode range.
+- **Zone windows.** The computed zone map is a window of W zones (W from the memory left, at
+  most `fsck_mem` in `/etc/rc.conf`, default 64 KB, minimum 8 KB). Pass 1 walks the tree as
+  today (directories, link counts, inode map) and marks zones inside window 0; it also records
+  per used inode one byte with the windows its zones touch. Each later pass reads only the
+  inodes, indirect and double-indirect blocks that touch its window, marks the zones, finds
+  duplicates, and compares with that slice of the disk map. Typical cost of the extra passes:
+  one more read of the used inodes and indirect blocks in total, since a file's zones are
+  mostly in one window.
+- Optional, for `/etc/setup` on new cards: `mkfs -i 16384` for `/usr` (packages are few files)
+  cuts its inode table, map and count array by 4×.
+- `chmem` of `fsck`: the window size plus ≈ 24 KB; it runs at boot when the RAM is free.
+- A PC fallback for a bad case: util-linux `fsck.minix -av /dev/sdX2` checks the same file
+  systems on a computer (the manual shows how).
+
+Time targets (SD ≈ 300 KB/s single-block, more with multi-block, R4b.9): root ≤ 3 s; a card
+with ≤ 5 000 files and ≤ 1 GB used ≤ 30 s for `/usr` and `/home` together; nothing at all on a
+clean card (three super block reads). Progress at least once a second (N.3).
+
+### N.5 Low battery and other power-off paths
+
+- INIT handles `SIGPWR` (R6.1) like the power menu's power off: `SIGTERM` to all processes,
+  up to 2 s grace, then `reboot(RBT_HALT)` (N.2 marks the card clean, then ship mode). The
+  whole path takes ≤ 3 s; the low-battery threshold (R7.1, default SYSDWN) must leave at least
+  10 s of battery under full load.
+- Every software power-off (power menu, `halt`, automatic power-off, low battery) goes through
+  `reboot(RBT_HALT)`; no code calls `hal_power_off` another way.
+- Hardware events cannot sync: Left+Back reset, the battery's own protection, watchdog, panic.
+  N.2 makes them harmless when idle and N.3 repairs the rest. The manual says that Left+Back
+  does not save.
+
+### N.6 Card pulled out while in use (owner, 2026-11-16)
+
+The card has a card-detect switch on PC10 (configured in `hal_disk_init`, never read today). Its
+EXTI line 10 belongs to the Up button (PB10), so it is **polled**: before every SD command, and
+in the clock task each tick while the card is selected or a buffer is dirty (one GPIO read, 0 B
+RAM). A socket's detect switch opens while the contacts may still touch, but the timing is not
+guaranteed: the write in flight can be lost or torn (1 KB block = two 512 B sectors). The aim is
+therefore: **nothing else is lost, and nothing is written to the wrong card**.
+
+- **R-N6.1 Freeze.** When the line says "no card", or a transfer fails and the line then says
+  "no card", the SD driver returns a distinct error (`ENXIO`) for every request until the card
+  is back. FS treats `ENXIO` on write as "keep the buffer dirty", not as today's "Unrecoverable
+  write error" which drops it (`cache.c`), and does not count it as a write for N.2. Reads fail
+  with `EIO` to the program. `update` keeps trying every 30 s at no cost.
+- **R-N6.2 Tell the user.** The kernel sets a "card out" state; the launcher (or the console if
+  no launcher) shows "SD card removed: put it back" with a short vibration. Apps running from
+  flash keep running; programs that need a file wait or fail with `EIO`.
+- **R-N6.3 Same card only.** When the card comes back the driver initialises it and compares its
+  CID (manufacturer, serial) and the root super block with the copies taken at boot (16 B CID +
+  a 4 B CRC of block 1 of each mounted file system, in the existing driver state where possible;
+  RAM ≤ 32 B kernel). Same card: rewrite the dirty buffers (the torn block too, since it stayed
+  dirty), clear the state, carry on: **no loss**. A different card or no match: never write
+  to it; the screen says "Different card: put the original back or power off". Power off then
+  ends without the sync for that device and the next boot checks the original card (N.3).
+- **R-N6.4 Never returned.** The user can power off from the screen; the original card has CLEAN
+  set if it was idle (N.2), else it is checked at its next boot.
+- **R-N6.5 Swap.** R12.25 already turns swap off on card removal; with N.6 it also waits for the
+  same card before turning swap back on.
+
+### N.7 Flash and RAM
+
+- Internal flash: **0 run-time writes**. Everything here writes the SD card only; `fsck`'s
+  text goes into the base image at build time (≈ 20 KB, checked by the base image size).
+- RAM: FS +0 B (spare `s_pad` bits), MM +0 B (a flag in the existing `SYNC` message), kernel
+  ≤ +32 B for N.6 (CID and super block CRCs), INIT ≤ +16 B for `SIGPWR`. `fsck` uses RAM only
+  while it runs, at boot.
+
+Acceptance:
+- ACN.1 (QEMU) Kill QEMU with no sync while `cp` writes `/home`: the next boot prints the `fsck`
+  lines on the console, repairs, the boot after that runs no check; files synced before the kill
+  are intact.
+- ACN.2 (QEMU) Kill QEMU 90 s after the last write: the next boot runs no check (N.2).
+- ACN.3 (QEMU) `fsck -v` on a full-size 2 GB image (sparse file) with 5 000 files, damaged with
+  `tools/fsdamage.py` style edits (zone marked free but used, duplicate zone, wrong link count,
+  orphan inode): every error repaired, peak memory ≤ `fsck_mem` + 24 KB, a second run clean.
+  Same image through util-linux `fsck.minix -n` on the host: clean.
+- ACN.4 (QEMU) Root damaged: `fsck` exits 2, `rc` reboots, the second boot is clean.
+- ACN.5 (Flipper) Pull the card while `cp` writes a 1 MB file and put it back within 10 s: the
+  message shows, then the copy completes and `cmp` matches; no `fsck` at the next boot after a
+  clean halt. Pull it and insert another card: nothing is written to the other card.
+- ACN.6 (Flipper) Unclean boot on the 3.8 GB card with ~5 000 files: the `fsck -v` lines are
+  readable on the LCD, progress moves at least once a second, total ≤ 30 s; Back skips `/home`
+  and it is mounted read-only.
+- ACN.7 (Flipper) Low battery (simulated threshold): orderly halt, the next boot runs no check.
+- ACN.8 Normal use for a day: internal-flash erase counters unchanged (ACL.3); SD writes for the
+  flags ≤ 2 per write burst.
+
+For the manual: what CLEAN means, why a check may run after a reset or a pulled card, what the
+screen shows and how to skip, `fsck_mem`, `/usr/adm/fsck.log`, checking the card on a PC with
+`fsck.minix`, "put the card back" and "different card", Left+Back does not save, batch your
+writes.
+
+---
+
 ## Roadmap: phase order
 
 Phases are ordered by what the next one needs, and by the stock features they unlock. Old numbers
@@ -3837,4 +4046,5 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
+| SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (owner request; no journaling) | section N, T17 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
