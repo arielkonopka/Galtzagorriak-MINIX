@@ -50,43 +50,55 @@ static int em_frame(const unsigned char *b, int n, unsigned char id[5])
 	return 1;
 }
 
+/* The comparator's edges one way are exact (the envelope crosses the
+ * threshold steeply there), the other way they drift while it settles:
+ * so only the periods between edges of one kind are used, each 2, 3 or 4
+ * half bits (256 us).  Within a period the level is first one way, then
+ * the other; in Manchester a run of two half bits must straddle a bit
+ * boundary, which decides a period of 3 by where it starts in the bit
+ * grid (2 and 4 are clear).  Both edge kinds, both grids and both
+ * polarities are tried; the frame's parities pick the right one. */
 static int em_decode(int nd, unsigned char id[5])
 {
-	static unsigned char bits[MAXD];
-	int lvl, nh, i, ph, inv, nb;
+	static unsigned char bits[MAXH / 2];
+	int off, grid, i, nh, pos, nb, inv, s, j;
 
-	for (lvl = 0; lvl < 2; lvl++) {
-		int l = lvl;
+	for (off = 0; off < 2; off++)
+	for (grid = 0; grid < 2; grid++) {
+		nh = 0;
+		pos = grid;			/* the half bit's place in a bit */
+		for (i = off; i + 1 < nd && nh < MAXH - 4; i += 2) {
+			unsigned long t = d[i] + d[i + 1];
+			int p = (int) ((t + 128) / 256), a, b;
 
-		nh = 0;			/* half bits from the durations */
-		for (i = 0; i < nd && nh < MAXH - 2; i++) {
-			unsigned long t = d[i];
-			int k = t < 128 ? 0 : t < 384 ? 1 : t < 700 ? 2 : 0;
-
-			if (k == 0) { nh = 0; continue; }	/* not EM: again */
-			while (k-- > 0) h[nh++] = l;
-			l = !l;
-		}
-		for (ph = 0; ph < 2; ph++) {
-			nb = 0;
-			for (i = ph; i + 1 < nh; i += 2) {
-				if (h[i] == h[i + 1]) { nb = -1; break; }
-				bits[nb++] = h[i + 1];
+			if (p < 2 || p > 4 || t < 400 || t > 1150) {
+				nh = 0;		/* not EM: start again */
+				pos = grid;
+				continue;
 			}
-			if (nb < 0) continue;
-			for (inv = 0; inv < 2; inv++) {
-				int s;
-
-				for (s = 0; s + 64 <= nb; s++) {
-					unsigned char b[64];
-					int j;
-
-					for (j = 0; j < 64; j++)
-						b[j] = bits[s + j] ^ inv;
-					if (em_frame(b, 64, id)) return 1;
-				}
-			}
+			if (p == 2) a = b = 1;
+			else if (p == 4) {
+				if ((pos & 1) == 0) { nh = 0; pos = grid; continue; }
+				a = b = 2;
+			} else if (pos & 1) { a = 2; b = 1; }
+			else { a = 1; b = 2; }
+			while (a-- > 0) h[nh++] = 1;
+			while (b-- > 0) h[nh++] = 0;
+			pos += p;
 		}
+		/* pairs from the grid: h[0] is at place grid */
+		nb = 0;
+		for (i = grid ? 1 : 0; i + 1 < nh; i += 2) {
+			if (h[i] == h[i + 1]) { nb = 0; continue; }
+			bits[nb++] = h[i + 1];
+		}
+		for (inv = 0; inv < 2; inv++)
+			for (s = 0; s + 64 <= nb; s++) {
+				unsigned char b64[64];
+
+				for (j = 0; j < 64; j++) b64[j] = bits[s + j] ^ inv;
+				if (em_frame(b64, 64, id)) return 1;
+			}
 	}
 	return 0;
 }
