@@ -49,7 +49,8 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 /* The backlight's settings, kept over resets (Flipper: RTC backup register
  * 15; no RAM): bit 27 off by the idle timeout, bits 24-26 the dimming step
  * (10 % less each second in the last 5 s before it), bits 16-23 the
- * brightness, bits 0-15 the timeout in seconds (0: never).  hal_bl_state()
+ * brightness, bits 0-15 the timeout in seconds (0: never).  Off with all
+ * three step bits set: the LCD in power save too (T14d).  hal_bl_state()
  * gives the defaults (255, 15 s) when nothing valid is stored. */
 #define HAL_BL_OFF		0x08000000u
 #define HAL_BL_STEP(s)		((s) >> 24 & 7)
@@ -59,6 +60,10 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
+/* The LCD's power save (T14d): 1 = display off and all points on (the
+ * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
+ * with no redraw.  -1: the SD card has the bus, try again later. */
+int hal_lcd_save(int on);
 
 /* Buttons: bitmask of currently pressed keys. */
 #define BTN_UP    0x01
@@ -108,6 +113,7 @@ unsigned hal_mt_ack(void);
 #define HAL_WAKE_BTN	1
 #define HAL_WAKE_TIMER	2
 int hal_stop2(void);
+int hal_can_stop2(void);		/* 0: never (QEMU, no HSE at boot) */
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
  * PA7 PA6 PA4 PB3 PB2 PC3 PC1 PC0 = header pins 2 3 4 5 6 7 15 16). */

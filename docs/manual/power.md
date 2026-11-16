@@ -32,13 +32,21 @@ use the battery percentage over a day, or a meter on the battery leads.
 From the shell, `cat /dev/power` prints the same values on one line:
 
 ```
-soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181 usb=0
+soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181 usb=0 chg=0 vbus=0
 ```
 
 `soc` is the charge in %, `mv` the battery voltage, `ma` the current now, `avg` the gauge's
 average, `sby` the gauge's estimate of the standby current (all in mA, negative when
 discharging), `temp` the battery temperature in tenths of a degree Celsius, `flags` the
-gauge's raw status word, and `usb` 1 while a computer is connected over USB.
+gauge's raw status word, `usb` 1 while a computer is connected over USB, `chg` the charger's state (0 not charging,
+1 pre-charge, 2 fast charge, 3 done) and `vbus` what the charger sees on the USB connector (0
+nothing, 1 a computer, other values a power supply). The app shows "charging" or "charged".
+
+## Screen power save
+
+On battery, 2 minutes after the backlight has gone off, the screen itself goes blank to save a
+little more current. Any key brings back the same picture at once (that first press only wakes the
+screen and the light, as when the light is off). With USB connected the screen never blanks.
 
 ## Sleep when idle
 
@@ -55,3 +63,10 @@ Flipper sleeps are lost. If you use it, keep USB connected as well.
 
 On a latency-trace build, `lat` prints how long the Flipper spent in Stop2 since boot, how many
 wake-ups came from a button, and why idle time did not sleep (USB, an alarm too close, and so on).
+
+## Power off
+
+`halt` (as root) switches the Flipper off for real: the battery is disconnected from the system
+(the charger's ship mode, as the stock firmware's power off). The screen and the backlight go dark
+first. With USB connected the Flipper cannot cut its own power: it waits, dark, until you unplug
+the cable. To switch it on again, hold **Back** for about a second, or plug in USB.
