@@ -270,6 +270,7 @@ CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
 CHMEM_ls     := 12288	# ls -l /bin (83 files) used 7.4 KB
+CHMEM_sed    := 10240	# R2a.5: cmds[], labels and the RE pool are malloc'd
 # opendir() mallocs a 1 KB DIR per open directory level (and malloc grows
 # the heap in 1 KB steps): recursive tools need room for a few levels.
 CHMEM_find   := 10240	# 6 KB: "can't read directory" already at /etc

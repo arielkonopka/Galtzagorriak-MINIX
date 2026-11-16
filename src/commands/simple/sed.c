@@ -178,6 +178,7 @@ char bits[] = {1, 2, 4, 8, 16, 32, 64, 128};
 static char AGMSG[] = "sed: garbled address %s\n";
 static char CGMSG[] = "sed: garbled command %s\n";
 static char TMTXT[] = "sed: too much text: %s\n";
+static char NOMEM[] = "sed: out of memory: %s\n";
 static char AD1NG[] = "sed: no addresses allowed for %s\n";
 static char AD2NG[] = "sed: only one address allowed for %s\n";
 static char TMCDS[] = "sed: too many commands, last was %s\n";
@@ -214,6 +215,8 @@ static label *lablst;		/* header for search list */
  * Flipper (R2a.5): no fixed 3 KB array; the pool grows in zeroed chunks
  * of POOLCHUNK bytes from the heap, and room() makes sure, before each
  * item is compiled into it, that the item fits in the current chunk.
+ * Regular expressions are compiled on the stack first and keep() copies
+ * them in with their real size, so a chunk is not left after one RE.
  * POOLSIZE stays the limit on the whole pool.
  */
 #define POOLCHUNK	512
@@ -236,6 +239,7 @@ static int gflag;		/* -g option flag */
 _PROTOTYPE(int main, (int argc, char **argv));
 _PROTOTYPE(static void tables, (int argc, char **argv));
 _PROTOTYPE(static void room, (size_t n));
+_PROTOTYPE(static char *keep, (char **where, char *start, char *end));
 _PROTOTYPE(static void compile, (void));
 _PROTOTYPE(static int cmdcomp, (int cchar));
 _PROTOTYPE(static char *rhscomp, (char *rhsp, int delim));
@@ -390,16 +394,39 @@ size_t n;
 
   if (fp != NULL && (size_t) (poolend - fp) >= n) return;
   size = n > POOLCHUNK ? n : POOLCHUNK;
-  if (poolused >= POOLSIZE || (fp = calloc(size, 1)) == NULL)
-	ABORT(TMTXT);
+  if (poolused >= POOLSIZE) ABORT(TMTXT);
+  if ((fp = calloc(size, 1)) == NULL) ABORT(NOMEM);
   poolused += size;
   poolend = fp + size;
+}
+
+static char *keep(where, start, end)
+char **where;
+char *start, *end;
+/* Copy the item compiled at start..end (in a scratch buffer) into the
+ * pool, point *where at the copy and return the pool pointer past it;
+ * BAD or NULL (nothing compiled) are returned with *where = fp (R2a.5).
+ */
+{
+  size_t n;
+
+  room(0);			/* fp is never NULL after this */
+  if (end == BAD || end == NULL) {
+	*where = fp;
+	return(end);
+  }
+  n = end - start;
+  room(n);
+  *where = fp;
+  memcpy(fp, start, n);
+  return(fp + n);
 }
 
 static void compile()
 /* Precompile sed commands out of a file */
 {
   char ccode;
+  char re[RELIMIT + 2];		/* an RE is compiled here, then kept */
 
 
   for (;;) {			/* main compilation loop */
@@ -420,8 +447,7 @@ static void compile()
 	}
 
 	/* Compile first address */
-	room(RELIMIT + 2);
-	if ((fp = address(cmdp->addr1 = fp)) == BAD)
+	if ((fp = keep(&cmdp->addr1, re, address(re))) == BAD)
 		ABORT(AGMSG);
 
 	if (fp == cmdp->addr1) {/* if empty RE was found */
@@ -436,8 +462,7 @@ static void compile()
 		lastre = cmdp->addr1;
 		if (*cp == ',' || *cp == ';') {	/* there's 2nd addr */
 			cp++;
-			room(RELIMIT + 2);
-			fp = address(cmdp->addr2 = fp);
+			fp = keep(&cmdp->addr2, re, address(re));
 			if (fp == BAD || fp == NULL) ABORT(AGMSG);
 			if (fp == cmdp->addr2)
 				cmdp->addr2 = lastre;
@@ -478,6 +503,7 @@ register char cchar;		/* character name of command */
   static FILE *fout[WFILES];	/* w file file ptrs */
   static int nwfiles = 1;	/* count of open w files */
   int i;			/* indexing dummy used in w */
+  char re[RELIMIT + 2];		/* s: the RE is compiled here, then kept */
   sedcmd *sp1, *sp2;		/* temps for label searches */
   label *lpt;
   char redelim;			/* current RE delimiter */
@@ -562,8 +588,8 @@ register char cchar;		/* character name of command */
 
       case 's':			/* substitute regular expression */
 	redelim = *cp++;	/* get delimiter from 1st ch */
-	room(RELIMIT + 2);
-	if ((fp = recomp(cmdp->u.lhs = fp, redelim)) == BAD) ABORT(CGMSG);
+	if ((fp = keep(&cmdp->u.lhs, re, recomp(re, redelim))) == BAD)
+		ABORT(CGMSG);
 	if (fp == cmdp->u.lhs)	/* if compiled RE zero len */
 		cmdp->u.lhs = lastre;	/* use the previous one */
 	else			/* otherwise */
@@ -732,6 +758,7 @@ char redelim;			/* RE end-marker to look for */
 	    case '[':		/* begin character set pattern */
 		if (ep + 17 >= expbuf + RELIMIT) ABORT(REITL);
 		*ep++ = CCL;	/* insert class mark */
+		memset(ep, 0, 16);	/* the set is ORed in below */
 		if (negclass = ((c = *sp++) == '^')) c = *sp++;
 		svclass = sp;	/* save ptr to class start */
 		do {

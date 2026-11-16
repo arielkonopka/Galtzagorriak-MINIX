@@ -53,7 +53,14 @@ void rev()
 
   do {
 	i = CHUNK_SIZE - 1;
-	while ((output[i] = nextchar()) != '\n' && output[i] != EOF) i--;
+	while ((output[i] = nextchar()) != '\n' && output[i] != EOF) {
+		if (i == 0) {	/* line longer than output[]: write this
+				 * piece and go on (it overran the stack) */
+			write(1, output, CHUNK_SIZE);
+			i = CHUNK_SIZE;
+		}
+		i--;
+	}
 	write(1, &output[i + 1], CHUNK_SIZE - 1 - i); /* write reversed line */
 	if (output[i] == '\n')	/* and write a '\n' */
 		write(1, "\n", 1);
