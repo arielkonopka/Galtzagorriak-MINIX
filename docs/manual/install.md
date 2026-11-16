@@ -145,7 +145,9 @@ An app that does not react to Back can still be closed: **hold Back for a second
 asked to end (SIGTERM), and stopped for good 3 seconds later if it has not. While an app runs it
 owns the screen and the buttons; other programs cannot draw over it.
 Today it offers *Console* (the system console on the LCD, 32x10 characters), *About* and
-*Lights*. After 5 minutes without a key the backlight fades out; the next key only turns it on.
+*Lights*. *About* shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
+based on, the machine and ABI number, the host name and the uptime; `uname -a` and `ver` print
+the same on the console. After 5 minutes without a key the backlight fades out; the next key only turns it on.
 
 ### Logging in
 

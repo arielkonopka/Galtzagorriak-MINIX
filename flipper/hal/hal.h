@@ -95,6 +95,14 @@ int hal_gauge_read(unsigned cmd);
  * CHRG_STAT (0 not charging, 1 pre, 2 fast, 3 done), 2 power good. */
 #define HAL_CHG_STATUS		0x0B
 int hal_charger_read(unsigned reg);
+/* R6.1: battery profile care (VREG 4.0 V, else 4.208), gentle charging
+ * (ICHG 1 A, else the stock 2 A), 5 V OTG on the header.  Profile and
+ * gentle are kept over resets.  0, or -1 on a bus error. */
+#define HAL_CHG_CARE		1
+#define HAL_CHG_GENTLE		2
+#define HAL_CHG_OTG		3
+#define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
+int hal_charger_set(int what, int on);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
@@ -134,6 +142,9 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
        HAL_GPIO_IN_DOWN, HAL_GPIO_OFF };	/* OFF: analog, high impedance */
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
+/* R6.4: mV on each header pin left analog ("off") with an ADC input, -1
+ * for the others; returns VDDA in mV, or -1 (no ADC). */
+int hal_adc_mv(int *mv);
 
 /* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
  * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the

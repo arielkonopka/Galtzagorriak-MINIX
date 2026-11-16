@@ -671,6 +671,9 @@ tty_t *tp;			/* TTY to check for events. */
  */
   char *buf;
   unsigned count;
+#if (CHIP == ARM_CM)
+  u32_t start = hal_cycles();
+#endif
 
   do {
 	tp->tty_events = 0;
@@ -683,6 +686,17 @@ tty_t *tp;			/* TTY to check for events. */
 
 	/* Ioctl waiting for some event? */
 	if (tp->tty_ioreq != 0) dev_ioctl(tp);
+#if (CHIP == ARM_CM)
+	/* Tasks are not preempted: an input flood (USB, the header UART)
+	 * must not keep the TTY task here (security review 2026-11-16, K1).
+	 * After a slice the events wait for the next clock tick
+	 * (tty_wakeup), and the processes run meanwhile. */
+	if (tp->tty_events
+	    && hal_cycles() - start > TTY_SLICE_MS * (hal_cpu_hz() / 1000)) {
+		force_timeout();
+		break;
+	}
+#endif
   } while (tp->tty_events);
 
   /* Transfer characters from the input queue to a waiting process. */

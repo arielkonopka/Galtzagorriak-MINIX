@@ -264,6 +264,7 @@ _PROTOTYPE( void task_yield, (void)					);
 _PROTOTYPE( void mt_init, (void)						);
 _PROTOTYPE( void mt_arm, (int client, unsigned ms)			);
 _PROTOTYPE( void pm_vbus, (void)					);
+_PROTOTYPE( void pm_minute, (void)					);
 _PROTOTYPE( void ecc_poll, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
@@ -300,6 +301,7 @@ _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */

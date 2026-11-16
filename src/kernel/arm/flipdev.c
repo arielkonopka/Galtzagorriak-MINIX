@@ -66,7 +66,8 @@
 #define IR_MINOR	7
 #define POWER_MINOR	8	/* the fuel gauge, read only (T15a) */
 #define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
-#define LAST_MINOR	9
+#define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
+#define LAST_MINOR	10
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -165,7 +166,9 @@ FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
 FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int power_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int ow_read_rom, (phys_bytes user) );
+FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -266,6 +269,54 @@ PUBLIC void flipdev_task()
 
 
 /*===========================================================================*
+ *				adc_read				     *
+ *===========================================================================*/
+/* /dev/adc (R6.4, part 1): one line with the header pins' voltages in mV,
+ *	pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=3297 vdda=3301
+ * "-": the pin is not left analog ("gpio N off", the default), so it is
+ * not measured.  PB3 and PB2 have no ADC input.  ~0.5 ms, on demand. */
+PRIVATE const char adc_names[HAL_GPIO_PINS][4] =
+	{ "pa7", "pa6", "pa4", "", "", "pc3", "pc1", "pc0" };
+
+PRIVATE int adc_put(line, n, v)
+char *line;
+int n, v;
+{
+  char d[6];
+  int j = 0;
+
+  if (v < 0) { line[n++] = '-'; return(n); }
+  do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+  while (j > 0) line[n++] = d[--j];
+  return(n);
+}
+
+PRIVATE int adc_read(user, count)
+phys_bytes user;
+int count;
+{
+  char line[80];
+  int mv[HAL_GPIO_PINS], vdda, i, n = 0;
+  const char *k;
+
+  if ((vdda = hal_adc_mv(mv)) < 0) return(ENXIO);
+  for (i = 0; i < HAL_GPIO_PINS; i++) {
+	if (adc_names[i][0] == 0) continue;
+	for (k = adc_names[i]; *k != 0; k++) line[n++] = *k;
+	line[n++] = '=';
+	n = adc_put(line, n, mv[i]);
+	line[n++] = ' ';
+  }
+  for (k = "vdda="; *k != 0; k++) line[n++] = *k;
+  n = adc_put(line, n, vdda);
+  line[n++] = '\n';
+  if (count > n) count = n;
+  phys_copy(vir2phys(line), user, (phys_bytes) count);
+  return(count);
+}
+
+
+/*===========================================================================*
  *				iButton (R6.7)				     *
  *===========================================================================*/
 /* 1-Wire master, standard speed.  Interrupts are masked (BASEPRI, lock)
@@ -353,9 +404,9 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[96], d[6];
+  char line[128], d[6];
   const char *k = pw_key;
-  int i, j, n = 0, v;
+  int i, j, n = 0, v, r6, r4, r3;
 
   for (i = 0; i < 7; i++) {
 	if ((v = hal_gauge_read(pw_cmd[i])) < 0)
@@ -377,12 +428,57 @@ int count;
   for (k = " usb=0"; *k != 0; k++) line[n++] = *k;
   if (hal_usb_awake()) line[n - 1] = '1';
   if ((v = hal_charger_read(HAL_CHG_STATUS)) < 0) return(EIO);
-  for (k = " chg=0 vbus=0\n"; *k != 0; k++) line[n++] = *k;
-  line[n - 9] += v >> 3 & 3;		/* CHRG_STAT */
-  line[n - 2] += v >> 5 & 7;		/* VBUS_STAT */
+  for (k = " chg=0 vbus=0"; *k != 0; k++) line[n++] = *k;
+  line[n - 8] += v >> 3 & 3;		/* CHRG_STAT */
+  line[n - 1] += v >> 5 & 7;		/* VBUS_STAT */
+  /* R6.1: what the charger is set to (end-of-charge mV, charge mA, 5 V) */
+  if ((r6 = hal_charger_read(0x06)) < 0 || (r4 = hal_charger_read(0x04)) < 0
+			|| (r3 = hal_charger_read(0x03)) < 0) return(EIO);
+  for (i = 0; i < 2; i++) {
+	for (k = i == 0 ? " vreg=" : " ichg="; *k != 0; k++) line[n++] = *k;
+	v = i == 0 ? 3840 + (r6 >> 2) * 16 : (r4 & 0x7F) * 64;
+	j = 0;
+	do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+	while (j > 0) line[n++] = d[--j];
+  }
+  for (k = " otg=0\n"; *k != 0; k++) line[n++] = *k;
+  if (r3 & 0x20) line[n - 2] = '1';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
+}
+
+
+/*===========================================================================*
+ *				power_write				     *
+ *===========================================================================*/
+/* R6.1: a command line written to /dev/power (writable by root only):
+ *	profile full|care	end of charge 4.208 V / 4.0 V (kept)
+ *	gentle on|off		charge current 1 A / the stock 2 A (kept)
+ *	otg on|off		5 V on the GPIO header
+ * Text rather than ioctl: FS checks the write permission, the kernel does
+ * not know the caller's uid. */
+PRIVATE const char *const pw_cmds[] = {
+  "profile full", "profile care", "gentle off", "gentle on", "otg off", "otg on"
+};
+
+PRIVATE int power_write(user, count)
+phys_bytes user;
+int count;
+{
+  char cmd[16];
+  int n = count, i;
+
+  if (n > (int) sizeof(cmd) - 1) return(EINVAL);
+  phys_copy(user, vir2phys(cmd), (phys_bytes) n);
+  while (n > 0 && (cmd[n - 1] == '\n' || cmd[n - 1] == ' ')) n--;
+  cmd[n] = 0;
+  for (i = 0; i < 6; i++) {
+	if (strcmp(cmd, pw_cmds[i]) != 0) continue;
+	if (hal_charger_set(HAL_CHG_CARE + i / 2, i & 1) < 0) return(EIO);
+	return(count);
+  }
+  return(EINVAL);
 }
 
 
@@ -458,11 +554,28 @@ message *m_ptr;
 	rd_count = count;
 	return(SUSPEND);
 
-  case VIBRO_MINOR:
+  case VIBRO_MINOR: {
+	/* "0" off, "1" on (or a byte 0/1), "N" (2..999): on for N ms, ended
+	 * by the ms timer (R6.3), so the writer need not stay awake. */
+	char t[4];
+	int i, ms = 0, n = count < 4 ? count : 4;
+
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
-	phys_copy(user, vir2phys(buf), (phys_bytes) 1);
-	hal_vibro(buf[0] != 0 && buf[0] != '0');
+	if (n < 1) return(0);
+	phys_copy(user, vir2phys(t), (phys_bytes) n);
+	if (t[0] >= '0' && t[0] <= '9') {
+		for (i = 0; i < n && t[i] >= '0' && t[i] <= '9'; i++)
+			ms = ms * 10 + t[i] - '0';
+		if (i == 4) return(EINVAL);		/* > 999 */
+	} else {
+		ms = t[0] != 0;
+	}
+	lock();
+	mt_arm(MT_VIBRO, ms > 1 ? (unsigned) ms : 0);
+	unlock();
+	hal_vibro(ms != 0);
 	return(count);
+  }
 
   case SPK_MINOR: {
 	u8_t nb[4 * NNOTES];
@@ -511,6 +624,11 @@ message *m_ptr;
 	return(count);
   }
 
+  case ADC_MINOR:
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
+	return(adc_read(user, count));
+
   case IBUTTON_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (m_ptr->POSITION != 0) return(0);	/* one ROM, then EOF */
@@ -518,7 +636,7 @@ message *m_ptr;
 	return(ow_read_rom(user));
 
   case POWER_MINOR:
-	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->m_type == DEV_WRITE) return(power_write(user, count));
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(power_read(user, count));
 
@@ -842,6 +960,16 @@ unsigned now;
   if ((((unsigned) uptime_irq() - FG_STAMP(b)) & 0xFF) < FG_LONG_T) return;
   last_buttons = b | FG_LONG;
   interrupt(PRINTER);
+}
+
+
+/*===========================================================================*
+ *				flipdev_vibro_off			     *
+ *===========================================================================*/
+PUBLIC void flipdev_vibro_off()
+{
+/* The ms timer: a timed buzz is over (R6.3). */
+  hal_vibro(0);
 }
 
 

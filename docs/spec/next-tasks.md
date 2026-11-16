@@ -225,6 +225,19 @@ The owner wants the user to control **how deeply and how soon the device powers 
 - Tests on the Flipper (agent): AC7.0; each wake-source switch really stops/starts that wake (e.g. pocket mode: Up does not wake, Back does); automatic power-off after a short test delay, then an alarm armed before it rings; `saver` vs `balanced` idle current recorded; L1 for every key in the app and from every sleep state; L6 for opening the app.
 - RAM: kernel ≤ +16 B (if the registers are not enough); app ≈ 2 KB while open. Flash ≈ 6 KB.
 
+## T16. Backlight gestures (spec R6.10; owner request 2026-11-16): small, any time after T14b; milestone M3, owner request so it may fill a gap earlier
+Hold Left+Up 1.5 s: backlight forced off until held again; hold Right+Down 1.5 s: forced on until held again; the red LED blinks faster towards the threshold. Spec R6.10 has the details; the points that reviews check:
+- Kernel only (`src/kernel/arm/flipdev.c`, `hal.h`, both boards): chord match at each button change in `btn_sample()`, the elapsed check at the 8 ms samples in `flipdev_btn()` (and the tick sampling on QEMU); the fire and the LED/vibro I2C in the task (`do_hardint`), never in the interrupt. Hold time counts from `k_input`.
+- Flags in the free bits of `last_buttons` (bits 6-7, 26-28); the mode in BKP15R bits 14-15 (timeout field shrinks to 14 bits, clamp the `/dev/backlight` write; update the BKP15R line in PORTING.md); mode cleared at boot.
+- `bl_want()`: forced on → 0; forced off → `BL_GONE`, `BL_SAVE` after `LCD_SAVE_S` on battery. `btn_sample()`: `SWALLOW` only for idle-off (and for the press that wakes a blank LCD), not for forced-off. `flipdev_idle()` agrees with `bl_want()` (no extra wakes in either mode).
+- RAM table: 4 x 1 B entries + 1 B hold (50 ms units) + 3 B LED save = **≤ 8 B** (owner accepts ~10 B; raise `flipper/ram-budget.txt` by that, with the reason). `const` defaults copied at boot. `ioctl(BTNIOCGTAB)` (root; `EINVAL` for Back in a mask or < 2 buttons) and `ioctl(BTNIOCGEST, 0/1)` (foreground app only, cleared at `FGIOCSET`) in `<minix/fg.h>` or a new `<minix/btn.h>`. Action 3 (user gesture) is accepted in the table but does nothing yet (R7.2).
+- `backlight force on|off|auto` and the mode in `backlight` with no arguments; the launcher passes `Gestures: no` from a `.desktop` entry. `/etc/rc`: if `/etc/flipper/gestures.conf` exists, a tiny helper (or `backlight gestures FILE`) loads it with `BTNIOCGTAB`; missing file: defaults, no message.
+- No flash writes at run time (state in BKP15R and RAM only).
+- QEMU test (in `m2test` or a kernel self-test under `BOARD=qemu`): set `qemu_fake_buttons` to Left+Up for 1.6 s → mode forced off in `/dev/backlight`; again → auto; Left+Up released at 1.0 s → unchanged; Left+Up+Back → unchanged; with `BTNIOCGEST 0` → unchanged. `M2 USER PASS` stays.
+- Acceptance on the Flipper (agent): AC6.7; L1 unchanged with gestures on (100 presses, `lat`); the LED is back to its earlier colour after a cancelled and a fired gesture; idle current in forced-off equals idle-off (same Stop2 behaviour).
+- Docs: CHANGELOG line, `docs/manual/buttons.md` (drop the "(planned)" marks), PORTING.md BKP15R.
+- Later: the `gestures` app (R7.2, M4) edits the table from the SD file; no kernel change needed for it except action 3.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.

@@ -133,6 +133,7 @@ int hal_lcd_flush(const uint8_t *fb)
 
 int hal_gauge_read(unsigned cmd) { (void) cmd; return -2; }
 int hal_charger_read(unsigned reg) { (void) reg; return -2; }
+int hal_charger_set(int what, int on) { (void) what; (void) on; return -1; }
 
 void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
@@ -558,6 +559,7 @@ unsigned hal_mt_ack(void)
 	}
 	return f;
 }
+int hal_adc_mv(int *mv) { (void) mv; return -1; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

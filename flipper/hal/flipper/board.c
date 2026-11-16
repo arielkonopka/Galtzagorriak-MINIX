@@ -453,6 +453,7 @@ static void spi2_wait_idle(void)
 static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
+static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
@@ -652,10 +653,79 @@ int hal_charger_read(unsigned reg)
 	return i2c1_read(BQ25896_ADDR, (uint8_t) reg, &r, 1) < 0 ? -1 : r;
 }
 
+/* Read-modify-write of charger register reg: (old & ~mask) | val. */
+static int charger_rmw(uint8_t reg, uint8_t mask, uint8_t val)
+{
+	uint8_t b[2];
+
+	if (i2c1_read(BQ25896_ADDR, reg, &b[1], 1) < 0) return -1;
+	if ((b[1] & mask) == val) return 0;
+	b[0] = reg;
+	b[1] = (uint8_t) ((b[1] & ~mask) | val);
+	return i2c1_write(BQ25896_ADDR, b, 2);
+}
+
+/* R6.1 (owner 2026-11-15): the battery profile and gentle charging, kept
+ * in RTC backup register 14 (magic 0xC in the top nibble; bit 0 care,
+ * bit 1 gentle).  Only the end-of-charge voltage and the charge current
+ * change, and never above the stock values: VREG 4.208 V (full) or 4.000
+ * V (care); ICHG 2048 mA (the charger's default, which the stock firmware
+ * keeps) or 1024 mA (gentle).  Nothing is written while the register was
+ * never set: the charger stays as the stock firmware left it. */
+#define CHG_REG		(RTC->BKP14R)
+#define CHG_MAGIC	0xC0000000u
+#define VREG_FULL	((4208 - 3840) / 16)
+#define VREG_CARE	((4000 - 3840) / 16)
+#define ICHG_STOCK	(2048 / 64)
+#define ICHG_GENTLE	(1024 / 64)
+
+/* The charger's I2C watchdog (REG07 WATCHDOG, 40 s after the charger's
+ * own power-on reset) would put REG03/04/06 back to their defaults: the
+ * profile, gentle charging and the kernel's temperature pause would be
+ * undone 40 s later.  Off, as the stock firmware's bq25896_init does. */
+static void charger_nowdog(void)
+{
+	(void) charger_rmw(0x07, 0x30, 0);
+}
+
+static void charger_apply(uint32_t s)
+{
+	charger_nowdog();
+	(void) charger_rmw(0x06, 0xFC, (s & 1 ? VREG_CARE : VREG_FULL) << 2);
+	(void) charger_rmw(0x04, 0x7F, s & 2 ? ICHG_GENTLE : ICHG_STOCK);
+}
+
+int hal_charger_set(int what, int on)
+{
+	uint32_t s;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	s = (CHG_REG & 0xF0000000u) == CHG_MAGIC ? CHG_REG & 3 : 0;
+	switch (what) {
+	case HAL_CHG_CARE:	s = on ? s | 1 : s & ~1u; break;
+	case HAL_CHG_GENTLE:	s = on ? s | 2 : s & ~2u; break;
+	case HAL_CHG_OTG:	/* 5 V on the header; not kept over a reset */
+		charger_nowdog();	/* a watchdog reset turns OTG on */
+		return charger_rmw(0x03, 0x20, on ? 0x20 : 0);
+	case HAL_CHG_PAUSE:	/* the kernel's temperature rule */
+		charger_nowdog();
+		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
+	default:		return -1;
+	}
+	bkp_set(&CHG_REG, CHG_MAGIC | s);
+	charger_apply(s);
+	return 0;
+}
+
 static void charger_init(void)
 {
 	uint8_t b[2];
 
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	charger_nowdog();
+	if ((CHG_REG & 0xF0000000u) == CHG_MAGIC) charger_apply(CHG_REG & 3);
 	if (i2c1_read(BQ25896_ADDR, 0x02, &b[1], 1) < 0) return;
 	if (!(b[1] & 0x40)) return;		/* CONV_RATE: continuous */
 	b[0] = 0x02;
@@ -767,6 +837,10 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define R1_ILLEGAL	0x04
 #define TOKEN_START	0xFE
 #define SD_TIMEOUT_MS	500
+#define SD_READ_MS	250	/* data token after a read command: the SD spec
+				 * allows 100 ms; this is the longest stretch
+				 * the disk task holds the CPU (security review
+				 * 2026-11-16, K3) */
 
 #define CMD59	59	/* CRC_ON_OFF */
 
@@ -880,7 +954,7 @@ static int sd_read_data(uint8_t *buf, unsigned len)
 	uint8_t t;
 
 	while ((t = spi2_xfer(0xFF)) == 0xFF)
-		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
+		if (ms_since(start) > SD_READ_MS) return -1;
 	if (t != TOKEN_START) return -1;
 	spi2_dma(NULL, buf, len);
 	crc = (uint16_t) (spi2_xfer(0xFF) << 8);
@@ -913,8 +987,13 @@ int hal_disk_init(void)
 		v2 = 1;
 	}
 	start = DWT->CYCCNT;
-	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0)	/* HCS */
+	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0) {	/* HCS */
 		if (ms_since(start) > 1000) goto fail;
+		/* up to a second: the other tasks between tries (K3) */
+		sd_select(0);
+		hal_disk_yield();
+		spi2_speed(SPI_DIV_SD_INIT);
+	}
 
 	sd_block_addr = 0;
 	if (v2) {
@@ -978,6 +1057,10 @@ static void sd_trouble(int *tries)
 		hal_disk_mhz = 8;
 	}
 	sd_select(0);
+	/* The other tasks between tries: a card that never sends its data
+	 * held the CPU for 5 tries x 500 ms, the watchdog reset the board
+	 * (security review 2026-11-16, K3). */
+	hal_disk_yield();
 	spi2_speed(sd_fast);
 }
 
@@ -1001,7 +1084,7 @@ int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
 			goto bad;
 		start = DWT->CYCCNT;
 		while ((t = spi2_xfer(0xFF)) == 0xFF)
-			if (ms_since(start) > SD_TIMEOUT_MS) goto bad;
+			if (ms_since(start) > SD_READ_MS) goto bad;
 		if (t != TOKEN_START) goto bad;
 		for (pos = 0; pos < HAL_SECTOR_SIZE; pos += n) {
 			n = HAL_SECTOR_SIZE - pos < sizeof(chunk)
@@ -1777,6 +1860,82 @@ int hal_gpio_read(unsigned pin)
 {
 	if (pin >= HAL_GPIO_PINS) return -1;
 	return gpio_get(hdr[pin].port, hdr[pin].pin);
+}
+
+/* ADC on the header pins (R6.4, part 1: one-shot).  ADC1 channels of the
+ * eight pins (0: none, PB3/PB2), and VREFINT (channel 0) to know VDDA:
+ * its factory value was taken at 3.6 V (VREFINT_CAL, ST's LL header).
+ * Synchronous clock HCLK/4 (16 MHz), 92.5-cycle sampling, 16x hardware
+ * oversampling (result shifted back to 12 bits).  The ADC is powered only
+ * for the reading, then back in deep power-down. */
+static const uint8_t adc_ch[HAL_GPIO_PINS] = { 12, 11, 9, 0, 0, 4, 2, 1 };
+#define VREFINT_CAL	(*(const volatile uint16_t *) 0x1FFF75AAu)
+
+static int adc_wait(volatile uint32_t *reg, uint32_t bit, int set)
+{
+	uint32_t start = DWT->CYCCNT;
+
+	while (((*reg & bit) != 0) != set)
+		if (ms_since(start) > 2) return -1;
+	return 0;
+}
+
+static int adc_conv(unsigned ch)
+{
+	ADC1->SQR1 = ch << ADC_SQR1_SQ1_Pos;		/* one conversion */
+	ADC1->ISR = ADC_ISR_EOC;
+	ADC1->CR |= ADC_CR_ADSTART;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_EOC, 1) < 0) return -1;
+	return (int) (ADC1->DR & 0xFFF);
+}
+
+int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
+{
+	unsigned pin, ch;
+	int vref, raw, r = 0;
+
+	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN;
+	(void) RCC->AHB2ENR;
+	ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ADC_CCR_CKMODE)
+				| (3u << ADC_CCR_CKMODE_Pos) | ADC_CCR_VREFEN;
+	ADC1->CR &= ~ADC_CR_DEEPPWD;
+	ADC1->CR |= ADC_CR_ADVREGEN;
+	hal_ow_delay(25);			/* the regulator: 20 us */
+	ADC1->CR |= ADC_CR_ADCAL;
+	if (adc_wait(&ADC1->CR, ADC_CR_ADCAL, 0) < 0) { r = -1; goto off; }
+	ADC1->ISR = ADC_ISR_ADRDY;
+	ADC1->CR |= ADC_CR_ADEN;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_ADRDY, 1) < 0) { r = -1; goto off; }
+	ADC1->CFGR = 0;				/* 12 bits, right, single */
+	ADC1->CFGR2 = ADC_CFGR2_ROVSE | (3u << ADC_CFGR2_OVSR_Pos)
+						| (4u << ADC_CFGR2_OVSS_Pos);
+	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
+	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
+	if ((vref = adc_conv(0)) <= 0) { r = -1; goto off; }
+	for (pin = 0; pin < HAL_GPIO_PINS; pin++) {
+		ch = adc_ch[pin];
+		mv[pin] = -1;
+		/* only pins left analog ("off"): a reading never changes a
+		 * pin someone set up */
+		if (ch == 0 || ((hdr[pin].port->MODER >> (hdr[pin].pin * 2)) & 3)
+								!= MODE_ANALOG)
+			continue;
+		if ((raw = adc_conv(ch)) < 0) continue;
+		/* VDDA = 3600 * CAL / vref; mV = VDDA * raw / 4095 */
+		mv[pin] = (int) (3600u * VREFINT_CAL / (unsigned) vref
+						* (unsigned) raw / 4095u);
+	}
+	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VDDA */
+off:
+	if (ADC1->CR & ADC_CR_ADEN) {
+		ADC1->CR |= ADC_CR_ADDIS;
+		(void) adc_wait(&ADC1->CR, ADC_CR_ADEN, 0);
+	}
+	ADC1->CR &= ~ADC_CR_ADVREGEN;
+	ADC1->CR |= ADC_CR_DEEPPWD;
+	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
+	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
+	return r;
 }
 
 /*===========================================================================*
