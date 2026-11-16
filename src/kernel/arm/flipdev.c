@@ -95,11 +95,30 @@ PRIVATE unsigned last_buttons;	/* the buttons down, and these flags: */
 #define FG_STAMP(b)	((b) >> 8 & 0xFF)	/* Back down (ticks), or the
 						 * SIGTERM (seconds), mod 256 */
 #define FG_STAMPS	0x0000FF00u
+#define GE_SAVED	0x00000040u	/* R6.10: the LED saved in ge_led (task) */
+#define GE_BLINK	0x00000080u	/* the red blink is lit now (task) */
+#define GE_CHORD	0x04000000u	/* a gesture chord held since k_input */
+#define GE_FIRE		0x08000000u	/* its hold time is reached: task work */
+#define GE_OFF		0x10000000u	/* the foreground app turned them off */
 #define BTN_ALL		0x3Fu		/* the buttons themselves */
 #define BTN_FLAGS	(~BTN_ALL)
 #define FG_LONG_T	HZ		/* Back held this long (ticks) */
 #define FG_KILL_S	3		/* then SIGKILL after (s) */
 #define BTN_MS		8	/* sampling while down, and the debounce */
+
+/* R6.10 button gestures (T16): exactly these buttons held GE_HOLD toggles
+ * the backlight's forced mode (1 off, 2 on; BKP15R bits 14-15).  Bits 0-5
+ * of an entry are the buttons, 6-7 the action.  Never with Back (long
+ * Back is R4b.8's).  The table is const for now; BTNIOCGTAB (root, from
+ * /etc/flipper/gestures.conf) comes with a way to check the caller. */
+PRIVATE const u8_t ge_tab[] = {
+  BTN_LEFT | BTN_UP | 1 << 6,		/* forced off */
+  BTN_RIGHT | BTN_DOWN | 2 << 6,	/* forced on */
+};
+#define GE_N		(sizeof(ge_tab) / sizeof(ge_tab[0]))
+#define GE_HOLD		(3 * HZ / 2)	/* 1.5 s, in ticks */
+#define GE_RED		64		/* the blink: red at ~25 % */
+PRIVATE u8_t ge_led[3];		/* the LED before the blink (3 B) */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
  * memory holds the infrared rings while /dev/ir is in use (one or the
@@ -172,6 +191,10 @@ FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
+FORWARD _PROTOTYPE( int ge_match, (unsigned now) );
+FORWARD _PROTOTYPE( int ge_blink_on, (clock_t e) );
+FORWARD _PROTOTYPE( void ge_hold, (void) );
+FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
@@ -209,7 +232,7 @@ PUBLIC void flipdev_task()
 	unlock();
   }
   {	/* the backlight as it was set before the reset, and on */
-	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS);
+	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS | HAL_BL_MODES);
 
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
@@ -492,7 +515,7 @@ message *m_ptr;
 {
   phys_bytes user;
   int count = m_ptr->COUNT;
-  u8_t buf[3];
+  u8_t buf[4];
 
   if (count <= 0) return(EINVAL);
   user = m_ptr->m_type == DEV_WRITE	/* a source may be constant */
@@ -536,6 +559,11 @@ message *m_ptr;
 	return(count);
 
   case BTN_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) {	/* QEMU tests: fake buttons */
+		phys_copy(user, vir2phys(buf), (phys_bytes) 1);
+		return(count == 1 && hal_buttons_fake(buf[0] & BTN_ALL) == 0
+							? 1 : EINVAL);
+	}
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (count < 2) return(EINVAL);
 	if (fg_other(m_ptr->PROC_NR)) {	/* R4b.8: not yours: wait (until
@@ -673,20 +701,34 @@ message *m_ptr;
 	/* fall through */
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
-	if (count > 3) count = 3;
+	if (count > 4) count = 4;
+	if (count == 4 && m_ptr->DEVICE != BL_MINOR) return(EINVAL);
 	phys_copy(user, vir2phys(buf), (phys_bytes) count);
 	if (m_ptr->DEVICE == BL_MINOR) {
 		/* brightness; 3 bytes: and the idle timeout in seconds
-		 * (little endian, 0: never).  Kept over resets. */
-		u32_t st = hal_bl_state() & 0xFFFF;
+		 * (little endian, 0: never, at most 16383); 4: and the forced
+		 * mode (R6.10: 0 auto, 1 off, 2 on).  Kept over resets, the
+		 * mode until the next boot. */
+		u32_t old = hal_bl_state(), st = old & 0xFFFF;
 
-		if (count == 3) st = buf[1] | (u32_t) buf[2] << 8;
-		else if (count != 1) return(EINVAL);
+		if (count >= 3) {
+			st = buf[1] | (u32_t) buf[2] << 8;
+			if (st > 0x3FFF) st = 0x3FFF;
+			st |= old & HAL_BL_MODES;
+		} else if (count != 1) return(EINVAL);
+		if (count == 4) {
+			if (buf[3] > 2) return(EINVAL);
+			st = (st & ~HAL_BL_MODES) | (u32_t) buf[3] << 14;
+		}
 		hal_bl_state_set((u32_t) buf[0] << 16 | st);	/* on */
 		hal_backlight(buf[0]);
 		k_input = get_uptime();		/* the timeout starts now */
 	}
-	else if (count == 3) hal_led(buf[0], buf[1], buf[2]);
+	else if (count == 3) {
+		if (last_buttons & GE_SAVED) {	/* a gesture blinks: later */
+			ge_led[0] = buf[0]; ge_led[1] = buf[1]; ge_led[2] = buf[2];
+		} else hal_led(buf[0], buf[1], buf[2]);
+	}
 	else return(EINVAL);
 	return(count);
   }
@@ -766,6 +808,12 @@ clock_t now;
  * well (T14d; a few hundred uA). */
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input);
 
+  /* R6.10: forced on never times out; forced off stays dark, and on
+   * battery the LCD sleeps LCD_SAVE_S after the last key */
+  if (HAL_BL_MODE(st) == 2) return(0);
+  if (HAL_BL_MODE(st) == 1)
+	return(idle >= (clock_t) LCD_SAVE_S * HZ && !hal_usb_awake()
+							? BL_SAVE : BL_GONE);
   if (t == 0) return(0);
   if (idle >= t + (clock_t) LCD_SAVE_S * HZ && !hal_usb_awake())
 	return(BL_SAVE);
@@ -792,6 +840,7 @@ PRIVATE void do_hardint()
  * show it. */
   int r;
 
+  if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
   bl_apply();
   if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
 						 * interrupt handler */
@@ -872,7 +921,10 @@ PUBLIC void flipdev_tick()
   }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
-  if (!(last_buttons & BTN_EXTI)) fg_hold(btn_sample());
+  if (!(last_buttons & BTN_EXTI)) {
+	fg_hold(btn_sample());
+	ge_hold();
+  }
   if ((last_buttons & FG_KILL) && ((unsigned) ((unsigned long) uptime_irq() / HZ)
 		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
 	interrupt(PRINTER);
@@ -893,6 +945,12 @@ clock_t now;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
   if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
+  if (bl_want(st, now) != bl_state(st)) return(0);	/* bl_apply due */
+  if (HAL_BL_MODE(st) == 2) return(LONG_MAX);		/* forced on */
+  if (HAL_BL_MODE(st) == 1) {				/* forced off */
+	if (bl_state(st) == BL_SAVE || hal_usb_awake()) return(LONG_MAX);
+	return((clock_t) LCD_SAVE_S * HZ - idle);	/* > 0: see above */
+  }
   if (t == 0 || bl_state(st) == BL_SAVE) return(LONG_MAX);
   if (st & HAL_BL_OFF) {		/* the LCD's power save is next */
 	t += (clock_t) LCD_SAVE_S * HZ;
@@ -927,6 +985,20 @@ message *m_ptr;
   struct proc *rp;
 
   if (m_ptr->DEVICE != LCD_MINOR && m_ptr->DEVICE != BTN_MINOR) return(ENOTTY);
+  if (m_ptr->TTY_REQUEST == BTNIOCGEST) {
+	/* R6.10: the foreground app (only) turns gestures off or on */
+	int on;
+
+	if (FG_SLOT(last_buttons) != m_ptr->PROC_NR) return(EPERM);
+	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+	if (user == 0) return(EFAULT);
+	phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(int));
+	lock();
+	last_buttons = on ? last_buttons & ~GE_OFF
+				: (last_buttons & ~GE_CHORD) | GE_OFF;
+	unlock();
+	return(OK);
+  }
   if (m_ptr->TTY_REQUEST != FGIOCSET) return(ENOTTY);
   if (fg_other(m_ptr->PROC_NR)) return(EPERM);
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
@@ -944,10 +1016,98 @@ message *m_ptr;
 	fg = n;
   }
   lock();
-  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL))
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF))
 					| (unsigned) (fg + 1) << 16;
   unlock();
   return(OK);
+}
+
+/*===========================================================================*
+ *				gestures (R6.10)			     *
+ *===========================================================================*/
+PRIVATE int ge_match(now)
+unsigned now;
+{
+/* The action of the gesture these buttons make exactly, or 0. */
+  unsigned i;
+
+  for (i = 0; i < GE_N; i++)
+	if ((now & BTN_ALL) == (ge_tab[i] & BTN_ALL)) return(ge_tab[i] >> 6);
+  return(0);
+}
+
+PRIVATE int ge_blink_on(e)
+clock_t e;			/* ticks into the hold */
+{
+/* The red blink: half-periods max(30, 200 - 170 * t / hold) ms, the first
+ * one lit; so faster and faster up to the threshold. */
+  long ms = (long) e * 1000 / HZ, hold = (long) GE_HOLD * 1000 / HZ, t = 0, h;
+  int k = 0;
+
+  while (t <= ms) {
+	h = 200 - 170 * t / hold;
+	t += h < 30 ? 30 : h;
+	k++;
+  }
+  return(k & 1);
+}
+
+PRIVATE void ge_hold()
+{
+/* At the button samples (8 ms, interrupt): the hold time reached, or the
+ * blink must flip.  The I2C is the task's (ge_task). */
+  unsigned b = last_buttons;
+  clock_t e;
+
+  if (!(b & GE_CHORD)) return;
+  e = TDIFF(uptime_irq(), k_input);
+  if (e >= GE_HOLD) {
+	last_buttons = (b & ~GE_CHORD) | GE_FIRE;	/* once per chord */
+	interrupt(PRINTER);
+  } else if (ge_blink_on(e) != ((b & GE_BLINK) != 0))
+	interrupt(PRINTER);
+}
+
+PRIVATE void ge_task()
+{
+/* The task's part: toggle the mode and buzz, blink the LED, put the LED
+ * back. */
+  unsigned b = last_buttons;
+  u32_t st;
+  int a, on;
+
+  if (b & GE_FIRE) {
+	lock();
+	last_buttons &= ~GE_FIRE;
+	unlock();
+	if ((a = ge_match(b)) != 0) {
+		st = hal_bl_state();
+		a = HAL_BL_MODE(st) == (u32_t) a ? 0 : a;	/* again: auto */
+		hal_bl_state_set((st & ~HAL_BL_MODES) | (u32_t) a << 14);
+		k_input = get_uptime();	/* forced-off's LCD save: from now */
+		lock();
+		mt_arm(MT_VIBRO, 30);		/* a 30 ms buzz (R6.3) */
+		unlock();
+		hal_vibro(1);
+	}
+	b = last_buttons;
+  } else if (b & GE_CHORD) {
+	on = ge_blink_on(TDIFF(get_uptime(), k_input));
+	if (on == ((b & GE_BLINK) != 0)) return;
+	if (!(b & GE_SAVED)) hal_led_get(ge_led);
+	hal_led(on ? GE_RED : 0, 0, 0);
+	lock();
+	last_buttons = (last_buttons & ~GE_BLINK) | GE_SAVED
+						| (on ? GE_BLINK : 0);
+	unlock();
+	return;
+  }
+  if (b & GE_SAVED) {			/* over: the LED as it was */
+	hal_led(ge_led[0], ge_led[1], ge_led[2]);
+	lock();
+	last_buttons &= ~(GE_SAVED | GE_BLINK);
+	unlock();
+  }
 }
 
 PRIVATE void fg_hold(now)
@@ -1004,6 +1164,7 @@ PUBLIC void flipdev_btn()
 
   if ((now = btn_sample()) != 0 || was != 0) {
 	fg_hold(now);
+	ge_hold();
 	mt_arm(MT_BUTTONS, BTN_MS);
 	return;
   }
@@ -1029,11 +1190,23 @@ PRIVATE unsigned btn_sample()
   k_input = uptime_irq();		/* no background flash work now */
   if ((changed & now & BTN_BACK) && !(flags & FG_KILL))	/* R4b.8 */
 	flags = (flags & ~FG_STAMPS) | ((unsigned) k_input & 0xFF) << 8;
+  /* R6.10: a gesture chord starts (exactly its buttons) or ends; the
+   * hold counts from k_input, the change just now */
+  if (!(flags & GE_OFF) && ge_match(now)) flags |= GE_CHORD;
+  else if (flags & GE_CHORD) {
+	flags &= ~GE_CHORD;		/* cancelled: the LED back (task) */
+	interrupt(PRINTER);
+  }
   /* With the backlight off, a press only turns it on (owner): neither it
-   * nor anything else reaches the apps until every button is up again. */
+   * nor anything else reaches the apps until every button is up again.
+   * Not in forced-off (R6.10: keys work in the dark), except the press
+   * that wakes a blank LCD. */
   if (hal_bl_state() & (HAL_BL_OFF | HAL_BL_STEPS))
 	interrupt(PRINTER);		/* the light back on, at once */
-  if ((hal_bl_state() & HAL_BL_OFF) && (now & changed)) flags |= SWALLOW;
+  if ((hal_bl_state() & HAL_BL_OFF) && (now & changed)
+		&& (HAL_BL_MODE(hal_bl_state()) != 1
+			|| bl_state(hal_bl_state()) == BL_SAVE))
+	flags |= SWALLOW;
   if (flags & SWALLOW) {
 	if (now == 0) flags &= ~SWALLOW;
 	last_buttons = now | flags;

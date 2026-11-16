@@ -369,6 +369,40 @@ int main(int argc, char **argv)
 		close(fd);
 	}
 
+	/* R6.10 gestures, on QEMU only (fake buttons by writing /dev/buttons;
+	 * the Flipper refuses that): Left+Up held 2 s -> forced off; again
+	 * -> auto; released after 1 s -> unchanged; with Back -> unchanged. */
+	{
+		int b = open("/dev/buttons", O_WRONLY), l = open("/dev/backlight",
+								O_RDONLY);
+		unsigned char m;
+		unsigned long st;
+		int mode[4], i;
+		static const unsigned char keys[4] = { 0x05, 0x05, 0x05, 0x25 };
+		static const int hold[4] = { 2, 2, 1, 2 };
+
+		m = 0;
+		if (b >= 0 && write(b, (char *) &m, 1) == 1 && l >= 0) {
+			for (i = 0; i < 4; i++) {
+				m = keys[i];
+				(void) write(b, (char *) &m, 1);
+				sleep(hold[i]);
+				m = 0;
+				(void) write(b, (char *) &m, 1);
+				sleep(1);
+				lseek(l, 0L, SEEK_SET);
+				st = 0;
+				(void) read(l, (char *) &st, 4);
+				mode[i] = (int) (st >> 14 & 3);
+			}
+			check(mode[0] == 1 && mode[1] == 0 && mode[2] == 0
+				&& mode[3] == 0, "gestures: Left+Up toggles forced "
+				"off; short or with Back does not");
+		}
+		if (b >= 0) close(b);
+		if (l >= 0) close(l);
+	}
+
 	/* Memory protection: a user process may not touch kernel memory. */
 	pid = fork();
 	if (pid == 0) {

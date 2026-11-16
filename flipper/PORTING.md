@@ -105,7 +105,7 @@ Without the buttons (2026-11-14):
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
   | BKP14R | charging (R6.1): magic 0xC (top nibble), profile care (bit 0), gentle charging (bit 1) |
-  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 15) |
+  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), the forced mode (bits 14-15, R6.10: 0 auto, 1 off, 2 on; cleared at boot), idle timeout in seconds (bits 0-13; 0 never, default 15, at most 16383) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
