@@ -69,7 +69,7 @@ EXTERN _PROTOTYPE( void (*level0_func), (void) );
 #if (CHIP == ARM_CM)
 /* IRQ handlers: few lines have one, so a byte per line says which of a
  * handful of slots (R2a.2: 72 instead of 256 bytes). */
-#define NR_IRQ_HANDLERS	8
+#define NR_IRQ_HANDLERS	10	/* 9 used with the RTC alarm (R7b.1) */
 EXTERN u8_t irq_slot[NR_IRQ_VECTORS];	/* 0: none, else slot + 1 */
 EXTERN irq_handler_t irq_handlers[NR_IRQ_HANDLERS];
 EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
