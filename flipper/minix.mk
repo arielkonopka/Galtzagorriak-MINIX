@@ -401,7 +401,8 @@ endef
 endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
-TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
+	   pkgbad pkgplant sticky
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
@@ -414,10 +415,15 @@ $(MB)/cmd/app/%.o: apps/%.c
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
-$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) tools/mkpkg.py
+# Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
+BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
+$(BADPKGS) &: tools/mkbadpkg.py
+	python3 -I tools/mkbadpkg.py $(PKGDIR)/bad
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(BADPKGS) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
-	   -D "Security tests (spec Phase 1)" \
-	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755)
+	   -D "Security tests (spec Phases 1 and 3)" \
+	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755) \
+	   $(foreach b,$(BADPKGS),/usr/tests/bad/$(notdir $(b))=$(b)$(COMMA)644)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
