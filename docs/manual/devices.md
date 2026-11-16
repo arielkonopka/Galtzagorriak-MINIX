@@ -40,3 +40,21 @@ takes one fresh measurement (16 samples averaged, corrected with the chip's fact
 calibration), usually in a few milliseconds while the reference settles, and the converter and
 the reference are switched off again afterwards. Continuous sampling and an app with a
 voltmeter screen are **(planned)** (spec R6.4, later parts).
+
+## Sub-GHz radio, listening only (`/dev/subghz`)
+
+The Sub-GHz chip (CC1101) can listen on one frequency and report the signal strength there. It
+never transmits through this device.
+
+```
+echo 433920000 > /dev/subghz    # listen at 433.92 MHz (in Hz)
+cat /dev/subghz                  # rssi=-95 freq=433919830
+echo 0 > /dev/subghz             # stop
+```
+
+Frequencies are those the stock firmware accepts: 300–348, 387–464 and 779–928 MHz; anything else
+is refused. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
+signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
+radio goes back to sleep when the device is closed, or after `echo 0`. A spectrum view and
+recording will build on this.
+

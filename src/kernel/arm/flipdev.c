@@ -67,7 +67,8 @@
 #define POWER_MINOR	8	/* the fuel gauge, read only (T15a) */
 #define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
-#define LAST_MINOR	10
+#define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
+#define LAST_MINOR	11
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -169,6 +170,9 @@ FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int power_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int ow_read_rom, (phys_bytes user) );
 FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int adc_put, (char *line, int n, int v) );
+FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -235,6 +239,8 @@ PUBLIC void flipdev_task()
 	case DEV_OPEN:
 	case DEV_CLOSE:
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SUBGHZ_MINOR)
+			hal_subghz_off();	/* ~15 mA in RX: asleep */
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
 #endif
@@ -265,6 +271,64 @@ PUBLIC void flipdev_task()
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
   }
+}
+
+
+/*===========================================================================*
+ *				Sub-GHz (R8.1 part 1)			     *
+ *===========================================================================*/
+/* /dev/subghz, receive only: write a frequency in Hz (the stock bands) to
+ * listen there, "0" to stop; a read gives one line,
+ *	rssi=-92 freq=433919830		or	off freq=433919830
+ * The radio sleeps again when the device is closed.  No transmit path. */
+PRIVATE int subghz_write(user, count)
+phys_bytes user;
+int count;
+{
+  char t[12];
+  u32_t hz = 0;
+  int i;
+
+  if (count > (int) sizeof(t)) return(EINVAL);
+  phys_copy(user, vir2phys(t), (phys_bytes) count);
+  for (i = 0; i < count && t[i] >= '0' && t[i] <= '9'; i++)
+	hz = hz * 10 + (t[i] - '0');
+  if (i == 0 || i > 10) return(EINVAL);
+  if (hz == 0) {
+	hal_subghz_off();
+	return(count);
+  }
+  return(hal_subghz_rx(hz) < 0 ? EINVAL : count);
+}
+
+PRIVATE int subghz_read(user, count)
+phys_bytes user;
+int count;
+{
+  char line[40];
+  const char *k;
+  u32_t hz;
+  int rssi = hal_subghz_rssi(&hz), n = 0;
+
+  if (rssi == HAL_SUBGHZ_OFF) {
+	for (k = "off"; *k != 0; k++) line[n++] = *k;
+  } else {
+	for (k = "rssi="; *k != 0; k++) line[n++] = *k;
+	n = adc_put(line, n, rssi < 0 ? -rssi : rssi);
+	if (rssi < 0) {			/* adc_put prints no sign */
+		int j;
+
+		for (j = n; j > 5; j--) line[j] = line[j - 1];
+		line[5] = '-';
+		n++;
+	}
+  }
+  for (k = " freq="; *k != 0; k++) line[n++] = *k;
+  n = adc_put(line, n, (int) hz);
+  line[n++] = '\n';
+  if (count > n) count = n;
+  phys_copy(vir2phys(line), user, (phys_bytes) count);
+  return(count);
 }
 
 
@@ -625,6 +689,11 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case SUBGHZ_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) return(subghz_write(user, count));
+	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
+	return(subghz_read(user, count));
 
   case ADC_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);

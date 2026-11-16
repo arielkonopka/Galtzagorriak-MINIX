@@ -52,3 +52,10 @@ then
 	mknod /dev/adc c 6 10 || echo "base: could not make /dev/adc"
 	chmod 444 /dev/adc 2>/dev/null
 fi
+# Cards made before R8.1 lack /dev/subghz (the CC1101, receive only).
+if test ! -r /dev/subghz
+then
+	mknod /dev/subghz c 6 11 || echo "base: could not make /dev/subghz"
+	chgrp gui /dev/subghz 2>/dev/null
+	chmod 660 /dev/subghz 2>/dev/null
+fi
