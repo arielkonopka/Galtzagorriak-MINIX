@@ -1018,7 +1018,8 @@ char *address;
   return n;
 }
 
-char output[TBLOCK_SIZE];
+#define OUT_SIZE	128	/* messages only (was TBLOCK_SIZE; R2a.5) */
+char output[OUT_SIZE];
 void print(str)			/* changed to use stderr rather than stdout
 			 * -Dal */
 register char *str;
@@ -1032,8 +1033,8 @@ register char *str;
   }
   while (*str) {
 	output[indx++] = *str++;
-	if (indx == TBLOCK_SIZE) {
-		write(2, output, TBLOCK_SIZE);
+	if (indx == OUT_SIZE) {
+		write(2, output, OUT_SIZE);
 		indx = 0;
 	}
   }
