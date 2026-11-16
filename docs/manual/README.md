@@ -12,6 +12,8 @@ that brings them.
 More chapters (using the launcher and apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
 [`CHANGELOG.md`](../../CHANGELOG.md); the design is in [`docs/spec/`](../spec/README.md).
+Writing software for the system, or working on it: the
+[Galtzagorriak MINIX Development Guide](../devguide/README.md).
 
 Keeping it current: see the standing rule "Docs follow behaviour" in
 [`docs/spec/next-tasks.md`](../spec/next-tasks.md).
