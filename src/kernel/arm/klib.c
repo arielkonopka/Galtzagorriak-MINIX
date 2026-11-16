@@ -749,6 +749,7 @@ PUBLIC void pm_minute()
 {
   int v, t;
 
+  subghz_minute();		/* a forgotten receiver: asleep (R8.1) */
   if ((v = hal_gauge_read(HAL_GAUGE_VOLT)) > 0) {
 	if (v < PM_LOW_MV) pm_busy |= PM_LOWBAT;
 	else if (v >= PM_LOW_MV + 100) pm_busy &= ~PM_LOWBAT;

@@ -79,6 +79,15 @@ int hal_lcd_save(int on);
 unsigned hal_buttons(void);
 int hal_buttons_fake(unsigned mask);	/* QEMU tests: these held; -1 else */
 
+/* Sub-GHz receive only (R8.1 part 1): the CC1101 listens at hz (stock
+ * bands 300-348, 387-464, 779-928 MHz); returns the frequency it really
+ * tuned, or -1.  The RSSI in dBm (and the frequency), or HAL_SUBGHZ_OFF
+ * when it is not receiving.  Off: back to sleep.  No transmit path. */
+#define HAL_SUBGHZ_OFF	(-1000)
+long hal_subghz_rx(uint32_t hz);
+int hal_subghz_rssi(uint32_t *hz);
+void hal_subghz_off(void);
+
 /* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
  * it, wait some microseconds (busy: only for the slot timing). */
 void hal_ow_line(int low);

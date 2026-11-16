@@ -139,6 +139,10 @@ void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
 
+long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
+int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
+void hal_subghz_off(void) { }
+
 unsigned hal_buttons(void)
 {
 	return qemu_fake_buttons;
