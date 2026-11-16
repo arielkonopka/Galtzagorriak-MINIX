@@ -413,9 +413,14 @@ latcheck:
 versioncheck:
 	@python3 -I tools/versioncheck.py $(MROOT)/include/minix/gzversion.h \
 	   $(MROOT)/CHANGELOG.md
-ramcheck: $(MB)/minix.bin versioncheck
+ramcheck: $(MB)/minix.bin versioncheck bsscheck
 	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
 	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
+# No base program above 4 KB of .bss except those in bss-exceptions.txt
+# (spec R2a.5); run with ramcheck.
+.PHONY: bsscheck
+bsscheck: $(UPROGS:%=$(MB)/user/%.elf) $(LIBPROGS:%=$(MB)/user/%.elf)
+	@python3 -I tools/bsscheck.py bss-exceptions.txt 4096 $^
 card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin
