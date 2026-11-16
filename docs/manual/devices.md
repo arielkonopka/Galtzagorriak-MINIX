@@ -29,12 +29,14 @@ PC1 and PC0 (PB3 and PB2 have none). Anyone may read it.
 
 ```
 cat /dev/adc
-pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=3297 vdda=3301
+pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=> ref=2500
 ```
 
-Values are in millivolts, from 0 to the supply (`vdda`, about 3.3 V); a pin must not get more
-than that. Only a pin left in its default "off" state (`gpio N off`) is measured; a pin set up
-as an input or output shows `-`, so reading never disturbs it. Each read takes one fresh
-measurement (16 samples averaged, corrected with the chip's internal reference) in under 1 ms,
-and the converter is powered down again afterwards. Continuous sampling and an app with a
+Values are in millivolts, from 0 to 2.5 V: the converter measures against the chip's internal
+2.5 V reference (`ref`, as the stock firmware does), so a pin above 2.5 V shows `>`. A pin must
+never get more than 3.3 V. Only a pin left in its default "off" state (`gpio N off`) is
+measured; a pin set up as an input or output shows `-`, so reading never disturbs it. Each read
+takes one fresh measurement (16 samples averaged, corrected with the chip's factory
+calibration), usually in a few milliseconds while the reference settles, and the converter and
+the reference are switched off again afterwards. Continuous sampling and an app with a
 voltmeter screen are **(planned)** (spec R6.4, later parts).
