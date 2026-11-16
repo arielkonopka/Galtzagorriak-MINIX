@@ -197,7 +197,7 @@
 #define TADD(a, d)	((clock_t) ((unsigned long) (a) + (unsigned long) (d)))
 #define DUE(t, now)	(TDIFF(t, now) <= 0)
 #ifndef REALTIME_WRAP
-#define REALTIME_WRAP	0	/* 1: uptime starts 10 s before the wrap */
+#define REALTIME_WRAP	0	/* n: uptime starts n s before the wrap */
 #endif
 
 #define printf        printk	/* the kernel really uses printk, not printf */

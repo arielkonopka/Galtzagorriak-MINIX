@@ -27,7 +27,7 @@ MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -Wno-format -Wno-uninitialized -Wno-maybe-uninitialized \
 	   -Wno-stringop-overflow	# FS passes "." for char[NAME_MAX]; reads stop at NUL
 MCFLAGS	+= $(if $(LATTRACE),-DLATTRACE=1)
-MCFLAGS	+= $(if $(WRAPTEST),-DREALTIME_WRAP=1)
+MCFLAGS	+= $(if $(WRAPTEST),-DREALTIME_WRAP=$(if $(filter 1,$(WRAPTEST)),10,$(WRAPTEST)))
 MLDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections \
 	    -Wl,--no-warn-rwx-segments
 

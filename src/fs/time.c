@@ -80,16 +80,16 @@ PUBLIC int do_stime()
 {
 /* Perform the stime(tp) system call. */
 
-  message m;
+  message cm;			/* not m: that is the request (param.h) */
   register int k;
 
   if (!super_user) return(EPERM);
   /* 64-bit in two halves (R2d.2).  The clock keeps 1970-2106 until the
    * RTC driver (R6.2): anything else is EINVAL, not a wrapped clock. */
   if (tp_high != 0) return(EINVAL);
-  m.m_type = SET_TIME;
-  m.NEW_TIME = tp;
-  if ( (k = sendrec(CLOCK, &m)) != OK) panic("do_stime error", k);
+  cm.m_type = SET_TIME;
+  cm.NEW_TIME = tp;
+  if ( (k = sendrec(CLOCK, &cm)) != OK) panic("do_stime error", k);
   return(OK);
 }
 

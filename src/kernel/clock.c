@@ -81,9 +81,9 @@
 /* Uptime in ticks is unsigned and wraps after 2^32 ticks (828 days at 60 Hz,
  * spec I.3): instants are compared only through TDIFF/DUE (const.h).
  * The uptime-wrap test build (make WRAPTEST=1, R2d.6) starts 10 s before
- * the wrap. */
+ * the wrap (WRAPTEST=n: n seconds). */
 #if REALTIME_WRAP
-PRIVATE unsigned long realtime = (unsigned long) -(10L * HZ);
+PRIVATE unsigned long realtime = (unsigned long) -((long) REALTIME_WRAP * HZ);
 #else
 PRIVATE unsigned long realtime;	/* real time clock */
 #endif
@@ -175,7 +175,14 @@ PUBLIC void clock_task()
       * ticks of 2^32 mod HZ, 0.27 s every 828 days). */
      if (realtime < then) boot_time += (ftime32_t) (0x100000000ULL / HZ);
 #if (CHIP == ARM_CM)
-     if (realtime / (60 * HZ) != minute) pm_minute();	/* R6.1 */
+     if (realtime / (60 * HZ) != minute) {
+	pm_minute();				/* R6.1 */
+	/* The last key press stays in the past for wrap-safe compares
+	 * (I.3): never older than 2^30 ticks (207 days), which is idle
+	 * enough for everything that asks. */
+	if (TDIFF(realtime, k_input) > 0x40000000L)
+		k_input = (clock_t) (realtime - 0x40000000UL);
+     }
 #endif
 
      switch (opcode) {
@@ -729,6 +736,7 @@ PRIVATE void init_clock()
    * MM then makes no new installed-program bindings (their ctimes would
    * repeat between boots). */
   boot_time = (ftime32_t) hal_rtc_time() - realtime / HZ;
+  k_input = (clock_t) realtime;		/* as if a key at boot */
   put_irq_handler(CLOCK_IRQ, clock_handler);
   mt_init();				/* the ms timer, R4b.2 */
   SYST_CSR = 0;

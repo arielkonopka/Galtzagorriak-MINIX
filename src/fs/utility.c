@@ -35,13 +35,13 @@ PUBLIC time_t wall_time()
  * more.  The message is on the stack: no static RAM for it.
  */
 
-  message m;
+  message cm;			/* not m: that is the request (param.h) */
   register int k;
 
-  m.m_type = GET_TIME;
-  if ( (k = sendrec(CLOCK, &m)) != OK) panic("clock_time err", k);
+  cm.m_type = GET_TIME;
+  if ( (k = sendrec(CLOCK, &cm)) != OK) panic("clock_time err", k);
 
-  return( (time_t) (ftime32_t) m.NEW_TIME);
+  return( (time_t) (ftime32_t) cm.NEW_TIME);
 }
 
 

@@ -11,6 +11,7 @@
 #define	rounded(x)	(((x / ENTRY_INC) + 1) * ENTRY_INC)
 
 extern _CONST char **environ;
+extern _CONST char **_penvp;		/* what getenv() reads (crtso.S) */
 
 int
 putenv(name)
@@ -65,12 +66,14 @@ _CONST char *name;
 		size = i;
 		p = environ;
 		environ = v;
+		_penvp = environ;	/* getenv() reads _penvp (crtso.S) */
 		while (*v++ = *p++);		/* copy the environment */
 		v = environ;
 	} else if (!(size % ENTRY_INC)) {
 		if (!(v = realloc(environ, rounded(size) * sizeof(char **))))
 			return 1;
 		environ = v;
+		_penvp = environ;
 	}
 	v[size - 1] = name;
 	v[size] = NULL;

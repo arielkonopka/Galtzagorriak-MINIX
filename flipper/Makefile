@@ -9,7 +9,7 @@ BOARD	?= qemu
 PROG	?= m0
 # LATTRACE=1: the latency trace build (spec R0.8e), in its own directory.
 # WRAPTEST=1: the uptime-wrap test build (R2d.6, AC2d.3): the tick counter
-# starts 10 s before it wraps at 2^32; its own directory too.
+# starts 10 s before it wraps at 2^32 (WRAPTEST=n: n s); its own directory.
 BUILD	:= build/$(BOARD)$(if $(LATTRACE),-lat)$(if $(WRAPTEST),-wrap)
 
 CROSS	?= arm-none-eabi-
