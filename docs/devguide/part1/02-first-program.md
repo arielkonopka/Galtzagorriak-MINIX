@@ -79,10 +79,13 @@ What happens on the way, in case something breaks:
 
 1. `arm-none-eabi-gcc` compiles with the user-program flags (`UCFLAGS`: gnu89, `-Os`,
    position-independent with `r9` as the data base).
-2. It links against `libc-pic.a` with `ld/user-pic.ld`, keeping relocations (`-Wl,-q`).
+2. It links against the shared libc in flash (its stubs, `shlibc/stubs.o`, plus the few
+   members kept static, `libc-static.a`) with `ld/user-shlibc.ld`, keeping relocations
+   (`-Wl,-q`). Only the stubs of the functions you call end up in your text, 12 bytes each.
 3. `tools/elf2mnx.py` turns the ELF into a MINIX a.out with separate text and data, a
-   relocation table, the `chmem` reserve and the ABI number. The result is
-   `build/flipper/minix/bin/tally`.
+   relocation table, the `chmem` reserve, the ABI number and the id of the libc build. The
+   result is `build/flipper/minix/bin/tally`; it runs only with the libc of the same build
+   (part 2, 1.6).
 4. `tools/mkpkg.py` packs it as `/usr/bin/tally` into `tally_1.0.tar`.
 
 `BOARD=qemu` builds the same thing for the emulator (2.6).

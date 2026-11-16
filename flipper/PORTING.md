@@ -542,7 +542,7 @@ base-flash` builds `rom.img` (a read-only MINIX file system, 32 KB, from
 `rootfs/rom.proto`: `/etc` as built, plus the default `rc.conf`, which is
 not put on the card) and puts it into `minix-base.bin` at a fixed place:
 right after the installed region's two directory pages (0x08032000 on
-the Flipper).  It is written only by DFU:
+the Flipper; 0x08042000 since the shared libc, R2b.9).  It is written only by DFU:
 - installs start after it;
 - the kernel refuses MM's erases and writes there (EROFS);
 - `/dev/rom` (memory driver, block 1/6) serves it and cannot be opened
@@ -636,6 +636,59 @@ R2b.12, rebinding by content, and the exec guard (2026-11-15, QEMU; the
   ctime), so the old record is stale.  Now 0 of 36; with compaction's
   old header-first order it still catches 13 of 22.  RAM 0 B (kernel,
   MM, FS).
+
+R2b.9, the shared libc in flash (2026-11-16, QEMU; the device numbers
+are a local-agent check):
+- Layout: the system image (at most 192 KB), then the shared libc at
+  0x08030000 (QEMU 0x30000), at most 64 KB, then the installed region
+  from 0x08040000 (the ROM image moves to 0x08042000).  `minix.bin`
+  carries the library: `make minix-flash` alone gives a working system.
+- The library: every libc-pic member except those with big per-process
+  data, linked at its flash address (`ld/shlibc.ld`, no
+  `--gc-sections`), plus libgcc's 64-bit division (R2d.4).  Header and
+  entry table first (`tools/mkshlibc.py tab`, from `libc.exports`): 352
+  functions, 18 304 B.  Programs call slot n through a weak 12-byte stub
+  (`ldr ip, =slot; ldr pc, [ip]`); weak, so a program's own `getc` or
+  `putchar` (sh, mined, date) still wins, as with the static libc (no
+  libc member calls those).
+- One base register: library and program both use r9.  The program's
+  `.got` output section starts with the libc area (`ld/user-shlibc.ld`,
+  `. = . + SHLIBC_AREA`), and ld counts GOT offsets from the start of
+  that section, so the program's offsets begin after the area while the
+  library's own start at 0.  No kernel, MM or signal change for r9.
+- The area: the library's GOT (with absolute flash addresses for its
+  constants and functions, which exec leaves alone) and its data and bss,
+  608 B.  `elf2mnx.py --libc` copies its initial contents into the
+  program and adds its 23 data relocations; `crtso` (`-DSHLIBC`) sets
+  `_brksize` to the program's `_end`.  The library's variables are
+  `PROVIDE`d at their area addresses (`shlibc-syms.ld`).
+- Binding: the program carries the area, so it fits one library build
+  only: 48-byte header, flag `A_LIBC`, `a_tbase` = the build id (CRC-32 of
+  the library and its area).  MM's exec compares it with the header in
+  flash and refuses another one (ENOEXEC) before allocating; `pkg`
+  refuses a package with another `Libc:`.  The build is reproducible: the
+  same sources give the same id, so builds that do not touch libc keep
+  working with the cards in use.
+- The kernel takes the library's flash as the source of a copy (after D
+  and T, R4a.9): `perror` and `strerror` strings, `system()`'s "/bin/sh".
+  Never as a destination.
+- Kept static (`SHLIBC_STATIC`): getpwent/getgrent (1.3/1.8 KB of bss),
+  mtab, crypt, scanf, the time zone code (`misc.c`) and what needs it
+  (localtime, mktime, strftime, ctime), the float conversion tables,
+  regexp, math, and small members few programs use whose data or GOT
+  would cost every process (getopt, termcap, tmpnam, system, qsort,
+  rand, gmtime, ...).  With them shared the area was 1104 B.
+- Numbers (Flipper build, the 96 base programs): text 606 708 B ->
+  263 440 B, plus 18 304 B of library once; `base_3.71.tar` 788 KB ->
+  481 KB; `make base-flash` programs 136 KB -> 92 KB.  Per process,
+  data + bss +172 to +452 B (the area minus the libc data the program
+  had anyway; 88 programs: +265 B on average).  For a program whose text
+  runs from RAM the total goes down (cat 15.6 -> 14.2 KB, login 22.7 ->
+  15.9 KB).  QEMU after login: free 85 KB (73 KB with static programs).
+  M2: cache erases 5 -> 4 (m2test's text is smaller).
+- Device check pending: exec latency (L6, L9), the XIP speed of a
+  libc-heavy command (each libc call is a stub and a load from flash),
+  free flash after `make base-flash`.
 
 T4b step 1, the SD card's busy wait (2026-11-15, Flipper): after a write
 the card programs for up to ~9 ms, and `sd_wait_ready` polled it all
@@ -938,8 +991,8 @@ list of the settings app come later (I.4, Phase 18b); until then set `TZ` in
 - libc: `gmtime` converts with days-from-civil (no year loop; a 32-bit
   path for 1970-2106, 64-bit division only outside it; beyond about
   +-5 million years it returns NULL), `mktime` likewise, before 1970 too.
-  The 64-bit division helper of libgcc moves into the shared libc with
-  R2b.9.  `printf` has no `%lld`: print times through `ctime`/`strftime`/
+  The 64-bit division helper of libgcc lives in the shared libc
+  (R2b.9).  `printf` has no `%lld`: print times through `ctime`/`strftime`/
   `date`, or a difference cast to `long`.
 - Audit (R2d.7): `make check` and `make ramcheck` run
   `tools/timecheck.py` over the sources that are built.  It flags a
@@ -1036,6 +1089,8 @@ disk` builds the small 8 MB `fs.img` and the QEMU `disk.img`.
 
 ### User programs
 
+Since R2b.9 against the shared libc in flash (`ld/user-shlibc.ld`, see
+the R2b.9 notes above).  Originally:
 Linked at 0 with relocations (`ld/user.ld`, `-Wl,-q`), converted by
 `tools/elf2mnx.py` to MINIX a.out (cpu `A_ARMCM`) with a GEMDOS-style
 relocation table, which exec relocates in MM (the Atari ST code path).
