@@ -9,16 +9,16 @@
 
 static void as_nobody(void)
 {
-	int fd, a, b, c;
+	int fd, rm_no, mv_no, own;
 
 	setgid(99);
 	setuid(9999);
-	a = unlink("/tmp/rootfile") == -1 && errno == EPERM;
-	b = rename("/tmp/rootfile", "/tmp/nobodys") == -1 && errno == EPERM;
-	c = (fd = creat("/tmp/nobodys", 0644)) >= 0 && close(fd) == 0
+	rm_no = unlink("/tmp/rootfile") == -1 && errno == EPERM;
+	mv_no = rename("/tmp/rootfile", "/tmp/nobodys") == -1 && errno == EPERM;
+	own = (fd = creat("/tmp/nobodys", 0644)) >= 0 && close(fd) == 0
 		&& rename("/tmp/nobodys", "/tmp/nobodys2") == 0
 		&& unlink("/tmp/nobodys2") == 0;
-	_exit((a ? 0 : 1) | (b ? 0 : 2) | (c ? 0 : 4));
+	_exit((rm_no ? 0 : 1) | (mv_no ? 0 : 2) | (own ? 0 : 4));
 }
 
 int main(void)

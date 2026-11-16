@@ -258,17 +258,17 @@ static void phase3_tests(void)
 	(void) rmdir("/tmp/sticky");
 	pid = fork();
 	if (pid == 0) {
-		int a, c, d;
+		int rm_no, mv_no, own;
 
 		setgid(99);
 		setuid(9999);			/* nobody */
-		a = unlink("/tmp/rootfile") == -1 && errno == EPERM;
-		c = rename("/tmp/rootfile", "/tmp/nobodys") == -1
+		rm_no = unlink("/tmp/rootfile") == -1 && errno == EPERM;
+		mv_no = rename("/tmp/rootfile", "/tmp/nobodys") == -1
 							&& errno == EPERM;
-		d = (fd = creat("/tmp/nobodys", 0644)) >= 0 && close(fd) == 0
+		own = (fd = creat("/tmp/nobodys", 0644)) >= 0 && close(fd) == 0
 		    && rename("/tmp/nobodys", "/tmp/nobodys2") == 0
 		    && unlink("/tmp/nobodys2") == 0;
-		_exit(a && c && d ? 0 : 1);
+		_exit(rm_no && mv_no && own ? 0 : 1);
 	}
 	check(stat("/tmp", &sb) == 0 && (sb.st_mode & 01000) != 0 && r1
 		&& pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)

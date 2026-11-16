@@ -175,7 +175,8 @@ and dropped.
 
 **In QEMU it is not random**: the emulated board has no generator, so the numbers come from a
 generator seeded with the uptime in milliseconds (the same sequence for the same boot timing).
-Good enough to test with, never for keys.
+Good enough to test with, never for keys. For the same reason (QEMU is slow at SHA-256) `passwd`
+in QEMU builds hashes with the fewest rounds, 1000 (`$5$rounds=1000$`); the Flipper uses 5000.
 
 ## The status LED (`/dev/led`)
 

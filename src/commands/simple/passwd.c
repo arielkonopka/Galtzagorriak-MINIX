@@ -103,7 +103,7 @@ char *argv[];
   FILE *fp_tmp;
   struct passwd *pwd;
   /* getpass() returns up to 32 characters; these were 9 bytes. */
-  char *name, pwname[9], oldpwd[33], newpwd[33], newcrypted[100], sl[20];
+  char *name, pwname[9], oldpwd[33], newpwd[33], newcrypted[100], sl[40];
   char *argn;
   int shadow = 0;
 
@@ -202,9 +202,17 @@ char *argv[];
 			std_err("passwd: /dev/random gives no data\n");
 			exit(1);
 		}
+#ifdef BOARD_QEMU
+		/* QEMU runs SHA-256 about 50 times slower than the Flipper:
+		 * the fewest rounds there (1000, still a full $5$ hash), so
+		 * that login stays under its 60 s.  Never on the device. */
+		strcpy(sl, "$5$rounds=1000$");
+#else
 		strcpy(sl, "$5$");
-		for (cn = 0; cn < 16; cn++) sl[3 + cn] = a64[rnd[cn] & 63];
-		sl[19] = 0;
+#endif
+		n = strlen(sl);
+		for (cn = 0; cn < 16; cn++) sl[n + cn] = a64[rnd[cn] & 63];
+		sl[n + 16] = 0;
 		memset(rnd, 0, sizeof(rnd));
 	}
 	strncpy(newcrypted, crypt(newpwd, sl), sizeof(newcrypted) - 1);

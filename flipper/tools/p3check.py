@@ -81,9 +81,10 @@ def send_packages(r, files):
 
 
 def salt(r):
-	out = r.output("sed -n 's/^root:\\$5\\$\\([^$]*\\)\\$.*/\\1/p' "
-		"/etc/shadow")
-	return out.strip() if out else None
+	"""The salt of root's $5$ hash in /etc/shadow, or None."""
+	out = r.output("grep '^root:' /etc/shadow")
+	m = re.match(rb"root:\$5\$(?:rounds=\d+\$)?([^$]*)\$", out or b"")
+	return m.group(1) if m else None
 
 
 def passwd(r, pw):
@@ -92,7 +93,7 @@ def passwd(r, pw):
 		if r.wait(prompt, 30) is None:
 			return None
 		r.send(pw)
-	m = r.wait(rb"@@(\d+)@@", 300)	# SHA-crypt from RAM: slow in QEMU
+	m = r.wait(rb"@@(\d+)@@", 300)	# SHA-crypt: slow in QEMU
 	return None if m is None else int(m.group(1))
 
 
@@ -141,7 +142,8 @@ def main():
 			"R3.4: /etc/shadow is mode 600")
 		s1 = salt(r)
 		check(s1 is not None and len(s1) == 16,
-			"R3.4: root's hash in /etc/shadow is $5$ with a 16-character salt")
+			"R3.4: root's hash in /etc/shadow is $5$ with a 16-character "
+			"salt")
 
 		# AC3.1: two passwd runs in a row
 		ok = passwd(r, PW) == 0
