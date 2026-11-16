@@ -86,6 +86,15 @@ class Run:
 		m = self.wait(rb"@@(\d+)@@", secs)
 		return None if m is None else int(m.group(1))
 
+	def output(self, line, secs=20):
+		"""What line prints, or None.  The markers are split by quotes
+		in what is typed, so only the shell's output matches them: the
+		echo of the typed line can be broken up by a late prompt
+		("ech# o"), which the old match took for no output."""
+		self.send("echo @@S''TART@@; %s; echo @@E''ND@@" % line)
+		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
+		return m.group(1).replace(b"\r", b"") if m else None
+
 	def login(self):
 		for _ in range(3):
 			if self.wait(rb"login: ", 60) is None:
@@ -164,9 +173,7 @@ def checks(r, n, mode, expect):
 			if step == "reinstalled" and r.sh("pkg flash /tmp/p") != 0:
 				return (n, mode, "pkg flash /tmp/p fails after "
 					"the cut", where)
-			r.send("echo hello | /tmp/p; echo @@end@@")
-			m = r.wait(rb"echo @@end@@\r?\n(.*?)@@end@@", 20)
-			got = m.group(1).replace(b"\r", b"") if m else None
+			got = r.output("echo hello | /tmp/p")
 			if got != want:
 				return (n, mode, "/tmp/p (%s, %s) printed %r" %
 					("od" if is_od else "cksum", step, got),
@@ -174,9 +181,7 @@ def checks(r, n, mode, expect):
 		if r.sh("cp /bin/sum /tmp/q; sync; pkg flash /tmp/q") != 0:
 			return (n, mode, "a new install fails after the cut",
 				where)
-		r.send("echo hello | /tmp/q; echo @@end@@")
-		m = r.wait(rb"echo @@end@@\r?\n(.*?)@@end@@", 20)
-		if m is None or m.group(1).replace(b"\r", b"") != expect["sum"]:
+		if r.output("echo hello | /tmp/q") != expect["sum"]:
 			return (n, mode, "/tmp/q (sum) printed wrong", where)
 		if BAD.search(r.out):
 			return (n, mode, "console: %r" %
@@ -192,9 +197,7 @@ def reference():
 			sys.exit("powercut: no login in QEMU")
 		expect = {}
 		for prog in ("od", "cksum", "sum"):
-			r.send("echo hello | %s; echo @@end@@" % prog)
-			m = r.wait(rb"echo @@end@@\r?\n(.*?)@@end@@", 20)
-			expect[prog] = m.group(1).replace(b"\r", b"")
+			expect[prog] = r.output("echo hello | " + prog)
 		for step in STEPS:
 			r.sh(step, 600)
 		ops = [(int(a, 16), b.decode(), int(c, 16)) for b, a, c in
