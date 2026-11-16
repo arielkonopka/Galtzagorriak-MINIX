@@ -679,6 +679,36 @@ PUBLIC void task_yield()
 #define PM_NOT(r)	return(0)
 #endif
 
+/*===========================================================================*
+ *				flash ECC (R4a.5)			     *
+ *===========================================================================*/
+PUBLIC void NMI_Handler()
+{
+/* A double ECC error in flash (the only NMI source used): the data read
+ * was wrong.  Say where, then stop: anything may have used it.  (The spec's
+ * finer rule, kill only the users of a text-cache entry and drop the
+ * entry, needs MM: later.) */
+  u32_t a;
+  unsigned f = hal_flash_ecc(&a);
+
+  if (f & HAL_ECC_DOUBLE) {
+	printf("\nflash ECC: uncorrectable error at %08lx (%s)\n",
+		(unsigned long) a, k_booted ? proc_ptr->p_name : "boot");
+	panic("flash ECC error", NO_NUM);
+  }
+  panic("NMI", NO_NUM);
+}
+
+PUBLIC void ecc_poll()
+{
+/* The clock task: corrected single-bit errors are worth a line (a page
+ * wearing out). */
+  u32_t a;
+
+  if (hal_flash_ecc(&a) & HAL_ECC_FIXED)
+	printf("flash ECC: corrected a bit at %08lx\n", (unsigned long) a);
+}
+
 PUBLIC void pm_vbus()
 {
 /* The clock task, whenever it runs (at least every 32 ticks while awake,

@@ -145,6 +145,7 @@ PUBLIC void clock_task()
 #if (CHIP == ARM_CM)
      hal_wdt_kick();		/* the clock task runs: nothing hogs the CPU */
      pm_vbus();			/* a cable in: no Stop2 (arm/klib.c) */
+     ecc_poll();			/* corrected flash ECC errors (R4a.5) */
 #endif
 
      lock();
