@@ -46,3 +46,9 @@ then
 	chgrp gui /dev/ibutton 2>/dev/null
 	chmod 660 /dev/ibutton 2>/dev/null
 fi
+# Cards made before R6.4 lack /dev/adc (header pin voltages).
+if test ! -r /dev/adc
+then
+	mknod /dev/adc c 6 10 || echo "base: could not make /dev/adc"
+	chmod 444 /dev/adc 2>/dev/null
+fi
