@@ -83,6 +83,7 @@ struct node {
 	struct {
 		long n_val;
 		int n_sign;
+		time_t n_time;	/* -atime/-ctime/-mtime/-newer (64-bit) */
 	} n_int;
 	struct exec *n_exec;
 	struct {
@@ -174,7 +175,7 @@ struct oper {
 char **ipp;			/* pointer to next argument during parsing       */
 char *prog;			/* program name (== argv [0])                    */
 char *epath;			/* value of PATH environment string              */
-long current_time;		/* for computing age                             */
+time_t current_time;		/* for computing age                             */
 int tty;			/* fd for /dev/tty when using -ok                */
 int xdev_flag = 0;		/* cross device boundaries?                      */
 int devnr;			/* device nr of first inode                      */
@@ -191,6 +192,7 @@ _PROTOTYPE(char *Salloc, (char *s));
 _PROTOTYPE(void find, (char *path, struct node * pred, char *last));
 _PROTOTYPE(int check, (char *path, struct stat * st, struct node * n, char *last));
 _PROTOTYPE(int ichk, (long val, struct node * n));
+_PROTOTYPE(int tchk, (time_t val, struct node * n));
 _PROTOTYPE(int lex, (char *str));
 _PROTOTYPE(struct node * newnode, (int t));
 _PROTOTYPE(int isnumber, (char *str, int base, int sign));
@@ -350,7 +352,7 @@ register struct node *n;
 			(int) n->n_info.n_int.n_val;
 	return(st->st_mode & 07777) == (int) n->n_info.n_int.n_val;
     case OP_NEWER:
-	return st->st_mtime > n->n_info.n_int.n_val;
+	return st->st_mtime > n->n_info.n_int.n_time;
     case OP_TYPE:
 	return(st->st_mode & S_IFMT) == (mode_t) n->n_info.n_int.n_val;
     case OP_LINKS:
@@ -367,11 +369,11 @@ register struct node *n;
     case OP_INUM:
 	return ichk((long) (st->st_ino), n);
     case OP_ATIME:
-	return ichk(st->st_atime, n);
+	return tchk(st->st_atime, n);
     case OP_CTIME:
-	return ichk(st->st_ctime, n);
+	return tchk(st->st_ctime, n);
     case OP_MTIME:
-	return ichk(st->st_mtime, n);
+	return tchk(st->st_mtime, n);
     case OP_EXEC:
     case OP_OK:
 	return execute(n->n_type, n->n_info.n_exec, path);
@@ -394,6 +396,20 @@ register struct node *n;
   }
   fatal("ILLEGAL NODE", "");
   return 0;			/* Never reached */
+}
+
+int tchk(val, n)
+time_t val;
+struct node *n;
+{
+/* ichk for times: 64-bit (spec R2d.7). */
+  switch (n->n_info.n_int.n_sign) {
+    case 0:	return val == n->n_info.n_int.n_time;
+    case 1:	return val > n->n_info.n_int.n_time;
+    case -1:	return val < n->n_info.n_int.n_time;
+  }
+  fatal("internal: bad n_sign", "");
+  return 0;
 }
 
 int ichk(val, n)
@@ -732,7 +748,7 @@ int t;
     case OP_MTIME:
 	checkarg(*++ipp);
 	number(*ipp, 10, &l, &(p->n_info.n_int.n_sign));
-	p->n_info.n_int.n_val = current_time - l * SECS_PER_DAY;
+	p->n_info.n_int.n_time = current_time - (time_t) l * SECS_PER_DAY;
 	/* More than n days old means less than the absolute time */
 	p->n_info.n_int.n_sign *= -1;
 	break;
@@ -764,7 +780,7 @@ int t;
 	checkarg(*++ipp);
 	if (LSTAT(*ipp, &est) == -1)
 		fatal("-newer: can't get status of ", *ipp);
-	p->n_info.n_int.n_val = est.st_mtime;
+	p->n_info.n_int.n_time = est.st_mtime;
 	break;
     case OP_NAME:
 	checkarg(*++ipp);

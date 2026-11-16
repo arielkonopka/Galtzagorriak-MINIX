@@ -191,4 +191,13 @@
  */
 #define vir2phys(vir)	(data_base + (vir_bytes) (vir))
 
+/* Uptime in ticks wraps after 2^32 ticks (828 days at 60 Hz, spec I.3):
+ * two instants are compared only through their difference. */
+#define TDIFF(a, b)	((long) ((unsigned long) (a) - (unsigned long) (b)))
+#define TADD(a, d)	((clock_t) ((unsigned long) (a) + (unsigned long) (d)))
+#define DUE(t, now)	(TDIFF(t, now) <= 0)
+#ifndef REALTIME_WRAP
+#define REALTIME_WRAP	0	/* n: uptime starts n s before the wrap */
+#endif
+
 #define printf        printk	/* the kernel really uses printk, not printf */

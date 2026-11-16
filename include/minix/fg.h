@@ -14,5 +14,8 @@
 #include <sys/ioctl.h>
 
 #define FGIOCSET	_IOW('F', 1, int)
+/* R6.10: the foreground app turns the button gestures off (0) or on (1)
+ * for itself (games using diagonals); cleared by the next FGIOCSET. */
+#define BTNIOCGEST	_IOW('F', 2, int)
 
 #endif /* _MINIX_FG_H */

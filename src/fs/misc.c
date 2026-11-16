@@ -366,7 +366,7 @@ PUBLIC int do_inochk()
   if (m.m1_i2 < 1 || (ino_t) m.m1_i2 > sp->s_ninodes) return(0);
   if ((rip = get_inode(dev, m.m1_i2)) == NIL_INODE) return(ENODEV);
   r = (rip->i_nlinks & BYTE) != 0 && (rip->i_mode & I_TYPE) == I_REGULAR
-	&& rip->i_ctime == (time_t) m.m1_i3;
+	&& rip->i_ctime == (ftime32_t) m.m1_i3;
   if (rip->i_count == 1 && (rip->i_nlinks & BYTE) == 0)
 	rip->i_count = 0;	/* a free inode: put_inode would free it */
   else

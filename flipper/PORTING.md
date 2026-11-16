@@ -105,7 +105,7 @@ Without the buttons (2026-11-14):
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
   | BKP14R | charging (R6.1): magic 0xC (top nibble), profile care (bit 0), gentle charging (bit 1) |
-  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 15) |
+  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), the forced mode (bits 14-15, R6.10: 0 auto, 1 off, 2 on; cleared at boot), idle timeout in seconds (bits 0-13; 0 never, default 15, at most 16383) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
@@ -899,6 +899,99 @@ How the sleep works (T14b, #115 #116 #121; for whoever changes it):
 
 Statistics: a `make latcheck` kernel and `lat` show the time in Stop2,
 wake-ups by source, the entry/exit time and why idle did not sleep.
+
+## Time (Phase 2d, spec section I, R2d.1-R2d.9)
+
+**Model.** The system clock keeps **UTC**, as POSIX seconds since
+1970-01-01 (no leap seconds).  Local time exists only for people: libc's
+`localtime`, `mktime`, `ctime` and `date` follow the `TZ` environment
+variable, a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3` (no `TZ`:
+UTC).  `/etc/TZ`, read by INIT for everything it starts, and the time-zone
+list of the settings app come later (I.4, Phase 18b); until then set `TZ` in
+`~/.profile` (`TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ`).
+
+**Year 2038: option E of I.2.**
+- Programs: `time_t` is a **signed 64-bit** integer (`long long`) in libc,
+  `struct stat` (48 bytes now, 16 more on the stack), `struct utimbuf`,
+  `time()` and `stime()`.  Programs compiled now need no other change for
+  time; this raised the ABI to **2** (J.3): MM's exec refuses programs of
+  ABI 1 (`a_version` 0 or 1) with `ENOEXEC`, `pkg` refuses packages with
+  `Abi: 1` or none.
+- Storage: **`ftime32_t`**, unsigned 32 bits, 1970 to 2106-02-07 06:28:15
+  UTC: MFS inode times on disk and in core (the V2 inode is unchanged, so
+  file systems made before still mount and show the same times; times
+  before 2038 read the same signed or unsigned), MM's `mp_ctime`, the
+  installed-region records and `utmp`/`wtmp` `ut_time`.  The conversion
+  happens at the boundary (`stat`, `utime`) and nowhere else.
+- Messages keep their size: a 64-bit value travels as two halves,
+  `m2_l1` low and `m2_l2` high (`time()` replies, `stime()` requests).  A
+  64-bit member in the message union is not allowed: it would make
+  `message` 8-byte aligned.
+- `utime()` refuses a time outside 1970 to 2106-02-07 06:28:14 with
+  `EINVAL` in libc (`touch -t 210701010000 f` fails, 2106 works);
+  `stime()` past 2106 gets `EINVAL` from FS.  When the clock passes 2106
+  (only possible with the RTC driver), FS stamps files with
+  `0xFFFFFFFE` and says so once on the console, instead of wrapping to
+  1970.
+- libc: `gmtime` converts with days-from-civil (no year loop; a 32-bit
+  path for 1970-2106, 64-bit division only outside it; beyond about
+  +-5 million years it returns NULL), `mktime` likewise, before 1970 too.
+  The 64-bit division helper of libgcc moves into the shared libc with
+  R2b.9.  `printf` has no `%lld`: print times through `ctime`/`strftime`/
+  `date`, or a difference cast to `long`.
+- Audit (R2d.7): `make check` and `make ramcheck` run
+  `tools/timecheck.py` over the sources that are built.  It flags a
+  `long`/`int` that holds `time()`, a cast of a time to `long`/`int`,
+  `time(&x.ut_time)`, `long`/`int` variables named `*time*`, and `%ld`/`%d`
+  next to a time value.  A line that is right as it is says
+  `/* timecheck: ok */`.  Fixed by it: `find` (`time()` into a `long`:
+  memory overwritten), `login` (`time(&ut_time)`), `tar` (times past
+  2038), `mkfs`, `date`, the power app.
+
+**The kernel's clock.**  Until the RTC driver (R6.2) reads the RTC on each
+`time()` (and the kernel's `boot_time` goes, -4 B), the clock task keeps
+`boot_time` as an `ftime32_t` read from the RTC at boot and adds the
+uptime: 0 B RAM change.  `time()` costs one message to FS and one to the
+clock task, as before.
+
+**Uptime wrap (I.3).**  `realtime`, the tick counter, is unsigned and wraps
+after 2^32 ticks (828 days at 60 Hz).  Every compare of two instants goes
+through `TDIFF(a, b)` / `DUE(t, now)` (`src/kernel/const.h`): alarms
+(`p_alarm`, `next_alarm`), the TTY timers, the tickless idle, the backlight
+timeout and the flash idle work.  "No timer" is half the range ahead
+instead of `LONG_MAX`; `force_timeout()` uses a past instant instead of 0;
+the last key press (`k_input`) is kept at most 2^30 ticks in the past so
+that it never looks like the future.  At the wrap the wall clock carries
+2^32/60 s (it loses 16 ticks, 0.27 s, every 828 days).  Test build:
+`make WRAPTEST=1` starts the counter 10 s before the wrap (`WRAPTEST=n`:
+n s); in QEMU the M2 test reaches `m2test` about 35 s after the start, so:
+
+    make -j WRAPTEST=40 INIT=m2 minix disk && make WRAPTEST=40 INIT=m2 minix-run
+
+checks an `alarm()` set before the wrap and a `sleep(2)` after it (AC2d.3),
+then runs the whole M2 test after the wrap.
+
+**QEMU checks (m2test).**  `gmtime`/`mktime` both ways for 1900-03-01,
+1969-12-31 23:59:59, 2038-01-19 03:14:08, 2100-03-01 (2100 is no leap
+year) and 9999-12-31 23:59:59; `TZ=CET-1CEST,M3.5.0,M10.5.0/3` at
+2026-03-29 00:59:59 UTC gives 01:59:59 and one second later 03:00:00
+local (AC2d.5); `utime` keeps 2106-01-01 and refuses 2107 (AC2d.2);
+`stime` refuses 2106+, sets 2038-01-19 03:14:06, and after `alarm(3)`
+`time()` is past 03:14:08 and a file stamped then shows 2038 (AC2d.1).
+
+**For the manual (I.7).**  The clock is UTC and local time comes from
+`TZ` (later `/etc/TZ`, changed with the settings app or `setup tz`);
+programs use 64-bit times, files store times up to 2106-02-07; after the
+stock firmware the RTC holds the stock firmware's local time (the
+first-boot wizard of Phase 18b will ask to confirm it; until then set it
+with `date -u ...Z`); after going back to stock, the stock clock shows UTC
+until it is set again.  `date -u` prints UTC; `date MMDDYYhhmm` sets local
+time, `date -u ...` or a trailing `Z` sets UTC.
+
+**Needs the device.**  AC2d.R: `time()` <= 5 us (one RTC read and the
+conversion, once R6.2 reads the RTC; today one FS and one clock message)
+and `ls -l` of 100 files not measurably slower (both recorded here);
+the boot still takes the clock from the RTC (#70).
 
 ## Status
 

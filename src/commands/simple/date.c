@@ -7,6 +7,7 @@
 #include <time.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define	MIN	60L		/* # seconds in a minute */
 #define	HOUR	(60 * MIN)	/* # seconds in an hour */
@@ -22,14 +23,16 @@ int outfd = 1;
 _PROTOTYPE(int main, (int argc, char **argv));
 _PROTOTYPE(void putchar, (int c));
 _PROTOTYPE(void pstring, (char *s, int len));
-_PROTOTYPE(void pldecimal, (unsigned long d, int digits));
+_PROTOTYPE(void pldecimal, (unsigned long long d, int digits));
 _PROTOTYPE(void pdecimal, (int d, int digits));
 _PROTOTYPE(void fmtdate, (char *format, time_t t, struct tm *p));
 _PROTOTYPE(time_t make_time, (char *t));
+_PROTOTYPE(long days_from_civil, (long y, int m, int d));
 _PROTOTYPE(void usage, (void));
 
-/* Main module. Handles P1003.2 date and system administrator's date. The
- * date entered should be given GMT, regardless of the system's TZ!
+/* Main module. Handles P1003.2 date and system administrator's date.  The
+ * clock keeps UTC (spec I.1): a date entered is local time (TZ), or UTC
+ * with -u or a trailing Z.
  */
 int main(argc, argv)
 int argc;
@@ -92,7 +95,8 @@ char **argv;
 
   if (sflag && stime(&t) != 0) {
 	outfd = 2;
-	pstring("No permission to set time\n", -1);
+	pstring(errno == EINVAL ? "The clock cannot keep that time\n"
+				: "No permission to set time\n", -1);
 	return(1);
   }
 
@@ -120,7 +124,7 @@ int c;
  * specific case.
  */
 void pldecimal(d, digits)
-unsigned long d;
+unsigned long long d;
 int digits;
 {
   digits--;
@@ -131,7 +135,7 @@ int digits;
 void pdecimal(d, digits)
 int d, digits;
 {
-  pldecimal((unsigned long) d, digits);
+  pldecimal((unsigned long long) (unsigned) d, digits);
 }
 
 /* Internal function that prints a fixed-size string. Replaces stdio in our
@@ -165,6 +169,11 @@ struct tm *p;
 		    "September", "October", "November", "December"};
 
   p= uflag ? gmtime(&t) : localtime(&t);
+  if (p == NULL) {
+	outfd = 2;
+	pstring("date: time out of range\n", -1);
+	exit(1);
+  }
 
   while (*format)
 	if (*format == '%') {
@@ -215,7 +224,7 @@ struct tm *p;
 			break;
 		    case 'Z':
 			if (uflag) {
-				s = "GMT";
+				s = "UTC";
 			} else {
 				s = (p->tm_isdst == 1) ? tzname[1] : tzname[0];
 			}
@@ -258,7 +267,9 @@ struct tm *p;
 			fmtdate("%I:%M:%S %p", t, p);
 			break;
 		    case 's':
-			pldecimal((unsigned long) t, 0);
+			if (t < 0) putchar('-');
+			pldecimal(t < 0 ? -(unsigned long long) t
+					: (unsigned long long) t, 0);
 			break;
 		    case 't':	putchar('\t');	break;
 		    case 'w':
@@ -275,33 +286,50 @@ struct tm *p;
 		putchar(*format++);
 }
 
-/* Convert a local date string into GMT time in seconds. */
+/* Days since 1970-01-01 of a date (days-from-civil, H. Hinnant). */
+long days_from_civil(y, m, d)
+long y;
+int m, d;
+{
+  long era;
+  unsigned long yoe, doe;
+
+  y -= m <= 2;
+  era = (y >= 0 ? y : y - 399) / 400;
+  yoe = (unsigned long) (y - era * 400);
+  doe = yoe * 365 + yoe / 4 - yoe / 100
+	+ (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+  return era * 146097 + (long) doe - 719468;
+}
+
+/* Convert a date string into UTC seconds (spec R2d.8): local time, or UTC
+ * with -u or a trailing Z.  [[MMDDYY]hhmm[ss]][Z] or MMDDCCYYhhmmss[Z]; a
+ * two-digit year is 1970-2069. */
 time_t make_time(t)
 char *t;
 {
   struct tm tm;				/* user specified time */
   time_t now;				/* current time */
-  int leap;				/* current year is leap year */
+  int utc = uflag;			/* the string is UTC */
   int i;				/* general index */
   int fld;				/* number of fields */
-  int f[6];				/* time fields */
-  static int days_per_month[2][12] = {
-  { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
-  { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }};
+  int f[7];				/* time fields */
+  long year;
+  static int days_per_month[12] = {
+	31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
 /* Get current time just in case */
   now = time((time_t *) 0);
-  tm  = *localtime(&now);
+  tm  = utc ? *gmtime(&now) : *localtime(&now);
   tm.tm_sec   = 0;
-  tm.tm_mon++;
-  tm.tm_year %= 100;
+  year = tm.tm_year + 1900L;
 
 /* Parse the time */
-#if '0'+1 != '1' || '1'+1 != '2' || '2'+1 != '3' || '3'+1 != '4' || \
-    '4'+1 != '5' || '5'+1 != '6' || '6'+1 != '7' || '7'+1 != '8' || '8'+1 != '9'
-  << Code unsuitable for character collating sequence >>
-#endif
-
+  i = strlen(t);
+  if (i > 0 && (t[i-1] == 'Z' || t[i-1] == 'z')) {
+	t[i-1] = 0;
+	utc = 1;
+  }
   for (fld = 0; fld < sizeof(f)/sizeof(f[0]); fld++) {
 	if (*t == 0) break;
 	f[fld] = 0;
@@ -310,6 +338,7 @@ char *t;
 		f[fld] = f[fld] * 10 + *t - '0';
 	}
   }
+  if (*t != 0) usage();
 
   switch (fld) {
   case 2:
@@ -320,81 +349,47 @@ char *t;
 	break;
 
   case 5:
-  	tm.tm_mon  = f[0]; tm.tm_mday = f[1]; tm.tm_year = f[2];
+  case 6:
+	tm.tm_mon  = f[0] - 1; tm.tm_mday = f[1];
+	year = f[2] < 70 ? 2000 + f[2] : 1900 + f[2];
 	tm.tm_hour = f[3]; tm.tm_min  = f[4];
+	tm.tm_sec = fld == 6 ? f[5] : 0;
 	break;
 
-  case 6:
-	tm.tm_mon  = f[0]; tm.tm_mday = f[1]; tm.tm_year = f[2];
-	tm.tm_hour = f[3]; tm.tm_min  = f[4]; tm.tm_sec  = f[5];
+  case 7:
+	tm.tm_mon  = f[0] - 1; tm.tm_mday = f[1];
+	year = f[2] * 100L + f[3];
+	tm.tm_hour = f[4]; tm.tm_min  = f[5]; tm.tm_sec  = f[6];
 	break;
 
   default:
 	usage();
   }
 
-/* Convert the time into seconds since 1 January 1970 */
-  if (tm.tm_year < 70)
-    tm.tm_year += 100;
-  leap = (tm.tm_year % 4 == 0 && tm.tm_year % 400 != 0);
-  if (tm.tm_mon  < 1  || tm.tm_mon  > 12 ||
-      tm.tm_mday < 1  || tm.tm_mday > days_per_month[leap][tm.tm_mon-1] ||
-      tm.tm_hour > 23 || tm.tm_min  > 59) {
+  if (tm.tm_mon  < 0  || tm.tm_mon  > 11 ||
+      tm.tm_mday < 1  || tm.tm_mday > days_per_month[tm.tm_mon] ||
+      (tm.tm_mon == 1 && tm.tm_mday == 29
+	&& !(year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))) ||
+      tm.tm_hour > 23 || tm.tm_min  > 59 || tm.tm_sec > 59) {
     outfd = 2;
     pstring("Illegal date format\n", -1);
     exit(1);
   }
 
-/* Convert the time into Minix time - zone independent code */
-  {
-    time_t utctime;			/* guess at unix time */
-    time_t nextbit;			/* next bit to try */
-    int rv;				/* result of try */
-    struct tm *tmp;			/* local time conversion */
-
-#define COMPARE(a,b)	((a) != (b)) ? ((a) - (b)) :
-
-    utctime = 1;
-    do {
-      nextbit = utctime;
-      utctime = nextbit << 1;
-    } while (utctime >= 1);
-
-    for (utctime = 0; ; nextbit >>= 1) {
-
-      utctime |= nextbit;
-      tmp = localtime(&utctime);
-      if (tmp == 0) continue;
-
-      rv = COMPARE(tmp->tm_year,    tm.tm_year)
-           COMPARE(tmp->tm_mon + 1, tm.tm_mon)
-	   COMPARE(tmp->tm_mday,    tm.tm_mday)
-	   COMPARE(tmp->tm_hour,    tm.tm_hour)
-	   COMPARE(tmp->tm_min,     tm.tm_min)
-	   COMPARE(tmp->tm_sec,     tm.tm_sec)
-	   0;
-
-      if (rv > 0)
-        utctime &= ~nextbit;
-      else if (rv == 0)
-        break;
-
-      if (nextbit == 0) {
-	uflag = 1;
-        outfd = 2;
-        pstring("Inexact conversion to UTC from ", -1);
-        fmtdate("%c\n", utctime, localtime(&utctime) );
-	exit(1);
-      }
-    }
-    return utctime;
+  if (utc) {
+	return (time_t) days_from_civil(year, tm.tm_mon + 1, tm.tm_mday) * DAY
+		+ tm.tm_hour * HOUR + tm.tm_min * MIN + tm.tm_sec;
   }
+  /* Local time: mktime follows TZ, daylight saving time included. */
+  tm.tm_year = (int) (year - 1900);
+  tm.tm_isdst = -1;
+  return mktime(&tm);
 }
 
 /* (Extended) Posix prototype of date. */
 void usage()
 {
   outfd = 2;
-  pstring("Usage: date [-qsu] [-t seconds] [[MMDDYY]hhmm[ss]] [+format]\n", -1);
+  pstring("Usage: date [-qsu] [-t seconds] [[MMDDYY]hhmm[ss][Z] | MMDDCCYYhhmmss[Z]] [+format]\n", -1);
   exit(1);
 }

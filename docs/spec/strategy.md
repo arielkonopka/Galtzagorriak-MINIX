@@ -75,8 +75,9 @@ graph LR
   P4b --> P8[8 Sub-GHz, LF RFID]
   P8 --> P9[9 apps, camfind v1]
   P4b --> P10[10 USB classes] --> P11[11 BadUSB, reader modes]
-  P3 --> P12[12 swap] --> P13[13 NFC] --> P14[14 NFC apps]
-  P12 --> P15[15 BLE, RPC] --> P16[16 BLE apps, sbctl] --> P17[17 trust] --> P18[18 parity = 1.0]
+  P2 --> P12a[12a plain swap] --> P13[13 NFC] --> P14[14 NFC apps]
+  P3 --> P12b[12b swap encryption]
+  P12a --> P15[15 BLE, RPC] --> P16[16 BLE apps, sbctl] --> P17[17 trust] --> P18[18 parity = 1.0]
   P16 --> P21[21 second Flipper]
   P10 --> P19[19 networking]
   P18 --> P22[22 Wi-Fi devboard]
@@ -89,7 +90,7 @@ branch (4b → 6) is longer, because only the local agent can test it.
 **Critical path to Berry (7c):** the 7b path plus Phase 5's GUI part (R5.1, R5.2) and 7b.4 sensors.
 The Berry VM itself has no dependency and can be ported early (section 4).
 
-**Critical path to 1.0 (Phase 18):** 3 → 12 (swap, for RAM headroom) → 15 (BLE on CPU2) → 16 → 17
+**Critical path to 1.0 (Phase 18):** 12a (plain swap, for RAM headroom) → 15 (BLE on CPU2) → 16 → 17
 → 18. BLE is the longest single chain and the biggest unknown (R16.1.0 full stack on CPU2).
 
 Rules this graph implies:
@@ -100,7 +101,9 @@ Rules this graph implies:
 - **4b before every new driver.** No new device driver (Sub-GHz, NFC, iButton, sensors) is merged
   before R4b.2 (ms timer), R4b.6 (`poll()`) and R4b.8 (foreground ownership); otherwise each driver
   invents its own timing and is reworked later.
-- **Swap (12) before NFC and BLE.** Their RAM does not fit otherwise.
+- **Swap (12) before NFC and BLE.** Their RAM does not fit otherwise. Since 2026-11-16 (owner)
+  swap ships in two steps: plain swap as an option first (R12.28, needs only M1), encryption
+  (12b) later. So the headroom arrives early and 12b is off the critical path.
 
 ## 4. Who does what: three lanes
 
@@ -157,10 +160,10 @@ every ~2 working days with a patch release if no phase closed (as 0.1.1). The ow
 |---|---|---|---|---|
 | **M1 Foundation** | 2a, 2b, 2c, 2d | Q: 2d → R2b.9 → 2c, R2a.5. H: T14a, T14b (EXTI, tickless, Stop2), R4b.2 ms timer | **0.5.0, ABI 2** | every AC of 2a–2d passes; ABI 2 stamped; old cards upgrade (pkg path) |
 | **M2 Platform** | 3, 4a, 4b | Q: Phase 3, `poll()` core, `libfuri` core (R5.1). H: 4b rest, 4a rest, T14c/d | 0.8.0 | drivers have timer/poll/foreground; `pkg` safe |
-| **M3 First GUI gadget** | 6, 7b (`remind`, `alarm`, `selftest`) | Q: `libfuri` GUI (R5.2), `libapp`, `remind`/`alarm` cores, T15 `power` app UI. H: RTC wake, LED, sound, selftest | 0.10.0 | an alarm rings from Stop2 at the set minute; battery ≤ 1.5 mA idle |
-| **M4 Apps and scripting** | 5, 7, 7b.4, 7c | Q: `fam2pkg`, launcher (R5.6), Berry VM + TSV modules. H: sensor drivers (section H), iButton | 0.14.0 | first stock apps ported; a Berry gadget runs ≤ 4 at once within L1–L10 |
+| **M3 First GUI gadget** | 6, 7b (`remind`, `alarm`, `selftest`), 12a+12e plain swap (R12.28) | Q: `libfuri` GUI (R5.2), `libapp`, `remind`/`alarm` cores, T15 `power` app UI, plain swap in MM (may start in M2 when a Q slot is free). H: RTC wake, LED, sound, selftest | 0.10.0 | an alarm rings from Stop2 at the set minute; battery ≤ 1.5 mA idle |
+| **M4 Apps and scripting** | 5, 7, 7b.4, 7c, 12d park/hibernate + Running list | Q: `fam2pkg`, launcher (R5.6) with Running list (R12.20), Berry VM + TSV modules. H: sensor drivers (section H), iButton | 0.14.0 | first stock apps ported; a Berry gadget runs ≤ 4 at once within L1–L10 |
 | **M5 Radios I and USB** | 8, 9 (camfind v1 without Wi-Fi), 10, 11 | Q: protocol decoders, BadUSB parser, canary logic. H: CC1101, LF RFID, USB classes | ≈ 0.18 | stock Sub-GHz/RFID/BadUSB parity |
-| **M6 Headroom and NFC** | 12 (swap with encryption), 13, 14 | Q: swap logic in MM, NFC protocol stacks. H: ST25R3916 driver | ≈ 0.22 | NFC apps run without OOM |
+| **M6 Headroom and NFC** | 12b (swap encryption, then `crypt` by default), 13, 14 | Q: AES-GCM glue in MM, software GCM for QEMU, NFC protocol stacks. H: AES1 driver (R12.9), ST25R3916 driver | ≈ 0.22 | NFC apps run without OOM |
 | **M7 Bluetooth** | 15, 16 (`sbctl`, `btbridge`, mobile app link R15.7) | Q: RPC protobuf (`libflipperpb`), GATT logic. H: CPU2 stack bring-up | ≈ 0.25 | phone app connects; `sbctl` drives the owner's Venty |
 | **M8 Trust and parity** | 17 (option bytes WRP/RDP1 after BLE), 18, 18b | Q: catalog, porting guide, wizard UI. H: U2F, updater, option bytes | **1.0.0** | Phase 18 ACs; rule 0.8 budgets met |
 | M9 After parity | 19, 21, 22, then 20 continuous | | 1.x | |

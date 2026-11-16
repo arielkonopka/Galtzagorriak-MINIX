@@ -28,7 +28,7 @@ FORWARD _PROTOTYPE( void load_boot_images, (void) );
  *				arm_flash				     *
  *===========================================================================*/
 /* Days of uptime: the erase budget's day when the RTC is not running. */
-#define UPDAY	((unsigned) (get_uptime() / ((clock_t) HZ * 86400)))
+#define UPDAY	((unsigned) ((unsigned long) get_uptime() / (HZ * 86400UL)))
 
 PUBLIC int arm_flash(op, addr, src, len, basep, sizep)
 int op;				/* FL_INFO, FL_ERASE or FL_WRITE */

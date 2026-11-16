@@ -27,6 +27,17 @@ tasks at the same time; the review side reads your PR and squash-merges it.
 - Licence: GPLv3 is fine; stock Flipper firmware code may be reused.
 - Never touch `.github/` (workflows, these instructions), secrets or tags.
 
+## Save your work as you go
+A run can stop at its turn or time limit. After **each finished step** of your
+checklist (it builds, or at least compiles), commit and push it with the git
+scripts you were given (`git-add.sh`, `git-commit.sh -m "WIP <task>: <step>"`,
+`git-push.sh origin HEAD`), and keep the checklist in your comment current.
+Then a cut-off run leaves a branch that the next run continues: the owner or
+the review side opens a draft PR from it and comments `@claude continue`.
+When you are started on a PR, read its commits and your earlier comment first
+and continue from the first unchecked step; do not redo finished steps.
+Plan big tasks so that each step is a few files, not the whole task at once.
+
 ## Check your work (all in this runner; the toolchain is installed)
 ```
 cd flipper

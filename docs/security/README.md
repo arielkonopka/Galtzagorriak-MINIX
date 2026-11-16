@@ -24,7 +24,7 @@ Inputs, by how they reach the kernel:
 |---|---|---|
 | USB host (frames, control requests, CDC data) | `flipper/hal/flipper/usb.c`, `vendor/libusb_stm32`, `src/kernel/arm/cons.c`, `tty.c` | reviewed |
 | Header UART (pins 13/14) | `cons.c`, `tty.c`, `board.c` | reviewed |
-| microSD card (bus responses, partition tables, file systems) | `board.c` (SPI), `arm/disk.c`, `drvlib.c`; FS server | kernel reviewed; FS server: next round |
+| microSD card (bus responses, partition tables, file systems) | `board.c` (SPI), `arm/disk.c`, `drvlib.c`; FS server | reviewed (kernel 2026-11-16, FS server weekly run 1) |
 | Infrared receiver | `arm/flipdev.c` (`ir_int`, `ir_drain`) | reviewed |
 | iButton / 1-Wire | `flipdev.c` (`ow_*`) | reviewed |
 | GPIO, ADC, buttons | `flipdev.c`, `board.c` | reviewed (no interrupts or parsing from GPIO) |
@@ -101,6 +101,9 @@ hostile input:
     random host: any SETUP packet, data, halts, resets; checks memory
     safety, packet sizes, `wLength`, and that every byte sent arrives once
     and in order.
+- `python3 -I flipper/tools/fsdamage.py` (QEMU, `make minix disk` first):
+  damaged file systems on `/dev/hd3` (junk indirect block, wiped bit map,
+  inconsistent super block) must not stop the system.
 - `python3 -I flipper/tools/conflood.py` (QEMU, `make minix disk` first):
   floods the console and checks that processes keep running and the shell
   answers. QEMU's UART delivers slower than the Flipper's USB, so it
