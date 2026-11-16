@@ -104,6 +104,7 @@ Without the buttons (2026-11-14):
   | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
+  | BKP14R | charging (R6.1): magic 0xC (top nibble), profile care (bit 0), gentle charging (bit 1) |
   | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 15) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds

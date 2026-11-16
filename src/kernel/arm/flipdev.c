@@ -152,6 +152,7 @@ FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
 FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int power_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
@@ -268,9 +269,9 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[96], d[6];
+  char line[128], d[6];
   const char *k = pw_key;
-  int i, j, n = 0, v;
+  int i, j, n = 0, v, r6, r4, r3;
 
   for (i = 0; i < 7; i++) {
 	if ((v = hal_gauge_read(pw_cmd[i])) < 0)
@@ -292,12 +293,57 @@ int count;
   for (k = " usb=0"; *k != 0; k++) line[n++] = *k;
   if (hal_usb_awake()) line[n - 1] = '1';
   if ((v = hal_charger_read(HAL_CHG_STATUS)) < 0) return(EIO);
-  for (k = " chg=0 vbus=0\n"; *k != 0; k++) line[n++] = *k;
-  line[n - 9] += v >> 3 & 3;		/* CHRG_STAT */
-  line[n - 2] += v >> 5 & 7;		/* VBUS_STAT */
+  for (k = " chg=0 vbus=0"; *k != 0; k++) line[n++] = *k;
+  line[n - 8] += v >> 3 & 3;		/* CHRG_STAT */
+  line[n - 1] += v >> 5 & 7;		/* VBUS_STAT */
+  /* R6.1: what the charger is set to (end-of-charge mV, charge mA, 5 V) */
+  if ((r6 = hal_charger_read(0x06)) < 0 || (r4 = hal_charger_read(0x04)) < 0
+			|| (r3 = hal_charger_read(0x03)) < 0) return(EIO);
+  for (i = 0; i < 2; i++) {
+	for (k = i == 0 ? " vreg=" : " ichg="; *k != 0; k++) line[n++] = *k;
+	v = i == 0 ? 3840 + (r6 >> 2) * 16 : (r4 & 0x7F) * 64;
+	j = 0;
+	do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+	while (j > 0) line[n++] = d[--j];
+  }
+  for (k = " otg=0\n"; *k != 0; k++) line[n++] = *k;
+  if (r3 & 0x20) line[n - 2] = '1';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
+}
+
+
+/*===========================================================================*
+ *				power_write				     *
+ *===========================================================================*/
+/* R6.1: a command line written to /dev/power (writable by root only):
+ *	profile full|care	end of charge 4.208 V / 4.0 V (kept)
+ *	gentle on|off		charge current 1 A / the stock 2 A (kept)
+ *	otg on|off		5 V on the GPIO header
+ * Text rather than ioctl: FS checks the write permission, the kernel does
+ * not know the caller's uid. */
+PRIVATE const char *const pw_cmds[] = {
+  "profile full", "profile care", "gentle off", "gentle on", "otg off", "otg on"
+};
+
+PRIVATE int power_write(user, count)
+phys_bytes user;
+int count;
+{
+  char cmd[16];
+  int n = count, i;
+
+  if (n > (int) sizeof(cmd) - 1) return(EINVAL);
+  phys_copy(user, vir2phys(cmd), (phys_bytes) n);
+  while (n > 0 && (cmd[n - 1] == '\n' || cmd[n - 1] == ' ')) n--;
+  cmd[n] = 0;
+  for (i = 0; i < 6; i++) {
+	if (strcmp(cmd, pw_cmds[i]) != 0) continue;
+	if (hal_charger_set(HAL_CHG_CARE + i / 2, i & 1) < 0) return(EIO);
+	return(count);
+  }
+  return(EINVAL);
 }
 
 
@@ -419,7 +465,7 @@ message *m_ptr;
   }
 
   case POWER_MINOR:
-	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->m_type == DEV_WRITE) return(power_write(user, count));
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(power_read(user, count));
 
