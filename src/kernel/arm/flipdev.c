@@ -161,6 +161,8 @@ PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
 PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
 PRIVATE volatile u32_t rx_last;		/* hal_cycles() of the last edge */
+PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due (R7b.1;
+					 * here: in rx_last's padding) */
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE u8_t ir_started;		/* its frame began */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -181,7 +183,6 @@ FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rtc_ioctl, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
-PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due */
 /* R7b.5: colour sequences run by the task from the ms timer: rainbow (the
  * six colours of the pride flag), dual, dualsoft and morph (two colours
  * given).  Each colour is held for its mode's time, then glides into the
