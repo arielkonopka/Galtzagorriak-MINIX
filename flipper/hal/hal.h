@@ -206,6 +206,14 @@ void hal_pulse_stop(void);
  * hal_rfid_stop turns it all off.  -1: no reader. */
 int hal_rfid_read(uint32_t dst, unsigned n);
 void hal_rfid_stop(void);
+/* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
+ * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
+ * arms the comparator without raising a field of its own; hal_rfid_field(0)
+ * drops it.  hal_pulse_left and hal_rfid_stop count and end the capture. */
+void hal_rfid_field(int on);
+void hal_rfid_pull(int release);	/* PA2: 1 for a command, 0 to capture */
+int hal_rfid_capture(uint32_t dst, unsigned n);
+void hal_rfid_capture_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
