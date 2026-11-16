@@ -27,5 +27,7 @@ kernel    164    14628  14792
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172
-fs        20     27176  27196
+# Phase 2d (UTC, 64-bit time_t): FS -72 B, its two static clock messages
+# moved to the stack (+1 B: the once-only "past 2106" note); kernel, MM 0.
+fs        20     27104  27124
 init      100    664    764

@@ -15,8 +15,6 @@
 #include "inode.h"
 #include "param.h"
 
-PRIVATE message clock_mess;
-
 /*===========================================================================*
  *				do_utime				     *
  *===========================================================================*/
@@ -45,8 +43,9 @@ PUBLIC int do_utime()
 		rip->i_atime = clock_time();
 		rip->i_mtime = rip->i_atime;
 	} else {
-		rip->i_atime = utime_actime;
-		rip->i_mtime = utime_modtime;
+		/* libc checked the range (R2d.2): stored as is */
+		rip->i_atime = (ftime32_t) utime_actime;
+		rip->i_mtime = (ftime32_t) utime_modtime;
 	}
 	rip->i_update = CTIME;	/* discard any stale ATIME and MTIME flags */
 	rip->i_dirt = DIRTY;
@@ -63,9 +62,13 @@ PUBLIC int do_utime()
 PUBLIC int do_time()
 
 {
-/* Perform the time(tp) system call. */
+/* Perform the time(tp) system call: the 64-bit time in two halves (R2d.2;
+ * no 64-bit member in the message union). */
 
-  reply_l1 = clock_time();	/* return time in seconds */
+  time_t t = wall_time();
+
+  reply_l1 = (long) (unsigned long) t;		/* low 32 bits */
+  reply_l2 = (long) (unsigned long) (t >> 32);	/* high 32 bits */
   return(OK);
 }
 
@@ -77,12 +80,16 @@ PUBLIC int do_stime()
 {
 /* Perform the stime(tp) system call. */
 
+  message m;
   register int k;
 
   if (!super_user) return(EPERM);
-  clock_mess.m_type = SET_TIME;
-  clock_mess.NEW_TIME = (long) tp;
-  if ( (k = sendrec(CLOCK, &clock_mess)) != OK) panic("do_stime error", k);
+  /* 64-bit in two halves (R2d.2).  The clock keeps 1970-2106 until the
+   * RTC driver (R6.2): anything else is EINVAL, not a wrapped clock. */
+  if (tp_high != 0) return(EINVAL);
+  m.m_type = SET_TIME;
+  m.NEW_TIME = tp;
+  if ( (k = sendrec(CLOCK, &m)) != OK) panic("do_stime error", k);
   return(OK);
 }
 

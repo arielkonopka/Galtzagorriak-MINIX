@@ -26,7 +26,7 @@ EXTERN struct mproc {
   /* File identification for sharing. */
   ino_t mp_ino;			/* inode number of file */
   dev_t mp_dev;			/* device number of file system */
-  time_t mp_ctime;		/* inode changed time */
+  ftime32_t mp_ctime;		/* inode changed time (as stored, R2d.3) */
 
   /* Signal handling information. */
   sigset_t mp_ignore;		/* 1 means ignore the signal, 0 means don't */

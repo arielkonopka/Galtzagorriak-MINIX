@@ -150,7 +150,8 @@ PUBLIC int do_exec()
 	fc_new = (fc_text == 0);	/* to be cached once it runs */
   }
 #else
-  sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
+  sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev,
+						(ftime32_t) s_buf.st_ctime);
 #endif
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
@@ -187,7 +188,7 @@ PUBLIC int do_exec()
   /* Save file identification to allow it to be shared. */
   rmp->mp_ino = s_buf.st_ino;
   rmp->mp_dev = s_buf.st_dev;
-  rmp->mp_ctime = s_buf.st_ctime;
+  rmp->mp_ctime = (ftime32_t) s_buf.st_ctime;
 
   /* Patch up stack and copy it from MM to new core image. */
   vsp = (vir_bytes) rmp->mp_seg[S].mem_vir << CLICK_SHIFT;
@@ -342,8 +343,9 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 #if (CHIP == ARM_CM)
   if (hdr.a_cpu != A_ARMCM) return(ENOEXEC);
   /* Built for another ABI (spec J.3): 0 is a program from before the
-   * stamp, ABI 1.  Refused before anything is allocated. */
-  if (hdr.a_version != 0 && hdr.a_version != GZ_ABI) return(ENOEXEC);
+   * stamp, ABI 1, whose 32-bit time_t ABI 2 dropped (R2d.1).  Refused
+   * before anything is allocated. */
+  if (hdr.a_version != GZ_ABI) return(ENOEXEC);
 #endif
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
 
@@ -642,7 +644,7 @@ PUBLIC struct mproc *find_share(mp_ign, ino, dev, ctime)
 struct mproc *mp_ign;		/* process that should not be looked at */
 ino_t ino;			/* parameters that uniquely identify a file */
 dev_t dev;
-time_t ctime;
+ftime32_t ctime;
 {
 /* Look for a process that is the file <ino, dev, ctime> in execution.  Don't
  * accidentally "find" mp_ign, because it is the process on whose behalf this
