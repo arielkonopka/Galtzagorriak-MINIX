@@ -456,6 +456,12 @@ register message *m_ptr;	/* pointer to request message */
   if (m_ptr->PROC2) cause_sig(m_ptr->PROC1, SIGTRAP);
   sp = (reg_t) m_ptr->STACK_PTR;
   rp = proc_addr(m_ptr->PROC1);
+#if (CHIP == ARM_CM)
+  /* The new program starts with no register of the old one: r0-r8 and
+   * r10-r12 kept the values of the program that called exec, e.g. a
+   * setuid program's (security review 2026-11-16, U1). */
+  memset(&rp->p_reg, 0, sizeof(rp->p_reg));
+#endif
   rp->p_reg.sp = sp;		/* set the stack pointer */
 #if (CHIP == M68000)
   rp->p_splow = sp;		/* set the stack pointer low water */

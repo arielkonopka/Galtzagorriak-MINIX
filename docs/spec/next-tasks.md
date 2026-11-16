@@ -238,6 +238,24 @@ Hold Left+Up 1.5 s: backlight forced off until held again; hold Right+Down 1.5 s
 - Docs: CHANGELOG line, `docs/manual/buttons.md` (drop the "(planned)" marks), PORTING.md BKP15R.
 - Later: the `gestures` app (R7.2, M4) edits the table from the SD file; no kernel change needed for it except action 3.
 
+## T17. SD card safety: clean flag, `fsck` at boot on the screen, card pulled out (spec section N; owner request 2026-11-16): milestone M2
+No journaling (owner decision). Spec section N has the details; the points that reviews check:
+
+### T17a (`lane:cloud`, QEMU): FS flags, `fsck`, `/etc/rc`
+- N.1: `s_pad` → `s_flags` (bit 0 CLEAN, bit 1 CHECK, the Linux `minix` / MINIX 3 values); in-core bits 14–15 of `s_pad`, masked out of disk writes; FS RAM **+0 B**. CHECK set at an unclean read-write mount; CLEAN = 0 written synchronously before the first other block of that device (hook in `cache.c` `rw_block`/`rw_scattered`). Read-modify-write of block 1 through the cache, never a stale in-core copy.
+- N.2: CLEAN again in `do_sync` after a quiet sync period (no writes, nothing dirty, no open unlinked inode on disk); `SYNC` with a shutdown flag from MM's `do_reboot` marks every read-write FS clean; reads no longer dirty the inode for `ATIME` (`read.c`).
+- N.3/N.4: `fsck` built and put in the base image; `-p`, `-v` (32-column lines, progress ≥ 1/s, reset cause in the header), BSD exit codes; spec maps only for `-i`/`-z`; streaming `chkmap`; link counts up to the highest used inode; zone windows with the per-inode window byte; `fsck_mem` from `/etc/rc.conf` (default 64 KB). `mkfs` and `tools/mkfsimg.py` write CLEAN.
+- `/etc/rc` order of N.3 (root `fsck -p -v` first, exit 2 → hold the summary, `reboot`; `/usr` and `/home` before mounting; 4/8 → `mount -r` + notice). The Back skip may land as a stub that reads `/dev/buttons` non-blocking; the device check is T17b.
+- The FS side of N.6 (`cache.c`: keep the buffer dirty on `ENXIO`, not "Unrecoverable write error"); QEMU can fake "card out" through the board's disk hook.
+- INIT: `SIGPWR` → orderly halt (N.5).
+- Tests: new `tools/sdcut.py` (kill QEMU mid-write and 90 s after the last write: ACN.1, ACN.2, ACN.4), `fsdamage.py` extended for ACN.3 with a sparse 2 GB image and peak memory; if util-linux `fsck.minix` is on the runner, cross-check. Add `sdcut` to the `powercut` CI job.
+- No internal-flash writes at run time (flashcheck unchanged); `ramcheck` FS +0 B, INIT ≤ +16 B.
+- Docs: CHANGELOG line (first boot after the update checks every file system once), `docs/manual/sdcard.md` drop the "(planned)" marks it covers, `man/man1/fsck.1` (`-p`, `-v`, exit codes).
+
+### T17b (`lane:local`, Flipper): card detect and the device checks
+- N.6: poll PC10 (EXTI 10 is the Up button) before every SD command and per tick while the card is selected or a buffer is dirty; `ENXIO` while out; CID + super block CRCs at boot (kernel ≤ +32 B); same card → resume, other card → never write; "SD card removed" / "Different card" on the screen with a short buzz; R12.25 swap waits for the same card.
+- Device checks: ACN.5 (pull and reinsert during `cp`, then a different card), ACN.6 (unclean boot on the 3.8 GB card: LCD output readable, progress, ≤ 30 s, Back skips `/home`), ACN.7 (low-battery halt, no check at the next boot). Numbers into PORTING.md.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
