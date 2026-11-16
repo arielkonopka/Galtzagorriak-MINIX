@@ -14,5 +14,7 @@
 # (gmtime, mktime, localtime with a TZ rule, utime, stime, alarm across
 # 2038): its text grew from 8.4 to 14.9 KB, one more 4 KB page.  Again
 # nothing changed in how often the cache writes.
-m2      cache   5
+# 2026-11-16 (R2b.9, shared libc): 4 - the programs' text no longer carries
+# libc, so the cached copy needs fewer pages.
+m2      cache   4
 m2      inst    0

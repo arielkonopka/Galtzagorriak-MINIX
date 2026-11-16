@@ -30,7 +30,13 @@
 # R7b.5 (LED patterns and colour sequences, owner 2026-11-16): kernel +8 B:
 # the two colours of dual/dualsoft/morph (6 B, padded); the sequence state
 # and its ms-timer slot fill existing padding.  Phase 7b budget: +64 B.
-kernel    164    14648  14812
+# R7b.1 (RTC alarm, owner-tested 2026-11-16): kernel +8 B: a 9th IRQ
+# handler slot (the alarm's; R4b.7 part 1 frees the IR receive one) and
+# its object's padding; rtc_fired sits in existing padding.  Phase 7b
+# kernel so far: +16 of its +64 B.
+# R4b.7 part 1 (IR receive by TIM2 capture + DMA): kernel -20 B: the
+# receive ring's state and its IRQ handler slot (8 slots again).
+kernel    160    14640  14800
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172

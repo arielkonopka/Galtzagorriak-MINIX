@@ -25,6 +25,16 @@ _start:
 	ldr	r3, .Lgot_penvp		/* getenv() looks here */
 	ldr	r3, [r9, r3]
 	str	r2, [r3]
+#ifdef SHLIBC
+	/* The shared libc (R2b.9) has _brksize in its area: the initial
+	 * break is this program's end of bss. */
+	ldr	r3, .Lgot_brk
+	ldr	r3, [r9, r3]
+	ldr	r1, .Lgot_end
+	ldr	r1, [r9, r1]
+	str	r1, [r3]
+	add	r1, sp, #4		/* argv again */
+#endif
 #else
 	ldr	r3, =environ
 	str	r2, [r3]
@@ -43,7 +53,15 @@ _start:
 	.word	environ(GOT)
 .Lgot_penvp:
 	.word	_penvp(GOT)
+#ifdef SHLIBC
+.Lgot_brk:
+	.word	_brksize(GOT)
+.Lgot_end:
+	.word	_end(GOT)
 #endif
+#endif
+
+#ifndef SHLIBC		/* the shared libc has them (tools/mkshlibc.py) */
 
 	.data
 	.p2align 2
@@ -54,3 +72,4 @@ environ:
 	.global	_penvp
 _penvp:
 	.word	0
+#endif

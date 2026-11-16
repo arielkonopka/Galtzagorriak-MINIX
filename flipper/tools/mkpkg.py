@@ -51,17 +51,25 @@ def main():
 
     # Abi: the ABI of its programs (MINIX a.out, a_version; 0 = 1), or
     # "any" for a package without programs (spec J.3).
-    abis = set()
+    # Libc: the build id of the shared libc its programs were linked with
+    # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
+    abis, libcs = set(), set()
     for spec in a.files:
         with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
-            h = f.read(8)
-        if len(h) == 8 and h[0:2] == b"\x01\x03":
+            h = f.read(48)
+        if len(h) >= 8 and h[0:2] == b"\x01\x03":
             abis.add(struct.unpack_from("<H", h, 6)[0] or 1)
+            if h[2] & 0x08 and h[4] >= 48 and len(h) == 48:
+                libcs.add(struct.unpack_from("<I", h, 40)[0])
     if len(abis) > 1:
         sys.exit(f"mkpkg: programs for different ABIs: {sorted(abis)}")
+    if len(libcs) > 1:
+        sys.exit("mkpkg: programs for different shared libc builds: "
+                 + " ".join(f"{x:08x}" for x in sorted(libcs)))
     control = (f"Package: {a.name}\nVersion: {a.version}\n"
                + (f"Depends: {a.depends}\n" if a.depends else "")
                + f"Abi: {abis.pop() if abis else 'any'}\n"
+               + (f"Libc: {libcs.pop():08x}\n" if libcs else "")
                + (f"Os: {a.os}\n" if a.os else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
