@@ -24,7 +24,7 @@
 #define IDLE_AFTER	30		/* s with the light off */
 
 struct gauge {
-	int soc, mv, ma, avg, sby, temp, usb;
+	int soc, mv, ma, avg, sby, temp, usb, chg;
 	unsigned flags;
 };
 
@@ -43,9 +43,10 @@ static int gauge(struct gauge *g)
 	close(fd);
 	if (n <= 0) return -1;
 	line[n] = 0;
+	g->chg = 0;
 	return sscanf(line, "soc=%d mv=%d ma=%d avg=%d sby=%d temp=%d flags=0x%x"
-		" usb=%d", &g->soc, &g->mv, &g->ma, &g->avg, &g->sby, &g->temp,
-		&g->flags, &g->usb) == 8 ? 0 : -1;
+		" usb=%d chg=%d", &g->soc, &g->mv, &g->ma, &g->avg, &g->sby,
+		&g->temp, &g->flags, &g->usb, &g->chg) >= 8 ? 0 : -1;
 }
 
 static int light_off(void)
@@ -96,8 +97,9 @@ int main(void)
 				g.mv % 1000, g.temp / 10,
 				(g.temp < 0 ? -g.temp : g.temp) % 10);
 			gui_center(38, line, 0);
-			gui_center(45, g.ma > 0 ? "charging" : usb ? "on USB"
-							: "on battery", 0);
+			gui_center(45, g.chg == 3 ? "charged" :
+				g.chg != 0 || g.ma > 0 ? "charging" :
+				usb ? "on USB" : "on battery", 0);
 			if (usb) {
 				strcpy(line, "USB: unplug to measure");
 			} else if (!have_idle) {

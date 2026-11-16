@@ -144,6 +144,7 @@ PUBLIC void clock_task()
      opcode = mc.m_type;	/* extract the function code */
 #if (CHIP == ARM_CM)
      hal_wdt_kick();		/* the clock task runs: nothing hogs the CPU */
+     pm_vbus();			/* a cable in: no Stop2 (arm/klib.c) */
 #endif
 
      lock();

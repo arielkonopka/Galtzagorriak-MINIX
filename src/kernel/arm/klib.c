@@ -679,6 +679,26 @@ PUBLIC void task_yield()
 #define PM_NOT(r)	return(0)
 #endif
 
+PUBLIC void pm_vbus()
+{
+/* The clock task, whenever it runs (at least every 32 ticks while awake,
+ * and after each Stop2 sleep of a tick or more): with the USB bus asleep,
+ * ask the charger whether VBUS is there.  A cable put in during Stop2 does
+ * not reliably wake the CPU through the USB wake-up line (seen on the
+ * device: the host's enumeration was lost, the console never came back),
+ * so with power on VBUS the CPU stays out of Stop2 and USB can start.  One
+ * I2C read (~0.3 ms) a wake-up, on battery only. */
+  int r;
+
+  if (hal_usb_awake()) {
+	pm_busy &= ~PM_VBUS;
+	return;
+  }
+  r = hal_charger_read(HAL_CHG_STATUS);
+  if (r >= 0 && (r & 0x04)) pm_busy |= PM_VBUS;		/* PG_STAT */
+  else pm_busy &= ~PM_VBUS;
+}
+
 PRIVATE void pm_wake()
 {
 /* MT_IDLE: the wake-up itself is all. */

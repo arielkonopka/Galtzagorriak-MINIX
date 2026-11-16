@@ -160,6 +160,7 @@
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console
  * and USB are asked directly (flipdev_idle, bell_ticks, hal_usb_awake). */
 #define PM_DISK         0x01	/* an SD DMA transfer runs */
+#define PM_VBUS         0x02	/* power on VBUS, the USB bus asleep (pm_vbus) */
 
 #endif /* (CHIP == ARM_CM) */
 

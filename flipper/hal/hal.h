@@ -84,6 +84,11 @@ unsigned hal_buttons(void);
 #define HAL_GAUGE_STANDBY	0x1A	/* StandbyCurrent, mA */
 #define HAL_GAUGE_SOC		0x2C	/* StateOfCharge, % */
 int hal_gauge_read(unsigned cmd);
+/* The charger (BQ25896, T14c): one register, read only here; -1 on a bus
+ * error, -2 if there is none.  HAL_CHG_STATUS: bits 5-7 VBUS_STAT, 3-4
+ * CHRG_STAT (0 not charging, 1 pre, 2 fast, 3 done), 2 power good. */
+#define HAL_CHG_STATUS		0x0B
+int hal_charger_read(unsigned reg);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
