@@ -398,6 +398,7 @@ message *m_ptr;
 	int i, ms = 0, n = count < 4 ? count : 4;
 
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
+	if (n < 1) return(0);
 	phys_copy(user, vir2phys(t), (phys_bytes) n);
 	if (t[0] >= '0' && t[0] <= '9') {
 		for (i = 0; i < n && t[i] >= '0' && t[i] <= '9'; i++)
