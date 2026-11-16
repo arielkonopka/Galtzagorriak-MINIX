@@ -96,6 +96,7 @@ echo off >/dev/led
 | `fast`  | flashes about five times a second             |
 | `double`| two short flashes, then a pause of about 1.6 s|
 | `pulse` | fades in and out, about every 1.8 s           |
+| `rainbow`| (no colour) red, green, blue and back, gliding, every 6 s; the kernel steps it 25 times a second |
 
 Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
 as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as

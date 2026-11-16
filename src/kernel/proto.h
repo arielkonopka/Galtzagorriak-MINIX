@@ -305,6 +305,7 @@ _PROTOTYPE( void flipdev_btn, (void)					);
 _PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);
+_PROTOTYPE( void flipdev_led_tick, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */

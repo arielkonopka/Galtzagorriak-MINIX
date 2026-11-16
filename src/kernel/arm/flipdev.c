@@ -176,6 +176,15 @@ PRIVATE vir_bytes rd_vir;
 
 FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
+/* R7b.5: the rainbow, run by the task every RB_MS from the ms timer: on,
+ * the next step is due, and the hue 0..767 (red, green, blue). */
+#define RB_ON		0x8000
+#define RB_DUE		0x4000
+#define RB_HUE		0x03FF
+#define RB_MS		40		/* ~6 s for the whole circle */
+#define RB_STEP		5
+PRIVATE volatile u16_t rb;
+FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
@@ -911,8 +920,13 @@ message *m_ptr;
 	/* fall through */
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
-	if (m_ptr->DEVICE == LED_MINOR && count != 3)
-		return(led_text(user, count));
+	if (m_ptr->DEVICE == LED_MINOR) {
+		lock();				/* a new colour: no rainbow */
+		rb = 0;
+		mt_arm(MT_LED, 0);
+		unlock();
+		if (count != 3) return(led_text(user, count));
+	}
 	if (count > 4) count = 4;
 	if (count == 4 && m_ptr->DEVICE != BL_MINOR) return(EINVAL);
 	phys_copy(user, vir2phys(buf), (phys_bytes) count);
@@ -949,6 +963,47 @@ message *m_ptr;
 
 
 /*===========================================================================*
+ *				rb_step					     *
+ *===========================================================================*/
+PRIVATE void rb_step()
+{
+/* The rainbow's next colour (task work: the I2C writes).  Each colour
+ * fades into the next at full strength at the midpoint (the PWM scale is
+ * logarithmic: a plain crossfade dips); white balance as hal_led_pattern.
+ */
+  unsigned h, f, up, dn, c[3];
+
+  lock();
+  if (!(rb & RB_ON)) { rb = 0; unlock(); return; }
+  h = (rb & RB_HUE) + RB_STEP;
+  if (h >= 768) h -= 768;
+  rb = RB_ON | h;
+  mt_arm(MT_LED, RB_MS);
+  unlock();
+  f = h & 0xFF;
+  up = f < 128 ? 2 * f : 255;
+  dn = f < 128 ? 255 : 2 * (255 - f);
+  c[0] = c[1] = c[2] = 0;
+  c[h >> 8] = dn;			/* this colour goes */
+  c[(h >> 8) == 2 ? 0 : (h >> 8) + 1] = up;	/* the next comes */
+  hal_led_pwm(c[0] * 200 / 255, c[1] * 128 / 255, c[2] * 96 / 255);
+}
+
+
+/*===========================================================================*
+ *				flipdev_led_tick			     *
+ *===========================================================================*/
+PUBLIC void flipdev_led_tick()
+{
+/* The ms timer: the rainbow's next step is due (R7b.5). */
+  if (rb & RB_ON) {
+	rb |= RB_DUE;
+	interrupt(PRINTER);
+  }
+}
+
+
+/*===========================================================================*
  *				led_text				     *
  *===========================================================================*/
 PRIVATE int led_text(user, count)
@@ -969,6 +1024,13 @@ int count;
   line[n] = 0;
   if (n == 3 && line[0] == 'o' && line[1] == 'f' && line[2] == 'f') {
 	hal_led(0, 0, 0);
+	return(count);
+  }
+  for (i = 0; line[i] == "rainbow"[i] && line[i] != 0; i++) ;
+  if (i == 7 && line[7] == 0) {
+	hal_led(0, 0, 0);			/* engines off, direct */
+	rb = RB_ON | RB_DUE;
+	rb_step();
 	return(count);
   }
   for (col = line; *col != 0 && *col != ' '; col++) ;
@@ -1123,6 +1185,7 @@ PRIVATE void do_hardint()
 	unlock();
   }
   if (as_proc != 0 && as_done) adcs_end(TRUE);	/* the samples are in */
+  if (rb & RB_DUE) rb_step();
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
