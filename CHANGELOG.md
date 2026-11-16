@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R4b.9) SD transfers check their CRC16 with the STM32WB's CRC unit instead of in software (a 512-byte sector: ~150 instead of ~10 000 cycles), after a self-test at start; on a mismatch the software CRC stays.
 - (T14c, part 1) The charger's state: `/dev/power` gains `chg=` (0 not charging, 1 pre-charge, 2 fast, 3 done) and `vbus=` (the charger's VBUS_STAT), and the Power app says "charged" or "charging". The charger's ADC converts on demand instead of every second; with power on the USB connector the Flipper stays out of Stop2 so USB can start. Base 3.60.
 - (T14d, part 1) On battery, 2 minutes after the backlight has gone off the screen goes into power save as well (blank); any key brings the same picture back at once. With USB connected the screen stays on.
 - (R4b.2) The millisecond timer works in QEMU too (CMSDK APB timers), so its users (`poll()` timeouts, R4b.6) can be tested in CI; the idle loop asks `hal_can_stop2()` before trying Stop2.
