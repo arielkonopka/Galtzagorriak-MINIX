@@ -6,7 +6,7 @@
  * it has exited.  While a foreground app is set, other writes to /dev/lcd
  * are dropped and other reads of /dev/buttons wait; holding Back for a
  * second sends it SIGTERM, and SIGKILL 3 s later if it is still the
- * foreground.
+ * foreground.  The servers and init can never be the foreground (EPERM).
  */
 #ifndef _MINIX_FG_H
 #define _MINIX_FG_H

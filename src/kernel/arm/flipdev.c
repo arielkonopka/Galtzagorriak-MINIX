@@ -746,6 +746,8 @@ message *m_ptr;
 		if (!(rp->p_flags & P_SLOT_FREE) && rp->p_pid == pid) break;
 	}
 	if (n == NR_PROCS) return(ESRCH);
+	/* never a server or init: holding Back would kill the system */
+	if (n <= INIT_PROC_NR) return(EPERM);
 	fg = n;
   }
   lock();
