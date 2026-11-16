@@ -161,8 +161,8 @@ PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
 PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 2 /dev/rfid */
-PRIVATE u8_t rf_polls;
-PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */			/* RFID: ms timer polls so far */
+PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
+PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;

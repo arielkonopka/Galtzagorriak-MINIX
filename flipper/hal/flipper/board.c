@@ -2604,9 +2604,9 @@ void hal_ir_freq(unsigned hz, unsigned duty)
 	ir_on = ir_period * duty / 100;
 }
 
-static int ir_ready;			/* TIM1 set up for the carrier; the
+static unsigned char ir_ready;			/* TIM1 set up for the carrier; the
 					 * RFID field takes TIM1 and clears it */
-static int ir_tgt;			/* 0 the IR LED, 1 the RFID antenna */
+static unsigned char ir_tgt;			/* 0 the IR LED, 1 the RFID antenna */
 
 /* The transmitter drives the IR LED (TIM1 CH3N, PB9) or, for writing a
  * T5577 tag (R6.5), the 125 kHz antenna (TIM1 CH1N, PB13; PA2 high: the

@@ -39,7 +39,10 @@
 # R6.5 part 1 (/dev/rfid read): kernel +8 B: the RFID read's ms-timer
 # slot (2 B), the input kind and poll count (2 B), padding.  R6 budget
 # +300 B.
-kernel    160    14648  14808
+# R6.5 part 2 (/dev/rfid write): kernel +4 B: the frame's target (the
+# RFID antenna or the IR LED) in the device task and in the HAL; the HAL's
+# two carrier flags made bytes (were ints) to win back the rest.
+kernel    160    14652  14812
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172
