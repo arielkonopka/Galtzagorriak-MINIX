@@ -445,10 +445,93 @@ irq_handler_t handler;
 	if (irq_handlers[irq_slot[irq] - 1] == handler) return; /* again */
 	panic("attempt to register second irq handler for irq", irq);
   }
-  for (s = 0; s < NR_IRQ_HANDLERS && irq_handlers[s] != 0; s++) ;
+  /* One handler for several lines (the buttons' EXTI) takes one slot. */
+  for (s = 0; s < NR_IRQ_HANDLERS && irq_handlers[s] != 0
+					&& irq_handlers[s] != handler; s++) ;
   if (s == NR_IRQ_HANDLERS) panic("too many irq handlers", irq);
   irq_handlers[s] = handler;
   irq_slot[irq] = s + 1;
+}
+
+/*===========================================================================*
+ *				The ms timer				     *
+ *===========================================================================*/
+/* R4b.2: a kernel client (MT_* in const.h) asks for a call of its function
+ * in 1..999 ms; it runs in interrupt context and may arm itself again.
+ * The HAL timer (LPTIM1, which keeps counting in Stop2) has one compare,
+ * holding the earliest due time.  A compare write takes effect a few
+ * timer clocks later and must not be followed by another before that:
+ * mt.wr is set until its "ready" interrupt, which programs the next one,
+ * so nobody waits.  Overdue clients are called at that interrupt too, so
+ * a due time that passed while a write was under way is not lost.  User
+ * alarms with ms resolution (setitimer, poll) come with R4b.6. */
+#define MT_MIN	4		/* timer clocks: more than a write takes */
+PRIVATE void (* const mt_func[MT_N])(void) = {
+	flipdev_btn,		/* MT_BUTTONS */
+};
+PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
+	u16_t at[MT_N];		/* due, in timer clocks */
+	u8_t on, wr;		/* armed clients; a compare write under way */
+} mt;
+FORWARD _PROTOTYPE( int mt_int, (int irq) );
+FORWARD _PROTOTYPE( void mt_program, (void) );
+
+PUBLIC void mt_init()
+{
+  int irq = hal_mt_irq();
+
+  if (irq < 0) return;
+  put_irq_handler(irq, mt_int);
+  enable_irq(irq);
+}
+
+PUBLIC void mt_arm(client, ms)
+int client;
+unsigned ms;			/* 1..999; 0 disarms */
+{
+/* Interrupts off: call it from an interrupt handler or under lock(). */
+  if (ms == 0) {
+	mt.on &= ~(1 << client);
+	return;
+  }
+  mt.at[client] = hal_mt_now() + (ms * HAL_MT_HZ + 999) / 1000;
+  mt.on |= 1 << client;
+  mt_program();
+}
+
+PRIVATE void mt_program()
+{
+  unsigned now, d, best = 0x8000;
+  int c;
+
+  if (mt.wr || mt.on == 0) return;
+  now = hal_mt_now();
+  for (c = 0; c < MT_N; c++) {
+	if (!(mt.on & (1 << c))) continue;
+	d = (u16_t) (mt.at[c] - now);
+	if (d >= 0x8000) d = 0;			/* overdue */
+	if (d < best) best = d;
+  }
+  hal_mt_set(now + (best < MT_MIN ? MT_MIN : best));
+  mt.wr = TRUE;
+}
+
+PRIVATE int mt_int(irq)
+int irq;
+{
+  unsigned now;
+  int c;
+
+  if (hal_mt_ack() & HAL_MT_READY) mt.wr = FALSE;
+  now = hal_mt_now();
+  for (c = 0; c < MT_N; c++) {
+	if ((mt.on & (1 << c)) && (u16_t) (now - mt.at[c]) < 0x8000) {
+		mt.on &= ~(1 << c);
+		(*mt_func[c])();
+	}
+  }
+  mt_program();
+  return 1;
 }
 
 PUBLIC void enable_irq(irq)

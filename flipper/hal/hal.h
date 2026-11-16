@@ -68,6 +68,23 @@ void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
 #define BTN_OK    0x10
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
+/* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
+ * NVIC lines, -1 after the last (none: the kernel samples on its tick).
+ * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
+int hal_btn_irq(int i);
+void hal_btn_arm(int on);
+
+/* The ms timer (R4b.2): a 16-bit counter at HAL_MT_HZ that keeps running
+ * in Stop2, and one compare.  hal_mt_set(due) takes effect a little later:
+ * HAL_MT_READY in hal_mt_ack(), which also says HAL_MT_MATCH when the
+ * counter passed the compare.  hal_mt_irq: -1 when there is none. */
+#define HAL_MT_HZ	32768u
+#define HAL_MT_MATCH	1
+#define HAL_MT_READY	2
+int hal_mt_irq(void);
+unsigned hal_mt_now(void);
+void hal_mt_set(unsigned due);
+unsigned hal_mt_ack(void);
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
  * PA7 PA6 PA4 PB3 PB2 PC3 PC1 PC0 = header pins 2 3 4 5 6 7 15 16). */

@@ -260,6 +260,8 @@ _PROTOTYPE( void phys_copy, (phys_bytes source, phys_bytes dest,
 		phys_bytes count)					);
 _PROTOTYPE( void idle_task, (void)					);
 _PROTOTYPE( void task_yield, (void)					);
+_PROTOTYPE( void mt_init, (void)						);
+_PROTOTYPE( void mt_arm, (int client, unsigned ms)			);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp)	);
@@ -292,6 +294,7 @@ _PROTOTYPE( void wreboot, (int how)					);
 _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
+_PROTOTYPE( void flipdev_btn, (void)					);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */
 _PROTOTYPE( void restart, (void)					);
