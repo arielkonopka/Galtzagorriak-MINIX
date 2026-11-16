@@ -1520,6 +1520,12 @@ void hal_power_off(void)
 
 	__disable_irq();
 	hal_tone(0);
+	hal_backlight(0);		/* it looks off at once, also on USB */
+	{
+		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
+
+		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+	}
 	rtc_alarm_out(1);
 	hal_vibro(1);				/* as stock: a short buzz */
 	hal_delay_ms(50);
