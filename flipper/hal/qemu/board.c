@@ -139,6 +139,10 @@ void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
 
+long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
+int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
+void hal_subghz_off(void) { }
+
 unsigned hal_buttons(void)
 {
 	return qemu_fake_buttons;
@@ -567,6 +571,9 @@ unsigned hal_mt_ack(void)
 	return f;
 }
 int hal_adc_mv(int *mv) { (void) mv; return -1; }
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (void) pin; (void) rate; (void) dst; (void) n; return -1; }
+unsigned hal_adc_stream_left(void) { return 0; }
+void hal_adc_stream_stop(void) { }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

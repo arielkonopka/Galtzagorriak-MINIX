@@ -21,7 +21,7 @@
 static char GROUP[]= "/etc/group";	/* The group file. */
 static const char *grfile;		/* Current group file. */
 
-static char buf[1024];			/* Read buffer. */
+static char buf[512];			/* Read buffer: one SD sector (R2a.5). */
 static char grline[512];		/* One line from the group file. */
 static struct group entry;		/* Entry to fill and return. */
 static char *members[64];		/* Group members with the entry. */

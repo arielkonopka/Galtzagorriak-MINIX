@@ -25,7 +25,9 @@
 # the ms timer's idle client 2, padding 2; T14b in all +24 B (its budget).
 # T16 (R6.10 backlight gestures, owner 2026-11-16): kernel +4 B: the LED's
 # colour saved during the blink (3 B, padded); the gesture table is const.
-kernel    164    14632  14796
+# R6.4 part 2 (ADC stream into the reader, R4b.5): kernel +8 B: the
+# stream's configuration and the suspended reader (R6 budget +300 B).
+kernel    164    14640  14804
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172

@@ -195,6 +195,119 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 }
 
 /*===========================================================================*
+ *			Sub-GHz receive (R8.1, part 1)			     *
+ *===========================================================================*/
+/* The CC1101 as a receiver only: the stock firmware's OOK 650 kHz preset
+ * (lib/subghz/devices/cc1101_configs.c; GPL), a frequency in the stock
+ * bands, the RF path switch as stock (PC4 and GDO2), RX, and the RSSI.
+ * There is no transmit here at all: no STX strobe and no PA table write;
+ * transmitting comes with the kernel's band limits (R8.2). */
+static const uint8_t cc_rx_regs[] = {
+	0x02, 0x0D,	/* IOCFG0: GDO0 async serial data */
+	0x03, 0x07,	/* FIFOTHR */
+	0x08, 0x32,	/* PKTCTRL0: async, continuous */
+	0x0B, 0x06,	/* FSCTRL1: IF 152 kHz */
+	0x14, 0x00,	/* MDMCFG0 */
+	0x13, 0x00,	/* MDMCFG1 */
+	0x12, 0x30,	/* MDMCFG2: ASK/OOK, no preamble/sync */
+	0x11, 0x32,	/* MDMCFG3 */
+	0x10, 0x17,	/* MDMCFG4: RX bandwidth 650 kHz */
+	0x18, 0x18,	/* MCSM0: calibrate from idle to RX */
+	0x19, 0x18,	/* FOCCFG */
+	0x1D, 0x91,	/* AGCCTRL0 */
+	0x1C, 0x00,	/* AGCCTRL1 */
+	0x1B, 0x07,	/* AGCCTRL2 */
+	0x20, 0xFB,	/* WORCTRL */
+	0x21, 0xB6,	/* FREND1 */
+};
+
+static uint8_t cc_xfer2(uint8_t a, uint8_t v)	/* address byte, data byte */
+{
+	uint8_t r;
+
+	(void) cc_ready();			/* CS low, CHIP_RDYn */
+	(void) spi1_xfer(a);
+	r = spi1_xfer(v);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	return r;
+}
+
+static void cc_strobe(uint8_t s)
+{
+	(void) cc_ready();
+	(void) spi1_xfer(s);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+}
+
+static int cc_band(uint32_t hz)		/* stock's bands: 315 433 868, or -1 */
+{
+	if (hz >= 299999755u && hz <= 348000335u) return 315;
+	if (hz >= 386999938u && hz <= 464000000u) return 433;
+	if (hz >= 778999847u && hz <= 928000000u) return 868;
+	return -1;
+}
+
+long hal_subghz_rx(uint32_t hz)
+{
+	uint32_t w;
+	unsigned i;
+	int band = cc_band(hz);
+
+	if (band < 0) return -1;
+	w = (uint32_t) (((uint64_t) hz << 16) / 26000000u);	/* 26 MHz xtal */
+	gpio_cfg(GPIOC, 4, MODE_OUT, PULL_NONE, 0);	/* RF switch 0 */
+	spi1_on(0);
+	/* Already set up (a sweep retunes): only idle, frequency, path, RX,
+	 * about 1 ms instead of 3. */
+	if (cc_xfer2(0x10 | 0x80, 0) != 0x17 || cc_xfer2(0x08 | 0x80, 0) != 0x32) {
+		cc_strobe(0x30);			/* SRES */
+		(void) cc_ready();
+		CC_CS(0);
+		for (i = 0; i < sizeof cc_rx_regs; i += 2)
+			(void) cc_xfer2(cc_rx_regs[i], cc_rx_regs[i + 1]);
+	} else
+		cc_strobe(0x36);			/* SIDLE first */
+	(void) cc_xfer2(0x0D, (uint8_t) (w >> 16));	/* FREQ2..0 */
+	(void) cc_xfer2(0x0E, (uint8_t) (w >> 8));
+	(void) cc_xfer2(0x0F, (uint8_t) w);
+	/* the path, as stock furi_hal_subghz_set_path */
+	gpio_set(GPIOC, 4, band != 433);
+	(void) cc_xfer2(0x00, band == 315 ? 0x2F : 0x2F | 0x40);	/* IOCFG2 */
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x34);				/* SRX (calibrates) */
+	spi1_off();
+	return (long) (((uint64_t) w * 26000000u) >> 16);
+}
+
+int hal_subghz_rssi(uint32_t *hz)	/* dBm, or HAL_SUBGHZ_OFF */
+{
+	uint8_t st, f2, f1, f0;
+	int raw;
+
+	spi1_on(0);
+	st = cc_xfer2(0x35 | 0xC0, 0) & 0x1F;		/* MARCSTATE */
+	raw = (int8_t) cc_xfer2(0x34 | 0xC0, 0);		/* RSSI */
+	f2 = cc_xfer2(0x0D | 0x80, 0);
+	f1 = cc_xfer2(0x0E | 0x80, 0);
+	f0 = cc_xfer2(0x0F | 0x80, 0);
+	spi1_off();
+	*hz = (uint32_t) ((((uint64_t) f2 << 16 | f1 << 8 | f0) * 26000000u) >> 16);
+	if (st != 0x0D) return HAL_SUBGHZ_OFF;		/* not in RX */
+	return raw / 2 - 74;			/* datasheet: RSSI offset 74 dB */
+}
+
+void hal_subghz_off(void)
+{
+	spi1_on(0);
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x39);				/* SPWD: asleep */
+	spi1_off();
+	gpio_set(GPIOC, 4, 0);
+}
+
+/*===========================================================================*
  *				Clocks					     *
  *===========================================================================*/
 /* HSE 32 MHz / M 2 = 16 MHz PLL input, * N 8 = 128 MHz VCO, / R 2 = 64 MHz.
@@ -1937,22 +2050,18 @@ static int adc_conv(unsigned ch)
 	return (int) (ADC1->DR & 0xFFF);
 }
 
-int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
+/* ADC power-up: VREF+ from the internal buffer (it is not tied to VDDA on
+ * the Flipper: 2.5 V with its factory trim, as stock furi_hal_adc does),
+ * the regulator, calibration, enable.  0, or -1 (then adc_down). */
+static int adc_up(void)
 {
-	unsigned pin, ch;
-	int vref, raw, r = 0;
+	uint32_t start;
 
-	/* The ADC's reference VREF+ is not tied to VDDA on the Flipper: the
-	 * internal buffer drives it, 2.5 V with its factory trim, as stock
-	 * furi_hal_adc does; off (high-Z) again after the reading. */
 	VREFBUF->CCR = *(const volatile uint8_t *) 0x1FFF7530u & 0x3F;
 	VREFBUF->CSR = VREFBUF_CSR_VRS | VREFBUF_CSR_ENVR;	/* 2.5 V, not HIZ */
-	if (adc_wait(&VREFBUF->CSR, VREFBUF_CSR_VRR, 1) < 0) {
-		uint32_t start = DWT->CYCCNT;	/* the VREF+ capacitor */
-
-		while (!(VREFBUF->CSR & VREFBUF_CSR_VRR))
-			if (ms_since(start) > 50) { r = -1; goto vref_off; }
-	}
+	start = DWT->CYCCNT;			/* the VREF+ capacitor */
+	while (!(VREFBUF->CSR & VREFBUF_CSR_VRR))
+		if (ms_since(start) > 50) return -1;
 	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN;
 	(void) RCC->AHB2ENR;
 	ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ADC_CCR_CKMODE)
@@ -1961,44 +2070,122 @@ int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
 	ADC1->CR |= ADC_CR_ADVREGEN;
 	hal_ow_delay(25);			/* the regulator: 20 us */
 	ADC1->CR |= ADC_CR_ADCAL;
-	if (adc_wait(&ADC1->CR, ADC_CR_ADCAL, 0) < 0) { r = -1; goto off; }
+	if (adc_wait(&ADC1->CR, ADC_CR_ADCAL, 0) < 0) return -1;
 	ADC1->ISR = ADC_ISR_ADRDY;
 	ADC1->CR |= ADC_CR_ADEN;
-	if (adc_wait(&ADC1->ISR, ADC_ISR_ADRDY, 1) < 0) { r = -1; goto off; }
+	if (adc_wait(&ADC1->ISR, ADC_ISR_ADRDY, 1) < 0) return -1;
+	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
+	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
+	return 0;
+}
+
+static void adc_down(void)
+{
+	if (ADC1->CR & ADC_CR_ADSTART) {
+		ADC1->CR |= ADC_CR_ADSTP;
+		(void) adc_wait(&ADC1->CR, ADC_CR_ADSTART, 0);
+	}
+	if (ADC1->CR & ADC_CR_ADEN) {
+		ADC1->CR |= ADC_CR_ADDIS;
+		(void) adc_wait(&ADC1->CR, ADC_CR_ADEN, 0);
+	}
+	ADC1->CFGR = 0;
+	ADC1->CR &= ~ADC_CR_ADVREGEN;
+	ADC1->CR |= ADC_CR_DEEPPWD;
+	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
+	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
+	VREFBUF->CSR = VREFBUF_CSR_HIZ;
+}
+
+static int adc_pin_ok(unsigned pin)	/* an ADC input, left analog */
+{
+	return pin < HAL_GPIO_PINS && adc_ch[pin] != 0
+		&& ((hdr[pin].port->MODER >> (hdr[pin].pin * 2)) & 3) == MODE_ANALOG;
+}
+
+int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
+{
+	unsigned pin;
+	int vref, raw, r = -1;
+
+	if (adc_up() < 0) goto off;
 	ADC1->CFGR = 0;				/* 12 bits, right, single */
 	ADC1->CFGR2 = ADC_CFGR2_ROVSE | (3u << ADC_CFGR2_OVSR_Pos)
 						| (4u << ADC_CFGR2_OVSS_Pos);
-	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
-	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
-	if ((vref = adc_conv(0)) <= 0) { r = -1; goto off; }
+	/* VREFINT before and after the pins, averaged: the buffer is still
+	 * settling right after VRR (seen: +-1.5 % between readings) */
+	if ((vref = adc_conv(0)) <= 0) goto off;
 	for (pin = 0; pin < HAL_GPIO_PINS; pin++) {
-		ch = adc_ch[pin];
 		mv[pin] = -1;
 		/* only pins left analog ("off"): a reading never changes a
 		 * pin someone set up */
-		if (ch == 0 || ((hdr[pin].port->MODER >> (hdr[pin].pin * 2)) & 3)
-								!= MODE_ANALOG)
+		if (!adc_pin_ok(pin) || (raw = adc_conv(adc_ch[pin])) < 0)
 			continue;
-		if ((raw = adc_conv(ch)) < 0) continue;
 		/* VREF+ = 3600 * CAL / vref (the factory VREFINT reading was
 		 * taken at 3.6 V); mV = VREF+ * raw / 4095; at full scale the
 		 * pin is above VREF+: HAL_ADC_OVER */
 		mv[pin] = raw >= 4095 ? HAL_ADC_OVER : (int) (3600u * VREFINT_CAL
 				/ (unsigned) vref * (unsigned) raw / 4095u);
 	}
+	if ((raw = adc_conv(0)) > 0) vref = (vref + raw + 1) / 2;
 	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VREF+ */
 off:
-	if (ADC1->CR & ADC_CR_ADEN) {
-		ADC1->CR |= ADC_CR_ADDIS;
-		(void) adc_wait(&ADC1->CR, ADC_CR_ADEN, 0);
-	}
-	ADC1->CR &= ~ADC_CR_ADVREGEN;
-	ADC1->CR |= ADC_CR_DEEPPWD;
-	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
-	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
-vref_off:
-	VREFBUF->CSR = VREFBUF_CSR_HIZ;
+	adc_down();
 	return r;
+}
+
+/* R6.4 part 2: a block of samples of one pin straight into the reader's
+ * buffer (R4b.5: the kernel pins the process): TIM2's update at the rate
+ * triggers each conversion, DMA1 channel 3 (DMAMUX request 5, ADC1)
+ * writes the 12-bit results.  TIM2 is also the IR pulse engine: the
+ * kernel never runs both.  No interrupt: the kernel polls the count. */
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n)
+{
+	if (!adc_pin_ok(pin) || rate < 100 || rate > 100000 || n == 0
+					|| n > 0xFFFF || (dst & 1)) return -1;
+	if (adc_up() < 0) {
+		adc_down();
+		return -1;
+	}
+	ADC1->CFGR2 = 0;			/* no oversampling */
+	ADC1->SQR1 = adc_ch[pin] << ADC_SQR1_SQ1_Pos;
+	ADC1->CFGR = ADC_CFGR_DMAEN | (1u << ADC_CFGR_EXTEN_Pos)	/* rising */
+		   | (0xBu << ADC_CFGR_EXTSEL_Pos) | ADC_CFGR_OVRMOD;	/* TIM2 TRGO */
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	(void) RCC->AHB1ENR;
+	DMA1_Channel3->CCR = 0;
+	DMAMUX1_Channel2->CCR = 5;			/* ADC1 */
+	DMA1_Channel3->CPAR = (uint32_t) &ADC1->DR;
+	DMA1_Channel3->CMAR = dst;
+	DMA1_Channel3->CNDTR = n;
+	DMA1_Channel3->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_0 | DMA_CCR_MSIZE_0
+							| DMA_CCR_EN;
+	ADC1->ISR = ADC_ISR_OVR | ADC_ISR_EOC;
+	ADC1->CR |= ADC_CR_ADSTART;			/* waits for TRGO */
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->PSC = 0;
+	TIM2->ARR = SystemCoreClock / rate - 1;
+	TIM2->CNT = 0;
+	TIM2->CR2 = 2u << TIM_CR2_MMS_Pos;		/* update -> TRGO */
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->CR1 = TIM_CR1_CEN;
+	return 0;
+}
+
+unsigned hal_adc_stream_left(void)
+{
+	return DMA1_Channel3->CCR & DMA_CCR_EN ? DMA1_Channel3->CNDTR : 0;
+}
+
+void hal_adc_stream_stop(void)
+{
+	TIM2->CR1 = 0;
+	TIM2->CR2 = 0;
+	DMA1_Channel3->CCR = 0;
+	DMAMUX1_Channel2->CCR = 0;
+	adc_down();
 }
 
 /*===========================================================================*

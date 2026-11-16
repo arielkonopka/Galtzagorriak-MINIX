@@ -1,0 +1,13 @@
+# Base programs allowed above 4 KB of .bss (spec R2a.5), checked by
+# tools/bsscheck.py in "make ramcheck".  Format: name max-bytes  # reason
+# Lower a line when the program shrinks; add one only with the reason.
+#
+# lat: diagnostic, only useful on the latency build (make latcheck).  It
+# keeps 1024 kernel events (8 KB) from a whole "lat -w SECONDS" run so
+# that p99/max are computed over all of them; a smaller ring would drop
+# events from the L1-L10 measurements.
+lat	9832
+# ir: one raw IR frame, 1024 durations of 32 bits (4 KB).  The same
+# buffer is the /dev/ir transmit format (first word: carrier), and long
+# air-conditioner frames need several hundred durations.
+ir	4344

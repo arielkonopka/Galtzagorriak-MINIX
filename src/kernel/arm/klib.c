@@ -521,6 +521,7 @@ PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
 	pm_wake,		/* MT_IDLE */
 	flipdev_vibro_off,	/* MT_VIBRO */
+	flipdev_adc_poll,	/* MT_ADC */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */
@@ -749,6 +750,7 @@ PUBLIC void pm_minute()
 {
   int v, t;
 
+  subghz_minute();		/* a forgotten receiver: asleep (R8.1) */
   if ((v = hal_gauge_read(HAL_GAUGE_VOLT)) > 0) {
 	if (v < PM_LOW_MV) pm_busy |= PM_LOWBAT;
 	else if (v >= PM_LOW_MV + 100) pm_busy &= ~PM_LOWBAT;

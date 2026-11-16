@@ -70,7 +70,9 @@ int ncols= 79;
 
 #define NSEP	2	/* # spaces between columns. */
 
-#define MAXCOLS	150	/* Max # of files per line. */
+#define MAXCOLS	48	/* Max # of files per line (150 before R2a.5:
+			 * a 1-char name and 2 spaces is 3 columns, so
+			 * 48 fills a 144-column terminal). */
 
 char *arg0;	/* Last component of argv[0]. */
 int uid, gid;	/* callers id. */
@@ -138,7 +140,7 @@ void report(char *f)
 /* Two functions, uidname and gidname, translate id's to readable names.
  * All names are remembered to avoid searching the password file.
  */
-#define NNAMES	(1 << (sizeof(int) + sizeof(char *)))
+#define NNAMES	32	/* hash chains per map (was 256; R2a.5) */
 enum whatmap { PASSWD, GROUP };
 
 struct idname {		/* Hash list of names. */

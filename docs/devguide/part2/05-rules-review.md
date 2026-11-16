@@ -34,7 +34,8 @@ long copies into ≤ 4 KB chunks, R0.8b); flash writes only as idle work, one pa
   `make ramcheck` enforces `flipper/ram-budget.txt`; raising a line needs the reason in the same
   commit and normally the owner's acceptance.
 - **Per-process RAM** (data, bss, `chmem`) of system programs is measured (`free -t on`) and
-  recorded in `minix.mk`.
+  recorded in `minix.mk`. No base program above 4 KB of `.bss` (R2a.5): `make ramcheck` also runs
+  `tools/bsscheck.py`; an exception needs a line with its reason in `flipper/bss-exceptions.txt`.
 - **Hardware first** (rule 0.7): when a peripheral can hold the data or do the work, use it
   (RTC backup registers, the LED chip's engines, FIFOs, DMA, the flash for constant data). A
   change that buffers data in RAM says why the hardware option does not apply.
