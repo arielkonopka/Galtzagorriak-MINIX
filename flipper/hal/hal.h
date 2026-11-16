@@ -173,16 +173,12 @@ int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n);
 unsigned hal_adc_stream_left(void);
 void hal_adc_stream_stop(void);
 
-/* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
- * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
- * new level (0 = carrier seen, "mark").  Transmit: hal_ir_carrier()
+/* Infrared.  Receive: a demodulating receiver, timed by the pulse engine
+ * (hal_pulse_rx below, input 0).  Transmit: hal_ir_carrier()
  * switches the carrier (hal_ir_freq: frequency, duty in %); a timer
  * interrupt (hal_ir_tx_irq) at the end of every mark and space, started by
  * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
  * all in microseconds (spec R6.6). */
-int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
-void hal_ir_rx_on(int on);
-int hal_ir_rx_edge(void);
 void hal_ir_carrier(int on);
 void hal_ir_freq(unsigned hz, unsigned duty);
 int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
@@ -190,6 +186,19 @@ void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);
 int hal_ir_tx_ack(void);		/* the timer's interrupt: 1 if real */
 void hal_ir_tx_next(uint32_t us);
 void hal_ir_tx_stop(void);
+/* R4b.7, the pulse engine's capture: the time between edges of an input
+ * (0: the IR receiver), in us, as 32-bit words by DMA straight into dst
+ * (n of them; the caller pins the memory).  The interrupt is the IR
+ * transmitter's (hal_ir_tx_irq): hal_pulse_ack() tells HAL_PULSE_START
+ * (a frame began: what follows is its), HAL_PULSE_GAP (gap_us without an
+ * edge after it: the frame is over).  hal_pulse_left: words not yet
+ * written. */
+#define HAL_PULSE_START	1
+#define HAL_PULSE_GAP	2
+int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us);
+int hal_pulse_ack(void);
+unsigned hal_pulse_left(void);
+void hal_pulse_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).

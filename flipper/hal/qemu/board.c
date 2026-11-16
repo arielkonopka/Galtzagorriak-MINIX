@@ -576,9 +576,6 @@ int hal_adc_mv(int *mv) { (void) mv; return -1; }
 int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (void) pin; (void) rate; (void) dst; (void) n; return -1; }
 unsigned hal_adc_stream_left(void) { return 0; }
 void hal_adc_stream_stop(void) { }
-int hal_ir_irq(void) { return -1; }
-void hal_ir_rx_on(int on) { (void) on; }
-int hal_ir_rx_edge(void) { return 1; }
 void hal_ir_carrier(int on) { (void) on; }
 void hal_ir_freq(unsigned hz, unsigned duty) { (void) hz; (void) duty; }
 int hal_ir_tx_irq(void) { return -1; }
@@ -586,4 +583,8 @@ void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }
 int hal_ir_tx_ack(void) { return 0; }
 void hal_ir_tx_next(uint32_t us) { (void) us; }
 void hal_ir_tx_stop(void) { }
+int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (void) d; (void) n; (void) g; return -1; }
+int hal_pulse_ack(void) { return 0; }
+unsigned hal_pulse_left(void) { return 0; }
+void hal_pulse_stop(void) { }
 uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */

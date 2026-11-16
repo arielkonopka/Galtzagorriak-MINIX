@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R4b.7, part 1) The pulse engine: infrared frames are received by timer capture and DMA straight into the reading program's buffer (1 µs resolution, one interrupt at the start and one at the end of a frame instead of one per edge; the 64-byte receive ring is gone). `/dev/ir` reads as before. A frame may be sent while another program waits for one. Kernel −16 B.
 - Console: program output and echo on the USB serial port, the header UART and the LCD console end lines in CR LF again (`OPOST`/`ONLCR`, the termios default): `minicom` and `picocom` with default settings no longer show a staircase. Raw output (`stty -opost`, `mined`, `rz`/`sz`) stays untouched. QEMU check in the M2 self-test. Kernel RAM unchanged.
 - Security (U1): `exec` clears every register of the old program before the new one starts (r0-r8 and r10-r12 used to carry over, e.g. from a setuid program).
 - (R7b.5) LED patterns: `echo blink red >/dev/led` (also `fast`, `double`, `pulse`; `rainbow`, and `dual`, `dualsoft`, `morph` with two colours; colours red, green, blue, yellow, cyan, magenta, white or `#rrggbb`; `off`) runs the pattern in the LED driver chip itself, with the CPU free to sleep. Setting the screen backlight no longer resets the LED chip's engines and channel map.
