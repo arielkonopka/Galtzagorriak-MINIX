@@ -1795,6 +1795,9 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
   - **Who keeps it awake:** live list of the sleep-blocker bits and the processes holding the
     devices behind them, sleep statistics (Stop2 share, wakes per source), battery screen (%, V,
     mA with sign, °C, health, charge state, time to full or to empty, charger or computer).
+    The battery screen comes first, before the rest of the app (task T15a, owner 2026-11-16): live
+    current, and an **idle** value read after the backlight has been off for 30 s, so the user can
+    check the idle draw on battery without opening the device or using a USB meter.
   - **Actions:** power off (says how many alarms are armed and that they will ring), reboot.
   - Limits: no setting may break L1 (≤ 50 ms) or stop alarms; settings that cost responsiveness are
     not offered (e.g. no lower CPU clock).
