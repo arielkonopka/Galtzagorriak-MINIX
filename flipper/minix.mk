@@ -104,7 +104,10 @@ SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
 	   setlocale localeconv regexp regsub printk difftime hypot \
 	   asctime ctime ecvt localtime mktime strftime tzset ttyslot \
-	   scanf fscanf sscanf vscanf vsscanf
+	   scanf fscanf sscanf vscanf vsscanf \
+	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
+	   peekpoke putenv freopen cfopen strtok qsort rand \
+	   lrand getopt gmtime
 SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
 LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
 	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))
@@ -117,7 +120,8 @@ $(SHL)/tab.o: $(SHL)/tab.S
 	$(CC) $(MCFLAGS) -c $< -o $@
 # No --gc-sections: every global function of the members is exported.
 $(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) ld/shlibc.ld
-	$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
+	@echo "  LD $@"
+	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
 	   -Wl,-q -Wl,--defsym=SHLIBC_BASE=$(SHLIBC_BASE) -Tld/shlibc.ld \
 	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) \
 	   $(SHLIBC_GCC:%=-Wl,-u,%) -lgcc -o $@
@@ -419,7 +423,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.70
+BASE_VER := 3.71
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

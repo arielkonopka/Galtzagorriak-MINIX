@@ -11,7 +11,7 @@ else runs.
 |---|---|
 | CPU | STM32WB55, Cortex-M4 at 64 MHz, Thumb-2 only. FPU present but not used by programs yet: code is built with `-mfloat-abi=soft` (the opt-in FPU is spec R5.7, **(planned)**). |
 | RAM | 192 KB SRAM1 plus two 10 KB pieces of SRAM2. Kernel, MM, FS and INIT take their share; about **105 KB is free in one piece after boot**, shared by every user process. |
-| Flash | 1 MB, of which MINIX uses the lower part: the system image (at most 192 KB), the *installed region* with program text and the default settings, and the *run-time text cache*. The top belongs to the radio CPU and is never touched. |
+| Flash | 1 MB, of which MINIX uses the lower part: the system image (at most 192 KB), the shared C library (one copy for every program), the *installed region* with program text and the default settings, and the *run-time text cache*. The top belongs to the radio CPU and is never touched. |
 | Processes | `NR_PROCS` is 16: MM, FS and INIT take three, so at most **13 user processes** exist at once, shells and the launcher included. |
 | Clock | `HZ` is 60: the scheduler, `alarm()` and `sleep()` count in ticks of 16.7 ms. A millisecond timer exists in the kernel (R4b.2) but not yet for programs (`setitimer` subset, **(planned)**). |
 | Screen and buttons | 128x64 monochrome LCD, six buttons (Up, Down, Left, Right, OK, Back). |
@@ -107,7 +107,8 @@ What eats the reserve, from experience in this tree:
   accepts: no declarations inside `for (...)`, and there is no `<stdint.h>` or `<stdbool.h>`.
   Fixed-size types are `u8_t`, `u16_t`, `u32_t` from `<sys/types.h>` (`long` and `int` are 32
   bits). Host-tested cores (chapter 2) are written so they compile in both worlds.
-- **libc** is MINIX 2.0's, extended for the port. Notable points:
+- **libc** is MINIX 2.0's, extended for the port. It is one shared copy in flash: programs
+  call it in place, and each process keeps only its data (about 0.6 KB). Notable points:
   - POSIX.1 (1990) calls: files, directories, `fork`/`vfork`/`exec`, signals with
     `sigaction`, `termios`, `pipe`, `mkfifo`, `alarm`, `pause`, `sigsuspend`;
   - **not present**: `select`/`poll` (`poll()` is spec R4b.6, **(planned)**), `usleep`,

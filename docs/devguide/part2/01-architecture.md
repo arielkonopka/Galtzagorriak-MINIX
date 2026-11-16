@@ -98,7 +98,8 @@ share.
 | Region | Written by | Contents |
 |---|---|---|
 | system image, from `0x08000000`, ≤ 192 KB | DFU only | kernel, MM, FS, INIT (`minix.bin`); the build fails above 192 KB |
-| installed region | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
+| shared libc, from `0x08030000`, ≤ 64 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
+| installed region, from `0x08040000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
 | run-time text cache, 128 KB | MM in the background | texts of programs run often, within a daily erase budget |
 | guard pages, then the radio stack and FUS | never | the top of flash, from `SFSA` (read from `FLASH->SFR` at boot) |
 
@@ -106,6 +107,27 @@ share.
 writable regions and inside the ROM image (`EROFS`). Every erase is counted in RTC backup
 registers (`free -v`). Erases run with interrupts enabled; the CPU simply stalls on fetches for
 about 22 ms per page.
+
+**The shared libc** (`<minix/shlibc.h>`, `tools/mkshlibc.py`, `ld/shlibc.ld`). The libc members
+are linked once at a fixed address, `SHLIBC_BASE`; the image starts with a header (magic, ABI,
+build id, sizes) and the *entry table*, one word per exported function. `flipper/libc.exports`
+fixes the order of that table for the ABI: append new functions at the end, never reorder or
+remove one without a new `GZ_ABI` (the build tells you what to append). A program calls slot *n*
+through a 12-byte stub in its own text (`ldr ip, =slot; ldr pc, [ip]`), so imports cost no RAM.
+
+The library's writable data (its GOT, `errno`, stdio, `malloc` and `atexit` state; about 0.6 KB)
+is per process: the first bytes of every data segment, the *libc area*, at `r9` like the
+program's own GOT, which `ld/user-shlibc.ld` places after the area. `elf2mnx.py --libc` fills the
+area with the library's initial contents, so a program fits only the library build it was
+linked with: the a.out header is 48 bytes, flag `A_LIBC`, `a_tbase` = the build id. MM's exec
+refuses any other (`ENOEXEC`); `mkpkg.py` writes `Libc: <id>` and `pkg` refuses a mismatch. The
+kernel accepts the library's flash as the *source* of a copy (its strings passed to system
+calls), never as a destination.
+
+Members with big per-process data stay static, linked into the programs that use them
+(`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, `scanf`, the time
+zone code, the float tables, `regexp`, `getopt`, `termcap`, math, ...). `SHLIBC=0` builds every
+program static, as before.
 
 ## 1.7 RTC backup registers
 
