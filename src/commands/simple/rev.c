@@ -6,7 +6,8 @@
 #include <unistd.h>
 #include <minix/minlib.h>
 
-#define CHUNK_SIZE	4096
+#define CHUNK_SIZE	4096	/* longest line (on the stack) */
+#define IN_SIZE		512	/* read size: one SD sector (R2a.5) */
 
 #ifndef EOF
 #define	EOF	((char) -1)
@@ -60,7 +61,7 @@ void rev()
 }
 
 
-char buf[CHUNK_SIZE];
+char buf[IN_SIZE];
 
 int nextchar()
 {				/* Does a sort of buffered I/O */
@@ -68,7 +69,7 @@ int nextchar()
   static int i;			/* Index in input buffer to next character */
 
   if (--n <= 0) {		/* We've had this block. Read in next block */
-	n = read(fd, buf, CHUNK_SIZE);
+	n = read(fd, buf, IN_SIZE);
 	i = 0;			/* Reset index in array */
   }
   return((n <= 0) ? EOF : buf[i++]);	/* Return -1 on EOF */

@@ -24,6 +24,7 @@ $(OBJS):	sed.h
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 /*+++++++++++++++*/
 
@@ -147,7 +148,8 @@ typedef struct cmd_t sedcmd;	/* use this name for declarations */
 
 /* Main data areas */
 char linebuf[MAXBUF + 1];	/* current-line buffer */
-sedcmd cmds[MAXCMDS + 1];	/* hold compiled commands */
+sedcmd *cmds;			/* hold compiled commands (malloc, R2a.5) */
+static int ncmds;		/* cmds[] has ncmds + 1 entries */
 long linenum[MAXLINES];		/* numeric-addresses table */
 
 /* Miscellaneous shared variables */
@@ -203,19 +205,26 @@ typedef struct {		/* represent a command label */
  label;
 
 /* Label handling */
-static label labels[MAXLABS];	/* here's the label table */
-static label *lab = labels + 1;	/* pointer to current label */
-static label *lablst = labels;	/* header for search list */
+static label *labels;		/* here's the label table (malloc) */
+static int nlabs;		/* its size */
+static label *lab;		/* pointer to current label */
+static label *lablst;		/* header for search list */
 
-/* String pool for regular expressions, append text, etc. etc. */
-static char pool[POOLSIZE];	/* the pool */
-static char *fp = pool;		/* current pool pointer */
-static char *poolend = pool + POOLSIZE;	/* pointer past pool end */
+/* String pool for regular expressions, append text, etc. etc.
+ * Flipper (R2a.5): no fixed 3 KB array; the pool grows in zeroed chunks
+ * of POOLCHUNK bytes from the heap, and room() makes sure, before each
+ * item is compiled into it, that the item fits in the current chunk.
+ * POOLSIZE stays the limit on the whole pool.
+ */
+#define POOLCHUNK	512
+static char *fp;		/* current pool pointer */
+static char *poolend;		/* pointer past pool end */
+static size_t poolused;		/* bytes taken from the heap so far */
 
 /* Compilation state */
 static FILE *cmdf = NULL;	/* current command source */
 static char *cp = linebuf;	/* compile pointer */
-static sedcmd *cmdp = cmds;	/* current compiled-cmd ptr */
+static sedcmd *cmdp;		/* current compiled-cmd ptr */
 static char *lastre = NULL;	/* old RE pointer */
 static int bdepth = 0;		/* current {}-nesting level */
 static int bcount = 0;		/* # tagged patterns in current RE */
@@ -225,6 +234,8 @@ static int eflag;		/* -e option flag */
 static int gflag;		/* -g option flag */
 
 _PROTOTYPE(int main, (int argc, char **argv));
+_PROTOTYPE(static void tables, (int argc, char **argv));
+_PROTOTYPE(static void room, (size_t n));
 _PROTOTYPE(static void compile, (void));
 _PROTOTYPE(static int cmdcomp, (int cchar));
 _PROTOTYPE(static char *rhscomp, (char *rhsp, int delim));
@@ -260,8 +271,8 @@ char *argv[];
 {
   eargc = argc;			/* set local copy of argument count */
   eargv = argv;			/* set local copy of argument list */
-  cmdp->addr1 = pool;		/* 1st addr expand will be at pool start */
   if (eargc == 1) quit(0);	/* exit immediately if no arguments */
+  tables(argc, argv);		/* allocate cmds[] and labels[] */
   /* Scan through the arguments, interpreting each one */
   while ((--eargc > 0) && (**++eargv == '-')) switch (eargv[0][1]) {
 	    case 'e':
@@ -329,6 +340,62 @@ static char cmdmask[] =
  XCMD, H + YCMD, 0, H + BCMD, 0, H, 0, 0,
 };
 
+static void tables(argc, argv)
+int argc;
+char **argv;
+/* Allocate cmds[] and labels[] for the script in the arguments (R2a.5).
+ * Every command takes at least one character of the script and every
+ * label at least one, so the script length bounds both; a script from
+ * a file that is not a regular file gets the full MAXCMDS/MAXLABS.
+ */
+{
+  struct stat st;
+  long len = 0;
+  int script = 0;
+
+  while (--argc > 0 && **++argv == '-') {
+	if (argv[0][1] == 'e' && argc > 1) {
+		argc--;
+		len += strlen(*++argv) + 1;
+		script = 1;
+	} else if (argv[0][1] == 'f' && argc > 1) {
+		argc--;
+		if (stat(*++argv, &st) == 0 && S_ISREG(st.st_mode))
+			len += st.st_size + 1;
+		else
+			len = MAXCMDS + MAXLABS;
+		script = 1;
+	}
+  }
+  if (!script) len = argc > 0 ? strlen(*argv) + 1 : 0;
+
+  ncmds = len + 1 < MAXCMDS ? len + 1 : MAXCMDS;
+  nlabs = len + 2 < MAXLABS ? len + 2 : MAXLABS;
+  cmds = (sedcmd *) calloc(ncmds + 1, sizeof(sedcmd));
+  labels = (label *) calloc(nlabs, sizeof(label));
+  if (cmds == NULL || labels == NULL) {
+	fprintf(stderr, "sed: out of memory\n");
+	quit(2);
+  }
+  cmdp = cmds;
+  lablst = labels;
+  lab = labels + 1;
+}
+
+static void room(n)
+size_t n;
+/* Make sure the next n bytes at fp are in the pool (R2a.5). */
+{
+  size_t size;
+
+  if (fp != NULL && (size_t) (poolend - fp) >= n) return;
+  size = n > POOLCHUNK ? n : POOLCHUNK;
+  if (poolused >= POOLSIZE || (fp = calloc(size, 1)) == NULL)
+	ABORT(TMTXT);
+  poolused += size;
+  poolend = fp + size;
+}
+
 static void compile()
 /* Precompile sed commands out of a file */
 {
@@ -353,9 +420,8 @@ static void compile()
 	}
 
 	/* Compile first address */
-	if (fp > poolend)
-		ABORT(TMTXT);
-	else if ((fp = address(cmdp->addr1 = fp)) == BAD)
+	room(RELIMIT + 2);
+	if ((fp = address(cmdp->addr1 = fp)) == BAD)
 		ABORT(AGMSG);
 
 	if (fp == cmdp->addr1) {/* if empty RE was found */
@@ -370,7 +436,7 @@ static void compile()
 		lastre = cmdp->addr1;
 		if (*cp == ',' || *cp == ';') {	/* there's 2nd addr */
 			cp++;
-			if (fp > poolend) ABORT(TMTXT);
+			room(RELIMIT + 2);
 			fp = address(cmdp->addr2 = fp);
 			if (fp == BAD || fp == NULL) ABORT(AGMSG);
 			if (fp == cmdp->addr2)
@@ -396,7 +462,7 @@ static void compile()
 	else if (cmdcomp(*cp++))/* execute it; if ret = 1 */
 		continue;	/* skip next line read */
 
-	if (++cmdp >= cmds + MAXCMDS) ABORT(TMCDS);
+	if (++cmdp >= cmds + ncmds) ABORT(TMCDS);
 
 	SKIPWS(cp);		/* look for trailing stuff */
 	if (*cp != '\0' && *cp != ';' && *cp != '#') ABORT(TRAIL);
@@ -421,7 +487,7 @@ register char cchar;		/* character name of command */
       case '{':			/* start command group */
 	cmdp->flags.allbut = !cmdp->flags.allbut;
 	cmpstk[bdepth++] = &(cmdp->u.link);
-	if (++cmdp >= cmds + MAXCMDS) ABORT(TMCDS);
+	if (++cmdp >= cmds + ncmds) ABORT(TMCDS);
 	return(1);
 
       case '}':			/* end command group */
@@ -437,13 +503,14 @@ register char cchar;		/* character name of command */
 
       case ':':			/* label declaration */
 	if (cmdp->addr1) ABORT(AD1NG);	/* no addresses allowed */
+	room(strlen(cp) + 2);
 	fp = gettext(lab->name = fp);	/* get the label name */
 	if (lpt = search(lab)) {/* does it have a double? */
 		if (lpt->address) ABORT(DLABL);	/* yes, abort */
 	} else {		/* check that it doesn't overflow label table */
 		lab->last = NULL;
 		lpt = lab;
-		if (++lab >= labels + MAXLABS) ABORT(TMLAB);
+		if (++lab >= labels + nlabs) ABORT(TMLAB);
 	}
 	lpt->address = cmdp;
 	return(1);
@@ -461,6 +528,7 @@ register char cchar;		/* character name of command */
 			lablst->last = cmdp;
 		break;
 	}
+	room(strlen(cp) + 2);
 	fp = gettext(lab->name = fp);	/* else get label into pool */
 	if (lpt = search(lab)) {/* enter branch to it */
 		if (lpt->address)
@@ -473,7 +541,7 @@ register char cchar;		/* character name of command */
 	} else {		/* matching named label not found */
 		lab->last = cmdp;	/* add the new label */
 		lab->address = NULL;	/* it's forward of here */
-		if (++lab >= labels + MAXLABS)	/* overflow if last */
+		if (++lab >= labels + nlabs)	/* overflow if last */
 			ABORT(TMLAB);
 	}
 	break;
@@ -484,6 +552,7 @@ register char cchar;		/* character name of command */
 	if (cmdp->addr2) ABORT(AD2NG);
       case 'c':			/* change text */
 	if ((*cp == '\\') && (*++cp == '\n')) cp++;
+	room(strlen(cp) + 2);
 	fp = gettext(cmdp->u.lhs = fp);
 	break;
 
@@ -493,11 +562,13 @@ register char cchar;		/* character name of command */
 
       case 's':			/* substitute regular expression */
 	redelim = *cp++;	/* get delimiter from 1st ch */
+	room(RELIMIT + 2);
 	if ((fp = recomp(cmdp->u.lhs = fp, redelim)) == BAD) ABORT(CGMSG);
 	if (fp == cmdp->u.lhs)	/* if compiled RE zero len */
 		cmdp->u.lhs = lastre;	/* use the previous one */
 	else			/* otherwise */
 		lastre = cmdp->u.lhs;	/* save the one just found */
+	room(strlen(cp) + 2);
 	if ((cmdp->rhs = fp) > poolend) ABORT(TMTXT);
 	if ((fp = rhscomp(cmdp->rhs, redelim)) == BAD) ABORT(CGMSG);
 	if (gflag) cmdp->flags.global ++;
@@ -516,6 +587,7 @@ register char cchar;		/* character name of command */
       case 'w':			/* write-pattern-space command */
       case 'W':			/* write-first-line command */
 	if (nwfiles >= WFILES) ABORT(TMWFI);
+	room(strlen(cp) + 2);
 	fp = gettext(fname[nwfiles] = fp);	/* filename will be in pool */
 	for (i = nwfiles - 1; i >= 0; i--)	/* match it in table */
 		if ((fname[i] != NULL) &&
@@ -533,6 +605,7 @@ register char cchar;		/* character name of command */
 	break;
 
       case 'y':			/* transliterate text */
+	room(0x80);
 	fp = ycomp(cmdp->u.lhs = fp, *cp++);	/* compile translit */
 	if (fp == BAD) ABORT(CGMSG);	/* fail on bad form */
 	if (fp > poolend) ABORT(TMTXT);	/* fail on overflow */
@@ -918,7 +991,7 @@ int n;
 
 /* Main data areas */
 extern char linebuf[];		/* current-line buffer */
-extern sedcmd cmds[];		/* hold compiled commands */
+extern sedcmd *cmds;		/* hold compiled commands */
 extern long linenum[];		/* numeric-addresses table */
 
 /* Miscellaneous shared variables */
