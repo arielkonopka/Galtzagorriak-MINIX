@@ -4,17 +4,23 @@
  *					(as the stock app: 5 bytes, hex);
  *					-r: also the timings; up to TRIES
  *					reads of 0.5 s (default 4)
- *		rfid write [-n TRIES] [-lock] EM B0 B1 B2 B3 B4
+ *		rfid write [OPTS] EM B0 B1 B2 B3 B4
  *					make a blank tag (fob, card) an
  *					EM4100 with that number: as T5577,
- *					else as EM4305 (as stock), each
- *					read back; TRIES rounds (default 20:
- *					a password-protected tag may take
- *					many).  -lock sets the T5577 lock
- *					bit, so the blocks can never be
- *					written again (not by a door entry
- *					system testing for a copy, and not
- *					by you)
+ *					else as EM4305 (as stock), read back
+ *		rfid copy [OPTS]	read a tag, then write its number
+ *					to the blank one put on next
+ *		  -n TRIES		rounds, default 20 (a tag that
+ *					wants a password may need many)
+ *		  -pass HEX		also give the T5577 a password, so
+ *					nothing rewrites it without that
+ *					word (some door entry systems try
+ *					to overwrite a copy they find).
+ *					Write it down: it is needed to
+ *					change the tag afterwards
+ *		  -lock			the T5577 lock bit instead: the
+ *					blocks can then never be written
+ *					again, by anyone, you included
  *
  * Writing a T5577 is done by gaps in the 125 kHz field, with the stock
  * firmware's timings (lib/lfrfid/tools/t5577.c, in carrier periods of
@@ -128,6 +134,7 @@ static int em_decode(int nd, unsigned char id[5])
 #define T_DATA_1	56
 #define T_PROGRAM	700
 #define T5577_EM4100	0x00148040UL	/* RF/64, Manchester, blocks 1-2 */
+#define T5577_PWD	0x00000010UL	/* block 0: a write needs block 7 */
 
 static int nt;			/* durations in d[], field on first */
 
@@ -159,6 +166,7 @@ static void wreset(void)
 }
 
 static int wlock;			/* -lock: the T5577 lock bit */
+static unsigned long wpass;		/* -pass: its password, or 0 */
 
 static void wblock(int blk, unsigned long data)
 {
@@ -278,14 +286,16 @@ static int write_em(unsigned char id[5], int tries)
 	 * (the stock app does the same while the button is held). */
 	for (v = -1; tries-- > 0; ) {
 		nt = 0;				/* T5577 first, as stock */
-		wblock(0, T5577_EM4100);
-		wblock(1, blk[0]);
-		wblock(2, blk[1]);
+		wblock(1, blk[0]);		/* the data first and the */
+		wblock(2, blk[1]);		/* config last: once PWD is */
+		if (wpass) wblock(7, wpass);	/* set, a write needs it */
+		wblock(0, T5577_EM4100 | (wpass ? T5577_PWD : 0));
 		wreset();
 		if (send(fd) < 0) return 1;
 		if ((v = verify(fd, id, got)) == 1) {
 			printf("written (T5577%s): EM4100 %02X %02X %02X %02X %02X\n",
-				wlock ? ", locked for ever" : "",
+				wlock ? ", locked for ever"
+				      : wpass ? ", password set" : "",
 				id[0], id[1], id[2], id[3], id[4]);
 			return 0;
 		}
@@ -308,22 +318,64 @@ static int write_em(unsigned char id[5], int tries)
 	return 1;
 }
 
+/* Read a tag, then write its number to the blank one put on next. */
+static int copy_em(int tries)
+{
+	unsigned char id[5], got[5];
+	int fd, n, t;
+
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	for (t = 0; t < 20; t++) {
+		if ((n = read(fd, d, sizeof(d))) < 0) {
+			perror("rfid");
+			return 1;
+		}
+		if (em_decode(n / 4, id)) break;
+	}
+	if (t == 20) {
+		printf("no tag to copy (hold it to the back)\n");
+		return 1;
+	}
+	printf("read EM4100 %02X %02X %02X %02X %02X\n",
+		id[0], id[1], id[2], id[3], id[4]);
+	printf("now put the blank one on\n");
+	for (t = 0; t < 600; t++) {		/* until that one is away */
+		if ((n = read(fd, d, sizeof(d))) < 0) break;
+		if (!em_decode(n / 4, got) || memcmp(got, id, 5) != 0) break;
+	}
+	close(fd);
+	return write_em(id, tries);
+}
+
 int main(int argc, char **argv)
 {
 	int fd, n, i, tries = 4, raw = 0, t;
 	unsigned char id[5];
 
-	if (argc >= 8 && strcmp(argv[1], "write") == 0) {
-		int tries = 20;
+	if (argc >= 2 && (strcmp(argv[1], "write") == 0
+				|| strcmp(argv[1], "copy") == 0)) {
+		int tries = 20, cp = argv[1][0] == 'c';
 
 		for (i = 2; i < argc && argv[i][0] == '-'; i++) {
+			char *e;
+
 			if (strcmp(argv[i], "-lock") == 0) wlock = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				tries = atoi(argv[++i]);
-			else goto use;
+			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
+				wpass = strtoul(argv[++i], &e, 16);
+				if (*e != 0 || wpass == 0) goto use;
+			} else goto use;
 		}
-		if (i + 6 != argc || strcmp(argv[i], "EM") != 0 || tries < 1)
-			goto use;
+		if (tries < 1 || (wlock && wpass)) goto use;
+		if (cp) {
+			if (i != argc) goto use;
+			return copy_em(tries);
+		}
+		if (i + 6 != argc || strcmp(argv[i], "EM") != 0) goto use;
 		for (i++, n = 0; n < 5; n++) {
 			char *e;
 			unsigned long v = strtoul(argv[i + n], &e, 16);
@@ -339,8 +391,9 @@ int main(int argc, char **argv)
 			tries = atoi(argv[++i]);
 		else {
 use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
-				"       rfid write [-n TRIES] [-lock] "
-				"EM B0 B1 B2 B3 B4\n");
+				"       rfid write [-n N] [-pass HEX] [-lock]"
+				" EM B0 B1 B2 B3 B4\n"
+				"       rfid copy [-n N] [-pass HEX] [-lock]\n");
 			return 2;
 		}
 	}

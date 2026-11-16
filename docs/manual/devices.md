@@ -100,8 +100,24 @@ rfid write EM 00 DE AD BE EF
 written (T5577): EM4100 00 DE AD BE EF
 ```
 
+Or copy one tag onto another, without typing the number:
+
+```
+rfid copy
+read EM4100 04 00 98 3D C5
+now put the blank one on
+written (T5577): EM4100 04 00 98 3D C5
+```
+
 The tag is read back afterwards; "not written" means a locked or password-protected tag (one
-written by another cloner may be), or a kind that cannot be written. A write to `/dev/rfid` is
+written by another cloner may be), or a kind that cannot be written. Each round writes the tag
+both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), because a tag that
+wants a password only answers now and then.
+
+`-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
+word (some door entry systems try to overwrite a copy they find). Write the password down: it
+is needed to change the tag afterwards, and this version cannot send one yet. `-lock` instead
+sets the chip's lock bit, which can never be undone by anyone, you included. A write to `/dev/rfid` is
 a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
 spaces. Emulating a tag is **(planned)**.
 
