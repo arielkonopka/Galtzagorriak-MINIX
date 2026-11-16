@@ -46,6 +46,18 @@ then
 	chgrp gui /dev/ibutton 2>/dev/null
 	chmod 660 /dev/ibutton 2>/dev/null
 fi
+# Cards made before R7b.1 lack the group timers and /dev/rtc (the RTC
+# alarm and calibration; root and group timers).
+grep '^timers:' /etc/group >/dev/null || {
+	echo 'timers:*:11:' >> /etc/group
+	echo "base: /etc/group now has timers"
+}
+if test ! -r /dev/rtc
+then
+	mknod /dev/rtc c 6 13 || echo "base: could not make /dev/rtc"
+	chgrp timers /dev/rtc 2>/dev/null
+	chmod 660 /dev/rtc 2>/dev/null
+fi
 # Cards made before R6.4 lack /dev/adc (header pin voltages).
 if test ! -r /dev/adc
 then

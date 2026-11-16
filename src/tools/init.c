@@ -48,9 +48,16 @@ struct slotent {
 
 struct slotent slots[PIDSLOTS];	/* init table of ttys and pids */
 
-int gothup = 0;			/* flag, showing signal 1 was received */
-int gotabrt = 0;		/* flag, showing signal 6 was received */
-int spawn = 1;			/* flag, spawn processes only when set */
+volatile char gothup = 0;	/* flag, showing signal 1 was received */
+volatile char gotabrt = 0;	/* flag, showing signal 6 was received */
+char spawn = 1;			/* flag, spawn processes only when set */
+/* R7b.3: SIGRTC (an RTC alarm, the time set) runs /usr/lib/timed, at most
+ * one at a time; one more run if a signal came meanwhile.  Also at boot,
+ * after /etc/rc (timers re-armed; the boot may have come from an alarm). */
+#define PATH_TIMED	"/usr/lib/timed"
+volatile char gotrtc = 1;	/* run timed (at boot too) */
+char timed_again;		/* SIGRTC while it ran */
+pid_t timed_pid = NO_PID;
 
 void tell(int fd, char *s);
 void report(int fd, char *label);
@@ -60,6 +67,8 @@ int execute(char **cmd);
 void onhup(int sig);
 void onterm(int sig);
 void onabrt(int sig);
+void onrtc(int sig);
+void timed(void);
 
 int main(void)
 {
@@ -93,6 +102,10 @@ int main(void)
   /* Abort: Sent by the kernel on CTRL-ALT-DEL; shut the system down. */
   sa.sa_handler = onabrt;
   sigaction(SIGABRT, &sa, NULL);
+
+  /* RTC: an alarm fired or the time was set (R7b.3). */
+  sa.sa_handler = onrtc;
+  sigaction(SIGRTC, &sa, NULL);
 
   /* Execute the /etc/rc file. */
   if ((pid = vfork()) != 0) {	/* R2c.2: the child opens and execs */
@@ -134,6 +147,12 @@ int main(void)
   while (1) {
 	while ((pid = waitpid(-1, NULL, check ? WNOHANG : 0)) > 0) {
 		/* Search to see which line terminated. */
+		if (pid == timed_pid) {
+			timed_pid = NO_PID;
+			if (timed_again) gotrtc = 1;
+			timed_again = 0;
+			continue;
+		}
 		for (linenr = 0; linenr < PIDSLOTS; linenr++) {
 			slotp = &slots[linenr];
 			if (slotp->pid == pid) {
@@ -152,6 +171,11 @@ int main(void)
 			slots[linenr].errct = 0;
 		}
 		check = 1;
+	}
+
+	if (gotrtc) {
+		gotrtc = 0;
+		timed();
 	}
 
 	/* Shut down on signal 6 (SIGABRT). */
@@ -189,6 +213,27 @@ void onhup(int sig)
 void onterm(int sig)
 {
   spawn = 0;
+}
+
+void onrtc(int sig)
+{
+  gotrtc = 1;
+}
+
+void timed(void)
+{
+  pid_t pid;
+
+  if (timed_pid != NO_PID) {
+	timed_again = 1;
+	return;
+  }
+  if (access(PATH_TIMED, X_OK) != 0) return;	/* not installed */
+  if ((pid = vfork()) == 0) {
+	execl(PATH_TIMED, "timed", (char *) NULL);
+	_exit(1);
+  }
+  if (pid > 0) timed_pid = pid;
 }
 
 void onabrt(int sig)

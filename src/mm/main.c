@@ -114,7 +114,7 @@ PRIVATE void mm_init()
 
   static char core_sigs[] = {
 	SIGQUIT, SIGILL, SIGTRAP, SIGABRT,
-	SIGEMT, SIGFPE, SIGUSR1, SIGSEGV,
+	SIGFPE, SIGUSR1, SIGSEGV,
 	SIGUSR2, 0 };
   register int proc_nr;
   register struct mproc *rmp;

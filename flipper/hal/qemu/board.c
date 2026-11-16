@@ -491,6 +491,13 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 
 /* QEMU: the host's clock, seconds since 1970 (semihosting). */
 uint32_t hal_rtc_time(void) { return semihost(SYS_TIME, 0); }
+int hal_rtc_ok(void) { return 0; }	/* the host's clock: not settable */
+int hal_rtc_set(uint32_t t) { (void) t; return -1; }
+int hal_rtc_alarm(uint32_t due, unsigned lead) { (void) due; (void) lead; return -1; }
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags) { *lead = 0; *flags = 0; return 0; }
+int hal_rtc_alarm_irq(void) { return -1; }
+int hal_rtc_alarm_ack(void) { return 0; }
+int hal_rtc_cal(int set, int v) { (void) set; (void) v; return 0; }
 
 /* No radios in QEMU (T14a). */
 void hal_radios_park(void) { }
