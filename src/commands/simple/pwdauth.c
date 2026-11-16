@@ -83,12 +83,15 @@ int main(int argc, char **argv)
 		if ((pw= getpwnam(salt + 2)) == nil) return fail(key);
 
 		/* A null encrypted password matches a null key, otherwise
-		 * do the normal crypt(3) authentication check.
+		 * do the normal crypt(3) authentication check.  A null key
+		 * matches nothing else (passwd refuses null passwords): no
+		 * 5000 rounds of SHA-256 for login's "any password?" probe.
 		 */
 		if (*pw->pw_passwd == 0 && *key == 0) {
 			/* fine */
 		} else
-		if (strcmp(crypt(key, pw->pw_passwd), pw->pw_passwd) != 0) {
+		if (*key == 0
+		    || strcmp(crypt(key, pw->pw_passwd), pw->pw_passwd) != 0) {
 			return fail(key);
 		}
 	} else {

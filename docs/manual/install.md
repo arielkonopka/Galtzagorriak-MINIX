@@ -84,7 +84,7 @@ stock firmware or qFlipper can install from the SD card without `dfu-util` (spec
 The same system runs in QEMU (a Cortex-M4 board), with the SD card as a file:
 
     make minix disk        # BOARD=qemu is the default
-    make minix-run         # log in as root, no password; the session ends after 60 s
+    make minix-run         # set root's password at the first boot; the session ends after 60 s
 
 ## 3. Before you start: back up the stock SD card
 
@@ -137,9 +137,13 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    | `/dev/hd3` | (swap) | 64 MB | reserved for swapping apps to the card later |
    | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
 
-2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
-   Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
-   the launcher.
+2. After the reboot it makes the file systems on `/usr` and `/home`.
+3. It asks for a **root password** on the console (USB or the serial pins). Root has none on a
+   new card, so the boot waits here, before any login prompt and before the launcher: connect
+   USB, open the serial port (see *Logging in* below), press Enter and type the password twice.
+   It is kept in `/etc/shadow`, readable only by root; `/etc/passwd` holds `##root` in its
+   place. The boot then continues: `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s
+   the first time) and starts the launcher.
 
 Do not unplug or reset the Flipper during these steps. If one fails, the boot continues without
 `/usr` and `/home` and says so on the console; rewrite the card (section 4) and start again.
@@ -164,7 +168,8 @@ the console ends each line with CR LF itself (output post-processing `OPOST`/`ON
 Unix terminal; `stty -opost` switches it off, full-screen programs and file transfer do so on
 their own). Do not turn on "add carriage return" in the terminal program, or you get blank lines.
 
-Press Enter, and log in as **root** with **no password**. Set one right away with `passwd`.
+Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
+it. A wrong password is refused after 2 seconds, to make guessing slow.
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
@@ -178,6 +183,9 @@ Without `TZ` the time shown is UTC. `date` prints local time, `date -u` UTC. To 
 root): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
 (`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
 use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
+
+In `/tmp` and `/usr/tmp` (sticky directories, mode 1777) everybody may create files, but only a
+file's owner (or root) may delete or rename it.
 
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
 date, time zone and location (spec Phase 18b), and `/etc/TZ` for the whole system. Until then the
@@ -195,6 +203,13 @@ Packages (`name_version.tar`) are sent from the PC over the USB console:
    file with a CRC check and resends damaged ones. About 100 KB/s.
 
 On the Flipper: `pkg list`, `pkg info NAME`, `pkg files NAME`, `pkg remove NAME`.
+
+`pkg` receives into `/usr/var/pkg/in` and unpacks in `/usr/var/pkg/tmp`, both root's only (it
+refuses to use them otherwise), and installs only the packages received in that run. It checks a
+package before unpacking anything and refuses it, with the reason, if a member has an absolute
+path, a `..` component, a name too long for `tar`, or is a link or device; package names and
+`Depends:` names are 1–32 letters, digits and `._+-`. `pkg remove` deletes only the files the
+package installed.
 
 ### Updating to a newer build without erasing the card
 
@@ -227,7 +242,7 @@ a hang just reboots the Flipper, like the stock firmware.
 | MINIX hangs | The watchdog resets the Flipper after 2 s. Or hold Left + Back for a hardware reset. |
 | A new image does not boot | Left + Back, keep Left: DFU mode; flash a working `minix-base.bin`. If that does not work: Left + Back + OK, keep OK. |
 | `/usr` or `/home` not mounted, or the card is damaged | Rewrite the card (section 4). This erases your files on it. |
-| Forgotten root password | Rewrite the card (the password lives in `/etc/passwd` on the card). |
+| Forgotten root password | Rewrite the card (the password lives in `/etc/shadow` on the card). |
 
 **Back to the stock firmware:**
 

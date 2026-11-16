@@ -203,7 +203,9 @@ written to the gauge. On QEMU the read fails with `ENXIO`.
 ## 3.12 Random numbers: `/dev/random`
 
 Bytes from the STM32's hardware random number generator. Use it for salts, nonces and random
-names; `rand()` is not random.
+names; `rand()` is not random. A read can be short while the radio core holds the generator:
+loop until you have what you need. **On QEMU it is a weak fallback** (a xorshift seeded from the
+uptime), clearly not for keys.
 
 ## 3.13 Who may use what: an example
 

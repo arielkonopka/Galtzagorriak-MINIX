@@ -39,6 +39,7 @@ QEMU = ["qemu-system-arm", "-M", "mps2-an386", "-nographic", "-monitor",
 	"enable=on,target=native,userspace=on"]
 CFG = 0x0008FFF0
 BAD = re.compile(rb"not erased|damaged|panic|does not read back")
+PASSWORD = "Kaixo-test1"	# root's, set at the first boot (R3.4)
 
 
 class Run:
@@ -95,12 +96,31 @@ class Run:
 		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
 		return m.group(1).replace(b"\r", b"") if m else None
 
-	def login(self):
-		for _ in range(3):
-			if self.wait(rb"login: ", 60) is None:
+	def set_root_password(self, pw=PASSWORD):
+		"""The first boot's question (/etc/setup, spec R3.4)."""
+		self.send("")
+		for prompt in (rb"New password:", rb"Retype password:"):
+			if self.wait(prompt, 30) is None:
 				return False
+			self.send(pw)
+		return True
+
+	def login(self, pw=PASSWORD):
+		"""Log in as root; on a new card set its password first."""
+		for _ in range(3):
+			m = self.wait(rb"login: |Press Enter to set one", 120)
+			if m is None:
+				return False
+			if m.group(0) != b"login: ":
+				if not self.set_root_password(pw):
+					return False
+				continue
 			self.send("root")
-			if self.wait(rb"# ", 15):
+			m = self.wait(rb"Password:|# ", 30)
+			if m is not None and m.group(0) == b"Password:":
+				self.send(pw)
+				m = self.wait(rb"# ", 120)	# SHA-crypt: slow in QEMU
+			if m is not None:
 				return True
 		return False
 

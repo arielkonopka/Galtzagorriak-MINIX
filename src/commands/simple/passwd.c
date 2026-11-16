@@ -71,6 +71,18 @@ void usage()
   exit(1);
 }
 
+/* getpass(), stopping if there is no terminal to ask on. */
+static char *askpass(char *prompt)
+{
+  char *p = getpass(prompt);
+
+  if (p == NULL) {
+	std_err("passwd: no terminal to ask the password on\n");
+	exit(1);
+  }
+  return p;
+}
+
 int goodchars(s)
 char *s;
 {
@@ -148,7 +160,7 @@ char *argv[];
 
 	oldpwd[0] = 0;
 	if (pwd->pw_passwd[0] != '\0' && uid != 0) {
-		strcpy(oldpwd, getpass("Old password:"));
+		strcpy(oldpwd, askpass("Old password:"));
 		if (strcmp(pwd->pw_passwd, crypt(oldpwd, pwd->pw_passwd)) != 0)
 		{
 			std_err(bad);
@@ -156,11 +168,11 @@ char *argv[];
 		}
 	}
 	for (;;) {
-		strcpy(newpwd, getpass("New password:"));
+		strcpy(newpwd, askpass("New password:"));
 
 		if (newpwd[0] == '\0')
 			std_err("Password cannot be null");
-		else if (strcmp(newpwd, getpass("Retype password:")) != 0)
+		else if (strcmp(newpwd, askpass("Retype password:")) != 0)
 			std_err("Passwords don't match");
 		else
 			break;

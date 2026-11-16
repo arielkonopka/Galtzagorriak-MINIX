@@ -9,6 +9,8 @@
 #define write _write
 #define read _read
 #define close _close
+#define dup _dup
+#define isatty _isatty
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -30,8 +32,12 @@ char *getpass(const char *prompt)
 	static char password[32+1];
 	int fd, n= 0;
 
-	/* Try to open the controlling terminal. */
-	if ((fd= open("/dev/tty", O_RDONLY)) < 0) return NULL;
+	/* Try to open the controlling terminal.  None (a process of init,
+	 * like /etc/rc asking for the root password at the first boot):
+	 * standard input, if that is a terminal (Galtzagorriak, R3.4).
+	 */
+	if ((fd= open("/dev/tty", O_RDONLY)) < 0
+			&& (!isatty(0) || (fd= dup(0)) < 0)) return NULL;
 
 	/* Trap interrupts unless ignored. */
 	intr= 0;

@@ -166,6 +166,17 @@ ir rx -r -d /dev/subghzraw
 Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
 fills up with noise at once; FSK remotes (many car keys) do not show at all.
 
+## Random numbers (`/dev/random`)
+
+Everybody may read it: the STM32WB's true random number generator, with its seed and clock error
+checks (spec R3.1). `passwd` takes its salts from it, `pkg` its scratch names. A read may come
+back short while the radio core holds the generator; read again for the rest. Writing is accepted
+and dropped.
+
+**In QEMU it is not random**: the emulated board has no generator, so the numbers come from a
+generator seeded with the uptime in milliseconds (the same sequence for the same boot timing).
+Good enough to test with, never for keys.
+
 ## The status LED (`/dev/led`)
 
 The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.

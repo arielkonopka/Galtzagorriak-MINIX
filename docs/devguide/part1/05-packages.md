@@ -17,7 +17,11 @@ directory:
 | `CONTROL/prerm` | optional `sh` script, run before the files are removed |
 
 Limits: a package name of at most 13 characters (MINIX file names are 14, and the transfer adds
-nothing to that), and paths under 100 characters.
+nothing to that), and paths under 100 characters. `pkg` checks every package before it unpacks
+anything (spec R3.6) and refuses one whose `Package:` or `Depends:` names are not 1–32 of
+`A-Za-z0-9._+-` (not starting with `.`, `-` or `+`), whose control lines are longer than 255
+characters, or with a member that has an absolute path, a `..` component, a ustar prefix (MINIX
+`tar` reads only the 100-character name) or is not a plain file or directory (links, devices).
 
 ```
 python3 -I flipper/tools/mkpkg.py -n tally -v 1.0 -o out \
