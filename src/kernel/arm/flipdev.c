@@ -508,11 +508,28 @@ message *m_ptr;
 	rd_count = count;
 	return(SUSPEND);
 
-  case VIBRO_MINOR:
+  case VIBRO_MINOR: {
+	/* "0" off, "1" on (or a byte 0/1), "N" (2..999): on for N ms, ended
+	 * by the ms timer (R6.3), so the writer need not stay awake. */
+	char t[4];
+	int i, ms = 0, n = count < 4 ? count : 4;
+
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
-	phys_copy(user, vir2phys(buf), (phys_bytes) 1);
-	hal_vibro(buf[0] != 0 && buf[0] != '0');
+	if (n < 1) return(0);
+	phys_copy(user, vir2phys(t), (phys_bytes) n);
+	if (t[0] >= '0' && t[0] <= '9') {
+		for (i = 0; i < n && t[i] >= '0' && t[i] <= '9'; i++)
+			ms = ms * 10 + t[i] - '0';
+		if (i == 4) return(EINVAL);		/* > 999 */
+	} else {
+		ms = t[0] != 0;
+	}
+	lock();
+	mt_arm(MT_VIBRO, ms > 1 ? (unsigned) ms : 0);
+	unlock();
+	hal_vibro(ms != 0);
 	return(count);
+  }
 
   case SPK_MINOR: {
 	u8_t nb[4 * NNOTES];
@@ -897,6 +914,16 @@ unsigned now;
   if ((((unsigned) uptime_irq() - FG_STAMP(b)) & 0xFF) < FG_LONG_T) return;
   last_buttons = b | FG_LONG;
   interrupt(PRINTER);
+}
+
+
+/*===========================================================================*
+ *				flipdev_vibro_off			     *
+ *===========================================================================*/
+PUBLIC void flipdev_vibro_off()
+{
+/* The ms timer: a timed buzz is over (R6.3). */
+  hal_vibro(0);
 }
 
 
