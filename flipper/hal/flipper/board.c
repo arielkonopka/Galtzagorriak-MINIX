@@ -2683,29 +2683,33 @@ int hal_ir_tx_irq(void)
 }
 
 /* R4b.7, the pulse engine's capture: TIM2 at 1 MHz restarts at every edge
- * of the input (slave mode reset on TI1F_ED, both edges) and channel 1
- * captures the count it had (IC1 on TRC): the time since the edge
- * before, in us.  DMA1 channel 4 (DMAMUX request 28, TIM2_CH1) writes
- * those 32-bit durations straight into the reader's buffer (R4b.5).  The
- * first edge, which only ends the silence before, goes to the interrupt
- * instead; it turns the DMA on.  Channel 2 compares at the gap: silence
- * that long ends the frame.  Input 0: the IR receiver on PA0 (TIM2_CH1,
- * AF1; active low, so a frame starts with a falling edge).  TIM2 is also
- * the IR transmitter's and the ADC stream's: the kernel runs one at a
- * time. */
-#define PULSE_DMAREQ	28			/* TIM2_CH1 */
+ * of the input (slave mode reset, both edges) and a channel captures the
+ * count it had: the time since the edge before, in us.  DMA1 channel 4
+ * writes those 32-bit durations straight into the reader's buffer
+ * (R4b.5).  The first edge, which only ends the silence before, goes to
+ * the interrupt instead; it turns the DMA on.  The other channel compares
+ * at the gap: silence that long ends the frame.
+ *   input 0: the IR receiver on PA0 (TIM2_CH1, AF1), active low: a frame
+ *            starts with a falling edge.  Reset on TI1F_ED, IC1 on TRC.
+ *   input 1: the CC1101's GDO0 on PA1 (TIM2_CH2, AF1), its demodulated
+ *            OOK data (IOCFG0 0x0D), high with carrier: a frame starts
+ *            with a rising edge.  Reset on TI2FP2 with both edges
+ *            (CC2P|CC2NP), IC2 on TI2.
+ * TIM2 is also the IR transmitter's and the ADC stream's: the kernel runs
+ * one at a time. */
+#define PULSE_IN1	(TIM2->SMCR & (2u << TIM_SMCR_TS_Pos))	/* TS 110 */
 
 int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us)
 {
-	if (input != 0 || n == 0 || gap_us == 0) return -1;
+	if (input > 1 || n == 0 || gap_us == 0) return -1;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
 	(void) RCC->APB1ENR1;
 	TIM2->CR1 = 0;
 	TIM2->DIER = 0;
 	DMA1_Channel4->CCR = 0;
-	DMAMUX1_Channel3->CCR = PULSE_DMAREQ;
-	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR1;
+	DMAMUX1_Channel3->CCR = input ? 29 : 28;	/* TIM2_CH2, TIM2_CH1 */
+	DMA1_Channel4->CPAR = (uint32_t) (input ? &TIM2->CCR2 : &TIM2->CCR1);
 	DMA1_Channel4->CMAR = dst;
 	DMA1_Channel4->CNDTR = n;
 	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
@@ -2713,36 +2717,48 @@ int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us)
 	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
 	TIM2->ARR = 0xFFFFFFFF;
 	TIM2->CR2 = 0;
-	TIM2->SMCR = (4u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);
-	TIM2->CCMR1 = (3u << TIM_CCMR1_CC1S_Pos)	/* IC1 on TRC */
-		| (3u << TIM_CCMR1_IC1F_Pos);		/* 8 samples: 125 ns */
 	TIM2->CCMR2 = 0;
-	TIM2->CCR2 = gap_us;
-	TIM2->CCER = TIM_CCER_CC1E;
+	if (input == 0) {
+		TIM2->SMCR = (4u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);
+		TIM2->CCMR1 = (3u << TIM_CCMR1_CC1S_Pos)	/* IC1 on TRC */
+			| (3u << TIM_CCMR1_IC1F_Pos);		/* 125 ns */
+		TIM2->CCR2 = gap_us;
+		TIM2->CCER = TIM_CCER_CC1E;
+	} else {
+		TIM2->SMCR = (6u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);
+		TIM2->CCMR1 = (1u << TIM_CCMR1_CC2S_Pos)	/* IC2 on TI2 */
+			| (3u << TIM_CCMR1_IC2F_Pos);
+		TIM2->CCR1 = gap_us;
+		TIM2->CCER = TIM_CCER_CC2E | TIM_CCER_CC2P | TIM_CCER_CC2NP;
+	}
 	TIM2->CR1 = TIM_CR1_URS;
 	TIM2->EGR = TIM_EGR_UG;				/* PSC now */
 	TIM2->SR = 0;
 	NVIC_ClearPendingIRQ(TIM2_IRQn);
-	gpio_cfg(GPIOA, 0, MODE_AF, PULL_NONE, 1);	/* TIM2_CH1 */
-	TIM2->DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;
+	gpio_cfg(GPIOA, input, MODE_AF, PULL_NONE, 1);	/* TIM2_CH1, CH2 */
+	TIM2->DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;	/* edge, gap */
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
 	return 0;
 }
 
 int hal_pulse_ack(void)
 {
-	uint32_t sr = TIM2->SR, dier = TIM2->DIER;
-	int r = 0;
+	uint32_t sr = TIM2->SR, dier = TIM2->DIER, cap, gap, de;
+	int in1 = PULSE_IN1 != 0, r = 0;
 
+	cap = in1 ? TIM_SR_CC2IF : TIM_SR_CC1IF;
+	gap = in1 ? TIM_SR_CC1IF : TIM_SR_CC2IF;
+	de = in1 ? TIM_DIER_CC2DE : TIM_DIER_CC1DE;
 	TIM2->SR = ~sr;				/* those seen, nothing else */
-	if ((sr & TIM_SR_CC1IF) && (dier & TIM_DIER_CC1IE)) {
-		(void) TIM2->CCR1;		/* the silence before: not kept */
-		if (!gpio_get(GPIOA, 0)) {	/* a mark began: the frame */
-			TIM2->DIER = TIM_DIER_CC1DE | TIM_DIER_CC2IE;
+	if ((sr & cap) && !(dier & de)) {
+		(void) (in1 ? TIM2->CCR2 : TIM2->CCR1);	/* the silence before */
+		/* a mark began: the frame (IR low, GDO0 high) */
+		if (gpio_get(GPIOA, in1) == in1) {
+			TIM2->DIER = de | (in1 ? TIM_DIER_CC1IE : TIM_DIER_CC2IE);
 			r |= HAL_PULSE_START;
 		}
 	}
-	if ((sr & TIM_SR_CC2IF) && (dier & TIM_DIER_CC1DE))
+	if ((sr & gap) && (dier & de))
 		r |= HAL_PULSE_GAP;		/* silence after the frame */
 	return r;
 }
@@ -2754,8 +2770,11 @@ unsigned hal_pulse_left(void)
 
 void hal_pulse_stop(void)
 {
+	int in1;
+
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
 	(void) RCC->APB1ENR1;
+	in1 = PULSE_IN1 != 0;
 	TIM2->DIER = 0;
 	TIM2->CR1 = 0;
 	TIM2->SMCR = 0;
@@ -2764,7 +2783,8 @@ void hal_pulse_stop(void)
 	TIM2->SR = 0;
 	DMA1_Channel4->CCR = 0;
 	DMAMUX1_Channel3->CCR = 0;
-	gpio_cfg(GPIOA, 0, MODE_IN, PULL_NONE, 0);
+	if (in1) gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);	/* as stock */
+	else gpio_cfg(GPIOA, 0, MODE_IN, PULL_NONE, 0);
 }
 
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us)
