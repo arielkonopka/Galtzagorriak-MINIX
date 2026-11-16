@@ -274,6 +274,8 @@ user_st_end:
 	isb
 	ldmia	r12, {r4-r11}		/* callee-saved registers */
 	ldr	lr, =EXC_RETURN_PSP
+	movs	r0, #0			/* a process runs unlocked (R4a.1: */
+	msr	basepri, r0		/* unhold() returns locked) */
 	cpsie	i
 	bx	lr
 

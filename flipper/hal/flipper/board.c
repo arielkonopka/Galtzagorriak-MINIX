@@ -427,6 +427,7 @@ static void spi2_wait_idle(void)
 static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
+static void rtc_alarm_out(int on);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
@@ -1407,6 +1408,9 @@ void hal_init(void)
 	hal_wdt_start();
 	uart_init();
 	spi2_init();
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	if (RTC->CR & RTC_CR_OSEL) rtc_alarm_out(0);	/* PC13 is Back */
 	buttons_init();
 	mt_init();
 	hal_radios_park();			/* T14a: -1.7 mA and more */
@@ -1505,6 +1509,52 @@ static void bkp_set(volatile uint32_t *reg, uint32_t v)
 	*reg = v;
 	(void) *reg;
 	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+/* The RTC's alarm output on PC13 (Back, also the charger's QON): Alarm A,
+ * open drain, active low, as stock furi_hal_rtc_set_alarm_out.  On only
+ * for power-off (stock: "shutting down with ext 3V3 off is causing LSE to
+ * stop"; and the alarm that starts the Flipper again, T14c part 2); at
+ * boot it goes off, or Back could not be read. */
+static void rtc_alarm_out(int on)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	PWR->CR1 |= PWR_CR1_DBP;
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
+	RTC->CR = (RTC->CR & ~RTC_CR_OSEL) | RTC_CR_POL
+						| (on ? RTC_CR_OSEL_0 : 0);
+	RTC->OR &= ~RTC_OR_ALARMOUTTYPE;		/* open drain */
+	RTC->WPR = 0xFF;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+void hal_power_off(void)
+{
+	uint8_t b[2];
+
+	__disable_irq();
+	hal_tone(0);
+	hal_backlight(0);		/* it looks off at once, also on USB */
+	{
+		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
+
+		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+	}
+	rtc_alarm_out(1);
+	hal_vibro(1);				/* as stock: a short buzz */
+	hal_delay_ms(50);
+	if (i2c1_read(BQ25896_ADDR, 0x09, &b[1], 1) == 0) {
+		b[0] = 0x09;
+		b[1] |= 0x20;			/* BATFET_DIS: ship mode */
+		i2c1_write(BQ25896_ADDR, b, 2);
+	}
+	hal_vibro(0);
+	for (;;) {		/* on USB: powered until the cable goes */
+		hal_usb_poll();
+		hal_wdt_kick();
+	}
 }
 
 int hal_fc_erase_ok(int cache, unsigned upday)

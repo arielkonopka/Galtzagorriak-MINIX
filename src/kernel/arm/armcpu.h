@@ -42,6 +42,8 @@
 #define MPU_RASR_ENABLE		0x1
 #define MPU_RASR_AP_RO_RO	(6u << 24)	/* read-only, priv and user */
 #define MPU_RASR_AP_RW_RW	(3u << 24)	/* read/write, priv and user */
+#define MPU_RASR_AP_RW_NO	(1u << 24)	/* read/write, privileged only */
+#define MPU_RASR_XN		(1u << 28)	/* no instruction fetch */
 
 #define AIRCR_VECTKEY	0x05FA0000
 #define AIRCR_SYSRESETREQ 0x4

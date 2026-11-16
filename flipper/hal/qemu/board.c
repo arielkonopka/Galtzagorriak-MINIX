@@ -195,6 +195,7 @@ int hal_random(uint32_t *w)
 	return 0;
 }
 void hal_dfu_request(void) { hal_halt(0); }
+void hal_power_off(void) { hal_halt(0); }
 void hal_dev_mode(int on) { (void) on; }
 int hal_dev(void) { return 0; }
 int hal_reset_bits(void) { return 0x08; }	/* BORRSTF: power on */
@@ -374,6 +375,10 @@ static int cut_here(uint32_t addr, int erase)	/* 1: cut now */
 
 static void cut_power(void)
 {
+	/* the MPU stays on during flash operations (R4a.3) and only the
+	 * target is writable: off for this test hook's own word */
+	*(volatile uint32_t *) 0xE000ED94 = 0;		/* MPU_CTRL */
+	__asm volatile ("dsb; isb");
 	CUT_CFG[2] = CUT_DONE;
 	cut_say("\n[power cut at flash op ", cut_ops, 0);
 	*(volatile uint32_t *) 0xE000ED0C = 0x05FA0004u;	/* SYSRESETREQ */
