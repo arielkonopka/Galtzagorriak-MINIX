@@ -271,6 +271,7 @@ CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
 CHMEM_ls     := 12288	# ls -l /bin (83 files) used 7.4 KB
+CHMEM_sed    := 10240	# R2a.5: cmds[], labels and the RE pool are malloc'd
 # opendir() mallocs a 1 KB DIR per open directory level (and malloc grows
 # the heap in 1 KB steps): recursive tools need room for a few levels.
 CHMEM_find   := 10240	# 6 KB: "can't read directory" already at /etc
@@ -355,7 +356,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.71
+BASE_VER := 3.72
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -425,9 +426,14 @@ TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
 timecheck:
 	@python3 -I tools/timecheck.py $(TIMECHECK_SRC)
 check: versioncheck timecheck
-ramcheck: $(MB)/minix.bin versioncheck timecheck
+ramcheck: $(MB)/minix.bin versioncheck timecheck bsscheck
 	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
 	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
+# No base program above 4 KB of .bss except those in bss-exceptions.txt
+# (spec R2a.5); run with ramcheck.
+.PHONY: bsscheck
+bsscheck: $(UPROGS:%=$(MB)/user/%.elf) $(LIBPROGS:%=$(MB)/user/%.elf)
+	@python3 -I tools/bsscheck.py bss-exceptions.txt 4096 $^
 card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin

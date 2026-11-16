@@ -21,7 +21,7 @@
 static char PASSWD[]= "/etc/passwd";	/* The password file. */
 static const char *pwfile;		/* Current password file. */
 
-static char buf[1024];			/* Read buffer. */
+static char buf[512];			/* Read buffer: one SD sector (R2a.5). */
 static char pwline[256];		/* One line from the password file. */
 static struct passwd entry;		/* Entry to fill and return. */
 static int pwfd= -1;			/* Filedescriptor to the file. */

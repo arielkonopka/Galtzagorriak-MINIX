@@ -28,19 +28,29 @@
 #define MAXARGS	8
 #define VISIBLE	(GUI_ROWS - 1)		/* rows below the title */
 
+#define CMDMAX	64			/* longest command line kept */
+
+/* One app: label, user and command, packed in one malloc'd string
+ * (R2a.5: was 16 fixed 100-byte entries in .bss). */
 struct app {
-	char label[24];
-	char user[12];
-	char cmd[64];
+	char *label;
+	char *user;
+	char *cmd;
 } apps[MAXAPPS];
 int napps;
+
+static void free_apps(void)
+{
+	while (napps > 0) free(apps[--napps].label);
+}
 
 static void load_apps(void)
 {
 	FILE *f;
-	char line[128], *a, *b;
+	char line[128], *a, *b, *m;
+	size_t la, lu, lc;
 
-	napps = 0;
+	free_apps();
 	/* the card's copy, else the default in /rom (spec L.3) */
 	if ((f = cfopen("/etc/apps", "r")) == NULL) return;
 	while (napps < MAXAPPS && fgets(line, sizeof line, f) != NULL) {
@@ -50,9 +60,16 @@ static void load_apps(void)
 		*a++ = 0;
 		if ((b = strchr(a, ':')) == NULL) continue;
 		*b++ = 0;
-		strncpy(apps[napps].label, line, sizeof apps[0].label - 1);
-		strncpy(apps[napps].user, a, sizeof apps[0].user - 1);
-		strncpy(apps[napps].cmd, b, sizeof apps[0].cmd - 1);
+		la = strlen(line);
+		if (la > 23) line[la = 23] = 0;
+		lu = strlen(a);
+		if (lu > 11) a[lu = 11] = 0;
+		lc = strlen(b);
+		if (lc > CMDMAX - 1) b[lc = CMDMAX - 1] = 0;
+		if ((m = malloc(la + lu + lc + 3)) == NULL) break;
+		apps[napps].label = strcpy(m, line);
+		apps[napps].user = strcpy(m + la + 1, a);
+		apps[napps].cmd = strcpy(m + la + lu + 2, b);
 		napps++;
 	}
 	fclose(f);
@@ -77,7 +94,7 @@ static void draw(int sel, int top)
 /* Run an app as its user and wait for it. */
 static void run(struct app *ap)
 {
-	char cmd[sizeof ap->cmd], *argv[MAXARGS + 1], *p;
+	char cmd[CMDMAX], *argv[MAXARGS + 1], *p;
 	struct passwd *pw;
 	struct group *gr;
 	int argc = 0, st, fg;

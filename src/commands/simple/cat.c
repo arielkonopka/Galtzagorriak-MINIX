@@ -12,12 +12,15 @@
 #include <minix/minlib.h>
 #include <stdio.h>
 
-#define CHUNK_SIZE	4096
+/* One 1 KB buffer (one file system block) instead of a 4 KB input and a
+ * 4 KB output buffer: reads fill it and it is written out when full, so
+ * small reads (pipes, the terminal) are still collected (R2a.5).
+ */
+#define CHUNK_SIZE	1024
 
 static int unbuffered;
-static char ibuf[CHUNK_SIZE];
-static char obuf[CHUNK_SIZE];
-static char *op = obuf;
+static char buf[CHUNK_SIZE];
+static size_t fill;
 
 _PROTOTYPE(int main, (int argc, char **argv));
 _PROTOTYPE(void copyfile, (int ifd, int ofd));
@@ -70,34 +73,21 @@ int ifd, ofd;
   int n;
 
   while (1) {
-	n = read(ifd, ibuf, CHUNK_SIZE);
+	n = read(ifd, buf + fill, CHUNK_SIZE - fill);
 	if (n < 0) fatal();
 	if (n == 0) return;
-	if (unbuffered || (op == obuf && n == CHUNK_SIZE)) {
-		if (write(ofd, ibuf, n) != n) fatal();
-	} else {
-		int bytes_left;
-
-		bytes_left = &obuf[CHUNK_SIZE] - op;
-		if (n <= bytes_left) {
-			memcpy(op, ibuf, (size_t)n);
-			op += n;
-		} else {
-			memcpy(op, ibuf, (size_t)bytes_left);
-			if (write(ofd, obuf, CHUNK_SIZE) != CHUNK_SIZE)
-				fatal();
-			n -= bytes_left;
-			memcpy(obuf, ibuf + bytes_left, (size_t)n);
-			op = obuf + n;
-		}
+	fill += n;
+	if (unbuffered || fill == CHUNK_SIZE) {
+		if (write(ofd, buf, fill) != (ssize_t) fill) fatal();
+		fill = 0;
 	}
   }
 }
 
 void flush()
 {
-  if (op != obuf)
-	if (write(STDOUT_FILENO, obuf, (size_t) (op - obuf)) <= 0) fatal();
+  if (fill != 0)
+	if (write(STDOUT_FILENO, buf, fill) <= 0) fatal();
 }
 
 void fatal()
