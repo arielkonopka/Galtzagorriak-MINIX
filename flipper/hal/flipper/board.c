@@ -837,6 +837,10 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define R1_ILLEGAL	0x04
 #define TOKEN_START	0xFE
 #define SD_TIMEOUT_MS	500
+#define SD_READ_MS	250	/* data token after a read command: the SD spec
+				 * allows 100 ms; this is the longest stretch
+				 * the disk task holds the CPU (security review
+				 * 2026-11-16, K3) */
 
 #define CMD59	59	/* CRC_ON_OFF */
 
@@ -950,7 +954,7 @@ static int sd_read_data(uint8_t *buf, unsigned len)
 	uint8_t t;
 
 	while ((t = spi2_xfer(0xFF)) == 0xFF)
-		if (ms_since(start) > SD_TIMEOUT_MS) return -1;
+		if (ms_since(start) > SD_READ_MS) return -1;
 	if (t != TOKEN_START) return -1;
 	spi2_dma(NULL, buf, len);
 	crc = (uint16_t) (spi2_xfer(0xFF) << 8);
@@ -983,8 +987,13 @@ int hal_disk_init(void)
 		v2 = 1;
 	}
 	start = DWT->CYCCNT;
-	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0)	/* HCS */
+	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0) {	/* HCS */
 		if (ms_since(start) > 1000) goto fail;
+		/* up to a second: the other tasks between tries (K3) */
+		sd_select(0);
+		hal_disk_yield();
+		spi2_speed(SPI_DIV_SD_INIT);
+	}
 
 	sd_block_addr = 0;
 	if (v2) {
@@ -1048,6 +1057,10 @@ static void sd_trouble(int *tries)
 		hal_disk_mhz = 8;
 	}
 	sd_select(0);
+	/* The other tasks between tries: a card that never sends its data
+	 * held the CPU for 5 tries x 500 ms, the watchdog reset the board
+	 * (security review 2026-11-16, K3). */
+	hal_disk_yield();
 	spi2_speed(sd_fast);
 }
 
@@ -1071,7 +1084,7 @@ int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
 			goto bad;
 		start = DWT->CYCCNT;
 		while ((t = spi2_xfer(0xFF)) == 0xFF)
-			if (ms_since(start) > SD_TIMEOUT_MS) goto bad;
+			if (ms_since(start) > SD_READ_MS) goto bad;
 		if (t != TOKEN_START) goto bad;
 		for (pos = 0; pos < HAL_SECTOR_SIZE; pos += n) {
 			n = HAL_SECTOR_SIZE - pos < sizeof(chunk)

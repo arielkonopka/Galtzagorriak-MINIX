@@ -18,6 +18,8 @@ FORWARD _PROTOTYPE( int get_part_table, (struct driver *dp, int device,
 			unsigned long offset, struct part_entry *table) );
 FORWARD _PROTOTYPE( void sort, (struct part_entry *table) );
 
+#define NR_EXT_LINKS	16	/* extended partition tables followed at most */
+
 
 /*============================================================================*
  *				partition				      *
@@ -73,6 +75,7 @@ int style;		/* partitioning style: floppy, primary, sub. */
 	if (part_limit < pe->lowsec) part_limit = limit;
 	if (part_limit > limit) part_limit = limit;
 	if (pe->lowsec < base) pe->lowsec = base;
+	if (pe->lowsec > limit) pe->lowsec = limit;	/* (and no wrap below) */
 	if (part_limit < pe->lowsec) part_limit = pe->lowsec;
 
 	dv->dv_base = pe->lowsec << SECTOR_SHIFT;
@@ -101,18 +104,33 @@ unsigned long extbase;	/* sector offset of the base extended partition */
 {
 /* Extended partitions cannot be ignored alas, because people like to move
  * files to and from DOS partitions.  Avoid reading this code, it's no fun.
+ *
+ * The tables come from the card, so they are not trusted (security review
+ * 2026-11-16, K2): a chain that points back to itself must not keep the
+ * disk task reading forever (it never gives the CPU back: the watchdog
+ * resets the board, at every boot while the card is in), and a logical
+ * partition must stay inside the extended one, like the primary ones stay
+ * inside the disk.
  */
   struct part_entry table[NR_PARTITIONS], *pe;
-  int subdev, disk, par;
+  int subdev, disk, par, links;
   struct device *dv;
-  unsigned long offset, nextoffset;
+  unsigned long offset, nextoffset, base, limit, lo, hi;
 
   disk = extdev / DEV_PER_DRIVE;
   par = extdev % DEV_PER_DRIVE - 1;
   subdev = MINOR_hd1a + (disk * NR_PARTITIONS + par) * NR_PARTITIONS;
 
+  /* The extended partition itself, as partition() clipped it. */
+  if ((dv = (*dp->dr_prepare)(extdev)) == NIL_DEV) return;
+  base = dv->dv_base >> SECTOR_SHIFT;
+  limit = base + (dv->dv_size >> SECTOR_SHIFT);
+
   offset = 0;
+  links = 0;
   do {
+	/* Real chains are short; only NR_PARTITIONS devices are filled. */
+	if (++links > NR_EXT_LINKS) return;
 	if (!get_part_table(dp, extdev, offset, table)) return;
 	sort(table);
 
@@ -128,9 +146,15 @@ unsigned long extbase;	/* sector offset of the base extended partition */
 		if (pe->sysind != NO_PART) {
 			if ((dv = (*dp->dr_prepare)(subdev)) == NIL_DEV) return;
 
-			dv->dv_base = (extbase + offset
-					+ pe->lowsec) << SECTOR_SHIFT;
-			dv->dv_size = pe->size << SECTOR_SHIFT;
+			/* Clip to the extended partition (no wrap-around). */
+			lo = extbase + offset;
+			if (lo < offset || (lo += pe->lowsec) < pe->lowsec
+						|| lo < base || lo > limit)
+				lo = limit;
+			hi = lo + pe->size;
+			if (hi < lo || hi > limit) hi = limit;
+			dv->dv_base = lo << SECTOR_SHIFT;
+			dv->dv_size = (hi - lo) << SECTOR_SHIFT;
 
 			/* Out of devices? */
 			if (++subdev % NR_PARTITIONS == 0) return;
