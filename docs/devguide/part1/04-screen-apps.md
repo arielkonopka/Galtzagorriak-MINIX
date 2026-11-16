@@ -11,7 +11,7 @@ here keeps working when they come.
 
 ## 4.1 The `gui` library
 
-`flipper/gui/gui.h` and `gui.c`, linked into each app (there are no shared libraries yet, so
+`flipper/gui/gui.h` and `gui.c`, linked into each app (only libc is shared so far, spec R2b.9, so
 each app carries its own copy, about 1–2 KB of text in flash). The screen is 128x64 pixels;
 text uses a 4x6 font, so 32 columns by 10 rows.
 

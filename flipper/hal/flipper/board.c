@@ -2609,18 +2609,20 @@ void hal_tone(unsigned hz)
  * secure area starts (SFSA, FLASH->SFR, in 4 KB pages), as the stock
  * firmware does:
  *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
- *	0x08030000  installed programs (Phase 2b)	up to the cache
+ *	0x08030000  shared libc (R2b.9, <minix/shlibc.h>)	HAL_LIBC_SIZE
+ *	0x08040000  installed programs (Phase 2b)	up to the cache
  *	...         run-time text cache			HAL_CACHE_SIZE
  *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
  *	SFSA ..     CPU2 wireless stack and FUS, never touched
  */
 #define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
+#define HAL_LIBC_SIZE	0x10000u	/* 64 KB, SHLIBC_MAX; in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	16u
 
 void hal_flash_layout(uint32_t *l)
 {
-	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE;
+	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE + HAL_LIBC_SIZE;
 
 	sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
 	top = sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
@@ -2641,7 +2643,10 @@ void hal_flash_layout(uint32_t *l)
 }
 
 /* For the MEMORY task, whose stack has no room for the layout table. */
-uint32_t hal_rom_base(void) { return FLASH_BASE + HAL_SYS_IMAGE + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void)
+{
+	return FLASH_BASE + HAL_SYS_IMAGE + HAL_LIBC_SIZE + HAL_ROM_OFF;
+}
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
