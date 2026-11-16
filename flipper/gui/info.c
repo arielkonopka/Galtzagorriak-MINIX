@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <minix/gzversion.h>
 #include "gui.h"
 
 int main(void)
@@ -20,14 +21,16 @@ int main(void)
 		up = times(&t) / CLK_TCK;
 		gui_clear();
 		gui_title("ABOUT");
-		gui_center(10, "Galtzagorriak MINIX", 0);
-		sprintf(line, "%s %s.%s on %s", u.sysname, u.release, u.version,
-								u.machine);
-		gui_center(19, line, 0);
-		sprintf(line, "host %s", u.nodename);
-		gui_center(28, line, 0);
+		/* 32 columns: one fact per line (owner, 2026-11-16) */
+		sprintf(line, "%s %s", u.sysname, u.release);
+		gui_center(10, line, 0);
+		gui_center(18, "based on " GZ_BASE, 0);
+		sprintf(line, "on %s, ABI %d", u.machine, GZ_ABI);
+		gui_center(26, line, 0);
+		sprintf(line, "host %.26s", u.nodename);
+		gui_center(34, line, 0);
 		sprintf(line, "up %ld:%02ld:%02ld", up / 3600, up / 60 % 60, up % 60);
-		gui_center(37, line, 0);
+		gui_center(42, line, 0);
 		gui_center(52, "BACK to return", 0);
 		gui_flush();
 	} while (gui_key() != KEY_BACK);
