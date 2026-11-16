@@ -53,6 +53,8 @@
 #include "../proc.h"
 #include "hal.h"
 #include <minix/lat.h>
+#include <minix/fg.h>
+#include <signal.h>
 
 #define LCD_MINOR	0
 #define BTN_MINOR	1
@@ -84,7 +86,17 @@ PRIVATE unsigned last_buttons;	/* the buttons down, and these flags: */
 #define SWALLOW		0x80000000u	/* a press woke the light */
 #define BTN_EXTI	0x40000000u	/* edges interrupt; else the tick samples */
 #define BTN_POLL	0x20000000u	/* one is down: the ms timer samples */
-#define BTN_FLAGS	(SWALLOW | BTN_EXTI | BTN_POLL)
+#define FG_LONG		0x02000000u	/* Back held long: SIGTERM due (task) */
+#define FG_KILL		0x01000000u	/* SIGTERM sent: SIGKILL in FG_KILL_S */
+#define FG_SLOT(b)	((int) ((b) >> 16 & 0xFF) - 1)	/* foreground proc */
+#define FG_BITS		0x00FF0000u
+#define FG_STAMP(b)	((b) >> 8 & 0xFF)	/* Back down (ticks), or the
+						 * SIGTERM (seconds), mod 256 */
+#define FG_STAMPS	0x0000FF00u
+#define BTN_ALL		0x3Fu		/* the buttons themselves */
+#define BTN_FLAGS	(~BTN_ALL)
+#define FG_LONG_T	HZ		/* Back held this long (ticks) */
+#define FG_KILL_S	3		/* then SIGKILL after (s) */
 #define BTN_MS		8	/* sampling while down, and the debounce */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
@@ -152,6 +164,9 @@ FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
 FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int fg_other, (int proc) );
+FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
+FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
@@ -222,6 +237,9 @@ PUBLIC void flipdev_task()
 	case DEV_READ:
 	case DEV_WRITE:
 		r = do_rw(&fm);
+		break;
+	case DEV_IOCTL:
+		r = fg_ioctl(&fm);
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
@@ -327,6 +345,9 @@ message *m_ptr;
 
   case LCD_MINOR:
 	if (count > FB_SIZE) count = FB_SIZE;
+	/* R4b.8: a frame from behind the foreground app is dropped */
+	if (m_ptr->m_type == DEV_WRITE && fg_other(m_ptr->PROC_NR))
+		return(count);
 	if (m_ptr->m_type == DEV_READ) {
 		if (lc_on) return(0);	/* console text is not for apps */
 		phys_copy(vir2phys(fbuf), user, (phys_bytes) count);
@@ -352,6 +373,11 @@ message *m_ptr;
   case BTN_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (count < 2) return(EINVAL);
+	if (fg_other(m_ptr->PROC_NR)) {	/* R4b.8: not yours: wait (until
+					 * a signal; the keys are not kept) */
+		if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+		return(SUSPEND);
+	}
 	if (ev_head != ev_tail) {
 		LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
 		return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
@@ -574,6 +600,25 @@ PRIVATE void do_hardint()
   int r;
 
   bl_apply();
+  if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
+						 * interrupt handler */
+	unsigned b, sec = (unsigned) (get_uptime() / HZ);
+	int fg;
+
+	lock();
+	b = last_buttons;
+	fg = FG_SLOT(b);
+	if (b & FG_LONG) {
+		b = (b & ~(FG_LONG | FG_STAMPS)) | FG_KILL | (sec & 0xFF) << 8;
+		if (fg >= 0) cause_sig(fg, SIGTERM);
+	} else if (((sec - FG_STAMP(b)) & 0xFF) >= FG_KILL_S) {
+		b &= ~FG_KILL;
+		if (fg >= 0 && !(proc_addr(fg)->p_flags & P_SLOT_FREE))
+			cause_sig(fg, SIGKILL);
+	}
+	last_buttons = b;
+	unlock();
+  }
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
@@ -634,7 +679,10 @@ PUBLIC void flipdev_tick()
   }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
-  if (!(last_buttons & BTN_EXTI)) (void) btn_sample();
+  if (!(last_buttons & BTN_EXTI)) fg_hold(btn_sample());
+  if ((last_buttons & FG_KILL) && ((unsigned) (uptime_irq() / HZ)
+		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
+	interrupt(PRINTER);
 }
 
 
@@ -651,6 +699,7 @@ clock_t now;
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
+  if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
   if (t == 0 || bl_state(st) == BL_SAVE) return(LONG_MAX);
   if (st & HAL_BL_OFF) {		/* the LCD's power save is next */
 	t += (clock_t) LCD_SAVE_S * HZ;
@@ -661,6 +710,65 @@ clock_t now;
   if (t <= BL_DIMS * HZ) return(t - idle);
   d = t - BL_DIMS * HZ;			/* the dimming starts */
   return(idle < d ? d - idle : HZ - (idle - d) % HZ);
+}
+
+
+/*===========================================================================*
+ *				foreground (R4b.8)			     *
+ *===========================================================================*/
+/* The foreground app's slot is kept in last_buttons (no RAM).  fg_other:
+ * a foreground app is set, alive, and proc is not it. */
+PRIVATE int fg_other(proc)
+int proc;
+{
+  int fg = FG_SLOT(last_buttons);
+
+  return(fg >= 0 && fg != proc && !(proc_addr(fg)->p_flags & P_SLOT_FREE));
+}
+
+PRIVATE int fg_ioctl(m_ptr)
+message *m_ptr;
+{
+  phys_bytes user;
+  int pid, fg, n;
+  struct proc *rp;
+
+  if (m_ptr->DEVICE != LCD_MINOR && m_ptr->DEVICE != BTN_MINOR) return(ENOTTY);
+  if (m_ptr->TTY_REQUEST != FGIOCSET) return(ENOTTY);
+  if (fg_other(m_ptr->PROC_NR)) return(EPERM);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&pid), (phys_bytes) sizeof(int));
+  fg = -1;
+  if (pid != 0) {
+	for (n = 0; n < NR_PROCS; n++) {
+		rp = proc_addr(n);
+		if (!(rp->p_flags & P_SLOT_FREE) && rp->p_pid == pid) break;
+	}
+	if (n == NR_PROCS) return(ESRCH);
+	/* never a server or init: holding Back would kill the system */
+	if (n <= INIT_PROC_NR) return(EPERM);
+	fg = n;
+  }
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL))
+					| (unsigned) (fg + 1) << 16;
+  unlock();
+  return(OK);
+}
+
+PRIVATE void fg_hold(now)
+unsigned now;
+{
+/* In the button sampling (interrupt): Back held FG_LONG_T with a
+ * foreground app: the task sends SIGTERM (cause_sig is task work). */
+  unsigned b = last_buttons;
+
+  if (!(now & BTN_BACK) || FG_SLOT(b) < 0 || (b & (FG_LONG | FG_KILL)))
+	return;
+  if ((((unsigned) uptime_irq() - FG_STAMP(b)) & 0xFF) < FG_LONG_T) return;
+  last_buttons = b | FG_LONG;
+  interrupt(PRINTER);
 }
 
 
@@ -689,9 +797,10 @@ PUBLIC void flipdev_btn()
 /* The ms timer, BTN_MS after an edge or the last sample: all up in two
  * samples in a row, and the edges interrupt again.
  */
-  unsigned was = last_buttons & ~BTN_FLAGS;
+  unsigned was = last_buttons & ~BTN_FLAGS, now;
 
-  if (btn_sample() != 0 || was != 0) {
+  if ((now = btn_sample()) != 0 || was != 0) {
+	fg_hold(now);
 	mt_arm(MT_BUTTONS, BTN_MS);
 	return;
   }
@@ -715,6 +824,8 @@ PRIVATE unsigned btn_sample()
 
   if (changed == 0) return(now);
   k_input = uptime_irq();		/* no background flash work now */
+  if ((changed & now & BTN_BACK) && !(flags & FG_KILL))	/* R4b.8 */
+	flags = (flags & ~FG_STAMPS) | ((unsigned) k_input & 0xFF) << 8;
   /* With the backlight off, a press only turns it on (owner): neither it
    * nor anything else reaches the apps until every button is up again. */
   if (hal_bl_state() & (HAL_BL_OFF | HAL_BL_STEPS))

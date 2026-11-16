@@ -286,6 +286,8 @@ static usbd_respond cdc_control(usbd_device *dev, usbd_ctlreq *req,
 		tx_kick();
 		return usbd_ack;
 	case USB_CDC_SET_LINE_CODING:
+		/* R4a.7: the host says how much it sent */
+		if (req->wLength != sizeof line) return usbd_fail;
 		memcpy(&line, req->data, sizeof line);	/* ignored */
 		return usbd_ack;
 	case USB_CDC_GET_LINE_CODING:

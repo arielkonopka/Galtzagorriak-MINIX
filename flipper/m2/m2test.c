@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <minix/fg.h>
 #include <unistd.h>
 
 static int fails;
@@ -62,6 +64,16 @@ static int memops_ok(void)
 		}
 	}
 	return 1;
+}
+
+/* Recursion with every byte of each frame written: the stack moves down
+ * without skipping the 32 B heap guard. */
+static int dig(int n)
+{
+	volatile char frame[48];
+
+	memset((char *) frame, n, sizeof frame);
+	return n > 100000 ? 0 : dig(n + 1) + frame[n % 48];
 }
 
 static void handler(int sig)
@@ -194,6 +206,30 @@ int main(int argc, char **argv)
 			&& WEXITSTATUS(st) == 0, "fork: 200 shadow flips");
 	}
 
+	/* R4b.8: the foreground app.  Only it may hand the screen on while
+	 * it lives; when it is gone anybody may. */
+	{
+		int fd = open("/dev/lcd", O_RDONLY), none = 0, bad = 30000;
+		int r1, r2, r3, r4, e2;
+
+		pid = fork();
+		if (pid == 0) {
+			pause();
+			_exit(0);
+		}
+		r1 = ioctl(fd, FGIOCSET, &pid);
+		r2 = ioctl(fd, FGIOCSET, &none);
+		e2 = errno;
+		kill(pid, SIGKILL);
+		(void) wait(&st);
+		r3 = ioctl(fd, FGIOCSET, &none);
+		r4 = ioctl(fd, FGIOCSET, &bad);
+		check(fd >= 0 && r1 == 0 && r2 == -1 && e2 == EPERM && r3 == 0
+			&& r4 == -1 && errno == ESRCH,
+			"foreground: hand over, refuse others, free at exit");
+		close(fd);
+	}
+
 	/* Memory protection: a user process may not touch kernel memory. */
 	pid = fork();
 	if (pid == 0) {
@@ -202,6 +238,40 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
 		&& WTERMSIG(st) == SIGSEGV, "write to kernel memory -> SIGSEGV");
+
+	/* R4a.2 (AC4a.1): NULL, code on the stack (no execute from RAM when
+	 * the text is in flash), the stack running down into the heap. */
+	pid = fork();
+	if (pid == 0) {
+		*(volatile int *) 0 = 1;	/* QEMU: the image is at 0, read-only */
+		_exit(0);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
+		&& WTERMSIG(st) == SIGSEGV, "write at NULL -> SIGSEGV");
+	if ((unsigned long) main >= 0x20000000UL
+				&& (unsigned long) main < 0x20040000UL) {
+		printf("  skip jump into the stack: this text is in RAM\n");
+	} else {
+		pid = fork();
+		if (pid == 0) {
+			volatile unsigned short code[2];
+
+			code[0] = 0x4770;		/* bx lr */
+			code[1] = 0x4770;
+			((void (*)(void)) ((unsigned long) code | 1))();
+			_exit(0);			/* it ran: no XN */
+		}
+		check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
+			&& WTERMSIG(st) == SIGSEGV,
+			"jump into the stack -> SIGSEGV");
+	}
+	pid = fork();
+	if (pid == 0) {
+		(void) malloc(64);			/* some heap */
+		_exit(dig(0) ? 0 : 1);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFSIGNALED(st)
+		&& WTERMSIG(st) == SIGSEGV, "stack into the heap -> SIGSEGV");
 
 	/* Buffers of system calls are checked against the caller's memory
 	 * (S13): not into the kernel, not past the end of the stack; but a

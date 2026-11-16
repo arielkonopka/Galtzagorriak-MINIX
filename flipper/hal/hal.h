@@ -243,6 +243,10 @@ uint32_t hal_rtc_time(void);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
 void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));
+/* Power off (T14c): the charger's ship mode, as stock furi_hal_power_off;
+ * on VBUS it cannot cut the power and waits for the cable to go.  QEMU:
+ * hal_halt(0). */
+void hal_power_off(void) __attribute__((noreturn));
 
 /* Low-level console output used by kprintf() and panics. */
 void kputc(int c);
