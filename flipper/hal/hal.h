@@ -68,6 +68,17 @@ void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
 #define BTN_OK    0x10
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
+
+/* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
+ * little endian), read only; -1 on a bus error, -2 if there is none. */
+#define HAL_GAUGE_TEMP		0x06	/* 0.1 K */
+#define HAL_GAUGE_VOLT		0x08	/* mV */
+#define HAL_GAUGE_STATUS	0x0A	/* BatteryStatus; bit 0 DSG */
+#define HAL_GAUGE_CURRENT	0x0C	/* mA, signed, < 0 discharging */
+#define HAL_GAUGE_AVG		0x14	/* AverageCurrent, mA */
+#define HAL_GAUGE_STANDBY	0x1A	/* StandbyCurrent, mA */
+#define HAL_GAUGE_SOC		0x2C	/* StateOfCharge, % */
+int hal_gauge_read(unsigned cmd);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
