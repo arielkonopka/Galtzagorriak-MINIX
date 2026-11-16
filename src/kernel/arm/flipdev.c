@@ -955,12 +955,13 @@ PRIVATE int led_text(user, count)
 phys_bytes user;
 int count;
 {
-/* R7b.5: "PATTERN COLOUR" or "off", one line ("echo blink red >/dev/led").
- * Three bytes stay the binary R, G, B. */
+/* R7b.5: "PATTERN COLOUR" or "off", one line ("echo blink red >/dev/led",
+ * "echo pulse #ff8000 >/dev/led").  Three bytes stay the binary R, G, B. */
   static const char cname[7][8] = { "blue", "green", "cyan", "red",
 				    "magenta", "yellow", "white" };
   char line[24], *col;
-  int n, c, i;
+  unsigned long rgb = 0;
+  int n, c, i, d;
 
   n = count < (int) sizeof(line) - 1 ? count : (int) sizeof(line) - 1;
   phys_copy(user, vir2phys(line), (phys_bytes) n);
@@ -973,11 +974,25 @@ int count;
   for (col = line; *col != 0 && *col != ' '; col++) ;
   if (*col == 0) return(EINVAL);
   *col++ = 0;
-  for (c = 0; c < 7; c++) {
-	for (i = 0; col[i] == cname[c][i] && col[i] != 0; i++) ;
-	if (col[i] == cname[c][i]) break;
+  if (*col == '#') {				/* #rrggbb */
+	for (i = 1; i <= 6; i++) {
+		c = col[i] | 0x20;		/* lower case */
+		if (c >= '0' && c <= '9') d = c - '0';
+		else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+		else return(EINVAL);
+		rgb = rgb << 4 | d;
+	}
+	if (col[7] != 0) return(EINVAL);
+  } else {
+	for (c = 0; c < 7; c++) {
+		for (i = 0; col[i] == cname[c][i] && col[i] != 0; i++) ;
+		if (col[i] == cname[c][i]) break;
+	}
+	if (c == 7) return(EINVAL);
+	c++;					/* bit 2 red, 1 green, 0 blue */
+	rgb = (c & 4 ? 0xFF0000L : 0) | (c & 2 ? 0xFF00L : 0) | (c & 1 ? 0xFFL : 0);
   }
-  if (c == 7 || hal_led_pattern(line, (unsigned) c + 1) < 0) return(EINVAL);
+  if (hal_led_pattern(line, rgb) < 0) return(EINVAL);
   return(count);
 }
 

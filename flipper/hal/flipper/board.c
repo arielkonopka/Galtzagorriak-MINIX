@@ -931,47 +931,63 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms)
 	lp5562_write(0x0E, to);		/* the direct value afterwards */
 }
 
+#define LP_CUR		20			/* stock RGB current, 0.1 mA */
+static void lp5562_cur(unsigned r, unsigned g, unsigned b);
+
 void hal_led(unsigned r, unsigned g, unsigned b)
 {
 	lp5562_rmw(0x70, 0x3F, 0x00);	/* R, G, B direct: a pattern stops */
 	lp5562_rmw(0x01, 0x0C, 0x00);
 	lp5562_rmw(0x00, 0x0C, 0x00);
+	lp5562_cur(LP_CUR, LP_CUR, LP_CUR);	/* as a pattern may have left */
 	lp5562_write(0x04, r);
 	lp5562_write(0x03, g);
 	lp5562_write(0x02, b);
 }
 
 /* R7b.5: LED patterns run by the LP5562's engine 2 on its own (the CPU
- * loads them once and may sleep).  One engine sets one brightness for the
- * colour channels mapped to it: red, green, blue and their mixtures.
- * Programs as the datasheet's instruction set (the stock fade's
- * encoding): set PWM 0x40nn, wait/ramp (prescale 15.6 or 0.49 ms, steps,
- * sign, count), branch 0xA000 (loop count 0: for ever). */
+ * loads them once and may sleep).  One engine gives one brightness to all
+ * the channels mapped to it, so the colour comes from the channels'
+ * currents: each 0..2 mA (the stock 20 x 0.1 mA) in proportion to its
+ * part of 0xRRGGBB, while the program swings the PWM.  Instructions as
+ * the datasheet's (the stock fade's encoding): set PWM 0x40nn,
+ * wait/ramp (prescale 15.6 or 0.49 ms, steps, sign, count), branch
+ * 0xA000 (loop count 0: for ever). */
 #define LP_WAIT(n)	(0x4000 | (n) << 8)	/* n x 15.6 ms, n 1..63 */
 #define LP_SET(v)	(0x4000 | (v))
 #define LP_RAMP(t, up, n) ((t) << 8 | ((up) ? 0 : 0x80) | (n))	/* x 0.49 ms */
 #define LP_LOOP		0xA000			/* to step 0, for ever */
 static const struct { char name[8]; uint16_t w[12]; } lp_pat[] = {
-	{ "blink",  { LP_SET(160), LP_WAIT(6), LP_SET(0), LP_WAIT(63), LP_LOOP } },
-	{ "fast",   { LP_SET(160), LP_WAIT(6), LP_SET(0), LP_WAIT(6), LP_LOOP } },
-	{ "double", { LP_SET(160), LP_WAIT(5), LP_SET(0), LP_WAIT(8),
-		      LP_SET(160), LP_WAIT(5), LP_SET(0), LP_WAIT(63),
+	{ "blink",  { LP_SET(255), LP_WAIT(6), LP_SET(0), LP_WAIT(63), LP_LOOP } },
+	{ "fast",   { LP_SET(255), LP_WAIT(6), LP_SET(0), LP_WAIT(6), LP_LOOP } },
+	{ "double", { LP_SET(255), LP_WAIT(5), LP_SET(0), LP_WAIT(8),
+		      LP_SET(255), LP_WAIT(5), LP_SET(0), LP_WAIT(63),
 		      LP_WAIT(40), LP_LOOP } },
-	{ "pulse",  { LP_SET(0), LP_RAMP(6, 1, 80), LP_RAMP(6, 1, 80),
-		      LP_RAMP(6, 0, 80), LP_RAMP(6, 0, 80), LP_WAIT(63),
+	{ "pulse",  { LP_SET(0), LP_RAMP(4, 1, 127), LP_RAMP(4, 1, 127),
+		      LP_RAMP(4, 0, 127), LP_RAMP(4, 0, 127), LP_WAIT(63),
 		      LP_LOOP } },
 };
 
-int hal_led_pattern(const char *name, unsigned rgb)
+static void lp5562_cur(unsigned r, unsigned g, unsigned b)
+{
+	lp5562_rmw(0x07, 0xFF, (uint8_t) r);
+	lp5562_rmw(0x06, 0xFF, (uint8_t) g);
+	lp5562_rmw(0x05, 0xFF, (uint8_t) b);
+}
+
+int hal_led_pattern(const char *name, unsigned long rgb)
 {
 	uint8_t prog[1 + 32], map = 0;
-	unsigned i, k;
+	unsigned i, k, c[3];
 
 	for (k = 0; k < sizeof lp_pat / sizeof lp_pat[0]; k++) {
 		for (i = 0; name[i] == lp_pat[k].name[i] && name[i]; i++) ;
 		if (name[i] == lp_pat[k].name[i]) break;
 	}
-	if (k == sizeof lp_pat / sizeof lp_pat[0] || (rgb & 7) == 0) return -1;
+	for (i = 0; i < 3; i++)		/* red, green, blue: 0.1 mA, rounded */
+		c[i] = ((rgb >> (16 - 8 * i) & 0xFF) * LP_CUR + 127) / 255;
+	if (k == sizeof lp_pat / sizeof lp_pat[0] || (c[0] | c[1] | c[2]) == 0)
+		return -1;
 	hal_led(0, 0, 0);			/* stops a running one */
 	lp5562_rmw(0x01, 0x0C, 0x04);		/* engine 2: load */
 	hal_ow_delay(100);
@@ -983,9 +999,10 @@ int hal_led_pattern(const char *name, unsigned rgb)
 		prog[2 + 2 * i] = (uint8_t) w;
 	}
 	(void) i2c1_write(LP5562_ADDR, prog, sizeof prog);
-	if (rgb & 4) map |= 2 << 4;		/* red from engine 2 */
-	if (rgb & 2) map |= 2 << 2;		/* green */
-	if (rgb & 1) map |= 2;			/* blue */
+	lp5562_cur(c[0], c[1], c[2]);
+	if (c[0]) map |= 2 << 4;		/* red from engine 2 */
+	if (c[1]) map |= 2 << 2;		/* green */
+	if (c[2]) map |= 2;			/* blue */
 	lp5562_rmw(0x01, 0x0C, 0x08);		/* engine 2: run */
 	lp5562_rmw(0x00, 0x0C, 0x08);
 	lp5562_rmw(0x70, 0x3F, map);
