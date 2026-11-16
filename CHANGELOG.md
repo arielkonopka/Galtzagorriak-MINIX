@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- Fix (#108): a program started right after an update, with memory short, could get garbage argument pointers and crash once (seen as `signal 11 ... addr=e000ed34` in `ed` and `wc`): exec copied the text to the flash cache through the buffer that held the new stack image.
 - (R4b.8) The app started from the launcher owns the screen and the buttons (`FGIOCSET` ioctl, `<minix/fg.h>`): frames from other programs are dropped, their button reads wait. Holding Back for a second ends the app (SIGTERM, then SIGKILL after 3 s), as on the stock firmware. Base 3.61.
 - (Phase 4a: R4a.1, R4a.2, R4a.3, R4a.7) Kernel hardening: interrupts are masked with BASEPRI, so a fault inside a kernel critical section is reported as what it is; a program whose code is in flash cannot execute from its RAM (stack, heap), and a 32-byte guard at the end of its heap stops a runaway stack with SIGSEGV before it overwrites the heap; flash writes keep the MPU on (only the target page opens, for the kernel); the USB console checks the length of SET_LINE_CODING. `m2test` checks NULL, the stack/heap guard and (with the text in flash) execute-from-stack.
 - (T14c, part 2a) `halt` powers the Flipper off for real (the charger's ship mode, as the stock firmware): screen and backlight go dark, the battery is disconnected; hold Back (or plug in USB) to start it again. With USB connected it waits for the cable to go.
