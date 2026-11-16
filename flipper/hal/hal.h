@@ -187,7 +187,7 @@ int hal_ir_tx_ack(void);		/* the timer's interrupt: 1 if real */
 void hal_ir_tx_next(uint32_t us);
 void hal_ir_tx_stop(void);
 /* R4b.7, the pulse engine's capture: the time between edges of an input
- * (0: the IR receiver), in us, as 32-bit words by DMA straight into dst
+ * (0: the IR receiver, 1: the CC1101's demodulated data), in us, as 32-bit words by DMA straight into dst
  * (n of them; the caller pins the memory).  The interrupt is the IR
  * transmitter's (hal_ir_tx_irq): hal_pulse_ack() tells HAL_PULSE_START
  * (a frame began: what follows is its), HAL_PULSE_GAP (gap_us without an
