@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T14b) Deep sleep when idle: with nothing to do and no USB cable, the Flipper stops its clocks (Stop2) and wakes on a button or its timer (at most about 1 s later); buttons now interrupt instead of being sampled on the clock tick, debounced by a new millisecond timer (LPTIM1). `lat` shows the time in Stop2 and why it was not taken. The UART console on the header loses input while asleep: keep USB attached to use it.
 - (T14a) Less current at idle: the core runs from the SMPS step-down converter, and the Sub-GHz and NFC chips sleep from boot (they idled with their crystals running).
 - QEMU board: SysTick starts at the lowest priority, so a tick during early boot can no longer enter the kernel before the first process (it locked up about 1 boot in 30 on a busy host: the random `powercut` failures in CI). The Flipper already did this.
 - (Phase 2c) `vfork`: the shell, init, the launcher and pkg start programs without copying themselves first, so commands still start when memory is short (`vfork(2)`). Base 3.58.
