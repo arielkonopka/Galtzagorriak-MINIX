@@ -104,6 +104,8 @@ Without the buttons (2026-11-14):
   | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
+  | BKP13R | the RTC alarm's due time, s since 1970 UTC (R7b.1); 0: none |
+  | BKP12R | RTC alarm: magic 0xD (top nibble), this boot came from the alarm (bit 16), it fired since it was set (17), the boot lead in s (0-15; 0: 10 s) |
   | BKP14R | charging (R6.1): magic 0xC (top nibble), profile care (bit 0), gentle charging (bit 1) |
   | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), the forced mode (bits 14-15, R6.10: 0 auto, 1 off, 2 on; cleared at boot), idle timeout in seconds (bits 0-13; 0 never, default 15, at most 16383) |
 

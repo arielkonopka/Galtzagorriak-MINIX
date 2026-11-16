@@ -54,6 +54,7 @@
 #include "hal.h"
 #include <minix/lat.h>
 #include <minix/fg.h>
+#include <minix/rtc.h>
 #include <signal.h>
 
 #define LCD_MINOR	0
@@ -69,7 +70,8 @@
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
-#define LAST_MINOR	12
+#define RTC_MINOR	13	/* the RTC alarm, calibration (R6.2, R7b.1) */
+#define LAST_MINOR	13
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -159,6 +161,8 @@ PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
 PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
 PRIVATE volatile u32_t rx_last;		/* hal_cycles() of the last edge */
+PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due (R7b.1;
+					 * here: in rx_last's padding) */
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE u8_t ir_started;		/* its frame began */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -177,6 +181,8 @@ PRIVATE vir_bytes rd_vir;
 
 FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rtc_ioctl, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 /* R7b.5: colour sequences run by the task from the ms timer: rainbow (the
  * six colours of the pride flag), dual, dualsoft and morph (two colours
  * given).  Each colour is held for its mode's time, then glides into the
@@ -290,6 +296,10 @@ PUBLIC void flipdev_task()
 	hal_ir_rx_on(1);
 	enable_irq(r);
   }
+  if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
+	put_irq_handler(r, rtc_int);
+	enable_irq(r);
+  }
   if ((r = hal_ir_tx_irq()) >= 0) {
 	hal_ir_tx_stop();			/* whatever ran before us */
 	put_irq_handler(r, ir_tx_int);
@@ -315,7 +325,7 @@ PUBLIC void flipdev_task()
 		r = do_rw(&fm);
 		break;
 	case DEV_IOCTL:
-		r = fg_ioctl(&fm);
+		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm) : fg_ioctl(&fm);
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
@@ -984,6 +994,51 @@ message *m_ptr;
 
 
 /*===========================================================================*
+ *				rtc_ioctl				     *
+ *===========================================================================*/
+PRIVATE int rtc_ioctl(m_ptr)
+message *m_ptr;
+{
+/* /dev/rtc (R7b.1, <minix/rtc.h>): the alarm and the calibration. */
+  struct rtc_alarm a;
+  phys_bytes user;
+  unsigned lead, flags;
+  int v, size, r = OK;
+
+  switch (m_ptr->TTY_REQUEST) {
+  case RTCIOCSALARM: case RTCIOCGALARM: size = sizeof(a); break;
+  case RTCIOCSCAL: case RTCIOCGCAL: size = sizeof(int); break;
+  default: return(ENOTTY);
+  }
+  if (!hal_rtc_ok()) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) size);
+  if (user == 0) return(EFAULT);
+  switch (m_ptr->TTY_REQUEST) {
+  case RTCIOCSALARM:
+	phys_copy(user, vir2phys(&a), (phys_bytes) size);
+	if (hal_rtc_alarm((u32_t) a.due, (unsigned) a.lead) < 0) r = EINVAL;
+	break;
+  case RTCIOCGALARM:
+	a.due = hal_rtc_alarm_get(&lead, &flags);
+	a.lead = lead;
+	a.flags = flags;		/* HAL_RTC_* are RTC_* */
+	phys_copy(vir2phys(&a), user, (phys_bytes) size);
+	break;
+  case RTCIOCSCAL:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	if (v < -511 || v > 512) return(EINVAL);
+	(void) hal_rtc_cal(1, v);
+	break;
+  case RTCIOCGCAL:
+	v = hal_rtc_cal(0, 0);
+	phys_copy(vir2phys(&v), user, (phys_bytes) size);
+	break;
+  }
+  return(r);
+}
+
+
+/*===========================================================================*
  *				rb_step					     *
  *===========================================================================*/
 PRIVATE void rb_step()
@@ -1012,6 +1067,21 @@ PRIVATE void rb_step()
   for (i = 0; i < 3; i++)
 	v[i] = (from[i] * (g - k) + to[i] * k) / g;
   hal_led_pwm(v[0], v[1], v[2]);
+}
+
+
+/*===========================================================================*
+ *				rtc_int					     *
+ *===========================================================================*/
+PRIVATE int rtc_int(irq)
+int irq;
+{
+/* RTC Alarm A (also out of Stop2): INIT gets SIGRTC from the task. */
+  if (hal_rtc_alarm_ack()) {
+	rtc_fired = TRUE;
+	interrupt(PRINTER);
+  }
+  return(1);			/* reenable the interrupt */
 }
 
 
@@ -1240,6 +1310,10 @@ PRIVATE void do_hardint()
 	unlock();
   }
   if (as_proc != 0 && as_done) adcs_end(TRUE);	/* the samples are in */
+  if (rtc_fired) {		/* R7b.1: timed runs from INIT */
+	rtc_fired = FALSE;
+	cause_sig(INIT_PROC_NR, SIGRTC);
+  }
   if (rb & RB_DUE) rb_step();
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;

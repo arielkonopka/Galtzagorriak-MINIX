@@ -568,6 +568,8 @@ static int lp5562_init(void);
 static void charger_init(void);
 static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
+static void rtc_boot(void);
+static void rtc_off(void);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
@@ -1842,6 +1844,7 @@ void hal_init(void)
 	spi2_init();
 	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
 	(void) RCC->APB1ENR1;
+	if (hal_rtc_ok()) rtc_boot();		/* before the output goes */
 	if (RTC->CR & RTC_CR_OSEL) rtc_alarm_out(0);	/* PC13 is Back */
 	buttons_init();
 	mt_init();
@@ -1974,6 +1977,7 @@ void hal_power_off(void)
 
 		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
 	}
+	rtc_off();				/* the alarm, early by the lead */
 	rtc_alarm_out(1);
 	hal_vibro(1);				/* as stock: a short buzz */
 	hal_delay_ms(50);
@@ -2068,34 +2072,259 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 	return 0;
 }
 
-/* The RTC calendar (BCD; the stock firmware keeps it running on the
- * battery) in seconds since 1970, years 2000-2099.  Days from the civil
- * date: Howard Hinnant's algorithm. */
-uint32_t hal_rtc_time(void)
-{
-	uint32_t tr, dr, y, m, d, era, yoe, doy, doe, i;
+/* The RTC (R6.2, R7b.1): the calendar (BCD; the stock firmware keeps it
+ * running on the battery) as seconds since 1970, UTC, years 2000-2099;
+ * Alarm A; smooth calibration.  Civil date <-> days: Howard Hinnant's
+ * algorithms.  The alarm's due time and boot lead are kept in backup
+ * registers (0 B RAM, register map in PORTING.md):
+ *   BKP13R  the due time (s since 1970), 0: none
+ *   BKP12R  magic 0xD (bits 28-31), this boot came from the alarm (16),
+ *           it fired since it was set (17), the boot lead in s (0-15) */
+#define RTCA_DUE	(RTC->BKP13R)
+#define RTCA_REG	(RTC->BKP12R)
+#define RTCA_MAGIC	0xD0000000u
+#define RTCA_WOKE	(1u << 16)
+#define RTCA_FIRED	(1u << 17)
+#define RTCA_LEAD0	10		/* s, until a boot is measured */
+#define RTC_EXTI	(1u << 17)	/* EXTI line 17: the RTC alarms */
 
+static void rtc_unlock(void)
+{
 	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
 	(void) RCC->APB1ENR1;
-	if (!(RCC->BDCR & RCC_BDCR_RTCEN) || !(RCC->BDCR & RCC_BDCR_LSERDY)
-				|| !(RTC->ISR & RTC_ISR_INITS))
-		return 0;
-	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_RSF); i++) ;
-	tr = RTC->TR;			/* locks DR until it is read */
-	dr = RTC->DR;
-	y = 2000 + (dr >> 20 & 15) * 10 + (dr >> 16 & 15);
-	m = (dr >> 12 & 1) * 10 + (dr >> 8 & 15);
-	d = (dr >> 4 & 3) * 10 + (dr & 15);
-	if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+	PWR->CR1 |= PWR_CR1_DBP;
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
+}
+
+static void rtc_lock(void)
+{
+	RTC->WPR = 0xFF;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+/* rc_w0 flags: write 0 to the one, 1 to the others; INIT unchanged */
+static void rtc_clear(uint32_t flag)
+{
+	RTC->ISR = ~(flag | RTC_ISR_INIT) | (RTC->ISR & RTC_ISR_INIT);
+}
+
+int hal_rtc_ok(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	return (RCC->BDCR & RCC_BDCR_RTCEN) && (RCC->BDCR & RCC_BDCR_LSERDY);
+}
+
+static uint32_t bcd(uint32_t v) { return v / 10 << 4 | v % 10; }
+static uint32_t unbcd(uint32_t v) { return (v >> 4) * 10 + (v & 15); }
+
+static uint32_t days_from_civil(uint32_t y, uint32_t m, uint32_t d)
+{
+	uint32_t era, yoe, doy, doe;
+
 	if (m <= 2) y--;
 	era = y / 400;
 	yoe = y - era * 400;
 	doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
 	doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-	return ((era * 146097 + doe - 719468) * 86400
-		+ ((tr >> 20 & 3) * 10 + (tr >> 16 & 15)) * 3600
-		+ ((tr >> 12 & 7) * 10 + (tr >> 8 & 15)) * 60
-		+ (tr >> 4 & 7) * 10 + (tr & 15));
+	return era * 146097 + doe - 719468;
+}
+
+static void civil_from_days(uint32_t z, uint32_t *y, uint32_t *m,
+								uint32_t *d)
+{
+	uint32_t era, doe, yoe, doy, mp;
+
+	z += 719468;
+	era = z / 146097;
+	doe = z - era * 146097;
+	yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	mp = (5 * doy + 2) / 153;
+	*d = doy - (153 * mp + 2) / 5 + 1;
+	*m = mp < 10 ? mp + 3 : mp - 9;
+	*y = yoe + era * 400 + (*m <= 2);
+}
+
+uint32_t hal_rtc_time(void)
+{
+	uint32_t tr, dr, y, m, d, i;
+
+	if (!hal_rtc_ok() || !(RTC->ISR & RTC_ISR_INITS)) return 0;
+	/* the shadow registers stand still in Stop2: wait for a fresh copy
+	 * (every 2 RTCCLK, ~61 us at most) */
+	PWR->CR1 |= PWR_CR1_DBP;
+	rtc_clear(RTC_ISR_RSF);
+	PWR->CR1 &= ~PWR_CR1_DBP;
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_RSF); i++) ;
+	tr = RTC->TR;			/* locks DR until it is read */
+	dr = RTC->DR;
+	y = 2000 + unbcd(dr >> 16 & 0xFF);
+	m = unbcd(dr >> 8 & 0x1F);
+	d = unbcd(dr & 0x3F);
+	if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+	return days_from_civil(y, m, d) * 86400
+		+ unbcd(tr >> 16 & 0x3F) * 3600 + unbcd(tr >> 8 & 0x7F) * 60
+		+ unbcd(tr & 0x7F);
+}
+
+int hal_rtc_set(uint32_t t)
+{
+	uint32_t y, m, d, days = t / 86400, s = t % 86400, i;
+
+	civil_from_days(days, &y, &m, &d);
+	if (!hal_rtc_ok() || y < 2000 || y > 2099) return -1;
+	rtc_unlock();
+	RTC->ISR = 0xFFFFFFFF;			/* INIT: stops the calendar */
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_INITF); i++) ;
+	RTC->TR = bcd(s / 3600) << 16 | bcd(s / 60 % 60) << 8 | bcd(s % 60);
+	RTC->DR = bcd(y - 2000) << 16 | ((days + 3) % 7 + 1) << 13
+						| bcd(m) << 8 | bcd(d);
+	RTC->CR &= ~RTC_CR_FMT;			/* 24 hours */
+	RTC->ISR &= ~RTC_ISR_INIT;		/* runs from here */
+	rtc_lock();
+	return 0;
+}
+
+/* Alarm A at t (date, h, m, s all compared: up to a month ahead). */
+static void rtc_arm(uint32_t t)
+{
+	uint32_t y, m, d, s = t % 86400, i;
+
+	civil_from_days(t / 86400, &y, &m, &d);
+	rtc_unlock();
+	RTC->CR &= ~(RTC_CR_ALRAE | RTC_CR_ALRAIE);
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_ALRAWF); i++) ;
+	RTC->ALRMAR = bcd(d) << 24 | bcd(s / 3600) << 16
+				| bcd(s / 60 % 60) << 8 | bcd(s % 60);
+	RTC->ALRMASSR = 0;			/* sub-seconds not compared */
+	rtc_clear(RTC_ISR_ALRAF);
+	RTC->CR |= RTC_CR_ALRAE | RTC_CR_ALRAIE;
+	rtc_lock();
+	EXTI->RTSR1 |= RTC_EXTI;		/* the alarm wakes Stop2 too */
+	EXTI->IMR1 |= RTC_EXTI;
+}
+
+static void rtc_disarm(void)
+{
+	rtc_unlock();
+	RTC->CR &= ~(RTC_CR_ALRAE | RTC_CR_ALRAIE);
+	rtc_clear(RTC_ISR_ALRAF);
+	rtc_lock();
+	EXTI->PR1 = RTC_EXTI;
+}
+
+static unsigned rtc_lead(void)
+{
+	uint32_t r = RTCA_REG;
+
+	return (r & 0xF0000000u) == RTCA_MAGIC && (r & 0xFFFF) != 0
+						? r & 0xFFFF : RTCA_LEAD0;
+}
+
+int hal_rtc_alarm(uint32_t due, unsigned lead)
+{
+	uint32_t now = hal_rtc_time(), r;
+
+	if (lead == 0 || lead > 0xFFFF) lead = rtc_lead();
+	r = RTCA_REG;
+	r = RTCA_MAGIC | ((r & 0xF0000000u) == RTCA_MAGIC ? r & RTCA_WOKE : 0)
+									| lead;
+	if (due == 0) {
+		if (hal_rtc_ok()) rtc_disarm();
+		bkp_set(&RTCA_DUE, 0);
+		bkp_set(&RTCA_REG, r);
+		return 0;
+	}
+	if (now == 0 || due <= now || due - now > 27 * 86400u) return -1;
+	bkp_set(&RTCA_DUE, due);
+	bkp_set(&RTCA_REG, r);
+	rtc_arm(due);
+	return 0;
+}
+
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags)
+{
+	uint32_t r = RTCA_REG;
+
+	*lead = rtc_lead();
+	*flags = 0;
+	if ((r & 0xF0000000u) == RTCA_MAGIC) {
+		if (r & RTCA_WOKE) *flags |= HAL_RTC_WOKE;
+		if (r & RTCA_FIRED) *flags |= HAL_RTC_FIRED;
+	}
+	if (RTC->CR & RTC_CR_ALRAE) *flags |= HAL_RTC_ARMED;
+	return (r & 0xF0000000u) == RTCA_MAGIC ? RTCA_DUE : 0;
+}
+
+int hal_rtc_alarm_irq(void)
+{
+	return hal_rtc_ok() ? RTC_Alarm_IRQn : -1;
+}
+
+int hal_rtc_alarm_ack(void)
+{
+	uint32_t r;
+
+	EXTI->PR1 = RTC_EXTI;
+	if (!(RTC->ISR & RTC_ISR_ALRAF)) return 0;
+	rtc_disarm();			/* once: the date would match next month */
+	r = RTCA_REG;
+	if ((r & 0xF0000000u) == RTCA_MAGIC) bkp_set(&RTCA_REG, r | RTCA_FIRED);
+	return 1;
+}
+
+/* At boot (hal_init), before the alarm output goes and Back is read: did
+ * the alarm start us?  The output was on (we powered off with it) and
+ * Alarm A fired. */
+static void rtc_boot(void)
+{
+	uint32_t r = RTCA_REG, woke;
+
+	woke = (RTC->CR & RTC_CR_OSEL) && (RTC->ISR & RTC_ISR_ALRAF);
+	if ((r & 0xF0000000u) == RTCA_MAGIC) {
+		r &= ~RTCA_WOKE;
+		if (woke) r |= RTCA_WOKE | RTCA_FIRED;
+		bkp_set(&RTCA_REG, r);
+	}
+	if (woke) rtc_disarm();
+	else if (RTC->CR & RTC_CR_ALRAE) {	/* still armed: wake us */
+		EXTI->RTSR1 |= RTC_EXTI;
+		EXTI->IMR1 |= RTC_EXTI;
+	}
+}
+
+/* At power-off: the alarm moves earlier by the boot lead, so the boot is
+ * over when it is due (timed then waits for the real time). */
+static void rtc_off(void)
+{
+	uint32_t due = RTCA_DUE, now = hal_rtc_time(), at;
+	unsigned lead = rtc_lead();
+
+	if ((RTCA_REG & 0xF0000000u) != RTCA_MAGIC || due == 0 || now == 0
+				|| !(RTC->CR & RTC_CR_ALRAE) || due <= now)
+		return;
+	at = due > now + lead + 2 ? due - lead : now + 2;
+	rtc_arm(at);
+}
+
+int hal_rtc_cal(int set, int v)
+{
+	uint32_t c, i;
+
+	if (!hal_rtc_ok()) return 0;
+	if (set) {
+		if (v > 512) v = 512;
+		if (v < -511) v = -511;
+		c = v > 0 ? RTC_CALR_CALP | (uint32_t) (512 - v) : (uint32_t) -v;
+		for (i = 0; i < 100000 && (RTC->ISR & RTC_ISR_RECALPF); i++) ;
+		rtc_unlock();
+		RTC->CALR = c;
+		rtc_lock();
+	}
+	c = RTC->CALR;
+	return (c & RTC_CALR_CALP ? 512 : 0) - (int) (c & RTC_CALR_CALM);
 }
 
 /* The backlight's settings (hal.h): BKP15R, magic 0xB in the top nibble
