@@ -214,7 +214,8 @@ a hang just reboots the Flipper, like the stock firmware.
   the spec (`docs/spec/galtzagorriak-spec.md`).
 - Power management is not done yet: the Flipper uses several mA even when idle, so the battery
   lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
-  power-off and sleep come with spec tasks T14/T15.
+  power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
+  [Power and battery](power.md).
 - The time zone is not handled yet (see section 6).
 - The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
