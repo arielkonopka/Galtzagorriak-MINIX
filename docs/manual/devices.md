@@ -41,6 +41,22 @@ calibration), usually in a few milliseconds while the reference settles, and the
 the reference are switched off again afterwards. Continuous sampling and an app with a
 voltmeter screen are **(planned)** (spec R6.4, later parts).
 
+### Sampling a pin at a fixed rate (`/dev/adcs`)
+
+For programs that need a waveform (for example the camera finder's light-flicker check):
+write the header pin (counted as `gpio` counts them, 0 = pin 2 … 7 = pin 16) and a rate in Hz
+(100–100 000), then read: each 2 bytes are one sample, 0–4095 for 0–2.5 V (the reference shown
+by `cat /dev/adc` as `ref=`).
+
+```
+echo 0 8000 > /dev/adcs                         # pin 2 (PA7) at 8 kHz
+dd if=/dev/adcs bs=2000 count=1 | od -d | head  # 1000 samples, 125 ms
+```
+
+The samples go straight into the reading program's memory; the read waits until they are all
+there. While a stream runs, infrared sending is not possible (they share a timer), and the
+Flipper does not go into deep sleep.
+
 ## Sub-GHz radio, listening only (`/dev/subghz`)
 
 The Sub-GHz chip (CC1101) can listen on one frequency and report the signal strength there. It
