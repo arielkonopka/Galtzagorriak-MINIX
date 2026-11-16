@@ -176,7 +176,7 @@ static volatile int configured, dtr, tx_busy, last_full;
 static volatile int rx_paused;		/* a packet waits in the endpoint */
 static uint8_t tx_ring[TX_RING], rx_ring[RX_RING];
 static volatile unsigned tx_head, tx_tail, rx_head, rx_tail;
-static int started;
+static volatile int started;	/* 1; 2 with the bus suspended (no cable) */
 
 static uint32_t irq_save(void)
 {
@@ -359,6 +359,21 @@ static void usb_pins(void)
 	}
 }
 
+/* Suspend: 3 ms without bus activity, also when the cable is pulled out;
+ * reset or resume: a host again.  While suspended the kernel may take the
+ * clocks away (Stop2); the bus activity of a host wakes the CPU through
+ * the USB wake-up line. */
+static void usb_bus(usbd_device *dev, uint8_t event, uint8_t ep)
+{
+	if (event == usbd_evt_susp) started = 2;
+	else started = 1;
+}
+
+int hal_usb_awake(void)
+{
+	return started == 1;
+}
+
 int hal_usb_init(void)
 {
 	if (started) return 0;
@@ -368,6 +383,9 @@ int hal_usb_init(void)
 	usbd_reg_config(&udev, cdc_setconf);
 	usbd_reg_control(&udev, cdc_control);
 	usbd_reg_descr(&udev, cdc_getdesc);
+	usbd_reg_event(&udev, usbd_evt_reset, usb_bus);
+	usbd_reg_event(&udev, usbd_evt_susp, usb_bus);
+	usbd_reg_event(&udev, usbd_evt_wkup, usb_bus);
 	usbd_enable(&udev, true);
 	usbd_connect(&udev, true);
 	started = 1;

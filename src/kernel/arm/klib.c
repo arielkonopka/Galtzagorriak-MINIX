@@ -466,8 +466,10 @@ irq_handler_t handler;
  * a due time that passed while a write was under way is not lost.  User
  * alarms with ms resolution (setitimer, poll) come with R4b.6. */
 #define MT_MIN	4		/* timer clocks: more than a write takes */
+FORWARD _PROTOTYPE( void pm_wake, (void) );
 PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
+	pm_wake,		/* MT_IDLE */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */
@@ -655,13 +657,113 @@ PUBLIC void task_yield()
 
 
 /*===========================================================================*
+ *				pm_sleep				     *
+ *===========================================================================*/
+/* Tickless idle and Stop2 (T14b, R6.8).  Nothing runs, no sleep blocker:
+ * the next work of the clock interrupt is some ticks away, so the clock
+ * stops, the ms timer (which counts on in Stop2) is set for then, and the
+ * CPU goes to Stop2 until it or anything else (a button) wakes it.  The
+ * time slept goes into the uptime, and SysTick starts again with the rest
+ * of the tick it was in, so the clock keeps the LSE's time.
+ *
+ * The watchdog (2 s, it keeps running in Stop2: stock option bytes) is
+ * left as it is (option b of T14b): no sleep is longer than a second, and
+ * every wake-up after a whole tick or more raises the clock interrupt at
+ * once with the ticks slept, so the clock task (it kicks the watchdog)
+ * runs whenever a 32-tick boundary passed.
+ */
+#define PM_MAX	(HZ - 2)	/* ticks: below the ms timer's 999 ms */
+#if LATTRACE			/* why not: lat counts the reasons */
+#define PM_NOT(r)	{ lat_nosleep(r); return(0); }
+#else
+#define PM_NOT(r)	return(0)
+#endif
+
+PRIVATE void pm_wake()
+{
+/* MT_IDLE: the wake-up itself is all. */
+}
+
+PRIVATE int pm_sleep()
+{
+/* Interrupts masked.  0: not now, wfi as before. */
+  clock_t d, f;
+  unsigned frac, e, us, n, rest, cyc, lp, want;
+  int w;
+
+  if (pm_busy || bell_ticks || hal_mt_irq() < 0) PM_NOT(1);
+  if (hal_usb_awake()) PM_NOT(2);
+  d = clock_idle();
+  if (d < 2) PM_NOT(3);
+  if ((f = flipdev_idle(uptime_irq())) < d) d = f;
+  if (d > PM_MAX) d = PM_MAX;
+  if (d < 2) PM_NOT(4);
+
+  /* The wake-up first: the compare write's own interrupt comes back to
+   * the idle loop (wfi), the next turn sleeps.  Armed already, and not
+   * later than now wanted (an alarm may have come closer): fine. */
+  want = ((unsigned) d * 1000 / HZ) * HAL_MT_HZ / 1000;
+  lp = (u16_t) (mt.at[MT_IDLE] - hal_mt_now());
+  if (!(mt.on & (1 << MT_IDLE)) || lp > want + HAL_MT_HZ / HZ) {
+	mt_arm(MT_IDLE, (unsigned) d * 1000 / HZ);
+	PM_NOT(5);
+  }
+  if (mt.wr) PM_NOT(6);
+
+  SYST_CSR = 0;
+  if (SCB_ICSR & ICSR_PENDSTSET) {	/* a tick to count first */
+	SYST_CSR = SYST_CSR_CLKSOURCE | SYST_CSR_TICKINT | SYST_CSR_ENABLE;
+	PM_NOT(7);
+  }
+  frac = SYST_RVR - SYST_CVR;		/* cycles of this tick gone */
+  lp = hal_mt_now();
+#if LATTRACE
+  cyc = hal_cycles();
+#endif
+  if ((w = hal_stop2()) < 0) {
+	SYST_CSR = SYST_CSR_CLKSOURCE | SYST_CSR_TICKINT | SYST_CSR_ENABLE;
+	PM_NOT(7);
+  }
+  e = (u16_t) (hal_mt_now() - lp);
+#if LATTRACE
+  lat_wake(hal_cycles() - cyc);
+#endif
+  pm_stat.stop += e;
+  if (w & HAL_WAKE_BTN) pm_stat.btn++; else pm_stat.other++;
+
+  /* Microseconds since the last tick (32768 Hz: 15625/512 us a clock),
+   * whole ticks in them, and the cycles left of the one we are in. */
+  us = frac / (cpu_hz / 1000000) + e * 15625 / 512;
+  n = us * HZ / 1000000;
+  rest = us * HZ % 1000000;		/* us x HZ into this tick */
+  cyc = (1000000 - rest) / HZ * (cpu_hz / 1000000);
+  if (cyc < 64) cyc = 64;
+  if (n > 0) {
+	/* The clock interrupt at once, before the one that woke us (SysTick
+	 * goes first at equal priority), counting all the ticks: so the
+	 * uptime is right for it, and the clock task runs when a 32-tick
+	 * boundary passed (the watchdog). */
+	lost_ticks += n - 1;
+	SCB_ICSR = ICSR_PENDSTSET;
+  }
+  SYST_RVR = cyc - 1;
+  SYST_CVR = 0;
+  SYST_CSR = SYST_CSR_CLKSOURCE | SYST_CSR_TICKINT | SYST_CSR_ENABLE;
+  while (SYST_CVR == 0) ;		/* loaded (a cycle or two) */
+  SYST_RVR = cpu_hz / HZ - 1;		/* from the next tick on */
+  return(1);
+}
+
+
+/*===========================================================================*
  *				idle_task				     *
  *===========================================================================*/
 PUBLIC void idle_task()
 {
 /* Nothing to run.  But a shadowed process may be ready, waiting for the
  * clock task to swap it in: PendSV wakes the clock task now rather than
- * at the next tick (a fork()ed pair taking turns: 16 ms per switch). */
+ * at the next tick (a fork()ed pair taking turns: 16 ms per switch).
+ * Else sleep: Stop2 when it may (pm_sleep), wfi as before when not. */
   for (;;) {
 	/* Check and sleep with interrupts masked (wfi still wakes up on a
 	 * pending one): idle may be switched out anywhere, and must not come
@@ -671,6 +773,10 @@ PUBLIC void idle_task()
 		SCB_ICSR = ICSR_PENDSVSET;
 		__asm volatile ("dsb; cpsie i; isb" : : : "memory");
 		continue;		/* PendSV ran; look again */
+	}
+	if (pm_sleep()) {
+		__asm volatile ("cpsie i; isb" : : : "memory");
+		continue;
 	}
 	__asm volatile ("wfi; cpsie i; isb" : : : "memory");
   }

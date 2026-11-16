@@ -153,7 +153,13 @@
 
 /* Clients of the ms timer (R4b.2, arm/klib.c: mt_arm, mt_func[]). */
 #define MT_BUTTONS         0	/* a button is down: sample (flipdev.c) */
-#define MT_N               1
+#define MT_IDLE            1	/* the end of a Stop2 sleep (klib.c) */
+#define MT_N               2
+
+/* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
+ * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console
+ * and USB are asked directly (flipdev_idle, bell_ticks, hal_usb_awake). */
+#define PM_DISK         0x01	/* an SD DMA transfer runs */
 
 #endif /* (CHIP == ARM_CM) */
 

@@ -270,6 +270,16 @@ PUBLIC clock_t uptime_irq()	/* get_uptime() in the clock interrupt */
 {
   return(realtime + pending_ticks);
 }
+
+/* Tickless idle (T14b, arm/klib.c), interrupts masked: how many ticks
+ * may pass without the clock interrupt (alarms, TTY timers). */
+PUBLIC clock_t clock_idle()
+{
+  clock_t now = realtime + pending_ticks, d = next_alarm - now;
+
+  if (tty_timeout - now < d) d = tty_timeout - now;
+  return(d < 0 ? 0 : d);
+}
 #endif
 
 

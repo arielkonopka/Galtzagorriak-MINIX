@@ -21,6 +21,7 @@
 /* System control block */
 #define SCB_ICSR	REG32(0xE000ED04)
 #define ICSR_PENDSVSET	(1u << 28)
+#define ICSR_PENDSTSET	(1u << 26)
 #define SCB_VTOR	REG32(0xE000ED08)
 #define SCB_AIRCR	REG32(0xE000ED0C)
 #define SCB_CCR		REG32(0xE000ED14)

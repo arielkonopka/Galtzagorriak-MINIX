@@ -87,6 +87,12 @@ void hal_mt_set(unsigned due);
 unsigned hal_mt_cmp(void);		/* the compare as last set */
 unsigned hal_mt_ack(void);
 
+/* Stop2 (T14b): call with interrupts masked; returns after the wake-up,
+ * clocks as before, with what woke it; -1: no Stop2 here (QEMU). */
+#define HAL_WAKE_BTN	1
+#define HAL_WAKE_TIMER	2
+int hal_stop2(void);
+
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
  * PA7 PA6 PA4 PB3 PB2 PC3 PC1 PC0 = header pins 2 3 4 5 6 7 15 16). */
 void hal_vibro(int on);
@@ -121,6 +127,8 @@ int hal_usb_init(void);
 int hal_usb_irq(void);
 void hal_usb_poll(void);
 int hal_usb_connected(void);		/* host has the port open (DTR) */
+int hal_usb_awake(void);		/* started, and the bus not suspended
+					 * (a cable in): no Stop2 */
 unsigned hal_usb_write(const void *buf, unsigned n);	/* bytes queued */
 unsigned hal_usb_room(void);		/* ring room; nobody listening: all */
 int hal_usb_getc(void);			/* -1 if nothing received */

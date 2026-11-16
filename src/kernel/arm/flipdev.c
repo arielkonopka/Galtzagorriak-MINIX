@@ -557,6 +557,27 @@ PUBLIC void flipdev_tick()
 
 
 /*===========================================================================*
+ *				flipdev_idle				     *
+ *===========================================================================*/
+PUBLIC clock_t flipdev_idle(now)
+clock_t now;
+{
+/* Tickless idle (T14b): the ticks until flipdev_tick has work, 0 if it
+ * has some on every tick (a tune, an IR reader or frame, the LCD console
+ * waiting for the bus).  The backlight's next step: see bl_want. */
+  u32_t st = hal_bl_state();
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
+
+  if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
+  if (t == 0 || (st & HAL_BL_OFF)) return(LONG_MAX);
+  if (idle >= t) return(0);
+  if (t <= BL_DIMS * HZ) return(t - idle);
+  d = t - BL_DIMS * HZ;			/* the dimming starts */
+  return(idle < d ? d - idle : HZ - (idle - d) % HZ);
+}
+
+
+/*===========================================================================*
  *				btn_int					     *
  *===========================================================================*/
 PRIVATE int btn_int(irq)

@@ -25,6 +25,7 @@ _PROTOTYPE( void clock_stop, (void)					);
 _PROTOTYPE( clock_t get_uptime, (void)					);
 _PROTOTYPE( unsigned server_stack_used, (int t, unsigned *sizep)	);
 _PROTOTYPE( clock_t uptime_irq, (void)					);
+_PROTOTYPE( clock_t clock_idle, (void)					);
 _PROTOTYPE( void syn_alrm_task, (void)					);
 
 /* dmp.c */
@@ -278,6 +279,8 @@ _PROTOTYPE( void lat_clear, (void)					);
 _PROTOTYPE( void lat_flash, (int end)					);
 _PROTOTYPE( void lat_reply, (struct proc *rp)				);
 _PROTOTYPE( void lat_flip, (int end, unsigned long bytes)		);
+_PROTOTYPE( void lat_wake, (unsigned long cyc)				);
+_PROTOTYPE( void lat_nosleep, (int r)					);
 #define LAT_EVENT(ev, arg)	lat_event((ev), (arg))
 #else
 #define LAT_EVENT(ev, arg)	((void) 0)
@@ -295,6 +298,7 @@ _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */
 _PROTOTYPE( void restart, (void)					);
