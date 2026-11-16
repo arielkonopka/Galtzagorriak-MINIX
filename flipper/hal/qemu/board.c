@@ -462,6 +462,15 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 /* QEMU: the host's clock, seconds since 1970 (semihosting). */
 uint32_t hal_rtc_time(void) { return semihost(SYS_TIME, 0); }
 
+/* No radios in QEMU (T14a). */
+void hal_radios_park(void) { }
+void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
+							int *smps)
+{
+	*cc_us = *nfc_op = *nfc_id = 0;
+	*smps = 0;
+}
+
 /* No infrared in QEMU. */
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
