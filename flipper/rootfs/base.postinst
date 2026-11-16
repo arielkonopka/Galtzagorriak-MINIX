@@ -19,7 +19,7 @@ grep '^EDITOR=' /etc/profile >/dev/null || {
 # default settings in internal flash, spec L.2).  The mount fails quietly
 # until a minix-base.bin with the settings image is flashed.
 test -d /rom || mkdir /rom
-test -b /dev/rom || mknod /dev/rom b 1 6 || echo "base: could not make /dev/rom"
+test -r /dev/rom || mknod /dev/rom b 1 6 || echo "base: could not make /dev/rom"
 chmod 755 /rom
 grep '/dev/rom' /etc/rc >/dev/null || {
 	(echo '/^>\/etc\/utmp/a'; echo ''
@@ -32,8 +32,9 @@ grep '/dev/rom' /etc/rc >/dev/null || {
 }
 # Cards made before T15a lack /dev/power (the fuel gauge, read only) and
 # the Power app on the launcher; /etc/apps is not replaced by an upgrade.
-test -c /dev/power || { mknod /dev/power c 6 8 && chmod 444 /dev/power; } ||
-	echo "base: could not make /dev/power"
+# (test knows no -c or -b: they are taken as strings, always true.)
+test -r /dev/power || mknod /dev/power c 6 8 || echo "base: could not make /dev/power"
+chmod 444 /dev/power 2>/dev/null
 grep '^Power:' /etc/apps >/dev/null || {
 	echo 'Power:nobody:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
