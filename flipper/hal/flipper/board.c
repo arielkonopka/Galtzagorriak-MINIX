@@ -2109,6 +2109,20 @@ static int flash_unlock(void)
 	return (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) ? -1 : 0;
 }
 
+/* Flash ECC (R4a.5): what the controller saw since the last call, cleared
+ * (HAL_ECC_*), and the double word's address.  A double error also raises
+ * the NMI; a corrected one only sets the flag (the kernel polls it). */
+unsigned hal_flash_ecc(uint32_t *addr)
+{
+	uint32_t r = FLASH->ECCR;
+
+	*addr = FLASH_BASE + (r & FLASH_ECCR_ADDR_ECC) * 8;
+	if (!(r & (FLASH_ECCR_ECCC | FLASH_ECCR_ECCD))) return 0;
+	FLASH->ECCR = r;			/* the flags are write-1-to-clear */
+	return (r & FLASH_ECCR_ECCD ? HAL_ECC_DOUBLE : 0)
+				| (r & FLASH_ECCR_ECCC ? HAL_ECC_FIXED : 0);
+}
+
 /* The flash caches may hold the old contents of a page just changed. */
 static void flash_done(void)
 {
