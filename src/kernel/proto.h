@@ -85,6 +85,7 @@ _PROTOTYPE( void cause_sig, (int proc_nr, int sig_nr)			);
 _PROTOTYPE( void inform, (void)						);
 _PROTOTYPE( phys_bytes numap, (int proc_nr, vir_bytes vir_addr, 
 		vir_bytes bytes)					);
+_PROTOTYPE( phys_bytes shlibc_src, (vir_bytes vir_addr, vir_bytes bytes) );
 _PROTOTYPE( phys_bytes numap_src, (int proc_nr, vir_bytes vir_addr, 
 		vir_bytes bytes)						);
 _PROTOTYPE( void sys_task, (void)					);
@@ -306,6 +307,7 @@ _PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);
 _PROTOTYPE( void flipdev_led_tick, (void)				);
+_PROTOTYPE( void flipdev_pulse_poll, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */

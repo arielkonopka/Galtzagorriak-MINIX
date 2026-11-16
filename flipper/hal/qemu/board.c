@@ -326,15 +326,16 @@ unsigned hal_disk_mhz;
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
 	l[HAL_FL_SFSA] = 0x00090000;
-	l[HAL_FL_INST] = 0x00030000;		/* after 192 KB of system */
-	l[HAL_FL_INST_SIZE] = 0x00030000;
+	l[HAL_FL_INST] = 0x00040000;		/* after 192 KB of system and
+						 * 64 KB of shared libc */
+	l[HAL_FL_INST_SIZE] = 0x00020000;
 	l[HAL_FL_CACHE] = 0x00060000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
-	l[HAL_FL_ROM] = 0x00030000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM] = 0x00040000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
 
-uint32_t hal_rom_base(void) { return 0x00030000 + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void) { return 0x00040000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
@@ -493,6 +494,13 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 
 /* QEMU: the host's clock, seconds since 1970 (semihosting). */
 uint32_t hal_rtc_time(void) { return semihost(SYS_TIME, 0); }
+int hal_rtc_ok(void) { return 0; }	/* the host's clock: not settable */
+int hal_rtc_set(uint32_t t) { (void) t; return -1; }
+int hal_rtc_alarm(uint32_t due, unsigned lead) { (void) due; (void) lead; return -1; }
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags) { *lead = 0; *flags = 0; return 0; }
+int hal_rtc_alarm_irq(void) { return -1; }
+int hal_rtc_alarm_ack(void) { return 0; }
+int hal_rtc_cal(int set, int v) { (void) set; (void) v; return 0; }
 
 /* No radios in QEMU (T14a). */
 void hal_radios_park(void) { }
@@ -576,14 +584,18 @@ int hal_adc_mv(int *mv) { (void) mv; return -1; }
 int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (void) pin; (void) rate; (void) dst; (void) n; return -1; }
 unsigned hal_adc_stream_left(void) { return 0; }
 void hal_adc_stream_stop(void) { }
-int hal_ir_irq(void) { return -1; }
-void hal_ir_rx_on(int on) { (void) on; }
-int hal_ir_rx_edge(void) { return 1; }
 void hal_ir_carrier(int on) { (void) on; }
+void hal_ir_target(int rfid) { (void) rfid; }
 void hal_ir_freq(unsigned hz, unsigned duty) { (void) hz; (void) duty; }
 int hal_ir_tx_irq(void) { return -1; }
 void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }
 int hal_ir_tx_ack(void) { return 0; }
 void hal_ir_tx_next(uint32_t us) { (void) us; }
 void hal_ir_tx_stop(void) { }
+int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (void) d; (void) n; (void) g; return -1; }
+int hal_pulse_ack(void) { return 0; }
+unsigned hal_pulse_left(void) { return 0; }
+void hal_pulse_stop(void) { }
+int hal_rfid_read(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
+void hal_rfid_stop(void) { }
 uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */

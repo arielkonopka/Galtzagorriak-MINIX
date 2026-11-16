@@ -76,6 +76,96 @@ radio keeps listening until `echo 0`, or until nobody has read it for about a mi
 about 15 mA while listening). A spectrum view and
 recording will build on this.
 
+## 125 kHz RFID tags (`rfid`, `/dev/rfid`)
+
+Hold a tag (a card, a key fob) flat against the middle of the Flipper's back:
+
+```
+rfid
+EM4100 04 00 98 3D C5
+```
+
+The number is the one the stock app shows and saves (`Data:` in its `.rfid` files). `rfid -r`
+also prints the timings, `-n N` makes up to N attempts of half a second (default 4). Without a
+tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
+as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns the 125 kHz field on
+for half a second and returns the times between the changes of the tag's signal, in µs, as
+32-bit numbers.
+
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
+firmware does):
+
+```
+rfid write EM 00 DE AD BE EF
+written (T5577): EM4100 00 DE AD BE EF
+```
+
+Or copy one tag onto another, without typing the number:
+
+```
+rfid copy
+read EM4100 04 00 98 3D C5
+now put the blank one on
+written (T5577): EM4100 04 00 98 3D C5
+```
+
+The tag is read back afterwards; "not written" means a locked or password-protected tag (one
+written by another cloner may be), or a kind that cannot be written. Each round writes the tag
+both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), because a tag that
+wants a password only answers now and then.
+
+`-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
+word (some door entry systems try to overwrite a copy they find). Write the password down:
+changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
+unless `-pass` gives a new one). A tag written by another cloner may have a password you do
+not know; then it cannot be rewritten. `-lock` instead sets the chip's lock bit, which can
+never be undone by anyone, you included. A write to `/dev/rfid` is
+a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
+spaces. Emulating a tag is **(planned)**.
+
+## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
+
+The Flipper's real-time clock keeps UTC on the battery, also while the Flipper is off. Setting
+the time (`date`) now writes it too, so the time survives a reset and power-off, and every
+program reads the time from it.
+
+Alarm A of the clock is for the timers and the alarm clock (spec F.2, coming with `timed`); the
+`rtc` command is the tool underneath, for root and the group `timers`:
+
+```
+rtc                 # the alarm, the boot lead, how this boot started, the calibration
+rtc alarm +600      # in 10 minutes
+rtc alarm off
+rtc lead 12         # a switched-off Flipper is started 12 s before the alarm
+rtc cal -20         # 19 ppm slower (about 1.6 s a day)
+```
+
+- When the alarm fires, INIT gets `SIGRTC` and runs `/usr/lib/timed` if it is installed (also
+  once at every boot, and after the time is set).
+- **Alarm while off.** If the Flipper is switched off (`halt`, on battery) with an alarm set,
+  the clock switches it on again, *lead* seconds early so it has finished booting by then (first
+  10 s). `rtc` then says "this boot: by the alarm". On USB power the Flipper does not really
+  switch off (the charger keeps it on), so this only works on battery.
+- An alarm at most 27 days ahead; further ones fail with "Invalid argument" (timed arms the
+  nearest one and moves on).
+- The calibration is kept by the clock itself, also while off. One step is 0.954 ppm, about
+  0.08 s a day; positive runs faster. Measure the drift against a good clock over some days.
+
+### Raw signal (`/dev/subghzraw`)
+
+What the receiver demodulates (on-off keying), as the times between its changes: 32-bit
+little-endian microseconds, carrier first, the same format as `/dev/ir`. Tune with
+`/dev/subghz` first; a read waits for the first change and ends after 0.1 s of silence or when
+the buffer is full:
+
+```
+echo 433920000 > /dev/subghz
+ir rx -r -d /dev/subghzraw
+```
+
+Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
+fills up with noise at once; FSK remotes (many car keys) do not show at all.
+
 ## The status LED (`/dev/led`)
 
 The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.

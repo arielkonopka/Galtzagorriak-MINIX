@@ -173,23 +173,39 @@ int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n);
 unsigned hal_adc_stream_left(void);
 void hal_adc_stream_stop(void);
 
-/* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
- * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
- * new level (0 = carrier seen, "mark").  Transmit: hal_ir_carrier()
+/* Infrared.  Receive: a demodulating receiver, timed by the pulse engine
+ * (hal_pulse_rx below, input 0).  Transmit: hal_ir_carrier()
  * switches the carrier (hal_ir_freq: frequency, duty in %); a timer
  * interrupt (hal_ir_tx_irq) at the end of every mark and space, started by
  * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
  * all in microseconds (spec R6.6). */
-int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
-void hal_ir_rx_on(int on);
-int hal_ir_rx_edge(void);
 void hal_ir_carrier(int on);
+void hal_ir_target(int rfid);		/* 0 IR LED, 1 the 125 kHz antenna */
 void hal_ir_freq(unsigned hz, unsigned duty);
 int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);
 int hal_ir_tx_ack(void);		/* the timer's interrupt: 1 if real */
 void hal_ir_tx_next(uint32_t us);
 void hal_ir_tx_stop(void);
+/* R4b.7, the pulse engine's capture: the time between edges of an input
+ * (0: the IR receiver, 1: the CC1101's demodulated data), in us, as 32-bit words by DMA straight into dst
+ * (n of them; the caller pins the memory).  The interrupt is the IR
+ * transmitter's (hal_ir_tx_irq): hal_pulse_ack() tells HAL_PULSE_START
+ * (a frame began: what follows is its), HAL_PULSE_GAP (gap_us without an
+ * edge after it: the frame is over).  hal_pulse_left: words not yet
+ * written. */
+#define HAL_PULSE_START	1
+#define HAL_PULSE_GAP	2
+int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us);
+int hal_pulse_ack(void);
+unsigned hal_pulse_left(void);
+void hal_pulse_stop(void);
+/* R6.5: reading a 125 kHz tag: the field on, the antenna's comparator
+ * captured on both edges, n 32-bit timestamps (us) by DMA into dst (the
+ * caller pins it; hal_pulse_left tells the words not yet written);
+ * hal_rfid_stop turns it all off.  -1: no reader. */
+int hal_rfid_read(uint32_t dst, unsigned n);
+void hal_rfid_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
@@ -281,9 +297,25 @@ const char *hal_reset_cause(void);	/* of the last reset */
 void hal_radios_park(void);
 void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 							int *smps);
-/* The RTC's time, seconds since 1970 (UTC, spec I.1); 0: it is not running
- * or was never set.  Read once at boot (the clock task). */
+/* The RTC (R6.2, R7b.1).  hal_rtc_ok: it runs and can be set (QEMU: 0, the
+ * kernel keeps its own clock).  The time in seconds since 1970 (UTC, spec
+ * I.1); 0: not running or never set.  hal_rtc_set: 2000-2099; -1: no. */
+int hal_rtc_ok(void);
 uint32_t hal_rtc_time(void);
+int hal_rtc_set(uint32_t t);
+/* Alarm A at due (UTC s, at most 27 days ahead; 0 clears it); at power-off
+ * it is moved lead seconds earlier (the boot takes that long; 0 keeps the
+ * stored lead, first 10 s).  -1: in the past, too far, or no RTC. */
+int hal_rtc_alarm(uint32_t due, unsigned lead);
+#define HAL_RTC_ARMED	1		/* it will fire */
+#define HAL_RTC_FIRED	2		/* it fired since it was set */
+#define HAL_RTC_WOKE	4		/* this boot came from it */
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags);  /* due, 0 none */
+int hal_rtc_alarm_irq(void);		/* -1: none */
+int hal_rtc_alarm_ack(void);		/* in the handler: 1 if it fired */
+/* Smooth calibration (RTC_CALR) in steps of 0.954 ppm, positive faster,
+ * -511..512; set != 0 writes v.  Returns the value in force. */
+int hal_rtc_cal(int set, int v);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
 void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));

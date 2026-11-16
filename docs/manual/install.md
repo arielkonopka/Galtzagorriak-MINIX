@@ -65,12 +65,16 @@ same files, without the directories):
 | File | Size (approx.) | What it is |
 |---|---|---|
 | `card.img` | 2 MB | SD card image: partition table + the 32 MB root file system |
-| `minix-base.bin` | 370 KB | **the firmware to flash**: kernel and servers, the programs used at boot (shell, launcher, login, ls, ...) and the default settings (`/rom`) |
-| `minix.bin` | 85 KB | the bare kernel and servers only, without the programs in flash and without `/rom`; for developers |
-| `pkgs/base_X.Y.tar` | 750 KB | the system programs as a package, for updating a card that is already in use (section 7) |
+| `minix-base.bin` | 390 KB | **the firmware to flash**: kernel and servers, the shared C library, the programs used at boot (shell, launcher, login, ls, ...) and the default settings (`/rom`) |
+| `minix.bin` | 210 KB | the kernel, the servers and the shared C library only, without the programs in flash and without `/rom`; for developers |
+| `pkgs/base_X.Y.tar` | 470 KB | the system programs as a package, for updating a card that is already in use (section 7) |
 | `pkgs/hello_1.0.tar` | 10 KB | an example app package |
 
-Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build**.
+Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build**. The
+programs on the card use the C library in the flashed image (one copy for all of them), and they
+run only with the library of their own build: with another one every program, the shell
+included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg: base needs
+shared libc ..., this system has ..."), and `free -v` shows the library and its id.
 
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
@@ -155,6 +159,11 @@ Connect the Flipper by USB and open its serial port; the speed setting does not 
 
     screen /dev/ttyACM0
 
+`picocom /dev/ttyACM0` and `minicom -D /dev/ttyACM0` work as well, with their default settings:
+the console ends each line with CR LF itself (output post-processing `OPOST`/`ONLCR`, as on any
+Unix terminal; `stty -opost` switches it off, full-screen programs and file transfer do so on
+their own). Do not turn on "add carriage return" in the terminal program, or you get blank lines.
+
 Press Enter, and log in as **root** with **no password**. Set one right away with `passwd`.
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
@@ -195,6 +204,10 @@ Rewriting the card (section 4) always works but erases `/home`. To keep your fil
 the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
 (64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
 you need from `/home` first. `ver` and the *About* app show the ABI.)
+
+(Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
+shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
+same build. Builds that do not touch the library keep its id, and the steps below work.)
 
 
 1. Build the new version (section 2).

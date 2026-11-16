@@ -18,6 +18,7 @@
 #include "mm.h"
 #include <sys/stat.h>
 #include <minix/gzversion.h>
+#include <minix/shlibc.h>
 #include <minix/callnr.h>
 #include <a.out.h>
 #include <signal.h>
@@ -346,8 +347,24 @@ vir_bytes *pc;			/* program entry point (initial PC) */
    * stamp, ABI 1, whose 32-bit time_t ABI 2 dropped (R2d.1).  Refused
    * before anything is allocated. */
   if (hdr.a_version != GZ_ABI) return(ENOEXEC);
-#endif
+  /* Linked against the shared libc in flash (R2b.9): its data area is in
+   * the program, so only the very build it was linked with will do.  The
+   * id is in a_tbase of the long header; the library's header is read in
+   * place (XIP).  Refused before anything is allocated. */
+  if (hdr.a_flags & A_LIBC) {
+	if ((hdr.a_hdrlen & BYTE) != sizeof(hdr)
+	    || read(fd, (char *) &hdr.a_trsize, sizeof(hdr) - A_MINHDR)
+					!= sizeof(hdr) - A_MINHDR
+	    || SHLIBC_HDR->sh_magic != SHLIBC_MAGIC
+	    || SHLIBC_HDR->sh_id != (unsigned long) hdr.a_tbase
+	    || !(hdr.a_flags & A_SEP))
+		return(ENOEXEC);
+  }
+  if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC)) != 0)
+	return(ENOEXEC);
+#else
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
+#endif
 
   *ft = ( (hdr.a_flags & A_SEP) ? SEPARATE : 0);    /* separate I & D or not */
 

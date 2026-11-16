@@ -38,9 +38,10 @@
  *				the writer waits until the frame is sent
  *
  * Infrared is interrupt driven (spec R6.6, rule 0.8): marks and spaces are
- * timed by a timer interrupt that switches the carrier, the receiver's
- * edges by its EXTI interrupt; this task only moves durations between the
- * caller and two small rings (96 bytes), and nobody busy-waits.
+ * timed by a timer interrupt that switches the carrier; received frames
+ * are timed by the pulse engine (R4b.7: timer capture, DMA straight into
+ * the reader's buffer, one interrupt at the start and one at the end).
+ * Nobody busy-waits.
  *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
@@ -54,6 +55,7 @@
 #include "hal.h"
 #include <minix/lat.h>
 #include <minix/fg.h>
+#include <minix/rtc.h>
 #include <signal.h>
 
 #define LCD_MINOR	0
@@ -69,7 +71,11 @@
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
-#define LAST_MINOR	12
+#define RTC_MINOR	13	/* the RTC alarm, calibration (R6.2, R7b.1) */
+#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
+#define RFID_MINOR	16	/* a 125 kHz tag's signal, timed (R6.5) */
+			/* (15 is /dev/lat, include/minix/lat.h) */
+#define LAST_MINOR	16
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -123,17 +129,15 @@ PRIVATE const u8_t ge_tab[] = {
 PRIVATE u8_t ge_led[3];		/* the LED before the blink (3 B) */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
- * memory holds the infrared rings while /dev/ir is in use (one or the
- * other: EBUSY), so they cost no RAM. */
-#define IR_RXQ		32		/* receive ring (power of 2) */
+ * memory holds the infrared transmit ring while a frame goes out (one or
+ * the other: EBUSY), so it costs no RAM. */
 #define IR_TXQ		64		/* transmit ring (power of 2: u8 indices) */
 PRIVATE union {
   struct { u16_t hz[NNOTES], ticks[NNOTES]; } sp;
-  struct { u16_t rxq[IR_RXQ], txq[IR_TXQ]; } ir;
+  struct { u16_t txq[IR_TXQ]; } ir;
 } sbuf;
 #define note_hz		sbuf.sp.hz
 #define note_ticks	sbuf.sp.ticks
-#define ir_rxq		sbuf.ir.rxq
 #define ir_txq		sbuf.ir.txq
 PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 					 * done */
@@ -147,26 +151,27 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define IR_HZ		38000
 #define IR_DUTY		33
 #define IR_GAP_MS	30		/* silence that ends a frame */
-#define IR_START	0x0000		/* rx ring markers */
-#define IR_END		0xFFFF
 #define IR_ENC(us)	((us) < 0x8000 ? (u16_t) ((us) ? (us) : 1) \
 				: (u16_t) (0x8000 | ((us) >> 6)))
 /* IR_DEC uses v twice: never pass it an expression with side effects */
 #define IR_DEC(v)	((v) & 0x8000 ? (u32_t) ((v) & 0x7FFF) << 6 : (u32_t) (v))
 
 PRIVATE volatile u16_t rb;		/* the rainbow (R7b.5, see rb_step) */
-PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
 PRIVATE volatile u8_t tx_h, tx_t;
-PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
-PRIVATE volatile u32_t rx_last;		/* hal_cycles() of the last edge */
+PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due (R7b.1) */
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
-PRIVATE u8_t ir_started;		/* its frame began */
+PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
+PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
+PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
+PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
+PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
-PRIVATE u16_t ir_count, ir_got, tx_count;
+PRIVATE u16_t ir_count, tx_count;
 PRIVATE volatile u16_t tx_seg;		/* segments started (by the timer) */
 PRIVATE u16_t tx_total, tx_fetch;	/* durations; next one to fetch */
-PRIVATE vir_bytes ir_vir, tx_vir;	/* reader's buffer; first duration */
+PRIVATE phys_bytes ir_buf;		/* reader's buffer (pinned) */
+PRIVATE vir_bytes tx_vir;		/* first duration */
 #define CYC_US		(hal_cpu_hz() / 1000000)	/* cycles per us */
 #define RING_N(h, t)	((u8_t) ((h) - (t)))	/* entries in a ring */
 
@@ -177,6 +182,8 @@ PRIVATE vir_bytes rd_vir;
 
 FORWARD _PROTOTYPE( void reply, (int code, int replyee, int proc, int status) );
 FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rtc_ioctl, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 /* R7b.5: colour sequences run by the task from the ms timer: rainbow (the
  * six colours of the pride flag), dual, dualsoft and morph (two colours
  * given).  Each colour is held for its mode's time, then glides into the
@@ -210,7 +217,6 @@ FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
-FORWARD _PROTOTYPE( int ir_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void bl_apply, (void) );
@@ -245,7 +251,14 @@ FORWARD _PROTOTYPE( void ge_hold, (void) );
 FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
-FORWARD _PROTOTYPE( void ir_drain, (void)				);
+FORWARD _PROTOTYPE( int ir_rx_arm, (void)				);
+FORWARD _PROTOTYPE( int rfid_read, (message *m_ptr, phys_bytes user,
+							int count)	);
+FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
+						int count, int input)	);
+FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
+FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
+FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -285,9 +298,8 @@ PUBLIC void flipdev_task()
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
   }
-  if ((r = hal_ir_irq()) >= 0) {
-	put_irq_handler(r, ir_int);
-	hal_ir_rx_on(1);
+  if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
+	put_irq_handler(r, rtc_int);
 	enable_irq(r);
   }
   if ((r = hal_ir_tx_irq()) >= 0) {
@@ -315,14 +327,15 @@ PUBLIC void flipdev_task()
 		r = do_rw(&fm);
 		break;
 	case DEV_IOCTL:
-		r = fg_ioctl(&fm);
+		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm) : fg_ioctl(&fm);
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
-		if (ir_rd && ir_proc == fm.PROC_NR) ir_rd = FALSE;
+		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
+			if (tx_rfid) rfid_tx_off();
 		}
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
@@ -357,11 +370,13 @@ PUBLIC void flipdev_task()
 #define SG_ON		1
 #define SG_READ		2
 #define SG_PEAK_MS	30
+#define SG_GAP_MS	100		/* silence that ends a raw frame */
 
 PUBLIC void subghz_minute()
 {
 /* The clock task, once a minute (pm_minute): a radio left listening with
  * nobody reading goes back to sleep. */
+  if (ir_rd && pu_input == 1) return;	/* a raw reader waits */
   if (sg_state == SG_ON) {
 	hal_subghz_off();
 	sg_state = 0;
@@ -478,7 +493,7 @@ int count;
   unsigned ms;
 
   if (as_cfg == 0 || count < 2 || count > 8192 || (count & 1)) return(EINVAL);
-  if (as_proc != 0 || tx_on) return(EBUSY);
+  if (as_proc != 0 || tx_on || ir_rd) return(EBUSY);	/* TIM2 */
   if (hal_adc_stream(as_cfg & 15, as_cfg >> 4, user, (unsigned) count / 2)
 							< 0) return(EIO);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* no shadow swap now */
@@ -842,7 +857,7 @@ message *m_ptr;
 
 	if (m_ptr->m_type != DEV_WRITE || count % 4 != 0) return(EINVAL);
 	if (sp_waiting) return(EIO);		/* one tune at a time */
-	if (ir_rd || tx_on) return(EBUSY);	/* sbuf holds the IR rings */
+	if (tx_on) return(EBUSY);		/* sbuf holds the IR ring */
 	if (count > (int) sizeof(nb)) count = sizeof(nb);
 	phys_copy(user, vir2phys(nb), (phys_bytes) count);
 	n = count / 4;
@@ -910,22 +925,29 @@ message *m_ptr;
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(power_read(user, count));
 
+  case RFID_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) {	/* field on/off times (T5577) */
+		if (ir_rd || tx_on) return(EBUSY);
+		int rr;
+
+		tx_rfid = TRUE;
+		rr = ir_write(m_ptr, user, count);
+		if (rr != SUSPEND) tx_rfid = FALSE;
+		return(rr);
+	}
+	return(rfid_read(m_ptr, user, count));
+
+  case SGRAW_MINOR:
+	/* R4b.7 part 2: what the receiver demodulates, as /dev/ir's
+	 * durations, high (carrier) first; tune with /dev/subghz first */
+	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
+	sg_state |= SG_READ;			/* in use: it stays on */
+	return(pulse_read(m_ptr, user, count, 1));
+
   case IR_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(ir_write(m_ptr, user, count));
-	if (count < 4) return(EINVAL);
-	if (hal_ir_irq() < 0) return(ENXIO);
-	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
-	if (ir_rd) return(EIO);			/* one reader at a time */
-	if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
-	rx_t = rx_h;				/* nothing old */
-	ir_caller = m_ptr->m_source;
-	ir_proc = m_ptr->PROC_NR;
-	ir_vir = (vir_bytes) m_ptr->ADDRESS;
-	ir_count = count & ~3;
-	ir_got = 0;
-	ir_started = FALSE;
-	ir_rd = TRUE;
-	return(SUSPEND);
+	return(pulse_read(m_ptr, user, count, 0));
 
   case BL_MINOR:
 	if (m_ptr->m_type == DEV_READ) {	/* the state, 4 bytes (hal.h) */
@@ -984,6 +1006,51 @@ message *m_ptr;
 
 
 /*===========================================================================*
+ *				rtc_ioctl				     *
+ *===========================================================================*/
+PRIVATE int rtc_ioctl(m_ptr)
+message *m_ptr;
+{
+/* /dev/rtc (R7b.1, <minix/rtc.h>): the alarm and the calibration. */
+  struct rtc_alarm a;
+  phys_bytes user;
+  unsigned lead, flags;
+  int v, size, r = OK;
+
+  switch (m_ptr->TTY_REQUEST) {
+  case RTCIOCSALARM: case RTCIOCGALARM: size = sizeof(a); break;
+  case RTCIOCSCAL: case RTCIOCGCAL: size = sizeof(int); break;
+  default: return(ENOTTY);
+  }
+  if (!hal_rtc_ok()) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) size);
+  if (user == 0) return(EFAULT);
+  switch (m_ptr->TTY_REQUEST) {
+  case RTCIOCSALARM:
+	phys_copy(user, vir2phys(&a), (phys_bytes) size);
+	if (hal_rtc_alarm((u32_t) a.due, (unsigned) a.lead) < 0) r = EINVAL;
+	break;
+  case RTCIOCGALARM:
+	a.due = hal_rtc_alarm_get(&lead, &flags);
+	a.lead = lead;
+	a.flags = flags;		/* HAL_RTC_* are RTC_* */
+	phys_copy(vir2phys(&a), user, (phys_bytes) size);
+	break;
+  case RTCIOCSCAL:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	if (v < -511 || v > 512) return(EINVAL);
+	(void) hal_rtc_cal(1, v);
+	break;
+  case RTCIOCGCAL:
+	v = hal_rtc_cal(0, 0);
+	phys_copy(vir2phys(&v), user, (phys_bytes) size);
+	break;
+  }
+  return(r);
+}
+
+
+/*===========================================================================*
  *				rb_step					     *
  *===========================================================================*/
 PRIVATE void rb_step()
@@ -1012,6 +1079,21 @@ PRIVATE void rb_step()
   for (i = 0; i < 3; i++)
 	v[i] = (from[i] * (g - k) + to[i] * k) / g;
   hal_led_pwm(v[0], v[1], v[2]);
+}
+
+
+/*===========================================================================*
+ *				rtc_int					     *
+ *===========================================================================*/
+PRIVATE int rtc_int(irq)
+int irq;
+{
+/* RTC Alarm A (also out of Stop2): INIT gets SIGRTC from the task. */
+  if (hal_rtc_alarm_ack()) {
+	rtc_fired = TRUE;
+	interrupt(PRINTER);
+  }
+  return(1);			/* reenable the interrupt */
 }
 
 
@@ -1240,6 +1322,10 @@ PRIVATE void do_hardint()
 	unlock();
   }
   if (as_proc != 0 && as_done) adcs_end(TRUE);	/* the samples are in */
+  if (rtc_fired) {		/* R7b.1: timed runs from INIT */
+	rtc_fired = FALSE;
+	cause_sig(INIT_PROC_NR, SIGRTC);
+  }
   if (rb & RB_DUE) rb_step();
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
@@ -1249,10 +1335,15 @@ PRIVATE void do_hardint()
 	sp_waiting = FALSE;
 	reply(REVIVE, sp_caller, sp_proc, sp_count);
   }
-  if (rx_h != rx_t || rx_over) ir_drain();	/* received durations */
+  if (ir_rd && ir_done) ir_rx_end(OK);	/* a frame is in */
   if (tx_on) {
 	if (tx_done) {				/* the frame is out */
 		tx_on = FALSE;
+		if (tx_rfid) rfid_tx_off();
+		if (ir_rd && ir_paused) {	/* the reader's capture again */
+			ir_paused = FALSE;
+			if (ir_rx_arm() < 0) ir_rx_end(EIO);
+		}
 		reply(REVIVE, tx_caller, tx_proc, tx_err ? EIO : tx_count);
 	} else
 		ir_fill();
@@ -1289,16 +1380,6 @@ PUBLIC void flipdev_tick()
 		interrupt(PRINTER);
 	}
   }
-  if (rx_active && rx_level == 1
-		&& hal_cycles() - rx_last > IR_GAP_MS * 1000 * CYC_US) {
-	rx_active = FALSE;			/* silence: the frame is over */
-	if (ir_rd) {
-		if (RING_N(rx_h, rx_t) < IR_RXQ)
-			ir_rxq[rx_h++ % IR_RXQ] = IR_END;
-		else rx_over = TRUE;
-		interrupt(PRINTER);
-	}
-  }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
   if (!(last_buttons & BTN_EXTI)) {
@@ -1323,7 +1404,7 @@ clock_t now;
   u32_t st = hal_bl_state();
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input), d;
 
-  if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
+  if (lc_dirty || note_i < note_n || tx_on) return(0);
   if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
   if (bl_want(st, now) != bl_state(st)) return(0);	/* bl_apply due */
   if (HAL_BL_MODE(st) == 2) return(LONG_MAX);		/* forced on */
@@ -1693,78 +1774,153 @@ PRIVATE void lc_newline()
 
 
 /*===========================================================================*
- *				ir_int					     *
+ *				ir_rx_arm, ir_rx_end			     *
  *===========================================================================*/
-PRIVATE int ir_int(irq)
-int irq;
+PRIVATE int pulse_read(m_ptr, user, count, input)
+message *m_ptr;
+phys_bytes user;
+int count, input;
 {
-/* An edge from the infrared receiver: queue the time since the last one
- * (a frame starts with a mark after a silence). */
-  u32_t now = hal_cycles(), us;
-  int level = hal_ir_rx_edge();
-  u16_t v;
-
-  if (level == rx_level) return 1;	/* glitch, nothing changed */
-  rx_level = level;
-  if (!rx_active) {
-	if (level != 0) return 1;
-	rx_active = TRUE;
-	v = IR_START;
-  } else {
-	us = (now - rx_last) / CYC_US;
-	if (us > 0x7FFE0) us = 0x7FFE0;
-	v = IR_ENC(us);
+/* /dev/ir and /dev/subghzraw: one frame that starts while the read waits,
+ * timed by the pulse engine (R4b.7) straight into the reader's buffer;
+ * it ends after a silence, or when the buffer is full. */
+  if (count < 4) return(EINVAL);
+  if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
+  if (ir_rd) return(EBUSY);		/* one reader at a time (TIM2) */
+  if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
+  if (input != 0 && tx_on) return(EBUSY);
+  ir_caller = m_ptr->m_source;
+  ir_proc = m_ptr->PROC_NR;
+  ir_buf = user;				/* count bytes, checked */
+  ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
+  ir_started = ir_done = ir_paused = FALSE;
+  pu_input = input;
+  proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+  ir_rd = TRUE;			/* first: TIM2's interrupt is the
+				 * transmitter's otherwise, and stops it */
+  if (tx_on) ir_paused = TRUE;		/* armed when it is out */
+  else if (ir_rx_arm() < 0) {
+	ir_rd = FALSE;
+	proc_addr(ir_proc)->p_physio = FALSE;
+	return(ENXIO);
   }
-  rx_last = now;
-  if (!ir_rd) return 1;			/* nobody reads: sbuf is not ours */
-  if (RING_N(rx_h, rx_t) < IR_RXQ) ir_rxq[rx_h++ % IR_RXQ] = v;
-  else rx_over = TRUE;			/* the task was too slow */
-  if (RING_N(rx_h, rx_t) >= IR_RXQ / 2) interrupt(PRINTER);
-  return 1;
+  return(SUSPEND);
+}
+
+PRIVATE int ir_rx_arm()
+{
+/* The pulse engine (R4b.7) captures the reader's frame straight into its
+ * buffer: the durations between edges, in us, by DMA. */
+  if (hal_pulse_rx(pu_input, ir_buf, (unsigned) ir_count / 4,
+		(pu_input ? SG_GAP_MS : IR_GAP_MS) * 1000) < 0)
+	return(-1);
+  lock();
+  pm_busy |= PM_PULSE;			/* TIM2 and DMA need the clocks */
+  unlock();
+  return(0);
+}
+
+PRIVATE void ir_rx_end(r)
+int r;			/* OK: the frame is in; 1: cancelled (no reply);
+			 * else an error for the reader */
+{
+  unsigned n = ir_count / 4 - hal_pulse_left();
+
+  if (pu_input == 2) {			/* RFID: timestamps, made durations */
+	hal_rfid_stop();		/* the DMA first, then the memory */
+	lock();
+	mt_arm(MT_PULSE, 0);
+	unlock();
+	n = rf_durations(n);
+  } else hal_pulse_stop();
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
+  proc_addr(ir_proc)->p_physio = FALSE;
+  ir_rd = FALSE;
+  if (r != 1) reply(REVIVE, ir_caller, ir_proc, r == OK ? (int) n * 4 : r);
 }
 
 
 /*===========================================================================*
- *				ir_drain				     *
+ *				rfid_read				     *
  *===========================================================================*/
-PRIVATE void ir_drain()
-{
-/* Move received durations to a waiting reader; without one they go. */
-  phys_bytes user;
-  u32_t d;
-  u16_t v;
+/* /dev/rfid (R6.5): a read turns the 125 kHz field on and gets the times
+ * between the changes of the tag's signal (the antenna's comparator), as
+ * /dev/ir's durations, for RF_MS or until the buffer is full; then the
+ * field goes off.  The level of the first one is not known (the decoder
+ * tries both). */
+#define RF_MS		500
+#define RF_POLL_MS	20
 
-  while (rx_t != rx_h) {
-	v = ir_rxq[rx_t % IR_RXQ];
-	rx_t++;
-	if (!ir_rd) continue;
-	if (v == IR_START) {		/* a frame begins: it is the reader's */
-		ir_started = TRUE;
-		ir_got = 0;
-		continue;
-	}
-	if (!ir_started || ir_got >= ir_count) continue;
-	if (v == IR_END) {
-		ir_rd = FALSE;
-		reply(REVIVE, ir_caller, ir_proc, ir_got);
-		continue;
-	}
-	d = IR_DEC(v);
-	if ((user = numap(ir_proc, ir_vir + ir_got, (vir_bytes) 4)) == 0) {
-		ir_rd = FALSE;
-		reply(REVIVE, ir_caller, ir_proc, EFAULT);
-		continue;
-	}
-	phys_copy(vir2phys(&d), user, (phys_bytes) 4);
-	ir_got += 4;
+PRIVATE int rfid_read(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+  if (count < 8) return(EINVAL);
+  if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
+  ir_caller = m_ptr->m_source;
+  ir_proc = m_ptr->PROC_NR;
+  ir_buf = user;
+  ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
+  ir_started = ir_done = ir_paused = FALSE;
+  pu_input = 2;
+  rf_polls = 0;
+  proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+  ir_rd = TRUE;
+  if (hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
+	ir_rd = FALSE;
+	proc_addr(ir_proc)->p_physio = FALSE;
+	return(ENXIO);
   }
-  if (rx_over) {			/* durations were lost */
-	rx_over = FALSE;
-	if (ir_rd && ir_started) {
-		ir_rd = FALSE;
-		reply(REVIVE, ir_caller, ir_proc, EIO);
+  lock();
+  pm_busy |= PM_PULSE;
+  mt_arm(MT_PULSE, RF_POLL_MS);
+  unlock();
+  return(SUSPEND);
+}
+
+PUBLIC void flipdev_pulse_poll()
+{
+/* The ms timer (interrupt): the RFID read's buffer is full, or its time
+ * is up, or look again. */
+  if (!ir_rd || pu_input != 2) return;
+  if (hal_pulse_left() == 0 || ++rf_polls >= RF_MS / RF_POLL_MS) {
+	ir_done = TRUE;
+	interrupt(PRINTER);
+  } else mt_arm(MT_PULSE, RF_POLL_MS);
+}
+
+PRIVATE void rfid_tx_off()
+{
+/* A T5577 write is over: the field off, the transmitter the IR LED's. */
+  hal_rfid_stop();
+  hal_ir_target(0);
+  tx_rfid = FALSE;
+}
+
+PRIVATE unsigned rf_durations(n)
+unsigned n;			/* timestamps in the reader's buffer */
+{
+/* Durations between them, in place: n - 1 of them. */
+  u32_t t[16], prev = 0;
+  unsigned i, k, j;
+
+  if (n < 2) return(0);
+  phys_copy(ir_buf, vir2phys(&prev), (phys_bytes) 4);
+  for (i = 1; i < n; i += k) {
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(ir_buf + i * 4, vir2phys(t), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		u32_t cur = t[j];
+
+		t[j] = cur - prev;
+		prev = cur;
 	}
+	phys_copy(vir2phys(t), ir_buf + (i - 1) * 4, (phys_bytes) k * 4);
   }
+  return(n - 1);
 }
 
 
@@ -1784,6 +1940,8 @@ int count;
   if (hal_ir_tx_irq() < 0) return(ENXIO);
   if (count % 4 != 0 || count == 0) return(EINVAL);
   if (tx_on) return(EIO);			/* one frame at a time */
+  if (ir_rd && (ir_started || pu_input != 0))
+	return(EBUSY);				/* TIM2 takes a frame in */
   if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
@@ -1793,6 +1951,7 @@ int count;
 	phys_copy(user + i * 4, vir2phys(d), (phys_bytes) k * 4);
 	for (j = 0; j < k; j++) {
 		if (i + j == 0 && (d[0] & IR_FREQ_FLAG)) {
+			if (tx_rfid) return(EINVAL);	/* 125 kHz, fixed */
 			hz = d[0] & 0xFFFFF;
 			duty = (d[0] >> 20) & 0x7F;
 			if (duty == 0) duty = IR_DUTY;
@@ -1819,6 +1978,11 @@ int count;
 	tx_on = FALSE;
 	return(EFAULT);
   }
+  if (tx_rfid) {				/* R6.5: the 125 kHz field */
+	hz = 125000;
+	duty = 50;
+  }
+  hal_ir_target(tx_rfid);
   hal_ir_freq(hz, duty);
   first_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
   tx_t++;
@@ -1826,6 +1990,10 @@ int count;
   if (tx_total > 1) {
 	next_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
 	tx_t++;
+  }
+  if (ir_rd && !ir_paused) {		/* the reader waits: TIM2 is ours */
+	hal_pulse_stop();
+	ir_paused = TRUE;
   }
   tx_seg = 1;
   hal_ir_carrier(1);				/* the first mark */
@@ -1861,8 +2029,21 @@ PRIVATE void ir_fill()
 PRIVATE int ir_tx_int(irq)
 int irq;
 {
-/* A mark or space is over: the next one (already loaded) starts now. */
-  int update = hal_ir_tx_ack();
+/* TIM2: a mark or space is over, the next one (already loaded) starts
+ * now; or, receiving, the pulse engine's capture (R4b.7). */
+  int update;
+
+  if (ir_rd && !tx_on) {
+	int f = hal_pulse_ack();
+
+	if (f & HAL_PULSE_START) ir_started = TRUE;
+	if ((f & HAL_PULSE_GAP) && ir_started) {
+		ir_done = TRUE;
+		interrupt(PRINTER);
+	}
+	return 1;
+  }
+  update = hal_ir_tx_ack();
 
   if (!tx_on || tx_done) {			/* nothing to send: off */
 	hal_ir_tx_stop();

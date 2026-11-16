@@ -408,8 +408,10 @@ int signo;			/* signal to send to process (1 to _NSIG) */
 	sigaddset(&rmp->mp_sigpending, signo);
 	return;
   }
-  /* Some signals are ignored by default. */
+  /* Some signals are ignored by default; SIGRTC (7, once SIGEMT) unless it
+   * is caught. */
   if (sigismember(&rmp->mp_ignore, signo)) return; 
+  if (signo == SIGRTC && !sigismember(&rmp->mp_catch, signo)) return;
 
   if (sigismember(&rmp->mp_sigmask, signo)) {
 	/* Signal should be blocked. */

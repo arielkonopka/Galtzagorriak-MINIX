@@ -3,6 +3,7 @@
  *	free [-v] [-k] [-t on|off]
  *
  * Total free RAM and the largest contiguous hole; -v lists the holes,
+ * also the flash regions and the shared libc (R2b.9);
  * -k the stack use (high-water mark) of the kernel tasks.  -t on makes MM
  * print, for every program that exits, how much of its chmem (gap + stack)
  * was never touched (root only; slows exec down a little).
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <minix/callnr.h>
+#include <minix/shlibc.h>
 
 static void kstacks(void)
 {
@@ -105,6 +107,15 @@ int main(int argc, char **argv)
 				fi.inst_entries, fi.inst_used / 1024,
 				fi.inst_size / 1024, fi.inst_base, fi.sfsa);
 		}
+		/* R2b.9: one copy for every program, read in place */
+		if (SHLIBC_HDR->sh_magic == SHLIBC_MAGIC)
+			printf("shared libc: %lu KB at %08lx, id %08lx, %d "
+				"functions, %lu bytes of data per process\n",
+				(SHLIBC_HDR->sh_size + 1023) / 1024,
+				(unsigned long) SHLIBC_BASE, SHLIBC_HDR->sh_id,
+				SHLIBC_HDR->sh_nslot, SHLIBC_HDR->sh_area);
+		else
+			printf("shared libc: none in flash\n");
 	}
 	if (k) kstacks();
 	return 0;

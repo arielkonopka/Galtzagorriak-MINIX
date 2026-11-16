@@ -568,6 +568,8 @@ static int lp5562_init(void);
 static void charger_init(void);
 static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
+static void rtc_boot(void);
+static void rtc_off(void);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
@@ -1842,6 +1844,7 @@ void hal_init(void)
 	spi2_init();
 	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
 	(void) RCC->APB1ENR1;
+	if (hal_rtc_ok()) rtc_boot();		/* before the output goes */
 	if (RTC->CR & RTC_CR_OSEL) rtc_alarm_out(0);	/* PC13 is Back */
 	buttons_init();
 	mt_init();
@@ -1974,6 +1977,7 @@ void hal_power_off(void)
 
 		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
 	}
+	rtc_off();				/* the alarm, early by the lead */
 	rtc_alarm_out(1);
 	hal_vibro(1);				/* as stock: a short buzz */
 	hal_delay_ms(50);
@@ -2068,34 +2072,259 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 	return 0;
 }
 
-/* The RTC calendar (BCD; the stock firmware keeps it running on the
- * battery) in seconds since 1970, years 2000-2099.  Days from the civil
- * date: Howard Hinnant's algorithm. */
-uint32_t hal_rtc_time(void)
-{
-	uint32_t tr, dr, y, m, d, era, yoe, doy, doe, i;
+/* The RTC (R6.2, R7b.1): the calendar (BCD; the stock firmware keeps it
+ * running on the battery) as seconds since 1970, UTC, years 2000-2099;
+ * Alarm A; smooth calibration.  Civil date <-> days: Howard Hinnant's
+ * algorithms.  The alarm's due time and boot lead are kept in backup
+ * registers (0 B RAM, register map in PORTING.md):
+ *   BKP13R  the due time (s since 1970), 0: none
+ *   BKP12R  magic 0xD (bits 28-31), this boot came from the alarm (16),
+ *           it fired since it was set (17), the boot lead in s (0-15) */
+#define RTCA_DUE	(RTC->BKP13R)
+#define RTCA_REG	(RTC->BKP12R)
+#define RTCA_MAGIC	0xD0000000u
+#define RTCA_WOKE	(1u << 16)
+#define RTCA_FIRED	(1u << 17)
+#define RTCA_LEAD0	10		/* s, until a boot is measured */
+#define RTC_EXTI	(1u << 17)	/* EXTI line 17: the RTC alarms */
 
+static void rtc_unlock(void)
+{
 	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
 	(void) RCC->APB1ENR1;
-	if (!(RCC->BDCR & RCC_BDCR_RTCEN) || !(RCC->BDCR & RCC_BDCR_LSERDY)
-				|| !(RTC->ISR & RTC_ISR_INITS))
-		return 0;
-	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_RSF); i++) ;
-	tr = RTC->TR;			/* locks DR until it is read */
-	dr = RTC->DR;
-	y = 2000 + (dr >> 20 & 15) * 10 + (dr >> 16 & 15);
-	m = (dr >> 12 & 1) * 10 + (dr >> 8 & 15);
-	d = (dr >> 4 & 3) * 10 + (dr & 15);
-	if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+	PWR->CR1 |= PWR_CR1_DBP;
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
+}
+
+static void rtc_lock(void)
+{
+	RTC->WPR = 0xFF;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+/* rc_w0 flags: write 0 to the one, 1 to the others; INIT unchanged */
+static void rtc_clear(uint32_t flag)
+{
+	RTC->ISR = ~(flag | RTC_ISR_INIT) | (RTC->ISR & RTC_ISR_INIT);
+}
+
+int hal_rtc_ok(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	return (RCC->BDCR & RCC_BDCR_RTCEN) && (RCC->BDCR & RCC_BDCR_LSERDY);
+}
+
+static uint32_t bcd(uint32_t v) { return v / 10 << 4 | v % 10; }
+static uint32_t unbcd(uint32_t v) { return (v >> 4) * 10 + (v & 15); }
+
+static uint32_t days_from_civil(uint32_t y, uint32_t m, uint32_t d)
+{
+	uint32_t era, yoe, doy, doe;
+
 	if (m <= 2) y--;
 	era = y / 400;
 	yoe = y - era * 400;
 	doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
 	doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-	return ((era * 146097 + doe - 719468) * 86400
-		+ ((tr >> 20 & 3) * 10 + (tr >> 16 & 15)) * 3600
-		+ ((tr >> 12 & 7) * 10 + (tr >> 8 & 15)) * 60
-		+ (tr >> 4 & 7) * 10 + (tr & 15));
+	return era * 146097 + doe - 719468;
+}
+
+static void civil_from_days(uint32_t z, uint32_t *y, uint32_t *m,
+								uint32_t *d)
+{
+	uint32_t era, doe, yoe, doy, mp;
+
+	z += 719468;
+	era = z / 146097;
+	doe = z - era * 146097;
+	yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	mp = (5 * doy + 2) / 153;
+	*d = doy - (153 * mp + 2) / 5 + 1;
+	*m = mp < 10 ? mp + 3 : mp - 9;
+	*y = yoe + era * 400 + (*m <= 2);
+}
+
+uint32_t hal_rtc_time(void)
+{
+	uint32_t tr, dr, y, m, d, i;
+
+	if (!hal_rtc_ok() || !(RTC->ISR & RTC_ISR_INITS)) return 0;
+	/* the shadow registers stand still in Stop2: wait for a fresh copy
+	 * (every 2 RTCCLK, ~61 us at most) */
+	PWR->CR1 |= PWR_CR1_DBP;
+	rtc_clear(RTC_ISR_RSF);
+	PWR->CR1 &= ~PWR_CR1_DBP;
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_RSF); i++) ;
+	tr = RTC->TR;			/* locks DR until it is read */
+	dr = RTC->DR;
+	y = 2000 + unbcd(dr >> 16 & 0xFF);
+	m = unbcd(dr >> 8 & 0x1F);
+	d = unbcd(dr & 0x3F);
+	if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+	return days_from_civil(y, m, d) * 86400
+		+ unbcd(tr >> 16 & 0x3F) * 3600 + unbcd(tr >> 8 & 0x7F) * 60
+		+ unbcd(tr & 0x7F);
+}
+
+int hal_rtc_set(uint32_t t)
+{
+	uint32_t y, m, d, days = t / 86400, s = t % 86400, i;
+
+	civil_from_days(days, &y, &m, &d);
+	if (!hal_rtc_ok() || y < 2000 || y > 2099) return -1;
+	rtc_unlock();
+	RTC->ISR = 0xFFFFFFFF;			/* INIT: stops the calendar */
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_INITF); i++) ;
+	RTC->TR = bcd(s / 3600) << 16 | bcd(s / 60 % 60) << 8 | bcd(s % 60);
+	RTC->DR = bcd(y - 2000) << 16 | ((days + 3) % 7 + 1) << 13
+						| bcd(m) << 8 | bcd(d);
+	RTC->CR &= ~RTC_CR_FMT;			/* 24 hours */
+	RTC->ISR &= ~RTC_ISR_INIT;		/* runs from here */
+	rtc_lock();
+	return 0;
+}
+
+/* Alarm A at t (date, h, m, s all compared: up to a month ahead). */
+static void rtc_arm(uint32_t t)
+{
+	uint32_t y, m, d, s = t % 86400, i;
+
+	civil_from_days(t / 86400, &y, &m, &d);
+	rtc_unlock();
+	RTC->CR &= ~(RTC_CR_ALRAE | RTC_CR_ALRAIE);
+	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_ALRAWF); i++) ;
+	RTC->ALRMAR = bcd(d) << 24 | bcd(s / 3600) << 16
+				| bcd(s / 60 % 60) << 8 | bcd(s % 60);
+	RTC->ALRMASSR = 0;			/* sub-seconds not compared */
+	rtc_clear(RTC_ISR_ALRAF);
+	RTC->CR |= RTC_CR_ALRAE | RTC_CR_ALRAIE;
+	rtc_lock();
+	EXTI->RTSR1 |= RTC_EXTI;		/* the alarm wakes Stop2 too */
+	EXTI->IMR1 |= RTC_EXTI;
+}
+
+static void rtc_disarm(void)
+{
+	rtc_unlock();
+	RTC->CR &= ~(RTC_CR_ALRAE | RTC_CR_ALRAIE);
+	rtc_clear(RTC_ISR_ALRAF);
+	rtc_lock();
+	EXTI->PR1 = RTC_EXTI;
+}
+
+static unsigned rtc_lead(void)
+{
+	uint32_t r = RTCA_REG;
+
+	return (r & 0xF0000000u) == RTCA_MAGIC && (r & 0xFFFF) != 0
+						? r & 0xFFFF : RTCA_LEAD0;
+}
+
+int hal_rtc_alarm(uint32_t due, unsigned lead)
+{
+	uint32_t now = hal_rtc_time(), r;
+
+	if (lead == 0 || lead > 0xFFFF) lead = rtc_lead();
+	r = RTCA_REG;
+	r = RTCA_MAGIC | ((r & 0xF0000000u) == RTCA_MAGIC ? r & RTCA_WOKE : 0)
+									| lead;
+	if (due == 0) {
+		if (hal_rtc_ok()) rtc_disarm();
+		bkp_set(&RTCA_DUE, 0);
+		bkp_set(&RTCA_REG, r);
+		return 0;
+	}
+	if (now == 0 || due <= now || due - now > 27 * 86400u) return -1;
+	bkp_set(&RTCA_DUE, due);
+	bkp_set(&RTCA_REG, r);
+	rtc_arm(due);
+	return 0;
+}
+
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags)
+{
+	uint32_t r = RTCA_REG;
+
+	*lead = rtc_lead();
+	*flags = 0;
+	if ((r & 0xF0000000u) == RTCA_MAGIC) {
+		if (r & RTCA_WOKE) *flags |= HAL_RTC_WOKE;
+		if (r & RTCA_FIRED) *flags |= HAL_RTC_FIRED;
+	}
+	if (RTC->CR & RTC_CR_ALRAE) *flags |= HAL_RTC_ARMED;
+	return (r & 0xF0000000u) == RTCA_MAGIC ? RTCA_DUE : 0;
+}
+
+int hal_rtc_alarm_irq(void)
+{
+	return hal_rtc_ok() ? RTC_Alarm_IRQn : -1;
+}
+
+int hal_rtc_alarm_ack(void)
+{
+	uint32_t r;
+
+	EXTI->PR1 = RTC_EXTI;
+	if (!(RTC->ISR & RTC_ISR_ALRAF)) return 0;
+	rtc_disarm();			/* once: the date would match next month */
+	r = RTCA_REG;
+	if ((r & 0xF0000000u) == RTCA_MAGIC) bkp_set(&RTCA_REG, r | RTCA_FIRED);
+	return 1;
+}
+
+/* At boot (hal_init), before the alarm output goes and Back is read: did
+ * the alarm start us?  The output was on (we powered off with it) and
+ * Alarm A fired. */
+static void rtc_boot(void)
+{
+	uint32_t r = RTCA_REG, woke;
+
+	woke = (RTC->CR & RTC_CR_OSEL) && (RTC->ISR & RTC_ISR_ALRAF);
+	if ((r & 0xF0000000u) == RTCA_MAGIC) {
+		r &= ~RTCA_WOKE;
+		if (woke) r |= RTCA_WOKE | RTCA_FIRED;
+		bkp_set(&RTCA_REG, r);
+	}
+	if (woke) rtc_disarm();
+	else if (RTC->CR & RTC_CR_ALRAE) {	/* still armed: wake us */
+		EXTI->RTSR1 |= RTC_EXTI;
+		EXTI->IMR1 |= RTC_EXTI;
+	}
+}
+
+/* At power-off: the alarm moves earlier by the boot lead, so the boot is
+ * over when it is due (timed then waits for the real time). */
+static void rtc_off(void)
+{
+	uint32_t due = RTCA_DUE, now = hal_rtc_time(), at;
+	unsigned lead = rtc_lead();
+
+	if ((RTCA_REG & 0xF0000000u) != RTCA_MAGIC || due == 0 || now == 0
+				|| !(RTC->CR & RTC_CR_ALRAE) || due <= now)
+		return;
+	at = due > now + lead + 2 ? due - lead : now + 2;
+	rtc_arm(at);
+}
+
+int hal_rtc_cal(int set, int v)
+{
+	uint32_t c, i;
+
+	if (!hal_rtc_ok()) return 0;
+	if (set) {
+		if (v > 512) v = 512;
+		if (v < -511) v = -511;
+		c = v > 0 ? RTC_CALR_CALP | (uint32_t) (512 - v) : (uint32_t) -v;
+		for (i = 0; i < 100000 && (RTC->ISR & RTC_ISR_RECALPF); i++) ;
+		rtc_unlock();
+		RTC->CALR = c;
+		rtc_lock();
+	}
+	c = RTC->CALR;
+	return (c & RTC_CALR_CALP ? 512 : 0) - (int) (c & RTC_CALR_CALM);
 }
 
 /* The backlight's settings (hal.h): BKP15R, magic 0xB in the top nibble
@@ -2354,7 +2583,7 @@ void hal_adc_stream_stop(void)
  *				Infrared				     *
  *===========================================================================*/
 /* As on the stock firmware: the receiver (TSOP, active low, own pull-up)
- * on PA0, here through EXTI line 0 on both edges; the LED driver on PB9,
+ * on PA0, timed by the pulse engine (hal_pulse_rx); the LED driver on PB9,
  * TIM1 channel 3N (AF1), PWM at the carrier frequency.  Carrier off: the
  * channel is forced inactive (the LED is dark at low level).  Marks and
  * spaces are timed by TIM2 (the "pulse engine", spec R6.6): 1 MHz, the
@@ -2369,73 +2598,193 @@ uint32_t hal_cycles(void)
 	return DWT->CYCCNT;
 }
 
-int hal_ir_irq(void)
-{
-	return EXTI0_IRQn;
-}
-
-void hal_ir_rx_on(int on)
-{
-	if (on) {
-		gpio_cfg(GPIOA, 0, MODE_IN, PULL_NONE, 0);
-		SYSCFG->EXTICR[0] &= ~SYSCFG_EXTICR1_EXTI0;	/* port A */
-		EXTI->RTSR1 |= EXTI_RTSR1_RT0;
-		EXTI->FTSR1 |= EXTI_FTSR1_FT0;
-		EXTI->PR1 = EXTI_PR1_PIF0;
-		EXTI->IMR1 |= EXTI_IMR1_IM0;
-	} else {
-		EXTI->IMR1 &= ~EXTI_IMR1_IM0;
-		EXTI->PR1 = EXTI_PR1_PIF0;
-	}
-}
-
-int hal_ir_rx_edge(void)
-{
-	EXTI->PR1 = EXTI_PR1_PIF0;
-	return gpio_get(GPIOA, 0);
-}
-
 void hal_ir_freq(unsigned hz, unsigned duty)
 {
 	ir_period = SystemCoreClock / hz;
 	ir_on = ir_period * duty / 100;
 }
 
+static unsigned char ir_ready;			/* TIM1 set up for the carrier; the
+					 * RFID field takes TIM1 and clears it */
+static unsigned char ir_tgt;			/* 0 the IR LED, 1 the RFID antenna */
+
+/* The transmitter drives the IR LED (TIM1 CH3N, PB9) or, for writing a
+ * T5577 tag (R6.5), the 125 kHz antenna (TIM1 CH1N, PB13; PA2 high: the
+ * antenna not grounded, as stock t5577_start; iButton low). */
+void hal_ir_target(int rfid)
+{
+	if (rfid == ir_tgt && ir_ready) return;
+	ir_tgt = rfid;
+	ir_ready = 0;
+	if (rfid) {
+		gpio_set(GPIOA, 2, 1);
+		gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+		hal_ow_line(1);
+		gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
+		gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* JTDI */
+	}
+}
+
 void hal_ir_carrier(int on)
 {
-	static int ready;
-
-	if (!ready) {
+	if (!ir_ready) {
 		RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
 		(void) RCC->APB2ENR;
 		TIM1->CR1 = 0;
 		TIM1->PSC = 0;
 		if (ir_period == 0) hal_ir_freq(IR_CARRIER_HZ, 33);
 		TIM1->ARR = ir_period - 1;
-		TIM1->CCR3 = ir_on;
-		TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
-		TIM1->CCER = TIM_CCER_CC3NE;
+		if (ir_tgt) {
+			TIM1->CCR1 = ir_on;
+			TIM1->CCMR1 = (4u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+			TIM1->CCMR2 = 0;
+			TIM1->CCER = TIM_CCER_CC1NE;
+		} else {
+			TIM1->CCR3 = ir_on;
+			TIM1->CCMR1 = 0;
+			TIM1->CCMR2 = (4u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
+			TIM1->CCER = TIM_CCER_CC3NE;
+		}
 		TIM1->BDTR = TIM_BDTR_MOE;
 		TIM1->EGR = TIM_EGR_UG;
 		TIM1->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
-		gpio_set(GPIOB, 9, 0);
-		gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
-		ready = 1;
+		if (ir_tgt) {
+			gpio_set(GPIOB, 13, 0);
+			gpio_cfg(GPIOB, 13, MODE_AF, PULL_NONE, 1);
+		} else {
+			gpio_set(GPIOB, 9, 0);
+			gpio_cfg(GPIOB, 9, MODE_AF, PULL_NONE, 1);
+		}
+		ir_ready = 1;
 	}
 	if (on) {				/* preloaded, taken by UG */
 		TIM1->ARR = ir_period - 1;
-		TIM1->CCR3 = ir_on;
+		if (ir_tgt) TIM1->CCR1 = ir_on;
+		else TIM1->CCR3 = ir_on;
 	}
-	/* PWM mode 1 (110) or forced inactive (100); start a fresh period
-	 * so every mark begins with a whole carrier cycle */
-	TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
-		| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
+	/* The antenna (a series LC): a gap is the outputs off (MOE 0, the
+	 * pin floats), as stock's furi_hal_rfid_tim_read_pause; held low
+	 * the circuit stays closed and the field rings on.  The IR LED:
+	 * PWM mode 1 (110) or forced inactive (100).  Either way a fresh
+	 * period, so every mark begins with a whole carrier cycle. */
+	if (ir_tgt) {
+		TIM1->CCMR1 = (TIM1->CCMR1 & ~TIM_CCMR1_OC1M)
+			| (6u << TIM_CCMR1_OC1M_Pos);
+		TIM1->BDTR = on ? TIM_BDTR_MOE : 0;
+	} else
+		TIM1->CCMR2 = (TIM1->CCMR2 & ~TIM_CCMR2_OC3M)
+			| ((on ? 6u : 4u) << TIM_CCMR2_OC3M_Pos);
 	if (on) TIM1->EGR = TIM_EGR_UG;
 }
 
 int hal_ir_tx_irq(void)
 {
 	return TIM2_IRQn;
+}
+
+/* R4b.7, the pulse engine's capture: TIM2 at 1 MHz restarts at every edge
+ * of the input (slave mode reset, both edges) and a channel captures the
+ * count it had: the time since the edge before, in us.  DMA1 channel 4
+ * writes those 32-bit durations straight into the reader's buffer
+ * (R4b.5).  The first edge, which only ends the silence before, goes to
+ * the interrupt instead; it turns the DMA on.  The other channel compares
+ * at the gap: silence that long ends the frame.
+ *   input 0: the IR receiver on PA0 (TIM2_CH1, AF1), active low: a frame
+ *            starts with a falling edge.  Reset on TI1F_ED, IC1 on TRC.
+ *   input 1: the CC1101's GDO0 on PA1 (TIM2_CH2, AF1), its demodulated
+ *            OOK data (IOCFG0 0x0D), high with carrier: a frame starts
+ *            with a rising edge.  Reset on TI2FP2 with both edges
+ *            (CC2P|CC2NP), IC2 on TI2.
+ * TIM2 is also the IR transmitter's and the ADC stream's: the kernel runs
+ * one at a time. */
+#define PULSE_IN1	(TIM2->SMCR & (2u << TIM_SMCR_TS_Pos))	/* TS 110 */
+
+int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us)
+{
+	if (input > 1 || n == 0 || gap_us == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = input ? 29 : 28;	/* TIM2_CH2, TIM2_CH1 */
+	DMA1_Channel4->CPAR = (uint32_t) (input ? &TIM2->CCR2 : &TIM2->CCR1);
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+							| DMA_CCR_EN;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CR2 = 0;
+	TIM2->CCMR2 = 0;
+	if (input == 0) {
+		TIM2->SMCR = (4u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);
+		TIM2->CCMR1 = (3u << TIM_CCMR1_CC1S_Pos)	/* IC1 on TRC */
+			| (3u << TIM_CCMR1_IC1F_Pos);		/* 125 ns */
+		TIM2->CCR2 = gap_us;
+		TIM2->CCER = TIM_CCER_CC1E;
+	} else {
+		TIM2->SMCR = (6u << TIM_SMCR_TS_Pos) | (4u << TIM_SMCR_SMS_Pos);
+		TIM2->CCMR1 = (1u << TIM_CCMR1_CC2S_Pos)	/* IC2 on TI2 */
+			| (3u << TIM_CCMR1_IC2F_Pos);
+		TIM2->CCR1 = gap_us;
+		TIM2->CCER = TIM_CCER_CC2E | TIM_CCER_CC2P | TIM_CCER_CC2NP;
+	}
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;				/* PSC now */
+	TIM2->SR = 0;
+	NVIC_ClearPendingIRQ(TIM2_IRQn);
+	gpio_cfg(GPIOA, input, MODE_AF, PULL_NONE, 1);	/* TIM2_CH1, CH2 */
+	TIM2->DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;	/* edge, gap */
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+int hal_pulse_ack(void)
+{
+	uint32_t sr = TIM2->SR, dier = TIM2->DIER, cap, gap, de;
+	int in1 = PULSE_IN1 != 0, r = 0;
+
+	cap = in1 ? TIM_SR_CC2IF : TIM_SR_CC1IF;
+	gap = in1 ? TIM_SR_CC1IF : TIM_SR_CC2IF;
+	de = in1 ? TIM_DIER_CC2DE : TIM_DIER_CC1DE;
+	TIM2->SR = ~sr;				/* those seen, nothing else */
+	if ((sr & cap) && !(dier & de)) {
+		(void) (in1 ? TIM2->CCR2 : TIM2->CCR1);	/* the silence before */
+		/* a mark began: the frame (IR low, GDO0 high) */
+		if (gpio_get(GPIOA, in1) == in1) {
+			TIM2->DIER = de | (in1 ? TIM_DIER_CC1IE : TIM_DIER_CC2IE);
+			r |= HAL_PULSE_START;
+		}
+	}
+	if ((sr & gap) && (dier & de))
+		r |= HAL_PULSE_GAP;		/* silence after the frame */
+	return r;
+}
+
+unsigned hal_pulse_left(void)
+{
+	return DMA1_Channel4->CNDTR;
+}
+
+void hal_pulse_stop(void)
+{
+	int in1;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	in1 = PULSE_IN1 != 0;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->SMCR = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR1 = 0;
+	TIM2->SR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 0;
+	if (in1) gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);	/* as stock */
+	else gpio_cfg(GPIOA, 0, MODE_IN, PULL_NONE, 0);
 }
 
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us)
@@ -2553,6 +2902,106 @@ int hal_random(uint32_t *w)
 }
 
 /*===========================================================================*
+ *				LF RFID (R6.5)				     *
+ *===========================================================================*/
+/* Reading a 125 kHz tag, as the stock firmware does (furi_hal_rfid.c):
+ * the field from TIM1 channel 1N on PB13 (AF1), 125 kHz at half duty;
+ * the antenna's envelope on PC5 into COMP1 against half of VREFINT (high
+ * hysteresis), COMP1's output into TIM2 channel 4 (TIM2_OR TI4_RMP).
+ * PA2 (the antenna pull) and PB14 (iButton) low meanwhile, as stock.
+ * TI4 cannot reset the timer, so TIM2 runs free at 1 MHz and channel 4
+ * captures both edges: DMA1 channel 4 (DMAMUX request 31, TIM2_CH4)
+ * writes 32-bit timestamps into the reader's buffer; the kernel makes
+ * durations of them.  TIM1 and TIM2 are the IR transmitter's too: the
+ * kernel runs one at a time. */
+int hal_rfid_read(uint32_t dst, unsigned n)
+{
+	uint32_t t0;
+
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	ir_ready = 0;
+	gpio_set(GPIOA, 2, 0);				/* antenna not pulled */
+	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+	hal_ow_line(1);					/* iButton low */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* the carrier node:
+						 * after reset JTDI, pulled up */
+	/* the field */
+	TIM1->CR1 = 0;
+	TIM1->PSC = 0;
+	TIM1->ARR = SystemCoreClock / 125000u - 1;
+	TIM1->CCR1 = SystemCoreClock / 125000u / 2;
+	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+	TIM1->CCMR2 = 0;
+	TIM1->CCER = TIM_CCER_CC1NE;
+	TIM1->BDTR = TIM_BDTR_MOE;
+	TIM1->EGR = TIM_EGR_UG;
+	TIM1->CR1 = TIM_CR1_CEN;
+	gpio_cfg(GPIOB, 13, MODE_AF, PULL_NONE, 1);	/* TIM1_CH1N */
+	/* the comparator */
+	COMP1->CSR = COMP_CSR_PWRMODE_0			/* medium speed */
+		| COMP_CSR_INMSEL_0 | COMP_CSR_SCALEN | COMP_CSR_BRGEN
+		| COMP_CSR_HYST_1 | COMP_CSR_HYST_0;	/* IO1 (PC5), VREFINT/2 */
+	COMP1->CSR |= COMP_CSR_EN;
+	t0 = DWT->CYCCNT;
+	while (DWT->CYCCNT - t0 < hal_cpu_hz() / 5000) ;	/* scaler: 200 us */
+	/* the capture */
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 31;			/* TIM2_CH4 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+							| DMA_CCR_EN;
+	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = 0;
+	TIM2->CCMR2 = 1u << TIM_CCMR2_CC4S_Pos;		/* IC4 on TI4 */
+	TIM2->CCER = TIM_CCER_CC4E | TIM_CCER_CC4P | TIM_CCER_CC4NP;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_CC4DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+void hal_rfid_stop(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR2 = 0;
+	TIM2->OR = 0;
+	TIM2->SR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 0;
+	COMP1->CSR = 0;
+	TIM1->CR1 = 0;
+	TIM1->CCER = 0;
+	TIM1->BDTR = 0;
+	ir_ready = 0;
+	gpio_set(GPIOB, 13, 0);				/* field off */
+	gpio_cfg(GPIOB, 13, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOA, 2, 1);				/* as stock's reset */
+	hal_ow_line(0);					/* iButton released */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
+}
+
+/*===========================================================================*
  *				Speaker					     *
  *===========================================================================*/
 /* Piezo on PB8, TIM16 channel 1 (AF14), as on the stock firmware.  The
@@ -2609,18 +3058,20 @@ void hal_tone(unsigned hz)
  * secure area starts (SFSA, FLASH->SFR, in 4 KB pages), as the stock
  * firmware does:
  *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
- *	0x08030000  installed programs (Phase 2b)	up to the cache
+ *	0x08030000  shared libc (R2b.9, <minix/shlibc.h>)	HAL_LIBC_SIZE
+ *	0x08040000  installed programs (Phase 2b)	up to the cache
  *	...         run-time text cache			HAL_CACHE_SIZE
  *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
  *	SFSA ..     CPU2 wireless stack and FUS, never touched
  */
 #define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
+#define HAL_LIBC_SIZE	0x10000u	/* 64 KB, SHLIBC_MAX; in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	16u
 
 void hal_flash_layout(uint32_t *l)
 {
-	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE;
+	uint32_t sfsa, top, inst = FLASH_BASE + HAL_SYS_IMAGE + HAL_LIBC_SIZE;
 
 	sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
 	top = sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
@@ -2641,7 +3092,10 @@ void hal_flash_layout(uint32_t *l)
 }
 
 /* For the MEMORY task, whose stack has no room for the layout table. */
-uint32_t hal_rom_base(void) { return FLASH_BASE + HAL_SYS_IMAGE + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void)
+{
+	return FLASH_BASE + HAL_SYS_IMAGE + HAL_LIBC_SIZE + HAL_ROM_OFF;
+}
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

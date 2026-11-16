@@ -157,7 +157,8 @@
 #define MT_VIBRO           2	/* a timed buzz ends (flipdev.c, R6.3) */
 #define MT_ADC             3	/* an ADC stream: done? (flipdev.c, R6.4) */
 #define MT_LED             4	/* the rainbow's next colour (flipdev.c, R7b.5) */
-#define MT_N               5
+#define MT_PULSE           5	/* an RFID read: done? (flipdev.c, R6.5) */
+#define MT_N               6
 
 /* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console
@@ -165,6 +166,7 @@
 #define PM_DISK         0x01	/* an SD DMA transfer runs */
 #define PM_VBUS         0x02	/* power on VBUS, the USB bus asleep (pm_vbus) */
 #define PM_ADC          0x04	/* an ADC stream runs (TIM2, ADC, DMA) */
+#define PM_PULSE        0x08	/* the pulse engine captures (TIM2, DMA) */
 #define PM_LOWBAT  0x80000000	/* not a blocker: battery low, no new flash
 				 * erases (pm_minute) */
 #define PM_BLOCKERS 0x7FFFFFFF

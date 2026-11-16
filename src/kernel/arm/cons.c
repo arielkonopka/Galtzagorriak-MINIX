@@ -235,17 +235,24 @@ register tty_t *tp;
   phys_bytes user_phys;
 
   unsigned room;
+  int onlcr;
 
   if ((count = tp->tty_outleft) == 0 || tp->tty_inhibited) return;
+
+  /* NL -> CR NL (OPOST|ONLCR, on by default and in cooked mode); raw
+   * output (rz/sz, mined's screen) passes untouched. */
+  onlcr = (tp->tty_termios.c_oflag & (OPOST|ONLCR)) == (OPOST|ONLCR);
 
   do {
 	if (count > sizeof(buf)) count = sizeof(buf);
 	/* Only what the USB ring takes now; the rest when the USB interrupt
 	 * sees room (usb_int), the writer stays suspended meanwhile.  No
-	 * waiting in the task for a host that does not read. */
-	if (usb_irq >= 0 && (room = hal_usb_room()) < (unsigned) count) {
+	 * waiting in the task for a host that does not read.  With ONLCR
+	 * each byte may become two. */
+	if (usb_irq >= 0
+		&& (room = hal_usb_room()) < ((unsigned) count << onlcr)) {
 		if (room < USB_CHUNK) break;
-		count = room;
+		count = room >> onlcr;
 	}
 	user_phys = proc_vir2phys(proc_addr(tp->tty_outproc), tp->tty_out_vir);
 	phys_copy(user_phys, vir2phys(buf), (phys_bytes) count);
@@ -258,6 +265,7 @@ register tty_t *tp;
 		/* ^G beeps, unless the output is raw (binary, rz/sz). */
 		if (buf[i] == '\007' && (tp->tty_termios.c_oflag & OPOST))
 			bell();
+		if (buf[i] == '\n' && onlcr) out_char('\r');
 		out_char(buf[i]);
 	}
   } while ((count = tp->tty_outleft) != 0 && !tp->tty_inhibited);
@@ -278,6 +286,9 @@ PRIVATE void cons_echo(tp, c)
 tty_t *tp;
 int c;
 {
+  if (c == '\n' && (tp->tty_termios.c_oflag & (OPOST|ONLCR))
+						== (OPOST|ONLCR))
+	out_char('\r');
   out_char(c);
 }
 
@@ -288,8 +299,9 @@ int c;
 PRIVATE void out_char(c)
 int c;
 {
-/* Send one byte as it is.  NL -> CR NL is TTY's job (OPOST/ONLCR), so
- * binary output in raw mode (rz/sz) passes untouched.
+/* Send one byte as it is.  NL -> CR NL is done by the callers when
+ * OPOST|ONLCR is set (cons_write, cons_echo), so binary output in raw mode
+ * (rz/sz) passes untouched.
  */
   char ch = c;
 
