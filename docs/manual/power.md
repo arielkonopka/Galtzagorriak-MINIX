@@ -40,6 +40,12 @@ average, `sby` the gauge's estimate of the standby current (all in mA, negative 
 discharging), `temp` the battery temperature in tenths of a degree Celsius, `flags` the
 gauge's raw status word, and `usb` 1 while a computer is connected over USB.
 
+## Screen power save
+
+On battery, 2 minutes after the backlight has gone off, the screen itself goes blank to save a
+little more current. Any key brings back the same picture at once (that first press only wakes the
+screen and the light, as when the light is off). With USB connected the screen never blanks.
+
 ## Sleep when idle
 
 When nothing runs and no USB cable is plugged in, the Flipper goes into deep sleep (the chip's
