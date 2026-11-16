@@ -162,8 +162,15 @@ PUBLIC int do_exec()
 	/* No room for its text in RAM (right after an update, nothing is
 	 * cached yet): put the text in the cache now, the old way, and run
 	 * it from flash.  The only case where exec waits for a flash write. */
-	fc_text = fc_sync(fd, (unsigned long) text_bytes, text_crc,
-				(unsigned long) s_buf.st_uid, mbuf, ARG_MAX);
+	/* mbuf holds the new stack image (gather(), patched below): read
+	 * the text through what is left after it, never over it (#108: the
+	 * argv pointers came out as text bytes plus the stack base). */
+	vir_bytes used = (stk_bytes + 7) & ~(vir_bytes) 7;
+
+	fc_text = ARG_MAX - used < 256 ? 0 :
+		fc_sync(fd, (unsigned long) text_bytes, text_crc,
+			(unsigned long) s_buf.st_uid, mbuf + used,
+			(int) ((ARG_MAX - used) & ~7));
 	if (fc_text != 0) {
 		fc_new = FALSE;
 		text_read = TRUE;		/* fd is past the text now */

@@ -74,6 +74,12 @@ int hal_lcd_save(int on);
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
 
+/* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
+ * it, wait some microseconds (busy: only for the slot timing). */
+void hal_ow_line(int low);
+int hal_ow_read(void);
+void hal_ow_delay(unsigned us);
+
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
  * little endian), read only; -1 on a bus error, -2 if there is none. */
 #define HAL_GAUGE_TEMP		0x06	/* 0.1 K */
@@ -89,6 +95,14 @@ int hal_gauge_read(unsigned cmd);
  * CHRG_STAT (0 not charging, 1 pre, 2 fast, 3 done), 2 power good. */
 #define HAL_CHG_STATUS		0x0B
 int hal_charger_read(unsigned reg);
+/* R6.1: battery profile care (VREG 4.0 V, else 4.208), gentle charging
+ * (ICHG 1 A, else the stock 2 A), 5 V OTG on the header.  Profile and
+ * gentle are kept over resets.  0, or -1 on a bus error. */
+#define HAL_CHG_CARE		1
+#define HAL_CHG_GENTLE		2
+#define HAL_CHG_OTG		3
+#define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
+int hal_charger_set(int what, int on);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
@@ -113,6 +127,11 @@ unsigned hal_mt_ack(void);
 #define HAL_WAKE_BTN	1
 #define HAL_WAKE_TIMER	2
 int hal_stop2(void);
+
+/* Flash ECC (R4a.5): flags since the last call (cleared), and where. */
+#define HAL_ECC_FIXED	1		/* a single bit, corrected */
+#define HAL_ECC_DOUBLE	2		/* two bits: the NMI */
+unsigned hal_flash_ecc(uint32_t *addr);
 int hal_can_stop2(void);		/* 0: never (QEMU, no HSE at boot) */
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
@@ -123,6 +142,9 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
        HAL_GPIO_IN_DOWN, HAL_GPIO_OFF };	/* OFF: analog, high impedance */
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
+/* R6.4: mV on each header pin left analog ("off") with an ADC input, -1
+ * for the others; returns VDDA in mV, or -1 (no ADC). */
+int hal_adc_mv(int *mv);
 
 /* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
  * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
@@ -238,6 +260,10 @@ uint32_t hal_rtc_time(void);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
 void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));
+/* Power off (T14c): the charger's ship mode, as stock furi_hal_power_off;
+ * on VBUS it cannot cut the power and waits for the cable to go.  QEMU:
+ * hal_halt(0). */
+void hal_power_off(void) __attribute__((noreturn));
 
 /* Low-level console output used by kprintf() and panics. */
 void kputc(int c);

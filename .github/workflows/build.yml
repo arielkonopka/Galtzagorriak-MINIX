@@ -39,6 +39,9 @@ jobs:
       - name: Build the Flipper images
         run: make BOARD=flipper -j"$(nproc)" minix card base-flash base pkgs
 
+      - name: Security tests on the PC (tests/host, docs/security)
+        run: make -C tests/host
+
       - name: RAM budget and version check
         run: make BOARD=flipper ramcheck
 

@@ -87,6 +87,10 @@ EXTERN tty_t tty_table[NR_CONS+NR_RS_LINES+NR_PTYS];
 /* Times and timeouts. */
 #define TIME_NEVER	((clock_t) -1 < 0 ? (clock_t) LONG_MAX : (clock_t) -1)
 #define force_timeout()	((void) (tty_timeout = 0))
+#if (CHIP == ARM_CM)
+#define TTY_SLICE_MS	2	/* the TTY task's longest run on input before
+				 * the processes get the CPU (K1) */
+#endif
 
 EXTERN tty_t *tty_timelist;	/* list of ttys with active timers */
 

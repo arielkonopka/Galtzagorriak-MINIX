@@ -135,6 +135,9 @@ PUBLIC void clock_task()
  */
 
   int opcode;
+#if (CHIP == ARM_CM)
+  clock_t minute;
+#endif
 
   init_clock();			/* initialize clock task */
 
@@ -145,12 +148,19 @@ PUBLIC void clock_task()
 #if (CHIP == ARM_CM)
      hal_wdt_kick();		/* the clock task runs: nothing hogs the CPU */
      pm_vbus();			/* a cable in: no Stop2 (arm/klib.c) */
+     ecc_poll();			/* corrected flash ECC errors (R4a.5) */
 #endif
 
      lock();
+#if (CHIP == ARM_CM)
+     minute = realtime / (60 * HZ);
+#endif
      realtime += pending_ticks;	/* transfer ticks from low level handler */
      pending_ticks = 0;		/* so we don't have to worry about them */
      unlock();
+#if (CHIP == ARM_CM)
+     if (realtime / (60 * HZ) != minute) pm_minute();	/* R6.1 */
+#endif
 
      switch (opcode) {
 #if (SHADOWING == 1) && (CHIP == ARM_CM)

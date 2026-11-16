@@ -148,8 +148,11 @@ SysTick_Handler:
 	.global	MemManage_Handler
 	.global	BusFault_Handler
 	.global	UsageFault_Handler
+	.global	DebugMon_Handler
 	.thumb_func
 HardFault_Handler:
+	.thumb_func
+DebugMon_Handler:			/* R4a.6: a stack guard was written */
 	.thumb_func
 MemManage_Handler:
 	.thumb_func
@@ -271,6 +274,8 @@ user_st_end:
 	isb
 	ldmia	r12, {r4-r11}		/* callee-saved registers */
 	ldr	lr, =EXC_RETURN_PSP
+	movs	r0, #0			/* a process runs unlocked (R4a.1: */
+	msr	basepri, r0		/* unhold() returns locked) */
 	cpsie	i
 	bx	lr
 

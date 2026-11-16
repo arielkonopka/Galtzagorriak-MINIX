@@ -21,7 +21,9 @@ PRIVATE char ibuf[CONS_IN_BYTES];
 PRIVATE unsigned ihead, itail;	/* free-running; ihead written by intr */
 PRIVATE int uart_irq;
 PRIVATE int usb_irq = -1;
-PRIVATE int uart_held;		/* UART receive interrupt off: ibuf full */
+PRIVATE u8_t uart_held;		/* UART receive interrupt off: ibuf full */
+PRIVATE u8_t usb_stuck;		/* a wait for USB room timed out: no more
+				 * waits until the host reads again (K1) */
 #define USB_CHUNK	64	/* cons_write waits for this much ring room */
 #define USB_WAIT_MS	20	/* echo/printf: longest wait for room */
 
@@ -104,20 +106,28 @@ unsigned n;
  * from processes never get here without room (cons_write).  Echo and kernel
  * printf() from a task wait for room at most USB_WAIT_MS, then drop: a
  * terminal that is open but not read must not hold a kernel task (rule
- * 0.8; the watchdog would reset the board after 2 s).
+ * 0.8; the watchdog would reset the board after 2 s).  After one such
+ * timeout the next bytes are dropped at once, until the host makes room
+ * again: else every echoed character of a flood waited its 20 ms, and a
+ * host that sends but never reads held the TTY task for good (security
+ * review 2026-11-16, K1).
  */
   unsigned k;
   u32_t start = hal_cycles();
 
   if (usb_irq < 0) return;
+  if (usb_stuck && hal_usb_room() >= USB_CHUNK) usb_stuck = FALSE;
   while (n > 0) {
 	k = hal_usb_write(buf, n);
 	buf += k;
 	n -= k;
-	if (n > 0 && (!hal_usb_connected()
-			|| k_reenter != (unsigned char) -1	/* not a task */
-			|| hal_cycles() - start
-				> USB_WAIT_MS * (hal_cpu_hz() / 1000))) break;
+	if (n == 0 || !hal_usb_connected() || usb_stuck
+			|| k_reenter != (unsigned char) -1)	/* not a task */
+		break;
+	if (hal_cycles() - start > USB_WAIT_MS * (hal_cpu_hz() / 1000)) {
+		usb_stuck = TRUE;
+		break;
+	}
   }
 }
 
@@ -157,12 +167,23 @@ tty_t *tp;
 {
 /* Hand buffered input characters to the line discipline. */
   char c;
+  u32_t start = hal_cycles();
 
   /* In raw mode a full input queue refuses a character; it is kept for
    * the next read instead of dropped (ZMODEM needs every byte): looked at
    * first, taken only when accepted. */
   for (;;) {
 	int ch;
+
+	/* A host that sends without pause (USB refills the ring while we
+	 * take from it) kept the TTY task here for good: no process ran,
+	 * and the watchdog reset the board (security review 2026-11-16,
+	 * K1).  After a slice the rest waits: handle_events() comes back
+	 * on the next clock tick. */
+	if (hal_cycles() - start > TTY_SLICE_MS * (hal_cpu_hz() / 1000)) {
+		tp->tty_events = 1;
+		break;
+	}
 
 	if (itail != ihead) {			/* UART input */
 		c = ibuf[itail % CONS_IN_BYTES];
