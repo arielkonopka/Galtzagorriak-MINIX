@@ -11,6 +11,9 @@
 # Secrets (the owner adds them; never in the repo): ANTHROPIC_API_KEY, or
 # CLAUDE_CODE_OAUTH_TOKEN (a Pro/Max subscription, `claude setup-token`).
 # Optional repository variable CLAUDE_MODEL (default claude-opus-5-5).
+# Big tasks take 100+ turns: the worker commits and pushes after each
+# finished step (claude-worker.md), so a cut-off run keeps its work;
+# continue it with "@claude continue" on a PR from that branch.
 name: claude-worker
 
 on:
@@ -44,7 +47,7 @@ jobs:
         contains(github.event.comment.body, '@claude') &&
         !contains(github.event.issue.labels.*.name, 'claimed:local')))
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,7 +85,7 @@ jobs:
             Your task is issue #${{ github.event.issue.number }} of this repository.
           claude_args: |
             --model ${{ vars.CLAUDE_MODEL || 'claude-opus-5-5' }}
-            --max-turns 80
+            --max-turns 400
             --allowedTools "Bash(make:*),Bash(python3 -I tools/*),Bash(arm-none-eabi-size:*)"
 
       # "@claude ..." from the owner on an issue or PR: plain tag mode.
@@ -97,6 +100,6 @@ jobs:
             actions: read
           claude_args: |
             --model ${{ vars.CLAUDE_MODEL || 'claude-opus-5-5' }}
-            --max-turns 80
+            --max-turns 400
             --allowedTools "Bash(make:*),Bash(python3 -I tools/*),Bash(arm-none-eabi-size:*)"
             --append-system-prompt "You work on Galtzagorriak MINIX. Before anything else read .github/claude-worker.md and follow it."
