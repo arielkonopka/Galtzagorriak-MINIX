@@ -84,6 +84,7 @@ then
 	chgrp gui /dev/subghzraw 2>/dev/null
 	chmod 660 /dev/subghzraw 2>/dev/null
 fi
+<<<<<<< HEAD
 # Cards made before R6.5 lack /dev/rfid (a 125 kHz tag's signal).
 if test ! -r /dev/rfid
 then
@@ -91,6 +92,8 @@ then
 	chgrp gui /dev/rfid 2>/dev/null
 	chmod 660 /dev/rfid 2>/dev/null
 fi
+=======
+>>>>>>> origin/main
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then
