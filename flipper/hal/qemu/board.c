@@ -127,6 +127,7 @@ int hal_lcd_flush(const uint8_t *fb)
 }
 
 int hal_gauge_read(unsigned cmd) { (void) cmd; return -2; }
+int hal_charger_read(unsigned reg) { (void) reg; return -2; }
 
 unsigned hal_buttons(void)
 {

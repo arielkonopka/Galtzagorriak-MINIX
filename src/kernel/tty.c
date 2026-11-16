@@ -164,6 +164,9 @@ PUBLIC void tty_task()
 		"id %x%s\n", smps ? "on" : "off",
 		cc_us >= 100 ? "asleep" : "awake", cc_us, nfc_op, nfc_id,
 		nfc_op == 0 ? " (off)" : "");
+	nfc_op = hal_charger_read(0x02);	/* T14c: its ADC on demand */
+	printf("charger: adc %s\n", (int) nfc_op < 0 ? "?" :
+			nfc_op & 0x40 ? "continuous" : "on demand");
   }
 #endif
   printf("Minix %s.%s  Copyright 1997 Prentice-Hall, Inc.\n\n",

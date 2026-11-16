@@ -426,6 +426,7 @@ static void spi2_wait_idle(void)
 
 static void i2c1_init(void);
 static int lp5562_init(void);
+static void charger_init(void);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
@@ -465,6 +466,7 @@ void hal_lcd_init(void)
 
 	i2c1_init();
 	if (lp5562_init() == 0) hal_backlight(255);
+	charger_init();
 }
 
 int hal_lcd_flush(const uint8_t *fb)
@@ -597,6 +599,30 @@ int hal_gauge_read(unsigned cmd)
 
 	if (i2c1_read(BQ27220_ADDR, (uint8_t) cmd, b, 2) < 0) return -1;
 	return b[0] | b[1] << 8;
+}
+
+/* The charger (BQ25896, T14c): read its registers; at boot only its ADC is
+ * set to convert on demand (the stock firmware leaves it converting every
+ * second, which the battery pays for while we sleep).  Charge currents,
+ * voltages, ICO and the watchdog stay as the stock firmware set them. */
+#define BQ25896_ADDR	0x6B
+
+int hal_charger_read(unsigned reg)
+{
+	uint8_t r;
+
+	return i2c1_read(BQ25896_ADDR, (uint8_t) reg, &r, 1) < 0 ? -1 : r;
+}
+
+static void charger_init(void)
+{
+	uint8_t b[2];
+
+	if (i2c1_read(BQ25896_ADDR, 0x02, &b[1], 1) < 0) return;
+	if (!(b[1] & 0x40)) return;		/* CONV_RATE: continuous */
+	b[0] = 0x02;
+	b[1] &= ~0xC0;				/* CONV_RATE, CONV_START off */
+	i2c1_write(BQ25896_ADDR, b, 2);
 }
 
 static int lp5562_write(uint8_t reg, uint8_t val)
