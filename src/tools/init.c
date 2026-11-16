@@ -230,7 +230,11 @@ void timed(void)
   }
   if (access(PATH_TIMED, X_OK) != 0) return;	/* not installed */
   if ((pid = vfork()) == 0) {
-	execl(PATH_TIMED, "timed", (char *) NULL);
+	char *cmd[2];			/* the empty environment, as execute() */
+
+	cmd[0] = PATH_TIMED;
+	cmd[1] = NULL;
+	execute(cmd);
 	_exit(1);
   }
   if (pid > 0) timed_pid = pid;
