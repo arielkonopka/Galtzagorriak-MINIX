@@ -706,6 +706,7 @@ int hal_charger_set(int what, int on)
 	case HAL_CHG_CARE:	s = on ? s | 1 : s & ~1u; break;
 	case HAL_CHG_GENTLE:	s = on ? s | 2 : s & ~2u; break;
 	case HAL_CHG_OTG:	/* 5 V on the header; not kept over a reset */
+		charger_nowdog();	/* a watchdog reset turns OTG on */
 		return charger_rmw(0x03, 0x20, on ? 0x20 : 0);
 	case HAL_CHG_PAUSE:	/* the kernel's temperature rule */
 		charger_nowdog();
