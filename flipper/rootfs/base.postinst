@@ -39,3 +39,10 @@ grep '^Power:' /etc/apps >/dev/null || {
 	echo 'Power:nobody:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
 }
+# Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
+if test ! -r /dev/ibutton
+then
+	mknod /dev/ibutton c 6 9 || echo "base: could not make /dev/ibutton"
+	chgrp gui /dev/ibutton 2>/dev/null
+	chmod 660 /dev/ibutton 2>/dev/null
+fi

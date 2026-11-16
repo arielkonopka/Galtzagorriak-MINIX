@@ -65,7 +65,8 @@
 #define GPIO_MINOR	6
 #define IR_MINOR	7
 #define POWER_MINOR	8	/* the fuel gauge, read only (T15a) */
-#define LAST_MINOR	8
+#define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
+#define LAST_MINOR	9
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -164,6 +165,7 @@ FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
 FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int ow_read_rom, (phys_bytes user) );
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -260,6 +262,71 @@ PUBLIC void flipdev_task()
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
   }
+}
+
+
+/*===========================================================================*
+ *				iButton (R6.7)				     *
+ *===========================================================================*/
+/* 1-Wire master, standard speed.  Interrupts are masked (BASEPRI, lock)
+ * only around the timed part of a slot, at most 70 us; between slots the
+ * line idles high and anything may run (1-Wire has no upper bound there).
+ * The 480 us reset pulse runs unmasked: longer is fine. */
+PRIVATE int ow_reset()
+{
+  int present;
+
+  hal_ow_line(1);
+  hal_ow_delay(480);
+  lock();
+  hal_ow_line(0);
+  hal_ow_delay(70);
+  present = !hal_ow_read();
+  unlock();
+  hal_ow_delay(410);
+  return(present);
+}
+
+PRIVATE int ow_bit(b)
+int b;
+{
+  int r = 0;
+
+  lock();
+  hal_ow_line(1);
+  hal_ow_delay(b ? 6 : 60);
+  hal_ow_line(0);
+  if (b) {				/* a 1, or a read slot */
+	hal_ow_delay(9);
+	r = hal_ow_read();
+	hal_ow_delay(55);
+  } else {
+	hal_ow_delay(10);
+  }
+  unlock();
+  return(r);
+}
+
+PRIVATE int ow_read_rom(user)
+phys_bytes user;
+{
+/* Reset, READ ROM (0x33), 8 bytes: family, serial, CRC8 (Dallas). */
+  u8_t rom[8], crc = 0;
+  int i, j;
+
+  if (!ow_reset()) return(ENODEV);		/* no key on the contacts */
+  for (i = 0; i < 8; i++) (void) ow_bit(0x33 >> i & 1);
+  for (i = 0; i < 8; i++) {
+	rom[i] = 0;
+	for (j = 0; j < 8; j++) rom[i] |= (u8_t) (ow_bit(1) << j);
+  }
+  for (i = 0; i < 7; i++) {
+	crc ^= rom[i];
+	for (j = 0; j < 8; j++) crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+  }
+  if (crc != rom[7] || rom[0] == 0) return(EIO);	/* a bad touch */
+  phys_copy(vir2phys(rom), user, (phys_bytes) 8);
+  return(8);
 }
 
 
@@ -443,6 +510,12 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case IBUTTON_MINOR:
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);	/* one ROM, then EOF */
+	if (count < 8) return(EINVAL);
+	return(ow_read_rom(user));
 
   case POWER_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
