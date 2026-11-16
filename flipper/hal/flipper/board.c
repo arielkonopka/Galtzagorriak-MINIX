@@ -453,6 +453,7 @@ static void spi2_wait_idle(void)
 static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
+static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
@@ -652,10 +653,79 @@ int hal_charger_read(unsigned reg)
 	return i2c1_read(BQ25896_ADDR, (uint8_t) reg, &r, 1) < 0 ? -1 : r;
 }
 
+/* Read-modify-write of charger register reg: (old & ~mask) | val. */
+static int charger_rmw(uint8_t reg, uint8_t mask, uint8_t val)
+{
+	uint8_t b[2];
+
+	if (i2c1_read(BQ25896_ADDR, reg, &b[1], 1) < 0) return -1;
+	if ((b[1] & mask) == val) return 0;
+	b[0] = reg;
+	b[1] = (uint8_t) ((b[1] & ~mask) | val);
+	return i2c1_write(BQ25896_ADDR, b, 2);
+}
+
+/* R6.1 (owner 2026-11-15): the battery profile and gentle charging, kept
+ * in RTC backup register 14 (magic 0xC in the top nibble; bit 0 care,
+ * bit 1 gentle).  Only the end-of-charge voltage and the charge current
+ * change, and never above the stock values: VREG 4.208 V (full) or 4.000
+ * V (care); ICHG 2048 mA (the charger's default, which the stock firmware
+ * keeps) or 1024 mA (gentle).  Nothing is written while the register was
+ * never set: the charger stays as the stock firmware left it. */
+#define CHG_REG		(RTC->BKP14R)
+#define CHG_MAGIC	0xC0000000u
+#define VREG_FULL	((4208 - 3840) / 16)
+#define VREG_CARE	((4000 - 3840) / 16)
+#define ICHG_STOCK	(2048 / 64)
+#define ICHG_GENTLE	(1024 / 64)
+
+/* The charger's I2C watchdog (REG07 WATCHDOG, 40 s after the charger's
+ * own power-on reset) would put REG03/04/06 back to their defaults: the
+ * profile, gentle charging and the kernel's temperature pause would be
+ * undone 40 s later.  Off, as the stock firmware's bq25896_init does. */
+static void charger_nowdog(void)
+{
+	(void) charger_rmw(0x07, 0x30, 0);
+}
+
+static void charger_apply(uint32_t s)
+{
+	charger_nowdog();
+	(void) charger_rmw(0x06, 0xFC, (s & 1 ? VREG_CARE : VREG_FULL) << 2);
+	(void) charger_rmw(0x04, 0x7F, s & 2 ? ICHG_GENTLE : ICHG_STOCK);
+}
+
+int hal_charger_set(int what, int on)
+{
+	uint32_t s;
+
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	s = (CHG_REG & 0xF0000000u) == CHG_MAGIC ? CHG_REG & 3 : 0;
+	switch (what) {
+	case HAL_CHG_CARE:	s = on ? s | 1 : s & ~1u; break;
+	case HAL_CHG_GENTLE:	s = on ? s | 2 : s & ~2u; break;
+	case HAL_CHG_OTG:	/* 5 V on the header; not kept over a reset */
+		charger_nowdog();	/* a watchdog reset turns OTG on */
+		return charger_rmw(0x03, 0x20, on ? 0x20 : 0);
+	case HAL_CHG_PAUSE:	/* the kernel's temperature rule */
+		charger_nowdog();
+		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
+	default:		return -1;
+	}
+	bkp_set(&CHG_REG, CHG_MAGIC | s);
+	charger_apply(s);
+	return 0;
+}
+
 static void charger_init(void)
 {
 	uint8_t b[2];
 
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	charger_nowdog();
+	if ((CHG_REG & 0xF0000000u) == CHG_MAGIC) charger_apply(CHG_REG & 3);
 	if (i2c1_read(BQ25896_ADDR, 0x02, &b[1], 1) < 0) return;
 	if (!(b[1] & 0x40)) return;		/* CONV_RATE: continuous */
 	b[0] = 0x02;

@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R6.1) Charging settings written to `/dev/power` (root): `profile full|care` (charge to 4.208 V or about 4.0 V), `gentle on|off` (1 A instead of the stock 2 A), `otg on|off` (5 V on the GPIO header); the profile and gentle charging are kept in an RTC backup register. `/dev/power` also shows `vreg=`, `ichg=` and `otg=`. Base 3.66 (`/dev/power` 0644). Once a minute the kernel checks the battery: on a charger, charging pauses outside 0–45 °C (gauge temperature; resumes between 2 and 43 °C); below 3.3 V no new flash erases start.
 - Fix (#108): a program started right after an update, with memory short, could get garbage argument pointers and crash once (seen as `signal 11 ... addr=e000ed34` in `ed` and `wc`): exec copied the text to the flash cache through the buffer that held the new stack image.
 - About screen: one fact per line (name and version, MINIX base, machine and ABI, host, uptime); the version line no longer runs off the screen. Base 3.65.
 - (R6.4, part 1) `cat /dev/adc` shows the voltage in mV on the GPIO header pins with an ADC input (2, 3, 4, 7, 15, 16) that are left analog (`gpio N off`, the default), and the supply (VDDA): 16x hardware oversampling, calibrated by the chip's internal reference. Base 3.64.

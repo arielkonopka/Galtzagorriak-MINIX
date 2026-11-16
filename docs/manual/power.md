@@ -64,6 +64,24 @@ Flipper sleeps are lost. If you use it, keep USB connected as well.
 On a latency-trace build, `lat` prints how long the Flipper spent in Stop2 since boot, how many
 wake-ups came from a button, and why idle time did not sleep (USB, an alarm too close, and so on).
 
+## Charging settings
+
+As root you can change how the battery is charged by writing a command to `/dev/power`:
+
+```
+echo profile care > /dev/power    # charge to about 80 % (4.0 V): for a Flipper kept on a charger
+echo profile full > /dev/power    # charge to full (4.208 V, as the stock firmware)
+echo gentle on > /dev/power       # charge at 1 A instead of 2 A: slower, cooler
+echo gentle off > /dev/power
+echo otg on > /dev/power          # 5 V on the GPIO header (pin 1), for a module
+echo otg off > /dev/power
+```
+
+The profile and gentle charging are kept until you change them (also over a reboot or power off,
+as long as the battery is in). Nothing ever charges faster than the stock firmware does.
+`cat /dev/power` shows the result at the end of the line: `vreg=` (charge-to voltage in mV),
+`ichg=` (charge current limit in mA) and `otg=`.
+
 ## Power off
 
 `halt` (as root) switches the Flipper off for real: the battery is disconnected from the system

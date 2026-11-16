@@ -91,6 +91,8 @@ u32_t *basep, *sizep;		/* region (all ops) */
 	 * (R2b.11): when spent, MM keeps the text in RAM */
 	if (op == FL_ERASE && !hal_fc_erase_ok(b == *basep, UPDAY))
 		return(ENOSPC);
+	if (op == FL_ERASE && (pm_busy & PM_LOWBAT))	/* R6.1 */
+		return(ENOSPC);
   }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 
@@ -733,6 +735,31 @@ PUBLIC void task_yield()
 #define PM_NOT(r)	return(0)
 #endif
 
+/* R6.1, once a minute from the clock task (no interrupt lines from the
+ * gauge or the charger):
+ * - battery below PM_LOW_MV: no new flash erases (an install that starts
+ *   would risk the battery cutting out in the middle; MM keeps the text in
+ *   RAM, as with a spent budget); back above with 100 mV of hysteresis;
+ * - on a charger: pause charging outside 0-45 C by the gauge's temperature
+ *   (the board has no thermistor on the charger's TS pin), resume between
+ *   2 and 43 C. */
+#define PM_LOW_MV	3300
+
+PUBLIC void pm_minute()
+{
+  int v, t;
+
+  if ((v = hal_gauge_read(HAL_GAUGE_VOLT)) > 0) {
+	if (v < PM_LOW_MV) pm_busy |= PM_LOWBAT;
+	else if (v >= PM_LOW_MV + 100) pm_busy &= ~PM_LOWBAT;
+  }
+  if (!(pm_busy & PM_VBUS) && !hal_usb_awake()) return;
+  if ((t = hal_gauge_read(HAL_GAUGE_TEMP)) < 0) return;
+  t -= 2731;				/* 0.1 K -> 0.1 C */
+  if (t < 0 || t > 450) (void) hal_charger_set(HAL_CHG_PAUSE, 1);
+  else if (t >= 20 && t <= 430) (void) hal_charger_set(HAL_CHG_PAUSE, 0);
+}
+
 /*===========================================================================*
  *				flash ECC (R4a.5)			     *
  *===========================================================================*/
@@ -795,7 +822,7 @@ PRIVATE int pm_sleep()
   unsigned frac, e, us, n, rest, cyc, lp, want;
   int w;
 
-  if (pm_busy || bell_ticks || !hal_can_stop2()) PM_NOT(1);
+  if ((pm_busy & PM_BLOCKERS) || bell_ticks || !hal_can_stop2()) PM_NOT(1);
   if (hal_usb_awake()) PM_NOT(2);
   d = clock_idle();
   if (d < 2) PM_NOT(3);
