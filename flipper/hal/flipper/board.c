@@ -948,8 +948,8 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 /* R7b.5: LED patterns run by the LP5562's engine 2 on its own (the CPU
  * loads them once and may sleep).  One engine gives one brightness to all
  * the channels mapped to it, so the colour comes from the channels'
- * currents: each 0..2 mA (the stock 20 x 0.1 mA) in proportion to its
- * part of 0xRRGGBB, while the program swings the PWM.  Instructions as
+ * currents: each 0..2 mA (the stock 20 x 0.1 mA) after its part of
+ * 0xRRGGBB, while the program swings the PWM.  Instructions as
  * the datasheet's (the stock fade's encoding): set PWM 0x40nn,
  * wait/ramp (prescale 15.6 or 0.49 ms, steps, sign, count), branch
  * 0xA000 (loop count 0: for ever). */
@@ -968,6 +968,8 @@ static const struct { char name[8]; uint16_t w[12]; } lp_pat[] = {
 		      LP_LOOP } },
 };
 
+static const uint8_t lp_white[3] = { 200, 128, 96 };
+
 static void lp5562_cur(unsigned r, unsigned g, unsigned b)
 {
 	lp5562_rmw(0x07, 0xFF, (uint8_t) r);
@@ -984,8 +986,15 @@ int hal_led_pattern(const char *name, unsigned long rgb)
 		for (i = 0; name[i] == lp_pat[k].name[i] && name[i]; i++) ;
 		if (name[i] == lp_pat[k].name[i]) break;
 	}
-	for (i = 0; i < 3; i++)		/* red, green, blue: 0.1 mA, rounded */
-		c[i] = ((rgb >> (16 - 8 * i) & 0xFF) * LP_CUR + 127) / 255;
+	for (i = 0; i < 3; i++) {	/* red, green, blue: 0.1 mA, rounded */
+		unsigned long v = rgb >> (16 - 8 * i) & 0xFF;
+
+		/* the web's #rrggbb is gamma-coded: light ~ v squared; and
+		 * the green LED looks brighter, the red a bit: white is
+		 * 200:128:96 (seen on the device, R7b.5) */
+		c[i] = (unsigned) ((v * v * lp_white[i] * LP_CUR + 8290687UL)
+								/ 16581375UL);
+	}
 	if (k == sizeof lp_pat / sizeof lp_pat[0] || (c[0] | c[1] | c[2]) == 0)
 		return -1;
 	hal_led(0, 0, 0);			/* stops a running one */

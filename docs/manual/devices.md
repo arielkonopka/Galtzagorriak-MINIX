@@ -98,7 +98,8 @@ echo off >/dev/led
 | `pulse` | fades in and out, about every 2 s             |
 
 Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
-as on the web; the chip sets each colour's current in 20 steps, so close shades look the
-same). An unknown pattern or
+as on the web, corrected for the LEDs so that `#ff8000` looks orange; the chip sets each colour's
+current in 20 steps, so close shades look the same, and very dark colours such as `#202020`
+are refused). An unknown pattern or
 colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
 stops the pattern; the screen's backlight does not. The pattern stops with a reset.
