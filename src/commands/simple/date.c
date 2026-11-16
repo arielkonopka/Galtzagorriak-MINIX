@@ -303,8 +303,8 @@ int m, d;
 }
 
 /* Convert a date string into UTC seconds (spec R2d.8): local time, or UTC
- * with -u or a trailing Z.  [[MMDD[CC]YY]hhmm[ss]][Z]; a two-digit year is
- * 1970-2069. */
+ * with -u or a trailing Z.  [[MMDDYY]hhmm[ss]][Z] or MMDDCCYYhhmmss[Z]; a
+ * two-digit year is 1970-2069. */
 time_t make_time(t)
 char *t;
 {
@@ -390,6 +390,6 @@ char *t;
 void usage()
 {
   outfd = 2;
-  pstring("Usage: date [-qsu] [-t seconds] [[MMDD[CC]YY]hhmm[ss][Z]] [+format]\n", -1);
+  pstring("Usage: date [-qsu] [-t seconds] [[MMDDYY]hhmm[ss][Z] | MMDDCCYYhhmmss[Z]] [+format]\n", -1);
   exit(1);
 }
