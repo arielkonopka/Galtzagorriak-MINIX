@@ -12,6 +12,8 @@
  */
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
+#include <minix/fg.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
@@ -78,7 +80,7 @@ static void run(struct app *ap)
 	char cmd[sizeof ap->cmd], *argv[MAXARGS + 1], *p;
 	struct passwd *pw;
 	struct group *gr;
-	int argc = 0, st;
+	int argc = 0, st, fg;
 	pid_t pid;
 
 	strcpy(cmd, ap->cmd);
@@ -96,6 +98,7 @@ static void run(struct app *ap)
 		return;
 	}
 	gui_close();			/* the app opens the devices itself */
+	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
 	gr = getgrnam("gui");		/* before: stdio state is ours */
 	if ((pid = vfork()) == 0) {	/* R2c.2; the child only sets ids,
 					 * changes directory and execs */
@@ -108,7 +111,16 @@ static void run(struct app *ap)
 		execv(argv[0], argv);
 		_exit(127);
 	}
+	/* The app owns the screen and buttons now: long Back ends it.  (Its
+	 * first frames, before this, are not dropped: nobody owned them.) */
+	if (pid > 0 && fg >= 0) (void) ioctl(fg, FGIOCSET, &pid);
 	if (pid > 0) while (waitpid(pid, &st, 0) < 0) ;
+	if (fg >= 0) {
+		int none = 0;
+
+		(void) ioctl(fg, FGIOCSET, &none);	/* the app is gone */
+		close(fg);
+	}
 	if (gui_open() < 0) exit(1);
 }
 

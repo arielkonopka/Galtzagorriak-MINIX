@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <minix/fg.h>
 #include <unistd.h>
 
 static int fails;
@@ -202,6 +204,30 @@ int main(int argc, char **argv)
 		close(up[0]); close(up[1]); close(down[0]); close(down[1]);
 		check(okk && wait(&st) == pid && WIFEXITED(st)
 			&& WEXITSTATUS(st) == 0, "fork: 200 shadow flips");
+	}
+
+	/* R4b.8: the foreground app.  Only it may hand the screen on while
+	 * it lives; when it is gone anybody may. */
+	{
+		int fd = open("/dev/lcd", O_RDONLY), none = 0, bad = 30000;
+		int r1, r2, r3, r4, e2;
+
+		pid = fork();
+		if (pid == 0) {
+			pause();
+			_exit(0);
+		}
+		r1 = ioctl(fd, FGIOCSET, &pid);
+		r2 = ioctl(fd, FGIOCSET, &none);
+		e2 = errno;
+		kill(pid, SIGKILL);
+		(void) wait(&st);
+		r3 = ioctl(fd, FGIOCSET, &none);
+		r4 = ioctl(fd, FGIOCSET, &bad);
+		check(fd >= 0 && r1 == 0 && r2 == -1 && e2 == EPERM && r3 == 0
+			&& r4 == -1 && errno == ESRCH,
+			"foreground: hand over, refuse others, free at exit");
+		close(fd);
 	}
 
 	/* Memory protection: a user process may not touch kernel memory. */
