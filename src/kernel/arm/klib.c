@@ -711,7 +711,7 @@ PRIVATE int pm_sleep()
   unsigned frac, e, us, n, rest, cyc, lp, want;
   int w;
 
-  if (pm_busy || bell_ticks || hal_mt_irq() < 0) PM_NOT(1);
+  if (pm_busy || bell_ticks || !hal_can_stop2()) PM_NOT(1);
   if (hal_usb_awake()) PM_NOT(2);
   d = clock_idle();
   if (d < 2) PM_NOT(3);

@@ -492,6 +492,17 @@ int hal_lcd_flush(const uint8_t *fb)
 	return 0;
 }
 
+int hal_lcd_save(int on)
+{
+	/* as u8g2's ST7567 power save (stock firmware's display driver) */
+	static const uint8_t save[] = { 0xAE, 0xA5 }, wake[] = { 0xA4, 0xAF };
+
+	if (!(GPIOC->ODR & (1u << 12))) return -1;	/* the SD's transfer */
+	if (on) lcd_cmds(save, sizeof save);
+	else lcd_cmds(wake, sizeof wake);
+	return 0;
+}
+
 /*===========================================================================*
  *				I2C1 ("power" bus) and LP5562		     *
  *===========================================================================*/
@@ -1235,6 +1246,11 @@ unsigned hal_buttons(void)
  * out of an interrupt, and nothing may run on a quarter of the clock.
  * Returns what woke it (HAL_WAKE_*), -1 if the CPU is not on the PLL (no
  * HSE at boot: no Stop2 either). */
+int hal_can_stop2(void)
+{
+	return (RCC->CFGR & RCC_CFGR_SWS) == (3u << RCC_CFGR_SWS_Pos);
+}
+
 int hal_stop2(void)
 {
 	uint32_t sai = RCC->CR & RCC_CR_PLLSAI1ON;
