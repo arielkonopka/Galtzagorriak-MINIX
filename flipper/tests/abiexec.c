@@ -1,10 +1,12 @@
 /* abiexec - J.3: MM's exec checks the ABI stamp (a.out a_version).
  *  1. a program stamped with another ABI (99) -> ENOEXEC, nothing runs
- *  2. a program from before the stamp (a_version 0) still runs
+ *  2. a program from before the stamp (a_version 0 = ABI 1, 32-bit time_t)
+ *     -> ENOEXEC since ABI 2 (R2d.1); one with this ABI's stamp runs
  *  3. the system keeps running (this test goes on)
  * The copies are made of this test itself in /tmp.
  */
 #include "t.h"
+#include <minix/gzversion.h>
 
 static int copy_stamped(char *from, char *to, unsigned short abi)
 {
@@ -40,6 +42,12 @@ static void run99(void)
 static void run0(void)
 {
 	execl("/tmp/abi0", "abi0", "child", (char *) 0);
+	_exit(errno == ENOEXEC ? 0 : 1);	/* ABI 1: exec must fail */
+}
+
+static void runcur(void)
+{
+	execl("/tmp/abicur", "abicur", "child", (char *) 0);
 	_exit(1);				/* exec must work */
 }
 
@@ -51,7 +59,8 @@ int main(int argc, char **argv)
 	self = argc > 0 && argv[0][0] == '/' ? argv[0] : "/usr/tests/abiexec";
 
 	if (copy_stamped(self, "/tmp/abi99", 99) < 0
-	    || copy_stamped(self, "/tmp/abi0", 0) < 0) {
+	    || copy_stamped(self, "/tmp/abi0", 0) < 0
+	    || copy_stamped(self, "/tmp/abicur", GZ_ABI) < 0) {
 		printf("FAIL abiexec: cannot copy %s to /tmp\n", self);
 		return 1;
 	}
@@ -59,9 +68,13 @@ int main(int argc, char **argv)
 	t_result("exec of a program for ABI 99", st == 0,
 		st == 0 ? "ENOEXEC" : "it ran or failed otherwise");
 	st = t_child(run0);
-	t_result("exec of a program from before the stamp",
+	t_result("exec of a program from before the stamp (ABI 1)", st == 0,
+		st == 0 ? "ENOEXEC" : "it ran or failed otherwise");
+	st = t_child(runcur);
+	t_result("exec of a program for this ABI",
 		WIFEXITED(st) && WEXITSTATUS(st) == 7, NULL);
 	unlink("/tmp/abi99");
 	unlink("/tmp/abi0");
+	unlink("/tmp/abicur");
 	return t_fail;
 }

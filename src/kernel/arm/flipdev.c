@@ -764,7 +764,7 @@ clock_t now;
 {
 /* LCD_SAVE_S after the light went off, on battery only, the LCD sleeps as
  * well (T14d; a few hundred uA). */
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input;
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input);
 
   if (t == 0) return(0);
   if (idle >= t + (clock_t) LCD_SAVE_S * HZ && !hal_usb_awake())
@@ -795,7 +795,7 @@ PRIVATE void do_hardint()
   bl_apply();
   if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
 						 * interrupt handler */
-	unsigned b, sec = (unsigned) (get_uptime() / HZ);
+	unsigned b, sec = (unsigned) ((unsigned long) get_uptime() / HZ);
 	int fg;
 
 	lock();
@@ -873,7 +873,7 @@ PUBLIC void flipdev_tick()
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
   if (!(last_buttons & BTN_EXTI)) fg_hold(btn_sample());
-  if ((last_buttons & FG_KILL) && ((unsigned) (uptime_irq() / HZ)
+  if ((last_buttons & FG_KILL) && ((unsigned) ((unsigned long) uptime_irq() / HZ)
 		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
 	interrupt(PRINTER);
 }
@@ -889,7 +889,7 @@ clock_t now;
  * has some on every tick (a tune, an IR reader or frame, the LCD console
  * waiting for the bus).  The backlight's next step: see bl_want. */
   u32_t st = hal_bl_state();
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input), d;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
   if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
