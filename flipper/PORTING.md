@@ -847,11 +847,57 @@ off for 30 s or more; the gauge counts in whole mA, so this is coarse):
 | Date | Build | Idle | Notes |
 |---|---|---|---|
 | 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
+| 2026-11-16 | + T14d part 1 (#120, LCD power save) | -2 mA | same setup; the LCD blank after 15 s + 2 min |
 
 Not measured: the build before T14a (#112) and the stock firmware's
 battery screen for comparison (each needs two more flashes; no meter on
-the battery leads at hand).  T14d (screen off, SD off) is next for the
-remaining draw.
+the battery leads at hand).  The SD rail (T14d part 2) is not switched
+off yet: with SPI2 shared with the LCD, an unpowered card would be fed
+through its inputs (CS idles high, SCK/MOSI toggle with every frame);
+that needs the pins parked while the card is off, and a meter to show it
+is worth it.
+
+How the sleep works (T14b, #115 #116 #121; for whoever changes it):
+
+- **Idle.** `idle_task` (arm/klib.c) runs `pm_sleep()` with interrupts
+  masked.  Stop2 only when: no bit of `pm_busy & PM_BLOCKERS` (PM_DISK:
+  an SD DMA transfer; PM_VBUS: power on the USB connector), no bell, the
+  USB bus suspended (`hal_usb_awake`), and the next tick work is >= 2
+  ticks away: `clock_idle()` (alarms, TTY timers) and `flipdev_idle()`
+  (a tune, IR, the LCD console, the backlight's next step, the LCD power
+  save, a pending SIGKILL of R4b.8).  Otherwise `wfi` with SysTick on.
+- **The wake-up time** is the ms timer's client MT_IDLE (LPTIM1 on the
+  LSE, which counts in Stop2).  Arming takes one idle turn: the compare
+  write's CMPOK interrupt comes first, the next turn sleeps.  At most 58
+  ticks (< 1 s).
+- **Time.**  SysTick stops; after the wake the LPTIM clocks slept plus the
+  part of the tick already gone become whole ticks (into `lost_ticks`,
+  with SysTick pended at once: at equal priority it runs before the
+  interrupt that woke us, so its handler sees the right uptime) and the
+  rest (SysTick restarted with what is left of the tick).  The clock
+  follows the LSE; checked against the RTC after an hour.
+- **Clocks.**  Stop2 entry and exit as stock `furi_hal_power_deep_sleep`
+  without CPU2's semaphores; HSE + PLL (+ PLLSAI1 for USB) are restored
+  with interrupts still masked (~140 us), because the kernel switches
+  tasks on the way out of an interrupt and nothing may run on HSI16.
+- **Watchdog.**  The stock option bytes keep the IWDG running in Stop2.
+  No sleep is longer than 1 s and each wake raises the clock interrupt
+  with the slept ticks, so the clock task kicks it whenever a 32-tick
+  boundary passed.
+- **USB.**  The USB wake-up line does not reliably bring the CPU out of
+  Stop2 (seen: a host's enumeration lost, console dead until reset), so
+  the clock task asks the charger (`PG_STAT`) on each run while the bus
+  is suspended, and power on VBUS (PM_VBUS) keeps the CPU out of Stop2.
+- **Buttons** interrupt on EXTI 3, 6, 10-13 (both edges); while one is
+  down the ms timer samples every 8 ms (debounce), then the edges are
+  armed again.
+- **Once a minute** (`pm_minute`, R6.1): below 3.3 V no new flash erases;
+  on a charger, charging paused outside 0-45 C.
+- **Not here:** the UART console on the header cannot wake the CPU
+  (USART1 has no Stop2 wake-up); keep USB attached to use it.
+
+Statistics: a `make latcheck` kernel and `lat` show the time in Stop2,
+wake-ups by source, the entry/exit time and why idle did not sleep.
 
 ## Status
 
