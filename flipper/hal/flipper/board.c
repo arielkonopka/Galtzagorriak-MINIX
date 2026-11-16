@@ -259,11 +259,16 @@ long hal_subghz_rx(uint32_t hz)
 	w = (uint32_t) (((uint64_t) hz << 16) / 26000000u);	/* 26 MHz xtal */
 	gpio_cfg(GPIOC, 4, MODE_OUT, PULL_NONE, 0);	/* RF switch 0 */
 	spi1_on(0);
-	cc_strobe(0x30);				/* SRES */
-	(void) cc_ready();
-	CC_CS(0);
-	for (i = 0; i < sizeof cc_rx_regs; i += 2)
-		(void) cc_xfer2(cc_rx_regs[i], cc_rx_regs[i + 1]);
+	/* Already set up (a sweep retunes): only idle, frequency, path, RX,
+	 * about 1 ms instead of 3. */
+	if (cc_xfer2(0x10 | 0x80, 0) != 0x17 || cc_xfer2(0x08 | 0x80, 0) != 0x32) {
+		cc_strobe(0x30);			/* SRES */
+		(void) cc_ready();
+		CC_CS(0);
+		for (i = 0; i < sizeof cc_rx_regs; i += 2)
+			(void) cc_xfer2(cc_rx_regs[i], cc_rx_regs[i + 1]);
+	} else
+		cc_strobe(0x36);			/* SIDLE first */
 	(void) cc_xfer2(0x0D, (uint8_t) (w >> 16));	/* FREQ2..0 */
 	(void) cc_xfer2(0x0E, (uint8_t) (w >> 8));
 	(void) cc_xfer2(0x0F, (uint8_t) w);
