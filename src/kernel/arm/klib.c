@@ -111,7 +111,9 @@ u32_t *basep, *sizep;		/* region (all ops) */
 	rbar7 = MPU_RBAR;
 	rasr7 = MPU_RASR;
 	MPU_RBAR = lo & ~((1u << k) - 1);
-	MPU_RASR = MPU_RASR_AP_RW_NO | MPU_RASR_XN | (u32_t) (k - 1) << 1
+	/* no XN: a range across a large boundary widens the block (up to
+	 * 1 MB, all of flash), and handlers run from flash meanwhile */
+	MPU_RASR = MPU_RASR_AP_RW_NO | (u32_t) (k - 1) << 1
 							| MPU_RASR_ENABLE;
   }
   *(volatile u32_t *) 0xE000E008 |= 2;	/* ACTLR.DISDEFWBUF: precise faults */
