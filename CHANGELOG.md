@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R4b.9) SD transfers check their CRC16 with the STM32WB's CRC unit instead of in software (a 512-byte sector: ~150 instead of ~10 000 cycles), after a self-test at start; on a mismatch the software CRC stays.
 - The LCD is written at 8 MHz instead of 4 (a frame in about 1 ms instead of 2: the CPU is free sooner for everything else).
 - Fixes from the device check: `/dev/adc` read nonsense (VREF+ floats on the Flipper): it now turns the internal 2.5 V reference buffer on for the reading, as the stock firmware does; the range is 0–2.5 V, `>` above it, and the line ends with `ref=` (the measured reference). Fault reports showed `addr=e000ed34` for every memory fault on the device: the address is now read before the fault status is cleared. The About screen's uptime counts. Base 3.67.
 - Security review of the kernel (`docs/security/`, weekly from now on): a USB host or the header UART flooding the console can no longer freeze the Flipper or make the watchdog reset it (the TTY task works on input in 2 ms slices, and echo to a USB host that does not read is dropped instead of waited for); a damaged SD card can no longer hang the boot with a looping extended partition table or hold the CPU for seconds when it stops answering. PC tests for hostile input: `make -C flipper/tests/host` (partition tables, the USB stack) and `tools/conflood.py` (QEMU).
