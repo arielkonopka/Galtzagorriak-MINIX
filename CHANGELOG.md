@@ -6,10 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
-<<<<<<< HEAD
 - (R6.5, part 1) LF RFID reading: `rfid` reads a 125 kHz tag held to the back and prints its EM4100 number as the stock app does (`EM4100 04 00 98 3D C5`); `/dev/rfid` gives the tag's signal timed by the pulse engine (the field from TIM1, the antenna's comparator into TIM2, DMA into the reader). Other kinds (HID, Indala) are shown as a summary for now. Base 3.76.
-=======
->>>>>>> origin/main
 - (R4b.7, part 2) `/dev/subghzraw`: what the Sub-GHz receiver demodulates (OOK), timed by the pulse engine like `/dev/ir` (durations in µs, carrier first); tune with `/dev/subghz` first. `ir rx -r -d /dev/subghzraw` shows it. Without an RSSI threshold the receiver's noise toggles it too (as stock "Read RAW" without one). Base 3.75.
 - (R4b.7, part 1) The pulse engine: infrared frames are received by timer capture and DMA straight into the reading program's buffer (1 µs resolution, one interrupt at the start and one at the end of a frame instead of one per edge; the 64-byte receive ring is gone). `/dev/ir` reads as before. A frame may be sent while another program waits for one. Kernel −16 B.
 - (R6.2, R7b.1, R7b.3, T14c) The clock: setting the time (`date`) writes the RTC, so it survives resets and power-off, and the time is read from it (it keeps counting in Stop2). `/dev/rtc` and the `rtc` command (root, new group `timers`): RTC Alarm A up to 27 days ahead, smooth calibration (`rtc cal`, 0.954 ppm steps). An alarm wakes the CPU from Stop2 and sends the new signal `SIGRTC` (7, ignored unless caught) to INIT, which runs `/usr/lib/timed` when installed (also at boot and after the time is set). Switched off on battery, the Flipper is started again by the alarm, early by the boot lead (`rtc lead`, first 10 s); `rtc` tells whether this boot came from the alarm. Base 3.74.
