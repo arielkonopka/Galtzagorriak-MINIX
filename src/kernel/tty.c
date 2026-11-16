@@ -1358,9 +1358,9 @@ clock_t now;				/* current time */
   tty_t *tp;
 
   /* Scan the timerlist for expired timers and compute the next timeout time. */
-  tty_timeout = TIME_NEVER;
+  tty_timeout = TADD(now, LONG_MAX);	/* none: half the range ahead */
   while ((tp = tty_timelist) != NULL) {
-	if (tp->tty_time > now) {
+	if (TDIFF(tp->tty_time, now) > 0) {
 		tty_timeout = tp->tty_time;	/* this timer is next */
 		break;
 	}
@@ -1396,15 +1396,15 @@ int on;				/* set timer if true, otherwise unset */
   if (!on) return;				/* unsetting it is enough */
 
   /* Timeout occurs TIME deciseconds from now. */
-  tp->tty_time = get_uptime() + tp->tty_termios.c_cc[VTIME] * (HZ/10);
+  tp->tty_time = TADD(get_uptime(), tp->tty_termios.c_cc[VTIME] * (HZ/10));
 
   /* Find a new place in the list. */
   for (ptp = &tty_timelist; *ptp != NULL; ptp = &(*ptp)->tty_timenext) {
-	if (tp->tty_time <= (*ptp)->tty_time) break;
+	if (TDIFF(tp->tty_time, (*ptp)->tty_time) <= 0) break;
   }
   tp->tty_timenext = *ptp;
   *ptp = tp;
-  if (tp->tty_time < tty_timeout) tty_timeout = tp->tty_time;
+  if (TDIFF(tp->tty_time, tty_timeout) < 0) tty_timeout = tp->tty_time;
 }
 
 

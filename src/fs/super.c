@@ -118,8 +118,10 @@ bit_t bit_returned;		/* number of bit to insert into the map */
 
   if (map == IMAP) {
 	start_block = SUPER_BLOCK + 1;
+	if (bit_returned / BITS_PER_BLOCK >= sp->s_imap_blocks) return;
   } else {
 	start_block = SUPER_BLOCK + 1 + sp->s_imap_blocks;
+	if (bit_returned / BITS_PER_BLOCK >= sp->s_zmap_blocks) return;
   }
   block = bit_returned / BITS_PER_BLOCK;
   word = (bit_returned % BITS_PER_BLOCK) / BITCHUNK_BITS;
@@ -130,8 +132,14 @@ bit_t bit_returned;		/* number of bit to insert into the map */
 
   k = conv2(sp->s_native, (int) bp->b_bitmap[word]);
   if (!(k & mask)) {
-	panic(map == IMAP ? "tried to free unused inode" :
-	      "tried to free unused block", NO_NUM);
+	/* A damaged file system (two files sharing a zone, a stale map):
+	 * this halted the whole system (security review 2026-11-16, F2).
+	 * Leave the map as it is and say so; fsck repairs it. */
+	printf("FS: freeing unused %s %u on device %d/%d: run fsck\n",
+		map == IMAP ? "inode" : "zone bit", (unsigned) bit_returned,
+		(sp->s_dev >> MAJOR) & BYTE, (sp->s_dev >> MINOR) & BYTE);
+	put_block(bp, MAP_BLOCK);
+	return;
   }
 
   k &= ~mask;
@@ -256,6 +264,23 @@ register struct super_block *sp; /* pointer to a superblock */
   if (sp->s_imap_blocks < 1 || sp->s_zmap_blocks < 1
 				|| sp->s_ninodes < 1 || sp->s_zones < 1
 				|| (unsigned) sp->s_log_zone_size > 4) {
+	return(EINVAL);
+  }
+  /* The layout must add up (security review 2026-11-16, F3): bit maps big
+   * enough for every inode and zone (else freeing a bit cleared one in
+   * the inode table), the data zones after the inodes and inside the
+   * device's zone count.  A damaged card is refused, not mounted. */
+  if ((unsigned long) sp->s_imap_blocks * BITS_PER_BLOCK
+					< (unsigned long) sp->s_ninodes + 1
+	|| sp->s_firstdatazone < 1
+	|| (unsigned long) sp->s_firstdatazone >= (unsigned long) sp->s_zones
+	|| (unsigned long) sp->s_zmap_blocks * BITS_PER_BLOCK
+		< (unsigned long) sp->s_zones - (sp->s_firstdatazone - 1)
+	|| ((unsigned long) sp->s_firstdatazone << sp->s_log_zone_size)
+		< (unsigned long) SUPER_BLOCK + 1 + sp->s_imap_blocks
+			+ sp->s_zmap_blocks + (sp->s_ninodes
+			+ sp->s_inodes_per_block - 1) / sp->s_inodes_per_block) {
+	printf("FS: inconsistent super block, not mounted\n");
 	return(EINVAL);
   }
   sp->s_dev = dev;		/* restore device number */

@@ -216,7 +216,7 @@ register struct inode *rip;	/* pointer to inode to be read/written */
  * released, update_times() may be called to actually fill in the times.
  */
 
-  time_t cur_time;
+  ftime32_t cur_time;
   struct super_block *sp;
 
   sp = rip->i_sp;		/* get pointer to super block. */

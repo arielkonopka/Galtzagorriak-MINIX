@@ -13,7 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/times.h>
 #include <minix/fg.h>
+#include <time.h>
+#include <utime.h>
 #include <unistd.h>
 
 static int fails;
@@ -99,6 +103,138 @@ static void flash_report(void)
 							fc.inst_erased);
 }
 
+/* Phase 2d (UTC, 64-bit time_t).  gmtime and mktime against known dates:
+ * time, wday, yday and the year, both ways. */
+static int date_is(time_t t, int y, int mo, int d, int h, int mi, int se,
+							int wd, int yd)
+{
+	struct tm *tm = gmtime(&t), c;
+
+	if (tm == NULL || tm->tm_year != y - 1900 || tm->tm_mon != mo - 1
+	    || tm->tm_mday != d || tm->tm_hour != h || tm->tm_min != mi
+	    || tm->tm_sec != se || tm->tm_wday != wd || tm->tm_yday != yd)
+		return 0;
+	c = *tm;			/* back with mktime, TZ=UTC0 */
+	c.tm_isdst = 0;
+	return mktime(&c) == t;
+}
+
+static void alarm_handler(int sig)
+{
+	got_sig = sig;
+}
+
+static char tz_utc[] = "TZ=UTC0";	/* putenv writes into them: not const */
+static char tz_cet[] = "TZ=CET-1CEST,M3.5.0,M10.5.0/3";
+
+static void time_tests(void)
+{
+	struct tm *tm, lt;
+	struct stat st;
+	struct utimbuf ut;
+	time_t t0, t, a;
+	int fd, r, e;
+
+	putenv(tz_utc);
+	check(sizeof(time_t) == 8 && (time_t) -1 < 0
+		&& date_is((time_t) 2147483648LL, 2038, 1, 19, 3, 14, 8, 2, 18)
+		&& date_is((time_t) -1, 1969, 12, 31, 23, 59, 59, 3, 364)
+		&& date_is((time_t) 4107542400LL, 2100, 3, 1, 0, 0, 0, 1, 59)
+		&& date_is((time_t) 253402300799LL, 9999, 12, 31, 23, 59, 59,
+									5, 364)
+		&& date_is((time_t) -2203891200LL, 1900, 3, 1, 0, 0, 0, 4, 59),
+		"64-bit time_t: gmtime/mktime 1900-9999 (R2d.4)");
+
+	/* AC2d.5: CET/CEST spring forward, 2026-03-29 01:00 UTC */
+	putenv(tz_cet);
+	t = 1774745999L;
+	tm = localtime(&t);
+	r = tm->tm_hour == 1 && tm->tm_min == 59 && tm->tm_sec == 59
+		&& tm->tm_isdst == 0;
+	t++;
+	tm = localtime(&t);
+	r = r && tm->tm_hour == 3 && tm->tm_min == 0 && tm->tm_sec == 0
+		&& tm->tm_isdst == 1;
+	lt = *tm;
+	lt.tm_isdst = -1;
+	check(r && mktime(&lt) == t, "TZ CET-1CEST: 01:59:59 -> 03:00:00 local"
+							" (AC2d.5)");
+	putenv(tz_utc);
+
+	/* AC2d.2: files keep 1970-2106 */
+	fd = creat("/tmp/t2d", 0644);
+	if (fd >= 0) close(fd);
+	ut.actime = ut.modtime = 4291747200LL;		/* 2106-01-01 */
+	r = utime("/tmp/t2d", &ut);
+	check(fd >= 0 && r == 0 && stat("/tmp/t2d", &st) == 0
+		&& st.st_mtime == 4291747200LL && st.st_atime == 4291747200LL,
+		"utime 2106-01-01 kept (AC2d.2)");
+	ut.actime = ut.modtime = 4323283200LL;		/* 2107-01-01 */
+	errno = 0;
+	r = utime("/tmp/t2d", &ut);
+	check(r == -1 && errno == EINVAL, "utime 2107 -> EINVAL (AC2d.2)");
+
+	/* AC2d.1: the clock across 2038-01-19 03:14:07 UTC */
+	t0 = time((time_t *) 0);
+	t = 4294967296LL + 5;				/* past 2106 */
+	errno = 0;
+	r = stime(&t);
+	e = errno;
+	t = 2147483647LL - 1;			/* 03:14:06 */
+	check(r == -1 && e == EINVAL && stime(&t) == 0, "stime: 2106+ -> "
+					"EINVAL, 2038-01-19 03:14:06 ok");
+	signal(SIGALRM, alarm_handler);
+	got_sig = 0;
+	alarm(3);
+	while (got_sig == 0) pause();
+	t = time((time_t *) 0);
+	check(t >= 2147483648LL && t <= 2147483652LL,
+		"time() and alarm(3) across 2038-01-19 03:14:08 (AC2d.1)");
+	r = utime("/tmp/t2d", (struct utimbuf *) NULL);	/* now */
+	tm = stat("/tmp/t2d", &st) == 0 ? gmtime(&st.st_mtime) : NULL;
+	check(r == 0 && tm != NULL && st.st_mtime >= 2147483648LL
+		&& tm->tm_year == 138 && st.st_mtime > (time_t) 0x7FFFFFFF,
+		"a file stamped after 2038-01-19 03:14:07 (AC2d.1)");
+	unlink("/tmp/t2d");
+	t = t0 + (time((time_t *) 0) - 2147483646LL);	/* the clock back */
+	stime(&t);
+	signal(SIGALRM, SIG_DFL);
+}
+
+#if REALTIME_WRAP
+/* AC2d.3, the uptime-wrap test build (make WRAPTEST=1): the uptime ticks
+ * wrap at 2^32 REALTIME_WRAP seconds after the kernel started.  An alarm
+ * set before the wrap must come after it, on time, and sleep() too. */
+static void wrap_test(void)
+{
+	struct tms tms;
+	unsigned long up = (unsigned long) times(&tms), left;
+	time_t a, t;
+
+	left = (0UL - up) / HZ;
+	if (up < 0x80000000UL) {
+		check(0, "uptime wrap: passed before the test (make "
+				"WRAPTEST=<more seconds>)");
+		return;
+	}
+	printf("  uptime wraps in %lu s\n", left);
+	signal(SIGALRM, alarm_handler);
+	a = time((time_t *) 0);
+	got_sig = 0;
+	alarm((unsigned) left + 3);
+	while (got_sig == 0) pause();
+	t = time((time_t *) 0) - a;
+	up = (unsigned long) times(&tms);
+	check(t >= (time_t) left + 2 && t <= (time_t) left + 4
+		&& up < 0x80000000UL, "alarm across the uptime wrap (AC2d.3)");
+	a = time((time_t *) 0);
+	sleep(2);
+	t = time((time_t *) 0) - a;
+	check(t >= 1 && t <= 3, "sleep(2) after the uptime wrap (AC2d.3)");
+	signal(SIGALRM, SIG_DFL);
+}
+#endif
+
 static void finish(void)
 {
 	flash_report();
@@ -129,6 +265,9 @@ int main(int argc, char **argv)
 		return 7;
 	}
 
+#if REALTIME_WRAP
+	wrap_test();			/* first: the wrap comes soon */
+#endif
 	printf("m2test: pid %d, argc %d:", getpid(), argc);
 	for (i = 0; i < argc; i++) printf(" %s", argv[i]);
 	printf("\n");
@@ -362,6 +501,7 @@ int main(int argc, char **argv)
 		check(marker == 20, "vfork 20 times");
 	}
 
+	time_tests();
 	finish();
 	return 0;
 }

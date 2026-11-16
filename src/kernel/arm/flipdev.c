@@ -806,7 +806,7 @@ clock_t now;
 {
 /* LCD_SAVE_S after the light went off, on battery only, the LCD sleeps as
  * well (T14d; a few hundred uA). */
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input;
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input);
 
   /* R6.10: forced on never times out; forced off stays dark, and on
    * battery the LCD sleeps LCD_SAVE_S after the last key */
@@ -844,7 +844,7 @@ PRIVATE void do_hardint()
   bl_apply();
   if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
 						 * interrupt handler */
-	unsigned b, sec = (unsigned) (get_uptime() / HZ);
+	unsigned b, sec = (unsigned) ((unsigned long) get_uptime() / HZ);
 	int fg;
 
 	lock();
@@ -925,7 +925,7 @@ PUBLIC void flipdev_tick()
 	fg_hold(btn_sample());
 	ge_hold();
   }
-  if ((last_buttons & FG_KILL) && ((unsigned) (uptime_irq() / HZ)
+  if ((last_buttons & FG_KILL) && ((unsigned) ((unsigned long) uptime_irq() / HZ)
 		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
 	interrupt(PRINTER);
 }
@@ -941,7 +941,7 @@ clock_t now;
  * has some on every tick (a tune, an IR reader or frame, the LCD console
  * waiting for the bus).  The backlight's next step: see bl_want. */
   u32_t st = hal_bl_state();
-  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
+  clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input), d;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
   if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
@@ -1060,7 +1060,7 @@ PRIVATE void ge_hold()
   clock_t e;
 
   if (!(b & GE_CHORD)) return;
-  e = uptime_irq() - k_input;
+  e = TDIFF(uptime_irq(), k_input);
   if (e >= GE_HOLD) {
 	last_buttons = (b & ~GE_CHORD) | GE_FIRE;	/* once per chord */
 	interrupt(PRINTER);
@@ -1092,7 +1092,7 @@ PRIVATE void ge_task()
 	}
 	b = last_buttons;
   } else if (b & GE_CHORD) {
-	on = ge_blink_on(get_uptime() - k_input);
+	on = ge_blink_on(TDIFF(get_uptime(), k_input));
 	if (on == ((b & GE_BLINK) != 0)) return;
 	if (!(b & GE_SAVED)) hal_led_get(ge_led);
 	hal_led(on ? GE_RED : 0, 0, 0);

@@ -1055,7 +1055,7 @@ void scratch_name()
   unsigned long v;
   int fd, i;
 
-  v = (unsigned long) getpid() * 2654435761UL ^ (unsigned long) time(NULL);
+  v = (unsigned long) getpid() * 2654435761UL ^ (unsigned long) time(NULL);	/* timecheck: ok (a seed) */
   if ((fd = open("/dev/random", O_RDONLY)) >= 0) {
 	if (read(fd, (char *) r, 4) == 4)
 		v ^= (unsigned long) r[0] << 24 | (unsigned long) r[1] << 16

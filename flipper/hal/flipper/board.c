@@ -339,7 +339,7 @@ static void spi2_init(void)
 
 /* Baud rate divider code: fPCLK / 2^(code+1).  The display and the SD card
  * share the bus and use different speeds; set it before each transaction. */
-#define SPI_DIV_DISPLAY	3	/* /16 = 4 MHz */
+#define SPI_DIV_DISPLAY	2	/* /8 = 8 MHz (stock: 4; the ST7567 takes 20) */
 #define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
 #define SPI_DIV_SD_FAST	1	/* /4 = 16 MHz (the stock firmware's SD speed) */
 
@@ -869,6 +869,40 @@ static uint8_t crc7(const uint8_t *p, unsigned n)
 	return (uint8_t) (crc | 1);		/* CRC7 << 1, end bit */
 }
 
+/* The STM32WB's CRC unit (R4b.9): CRC-16/XMODEM in hardware, a 512 B
+ * sector in ~150 cycles instead of ~10 000.  Words go in big-endian (the
+ * unit takes the MSB first).  Used once hal_disk_init() checked it on a
+ * test vector (SD_HWCRC in sd_ready); only the disk task calls it, and
+ * tasks do not preempt each other, so nobody shares the unit. */
+#define SD_HWCRC	2		/* in sd_ready: the CRC unit is in use */
+static uint16_t crc16(const uint8_t *p, unsigned n);
+
+static uint16_t crc16_hw(uint16_t crc, const uint8_t *p, unsigned n)
+{
+	CRC->INIT = crc;
+	CRC->CR = CRC_CR_POLYSIZE_0 | CRC_CR_RESET;	/* 16 bits, as is */
+	if (((uint32_t) p & 3) == 0)
+		for (; n >= 4; n -= 4, p += 4)
+			CRC->DR = __REV(*(const uint32_t *) p);
+	for (; n > 0; n--)
+		*(volatile uint8_t *) &CRC->DR = *p++;
+	return (uint16_t) CRC->DR;
+}
+
+static int crc16_hw_init(void)
+{
+	/* aligned: the word path, the byte tail, and a continuation */
+	static const union { uint32_t w[3]; char b[12]; } v = { .b = "123456789" };
+	const uint8_t *b = (const uint8_t *) v.b;
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_CRCEN;
+	(void) RCC->AHB1ENR;
+	CRC->POL = 0x1021;
+	return crc16_hw(0, b, 9) == 0x31C3
+		&& crc16_hw(crc16_hw(0, b, 4), b + 4, 5) == 0x31C3
+		&& crc16_hw(0, b + 1, 3) == crc16(b + 1, 3);
+}
+
 static uint16_t crc16_more(uint16_t crc, const uint8_t *p, unsigned n)
 {
 	static const uint16_t t[16] = {
@@ -876,6 +910,7 @@ static uint16_t crc16_more(uint16_t crc, const uint8_t *p, unsigned n)
 		0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
 	};
 
+	if (sd_ready & SD_HWCRC) return crc16_hw(crc, p, n);
 	while (n-- > 0) {
 		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p >> 4)]);
 		crc = (uint16_t) ((crc << 4) ^ t[(crc >> 12) ^ (*p++ & 0x0F)]);
@@ -1025,7 +1060,7 @@ int hal_disk_init(void)
 	}
 	sd_select(0);
 	spi2_speed(sd_fast);
-	sd_ready = 1;
+	sd_ready = crc16_hw_init() ? 1 | SD_HWCRC : 1;
 	return 0;
 fail:
 	sd_select(0);
