@@ -9,3 +9,4 @@ ftp:*:7:
 kmem:*:8:
 nogroup:*:99:
 gui:*:10:
+timers:*:11:

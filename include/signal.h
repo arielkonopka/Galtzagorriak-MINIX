@@ -40,6 +40,8 @@ typedef unsigned long sigset_t;
 #define SIGTERM           15	/* software termination signal from kill */
 
 #define SIGEMT             7	/* obsolete */
+#define SIGRTC             7	/* Galtzagorriak (spec F.2): an RTC alarm, or
+				 * the time was set; ignored unless caught */
 #define SIGBUS            10	/* obsolete */
 
 /* POSIX requires the following signals to be defined, even if they are
