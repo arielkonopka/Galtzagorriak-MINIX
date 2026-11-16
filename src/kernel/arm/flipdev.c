@@ -77,6 +77,8 @@ PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
+#define BL_SAVE		8	/* off, and the LCD in power save (T14d) */
+#define LCD_SAVE_S	120	/* that long after the light went off */
 PRIVATE unsigned last_buttons;	/* the buttons down, and these flags: */
 #define SWALLOW		0x80000000u	/* a press woke the light */
 #define BTN_EXTI	0x40000000u	/* edges interrupt; else the tick samples */
@@ -449,6 +451,18 @@ PRIVATE void bl_apply()
   unsigned lv = HAL_BL_LEVEL(st);
 
   if (want == cur) return;
+  if (cur == BL_SAVE) {		/* the LCD back first, as it was: no redraw */
+	if (hal_lcd_save(0) < 0) return;	/* the SD card's: next tick */
+	hal_bl_state_set(st &= ~HAL_BL_STEPS);
+	if ((cur = BL_GONE) == want) return;
+  }
+  if (want == BL_SAVE) {
+	if (cur == BL_GONE) {
+		if (hal_lcd_save(1) == 0) hal_bl_state_set(st | HAL_BL_STEPS);
+		return;
+	}
+	want = BL_GONE;			/* the light out first */
+  }
   st &= ~(HAL_BL_STEPS | HAL_BL_OFF);
   if (want == BL_GONE) {
 	hal_backlight_fade(lv - lv * cur / 10, 0, 500);	/* out, 0.5 s */
@@ -462,13 +476,17 @@ PRIVATE void bl_apply()
   }
 }
 
-PRIVATE int bl_want(st, now)	/* 0 on, 1..5 dimmed, BL_GONE off */
+PRIVATE int bl_want(st, now)	/* 0 on, 1..5 dimmed, BL_GONE off, BL_SAVE */
 u32_t st;
 clock_t now;
 {
+/* LCD_SAVE_S after the light went off, on battery only, the LCD sleeps as
+ * well (T14d; a few hundred uA). */
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input;
 
   if (t == 0) return(0);
+  if (idle >= t + (clock_t) LCD_SAVE_S * HZ && !hal_usb_awake())
+	return(BL_SAVE);
   if (idle >= t) return(BL_GONE);
   if (t > BL_DIMS * HZ && idle >= t - BL_DIMS * HZ)
 	return((int) ((idle - (t - BL_DIMS * HZ)) / HZ) + 1);
@@ -478,7 +496,8 @@ clock_t now;
 PRIVATE int bl_state(st)	/* what bl_apply last did */
 u32_t st;
 {
-  return(st & HAL_BL_OFF ? BL_GONE : (int) HAL_BL_STEP(st));
+  if (!(st & HAL_BL_OFF)) return((int) HAL_BL_STEP(st));
+  return(HAL_BL_STEP(st) == 7 ? BL_SAVE : BL_GONE);
 }
 
 
@@ -569,7 +588,12 @@ clock_t now;
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
-  if (t == 0 || (st & HAL_BL_OFF)) return(LONG_MAX);
+  if (t == 0 || bl_state(st) == BL_SAVE) return(LONG_MAX);
+  if (st & HAL_BL_OFF) {		/* the LCD's power save is next */
+	t += (clock_t) LCD_SAVE_S * HZ;
+	if (hal_usb_awake()) return(LONG_MAX);
+	return(idle >= t ? 0 : t - idle);
+  }
   if (idle >= t) return(0);
   if (t <= BL_DIMS * HZ) return(t - idle);
   d = t - BL_DIMS * HZ;			/* the dimming starts */
