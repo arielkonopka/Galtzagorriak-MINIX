@@ -7,6 +7,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 ## Unreleased
 
 - (R6.3) Timed vibration: writing a number of milliseconds (2–999) to `/dev/vibro` buzzes that long, ended by the kernel's ms timer (also from Stop2), so the program need not wait; `0` and `1` still turn it off and on.
+- (R6.7, part 1) iButton: reading `/dev/ibutton` with a key on the contacts gives its 8-byte ROM (family, serial, CRC checked); no key: ENODEV. 1-Wire timing in the kernel with interrupts masked at most 70 µs per bit. Base 3.63.
 - (R4a.5, part) Flash ECC: an uncorrectable error stops the system with "flash ECC: uncorrectable error at ADDRESS" instead of an unexplained exception; a corrected single-bit error is reported in one line (a page wearing out).
 - (R4a.6) Stack overflow detection: a DWT watchpoint guards the kernel stack and the running task's stack; writing past either stops the system with "stack overflow in TASK" instead of corrupting memory silently.
 - (R4b.8) The app started from the launcher owns the screen and the buttons (`FGIOCSET` ioctl, `<minix/fg.h>`): frames from other programs are dropped, their button reads wait. Holding Back for a second ends the app (SIGTERM, then SIGKILL after 3 s), as on the stock firmware. Base 3.61.
