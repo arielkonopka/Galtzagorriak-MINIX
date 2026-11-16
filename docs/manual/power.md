@@ -63,3 +63,10 @@ Flipper sleeps are lost. If you use it, keep USB connected as well.
 
 On a latency-trace build, `lat` prints how long the Flipper spent in Stop2 since boot, how many
 wake-ups came from a button, and why idle time did not sleep (USB, an alarm too close, and so on).
+
+## Power off
+
+`halt` (as root) switches the Flipper off for real: the battery is disconnected from the system
+(the charger's ship mode, as the stock firmware's power off). The screen and the backlight go dark
+first. With USB connected the Flipper cannot cut its own power: it waits, dark, until you unplug
+the cable. To switch it on again, hold **Back** for about a second, or plug in USB.
