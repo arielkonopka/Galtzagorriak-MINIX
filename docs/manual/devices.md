@@ -76,6 +76,21 @@ radio keeps listening until `echo 0`, or until nobody has read it for about a mi
 about 15 mA while listening). A spectrum view and
 recording will build on this.
 
+### Raw signal (`/dev/subghzraw`)
+
+What the receiver demodulates (on-off keying), as the times between its changes: 32-bit
+little-endian microseconds, carrier first, the same format as `/dev/ir`. Tune with
+`/dev/subghz` first; a read waits for the first change and ends after 0.1 s of silence or when
+the buffer is full:
+
+```
+echo 433920000 > /dev/subghz
+ir rx -r -d /dev/subghzraw
+```
+
+Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
+fills up with noise at once; FSK remotes (many car keys) do not show at all.
+
 ## The status LED (`/dev/led`)
 
 The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.
