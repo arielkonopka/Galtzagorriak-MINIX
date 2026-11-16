@@ -172,6 +172,10 @@ RAM: 0 B (flags in existing words). Flash ≈ +1 KB.
 - External meter on the battery leads (e.g. Nordic PPK2 or a µCurrent with a multimeter); the
   BQ27220 has 1 mA resolution, too coarse below 1 mA.
 - Without a meter: battery-SoC drop over 24 h idle (coarse) plus the Stop2 statistics.
+- On the Flipper itself (T15a, owner 2026-11-16): the `power` app's **Idle** line, the gauge's
+  AverageCurrent read after the backlight has been off for 30 s, on battery. Whole mA only, but
+  enough to see T14a (~1.7 mA) and the step from several mA to ~1.5 mA. `cat /dev/power` gives
+  the same values in the shell.
 - Every PR adds a "Power" block to PORTING.md: date, build, state, current, how measured.
 
 ## 4. After T14: the `power` app (T15, spec R7.1)

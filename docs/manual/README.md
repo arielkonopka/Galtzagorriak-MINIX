@@ -6,9 +6,10 @@ that brings them.
 
 1. [Installation](install.md): building, the SD card, flashing, first boot, updating, recovery
    and going back to the stock firmware, known limitations.
+2. [Power and battery](power.md): reading the battery current and the idle draw.
 
 More chapters (using the launcher and apps, the shell and commands, packages, settings, the
-hardware devices, time and location, power) follow as the features settle. Release notes are in
+hardware devices, time and location) follow as the features settle. Release notes are in
 [`CHANGELOG.md`](../../CHANGELOG.md); the design is in [`docs/spec/`](../spec/README.md).
 
 Keeping it current: see the standing rule "Docs follow behaviour" in

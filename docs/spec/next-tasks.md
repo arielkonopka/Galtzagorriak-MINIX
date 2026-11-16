@@ -164,7 +164,7 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 - Enable the SMPS in step-down mode after the clock setup (stock: `LL_PWR_SMPS_SetMode(LL_PWR_SMPS_STEP_DOWN)` in `furi_hal_power_init`; read RM0434 for the SMPS clock source and the order against the PLL). Halves the run current.
 - Park the radios: SPI1 pins, CC1101 CS (PD0) and NFC CS (PE4) high. CC1101: `SRES` strobe, wait for CHIP_RDYn, then `SPWD` (after a power-on reset it sits in IDLE at ~1.7 mA). ST25R3916: direct command `SET_DEFAULT`, then op-control register 0 (power-down). Use the stock register values (`furi_hal_subghz_init/sleep`, `furi_hal_nfc_init` + `furi_hal_nfc_low_power_mode_start`; GPL, fine).
 - Unused pins to analog mode; `DBGMCU` stop/standby clocks off unless the debug flag is set.
-- Acceptance: CC1101 `MARCSTATE` read back = SLEEP and ST25R3916 op-control = 0 at the end of `hal_init`; QEMU board unaffected; idle current before/after in PORTING.md if a meter is at hand (otherwise say so).
+- Acceptance: CC1101 `MARCSTATE` read back = SLEEP and ST25R3916 op-control = 0 at the end of `hal_init`; QEMU board unaffected; idle current before/after in PORTING.md if a meter is at hand (otherwise say so; the T15a idle reading works as a meter for this).
 - RAM: 0 B. Flash: about +300 B.
 
 ### T14b. EXTI buttons, tickless idle, Stop2 (R6.8, R4b.2, R20a.4)
@@ -195,6 +195,26 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 - RAM: 0 B (a few bits in existing flags). Flash ≈ +1 KB.
 
 Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
+
+## T15a. Battery current on the Flipper's screen, early (spec R7.1 battery screen; owner request 2026-11-16): any time, needs only the I2C1 bus
+The owner wants to check the idle current **without opening the Flipper**. A USB meter cannot do it: USB keeps the device awake and charging, and its resolution is ~10 mA. This is the first slice of T15 (its battery screen) and of T14c (the read side of the BQ27220 driver), done now so that T14a (#112, ~1.7 mA expected saving), T14b and T14d can be checked on the device.
+- **Kernel, `flipdev`:** new minor 8 **`/dev/power`**, read only for now. A read talks to the BQ27220 (I2C1, 7-bit address 0x55, the bus `flipdev` already drives for the LP5562) and returns **one text line**, then EOF:
+  `soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181`
+  from the gauge's standard commands (check the codes against stock `lib/drivers/bq27220_reg.h`): StateOfCharge (%), Voltage (mV), Current (signed mA, negative = discharging), AverageCurrent (the gauge's own filter), StandbyCurrent, Temperature (0.1 K in the gauge, printed in 0.1 °C), BatteryStatus (raw). An I2C error gives `EIO`, so the app can say "no gauge" (QEMU: the device returns `ENXIO`, the QEMU board has no gauge).
+  - **Read only. Never write the gauge** (no control subcommands, no data-memory access): its data memory is flash, and the stock firmware already configured it. T14c adds the charger and the write side later and keeps this line, adding fields at the end.
+  - No polling and no cache: the read is done on demand in the task, on the task stack. 0 B static RAM. One read is 7 short I2C transfers at 100 kHz (~3 ms); fine for L1, but say the measured time in the PR.
+  - Device node `/dev/power` (character, major 6 minor 8, mode 0444, group `operator` can read later; for now world-readable is fine: it is only battery data).
+- **App `power` in `flipper/gui/`** (like `lights.c`), entry "Power" in `/etc/apps`, added to `GUIAPPS`. One screen for now, title "POWER":
+  - **Now:** Current in mA with sign (large), refreshed every 1 s while the backlight is on. Below it: average mA, battery %, voltage, temperature, and "charging" / "on battery" from BatteryStatus (DSG bit).
+  - **Idle:** the AverageCurrent read while the backlight had been **off for at least 30 s**, with its age ("Idle -5 mA, 2 min ago"). This is the number the owner wants: the screen's own backlight and the app's refresh are not in it. While the backlight is off the app reads only every 10 s (a wake every 10 s costs microamps) and keeps the last such reading. A key press only turns the backlight on (existing rule), and the screen already shows the idle value. Before the first such reading the line says "Idle: leave it 1 min".
+  - If USB is connected (gauge current ≥ 0 or DSG clear) show "USB: unplug to measure" instead of the idle value: with USB the reading is not the idle draw.
+  - Keys answer within L1: wait for a key **blocking**, with `alarm()` for the refresh (the read returns `EINTR`), never a `sleep()` + poll loop. Back quits. No other keys yet (the rest of T15 adds the menu).
+  - Uses `read()` on `/dev/backlight` (`HAL_BL_OFF`) to know whether the backlight is off. No flash writes; the app keeps its values in its own RAM only (well under 1 KB).
+- **Shell:** `cat /dev/power` prints the same line (the twin `pm` comes with T15).
+- **Docs:** `docs/manual/power.md` (now marked planned) loses its **(planned)** mark and states what the app really shows; `PORTING.md` lists minor 8 in the `flipdev` table.
+- Acceptance (agent, on the Flipper): (1) the line's %, mV and mA match the stock battery screen within 2 % / 1 mA (flash stock, note values, flash back; as T14c test 1, can be done once for both); (2) idle reading on battery after 1 min: record it in PORTING.md under "Power" for the current main (with T14a), and, if easy, for the build before #112 for a before/after; (3) with USB plugged the screen says so; (4) L1 for Back and for the backlight-on key while the app runs; (5) QEMU: the app opens, shows "no gauge", Back works, `M2 USER PASS` unchanged.
+- Limits to say in the manual: the gauge measures in whole mA, so below ~2 mA the value is coarse (use the average, or the SoC drop over 24 h, or an external meter on the battery leads; `power-plan.md` section 3).
+- RAM: kernel 0 B static. App < 1 KB while open. Flash ≈ +1.5 KB (driver ≈ 0.5 KB, app ≈ 1 KB).
 
 ## T15. Power management app `power` and `pm` (spec R7.1; owner request 2026-11-15): after T14c and T14d
 The owner wants the user to control **how deeply and how soon the device powers down**, and every other power knob that makes sense. Read R7.1 for the full list.
