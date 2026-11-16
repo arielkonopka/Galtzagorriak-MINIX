@@ -18,7 +18,10 @@
 # R0.8b disk yield: do_vrdwt without its static iovec copy, -288 B.
 # T12 (L.2): /dev/random and /dev/zero lose their geometry entries, /dev/rom
 # takes one: -8 B.
-kernel    164    14604  14768
+# T14b PR 1 (EXTI buttons, R4b.2 ms timer): kernel +8 B: the timer state
+# 4 B, and 4 B of padding before the 8-aligned kernel_stack, which the
+# PR 2 sleep blocker (4 B) fills (T14b budget: +24 B).
+kernel    164    14612  14776
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 mm        32     10140  10172

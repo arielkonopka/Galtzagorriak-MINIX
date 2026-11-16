@@ -151,6 +151,10 @@
 
 #define MEM_BYTES  0xffffffff	/* memory size for /dev/mem */
 
+/* Clients of the ms timer (R4b.2, arm/klib.c: mt_arm, mt_func[]). */
+#define MT_BUTTONS         0	/* a button is down: sample (flipdev.c) */
+#define MT_N               1
+
 #endif /* (CHIP == ARM_CM) */
 
 /* The following items pertain to the scheduling queues. */

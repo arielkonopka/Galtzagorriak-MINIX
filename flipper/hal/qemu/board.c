@@ -472,6 +472,13 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 }
 
 /* No infrared in QEMU. */
+int hal_btn_irq(int i) { (void) i; return -1; }
+void hal_btn_arm(int on) { (void) on; }
+int hal_mt_irq(void) { return -1; }
+unsigned hal_mt_now(void) { return 0; }
+void hal_mt_set(unsigned due) { (void) due; }
+unsigned hal_mt_cmp(void) { return 0; }
+unsigned hal_mt_ack(void) { return 0; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

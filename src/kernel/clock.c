@@ -663,6 +663,7 @@ PRIVATE void init_clock()
    * repeat between boots). */
   boot_time = (time_t) hal_rtc_time();
   put_irq_handler(CLOCK_IRQ, clock_handler);
+  mt_init();				/* the ms timer, R4b.2 */
   SYST_CSR = 0;
   SYST_RVR = cpu_hz / HZ - 1;
   SYST_CVR = 0;

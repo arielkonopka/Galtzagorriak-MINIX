@@ -77,8 +77,12 @@ PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
 PRIVATE volatile unsigned ev_head, ev_tail;
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
-PRIVATE unsigned last_buttons;	/* and SWALLOW: a press woke the light */
-#define SWALLOW		0x80000000u
+PRIVATE unsigned last_buttons;	/* the buttons down, and these flags: */
+#define SWALLOW		0x80000000u	/* a press woke the light */
+#define BTN_EXTI	0x40000000u	/* edges interrupt; else the tick samples */
+#define BTN_POLL	0x20000000u	/* one is down: the ms timer samples */
+#define BTN_FLAGS	(SWALLOW | BTN_EXTI | BTN_POLL)
+#define BTN_MS		8	/* sampling while down, and the debounce */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
  * memory holds the infrared rings while /dev/ir is in use (one or the
@@ -142,6 +146,8 @@ FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void bl_apply, (void) );
 FORWARD _PROTOTYPE( int bl_want, (u32_t st, clock_t now) );
+FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
+FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
@@ -168,6 +174,16 @@ PUBLIC void flipdev_task()
   int r;
 
   last_buttons = hal_buttons();
+  for (r = 0; hal_btn_irq(r) >= 0; r++) {	/* T14b: one handler, 3 lines */
+	put_irq_handler(hal_btn_irq(r), btn_int);
+	enable_irq(hal_btn_irq(r));
+  }
+  if (r > 0) {			/* the ms timer samples until all are up */
+	lock();
+	last_buttons |= BTN_EXTI | BTN_POLL;
+	mt_arm(MT_BUTTONS, BTN_MS);
+	unlock();
+  }
   {	/* the backlight as it was set before the reset, and on */
 	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS);
 
@@ -505,11 +521,10 @@ PRIVATE void do_hardint()
  *===========================================================================*/
 PUBLIC void flipdev_tick()
 {
-/* Called by the clock interrupt handler: sample the buttons, queue the
- * changes, wake the task if somebody is waiting.
+/* Called by the clock interrupt handler: the LCD console, the speaker,
+ * the end of an IR frame, the backlight; the buttons when they have no
+ * interrupt (QEMU).
  */
-  unsigned now = hal_buttons(), b;
-  unsigned changed = (now ^ last_buttons) & ~SWALLOW;
   u32_t st = hal_bl_state();
 
   if (lc_dirty && ++lc_wait >= LC_TICKS) {
@@ -537,14 +552,70 @@ PUBLIC void flipdev_tick()
   }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
-  if (changed == 0) return;
+  if (!(last_buttons & BTN_EXTI)) (void) btn_sample();
+}
+
+
+/*===========================================================================*
+ *				btn_int					     *
+ *===========================================================================*/
+PRIVATE int btn_int(irq)
+int irq;
+{
+/* An edge on a button (T14b): take it now, then turn the edges off; the
+ * ms timer samples while any is down, which also debounces.
+ */
+  hal_btn_arm(0);
+  last_buttons |= BTN_POLL;
+  (void) btn_sample();
+  mt_arm(MT_BUTTONS, BTN_MS);
+  return 1;
+}
+
+
+/*===========================================================================*
+ *				flipdev_btn				     *
+ *===========================================================================*/
+PUBLIC void flipdev_btn()
+{
+/* The ms timer, BTN_MS after an edge or the last sample: all up in two
+ * samples in a row, and the edges interrupt again.
+ */
+  unsigned was = last_buttons & ~BTN_FLAGS;
+
+  if (btn_sample() != 0 || was != 0) {
+	mt_arm(MT_BUTTONS, BTN_MS);
+	return;
+  }
+  last_buttons &= ~BTN_POLL;
+  hal_btn_arm(1);
+  if (hal_buttons() != 0) (void) btn_int(0);	/* pressed just now */
+}
+
+
+/*===========================================================================*
+ *				btn_sample				     *
+ *===========================================================================*/
+PRIVATE unsigned btn_sample()
+{
+/* In an interrupt handler: sample the buttons, queue the changes, wake the
+ * task if somebody is waiting.  Returns the buttons down.
+ */
+  unsigned now = hal_buttons(), b;
+  unsigned flags = last_buttons & BTN_FLAGS;
+  unsigned changed = (now ^ last_buttons) & ~BTN_FLAGS;
+
+  if (changed == 0) return(now);
   k_input = uptime_irq();		/* no background flash work now */
   /* With the backlight off, a press only turns it on (owner): neither it
    * nor anything else reaches the apps until every button is up again. */
-  if ((st & HAL_BL_OFF) && (now & changed)) last_buttons |= SWALLOW;
-  if (last_buttons & SWALLOW) {
-	last_buttons = now == 0 ? 0 : now | SWALLOW;
-	return;
+  if (hal_bl_state() & (HAL_BL_OFF | HAL_BL_STEPS))
+	interrupt(PRINTER);		/* the light back on, at once */
+  if ((hal_bl_state() & HAL_BL_OFF) && (now & changed)) flags |= SWALLOW;
+  if (flags & SWALLOW) {
+	if (now == 0) flags &= ~SWALLOW;
+	last_buttons = now | flags;
+	return(now);
   }
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
@@ -555,8 +626,9 @@ PUBLIC void flipdev_tick()
 		ev_head++;
 	}
   }
-  last_buttons = now;
+  last_buttons = now | flags;
   if (rd_waiting) interrupt(PRINTER);
+  return(now);
 }
 
 

@@ -1009,6 +1009,9 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 /*===========================================================================*
  *				Buttons					     *
  *===========================================================================*/
+#define BTN_LINES	(EXTI_IMR1_IM3 | EXTI_IMR1_IM6 | EXTI_IMR1_IM10 \
+			| EXTI_IMR1_IM11 | EXTI_IMR1_IM12 | EXTI_IMR1_IM13)
+
 static void buttons_init(void)
 {
 	gpio_cfg(GPIOB, 10, MODE_IN, PULL_UP, 0);	/* up */
@@ -1017,6 +1020,113 @@ static void buttons_init(void)
 	gpio_cfg(GPIOB, 12, MODE_IN, PULL_UP, 0);	/* right */
 	gpio_cfg(GPIOH, 3, MODE_IN, PULL_DOWN, 0);	/* ok (active high) */
 	gpio_cfg(GPIOC, 13, MODE_IN, PULL_UP, 0);	/* back */
+
+	/* EXTI lines 3, 6, 10-13 on both edges, masked until the kernel
+	 * arms them (T14b).  SYSCFG is always clocked on the WB.  Port
+	 * codes: B 1, C 2, H 7. */
+	SYSCFG->EXTICR[0] = (SYSCFG->EXTICR[0] & ~SYSCFG_EXTICR1_EXTI3)
+					| 7u << SYSCFG_EXTICR1_EXTI3_Pos;
+	SYSCFG->EXTICR[1] = (SYSCFG->EXTICR[1] & ~SYSCFG_EXTICR2_EXTI6)
+					| 2u << SYSCFG_EXTICR2_EXTI6_Pos;
+	SYSCFG->EXTICR[2] = (SYSCFG->EXTICR[2] & ~(SYSCFG_EXTICR3_EXTI10
+						| SYSCFG_EXTICR3_EXTI11))
+			| 1u << SYSCFG_EXTICR3_EXTI10_Pos
+			| 1u << SYSCFG_EXTICR3_EXTI11_Pos;
+	SYSCFG->EXTICR[3] = (SYSCFG->EXTICR[3] & ~(SYSCFG_EXTICR4_EXTI12
+						| SYSCFG_EXTICR4_EXTI13))
+			| 1u << SYSCFG_EXTICR4_EXTI12_Pos
+			| 2u << SYSCFG_EXTICR4_EXTI13_Pos;
+	EXTI->IMR1 &= ~BTN_LINES;
+	EXTI->RTSR1 |= BTN_LINES;
+	EXTI->FTSR1 |= BTN_LINES;
+	EXTI->PR1 = BTN_LINES;
+}
+
+int hal_btn_irq(int i)
+{
+	static const signed char irq[] =
+		{ EXTI3_IRQn, EXTI9_5_IRQn, EXTI15_10_IRQn, -1 };
+
+	return irq[(unsigned) i < 3 ? i : 3];
+}
+
+void hal_btn_arm(int on)
+{
+	if (on) {
+		EXTI->PR1 = BTN_LINES;
+		EXTI->IMR1 |= BTN_LINES;
+	} else {
+		EXTI->IMR1 &= ~BTN_LINES;
+		EXTI->PR1 = BTN_LINES;
+	}
+}
+
+/*===========================================================================*
+ *				The ms timer				     *
+ *===========================================================================*/
+/* LPTIM1 (R4b.2), free running on the 32768 Hz LSE, which the stock
+ * firmware keeps running on the battery for the RTC (on the LSI when the
+ * LSE is not up: a drained battery), and which keeps counting in Stop2.
+ * One compare: the kernel puts its earliest due time there.  A compare
+ * write takes effect some LSE cycles later (CMPOK, an interrupt too): the
+ * kernel writes the next one only after that, and never waits for it. */
+static void mt_init(void)
+{
+	uint32_t i;
+
+	RCC->CCIPR = (RCC->CCIPR & ~RCC_CCIPR_LPTIM1SEL)
+		| ((RCC->BDCR & RCC_BDCR_LSERDY) ? 3u : 1u)
+						<< RCC_CCIPR_LPTIM1SEL_Pos;
+	if (!(RCC->BDCR & RCC_BDCR_LSERDY)) {
+		RCC->CSR |= RCC_CSR_LSI1ON;
+		for (i = 0; i < 100000 && !(RCC->CSR & RCC_CSR_LSI1RDY); i++) ;
+	}
+	RCC->APB1ENR1 |= RCC_APB1ENR1_LPTIM1EN;
+	(void) RCC->APB1ENR1;
+	LPTIM1->CR = 0;
+	LPTIM1->CFGR = 0;			/* internal clock, /1 */
+	LPTIM1->IER = LPTIM_IER_CMPMIE | LPTIM_IER_CMPOKIE; /* only when off */
+	LPTIM1->CR = LPTIM_CR_ENABLE;
+	LPTIM1->ARR = 0xFFFF;
+	for (i = 0; i < 100000 && !(LPTIM1->ISR & LPTIM_ISR_ARROK); i++) ;
+	LPTIM1->CMP = 0;
+	for (i = 0; i < 100000 && !(LPTIM1->ISR & LPTIM_ISR_CMPOK); i++) ;
+	LPTIM1->ICR = LPTIM_ICR_ARROKCF | LPTIM_ICR_CMPOKCF | LPTIM_ICR_CMPMCF;
+	LPTIM1->CR = LPTIM_CR_ENABLE | LPTIM_CR_CNTSTRT;
+}
+
+int hal_mt_irq(void)
+{
+	return LPTIM1_IRQn;
+}
+
+unsigned hal_mt_now(void)
+{
+	uint32_t a, b;
+
+	/* the counter runs on its own clock: two equal reads (RM0434) */
+	do { a = LPTIM1->CNT; b = LPTIM1->CNT; } while (a != b);
+	return a & 0xFFFF;
+}
+
+void hal_mt_set(unsigned due)
+{
+	LPTIM1->ICR = LPTIM_ICR_CMPOKCF;
+	LPTIM1->CMP = due & 0xFFFF;
+}
+
+unsigned hal_mt_cmp(void)
+{
+	return LPTIM1->CMP & 0xFFFF;
+}
+
+unsigned hal_mt_ack(void)
+{
+	uint32_t f = LPTIM1->ISR & (LPTIM_ISR_CMPM | LPTIM_ISR_CMPOK);
+
+	LPTIM1->ICR = f;
+	return (f & LPTIM_ISR_CMPM ? HAL_MT_MATCH : 0)
+				| (f & LPTIM_ISR_CMPOK ? HAL_MT_READY : 0);
 }
 
 unsigned hal_buttons(void)
@@ -1154,6 +1264,7 @@ void hal_init(void)
 	uart_init();
 	spi2_init();
 	buttons_init();
+	mt_init();
 	hal_radios_park();			/* T14a: -1.7 mA and more */
 }
 
