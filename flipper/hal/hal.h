@@ -74,6 +74,12 @@ int hal_lcd_save(int on);
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
 
+/* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
+ * it, wait some microseconds (busy: only for the slot timing). */
+void hal_ow_line(int low);
+int hal_ow_read(void);
+void hal_ow_delay(unsigned us);
+
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
  * little endian), read only; -1 on a bus error, -2 if there is none. */
 #define HAL_GAUGE_TEMP		0x06	/* 0.1 K */
@@ -113,6 +119,11 @@ unsigned hal_mt_ack(void);
 #define HAL_WAKE_BTN	1
 #define HAL_WAKE_TIMER	2
 int hal_stop2(void);
+
+/* Flash ECC (R4a.5): flags since the last call (cleared), and where. */
+#define HAL_ECC_FIXED	1		/* a single bit, corrected */
+#define HAL_ECC_DOUBLE	2		/* two bits: the NMI */
+unsigned hal_flash_ecc(uint32_t *addr);
 int hal_can_stop2(void);		/* 0: never (QEMU, no HSE at boot) */
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:

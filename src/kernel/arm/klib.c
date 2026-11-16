@@ -378,6 +378,8 @@ PUBLIC void mpu_switch()
 #if LATTRACE
   lat_run(rp);
 #endif
+  DWT_COMP(0) = (u32_t) &kernel_stack[0];		/* R4a.6 */
+  if (istaskp(rp) && rp->p_stguard != NULL) DWT_COMP(1) = (u32_t) rp->p_stguard;
   if (rp == mpu_proc || !(rp->p_reg.control & CONTROL_NPRIV)) return;
   mpu_proc = rp;
 
@@ -468,6 +470,15 @@ int mine;
   SCB_SHPR(EXC_MEMMANAGE) = 0;
   SCB_SHPR(EXC_BUSFAULT) = 0;
   SCB_SHPR(EXC_USAGEFAULT) = 0;
+  SCB_SHPR(EXC_DEBUGMON) = 0;
+  /* R4a.6: DWT comparator 0 watches the kernel stack's guard word, 1 the
+   * running task's (mpu_switch moves it); a write to either raises the
+   * DebugMonitor exception, reported as a stack overflow.  Armed from the
+   * first switch on: main() still fills the stacks. */
+  DEMCR |= DEMCR_TRCENA | DEMCR_MON_EN;
+  DWT_MASK(0) = DWT_MASK(1) = 2;		/* one word */
+  DWT_COMP(0) = DWT_COMP(1) = 0;
+  DWT_FUNC(0) = DWT_FUNC(1) = DWT_FUNC_WRITE;
 }
 
 PUBLIC void put_irq_handler(irq, handler)
@@ -507,6 +518,7 @@ FORWARD _PROTOTYPE( void pm_wake, (void) );
 PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
 	pm_wake,		/* MT_IDLE */
+	flipdev_vibro_off,	/* MT_VIBRO */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */
@@ -721,6 +733,36 @@ PUBLIC void task_yield()
 #define PM_NOT(r)	return(0)
 #endif
 
+/*===========================================================================*
+ *				flash ECC (R4a.5)			     *
+ *===========================================================================*/
+PUBLIC void NMI_Handler()
+{
+/* A double ECC error in flash (the only NMI source used): the data read
+ * was wrong.  Say where, then stop: anything may have used it.  (The spec's
+ * finer rule, kill only the users of a text-cache entry and drop the
+ * entry, needs MM: later.) */
+  u32_t a;
+  unsigned f = hal_flash_ecc(&a);
+
+  if (f & HAL_ECC_DOUBLE) {
+	printf("\nflash ECC: uncorrectable error at %08lx (%s)\n",
+		(unsigned long) a, k_booted ? proc_ptr->p_name : "boot");
+	panic("flash ECC error", NO_NUM);
+  }
+  panic("NMI", NO_NUM);
+}
+
+PUBLIC void ecc_poll()
+{
+/* The clock task: corrected single-bit errors are worth a line (a page
+ * wearing out). */
+  u32_t a;
+
+  if (hal_flash_ecc(&a) & HAL_ECC_FIXED)
+	printf("flash ECC: corrected a bit at %08lx\n", (unsigned long) a);
+}
+
 PUBLIC void pm_vbus()
 {
 /* The clock task, whenever it runs (at least every 32 ticks while awake,
@@ -874,6 +916,13 @@ unsigned exc;
   else if (cfsr & 0x01000000) sig = SIGBUS;	/* UNALIGNED */
   else sig = SIGSEGV;
 
+  if (exc == EXC_DEBUGMON) {		/* R4a.6: its guard word written */
+	printf("\nstack overflow in %s (guard %08lx written), pc=%08lx "
+		"lr=%08lx sp=%08lx\n", rp->p_name,
+		(unsigned long) DWT_COMP(1), (unsigned long) rp->p_reg.pc,
+		(unsigned long) rp->p_reg.lr, (unsigned long) rp->p_reg.sp);
+	panic("task stack overflow", proc_number(rp));
+  }
   if (!isuserp(rp) || k_reenter != 0) {
 	printf("\n%s (exception %u) in %s, pc=%08lx lr=%08lx sp=%08lx\n",
 		sig == SIGSEGV ? "memory fault" : "fault", exc, rp->p_name,
@@ -927,6 +976,9 @@ u32_t *frame;
 unsigned exc;
 {
 /* Fault in Handler mode (or before the first process ran): kernel bug. */
+  if (exc == EXC_DEBUGMON)
+	printf("\nKernel stack overflow (its guard word %08lx written)\n",
+					(unsigned long) DWT_COMP(0));
   printf("\nKernel fault, exception %u: pc=%08lx lr=%08lx psr=%08lx\n",
 	exc, (unsigned long) frame[6], (unsigned long) frame[5],
 	(unsigned long) frame[7]);

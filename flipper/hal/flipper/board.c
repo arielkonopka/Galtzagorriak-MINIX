@@ -48,6 +48,32 @@ static inline int gpio_get(GPIO_TypeDef *port, unsigned pin)
 }
 
 /*===========================================================================*
+ *				iButton 1-Wire (R6.7)			     *
+ *===========================================================================*/
+/* PB14, open drain with the board's pull-up (stock: OutputOpenDrain, no
+ * pull).  The kernel builds the slots from these and masks interrupts
+ * around the timed part of each (<= 70 us); the times are stock's
+ * standard-speed ones (lib/one_wire/one_wire_host.c). */
+void hal_ow_line(int low)
+{
+	GPIOB->OTYPER |= 1u << 14;			/* open drain */
+	gpio_set(GPIOB, 14, !low);
+	GPIOB->MODER = (GPIOB->MODER & ~(3u << 28)) | (1u << 28);	/* out */
+}
+
+int hal_ow_read(void)
+{
+	return gpio_get(GPIOB, 14);
+}
+
+void hal_ow_delay(unsigned us)
+{
+	uint32_t s = DWT->CYCCNT, n = us * (SystemCoreClock / 1000000);
+
+	while (DWT->CYCCNT - s < n) ;
+}
+
+/*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/
 /* After a power-on reset the CC1101 (Sub-GHz) idles with its crystal
@@ -2107,6 +2133,20 @@ static int flash_unlock(void)
 	 * reset and leaves its flags set - are not ours; only busy counts. */
 	(void) flash_wait();
 	return (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) ? -1 : 0;
+}
+
+/* Flash ECC (R4a.5): what the controller saw since the last call, cleared
+ * (HAL_ECC_*), and the double word's address.  A double error also raises
+ * the NMI; a corrected one only sets the flag (the kernel polls it). */
+unsigned hal_flash_ecc(uint32_t *addr)
+{
+	uint32_t r = FLASH->ECCR;
+
+	*addr = FLASH_BASE + (r & FLASH_ECCR_ADDR_ECC) * 8;
+	if (!(r & (FLASH_ECCR_ECCC | FLASH_ECCR_ECCD))) return 0;
+	FLASH->ECCR = r;			/* the flags are write-1-to-clear */
+	return (r & FLASH_ECCR_ECCD ? HAL_ECC_DOUBLE : 0)
+				| (r & FLASH_ECCR_ECCC ? HAL_ECC_FIXED : 0);
 }
 
 /* The flash caches may hold the old contents of a page just changed. */
