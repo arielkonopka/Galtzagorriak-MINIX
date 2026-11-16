@@ -131,6 +131,10 @@
 /* CONTROL register: tasks run privileged, servers and users unprivileged.
  * SPSEL is irrelevant, the exception return always selects the PSP. */
 #define CONTROL_NPRIV 0x1
+/* R5.7: in p_reg.control, the process has an FP context: its frame has
+ * S0-S15 and FPSCR, S16-S31 are at p_reg.sp (arm/mpx.S).  Set by the
+ * kernel entry, not by the process; cleared by exec and signal delivery. */
+#define CONTROL_FPCA  0x4
 #define INIT_CONTROL      CONTROL_NPRIV
 #define INIT_TASK_CONTROL 0
 

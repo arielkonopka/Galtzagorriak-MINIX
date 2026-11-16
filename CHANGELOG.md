@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R5.7) The FPU can be used by programs (single-precision `float` in hardware), opt in per program with `UFPFLAGS` (`flipper/minix.mk`). Lazy context switch: only processes that used the FPU pay, 136 B of their own stack and about 1.7 µs per switch; the FP registers are saved only when another process runs and cleared before it, so no process sees another's. Kernel RAM +0 B. `m2test` checks it in QEMU.
 - Security review, weekly run 1 (`docs/security/2026-11-16-fs.md`): a damaged file system on the SD card no longer stops the whole system: a bad zone number in an indirect block reads as a hole, freeing an already free zone or inode only prints "run fsck", and a super block whose bit maps do not cover its inodes and zones is refused at mount instead of corrupting the inode table. QEMU test `tools/fsdamage.py`.
 - (R4b.9) SD transfers check their CRC16 with the STM32WB's CRC unit instead of in software (a 512-byte sector: ~150 instead of ~10 000 cycles), after a self-test at start; on a mismatch the software CRC stays.
 - The LCD is written at 8 MHz instead of 4 (a frame in about 1 ms instead of 2: the CPU is free sooner for everything else).

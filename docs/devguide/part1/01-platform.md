@@ -9,7 +9,7 @@ else runs.
 
 | | |
 |---|---|
-| CPU | STM32WB55, Cortex-M4 at 64 MHz, Thumb-2 only. FPU present but not used by programs yet: code is built with `-mfloat-abi=soft` (the opt-in FPU is spec R5.7, **(planned)**). |
+| CPU | STM32WB55, Cortex-M4 at 64 MHz, Thumb-2 only. Single-precision FPU, opt-in per program (spec R5.7): code is built with `-mfloat-abi=soft` unless it asks for the FPU, see 1.5. |
 | RAM | 192 KB SRAM1 plus two 10 KB pieces of SRAM2. Kernel, MM, FS and INIT take their share; about **105 KB is free in one piece after boot**, shared by every user process. |
 | Flash | 1 MB, of which MINIX uses the lower part: the system image (at most 192 KB), the *installed region* with program text and the default settings, and the *run-time text cache*. The top belongs to the radio CPU and is never touched. |
 | Processes | `NR_PROCS` is 16: MM, FS and INIT take three, so at most **13 user processes** exist at once, shells and the launcher included. |
@@ -117,6 +117,16 @@ What eats the reserve, from experience in this tree:
     `/rom` (chapter 5);
   - `printf` handles floating point, in software. Floating point is slow and makes code bigger;
     integer arithmetic (millivolts, tenths of a degree) is the habit here.
+  - **The FPU** (R5.7): a program whose `float` arithmetic matters can build those files with
+    `$(UFPFLAGS)` (`-mfpu=fpv4-sp-d16 -mfloat-abi=softfp`, `flipper/minix.mk`) and link with
+    `$(UFPLDFLAGS)`. `softfp` keeps the soft-float calling convention, so it links with the one
+    libc. Only `float` is in hardware; `double` stays in software (the FPU is single precision),
+    so write `1.5f` and `sinf()`, not `1.5` and `sin()`. Cost: 136 B more on the program's stack
+    (its FP registers are kept there while another process runs), nothing for programs without
+    the FPU. Two rules: no `vfork` (`$(UFPLDFLAGS)` makes it `fork`: the child would run over
+    the parent's saved registers), and `setjmp`/`longjmp` do not save the FP registers, so a
+    `float` local that lives across a `longjmp` is undefined (as C says for non-`volatile`
+    locals anyway).
 - **Headers**: `<minix/...>` for system-specific things such as `<minix/fg.h>` (foreground
   app), and the port's own `flipper/gui/gui.h` for screen apps.
 

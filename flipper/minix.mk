@@ -71,6 +71,14 @@ $(MB)/libc.a: $(LIBC_OBJ)
 PICFLAGS := -fpic -msingle-pic-base -mpic-register=r9 \
 	    -mno-pic-data-is-text-relative
 UCFLAGS	:= $(LIBCFLAGS) $(PICFLAGS)
+# R5.7: code that uses the FPU (float in hardware; double stays in software,
+# the FPU is single precision).  softfp keeps the soft-float calling
+# convention, so it links with the one libc.  The kernel saves such a
+# process's FP registers on its own stack (+136 B of stack, no other RAM).
+# Such a program must not use vfork: the child would run over the
+# parent's saved S16-S31.  Link it with $(UFPLDFLAGS) (vfork becomes fork).
+UFPFLAGS := -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+UFPLDFLAGS := -Wl,--defsym=vfork=fork -Wl,--defsym=_vfork=fork
 LIBCP_OBJ := $(LIBC_OBJ:$(MB)/libc/%=$(MB)/libcp/%)
 $(MB)/libcp/%.o: $(MROOT)/src/lib/%.c
 	@mkdir -p $(dir $@)
@@ -301,6 +309,13 @@ $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 $(MB)/cmd/m2test.o: m2/m2test.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
+$(MB)/cmd/m2fpu.o: m2/m2fpu.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) $(UFPFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/fpregs.o: m2/fpregs.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
