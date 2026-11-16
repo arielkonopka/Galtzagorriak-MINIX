@@ -92,6 +92,7 @@ unsigned hal_mt_ack(void);
 #define HAL_WAKE_BTN	1
 #define HAL_WAKE_TIMER	2
 int hal_stop2(void);
+int hal_can_stop2(void);		/* 0: never (QEMU, no HSE at boot) */
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
  * PA7 PA6 PA4 PB3 PB2 PC3 PC1 PC0 = header pins 2 3 4 5 6 7 15 16). */

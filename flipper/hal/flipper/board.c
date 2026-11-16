@@ -1154,6 +1154,11 @@ unsigned hal_buttons(void)
  * out of an interrupt, and nothing may run on a quarter of the clock.
  * Returns what woke it (HAL_WAKE_*), -1 if the CPU is not on the PLL (no
  * HSE at boot: no Stop2 either). */
+int hal_can_stop2(void)
+{
+	return (RCC->CFGR & RCC_CFGR_SWS) == (3u << RCC_CFGR_SWS_Pos);
+}
+
 int hal_stop2(void)
 {
 	uint32_t sai = RCC->CR & RCC_CR_PLLSAI1ON;
