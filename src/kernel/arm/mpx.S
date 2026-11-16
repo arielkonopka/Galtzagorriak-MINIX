@@ -148,8 +148,11 @@ SysTick_Handler:
 	.global	MemManage_Handler
 	.global	BusFault_Handler
 	.global	UsageFault_Handler
+	.global	DebugMon_Handler
 	.thumb_func
 HardFault_Handler:
+	.thumb_func
+DebugMon_Handler:			/* R4a.6: a stack guard was written */
 	.thumb_func
 MemManage_Handler:
 	.thumb_func
