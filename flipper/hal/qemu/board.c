@@ -195,6 +195,7 @@ int hal_random(uint32_t *w)
 	return 0;
 }
 void hal_dfu_request(void) { hal_halt(0); }
+void hal_power_off(void) { hal_halt(0); }
 void hal_dev_mode(int on) { (void) on; }
 int hal_dev(void) { return 0; }
 int hal_reset_bits(void) { return 0x08; }	/* BORRSTF: power on */

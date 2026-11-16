@@ -961,7 +961,12 @@ int how;
   if (how != RBT_PANIC && how != RBT_MONITOR)
 	hal_dev_mode(0);	/* an orderly end: a user's board again */
   if (how == RBT_PANIC) printf("System halted after panic.\n");
-  else if (how == RBT_HALT) printf("System halted.\n");
+  else if (how == RBT_HALT) {
+	/* T14c: power off (the charger's ship mode); hold Back, or plug in
+	 * USB, to start again.  On USB the power stays until the cable goes. */
+	printf("Power off.\n");
+	hal_power_off();
+  }
   if (how == RBT_MONITOR) {
 	/* No boot monitor: "return to the monitor" means ST's ROM DFU
 	 * loader, so a new image can be flashed without the buttons. */
