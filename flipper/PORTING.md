@@ -730,6 +730,28 @@ Phase 2c, vfork (2026-11-15, QEMU and Flipper):
     17 KB, AC2c.R).
 - RAM 0 B.
 
+T14a, power fixes at boot (2026-11-16, Flipper, #103):
+- SMPS step-down for the core instead of the LDO.  Its clock is set as
+  the stock firmware does: HSI16 (kept on), SMPSDIV 01.
+- The radios are parked in `hal_init` over SPI1, which is switched off
+  again afterwards with its pins analog:
+  - CC1101: SRES, then SPWD with CS high;
+  - ST25R3916: SET_DEFAULT, then op-control 0.
+- DBGMCU's Stop/Standby debug clocks are cleared unless in dev mode.
+- Dev-mode boot line on the Flipper:
+  `power: smps on; cc1101 asleep (122 us to wake); st25r3916 op 0 id
+  2a (off)`.
+  - A sleeping CC1101's crystal has to start once CS goes low, so it
+    takes 122 us before CHIP_RDYn; reading MARCSTATE would wake it, so
+    this is the check.  It goes back to sleep afterwards.
+  - Chip id 0x2a = type 5, the ST25R3916.
+- Regression: the SD card, IR send, the backlight and the USB console
+  work; `lat` L4 0 us.
+- Idle current: not measured, no meter at hand.  Expected about -1.7 mA
+  for the CC1101 and roughly half the CPU current from the SMPS
+  (power-plan.md 1.1).
+- RAM 0 B.
+
 T9 (2026-11-15): pipe data did reach the SD card.  Pipes are inodes on
 the root device with their data in ordinary cache blocks; counted in
 QEMU (every SD write logged), 10 times `cat /etc/rc /etc/profile

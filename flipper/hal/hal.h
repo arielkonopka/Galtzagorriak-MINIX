@@ -178,6 +178,12 @@ void hal_dfu_request(void) __attribute__((noreturn));
 void hal_dev_mode(int on);
 int hal_dev(void);
 const char *hal_reset_cause(void);	/* of the last reset */
+/* T14a: the Sub-GHz and NFC chips asleep, at boot (hal_init).  The check
+ * for the boot report: us the CC1101 took to wake (asleep: hundreds),
+ * the ST25R3916's op-control (0: off) and id, SMPS step-down running. */
+void hal_radios_park(void);
+void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
+							int *smps);
 /* The RTC's time, seconds since 1970 (UTC, spec I.1); 0: it is not running
  * or was never set.  Read once at boot (the clock task). */
 uint32_t hal_rtc_time(void);

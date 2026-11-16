@@ -155,6 +155,16 @@ PUBLIC void tty_task()
 						GZ_BASE, GZ_ABI);
   printf("reset: %s%s\n", hal_reset_cause(),
 	hal_dev() ? "; dev mode: a watchdog reset goes to DFU" : "");
+  if (hal_dev()) {		/* T14a: what hal_init parked */
+	unsigned cc_us, nfc_op, nfc_id;
+	int smps;
+
+	hal_radios_check(&cc_us, &nfc_op, &nfc_id, &smps);
+	printf("power: smps %s; cc1101 %s (%u us to wake); st25r3916 op %x "
+		"id %x%s\n", smps ? "on" : "off",
+		cc_us >= 100 ? "asleep" : "awake", cc_us, nfc_op, nfc_id,
+		nfc_op == 0 ? " (off)" : "");
+  }
 #endif
   printf("Minix %s.%s  Copyright 1997 Prentice-Hall, Inc.\n\n",
 						OS_RELEASE, OS_VERSION);

@@ -48,6 +48,127 @@ static inline int gpio_get(GPIO_TypeDef *port, unsigned pin)
 }
 
 /*===========================================================================*
+ *				Radios parked (T14a)			     *
+ *===========================================================================*/
+/* After a power-on reset the CC1101 (Sub-GHz) idles with its crystal
+ * running, ~1.7 mA, and the ST25R3916 (NFC) is not in power-down: MINIX
+ * does not use them yet, so at boot both are put to sleep over SPI1 and
+ * SPI1 is switched off again.  Command bytes and order from the stock
+ * firmware (lib/drivers/cc1101*, st25r3916*, furi_hal_nfc.c; GPL).
+ * Pins: SPI1 SCK PA5, MISO PB4, MOSI PB5 (AF5); CC1101 CS PD0 (mode 0),
+ * ST25R3916 CS PE4 (mode 1).  Both CS lines stay high: a low CS wakes
+ * the CC1101. */
+#define CC_CS(on)	gpio_set(GPIOD, 0, !(on))
+#define NFC_CS(on)	gpio_set(GPIOE, 4, !(on))
+#define SPI1_MISO	gpio_get(GPIOB, 4)
+
+static void spi1_on(int cpha)
+{
+	RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+	(void) RCC->APB2ENR;
+	gpio_cfg(GPIOA, 5, MODE_AF, PULL_NONE, 5);	/* SCK */
+	gpio_cfg(GPIOB, 4, MODE_AF, PULL_NONE, 5);	/* MISO */
+	gpio_cfg(GPIOB, 5, MODE_AF, PULL_NONE, 5);	/* MOSI */
+	SPI1->CR1 = 0;
+	SPI1->CR2 = (7u << SPI_CR2_DS_Pos) | SPI_CR2_FRXTH;	/* 8-bit */
+	SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI
+		  | (4u << SPI_CR1_BR_Pos)		/* 64 MHz / 32 = 2 MHz */
+		  | (cpha ? SPI_CR1_CPHA : 0) | SPI_CR1_SPE;
+}
+
+static void spi1_off(void)
+{
+	while (SPI1->SR & SPI_SR_BSY) ;
+	SPI1->CR1 = 0;
+	RCC->APB2ENR &= ~RCC_APB2ENR_SPI1EN;
+	gpio_cfg(GPIOA, 5, MODE_ANALOG, PULL_NONE, 0);
+	gpio_cfg(GPIOB, 4, MODE_ANALOG, PULL_NONE, 0);
+	gpio_cfg(GPIOB, 5, MODE_ANALOG, PULL_NONE, 0);
+}
+
+static uint8_t spi1_xfer(uint8_t out)
+{
+	while (!(SPI1->SR & SPI_SR_TXE)) ;
+	*(volatile uint8_t *) &SPI1->DR = out;
+	while (!(SPI1->SR & SPI_SR_RXNE)) ;
+	return *(volatile uint8_t *) &SPI1->DR;
+}
+
+static unsigned cc_ready(void)	/* CS low: us until MISO low (CHIP_RDYn) */
+{
+	uint32_t t0 = DWT->CYCCNT, us;
+
+	CC_CS(1);
+	while (SPI1_MISO)
+		if ((us = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000)) > 2000)
+			return us;
+	return (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000);
+}
+
+static void nfc_cmd(uint8_t a, int n, uint8_t b, uint8_t *in)
+{
+	uint8_t r;
+
+	NFC_CS(1);
+	(void) spi1_xfer(a);
+	r = n > 1 ? spi1_xfer(b) : 0;
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	if (in != NULL) *in = r;
+}
+
+void hal_radios_park(void)
+{
+	gpio_set(GPIOD, 0, 1);				/* both deselected */
+	gpio_cfg(GPIOD, 0, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOE, 4, 1);
+	gpio_cfg(GPIOE, 4, MODE_OUT, PULL_NONE, 0);
+
+	spi1_on(0);					/* CC1101: mode 0 */
+	(void) cc_ready();
+	(void) spi1_xfer(0x30);				/* SRES */
+	CC_CS(0);
+	(void) cc_ready();				/* reset done */
+	(void) spi1_xfer(0x39);				/* SPWD */
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);					/* sleeps from here */
+	spi1_off();
+
+	spi1_on(1);					/* ST25R3916: mode 1 */
+	nfc_cmd(0xC1, 1, 0, NULL);			/* SET_DEFAULT */
+	nfc_cmd(0x02, 2, 0x00, NULL);			/* op control: off */
+	spi1_off();
+
+	/* The debug interface's clocks in Stop/Standby only in dev mode. */
+	if (!hal_dev())
+		DBGMCU->CR &= ~(DBGMCU_CR_DBG_SLEEP | DBGMCU_CR_DBG_STOP
+							| DBGMCU_CR_DBG_STANDBY);
+}
+
+/* For the boot report: is the CC1101 asleep (its crystal must start: a
+ * long wait for CHIP_RDYn; it is put back to sleep), the ST25R3916's
+ * op-control (0: off) and chip id, and whether the SMPS runs. */
+void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
+							int *smps)
+{
+	uint8_t v;
+
+	spi1_on(0);
+	*cc_us = cc_ready();
+	(void) spi1_xfer(0x39);				/* SPWD again */
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	spi1_off();
+	spi1_on(1);
+	nfc_cmd(0x40 | 0x02, 2, 0, &v);			/* read op control */
+	*nfc_op = v;
+	nfc_cmd(0x40 | 0x3F, 2, 0, &v);			/* read IC identity */
+	*nfc_id = v;
+	spi1_off();
+	*smps = (PWR->SR2 & PWR_SR2_SMPSF) != 0;
+}
+
+/*===========================================================================*
  *				Clocks					     *
  *===========================================================================*/
 /* HSE 32 MHz / M 2 = 16 MHz PLL input, * N 8 = 128 MHz VCO, / R 2 = 64 MHz.
@@ -89,6 +210,17 @@ static void clock_init(void)
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
 	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
 	SystemCoreClock = 64000000;
+
+	/* The SMPS step-down converter instead of the LDO for the core
+	 * (T14a): about half the run current.  Its clock as the stock
+	 * firmware sets it (furi_hal_clock.c): HSI16, SMPSDIV 01, within the
+	 * 2-8 MHz it needs; HSI16 stays on for it. */
+	RCC->CR |= RCC_CR_HSION;
+	for (timeout = 200000; !(RCC->CR & RCC_CR_HSIRDY); )
+		if (--timeout == 0) return;		/* LDO, as before */
+	RCC->SMPSCR = (RCC->SMPSCR & ~(RCC_SMPSCR_SMPSSEL | RCC_SMPSCR_SMPSDIV))
+		    | RCC_SMPSCR_SMPSDIV_0;		/* HSI16 */
+	PWR->CR5 |= PWR_CR5_SMPSEN;
 }
 
 __attribute__((weak)) void SysTick_Handler(void)
@@ -1022,6 +1154,7 @@ void hal_init(void)
 	uart_init();
 	spi2_init();
 	buttons_init();
+	hal_radios_park();			/* T14a: -1.7 mA and more */
 }
 
 void hal_halt(int status)

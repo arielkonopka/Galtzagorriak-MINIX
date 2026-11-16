@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (T14a) Less current at idle: the core runs from the SMPS step-down converter, and the Sub-GHz and NFC chips sleep from boot (they idled with their crystals running).
 - QEMU board: SysTick starts at the lowest priority, so a tick during early boot can no longer enter the kernel before the first process (it locked up about 1 boot in 30 on a busy host: the random `powercut` failures in CI). The Flipper already did this.
 - (Phase 2c) `vfork`: the shell, init, the launcher and pkg start programs without copying themselves first, so commands still start when memory is short (`vfork(2)`). Base 3.58.
 - The LCD backlight dims 10 % a second from 5 s before its timeout (default 15 s, spec #89) and then fades out (0.5 s); the next key or button brings it back at once (when it is off, that press only turns it on). Reading `/dev/backlight` ends after its 4-byte state.
