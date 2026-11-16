@@ -154,7 +154,8 @@
 /* Clients of the ms timer (R4b.2, arm/klib.c: mt_arm, mt_func[]). */
 #define MT_BUTTONS         0	/* a button is down: sample (flipdev.c) */
 #define MT_IDLE            1	/* the end of a Stop2 sleep (klib.c) */
-#define MT_N               2
+#define MT_VIBRO           2	/* a timed buzz ends (flipdev.c, R6.3) */
+#define MT_N               3
 
 /* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console
