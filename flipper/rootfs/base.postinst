@@ -76,6 +76,14 @@ then
 	chgrp gui /dev/subghz 2>/dev/null
 	chmod 660 /dev/subghz 2>/dev/null
 fi
+# Cards made before R4b.7 part 2 lack /dev/subghzraw (what the CC1101
+# demodulates, timed).
+if test ! -r /dev/subghzraw
+then
+	mknod /dev/subghzraw c 6 14 || echo "base: could not make /dev/subghzraw"
+	chgrp gui /dev/subghzraw 2>/dev/null
+	chmod 660 /dev/subghzraw 2>/dev/null
+fi
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then

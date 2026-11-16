@@ -104,6 +104,20 @@ rtc cal -20         # 19 ppm slower (about 1.6 s a day)
 - The calibration is kept by the clock itself, also while off. One step is 0.954 ppm, about
   0.08 s a day; positive runs faster. Measure the drift against a good clock over some days.
 
+### Raw signal (`/dev/subghzraw`)
+
+What the receiver demodulates (on-off keying), as the times between its changes: 32-bit
+little-endian microseconds, carrier first, the same format as `/dev/ir`. Tune with
+`/dev/subghz` first; a read waits for the first change and ends after 0.1 s of silence or when
+the buffer is full:
+
+```
+echo 433920000 > /dev/subghz
+ir rx -r -d /dev/subghzraw
+```
+
+Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
+fills up with noise at once; FSK remotes (many car keys) do not show at all.
 
 ## The status LED (`/dev/led`)
 
