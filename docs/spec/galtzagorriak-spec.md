@@ -1744,6 +1744,64 @@ infrared, iButton, low-power modes.
     while `/dev/gpio` uses header 3V3 (pin 9 shares the rail);
   - charger ADC one-shot on demand (stock leaves it continuous); 5 V OTG off when unused;
   - below a low-voltage threshold: no flash writes; SYSDWN sends `SIGPWR` and INIT powers off.
+- **R6.10 Button gestures: backlight forced off / forced on** (owner request 2026-11-16):
+  - **Gestures.** Hold **Left+Up** for 1.5 s: the backlight goes **forced off** (it stays dark
+    whatever keys are pressed) until the same gesture again returns it to the normal idle timeout
+    (15 s, R6.9). Hold **Right+Down** for 1.5 s: **forced on** (never times out), until held again.
+    Doing the other gesture switches straight from one forced mode to the other.
+  - **Chord rule.** A gesture is exactly its buttons down, no others, in any order; the hold time
+    counts from the last button change (`k_input`, already kept: 0 B). Any change (a third button,
+    one released) cancels it. Once it fires, nothing more happens until a button changes. Chords
+    are at least two buttons and **never include Back**, and Back going down cancels a chord, so
+    long Back (R4b.8: park or close the app) is never affected.
+  - **Feedback while holding.** From the moment the chord is complete, the RGB LED blinks red
+    (low level, ~25 %), faster and faster until the threshold: half-period `max(30, 200 - 170 *
+    elapsed / hold)` ms. When it fires: a 30 ms vibro pulse (R6.3 timed buzz, ms timer) and the LED
+    back to what it was before the chord. Cancelled: the LED back at once. The blink is driven by the
+    button sampling the kernel already does every 8 ms while a key is down (`flipdev_btn`, ms timer):
+    the interrupt only decides that the LED must flip and wakes the task, which does the I2C write
+    (no I2C at interrupt level). Before the first blink the task reads the LP5562's three PWM
+    registers into a 3 B save area; a `/dev/led` write during the hold goes into the save area, so
+    it is not lost. If an LP5562 engine pattern owns the LED (an alert, R7b.5), there is no blink
+    (the gesture still works, the vibro pulse confirms it). An engine program instead of the
+    sampling is allowed if it scales with the hold time and leaves engine 1 to the backlight fade.
+  - **Keys reach the app as usual.** The kernel cannot know at the first press that a chord is
+    coming, so the down and up events of both buttons are delivered to the foreground app normally
+    (never a down without its up). Apps should not act on Left+Up or Right+Down held together.
+  - **Idle-off vs forced-off.** The existing rule "with the light off by the idle timeout, a press
+    only turns it on and is swallowed" stays for idle-off. In forced-off, presses are delivered
+    (the user works in the dark on purpose). On battery the LCD power save (R6.9, `LCD_SAVE_S`
+    after the last key) still comes in forced-off; the press that wakes a blank LCD is swallowed,
+    as today. Forced-on: no dimming, no light-off, no LCD power save. Later idle-ladder steps (SD
+    rail off, automatic power-off, R7.1) still count from the last key in both modes.
+  - **Apps that need every key.** The foreground app (or the launcher for it, from a `Gestures: no`
+    key in the app's `.desktop` entry) turns gestures off with `ioctl(BTNIOCGEST, 0)` on
+    `/dev/buttons`; allowed only for the foreground app (R4b.8 rules), cleared at the next
+    `FGIOCSET`. Games that use diagonals set it. Long Back keeps working.
+  - **State, 0 B for the mode.** The mode lives in the backlight's RTC backup register (BKP15R,
+    PORTING.md map): bits 14-15 of the timeout field, 00 auto, 01 forced off, 10 forced on; the
+    idle timeout shrinks to 14 bits (≤ 16383 s; `/dev/backlight` writes clamp). The mode is
+    cleared at boot (a reboot always gives the normal light back). `read()` on `/dev/backlight`
+    returns it, so `power`, the launcher's status bar and `backlight` can show it; `backlight force
+    on|off|auto` sets it from the shell (root).
+  - **The gesture table, in RAM (owner, 2026-11-16: config not in flash until it settles).** Up
+    to 4 entries of 1 byte (bits 0-5 the button mask, bits 6-7 the action: 0 none, 1 toggle
+    forced off, 2 toggle forced on, 3 user gesture: reserved for R7.2) and 1 byte hold time in
+    50 ms units shared by all (default 30 = 1.5 s), plus the 3 B LED save area: **≤ 8 B kernel
+    RAM** (owner accepts ~10 B). The defaults (the two gestures above) are a `const` table copied
+    at boot. `ioctl(BTNIOCGTAB)` on `/dev/buttons` (root only; masks with Back or fewer than 2
+    buttons: `EINVAL`) replaces the table; a boot script applies `/etc/flipper/gestures.conf` from
+    the SD card if present (section L: defaults in ROM, changes on SD). **No flash writes** at run
+    time; moving a settled table into the installed flash is a later, install-time step.
+  - **Flags, 0 B.** Chord in progress, fire due (task work) and the matched entry (2 bits) fit in the
+    free bits of `last_buttons` (bits 6-7, 26-28 are free today); the per-app gestures-off flag too.
+  - **Interactions.** Profiles of `power`/`pm` (R7.1) sit under the forced modes: switching a
+    profile does not clear them. Desk mode (R7b.2) does not override forced-off. An alert
+    (`FG_PREEMPT`, alarm) respects forced-off: sound, vibro and LED wake the user, the reflective
+    LCD still shows the text. Mode changes use the same ramps as the idle timeout (0.5 s fade out;
+    the planned ~150 ms fade in, "Still open" in next-tasks.md, applies here too).
+  - **Responsiveness.** At interrupt level only a compare of the buttons against ≤ 4 masks at each
+    change, and an elapsed-time check at the 8 ms samples while a chord is held: L1 unchanged.
 
 Acceptance:
 - AC6.1 `cat /dev/power` matches the stock firmware's battery screen within 2 %; power-off and
@@ -1757,10 +1815,16 @@ Acceptance:
   state and the SD rail off (R6.9). Measured with an external meter on the battery leads (the
   gauge's 1 mA resolution is too coarse).
 - AC6.6 8 h idle in Stop2: no watchdog reset, clock error within the LSE tolerance.
+- AC6.7 (R6.10) Left+Up held 1.5 s: light off, keys still reach the app, light stays off;
+  held again: back to the 15 s timeout. Right+Down: never times out; again: normal. Released at
+  1.4 s: nothing changes and the LED is as before. With Back in the chord, or a third button, or in
+  an app that set `BTNIOCGEST 0`: nothing. Long Back still parks/closes the app during and after
+  a forced mode. The LED blinks faster towards the threshold; a 30 ms buzz confirms. A reboot
+  clears the mode. No flash erase or write during any of this (`flashcheck` unchanged).
 
 Responsiveness: AC6.R Waking from Stop2 by a button meets L1 (≤ 50 ms max including clock restart); speaker and vibro never delay input (L2).
 
-RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
+RAM budget: kernel ≤ +300 B in total (R6.1–R6.9); R6.10 ≤ +8 B on top. Flash: ≈ +13 KB kernel.
 
 ---
 
@@ -1814,6 +1878,19 @@ RAM budget: kernel ≤ +300 B in total (R6.1–R6.9). Flash: ≈ +13 KB kernel.
     and the wake sources); the app only edits them. Group `operator`. GUI as the other system apps
     (`flipper/gui` now, `libfuri` later). RAM: ~2 KB while open, 0 B static beyond the registers.
   - Command-line twin `pm` (same `ioctl`s, `-t` output per K.1) for scripts and the shell.
+- **R7.2 Gestures app `gestures` (planned; owner request 2026-11-16), after R6.10:**
+  - in the settings group; lists the 4 gesture slots of R6.10; "record" a chord by holding the
+    buttons (Back cannot be part of one), pick the action, set the common hold time (0.5–5 s); a
+    test mode that shows the LED countdown without acting.
+  - saves to `/etc/flipper/gestures.conf` on the SD card (one line per slot, TSV: mask, action,
+    and for a user gesture the command line) and applies it at once with `ioctl(BTNIOCGTAB)`.
+  - user gestures (action 3): the kernel flags the entry and signals INIT, which forks the
+    short-lived `/usr/bin/gesture N` (the same pattern as `timed` on `SIGRTC`, F.2); it reads the
+    command for slot N from the conf file and runs it (e.g. start the mouse jiggler, a TV-remote
+    "mute", toggle desk mode). No resident daemon, no extra kernel RAM.
+  - once the owner says the table has settled, the defaults move into the installed flash
+    (install-time write only).
+  - Later ideas, not scheduled: sequences (e.g. Up Up Down within 1 s), per-app tables.
 
 Acceptance:
 - AC7.0 Every setting in `power` takes effect at once, survives a power-off and a battery
@@ -1824,6 +1901,8 @@ Acceptance:
   load, and files saved here load on stock.
 - AC7.2 The IR universal remote for TVs works on at least 3 brands.
 - AC7.3 Running the IR app as a user outside group `ir` fails to open `/dev/ir`.
+- AC7.4 (R7.2) A gesture recorded in `gestures` works at once and after a reboot (from the SD
+  file); a user gesture runs its command; removing the SD card gives the default table.
 
 Responsiveness: AC7.R L6 and L7 met for every app in the table; the IR learn screen shows a received signal within 100 ms of the end of the burst.
 
