@@ -272,9 +272,10 @@ PUBLIC void flipdev_task()
  *				adc_read				     *
  *===========================================================================*/
 /* /dev/adc (R6.4, part 1): one line with the header pins' voltages in mV,
- *	pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=3297 vdda=3301
+ *	pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=> ref=2500
  * "-": the pin is not left analog ("gpio N off", the default), so it is
- * not measured.  PB3 and PB2 have no ADC input.  ~0.5 ms, on demand. */
+ * not measured; ">": above the reference (VREF+, 2.5 V from the internal
+ * buffer: the range is 0-2.5 V).  PB3 and PB2 have no ADC input.  ~0.5 ms, on demand. */
 PRIVATE const char adc_names[HAL_GPIO_PINS][4] =
 	{ "pa7", "pa6", "pa4", "", "", "pc3", "pc1", "pc0" };
 
@@ -285,6 +286,7 @@ int n, v;
   char d[6];
   int j = 0;
 
+  if (v == HAL_ADC_OVER) { line[n++] = '>'; return(n); }
   if (v < 0) { line[n++] = '-'; return(n); }
   do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
   while (j > 0) line[n++] = d[--j];
@@ -307,7 +309,7 @@ int count;
 	n = adc_put(line, n, mv[i]);
 	line[n++] = ' ';
   }
-  for (k = "vdda="; *k != 0; k++) line[n++] = *k;
+  for (k = "ref="; *k != 0; k++) line[n++] = *k;
   n = adc_put(line, n, vdda);
   line[n++] = '\n';
   if (count > n) count = n;
