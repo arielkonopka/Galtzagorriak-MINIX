@@ -134,6 +134,10 @@ int hal_lcd_flush(const uint8_t *fb)
 int hal_gauge_read(unsigned cmd) { (void) cmd; return -2; }
 int hal_charger_read(unsigned reg) { (void) reg; return -2; }
 
+void hal_ow_line(int low) { (void) low; }
+int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
+void hal_ow_delay(unsigned us) { (void) us; }
+
 unsigned hal_buttons(void)
 {
 	return qemu_fake_buttons;
