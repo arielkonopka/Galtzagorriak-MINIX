@@ -43,6 +43,13 @@ struct latinfo {
   long rev_q_big_proc;		/*   its longest single slice: whose */
   unsigned long rev_q_big;	/*   and how long */
   struct latevent ring[LAT_RING];
+  /* T14b: Stop2 since boot (the kernel's statistics) and, since lat -c,
+   * the wake-ups' way back to the PLL: Stop2 entry and exit in cycles of
+   * HSI16 (16 MHz), most of it the crystal's start-up */
+  unsigned long stop_lp;	/* time in Stop2, 32768 Hz clocks (wraps) */
+  unsigned long wake_btn, wake_other;
+  unsigned long wake_max, wake_sum, wake_n;
+  unsigned long nosleep[8];	/* idle without Stop2, by reason (klib.c) */
 };
 
 #endif /* _MINIX_LAT_H */

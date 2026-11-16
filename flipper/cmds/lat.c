@@ -17,6 +17,8 @@
  * maxima (L4, L5) first.
  */
 #include <sys/types.h>
+#include <sys/times.h>
+#include <time.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -213,5 +215,24 @@ int main(int argc, char **argv)
 	if (li.boot_lcd_ms != 0)
 		printf("L10  boot -> first frame                  %lu ms\n",
 							li.boot_lcd_ms);
+	{	/* T14b: Stop2 */
+		struct tms tm;
+		unsigned long up = (unsigned long) times(&tm) / CLK_TCK;
+		unsigned long st = li.stop_lp / 32768;
+
+		printf("Stop2  %lu of %lu s up (%lu%%), wake-ups: %lu by a "
+			"button, %lu other\n", st, up, up ? st * 100 / up : 0,
+			li.wake_btn, li.wake_other);
+		if (li.wake_n > 0)
+			printf("Stop2  in and out (clocks back)    %6lu  avg "
+				"%5lu us        max %6lu us\n", li.wake_n,
+				li.wake_sum / li.wake_n / 16,
+				li.wake_max / 16);
+		printf("Stop2  not taken: blocker %lu, USB %lu, alarm %lu, "
+			"tick work %lu, arming %lu, timer write %lu, other %lu\n",
+			li.nosleep[1], li.nosleep[2], li.nosleep[3],
+			li.nosleep[4], li.nosleep[5], li.nosleep[6],
+			li.nosleep[7]);
+	}
 	return 0;
 }

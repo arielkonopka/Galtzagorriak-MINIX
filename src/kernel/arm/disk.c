@@ -174,7 +174,9 @@ PUBLIC void hal_disk_wait()
  * the hardware afterwards: a stale wakeup costs a little polling. */
   message m;
 
+  pm_busy |= PM_DISK;		/* DMA needs the clocks: no Stop2 */
   receive(HARDWARE, &m);
+  pm_busy &= ~PM_DISK;
 }
 
 

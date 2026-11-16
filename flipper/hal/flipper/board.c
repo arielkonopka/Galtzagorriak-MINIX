@@ -1143,6 +1143,53 @@ unsigned hal_buttons(void)
 }
 
 /*===========================================================================*
+ *				Stop2					     *
+ *===========================================================================*/
+/* Stop2 (T14b, R6.8) as the stock furi_hal_power_deep_sleep, without the
+ * CPU2 semaphores (CPU2 is never started): onto HSI16, Stop2 for both CPUs,
+ * SLEEPDEEP, WFI; the wake-up comes on HSI16 (STOPWUCK), then back to HSE
+ * and the PLL (and PLLSAI1, USB's 48 MHz, if it ran).  Stop2 turns HSE and
+ * the PLLs off.  The crystal's start-up is waited for here, interrupts
+ * masked, before anything else runs: the kernel switches tasks on the way
+ * out of an interrupt, and nothing may run on a quarter of the clock.
+ * Returns what woke it (HAL_WAKE_*), -1 if the CPU is not on the PLL (no
+ * HSE at boot: no Stop2 either). */
+int hal_stop2(void)
+{
+	uint32_t sai = RCC->CR & RCC_CR_PLLSAI1ON;
+	int w;
+
+	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) return -1;
+	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_STOPWUCK
+						| (1u << RCC_CFGR_SW_Pos);
+	while ((RCC->CFGR & RCC_CFGR_SWS) != (1u << RCC_CFGR_SWS_Pos)) ;
+	PWR->CR1 = (PWR->CR1 & ~PWR_CR1_LPMS) | PWR_CR1_LPMS_1;
+	PWR->C2CR1 = (PWR->C2CR1 & ~PWR_C2CR1_LPMS) | PWR_C2CR1_LPMS_1;
+	SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
+	__DSB();
+	__WFI();
+	SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+	/* Stop0 selected again, as stock: a stray deep sleep is no Stop2 */
+	PWR->CR1 &= ~PWR_CR1_LPMS;
+	PWR->C2CR1 &= ~PWR_C2CR1_LPMS;
+	PWR->EXTSCR = PWR_EXTSCR_C1CSSF;
+	w = (EXTI->PR1 & BTN_LINES) ? HAL_WAKE_BTN : 0;
+	if (LPTIM1->ISR & (LPTIM_ISR_CMPM | LPTIM_ISR_CMPOK)) w |= HAL_WAKE_TIMER;
+
+	RCC->CR |= RCC_CR_HSEON;
+	while (!(RCC->CR & RCC_CR_HSERDY)) ;
+	RCC->CR |= RCC_CR_PLLON;
+	while (!(RCC->CR & RCC_CR_PLLRDY)) ;
+	if (sai) {
+		RCC->CR |= RCC_CR_PLLSAI1ON;
+		while (!(RCC->CR & RCC_CR_PLLSAI1RDY)) ;
+	}
+	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
+	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
+	return w;
+}
+
+/*===========================================================================*
  *				DFU entry				     *
  *===========================================================================*/
 /* Like the stock firmware: if LEFT is held at reset (Left+Back reset, then

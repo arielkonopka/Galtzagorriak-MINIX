@@ -275,6 +275,7 @@ int hal_usb_init(void) { return -1; }
 int hal_usb_irq(void) { return -1; }
 void hal_usb_poll(void) { }
 int hal_usb_connected(void) { return 0; }
+int hal_usb_awake(void) { return 0; }
 unsigned hal_usb_write(const void *buf, unsigned n) { (void) buf; return n; }
 unsigned hal_usb_room(void) { return 512; }
 int hal_usb_getc(void) { return -1; }
@@ -479,6 +480,7 @@ unsigned hal_mt_now(void) { return 0; }
 void hal_mt_set(unsigned due) { (void) due; }
 unsigned hal_mt_cmp(void) { return 0; }
 unsigned hal_mt_ack(void) { return 0; }
+int hal_stop2(void) { return -1; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

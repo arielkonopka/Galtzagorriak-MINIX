@@ -74,6 +74,11 @@ EXTERN u8_t irq_slot[NR_IRQ_VECTORS];	/* 0: none, else slot + 1 */
 EXTERN irq_handler_t irq_handlers[NR_IRQ_HANDLERS];
 EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
 EXTERN clock_t k_input;		/* uptime of the last key or button (T4) */
+EXTERN u32_t pm_busy;		/* sleep blockers (T14b): PM_* in const.h */
+EXTERN struct {			/* T14b statistics, since boot */
+  u32_t stop;			/* time in Stop2, ms timer clocks (36 h) */
+  u16_t btn, other;		/* wake-ups: a button; anything else */
+} pm_stat;
 #endif
 
 #if (CHIP == M68000)

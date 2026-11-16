@@ -149,11 +149,28 @@ int end;
   lat.flash_n++;
 }
 
+PUBLIC void lat_wake(cyc)		/* a Stop2 sleep's entry and exit */
+unsigned long cyc;
+{
+  lat.wake_n++;
+  lat.wake_sum += cyc;
+  if (cyc > lat.wake_max) lat.wake_max = cyc;
+}
+
+PUBLIC void lat_nosleep(r)		/* idle, but no Stop2: why */
+int r;
+{
+  lat.nosleep[r & 7]++;
+}
+
 PUBLIC int lat_read(user, count)	/* /dev/lat */
 phys_bytes user;
 int count;
 {
   lat.hz = hal_cpu_hz();
+  lat.stop_lp = pm_stat.stop;
+  lat.wake_btn = pm_stat.btn;
+  lat.wake_other = pm_stat.other;
   if (count > sizeof(lat)) count = sizeof(lat);
   phys_copy(vir2phys(&lat), user, (phys_bytes) count);
   return(count);
@@ -167,6 +184,8 @@ PUBLIC void lat_clear()
   lat.flip_max = lat.flip_n = lat.flip_bytes = 0;
   lat.rev_q_flash = lat.rev_q_slow = lat.rev_q_slow_flash = 0;
   lat.rev_q_prev = 0;
+  lat.wake_max = lat.wake_sum = lat.wake_n = 0;
+  { int i; for (i = 0; i < 8; i++) lat.nosleep[i] = 0; }
   lat.hz = hal_cpu_hz();
 }
 #endif /* LATTRACE */
