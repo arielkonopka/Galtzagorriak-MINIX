@@ -115,8 +115,9 @@ static int em_decode(int nd, unsigned char id[5])
 
 /* ---- writing a T5577 ---- */
 #define T_WAIT		400
-#define T_START_GAP	30
-#define T_WRITE_GAP	18
+#define T_START_GAP	50		/* stock 30; 8-50 allowed: the field
+				 * decays slowly (seen with the comparator) */
+#define T_WRITE_GAP	30		/* stock 18; 8-30 allowed */
 #define T_DATA_0	24
 #define T_DATA_1	56
 #define T_PROGRAM	700

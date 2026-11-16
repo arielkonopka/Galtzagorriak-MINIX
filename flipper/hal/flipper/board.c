@@ -2392,6 +2392,7 @@ void hal_ir_target(int rfid)
 		gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
 		hal_ow_line(1);
 		gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
+		gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* JTDI */
 	}
 }
 
@@ -2678,6 +2679,8 @@ int hal_rfid_read(uint32_t dst, unsigned n)
 	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
 	hal_ow_line(1);					/* iButton low */
 	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);	/* the carrier node:
+						 * after reset JTDI, pulled up */
 	/* the field */
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;
