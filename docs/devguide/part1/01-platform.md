@@ -53,8 +53,27 @@ and a copy on each switch.
 ### Threads
 
 There are none, and none are planned in the kernel. A second activity is a second process (with
-pipes or signals between the two), or an event loop in one process. Cooperative threads inside
-one process come with `libfuri` (Phase 5) for ported stock apps **(planned)**.
+pipes or signals between the two), or an event loop in one process.
+
+For ported stock apps, the `libfuri` core (spec R5.1, `flipper/lib/furi`) gives **cooperative
+threads inside one process** with the stock API (`furi_thread_*`, `furi_message_queue_*`,
+`furi_event_flag_*`, `furi_mutex_*`, `furi_semaphore_*`, `furi_timer_*`, records,
+`FuriString`, `furi_check`, `FURI_LOG_*`; `#include <furi.h>`, link `libfuri.a`). What to know:
+
+- A thread runs until it waits (queue, flags, mutex, semaphore, delay, join) or calls
+  `furi_thread_yield()`. Priorities are kept but not used. Timer callbacks run when a thread
+  waits or yields and must not block.
+- Thread stacks are cut from the program's stack gap, not the heap (MM accepts a stack pointer
+  only there), so the program's `chmem` must hold the main stack (libfuri leaves it 3 KB), every
+  thread stack and the heap. The C library's `printf` family alone needs about 1.2 KB of stack.
+  A 16-byte canary at the bottom of each stack is checked at every switch.
+- `furi_check`/`furi_crash` write the message to `/dev/log` and stderr and `abort()` the process;
+  the rest of the system keeps running.
+- Until `poll()` (R4b.6) a blocking `read()` stops every thread of the process, and an idle
+  process sleeps in whole seconds (`alarm()`; libfuri owns `SIGALRM` while it sleeps).
+- Costs on the device: about 12 KB of code (until it moves into the shared library), 84 B per
+  thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
+- Not from signal handlers. The GUI, storage and HAL parts come with R5.2–R5.4 **(planned)**.
 
 ## 1.3 Program text runs from flash
 

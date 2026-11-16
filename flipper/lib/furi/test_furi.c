@@ -4,11 +4,11 @@
  * run by m2test). Exit status 0 when all pass.
  * Times differ: the host sleeps in ms, MINIX in whole seconds until
  * poll() (R4b.6), so the timing checks are loose there. */
+#include <sys/types.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <furi.h>

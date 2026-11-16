@@ -2,6 +2,7 @@
  * libfuri (spec R5.1, D.1, D.2): furi_crash/furi_check and the log.
  * The stock firmware halts or reboots the Flipper; here the message goes
  * to /dev/log and stderr, then abort() ends this process only. */
+#include <sys/types.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,7 @@ static void die(const char* what, const char* message, const char* file, int lin
         /* the log has it */
     }
     abort();
+    __builtin_unreachable(); /* MINIX's abort() is not marked noreturn */
 }
 
 void __furi_crash_at(const char* message, const char* file, int line) {
