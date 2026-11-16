@@ -121,6 +121,18 @@ def one(n, mode, expect):
 	"""Returns (n, mode, problem or None, where the cut was)."""
 	r = Run(n, mode)
 	try:
+		res = checks(r, n, mode, expect)
+		if res[2] and res[2] != "no cut happened":	# console's last lines, for CI flakes
+			sys.stdout.write("---- cut %d mode %d, console:\n%s\n----\n"
+				% (n, mode, r.out[-1500:].decode("latin-1")))
+		return res
+	finally:
+		r.close()
+
+
+def checks(r, n, mode, expect):
+	"""The checks of one run (one())."""
+	if True:
 		if not r.login():
 			return (n, mode, "no login", "")
 		cut = None
@@ -170,8 +182,6 @@ def one(n, mode, expect):
 			return (n, mode, "console: %r" %
 				BAD.search(r.out).group(0), where)
 		return (n, mode, None, where)
-	finally:
-		r.close()
 
 
 def reference():
