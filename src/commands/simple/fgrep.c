@@ -33,8 +33,9 @@
 
 #define MAX_STR_LEN	 256	/* maximum length of strings to search for */
 #define BYTE		0xFF	/* convert from char to int */
-#define READ_SIZE	4096	/* read() request size */
-#define BUF_SIZE (2*READ_SIZE)	/* size of buffer */
+#define READ_SIZE	1024	/* read() request size: one block (R2a.5) */
+#define BUF_SIZE (2*READ_SIZE)	/* size of buffer: lines up to 2047 chars
+				 * (POSIX LINE_MAX 2048) stay whole */
 
 typedef struct test_str {
   struct test_str *next;	/* linked list */
@@ -226,7 +227,13 @@ int fill_buffer()
   bufp = &buffer[size];
 
   do {
-	if ((size = read(fd_in, bufp, READ_SIZE)) <= 0) {
+	/* Never past the buffer; keep one byte for the '\n' a too long
+	 * line gets below.  A leftover line may already fill most of it.
+	 */
+	size = &buffer[BUF_SIZE - 1] - bufp;
+	if (size > READ_SIZE) size = READ_SIZE;
+	if (size <= 0) break;
+	if ((size = read(fd_in, bufp, size)) <= 0) {
 		if (size != 0) failure("read error");
 		eof_seen++;
 		if (bufp == buffer)	/* no input left */

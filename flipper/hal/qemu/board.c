@@ -313,6 +313,8 @@ static uint32_t bl_state = 255u << 16 | 15u;	/* QEMU: no backup register */
 uint32_t hal_bl_state(void) { return bl_state; }
 void hal_bl_state_set(uint32_t s) { bl_state = s & 0x0FFFFFFFu; }
 void hal_led(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+void hal_led_pwm(unsigned r, unsigned g, unsigned b) { (void) r; (void) g; (void) b; }
+int hal_led_pattern(const char *name, unsigned long rgb) { (void) name; return (rgb & 0xFFFFFF) ? 0 : -1; }
 void hal_led_get(unsigned char rgb[3]) { rgb[0] = rgb[1] = rgb[2] = 0; }
 
 
@@ -572,6 +574,9 @@ unsigned hal_mt_ack(void)
 	return f;
 }
 int hal_adc_mv(int *mv) { (void) mv; return -1; }
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n) { (void) pin; (void) rate; (void) dst; (void) n; return -1; }
+unsigned hal_adc_stream_left(void) { return 0; }
+void hal_adc_stream_stop(void) { }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }

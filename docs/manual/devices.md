@@ -41,6 +41,22 @@ calibration), usually in a few milliseconds while the reference settles, and the
 the reference are switched off again afterwards. Continuous sampling and an app with a
 voltmeter screen are **(planned)** (spec R6.4, later parts).
 
+### Sampling a pin at a fixed rate (`/dev/adcs`)
+
+For programs that need a waveform (for example the camera finder's light-flicker check):
+write the header pin (counted as `gpio` counts them, 0 = pin 2 … 7 = pin 16) and a rate in Hz
+(100–100 000), then read: each 2 bytes are one sample, 0–4095 for 0–2.5 V (the reference shown
+by `cat /dev/adc` as `ref=`).
+
+```
+echo 0 8000 > /dev/adcs                         # pin 2 (PA7) at 8 kHz
+dd if=/dev/adcs bs=2000 count=1 | od -d | head  # 1000 samples, 125 ms
+```
+
+The samples go straight into the reading program's memory; the read waits until they are all
+there. While a stream runs, infrared sending is not possible (they share a timer), and the
+Flipper does not go into deep sleep.
+
 ## Sub-GHz radio, listening only (`/dev/subghz`)
 
 The Sub-GHz chip (CC1101) can listen on one frequency and report the signal strength there. It
@@ -60,3 +76,37 @@ radio keeps listening until `echo 0`, or until nobody has read it for about a mi
 about 15 mA while listening). A spectrum view and
 recording will build on this.
 
+## The status LED (`/dev/led`)
+
+The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.
+
+Three bytes set red, green and blue directly (0–255 each). A text line starts a pattern.
+The first four run in the LED driver chip itself, so the CPU can sleep meanwhile; the colour
+sequences (`rainbow`, `dual`, `dualsoft`, `morph`) are stepped by the kernel, which wakes the
+CPU briefly up to 25 times a second:
+
+```
+echo blink red >/dev/led
+echo pulse blue >/dev/led
+echo double #ff8000 >/dev/led
+echo morph #ff8000 blue >/dev/led
+echo off >/dev/led
+```
+
+| pattern | what it does                                  |
+|---------|-----------------------------------------------|
+| `blink` | a 0.1 s flash about once a second             |
+| `fast`  | flashes about five times a second             |
+| `double`| two short flashes, then a pause of about 1.6 s|
+| `pulse` | fades in and out, about every 1.8 s           |
+| `rainbow`| the six colours of the pride flag, 1 s each, gliding into the next in 0.2 s |
+| `dual A B` | switches between colours A and B every 0.5 s |
+| `dualsoft A B` | A and B, 1 s each, gliding into the other in 0.2 s |
+| `morph A B` | glides from A to B and back, 10 s for the round |
+
+Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
+as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as
+`#080808` are refused). An unknown pattern or
+colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
+stops the pattern; the screen's backlight does not (the chip has three
+program engines: one fades the backlight, two run the LED). The pattern stops with a reset.

@@ -50,6 +50,9 @@ jobs:
           make -j"$(nproc)" INIT=m2 minix disk
           make INIT=m2 minix-run | tee m2.log
           grep -q 'M2 USER PASS' m2.log
+          # console ONLCR: CR NL in cooked output, bare NL with OPOST off
+          grep -q $'^M2 USER PASS\r$' m2.log
+          grep -qx 'M2 RAW NL' m2.log
 
       - name: Flash erase budget (M2)
         run: python3 -I tools/flashcheck.py flash-budget.txt m2 m2.log

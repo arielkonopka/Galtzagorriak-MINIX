@@ -63,6 +63,11 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
+/* R7b.5: a named pattern (blink, fast, double, pulse) run by the LED
+ * driver on its own, in the colour rgb (0xRRGGBB); hal_led() stops it.
+ * 0, or -1: no such pattern, or black. */
+int hal_led_pattern(const char *name, unsigned long rgb);
+void hal_led_pwm(unsigned r, unsigned g, unsigned b);	/* only the levels */
 void hal_led_get(unsigned char rgb[3]);		/* as last set (I2C read) */
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
@@ -161,6 +166,12 @@ int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
  * (VREF+, ~2500 mV) in mV, or -1 (no ADC). */
 #define HAL_ADC_OVER	(-2)
 int hal_adc_mv(int *mv);
+/* R6.4 part 2: n 12-bit samples of header pin `pin` (as hal_gpio; left
+ * analog) at `rate` Hz (100..100000) by DMA to the physical address dst
+ * (even); -1 if not possible.  Left: samples still to come (0: done). */
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n);
+unsigned hal_adc_stream_left(void);
+void hal_adc_stream_stop(void);
 
 /* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
  * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the

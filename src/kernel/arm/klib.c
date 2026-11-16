@@ -521,6 +521,8 @@ PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
 	pm_wake,		/* MT_IDLE */
 	flipdev_vibro_off,	/* MT_VIBRO */
+	flipdev_adc_poll,	/* MT_ADC */
+	flipdev_led_tick,	/* MT_LED */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */

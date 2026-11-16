@@ -270,8 +270,10 @@ char *argv[];
 
 #ifdef UNIX
   if (!donttest) {
-	static short testb[BLOCK_SIZE / sizeof(short)];
+	short *testb;		/* malloc'd, not in .bss (R2a.5) */
 
+	if ((testb = (short *) calloc(1, BLOCK_SIZE)) == NULL)
+		pexit("out of memory");
 	/* Try writing the last block of partition or diskette. */
 	lseek(fd, (off_t) (blocks - 1) * BLOCK_SIZE, SEEK_SET);
 	testb[0] = 0x3245;
@@ -291,6 +293,7 @@ char *argv[];
 	if (write(fd, (char *) testb, BLOCK_SIZE) != BLOCK_SIZE)
 		pexit("File system is too big for minor device");
 	lseek(fd, 0L, SEEK_SET);
+	free(testb);
   }
 #endif
 

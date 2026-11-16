@@ -73,7 +73,10 @@ copy live in flash:
 
 So the RAM a running program costs is mostly **data + bss + chmem**, not its size on disk. Code
 is cheap; static tables and buffers are not. Make tables `const` (they then stay in flash),
-keep buffers small, and prefer the stack for short-lived work.
+keep buffers small, and prefer the stack for short-lived work. A base program may have at most
+4 KB of `.bss` (spec R2a.5; `make ramcheck` runs `tools/bsscheck.py`): read and write in 512 B–1 KB
+pieces (one SD sector or file system block), and `malloc` big tables in the size the input needs.
+The few programs allowed more are listed, with the reason, in `flipper/bss-exceptions.txt`.
 
 ## 1.4 `chmem`: the stack and heap reserve
 

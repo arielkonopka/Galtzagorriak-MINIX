@@ -159,6 +159,11 @@ Connect the Flipper by USB and open its serial port; the speed setting does not 
 
     screen /dev/ttyACM0
 
+`picocom /dev/ttyACM0` and `minicom -D /dev/ttyACM0` work as well, with their default settings:
+the console ends each line with CR LF itself (output post-processing `OPOST`/`ONLCR`, as on any
+Unix terminal; `stty -opost` switches it off, full-screen programs and file transfer do so on
+their own). Do not turn on "add carriage return" in the terminal program, or you get blank lines.
+
 Press Enter, and log in as **root** with **no password**. Set one right away with `passwd`.
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,

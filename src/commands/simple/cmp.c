@@ -13,7 +13,7 @@ _PROTOTYPE(int cmp, (int fd1, int fd2));
 _PROTOTYPE(void Usage, (void));
 _PROTOTYPE(int main, (int argc, char **argv));
 
-#define BLOCK	4096
+#define BLOCK	1024	/* one file system block per read (R2a.5) */
 
 static int loud = 0, silent = 0;
 static char *name1, *name2;
