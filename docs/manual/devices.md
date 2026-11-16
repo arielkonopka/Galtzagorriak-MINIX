@@ -104,3 +104,38 @@ rtc cal -20         # 19 ppm slower (about 1.6 s a day)
 - The calibration is kept by the clock itself, also while off. One step is 0.954 ppm, about
   0.08 s a day; positive runs faster. Measure the drift against a good clock over some days.
 
+
+## The status LED (`/dev/led`)
+
+The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) may write it.
+
+Three bytes set red, green and blue directly (0–255 each). A text line starts a pattern.
+The first four run in the LED driver chip itself, so the CPU can sleep meanwhile; the colour
+sequences (`rainbow`, `dual`, `dualsoft`, `morph`) are stepped by the kernel, which wakes the
+CPU briefly up to 25 times a second:
+
+```
+echo blink red >/dev/led
+echo pulse blue >/dev/led
+echo double #ff8000 >/dev/led
+echo morph #ff8000 blue >/dev/led
+echo off >/dev/led
+```
+
+| pattern | what it does                                  |
+|---------|-----------------------------------------------|
+| `blink` | a 0.1 s flash about once a second             |
+| `fast`  | flashes about five times a second             |
+| `double`| two short flashes, then a pause of about 1.6 s|
+| `pulse` | fades in and out, about every 1.8 s           |
+| `rainbow`| the six colours of the pride flag, 1 s each, gliding into the next in 0.2 s |
+| `dual A B` | switches between colours A and B every 0.5 s |
+| `dualsoft A B` | A and B, 1 s each, gliding into the other in 0.2 s |
+| `morph A B` | glides from A to B and back, 10 s for the round |
+
+Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
+as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as
+`#080808` are refused). An unknown pattern or
+colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
+stops the pattern; the screen's backlight does not (the chip has three
+program engines: one fades the backlight, two run the LED). The pattern stops with a reset.

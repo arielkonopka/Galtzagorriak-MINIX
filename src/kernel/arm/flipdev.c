@@ -156,6 +156,7 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 /* IR_DEC uses v twice: never pass it an expression with side effects */
 #define IR_DEC(v)	((v) & 0x8000 ? (u32_t) ((v) & 0x7FFF) << 6 : (u32_t) (v))
 
+PRIVATE volatile u16_t rb;		/* the rainbow (R7b.5, see rb_step) */
 PRIVATE volatile u8_t rx_h, rx_t;	/* free-running ring indices */
 PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t rx_active, rx_level = 1, rx_over;
@@ -181,6 +182,36 @@ FORWARD _PROTOTYPE( int do_rw, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rtc_ioctl, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due */
+/* R7b.5: colour sequences run by the task from the ms timer: rainbow (the
+ * six colours of the pride flag), dual, dualsoft and morph (two colours
+ * given).  Each colour is held for its mode's time, then glides into the
+ * next in steps of RB_MS.  rb: on, the next step is due, the mode, the
+ * colour and the step within its glide. */
+#define RB_ON		0x8000
+#define RB_DUE		0x4000
+#define RB_MODE(r)	((r) >> 12 & 3)
+#define RB_COLOUR(r)	((r) >> 8 & 7)
+#define RB_STEPOF(r)	((r) & 0x7F)
+#define RB_MS		40
+PRIVATE const struct {
+	char name[9];
+	u8_t ncol, glide;		/* colours; steps of RB_MS to the next */
+	u16_t hold;			/* ms at the colour (0: glide on) */
+} rb_mode[4] = {
+	{ "rainbow",  6, 5, 960 },	/* 1 s each, 0.2 s glide (owner) */
+	{ "dual",     2, 1, 500 },	/* switches every 0.5 s */
+	{ "dualsoft", 2, 5, 960 },	/* as rainbow */
+	{ "morph",    2, 125, 0 },	/* 5 s there, 5 s back */
+};
+PRIVATE const u8_t rb_col[6][3] = {	/* PWM, white = 200:128:96 */
+	{ 200, 0, 0 }, { 200, 32, 0 }, { 200, 128, 0 },
+	{ 0, 128, 0 }, { 0, 0, 96 }, { 120, 0, 96 },
+};
+/* (rb, the rainbow's state, is declared next to the IR ring indices:
+ * there it fills their padding, 0 B) */
+PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
+FORWARD _PROTOTYPE( void rb_step, (void)				);
+FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
@@ -919,6 +950,13 @@ message *m_ptr;
 	/* fall through */
   case LED_MINOR:
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
+	if (m_ptr->DEVICE == LED_MINOR) {
+		lock();				/* a new colour: no rainbow */
+		rb = 0;
+		mt_arm(MT_LED, 0);
+		unlock();
+		if (count != 3) return(led_text(user, count));
+	}
 	if (count > 4) count = 4;
 	if (count == 4 && m_ptr->DEVICE != BL_MINOR) return(EINVAL);
 	phys_copy(user, vir2phys(buf), (phys_bytes) count);
@@ -1000,6 +1038,38 @@ message *m_ptr;
 
 
 /*===========================================================================*
+ *				rb_step					     *
+ *===========================================================================*/
+PRIVATE void rb_step()
+{
+/* The sequence's next step (task work: the I2C writes).  The glide is
+ * linear in PWM level, which the LP5562 shows on a logarithmic scale. */
+  unsigned m, c, n, k, g, i, v[3];
+  const u8_t *from, *to;
+
+  lock();
+  if (!(rb & RB_ON)) { rb = 0; unlock(); return; }
+  m = RB_MODE(rb);
+  c = RB_COLOUR(rb);
+  k = RB_STEPOF(rb) + 1;
+  g = rb_mode[m].glide;
+  if (k > g) {				/* held: glide to the next colour */
+	k = 1;
+	if (++c == rb_mode[m].ncol) c = 0;
+  }
+  rb = RB_ON | m << 12 | c << 8 | k;
+  mt_arm(MT_LED, k == g && rb_mode[m].hold ? rb_mode[m].hold : RB_MS);
+  unlock();
+  n = c == 0 ? rb_mode[m].ncol - 1 : c - 1;	/* from the one before */
+  from = m == 0 ? rb_col[n] : rb_user[n];
+  to = m == 0 ? rb_col[c] : rb_user[c];
+  for (i = 0; i < 3; i++)
+	v[i] = (from[i] * (g - k) + to[i] * k) / g;
+  hal_led_pwm(v[0], v[1], v[2]);
+}
+
+
+/*===========================================================================*
  *				rtc_int					     *
  *===========================================================================*/
 PRIVATE int rtc_int(irq)
@@ -1011,6 +1081,105 @@ int irq;
 	interrupt(PRINTER);
   }
   return(1);			/* reenable the interrupt */
+}
+
+
+/*===========================================================================*
+ *				flipdev_led_tick			     *
+ *===========================================================================*/
+PUBLIC void flipdev_led_tick()
+{
+/* The ms timer: the rainbow's next step is due (R7b.5). */
+  if (rb & RB_ON) {
+	rb |= RB_DUE;
+	interrupt(PRINTER);
+  }
+}
+
+
+/*===========================================================================*
+ *				led_text				     *
+ *===========================================================================*/
+PRIVATE int led_streq(a, b)
+const char *a, *b;
+{
+  while (*a == *b && *a != 0) a++, b++;
+  return(*a == *b);
+}
+
+PRIVATE int led_colour(s, rgb)
+char *s;
+unsigned long *rgb;
+{
+/* A colour name or #rrggbb, as 0xRRGGBB; -1: neither. */
+  static const char cname[7][8] = { "blue", "green", "cyan", "red",
+				    "magenta", "yellow", "white" };
+  int c, i, d;
+
+  *rgb = 0;
+  if (*s == '#') {
+	for (i = 1; i <= 6; i++) {
+		c = s[i] | 0x20;		/* lower case */
+		if (c >= '0' && c <= '9') d = c - '0';
+		else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+		else return(-1);
+		*rgb = *rgb << 4 | d;
+	}
+	return(s[7] == 0 ? 0 : -1);
+  }
+  for (c = 0; c < 7 && !led_streq(s, cname[c]); c++) ;
+  if (c++ == 7) return(-1);		/* bit 2 red, 1 green, 0 blue */
+  *rgb = (c & 4 ? 0xFF0000L : 0) | (c & 2 ? 0xFF00L : 0) | (c & 1 ? 0xFFL : 0);
+  return(0);
+}
+
+PRIVATE int led_text(user, count)
+phys_bytes user;
+int count;
+{
+/* R7b.5: "PATTERN [COLOUR [COLOUR]]" or "off", one line ("echo blink red
+ * >/dev/led", "echo morph #ff8000 blue >/dev/led").  Three bytes stay
+ * the binary R, G, B. */
+  static const u8_t white[3] = { 200, 128, 96 };
+  char line[40], *wd[4];
+  unsigned long rgb[2];
+  int n, nw, m, i, j;
+
+  n = count < (int) sizeof(line) - 1 ? count : (int) sizeof(line) - 1;
+  phys_copy(user, vir2phys(line), (phys_bytes) n);
+  line[n] = 0;
+  for (nw = 0, i = 0; nw < 4; nw++) {	/* words */
+	while (line[i] == ' ' || line[i] == '\n') line[i++] = 0;
+	if (line[i] == 0) break;
+	wd[nw] = &line[i];
+	while (line[i] != ' ' && line[i] != '\n' && line[i] != 0) i++;
+  }
+  if (nw == 0 || nw == 4) return(EINVAL);
+  for (i = 1; i < nw; i++)
+	if (led_colour(wd[i], &rgb[i-1]) < 0) return(EINVAL);
+  if (nw == 1 && led_streq(wd[0], "off")) {
+	hal_led(0, 0, 0);
+	return(count);
+  }
+  for (m = 0; m < 4 && !led_streq(wd[0], rb_mode[m].name); m++) ;
+  if (m < 4) {				/* a sequence */
+	if (nw != (m == 0 ? 1 : 3)) return(EINVAL);
+	for (j = 0; j < nw - 1; j++)	/* gamma 2 and white balance */
+		for (i = 0; i < 3; i++) {
+			unsigned long v = rgb[j] >> (16 - 8 * i) & 0xFF;
+
+			rb_user[j][i] = (u8_t) ((v * v * white[i] + 32512)
+								/ 65025);
+		}
+	hal_led(0, 0, 0);			/* engines off, direct */
+	lock();
+	rb = RB_ON | m << 12 | (rb_mode[m].ncol - 1) << 8 | rb_mode[m].glide;
+	unlock();
+	rb_step();				/* the first colour next */
+	return(count);
+  }
+  if (nw != 2 || hal_led_pattern(wd[0], rgb[0]) < 0) return(EINVAL);
+  return(count);
 }
 
 
@@ -1144,6 +1313,7 @@ PRIVATE void do_hardint()
 	rtc_fired = FALSE;
 	cause_sig(INIT_PROC_NR, SIGRTC);
   }
+  if (rb & RB_DUE) rb_step();
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/times.h>
@@ -238,6 +239,21 @@ static void wrap_test(void)
 static void finish(void)
 {
 	flash_report();
+	{
+		/* Console output post-processing: the PASS line below must
+		 * end in CR NL (OPOST|ONLCR, the default), this one in a bare
+		 * NL (OPOST off, as raw programs set it).  CI checks both. */
+		struct termios t, raw;
+
+		fflush(stdout);
+		if (tcgetattr(1, &t) == 0) {
+			raw = t;
+			raw.c_oflag &= ~OPOST;
+			tcsetattr(1, TCSADRAIN, &raw);
+			write(1, "M2 RAW NL\n", 10);
+			tcsetattr(1, TCSADRAIN, &t);
+		}
+	}
 	printf(fails == 0 ? "M2 USER PASS\n" : "M2 USER FAIL\n");
 	fflush(stdout);
 #ifdef BOARD_QEMU
