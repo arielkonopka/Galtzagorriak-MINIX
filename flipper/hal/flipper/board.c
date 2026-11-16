@@ -853,6 +853,16 @@ static int lp5562_write(uint8_t reg, uint8_t val)
 	return i2c1_write(LP5562_ADDR, b, 2);
 }
 
+/* Change only some bits: engine 1 belongs to the backlight's fade, engine
+ * 2 to the LED patterns (R7b.5); each leaves the other's bits alone. */
+static void lp5562_rmw(uint8_t reg, uint8_t mask, uint8_t val)
+{
+	uint8_t v;
+
+	if (i2c1_read(LP5562_ADDR, reg, &v, 1) < 0) return;
+	if ((v & mask) != val) lp5562_write(reg, (uint8_t) ((v & ~mask) | val));
+}
+
 /* Register sequence from the stock firmware (lib/drivers/lp5562.c). */
 static int lp5562_init(void)
 {
@@ -871,10 +881,11 @@ static int lp5562_init(void)
 void hal_backlight(unsigned level)
 {
 	/* at once: the white channel back under I2C control (a fade may have
-	 * left it with engine 1), the engine stopped, then the level */
-	lp5562_write(0x70, 0x00);	/* LED map: all direct */
-	lp5562_write(0x01, 0x00);	/* op mode: engines disabled */
-	lp5562_write(0x00, 0xC0);	/* enable: CHIP_EN, LOG_EN, engines hold */
+	 * left it with engine 1), engine 1 stopped, then the level; engine 2
+	 * (an LED pattern) runs on */
+	lp5562_rmw(0x70, 0xC0, 0x00);	/* LED map: white direct */
+	lp5562_rmw(0x01, 0x30, 0x00);	/* op mode: engine 1 disabled */
+	lp5562_rmw(0x00, 0xF0, 0xC0);	/* enable: CHIP_EN, LOG_EN, eng 1 hold */
 	lp5562_write(0x0E, level > 255 ? 255 : level);
 }
 
@@ -904,8 +915,8 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms)
 	w[2] = 0xA001 | ((2 - 1) << 7);		/* loop to 1, twice */
 	w[3] = 0xC000;				/* end */
 
-	lp5562_write(0x70, 0x00);	/* direct while loading */
-	lp5562_write(0x01, 0x10);	/* engine 1: load program */
+	lp5562_rmw(0x70, 0xC0, 0x00);	/* white direct while loading */
+	lp5562_rmw(0x01, 0x30, 0x10);	/* engine 1: load program */
 	t0 = DWT->CYCCNT;
 	while (DWT->CYCCNT - t0 < hal_cpu_hz() / 10000) ;	/* 100 us */
 	prog[0] = 0x10;			/* engine 1's program memory */
@@ -914,17 +925,168 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms)
 		prog[2 + 2 * i] = i < 4 ? w[i] & 0xFF : 0;
 	}
 	(void) i2c1_write(LP5562_ADDR, prog, sizeof prog);
-	lp5562_write(0x01, 0x20);	/* engine 1: run */
-	lp5562_write(0x00, 0xC0 | 0x20);	/* enable: engine 1 runs */
-	lp5562_write(0x70, 0x40);	/* white from engine 1 */
+	lp5562_rmw(0x01, 0x30, 0x20);	/* engine 1: run */
+	lp5562_rmw(0x00, 0xF0, 0xC0 | 0x20);	/* enable: engine 1 runs */
+	lp5562_rmw(0x70, 0xC0, 0x40);	/* white from engine 1 */
 	lp5562_write(0x0E, to);		/* the direct value afterwards */
 }
 
+#define LP_CUR		20			/* stock RGB current, 0.1 mA */
+static void lp5562_cur(unsigned r, unsigned g, unsigned b);
+
 void hal_led(unsigned r, unsigned g, unsigned b)
+{
+	lp5562_rmw(0x70, 0x3F, 0x00);	/* R, G, B direct: a pattern stops */
+	lp5562_rmw(0x01, 0x0F, 0x00);	/* engines 2 and 3 disabled */
+	lp5562_rmw(0x00, 0x0F, 0x00);
+	lp5562_cur(LP_CUR, LP_CUR, LP_CUR);	/* as a pattern may have left */
+	hal_led_pwm(r, g, b);
+}
+
+void hal_led_pwm(unsigned r, unsigned g, unsigned b)
 {
 	lp5562_write(0x04, r);
 	lp5562_write(0x03, g);
 	lp5562_write(0x02, b);
+}
+
+/* R7b.5: LED patterns run by the LP5562's engines 2 and 3 on their own
+ * (the CPU loads them once and may sleep; engine 1 is the backlight's
+ * fade).  An engine gives one PWM level to all the channels mapped to it,
+ * so a colour gets one engine per level, both started by one write and
+ * timed alike so they never drift apart.  Mixing by the channels'
+ * currents does not work: at 0.1-0.3 mA the green LED is far too bright
+ * against the red (seen on the device), so the current only trims a
+ * third channel that shares an engine with a close level (white).
+ * Instructions as the datasheet's (the stock fade's encoding): set PWM
+ * 0x40nn, wait/ramp (prescale 15.6 or 0.49 ms, step time, sign, count),
+ * branch 0xA000 (loop count 0: for ever). */
+#define LP_WAIT(n)	(0x4000 | (n) << 8)	/* n x 15.6 ms, n 1..63 */
+#define LP_SET(v)	(0x4000 | (v))
+#define LP_RAMP(t, up, n) ((t) << 8 | ((up) ? 0 : 0x80) | (n))	/* x 0.49 ms */
+#define LP_LOOP		0xA000			/* to step 0, for ever */
+#define LP_PEAK		0xFFFF			/* in lp_pat: set PWM to the level */
+#define LP_PULSE	0xFFFE			/* in lp_pat: see lp_load() */
+#define LP_WAITF(n)	((n) << 8)		/* n x 0.49 ms, n 1..63 */
+static const struct { char name[8]; uint16_t w[12]; } lp_pat[] = {
+	{ "blink",  { LP_PEAK, LP_WAIT(6), LP_SET(0), LP_WAIT(63), LP_LOOP } },
+	{ "fast",   { LP_PEAK, LP_WAIT(6), LP_SET(0), LP_WAIT(6), LP_LOOP } },
+	{ "double", { LP_PEAK, LP_WAIT(5), LP_SET(0), LP_WAIT(8),
+		      LP_PEAK, LP_WAIT(5), LP_SET(0), LP_WAIT(63),
+		      LP_WAIT(40), LP_LOOP } },
+	{ "pulse",  { LP_PULSE } },		/* built by lp_load() */
+};
+/* White is 200:128:96 in PWM (seen on the device); #rrggbb is
+ * gamma-coded (light ~ v squared). */
+static const uint8_t lp_white[3] = { 200, 128, 96 };
+
+static void lp5562_cur(unsigned r, unsigned g, unsigned b)
+{
+	lp5562_rmw(0x07, 0xFF, (uint8_t) r);
+	lp5562_rmw(0x06, 0xFF, (uint8_t) g);
+	lp5562_rmw(0x05, 0xFF, (uint8_t) b);
+}
+
+/* Load pattern k at level pwm into the engine program memory at addr; top
+ * is the highest level of the colour.  The PWM scale is logarithmic
+ * (LOG_EN, as stock), so a colour stays the same colour while it fades
+ * only if the engines keep the same *difference* of levels: a pulse
+ * rises and falls one level per 1.96 ms on every engine, and a lower one
+ * starts later and ends sooner by its difference.  Every engine runs the
+ * same number of instructions, so they never drift apart. */
+static void lp_load(uint8_t addr, unsigned k, unsigned pwm, unsigned top)
+{
+	uint8_t prog[1 + 32];
+	uint16_t w[16];
+	unsigned i, u, q;
+
+	for (i = 0; i < 16; i++) w[i] = i < 12 ? lp_pat[k].w[i] : 0;
+	if (w[0] == LP_PULSE) {
+		/* the wait before and after: 4 (top - pwm) + 64 x 0.49 ms, as
+		 * q x 15.6 ms (q >= 1) and 1..32 x 0.49 ms */
+		u = 4 * (top - pwm) + 64;
+		q = (u - 1) / 32;
+		u -= 32 * q;
+		i = 0;
+		w[i++] = LP_SET(0);
+		w[i++] = LP_WAIT(q);
+		w[i++] = LP_WAITF(u);
+		w[i++] = LP_RAMP(4, 1, pwm / 2);
+		w[i++] = LP_RAMP(4, 1, pwm - pwm / 2);
+		w[i++] = LP_RAMP(4, 0, pwm - pwm / 2);
+		w[i++] = LP_RAMP(4, 0, pwm / 2);
+		w[i++] = LP_WAIT(q);
+		w[i++] = LP_WAITF(u);
+		w[i++] = LP_WAIT(50);
+		w[i++] = LP_LOOP;
+		while (i < 16) w[i++] = 0;
+	}
+	prog[0] = addr;
+	for (i = 0; i < 16; i++) {
+		if (w[i] == LP_PEAK) w[i] = LP_SET(pwm);
+		prog[1 + 2 * i] = (uint8_t) (w[i] >> 8);
+		prog[2 + 2 * i] = (uint8_t) w[i];
+	}
+	(void) i2c1_write(LP5562_ADDR, prog, sizeof prog);
+}
+
+int hal_led_pattern(const char *name, unsigned long rgb)
+{
+	unsigned i, k, p[3], cur[3], eng[3], lvl[2], ne = 0, hi, mid, lo;
+	uint8_t map = 0;
+
+	for (k = 0; k < sizeof lp_pat / sizeof lp_pat[0]; k++) {
+		for (i = 0; name[i] == lp_pat[k].name[i] && name[i]; i++) ;
+		if (name[i] == lp_pat[k].name[i]) break;
+	}
+	if (k == sizeof lp_pat / sizeof lp_pat[0]) return -1;
+	for (i = 0; i < 3; i++) {	/* red, green, blue: PWM 0..200 */
+		unsigned long v = rgb >> (16 - 8 * i) & 0xFF;
+
+		p[i] = (unsigned) ((v * v * lp_white[i] + 32512) / 65025);
+		cur[i] = LP_CUR;
+		eng[i] = 2;			/* none */
+	}
+	if ((p[0] | p[1] | p[2]) == 0) return -1;
+	/* three different levels: the middle one shares the engine of its
+	 * nearer neighbour (by ratio) and is trimmed by its current */
+	if (p[0] && p[1] && p[2] && p[0] != p[1] && p[1] != p[2]
+							&& p[0] != p[2]) {
+		hi = p[0] > p[1] ? 0 : 1;
+		if (p[2] > p[hi]) hi = 2;
+		lo = p[0] < p[1] ? 0 : 1;
+		if (p[2] < p[lo]) lo = 2;
+		mid = 3 - hi - lo;
+		if (p[hi] * p[lo] < p[mid] * p[mid]) {	/* nearer to hi */
+			cur[mid] = (LP_CUR * p[mid] + p[hi] / 2) / p[hi];
+			p[mid] = p[hi];
+		} else {
+			cur[lo] = (LP_CUR * p[lo] + p[mid] / 2) / p[mid];
+			p[lo] = p[mid];
+		}
+	}
+	for (i = 0; i < 3; i++) {	/* one engine per level */
+		if (p[i] == 0) continue;
+		if (ne > 0 && lvl[0] == p[i]) eng[i] = 0;
+		else if (ne > 1 && lvl[1] == p[i]) eng[i] = 1;
+		else { lvl[ne] = p[i]; eng[i] = ne++; }
+	}
+	hal_led(0, 0, 0);			/* stops a running one */
+	lp5562_rmw(0x01, 0x0F, ne > 1 ? 0x05 : 0x04);	/* load */
+	hal_ow_delay(100);
+	if (ne < 2) lvl[1] = 0;
+	for (i = 0; i < ne; i++)		/* a pulse's ramps: >= 1 each */
+		if (lvl[i] < 2) lvl[i] = 2;
+	hi = lvl[0] > lvl[1] ? lvl[0] : lvl[1];
+	lp_load(0x30, k, lvl[0], hi);		/* engine 2 */
+	if (ne > 1) lp_load(0x50, k, lvl[1], hi);	/* engine 3 */
+	lp5562_cur(cur[0], cur[1], cur[2]);
+	for (i = 0; i < 3; i++)		/* engine 2: 10, engine 3: 11 */
+		if (eng[i] < 2) map |= (2 + eng[i]) << (4 - 2 * i);
+	lp5562_rmw(0x01, 0x0F, ne > 1 ? 0x0A : 0x08);	/* run */
+	lp5562_rmw(0x00, 0x0F, ne > 1 ? 0x0A : 0x08);	/* together */
+	lp5562_rmw(0x70, 0x3F, map);
+	return 0;
 }
 
 void hal_led_get(unsigned char rgb[3])

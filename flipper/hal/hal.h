@@ -63,6 +63,11 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
+/* R7b.5: a named pattern (blink, fast, double, pulse) run by the LED
+ * driver on its own, in the colour rgb (0xRRGGBB); hal_led() stops it.
+ * 0, or -1: no such pattern, or black. */
+int hal_led_pattern(const char *name, unsigned long rgb);
+void hal_led_pwm(unsigned r, unsigned g, unsigned b);	/* only the levels */
 void hal_led_get(unsigned char rgb[3]);		/* as last set (I2C read) */
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
