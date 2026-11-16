@@ -339,7 +339,7 @@ static void spi2_init(void)
 
 /* Baud rate divider code: fPCLK / 2^(code+1).  The display and the SD card
  * share the bus and use different speeds; set it before each transaction. */
-#define SPI_DIV_DISPLAY	3	/* /16 = 4 MHz */
+#define SPI_DIV_DISPLAY	2	/* /8 = 8 MHz (stock: 4; the ST7567 takes 20) */
 #define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
 #define SPI_DIV_SD_FAST	1	/* /4 = 16 MHz (the stock firmware's SD speed) */
 
@@ -1894,6 +1894,17 @@ int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
 	unsigned pin, ch;
 	int vref, raw, r = 0;
 
+	/* The ADC's reference VREF+ is not tied to VDDA on the Flipper: the
+	 * internal buffer drives it, 2.5 V with its factory trim, as stock
+	 * furi_hal_adc does; off (high-Z) again after the reading. */
+	VREFBUF->CCR = *(const volatile uint8_t *) 0x1FFF7530u & 0x3F;
+	VREFBUF->CSR = VREFBUF_CSR_VRS | VREFBUF_CSR_ENVR;	/* 2.5 V, not HIZ */
+	if (adc_wait(&VREFBUF->CSR, VREFBUF_CSR_VRR, 1) < 0) {
+		uint32_t start = DWT->CYCCNT;	/* the VREF+ capacitor */
+
+		while (!(VREFBUF->CSR & VREFBUF_CSR_VRR))
+			if (ms_since(start) > 50) { r = -1; goto vref_off; }
+	}
 	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN;
 	(void) RCC->AHB2ENR;
 	ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ADC_CCR_CKMODE)
@@ -1921,11 +1932,13 @@ int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
 								!= MODE_ANALOG)
 			continue;
 		if ((raw = adc_conv(ch)) < 0) continue;
-		/* VDDA = 3600 * CAL / vref; mV = VDDA * raw / 4095 */
-		mv[pin] = (int) (3600u * VREFINT_CAL / (unsigned) vref
-						* (unsigned) raw / 4095u);
+		/* VREF+ = 3600 * CAL / vref (the factory VREFINT reading was
+		 * taken at 3.6 V); mV = VREF+ * raw / 4095; at full scale the
+		 * pin is above VREF+: HAL_ADC_OVER */
+		mv[pin] = raw >= 4095 ? HAL_ADC_OVER : (int) (3600u * VREFINT_CAL
+				/ (unsigned) vref * (unsigned) raw / 4095u);
 	}
-	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VDDA */
+	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VREF+ */
 off:
 	if (ADC1->CR & ADC_CR_ADEN) {
 		ADC1->CR |= ADC_CR_ADDIS;
@@ -1935,6 +1948,8 @@ off:
 	ADC1->CR |= ADC_CR_DEEPPWD;
 	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
 	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
+vref_off:
+	VREFBUF->CSR = VREFBUF_CSR_HIZ;
 	return r;
 }
 
