@@ -12,8 +12,18 @@
  * shell IO
  */
 
-static struct iobuf sharedbuf = {AFID_NOBUF};
-static struct iobuf mainbuf = {AFID_NOBUF};
+/*
+ * Read buffers for files the shell takes commands from (512 bytes each):
+ * mainbuf for a script given as the shell's input, sharedbuf for the
+ * files nested in it (".", the profiles).  Galtzagorriak: taken from the
+ * shell's own heap when a file needs one, not kept in .data, so an
+ * interactive shell - its input a terminal, which is read unbuffered -
+ * does not carry 1 KB it never uses.  sharedbuf goes back to the heap
+ * once only the base input is left (freeshared(), between commands).
+ * No heap: the file is read a byte at a time, as a terminal is.
+ */
+static struct iobuf *sharedbuf;
+static struct iobuf *mainbuf;
 static unsigned bufid = AFID_ID;	/* buffer id counter */
 
 struct ioarg temparg = {0, 0, 0, AFID_NOBUF, 0};
@@ -22,6 +32,39 @@ _PROTOTYPE(static void readhere, (char **name, char *s, int ec ));
 _PROTOTYPE(void pushio, (struct ioarg *argp, int (*fn)()));
 _PROTOTYPE(static int xxchar, (struct ioarg *ap ));
 _PROTOTYPE(void tempname, (char *tname ));
+_PROTOTYPE(static struct iobuf *getbuf, (struct iobuf **bpp ));
+
+/*
+ * The buffer *bpp, from the heap the first time (area 0: kept until
+ * freeshared() gives it back).  NULL when the heap is full.
+ */
+static struct iobuf *
+getbuf(bpp)
+struct iobuf **bpp;
+{
+	register struct iobuf *bp;
+
+	if ((bp = *bpp) == NULL && (bp = NEW(struct iobuf)) != NULL) {
+		setarea((char *)bp, 0);
+		bp->id = AFID_NOBUF;
+		bp->bufp = bp->ebufp = bp->buf;
+		*bpp = bp;
+	}
+	return bp;
+}
+
+/*
+ * Between commands: with no nested input file left, the shared buffer is
+ * free for other use (glob lists, here documents).
+ */
+void
+freeshared()
+{
+	if (sharedbuf != NULL && e.iop <= iostack) {
+		DELETE(sharedbuf);
+		sharedbuf = NULL;
+	}
+}
 
 int
 getc(ec)
@@ -130,10 +173,11 @@ int (*fn)();
 	else {
 	  e.iop->argp  = ioargstack + (e.iop - iostack);
 	  *e.iop->argp = *argp;
-	  e.iop->argp->afbuf = e.iop == &iostack[0] ? &mainbuf : &sharedbuf;
 	  if (isatty(e.iop->argp->afile) == 0 &&
 	      (e.iop == &iostack[0] ||
-	       lseek(e.iop->argp->afile, 0L, 1) != -1)) {
+	       lseek(e.iop->argp->afile, 0L, 1) != -1) &&
+	      (e.iop->argp->afbuf = getbuf(e.iop == &iostack[0] ?
+				&mainbuf : &sharedbuf)) != NULL) {
 	    if (++bufid == AFID_NOBUF)
 	      bufid = AFID_ID;
 	    e.iop->argp->afid  = bufid;

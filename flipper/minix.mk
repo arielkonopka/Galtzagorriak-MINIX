@@ -294,9 +294,11 @@ MINED_SRC := mined1.c mined2.c
 $(MB)/cmd/mined/%.o: $(MROOT)/src/commands/mined/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+# The shell without -fdata-sections: its static variables then share GOT
+# entries (section anchors), 48 B less RAM per shell process.
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -fno-data-sections -MMD -MP -c $< -o $@
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -356,7 +358,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.72
+BASE_VER := 3.73
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

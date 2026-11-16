@@ -224,6 +224,7 @@ onecommand()
 	areanum = 1;
 	freehere(areanum);
 	freearea(areanum);
+	freeshared();
 	garbage();
 	wdlist = 0;
 	iolist = 0;
