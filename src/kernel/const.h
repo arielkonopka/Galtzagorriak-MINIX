@@ -156,7 +156,8 @@
 #define MT_IDLE            1	/* the end of a Stop2 sleep (klib.c) */
 #define MT_VIBRO           2	/* a timed buzz ends (flipdev.c, R6.3) */
 #define MT_ADC             3	/* an ADC stream: done? (flipdev.c, R6.4) */
-#define MT_N               4
+#define MT_LED             4	/* the rainbow's next colour (flipdev.c, R7b.5) */
+#define MT_N               5
 
 /* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console

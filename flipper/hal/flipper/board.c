@@ -940,6 +940,11 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 	lp5562_rmw(0x01, 0x0F, 0x00);	/* engines 2 and 3 disabled */
 	lp5562_rmw(0x00, 0x0F, 0x00);
 	lp5562_cur(LP_CUR, LP_CUR, LP_CUR);	/* as a pattern may have left */
+	hal_led_pwm(r, g, b);
+}
+
+void hal_led_pwm(unsigned r, unsigned g, unsigned b)
+{
 	lp5562_write(0x04, r);
 	lp5562_write(0x03, g);
 	lp5562_write(0x02, b);

@@ -67,6 +67,7 @@ void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
  * driver on its own, in the colour rgb (0xRRGGBB); hal_led() stops it.
  * 0, or -1: no such pattern, or black. */
 int hal_led_pattern(const char *name, unsigned long rgb);
+void hal_led_pwm(unsigned r, unsigned g, unsigned b);	/* only the levels */
 void hal_led_get(unsigned char rgb[3]);		/* as last set (I2C read) */
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
