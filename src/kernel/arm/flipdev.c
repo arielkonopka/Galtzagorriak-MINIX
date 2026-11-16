@@ -68,7 +68,8 @@
 #define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
-#define LAST_MINOR	11
+#define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
+#define LAST_MINOR	12
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -193,6 +194,17 @@ FORWARD _PROTOTYPE( int adc_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int sg_put, (char *line, int n, int v) );
+FORWARD _PROTOTYPE( int adcs_config, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int adcs_read, (message *m_ptr, phys_bytes user, int count) );
+FORWARD _PROTOTYPE( void adcs_end, (int ok) );
+/* the ADC stream (R6.4 part 2, see adcs_read) */
+PRIVATE u32_t as_cfg;		/* rate << 4 | pin; 0: not set */
+/* (sg_state, the Sub-GHz receiver: SG_ON listening, SG_READ read lately;
+ * here, next to the stream's bytes, it costs no padding) */
+PRIVATE u8_t sg_state;
+PRIVATE u8_t as_proc;		/* the reader + 1, 0: none */
+PRIVATE u8_t as_caller, as_done;
+PRIVATE u16_t as_count;
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -281,6 +293,7 @@ PUBLIC void flipdev_task()
 			ir_stop_tx();
 			tx_on = FALSE;
 		}
+		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
 			note_i = note_n;
@@ -310,7 +323,6 @@ PUBLIC void flipdev_task()
  * It keeps listening between commands (the shell opens and closes the
  * device for each); "0" puts it to sleep, and so does a minute without a
  * read (subghz_minute: ~15 mA in RX).  No transmit path. */
-PRIVATE u8_t sg_state;		/* SG_ON listening, SG_READ read lately */
 #define SG_ON		1
 #define SG_READ		2
 #define SG_PEAK_MS	30
@@ -395,6 +407,85 @@ int count;
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
+}
+
+
+/*===========================================================================*
+ *				ADC stream (R6.4 part 2)		     *
+ *===========================================================================*/
+/* /dev/adcs: write "PIN RATE" (header pin number as gpio(1) counts them,
+ * 0..7, left analog; 100..100000 Hz), then a read of n bytes gets n/2
+ * 12-bit samples, by DMA straight into the reader's buffer (R4b.5: the
+ * process is pinned meanwhile, p_physio, and a signal stops the DMA
+ * before its memory can go).  The ms timer looks whether it is done; no
+ * interrupt.  TIM2 is shared with the IR pulse engine: one or the other. */
+
+PRIVATE int adcs_config(user, count)
+phys_bytes user;
+int count;
+{
+  char t[16];
+  u32_t pin = 0, rate = 0;
+  int i = 0;
+
+  if (count >= (int) sizeof(t)) return(EINVAL);
+  phys_copy(user, vir2phys(t), (phys_bytes) count);
+  t[count] = 0;
+  while (t[i] >= '0' && t[i] <= '9') pin = pin * 10 + (t[i++] - '0');
+  if (t[i++] != ' ') return(EINVAL);
+  while (t[i] >= '0' && t[i] <= '9') rate = rate * 10 + (t[i++] - '0');
+  if (pin >= HAL_GPIO_PINS || rate < 100 || rate > 100000) return(EINVAL);
+  as_cfg = rate << 4 | pin;
+  return(count);
+}
+
+PRIVATE int adcs_read(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+  unsigned ms;
+
+  if (as_cfg == 0 || count < 2 || count > 8192 || (count & 1)) return(EINVAL);
+  if (as_proc != 0 || tx_on) return(EBUSY);
+  if (hal_adc_stream(as_cfg & 15, as_cfg >> 4, user, (unsigned) count / 2)
+							< 0) return(EIO);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* no shadow swap now */
+  as_proc = m_ptr->PROC_NR + 1;
+  as_caller = m_ptr->m_source;
+  as_count = count;
+  as_done = FALSE;
+  ms = (unsigned) ((u32_t) count / 2 * 1000 / (as_cfg >> 4)) + 2;
+  lock();
+  pm_busy |= PM_ADC;			/* TIM2, ADC and DMA need the clocks */
+  mt_arm(MT_ADC, ms > 999 ? 999 : ms);
+  unlock();
+  return(SUSPEND);
+}
+
+PUBLIC void flipdev_adc_poll()
+{
+/* The ms timer (interrupt): the stream's DMA is done, or look again. */
+  if (as_proc == 0) return;
+  if (hal_adc_stream_left() == 0) {
+	as_done = TRUE;
+	interrupt(PRINTER);
+  } else mt_arm(MT_ADC, 10);
+}
+
+PRIVATE void adcs_end(ok)
+int ok;			/* done (reply), else cancelled */
+{
+  int proc = as_proc - 1;
+
+  hal_adc_stream_stop();		/* the DMA first, then the memory */
+  lock();
+  mt_arm(MT_ADC, 0);
+  pm_busy &= ~PM_ADC;
+  unlock();
+  proc_addr(proc)->p_physio = FALSE;
+  as_proc = 0;
+  if (ok) reply(REVIVE, as_caller, proc, as_count);
 }
 
 
@@ -766,9 +857,15 @@ message *m_ptr;
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(subghz_read(user, count));
 
+  case ADCS_MINOR:
+	if (m_ptr->m_type == DEV_WRITE) return(adcs_config(user, count));
+	return(adcs_read(m_ptr, user, count));
+
   case ADC_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
+	if (as_proc != 0) return(EBUSY);	/* the ADC is a stream's: a
+						 * reading would stop it */
 	return(adc_read(user, count));
 
   case IBUTTON_MINOR:
@@ -973,6 +1070,7 @@ PRIVATE void do_hardint()
 	last_buttons = b;
 	unlock();
   }
+  if (as_proc != 0 && as_done) adcs_end(TRUE);	/* the samples are in */
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
@@ -1516,6 +1614,7 @@ int count;
   if (hal_ir_tx_irq() < 0) return(ENXIO);
   if (count % 4 != 0 || count == 0) return(EINVAL);
   if (tx_on) return(EIO);			/* one frame at a time */
+  if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
   if (n > IR_TX_MAX + 1) return(EINVAL);
