@@ -50,10 +50,10 @@ clock_t _times(struct tms *buffer);
 #else					/* Version 7 UNIX */
 
 struct tbuffer {
-	long proc_user_time;
-	long proc_system_time;
-	long child_user_time;
-	long child_system_time;
+	long proc_user_time;	/* timecheck: ok (ticks) */
+	long proc_system_time;	/* timecheck: ok (ticks) */
+	long child_user_time;	/* timecheck: ok (ticks) */
+	long child_system_time;	/* timecheck: ok (ticks) */
 };
 
 clock_t _times(struct tbuffer *buffer);

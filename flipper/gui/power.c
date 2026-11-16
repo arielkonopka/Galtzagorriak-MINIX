@@ -65,7 +65,8 @@ int main(void)
 	struct gauge g;
 	char line[40];
 	int ok, off, usb, have_idle = 0, idle = 0, k, w;
-	long now, off_since = 0, idle_at = 0, age;
+	time_t now, off_since = 0, idle_at = 0;
+	long age;
 
 	if (gui_open() < 0) return 1;
 	signal(SIGALRM, tick);

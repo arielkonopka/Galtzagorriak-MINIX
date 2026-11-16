@@ -22,8 +22,8 @@ _CONST struct utimbuf *timp;
 		errno = EINVAL;
 		return(-1);
 	}
-	m.m2_l1 = (long) (unsigned long) timp->actime;
-	m.m2_l2 = (long) (unsigned long) timp->modtime;
+	m.m2_l1 = (long) (unsigned long) timp->actime;	/* timecheck: ok */
+	m.m2_l2 = (long) (unsigned long) timp->modtime;	/* timecheck: ok */
 	m.m2_i1 = strlen(name) + 1;
   }
   m.m2_p1 = (char *) name;

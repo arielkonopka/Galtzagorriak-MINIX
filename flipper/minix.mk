@@ -414,7 +414,18 @@ latcheck:
 versioncheck:
 	@python3 -I tools/versioncheck.py $(MROOT)/include/minix/gzversion.h \
 	   $(MROOT)/CHANGELOG.md
-ramcheck: $(MB)/minix.bin versioncheck
+# The Year-2038 audit (spec R2d.7): no time in an int or a long in the
+# sources that are built; run with ramcheck and make check.
+TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
+	   $(MROOT)/src/commands/sh $(MROOT)/src/commands/mined \
+	   $(MROOT)/src/commands/reboot/halt.c $(MROOT)/src/commands/reboot/log.c \
+	   cmds gui apps tests m2 $(MROOT)/src/tools/init.c \
+	   $(LIBDIRS:%=$(MROOT)/src/lib/%) $(MROOT)/include
+.PHONY: timecheck check
+timecheck:
+	@python3 -I tools/timecheck.py $(TIMECHECK_SRC)
+check: versioncheck timecheck
+ramcheck: $(MB)/minix.bin versioncheck timecheck
 	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
 	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
 card: $(MB)/card.img
