@@ -18,6 +18,11 @@
  *
  * As a special case, anything matches a null encrypted password to allow
  * a no-password login.
+ *
+ * Galtzagorriak (spec R3.3): a '##name' check is answered only for a caller
+ * whose real uid is 0 or the uid of 'name' in /etc/passwd, and every failed
+ * one takes 2 seconds, so that guessing a shadow password is slow.  su(1)
+ * becomes root (real uid) before it asks.
  */
 #define nil 0
 #define crypt	CRYPT	/* The true crypt is included here. */
@@ -30,6 +35,19 @@
 
 #define LEN	1024
 char SHADOW[] = "/etc/shadow";
+
+/* A failed '##' check: wait 2 s before saying so (R3.3).  Not for an
+ * empty key: login and su ask that first ("is there a password at all?"),
+ * which tells nothing worth guessing.
+ */
+static int fail(char *key)
+{
+	int empty = key[0] == 0;
+
+	memset(key, 0, LEN);
+	if (!empty) sleep(2);
+	return 2;
+}
 
 int main(int argc, char **argv)
 {
@@ -50,12 +68,19 @@ int main(int argc, char **argv)
 	salt = key + strlen(key) + 1;
 
 	if (salt[0] == '#' && salt[1] == '#') {
+		uid_t ruid = getuid();
+
+		/* Only root, or the user asking about itself. */
+		if (ruid != 0 && ((pw= getpwnam(salt + 2)) == nil
+						|| pw->pw_uid != ruid))
+			return fail(key);
+
 		/* Get the encrypted password from the shadow password file,
 		 * encrypt key and compare.
 		 */
 		setpwfile(SHADOW);
 
-		if ((pw= getpwnam(salt + 2)) == nil) return 2;
+		if ((pw= getpwnam(salt + 2)) == nil) return fail(key);
 
 		/* A null encrypted password matches a null key, otherwise
 		 * do the normal crypt(3) authentication check.
@@ -64,7 +89,7 @@ int main(int argc, char **argv)
 			/* fine */
 		} else
 		if (strcmp(crypt(key, pw->pw_passwd), pw->pw_passwd) != 0) {
-			return 2;
+			return fail(key);
 		}
 	} else {
 		/* Normal encryption. */

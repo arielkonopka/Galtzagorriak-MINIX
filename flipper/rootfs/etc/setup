@@ -6,35 +6,52 @@
 #	/dev/hd2  /usr   2 GB	programs and packages
 #	/dev/hd3  swap   64 MB	reserved
 #	/dev/hd4  /home  rest	your files
+# Stage 3 asks for the root password (spec R3.4): a new card has none, and
+# /etc/rc starts no login before it is set.
 
-if test ! -f /etc/.setup-parted
+if test -f /etc/.setup-done
+then :
+elif test ! -f /etc/.setup-parted
 then
 	echo "First boot: adding /usr (2 GB), swap (64 MB) and /home to the SD card."
-	mkpart /dev/hd0 81:2048 82:64 81:* || {
-		echo "setup: partitioning failed, starting without /usr and /home"
-		exit 1
-	}
-	>/etc/.setup-parted
-	sync
-	echo "Rebooting to use the new partitions."
-	reboot
-	exit 0
+	if mkpart /dev/hd0 81:2048 82:64 81:*
+	then
+		>/etc/.setup-parted
+		sync
+		echo "Rebooting to use the new partitions."
+		reboot
+		exit 0
+	fi
+	echo "setup: partitioning failed, starting without /usr and /home"
+else
+	echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
+	if mkfs /dev/hd2 && mkfs /dev/hd4
+	then
+		mount /dev/hd2 /usr && {
+			mkdir /usr/bin /usr/lib /usr/tmp /usr/var \
+				/usr/var/pkg /usr/var/pkg/info
+			chmod 1777 /usr/tmp
+			umount /dev/hd2
+		}
+		mount /dev/hd4 /home && {
+			mkdir /home/root
+			umount /dev/hd4
+		}
+		>/etc/.setup-done
+		sync
+		echo "First boot setup done."
+	else
+		echo "setup: mkfs failed"
+	fi
 fi
 
-echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
-mkfs /dev/hd2 && mkfs /dev/hd4 || {
-	echo "setup: mkfs failed"
-	exit 1
-}
-mount /dev/hd2 /usr && {
-	mkdir /usr/bin /usr/lib /usr/tmp /usr/var /usr/var/pkg /usr/var/pkg/info
-	chmod 1777 /usr/tmp
-	umount /dev/hd2
-}
-mount /dev/hd4 /home && {
-	mkdir /home/root
-	umount /dev/hd4
-}
->/etc/.setup-done
+# The root password: on the USB console (or the serial pins), before any
+# login prompt.  passwd writes it to /etc/shadow (mode 600).
+while grep '^root::' /etc/shadow >/dev/null 2>&1
+do
+	echo ""
+	echo "First boot: root has no password yet.  Press Enter to set one."
+	read answer || sleep 1
+	passwd root
+done
 sync
-echo "First boot setup done."

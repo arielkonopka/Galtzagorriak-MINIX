@@ -25,6 +25,7 @@
 FORWARD _PROTOTYPE( int remove_dir, (struct inode *rldirp, struct inode *rip,
 			char dir_name[NAME_MAX])			);
 
+FORWARD _PROTOTYPE( int sticky, (struct inode *dirp, struct inode *rip)	);
 FORWARD _PROTOTYPE( int unlink_file, (struct inode *dirp, struct inode *rip,
 			char file_name[NAME_MAX])			);
 
@@ -136,6 +137,13 @@ PUBLIC int do_unlink()
 	return(EBUSY);
   }
 
+  /* In a sticky directory (/tmp) only the owners may remove (R3.7). */
+  if ((r = sticky(rldirp, rip)) != OK) {
+	put_inode(rldirp);
+	put_inode(rip);
+	return(r);
+  }
+
   /* Now test if the call is allowed, separately for unlink() and rmdir(). */
   if (fs_call == UNLINK) {
 	/* Only the su may unlink directories, but the su can unlink any dir.*/
@@ -225,6 +233,11 @@ PUBLIC int do_rename()
 	/* Parent dirs must be writable, searchable and on a writable device */
 	if ((r1 = forbidden(old_dirp, W_BIT | X_BIT)) != OK ||
 	    (r1 = forbidden(new_dirp, W_BIT | X_BIT)) != OK) r = r1;
+
+	/* Sticky directories: only the owners may move or replace (R3.7). */
+	if ((r1 = sticky(old_dirp, old_ip)) != OK ||
+	    (new_ip != NIL_INODE && (r1 = sticky(new_dirp, new_ip)) != OK))
+		r = r1;
 
 	/* Some tests apply only if the new path exists. */
 	if (new_ip == NIL_INODE) {
@@ -410,6 +423,23 @@ char dir_name[NAME_MAX];		/* name of directory to be removed */
   (void) unlink_file(rip, NIL_INODE, dot1);
   (void) unlink_file(rip, NIL_INODE, dot2);
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				sticky					     *
+ *===========================================================================*/
+PRIVATE int sticky(dirp, rip)
+struct inode *dirp;		/* directory holding the entry */
+struct inode *rip;		/* the entry's inode */
+{
+/* R3.7 [S5]: in a directory with the sticky bit (/tmp, /usr/tmp) an entry
+ * may be removed or renamed only by the owner of the file or of the
+ * directory, or by the super-user.
+ */
+  if (!(dirp->i_mode & I_SET_STCKY_BIT) || super_user) return(OK);
+  if (fp->fp_effuid == rip->i_uid || fp->fp_effuid == dirp->i_uid) return(OK);
+  return(EPERM);
 }
 
 
