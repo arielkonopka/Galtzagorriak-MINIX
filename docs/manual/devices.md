@@ -55,6 +55,7 @@ echo 0 > /dev/subghz             # stop
 Frequencies are those the stock firmware accepts: 300–348, 387–464 and 779–928 MHz; anything else
 is refused. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
 signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
-radio goes back to sleep when the device is closed, or after `echo 0`. A spectrum view and
+radio keeps listening until `echo 0`, or until nobody has read it for about a minute (it draws
+about 15 mA while listening). A spectrum view and
 recording will build on this.
 

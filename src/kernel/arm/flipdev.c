@@ -239,8 +239,6 @@ PUBLIC void flipdev_task()
 	case DEV_OPEN:
 	case DEV_CLOSE:
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
-		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SUBGHZ_MINOR)
-			hal_subghz_off();	/* ~15 mA in RX: asleep */
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
 #endif
@@ -280,7 +278,23 @@ PUBLIC void flipdev_task()
 /* /dev/subghz, receive only: write a frequency in Hz (the stock bands) to
  * listen there, "0" to stop; a read gives one line,
  *	rssi=-92 freq=433919830		or	off freq=433919830
- * The radio sleeps again when the device is closed.  No transmit path. */
+ * It keeps listening between commands (the shell opens and closes the
+ * device for each); "0" puts it to sleep, and so does a minute without a
+ * read (subghz_minute: ~15 mA in RX).  No transmit path. */
+PRIVATE u8_t sg_state;		/* SG_ON listening, SG_READ read lately */
+#define SG_ON		1
+#define SG_READ		2
+
+PUBLIC void subghz_minute()
+{
+/* The clock task, once a minute (pm_minute): a radio left listening with
+ * nobody reading goes back to sleep. */
+  if (sg_state == SG_ON) {
+	hal_subghz_off();
+	sg_state = 0;
+  } else sg_state &= SG_ON;
+}
+
 PRIVATE int subghz_write(user, count)
 phys_bytes user;
 int count;
@@ -296,9 +310,12 @@ int count;
   if (i == 0 || i > 10) return(EINVAL);
   if (hz == 0) {
 	hal_subghz_off();
+	sg_state = 0;
 	return(count);
   }
-  return(hal_subghz_rx(hz) < 0 ? EINVAL : count);
+  if (hal_subghz_rx(hz) < 0) return(EINVAL);
+  sg_state = SG_ON | SG_READ;
+  return(count);
 }
 
 PRIVATE int subghz_read(user, count)
@@ -310,6 +327,7 @@ int count;
   u32_t hz;
   int rssi = hal_subghz_rssi(&hz), n = 0;
 
+  sg_state |= SG_READ;
   if (rssi == HAL_SUBGHZ_OFF) {
 	for (k = "off"; *k != 0; k++) line[n++] = *k;
   } else {
