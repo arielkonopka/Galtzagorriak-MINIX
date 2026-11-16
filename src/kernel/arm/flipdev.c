@@ -53,6 +53,8 @@
 #include "../proc.h"
 #include "hal.h"
 #include <minix/lat.h>
+#include <minix/fg.h>
+#include <signal.h>
 
 #define LCD_MINOR	0
 #define BTN_MINOR	1
@@ -63,7 +65,9 @@
 #define GPIO_MINOR	6
 #define IR_MINOR	7
 #define POWER_MINOR	8	/* the fuel gauge, read only (T15a) */
-#define LAST_MINOR	8
+#define IBUTTON_MINOR	9	/* iButton 1-Wire: read the ROM (R6.7) */
+#define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
+#define LAST_MINOR	10
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -84,7 +88,17 @@ PRIVATE unsigned last_buttons;	/* the buttons down, and these flags: */
 #define SWALLOW		0x80000000u	/* a press woke the light */
 #define BTN_EXTI	0x40000000u	/* edges interrupt; else the tick samples */
 #define BTN_POLL	0x20000000u	/* one is down: the ms timer samples */
-#define BTN_FLAGS	(SWALLOW | BTN_EXTI | BTN_POLL)
+#define FG_LONG		0x02000000u	/* Back held long: SIGTERM due (task) */
+#define FG_KILL		0x01000000u	/* SIGTERM sent: SIGKILL in FG_KILL_S */
+#define FG_SLOT(b)	((int) ((b) >> 16 & 0xFF) - 1)	/* foreground proc */
+#define FG_BITS		0x00FF0000u
+#define FG_STAMP(b)	((b) >> 8 & 0xFF)	/* Back down (ticks), or the
+						 * SIGTERM (seconds), mod 256 */
+#define FG_STAMPS	0x0000FF00u
+#define BTN_ALL		0x3Fu		/* the buttons themselves */
+#define BTN_FLAGS	(~BTN_ALL)
+#define FG_LONG_T	HZ		/* Back held this long (ticks) */
+#define FG_KILL_S	3		/* then SIGKILL after (s) */
 #define BTN_MS		8	/* sampling while down, and the debounce */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
@@ -153,6 +167,11 @@ FORWARD _PROTOTYPE( unsigned btn_sample, (void) );
 FORWARD _PROTOTYPE( int btn_int, (int irq) );
 FORWARD _PROTOTYPE( int power_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int power_write, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int ow_read_rom, (phys_bytes user) );
+FORWARD _PROTOTYPE( int adc_read, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int fg_other, (int proc) );
+FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
+FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( void ir_drain, (void)				);
@@ -224,6 +243,9 @@ PUBLIC void flipdev_task()
 	case DEV_WRITE:
 		r = do_rw(&fm);
 		break;
+	case DEV_IOCTL:
+		r = fg_ioctl(&fm);
+		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rd = FALSE;
@@ -243,6 +265,119 @@ PUBLIC void flipdev_task()
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
   }
+}
+
+
+/*===========================================================================*
+ *				adc_read				     *
+ *===========================================================================*/
+/* /dev/adc (R6.4, part 1): one line with the header pins' voltages in mV,
+ *	pa7=1650 pa6=- pa4=- pc3=- pc1=- pc0=3297 vdda=3301
+ * "-": the pin is not left analog ("gpio N off", the default), so it is
+ * not measured.  PB3 and PB2 have no ADC input.  ~0.5 ms, on demand. */
+PRIVATE const char adc_names[HAL_GPIO_PINS][4] =
+	{ "pa7", "pa6", "pa4", "", "", "pc3", "pc1", "pc0" };
+
+PRIVATE int adc_put(line, n, v)
+char *line;
+int n, v;
+{
+  char d[6];
+  int j = 0;
+
+  if (v < 0) { line[n++] = '-'; return(n); }
+  do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+  while (j > 0) line[n++] = d[--j];
+  return(n);
+}
+
+PRIVATE int adc_read(user, count)
+phys_bytes user;
+int count;
+{
+  char line[80];
+  int mv[HAL_GPIO_PINS], vdda, i, n = 0;
+  const char *k;
+
+  if ((vdda = hal_adc_mv(mv)) < 0) return(ENXIO);
+  for (i = 0; i < HAL_GPIO_PINS; i++) {
+	if (adc_names[i][0] == 0) continue;
+	for (k = adc_names[i]; *k != 0; k++) line[n++] = *k;
+	line[n++] = '=';
+	n = adc_put(line, n, mv[i]);
+	line[n++] = ' ';
+  }
+  for (k = "vdda="; *k != 0; k++) line[n++] = *k;
+  n = adc_put(line, n, vdda);
+  line[n++] = '\n';
+  if (count > n) count = n;
+  phys_copy(vir2phys(line), user, (phys_bytes) count);
+  return(count);
+}
+
+
+/*===========================================================================*
+ *				iButton (R6.7)				     *
+ *===========================================================================*/
+/* 1-Wire master, standard speed.  Interrupts are masked (BASEPRI, lock)
+ * only around the timed part of a slot, at most 70 us; between slots the
+ * line idles high and anything may run (1-Wire has no upper bound there).
+ * The 480 us reset pulse runs unmasked: longer is fine. */
+PRIVATE int ow_reset()
+{
+  int present;
+
+  hal_ow_line(1);
+  hal_ow_delay(480);
+  lock();
+  hal_ow_line(0);
+  hal_ow_delay(70);
+  present = !hal_ow_read();
+  unlock();
+  hal_ow_delay(410);
+  return(present);
+}
+
+PRIVATE int ow_bit(b)
+int b;
+{
+  int r = 0;
+
+  lock();
+  hal_ow_line(1);
+  hal_ow_delay(b ? 6 : 60);
+  hal_ow_line(0);
+  if (b) {				/* a 1, or a read slot */
+	hal_ow_delay(9);
+	r = hal_ow_read();
+	hal_ow_delay(55);
+  } else {
+	hal_ow_delay(10);
+  }
+  unlock();
+  return(r);
+}
+
+PRIVATE int ow_read_rom(user)
+phys_bytes user;
+{
+/* Reset, READ ROM (0x33), 8 bytes: family, serial, CRC8 (Dallas). */
+  u8_t rom[8], crc = 0;
+  int i, j;
+
+  if (!ow_reset()) return(ENODEV);		/* no key on the contacts */
+  for (i = 0; i < 8; i++) (void) ow_bit(0x33 >> i & 1);
+  for (i = 0; i < 8; i++) {
+	rom[i] = 0;
+	for (j = 0; j < 8; j++) rom[i] |= (u8_t) (ow_bit(1) << j);
+  }
+  for (i = 0; i < 7; i++) {
+	crc ^= rom[i];
+	for (j = 0; j < 8; j++) crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+  }
+  if (crc != rom[7] || rom[0] == 0) return(EIO);	/* a bad touch */
+  phys_copy(vir2phys(rom), user, (phys_bytes) 8);
+  return(8);
 }
 
 
@@ -373,6 +508,9 @@ message *m_ptr;
 
   case LCD_MINOR:
 	if (count > FB_SIZE) count = FB_SIZE;
+	/* R4b.8: a frame from behind the foreground app is dropped */
+	if (m_ptr->m_type == DEV_WRITE && fg_other(m_ptr->PROC_NR))
+		return(count);
 	if (m_ptr->m_type == DEV_READ) {
 		if (lc_on) return(0);	/* console text is not for apps */
 		phys_copy(vir2phys(fbuf), user, (phys_bytes) count);
@@ -398,6 +536,11 @@ message *m_ptr;
   case BTN_MINOR:
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (count < 2) return(EINVAL);
+	if (fg_other(m_ptr->PROC_NR)) {	/* R4b.8: not yours: wait (until
+					 * a signal; the keys are not kept) */
+		if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+		return(SUSPEND);
+	}
 	if (ev_head != ev_tail) {
 		LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
 		return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
@@ -411,11 +554,28 @@ message *m_ptr;
 	rd_count = count;
 	return(SUSPEND);
 
-  case VIBRO_MINOR:
+  case VIBRO_MINOR: {
+	/* "0" off, "1" on (or a byte 0/1), "N" (2..999): on for N ms, ended
+	 * by the ms timer (R6.3), so the writer need not stay awake. */
+	char t[4];
+	int i, ms = 0, n = count < 4 ? count : 4;
+
 	if (m_ptr->m_type != DEV_WRITE) return(EINVAL);
-	phys_copy(user, vir2phys(buf), (phys_bytes) 1);
-	hal_vibro(buf[0] != 0 && buf[0] != '0');
+	if (n < 1) return(0);
+	phys_copy(user, vir2phys(t), (phys_bytes) n);
+	if (t[0] >= '0' && t[0] <= '9') {
+		for (i = 0; i < n && t[i] >= '0' && t[i] <= '9'; i++)
+			ms = ms * 10 + t[i] - '0';
+		if (i == 4) return(EINVAL);		/* > 999 */
+	} else {
+		ms = t[0] != 0;
+	}
+	lock();
+	mt_arm(MT_VIBRO, ms > 1 ? (unsigned) ms : 0);
+	unlock();
+	hal_vibro(ms != 0);
 	return(count);
+  }
 
   case SPK_MINOR: {
 	u8_t nb[4 * NNOTES];
@@ -463,6 +623,17 @@ message *m_ptr;
 		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
 	return(count);
   }
+
+  case ADC_MINOR:
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
+	return(adc_read(user, count));
+
+  case IBUTTON_MINOR:
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);	/* one ROM, then EOF */
+	if (count < 8) return(EINVAL);
+	return(ow_read_rom(user));
 
   case POWER_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(power_write(user, count));
@@ -620,6 +791,25 @@ PRIVATE void do_hardint()
   int r;
 
   bl_apply();
+  if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
+						 * interrupt handler */
+	unsigned b, sec = (unsigned) (get_uptime() / HZ);
+	int fg;
+
+	lock();
+	b = last_buttons;
+	fg = FG_SLOT(b);
+	if (b & FG_LONG) {
+		b = (b & ~(FG_LONG | FG_STAMPS)) | FG_KILL | (sec & 0xFF) << 8;
+		if (fg >= 0) cause_sig(fg, SIGTERM);
+	} else if (((sec - FG_STAMP(b)) & 0xFF) >= FG_KILL_S) {
+		b &= ~FG_KILL;
+		if (fg >= 0 && !(proc_addr(fg)->p_flags & P_SLOT_FREE))
+			cause_sig(fg, SIGKILL);
+	}
+	last_buttons = b;
+	unlock();
+  }
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
@@ -680,7 +870,10 @@ PUBLIC void flipdev_tick()
   }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
-  if (!(last_buttons & BTN_EXTI)) (void) btn_sample();
+  if (!(last_buttons & BTN_EXTI)) fg_hold(btn_sample());
+  if ((last_buttons & FG_KILL) && ((unsigned) (uptime_irq() / HZ)
+		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
+	interrupt(PRINTER);
 }
 
 
@@ -697,6 +890,7 @@ clock_t now;
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = now - k_input, d;
 
   if (lc_dirty || note_i < note_n || rx_active || ir_rd || tx_on) return(0);
+  if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
   if (t == 0 || bl_state(st) == BL_SAVE) return(LONG_MAX);
   if (st & HAL_BL_OFF) {		/* the LCD's power save is next */
 	t += (clock_t) LCD_SAVE_S * HZ;
@@ -707,6 +901,75 @@ clock_t now;
   if (t <= BL_DIMS * HZ) return(t - idle);
   d = t - BL_DIMS * HZ;			/* the dimming starts */
   return(idle < d ? d - idle : HZ - (idle - d) % HZ);
+}
+
+
+/*===========================================================================*
+ *				foreground (R4b.8)			     *
+ *===========================================================================*/
+/* The foreground app's slot is kept in last_buttons (no RAM).  fg_other:
+ * a foreground app is set, alive, and proc is not it. */
+PRIVATE int fg_other(proc)
+int proc;
+{
+  int fg = FG_SLOT(last_buttons);
+
+  return(fg >= 0 && fg != proc && !(proc_addr(fg)->p_flags & P_SLOT_FREE));
+}
+
+PRIVATE int fg_ioctl(m_ptr)
+message *m_ptr;
+{
+  phys_bytes user;
+  int pid, fg, n;
+  struct proc *rp;
+
+  if (m_ptr->DEVICE != LCD_MINOR && m_ptr->DEVICE != BTN_MINOR) return(ENOTTY);
+  if (m_ptr->TTY_REQUEST != FGIOCSET) return(ENOTTY);
+  if (fg_other(m_ptr->PROC_NR)) return(EPERM);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&pid), (phys_bytes) sizeof(int));
+  fg = -1;
+  if (pid != 0) {
+	for (n = 0; n < NR_PROCS; n++) {
+		rp = proc_addr(n);
+		if (!(rp->p_flags & P_SLOT_FREE) && rp->p_pid == pid) break;
+	}
+	if (n == NR_PROCS) return(ESRCH);
+	/* never a server or init: holding Back would kill the system */
+	if (n <= INIT_PROC_NR) return(EPERM);
+	fg = n;
+  }
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL))
+					| (unsigned) (fg + 1) << 16;
+  unlock();
+  return(OK);
+}
+
+PRIVATE void fg_hold(now)
+unsigned now;
+{
+/* In the button sampling (interrupt): Back held FG_LONG_T with a
+ * foreground app: the task sends SIGTERM (cause_sig is task work). */
+  unsigned b = last_buttons;
+
+  if (!(now & BTN_BACK) || FG_SLOT(b) < 0 || (b & (FG_LONG | FG_KILL)))
+	return;
+  if ((((unsigned) uptime_irq() - FG_STAMP(b)) & 0xFF) < FG_LONG_T) return;
+  last_buttons = b | FG_LONG;
+  interrupt(PRINTER);
+}
+
+
+/*===========================================================================*
+ *				flipdev_vibro_off			     *
+ *===========================================================================*/
+PUBLIC void flipdev_vibro_off()
+{
+/* The ms timer: a timed buzz is over (R6.3). */
+  hal_vibro(0);
 }
 
 
@@ -735,9 +998,10 @@ PUBLIC void flipdev_btn()
 /* The ms timer, BTN_MS after an edge or the last sample: all up in two
  * samples in a row, and the edges interrupt again.
  */
-  unsigned was = last_buttons & ~BTN_FLAGS;
+  unsigned was = last_buttons & ~BTN_FLAGS, now;
 
-  if (btn_sample() != 0 || was != 0) {
+  if ((now = btn_sample()) != 0 || was != 0) {
+	fg_hold(now);
 	mt_arm(MT_BUTTONS, BTN_MS);
 	return;
   }
@@ -761,6 +1025,8 @@ PRIVATE unsigned btn_sample()
 
   if (changed == 0) return(now);
   k_input = uptime_irq();		/* no background flash work now */
+  if ((changed & now & BTN_BACK) && !(flags & FG_KILL))	/* R4b.8 */
+	flags = (flags & ~FG_STAMPS) | ((unsigned) k_input & 0xFF) << 8;
   /* With the backlight off, a press only turns it on (owner): neither it
    * nor anything else reaches the apps until every button is up again. */
   if (hal_bl_state() & (HAL_BL_OFF | HAL_BL_STEPS))

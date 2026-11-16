@@ -82,3 +82,9 @@ as long as the battery is in). Nothing ever charges faster than the stock firmwa
 `cat /dev/power` shows the result at the end of the line: `vreg=` (charge-to voltage in mV),
 `ichg=` (charge current limit in mA) and `otg=`.
 
+## Power off
+
+`halt` (as root) switches the Flipper off for real: the battery is disconnected from the system
+(the charger's ship mode, as the stock firmware's power off). The screen and the backlight go dark
+first. With USB connected the Flipper cannot cut its own power: it waits, dark, until you unplug
+the cable. To switch it on again, hold **Back** for about a second, or plug in USB.

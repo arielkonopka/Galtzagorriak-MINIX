@@ -42,6 +42,8 @@
 #define MPU_RASR_ENABLE		0x1
 #define MPU_RASR_AP_RO_RO	(6u << 24)	/* read-only, priv and user */
 #define MPU_RASR_AP_RW_RW	(3u << 24)	/* read/write, priv and user */
+#define MPU_RASR_AP_RW_NO	(1u << 24)	/* read/write, privileged only */
+#define MPU_RASR_XN		(1u << 28)	/* no instruction fetch */
 
 #define AIRCR_VECTKEY	0x05FA0000
 #define AIRCR_SYSRESETREQ 0x4
@@ -55,6 +57,16 @@
 #define EXC_MEMMANAGE	4
 #define EXC_BUSFAULT	5
 #define EXC_USAGEFAULT	6
+#define EXC_DEBUGMON	12	/* R4a.6: a DWT watchpoint hit */
+
+/* DWT comparators, watching stack guard words (R4a.6). */
+#define DEMCR		REG32(0xE000EDFC)
+#define DEMCR_TRCENA	(1u << 24)
+#define DEMCR_MON_EN	(1u << 16)
+#define DWT_COMP(n)	REG32(0xE0001020 + 16 * (n))
+#define DWT_MASK(n)	REG32(0xE0001024 + 16 * (n))
+#define DWT_FUNC(n)	REG32(0xE0001028 + 16 * (n))
+#define DWT_FUNC_WRITE	6	/* data address, write: debug event */
 #define EXC_SVCALL	11
 #define EXC_PENDSV	14
 #define EXC_IRQ0	16

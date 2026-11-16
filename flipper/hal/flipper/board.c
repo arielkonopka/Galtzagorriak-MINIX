@@ -48,6 +48,32 @@ static inline int gpio_get(GPIO_TypeDef *port, unsigned pin)
 }
 
 /*===========================================================================*
+ *				iButton 1-Wire (R6.7)			     *
+ *===========================================================================*/
+/* PB14, open drain with the board's pull-up (stock: OutputOpenDrain, no
+ * pull).  The kernel builds the slots from these and masks interrupts
+ * around the timed part of each (<= 70 us); the times are stock's
+ * standard-speed ones (lib/one_wire/one_wire_host.c). */
+void hal_ow_line(int low)
+{
+	GPIOB->OTYPER |= 1u << 14;			/* open drain */
+	gpio_set(GPIOB, 14, !low);
+	GPIOB->MODER = (GPIOB->MODER & ~(3u << 28)) | (1u << 28);	/* out */
+}
+
+int hal_ow_read(void)
+{
+	return gpio_get(GPIOB, 14);
+}
+
+void hal_ow_delay(unsigned us)
+{
+	uint32_t s = DWT->CYCCNT, n = us * (SystemCoreClock / 1000000);
+
+	while (DWT->CYCCNT - s < n) ;
+}
+
+/*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/
 /* After a power-on reset the CC1101 (Sub-GHz) idles with its crystal
@@ -428,6 +454,7 @@ static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
 static void bkp_set(volatile uint32_t *reg, uint32_t v);
+static void rtc_alarm_out(int on);
 
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
 {
@@ -652,8 +679,18 @@ static int charger_rmw(uint8_t reg, uint8_t mask, uint8_t val)
 #define ICHG_STOCK	(2048 / 64)
 #define ICHG_GENTLE	(1024 / 64)
 
+/* The charger's I2C watchdog (REG07 WATCHDOG, 40 s after the charger's
+ * own power-on reset) would put REG03/04/06 back to their defaults: the
+ * profile, gentle charging and the kernel's temperature pause would be
+ * undone 40 s later.  Off, as the stock firmware's bq25896_init does. */
+static void charger_nowdog(void)
+{
+	(void) charger_rmw(0x07, 0x30, 0);
+}
+
 static void charger_apply(uint32_t s)
 {
+	charger_nowdog();
 	(void) charger_rmw(0x06, 0xFC, (s & 1 ? VREG_CARE : VREG_FULL) << 2);
 	(void) charger_rmw(0x04, 0x7F, s & 2 ? ICHG_GENTLE : ICHG_STOCK);
 }
@@ -671,6 +708,7 @@ int hal_charger_set(int what, int on)
 	case HAL_CHG_OTG:	/* 5 V on the header; not kept over a reset */
 		return charger_rmw(0x03, 0x20, on ? 0x20 : 0);
 	case HAL_CHG_PAUSE:	/* the kernel's temperature rule */
+		charger_nowdog();
 		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
 	default:		return -1;
 	}
@@ -685,6 +723,7 @@ static void charger_init(void)
 
 	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
 	(void) RCC->APB1ENR1;
+	charger_nowdog();
 	if ((CHG_REG & 0xF0000000u) == CHG_MAGIC) charger_apply(CHG_REG & 3);
 	if (i2c1_read(BQ25896_ADDR, 0x02, &b[1], 1) < 0) return;
 	if (!(b[1] & 0x40)) return;		/* CONV_RATE: continuous */
@@ -1464,6 +1503,9 @@ void hal_init(void)
 	hal_wdt_start();
 	uart_init();
 	spi2_init();
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	if (RTC->CR & RTC_CR_OSEL) rtc_alarm_out(0);	/* PC13 is Back */
 	buttons_init();
 	mt_init();
 	hal_radios_park();			/* T14a: -1.7 mA and more */
@@ -1562,6 +1604,52 @@ static void bkp_set(volatile uint32_t *reg, uint32_t v)
 	*reg = v;
 	(void) *reg;
 	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+/* The RTC's alarm output on PC13 (Back, also the charger's QON): Alarm A,
+ * open drain, active low, as stock furi_hal_rtc_set_alarm_out.  On only
+ * for power-off (stock: "shutting down with ext 3V3 off is causing LSE to
+ * stop"; and the alarm that starts the Flipper again, T14c part 2); at
+ * boot it goes off, or Back could not be read. */
+static void rtc_alarm_out(int on)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	PWR->CR1 |= PWR_CR1_DBP;
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
+	RTC->CR = (RTC->CR & ~RTC_CR_OSEL) | RTC_CR_POL
+						| (on ? RTC_CR_OSEL_0 : 0);
+	RTC->OR &= ~RTC_OR_ALARMOUTTYPE;		/* open drain */
+	RTC->WPR = 0xFF;
+	PWR->CR1 &= ~PWR_CR1_DBP;
+}
+
+void hal_power_off(void)
+{
+	uint8_t b[2];
+
+	__disable_irq();
+	hal_tone(0);
+	hal_backlight(0);		/* it looks off at once, also on USB */
+	{
+		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
+
+		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+	}
+	rtc_alarm_out(1);
+	hal_vibro(1);				/* as stock: a short buzz */
+	hal_delay_ms(50);
+	if (i2c1_read(BQ25896_ADDR, 0x09, &b[1], 1) == 0) {
+		b[0] = 0x09;
+		b[1] |= 0x20;			/* BATFET_DIS: ship mode */
+		i2c1_write(BQ25896_ADDR, b, 2);
+	}
+	hal_vibro(0);
+	for (;;) {		/* on USB: powered until the cable goes */
+		hal_usb_poll();
+		hal_wdt_kick();
+	}
 }
 
 int hal_fc_erase_ok(int cache, unsigned upday)
@@ -1758,6 +1846,82 @@ int hal_gpio_read(unsigned pin)
 {
 	if (pin >= HAL_GPIO_PINS) return -1;
 	return gpio_get(hdr[pin].port, hdr[pin].pin);
+}
+
+/* ADC on the header pins (R6.4, part 1: one-shot).  ADC1 channels of the
+ * eight pins (0: none, PB3/PB2), and VREFINT (channel 0) to know VDDA:
+ * its factory value was taken at 3.6 V (VREFINT_CAL, ST's LL header).
+ * Synchronous clock HCLK/4 (16 MHz), 92.5-cycle sampling, 16x hardware
+ * oversampling (result shifted back to 12 bits).  The ADC is powered only
+ * for the reading, then back in deep power-down. */
+static const uint8_t adc_ch[HAL_GPIO_PINS] = { 12, 11, 9, 0, 0, 4, 2, 1 };
+#define VREFINT_CAL	(*(const volatile uint16_t *) 0x1FFF75AAu)
+
+static int adc_wait(volatile uint32_t *reg, uint32_t bit, int set)
+{
+	uint32_t start = DWT->CYCCNT;
+
+	while (((*reg & bit) != 0) != set)
+		if (ms_since(start) > 2) return -1;
+	return 0;
+}
+
+static int adc_conv(unsigned ch)
+{
+	ADC1->SQR1 = ch << ADC_SQR1_SQ1_Pos;		/* one conversion */
+	ADC1->ISR = ADC_ISR_EOC;
+	ADC1->CR |= ADC_CR_ADSTART;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_EOC, 1) < 0) return -1;
+	return (int) (ADC1->DR & 0xFFF);
+}
+
+int hal_adc_mv(int *mv)		/* HAL_GPIO_PINS values, -1 not measured */
+{
+	unsigned pin, ch;
+	int vref, raw, r = 0;
+
+	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN;
+	(void) RCC->AHB2ENR;
+	ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ADC_CCR_CKMODE)
+				| (3u << ADC_CCR_CKMODE_Pos) | ADC_CCR_VREFEN;
+	ADC1->CR &= ~ADC_CR_DEEPPWD;
+	ADC1->CR |= ADC_CR_ADVREGEN;
+	hal_ow_delay(25);			/* the regulator: 20 us */
+	ADC1->CR |= ADC_CR_ADCAL;
+	if (adc_wait(&ADC1->CR, ADC_CR_ADCAL, 0) < 0) { r = -1; goto off; }
+	ADC1->ISR = ADC_ISR_ADRDY;
+	ADC1->CR |= ADC_CR_ADEN;
+	if (adc_wait(&ADC1->ISR, ADC_ISR_ADRDY, 1) < 0) { r = -1; goto off; }
+	ADC1->CFGR = 0;				/* 12 bits, right, single */
+	ADC1->CFGR2 = ADC_CFGR2_ROVSE | (3u << ADC_CFGR2_OVSR_Pos)
+						| (4u << ADC_CFGR2_OVSS_Pos);
+	ADC1->SMPR1 = 0x2DB6DB6Du;		/* 92.5 cycles, channels 0-9 */
+	ADC1->SMPR2 = 0x05B6DB6Du;		/* and 10-18 */
+	if ((vref = adc_conv(0)) <= 0) { r = -1; goto off; }
+	for (pin = 0; pin < HAL_GPIO_PINS; pin++) {
+		ch = adc_ch[pin];
+		mv[pin] = -1;
+		/* only pins left analog ("off"): a reading never changes a
+		 * pin someone set up */
+		if (ch == 0 || ((hdr[pin].port->MODER >> (hdr[pin].pin * 2)) & 3)
+								!= MODE_ANALOG)
+			continue;
+		if ((raw = adc_conv(ch)) < 0) continue;
+		/* VDDA = 3600 * CAL / vref; mV = VDDA * raw / 4095 */
+		mv[pin] = (int) (3600u * VREFINT_CAL / (unsigned) vref
+						* (unsigned) raw / 4095u);
+	}
+	r = (int) (3600u * VREFINT_CAL / (unsigned) vref);	/* VDDA */
+off:
+	if (ADC1->CR & ADC_CR_ADEN) {
+		ADC1->CR |= ADC_CR_ADDIS;
+		(void) adc_wait(&ADC1->CR, ADC_CR_ADEN, 0);
+	}
+	ADC1->CR &= ~ADC_CR_ADVREGEN;
+	ADC1->CR |= ADC_CR_DEEPPWD;
+	ADC1_COMMON->CCR &= ~ADC_CCR_VREFEN;
+	RCC->AHB2ENR &= ~RCC_AHB2ENR_ADCEN;
+	return r;
 }
 
 /*===========================================================================*
@@ -2114,6 +2278,20 @@ static int flash_unlock(void)
 	 * reset and leaves its flags set - are not ours; only busy counts. */
 	(void) flash_wait();
 	return (FLASH->SR & (FLASH_SR_BSY | FLASH_SR_CFGBSY)) ? -1 : 0;
+}
+
+/* Flash ECC (R4a.5): what the controller saw since the last call, cleared
+ * (HAL_ECC_*), and the double word's address.  A double error also raises
+ * the NMI; a corrected one only sets the flag (the kernel polls it). */
+unsigned hal_flash_ecc(uint32_t *addr)
+{
+	uint32_t r = FLASH->ECCR;
+
+	*addr = FLASH_BASE + (r & FLASH_ECCR_ADDR_ECC) * 8;
+	if (!(r & (FLASH_ECCR_ECCC | FLASH_ECCR_ECCD))) return 0;
+	FLASH->ECCR = r;			/* the flags are write-1-to-clear */
+	return (r & FLASH_ECCR_ECCD ? HAL_ECC_DOUBLE : 0)
+				| (r & FLASH_ECCR_ECCC ? HAL_ECC_FIXED : 0);
 }
 
 /* The flash caches may hold the old contents of a page just changed. */

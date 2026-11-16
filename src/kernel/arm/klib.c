@@ -17,6 +17,7 @@ extern const unsigned char splash_fb[];	/* flipper/hal/common/splash.c */
 
 u32_t cpu_hz;
 int k_booted;			/* set by the first SVC, see mpx.S */
+#define MPU_TOP		7	/* the highest MPU region: wins over the rest */
 
 PRIVATE u32_t kernel_stack[K_STACK_BYTES / sizeof(u32_t)]
 				__attribute__((aligned(8)));
@@ -45,7 +46,7 @@ u32_t *basep, *sizep;		/* region (all ops) */
  * the two stores of a double word.  MM calls this as idle work, one page
  * erase or 256 bytes at a time (fcache.c).
  */
-  u32_t ctrl;
+  u32_t rbar7, rasr7;
   int r;
 
   if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA
@@ -98,13 +99,32 @@ u32_t *basep, *sizep;		/* region (all ops) */
 #if LATTRACE
   lat_flash(0);
 #endif
-  ctrl = MPU_CTRL;
-  MPU_CTRL = 0;
+  /* R4a.3: the MPU stays on.  The highest region (it wins over the
+   * read-only flash region 0 and a process's regions) opens the target
+   * page - or the smallest aligned block holding the range - privileged
+   * read/write for the operation, then gets back what it held. */
+  {
+	u32_t lo = op == FL_ERASE ? addr & ~(u32_t) 4095 : addr;
+	u32_t hi = op == FL_ERASE ? lo + 4096 : addr + len;
+	int k = 12;
+
+	while (k < 20 && (lo >> k) != ((hi - 1) >> k)) k++;
+	MPU_RNR = MPU_TOP;
+	rbar7 = MPU_RBAR;
+	rasr7 = MPU_RASR;
+	MPU_RBAR = lo & ~((1u << k) - 1);
+	/* no XN: a range across a large boundary widens the block (up to
+	 * 1 MB, all of flash), and handlers run from flash meanwhile */
+	MPU_RASR = MPU_RASR_AP_RW_NO | (u32_t) (k - 1) << 1
+							| MPU_RASR_ENABLE;
+  }
   *(volatile u32_t *) 0xE000E008 |= 2;	/* ACTLR.DISDEFWBUF: precise faults */
   __asm volatile ("dsb; isb");
   r = op == FL_ERASE ? hal_flash_erase(addr)
 		     : hal_flash_write(addr, (const void *) src, len);
-  MPU_CTRL = ctrl;
+  MPU_RNR = MPU_TOP;
+  MPU_RBAR = rbar7;
+  MPU_RASR = rasr7;
   *(volatile u32_t *) 0xE000E008 &= ~2;
   __asm volatile ("dsb; isb");
 #if LATTRACE
@@ -353,23 +373,42 @@ PUBLIC void mpu_switch()
  */
   struct proc *rp = proc_ptr;
   unsigned long rbar[MPU_REGIONS], rasr[MPU_REGIONS];
-  u32_t lo, hi;
+  u32_t lo, hi, dend, sbase, xn;
   int i, n;
   static int warned;
 
 #if LATTRACE
   lat_run(rp);
 #endif
+  DWT_COMP(0) = (u32_t) &kernel_stack[0];		/* R4a.6 */
+  if (istaskp(rp) && rp->p_stguard != NULL) DWT_COMP(1) = (u32_t) rp->p_stguard;
   if (rp == mpu_proc || !(rp->p_reg.control & CONTROL_NPRIV)) return;
   mpu_proc = rp;
 
   lo = (u32_t) rp->p_map[T].mem_phys << CLICK_SHIFT;
+  xn = 0;
   if (lo < (u32_t) _ram_start || rp->p_map[T].mem_len == 0
-	|| rp->p_map[T].mem_phys + rp->p_map[T].mem_len != rp->p_map[D].mem_phys)
+	|| rp->p_map[T].mem_phys + rp->p_map[T].mem_len != rp->p_map[D].mem_phys) {
 	lo = (u32_t) rp->p_map[D].mem_phys << CLICK_SHIFT; /* text in flash */
+	xn = MPU_RASR_XN;	/* R4a.2: nothing in its RAM is code */
+  }
   hi = (u32_t) (rp->p_map[S].mem_phys + rp->p_map[S].mem_len) << CLICK_SHIFT;
 
   n = mpu_cover(lo, hi, rbar, rasr, MPU_REGIONS - MPU_FIRST);
+  for (i = 0; i < n; i++) rasr[i] |= xn;
+  /* R4a.2: a 32 B no-access guard at the break (the end of D, where the
+   * gap to the stack starts), in the highest region used so it wins over
+   * the cover: a stack that runs down into the heap faults there instead
+   * of overwriting it.  Only if a region is left (the cover first, R1.6). */
+  dend = (u32_t) (rp->p_map[D].mem_phys + rp->p_map[D].mem_len) << CLICK_SHIFT;
+  sbase = (u32_t) rp->p_map[S].mem_phys << CLICK_SHIFT;
+  if (n >= 0 && n < MPU_REGIONS - MPU_FIRST && sbase >= dend + 32) {
+	rbar[n] = dend;
+	/* the kernel copies into a process's memory: privileged RW */
+	rasr[n] = MPU_RASR_AP_RW_NO | MPU_RASR_XN | (4u << 1)	/* 2^5 */
+							| MPU_RASR_ENABLE;
+	n++;
+  }
   if (n < 0) {
 	/* Cannot be described (MM should have refused the layout): fail
 	 * closed with no regions at all.  restart's unprivileged frame
@@ -433,6 +472,15 @@ int mine;
   SCB_SHPR(EXC_MEMMANAGE) = 0;
   SCB_SHPR(EXC_BUSFAULT) = 0;
   SCB_SHPR(EXC_USAGEFAULT) = 0;
+  SCB_SHPR(EXC_DEBUGMON) = 0;
+  /* R4a.6: DWT comparator 0 watches the kernel stack's guard word, 1 the
+   * running task's (mpu_switch moves it); a write to either raises the
+   * DebugMonitor exception, reported as a stack overflow.  Armed from the
+   * first switch on: main() still fills the stacks. */
+  DEMCR |= DEMCR_TRCENA | DEMCR_MON_EN;
+  DWT_MASK(0) = DWT_MASK(1) = 2;		/* one word */
+  DWT_COMP(0) = DWT_COMP(1) = 0;
+  DWT_FUNC(0) = DWT_FUNC(1) = DWT_FUNC_WRITE;
 }
 
 PUBLIC void put_irq_handler(irq, handler)
@@ -472,6 +520,7 @@ FORWARD _PROTOTYPE( void pm_wake, (void) );
 PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
 	pm_wake,		/* MT_IDLE */
+	flipdev_vibro_off,	/* MT_VIBRO */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */
@@ -613,9 +662,14 @@ unsigned exc;
   if ((*handler)(irq) == 0) (void) disable_irq(irq);
 }
 
+/* R4a.1: lock() masks the kernel's interrupts with BASEPRI, not PRIMASK,
+ * so a fault inside a locked section (priority 0) is still taken as what
+ * it is (MemManage, BusFault, UsageFault) and not escalated to HardFault.
+ * Before the first process (k_booted) BASEPRI stays as cstart() left it.
+ * unhold() ends locked: restart (mpx.S) clears BASEPRI on the way out. */
 PUBLIC void lock()
 {
-  __asm volatile ("cpsid i" : : : "memory");
+  __asm volatile ("msr basepri, %0" : : "r" (KERNEL_PRIO) : "memory");
 #if LATTRACE
   lat_lock();
 #endif
@@ -626,7 +680,7 @@ PUBLIC void unlock()
 #if LATTRACE
   lat_unlock();
 #endif
-  __asm volatile ("cpsie i" : : : "memory");
+  if (k_booted) __asm volatile ("msr basepri, %0" : : "r" (0) : "memory");
 }
 
 
@@ -704,6 +758,36 @@ PUBLIC void pm_minute()
   t -= 2731;				/* 0.1 K -> 0.1 C */
   if (t < 0 || t > 450) (void) hal_charger_set(HAL_CHG_PAUSE, 1);
   else if (t >= 20 && t <= 430) (void) hal_charger_set(HAL_CHG_PAUSE, 0);
+}
+
+/*===========================================================================*
+ *				flash ECC (R4a.5)			     *
+ *===========================================================================*/
+PUBLIC void NMI_Handler()
+{
+/* A double ECC error in flash (the only NMI source used): the data read
+ * was wrong.  Say where, then stop: anything may have used it.  (The spec's
+ * finer rule, kill only the users of a text-cache entry and drop the
+ * entry, needs MM: later.) */
+  u32_t a;
+  unsigned f = hal_flash_ecc(&a);
+
+  if (f & HAL_ECC_DOUBLE) {
+	printf("\nflash ECC: uncorrectable error at %08lx (%s)\n",
+		(unsigned long) a, k_booted ? proc_ptr->p_name : "boot");
+	panic("flash ECC error", NO_NUM);
+  }
+  panic("NMI", NO_NUM);
+}
+
+PUBLIC void ecc_poll()
+{
+/* The clock task: corrected single-bit errors are worth a line (a page
+ * wearing out). */
+  u32_t a;
+
+  if (hal_flash_ecc(&a) & HAL_ECC_FIXED)
+	printf("flash ECC: corrected a bit at %08lx\n", (unsigned long) a);
 }
 
 PUBLIC void pm_vbus()
@@ -859,6 +943,13 @@ unsigned exc;
   else if (cfsr & 0x01000000) sig = SIGBUS;	/* UNALIGNED */
   else sig = SIGSEGV;
 
+  if (exc == EXC_DEBUGMON) {		/* R4a.6: its guard word written */
+	printf("\nstack overflow in %s (guard %08lx written), pc=%08lx "
+		"lr=%08lx sp=%08lx\n", rp->p_name,
+		(unsigned long) DWT_COMP(1), (unsigned long) rp->p_reg.pc,
+		(unsigned long) rp->p_reg.lr, (unsigned long) rp->p_reg.sp);
+	panic("task stack overflow", proc_number(rp));
+  }
   if (!isuserp(rp) || k_reenter != 0) {
 	printf("\n%s (exception %u) in %s, pc=%08lx lr=%08lx sp=%08lx\n",
 		sig == SIGSEGV ? "memory fault" : "fault", exc, rp->p_name,
@@ -912,6 +1003,9 @@ u32_t *frame;
 unsigned exc;
 {
 /* Fault in Handler mode (or before the first process ran): kernel bug. */
+  if (exc == EXC_DEBUGMON)
+	printf("\nKernel stack overflow (its guard word %08lx written)\n",
+					(unsigned long) DWT_COMP(0));
   printf("\nKernel fault, exception %u: pc=%08lx lr=%08lx psr=%08lx\n",
 	exc, (unsigned long) frame[6], (unsigned long) frame[5],
 	(unsigned long) frame[7]);
@@ -946,7 +1040,12 @@ int how;
   if (how != RBT_PANIC && how != RBT_MONITOR)
 	hal_dev_mode(0);	/* an orderly end: a user's board again */
   if (how == RBT_PANIC) printf("System halted after panic.\n");
-  else if (how == RBT_HALT) printf("System halted.\n");
+  else if (how == RBT_HALT) {
+	/* T14c: power off (the charger's ship mode); hold Back, or plug in
+	 * USB, to start again.  On USB the power stays until the cable goes. */
+	printf("Power off.\n");
+	hal_power_off();
+  }
   if (how == RBT_MONITOR) {
 	/* No boot monitor: "return to the monitor" means ST's ROM DFU
 	 * loader, so a new image can be flashed without the buttons. */

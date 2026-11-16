@@ -135,6 +135,10 @@ int hal_gauge_read(unsigned cmd) { (void) cmd; return -2; }
 int hal_charger_read(unsigned reg) { (void) reg; return -2; }
 int hal_charger_set(int what, int on) { (void) what; (void) on; return -1; }
 
+void hal_ow_line(int low) { (void) low; }
+int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
+void hal_ow_delay(unsigned us) { (void) us; }
+
 unsigned hal_buttons(void)
 {
 	return qemu_fake_buttons;
@@ -196,6 +200,7 @@ int hal_random(uint32_t *w)
 	return 0;
 }
 void hal_dfu_request(void) { hal_halt(0); }
+void hal_power_off(void) { hal_halt(0); }
 void hal_dev_mode(int on) { (void) on; }
 int hal_dev(void) { return 0; }
 int hal_reset_bits(void) { return 0x08; }	/* BORRSTF: power on */
@@ -375,6 +380,10 @@ static int cut_here(uint32_t addr, int erase)	/* 1: cut now */
 
 static void cut_power(void)
 {
+	/* the MPU stays on during flash operations (R4a.3) and only the
+	 * target is writable: off for this test hook's own word */
+	*(volatile uint32_t *) 0xE000ED94 = 0;		/* MPU_CTRL */
+	__asm volatile ("dsb; isb");
 	CUT_CFG[2] = CUT_DONE;
 	cut_say("\n[power cut at flash op ", cut_ops, 0);
 	*(volatile uint32_t *) 0xE000ED0C = 0x05FA0004u;	/* SYSRESETREQ */
@@ -485,6 +494,7 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 int hal_btn_irq(int i) { (void) i; return -1; }
 void hal_btn_arm(int on) { (void) on; }
 int hal_stop2(void) { return -1; }
+unsigned hal_flash_ecc(uint32_t *addr) { *addr = 0; return 0; }
 int hal_can_stop2(void) { return 0; }
 
 /* The ms timer (R4b.2) on the board's CMSDK APB timers, so that it works
@@ -549,6 +559,7 @@ unsigned hal_mt_ack(void)
 	}
 	return f;
 }
+int hal_adc_mv(int *mv) { (void) mv; return -1; }
 int hal_ir_irq(void) { return -1; }
 void hal_ir_rx_on(int on) { (void) on; }
 int hal_ir_rx_edge(void) { return 1; }
