@@ -1,7 +1,9 @@
 /* ir - infrared receive and send on the Flipper (Galtzagorriak MINIX)
  *
- * Usage:	ir rx [-r] [-n COUNT]	print received frames (default: one),
- *					decoded; -r: also the raw timings
+ * Usage:	ir rx [-r] [-n COUNT] [-d DEV]	print received frames (default:
+ *					one), decoded; -r: also the raw
+ *					timings; -d: another device with
+ *					the same timings (/dev/subghzraw)
  *		ir tx PROTO ADDR CMD	send one message
  *		ir tx raw [-f HZ] US ...  send marks and spaces, microseconds,
  *					mark first; carrier HZ (38000)
@@ -63,7 +65,7 @@ static struct pd pd_pio = { 8500, 4225, 500, 500, 1500 };
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ir rx [-r] [-n COUNT]\n"
+	fprintf(stderr, "Usage: ir rx [-r] [-n COUNT] [-d DEV]\n"
 			"       ir tx PROTO ADDR CMD\n"
 			"       ir tx raw [-f HZ] US US ...\n"
 			"       ir list FILE\n"
@@ -513,12 +515,14 @@ static void encode(int proto, unsigned long a, unsigned long c)
 /*===========================================================================*
  *				/dev/ir					     *
  *===========================================================================*/
+static char *devname = "/dev/ir";
+
 static int devir(int mode)
 {
 	int fd;
 
-	if ((fd = open("/dev/ir", mode)) < 0) {
-		perror("ir: /dev/ir");
+	if ((fd = open(devname, mode)) < 0) {
+		perror(devname);
 		exit(1);
 	}
 	return fd;
@@ -796,6 +800,8 @@ int main(int argc, char **argv)
 			if (strcmp(argv[i], "-r") == 0) rawtoo = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				count = atoi(argv[++i]);
+			else if (strcmp(argv[i], "-d") == 0 && i + 1 < argc)
+				devname = argv[++i];
 			else usage();
 		}
 		return rx(count, rawtoo);

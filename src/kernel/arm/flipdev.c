@@ -70,7 +70,8 @@
 #define ADC_MINOR	10	/* header pins' voltages, one-shot (R6.4) */
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
-#define LAST_MINOR	12
+#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
+#define LAST_MINOR	14
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -156,6 +157,7 @@ PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
 PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
+PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;
@@ -241,6 +243,8 @@ FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( int ir_rx_arm, (void)				);
+FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
+						int count, int input)	);
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
@@ -348,11 +352,13 @@ PUBLIC void flipdev_task()
 #define SG_ON		1
 #define SG_READ		2
 #define SG_PEAK_MS	30
+#define SG_GAP_MS	100		/* silence that ends a raw frame */
 
 PUBLIC void subghz_minute()
 {
 /* The clock task, once a minute (pm_minute): a radio left listening with
  * nobody reading goes back to sleep. */
+  if (ir_rd && pu_input != 0) return;	/* a raw reader waits */
   if (sg_state == SG_ON) {
 	hal_subghz_off();
 	sg_state = 0;
@@ -901,27 +907,17 @@ message *m_ptr;
 	if (m_ptr->POSITION != 0) return(0);	/* one line, then EOF */
 	return(power_read(user, count));
 
+  case SGRAW_MINOR:
+	/* R4b.7 part 2: what the receiver demodulates, as /dev/ir's
+	 * durations, high (carrier) first; tune with /dev/subghz first */
+	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
+	sg_state |= SG_READ;			/* in use: it stays on */
+	return(pulse_read(m_ptr, user, count, 1));
+
   case IR_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(ir_write(m_ptr, user, count));
-	if (count < 4) return(EINVAL);
-	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
-	if (ir_rd) return(EIO);			/* one reader at a time */
-	if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
-	ir_caller = m_ptr->m_source;
-	ir_proc = m_ptr->PROC_NR;
-	ir_buf = user;				/* count bytes, checked */
-	ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
-	ir_started = ir_done = ir_paused = FALSE;
-	proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
-	ir_rd = TRUE;			/* first: TIM2's interrupt is the
-					 * transmitter's otherwise, and stops it */
-	if (tx_on) ir_paused = TRUE;		/* armed when it is out */
-	else if (ir_rx_arm() < 0) {
-		ir_rd = FALSE;
-		proc_addr(ir_proc)->p_physio = FALSE;
-		return(ENXIO);
-	}
-	return(SUSPEND);
+	return(pulse_read(m_ptr, user, count, 0));
 
   case BL_MINOR:
 	if (m_ptr->m_type == DEV_READ) {	/* the state, 4 bytes (hal.h) */
@@ -1685,11 +1681,43 @@ PRIVATE void lc_newline()
 /*===========================================================================*
  *				ir_rx_arm, ir_rx_end			     *
  *===========================================================================*/
+PRIVATE int pulse_read(m_ptr, user, count, input)
+message *m_ptr;
+phys_bytes user;
+int count, input;
+{
+/* /dev/ir and /dev/subghzraw: one frame that starts while the read waits,
+ * timed by the pulse engine (R4b.7) straight into the reader's buffer;
+ * it ends after a silence, or when the buffer is full. */
+  if (count < 4) return(EINVAL);
+  if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
+  if (ir_rd) return(EBUSY);		/* one reader at a time (TIM2) */
+  if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
+  if (input != 0 && tx_on) return(EBUSY);
+  ir_caller = m_ptr->m_source;
+  ir_proc = m_ptr->PROC_NR;
+  ir_buf = user;				/* count bytes, checked */
+  ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
+  ir_started = ir_done = ir_paused = FALSE;
+  pu_input = input;
+  proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+  ir_rd = TRUE;			/* first: TIM2's interrupt is the
+				 * transmitter's otherwise, and stops it */
+  if (tx_on) ir_paused = TRUE;		/* armed when it is out */
+  else if (ir_rx_arm() < 0) {
+	ir_rd = FALSE;
+	proc_addr(ir_proc)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  return(SUSPEND);
+}
+
 PRIVATE int ir_rx_arm()
 {
 /* The pulse engine (R4b.7) captures the reader's frame straight into its
  * buffer: the durations between edges, in us, by DMA. */
-  if (hal_pulse_rx(0, ir_buf, (unsigned) ir_count / 4, IR_GAP_MS * 1000) < 0)
+  if (hal_pulse_rx(pu_input, ir_buf, (unsigned) ir_count / 4,
+		(pu_input ? SG_GAP_MS : IR_GAP_MS) * 1000) < 0)
 	return(-1);
   lock();
   pm_busy |= PM_PULSE;			/* TIM2 and DMA need the clocks */
@@ -1729,7 +1757,8 @@ int count;
   if (hal_ir_tx_irq() < 0) return(ENXIO);
   if (count % 4 != 0 || count == 0) return(EINVAL);
   if (tx_on) return(EIO);			/* one frame at a time */
-  if (ir_rd && ir_started) return(EBUSY);	/* TIM2 takes a frame in */
+  if (ir_rd && (ir_started || pu_input != 0))
+	return(EBUSY);				/* TIM2 takes a frame in */
   if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
