@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (R6.5, part 2) Writing blank 125 kHz tags: `rfid write EM B0 B1 B2 B3 B4` makes a T5577 (or EM4305, as the stock firmware tries next) fob or card an EM4100 with that number and reads it back. The field gaps are timed by the IR transmitter's engine on the RFID antenna (`/dev/rfid` write).
 - (R6.5, part 1) LF RFID reading: `rfid` reads a 125 kHz tag held to the back and prints its EM4100 number as the stock app does (`EM4100 04 00 98 3D C5`); `/dev/rfid` gives the tag's signal timed by the pulse engine (the field from TIM1, the antenna's comparator into TIM2, DMA into the reader). Other kinds (HID, Indala) are shown as a summary for now. Base 3.75.
 - (R4b.7, part 1) The pulse engine: infrared frames are received by timer capture and DMA straight into the reading program's buffer (1 µs resolution, one interrupt at the start and one at the end of a frame instead of one per edge; the 64-byte receive ring is gone). `/dev/ir` reads as before. A frame may be sent while another program waits for one. Kernel −16 B.
 - Console: program output and echo on the USB serial port, the header UART and the LCD console end lines in CR LF again (`OPOST`/`ONLCR`, the termios default): `minicom` and `picocom` with default settings no longer show a staircase. Raw output (`stty -opost`, `mined`, `rz`/`sz`) stays untouched. QEMU check in the M2 self-test. Kernel RAM unchanged.

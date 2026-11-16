@@ -90,7 +90,20 @@ also prints the timings, `-n N` makes up to N attempts of half a second (default
 tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
 as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns the 125 kHz field on
 for half a second and returns the times between the changes of the tag's signal, in µs, as
-32-bit numbers. Writing blank T5577 fobs and emulating a tag are **(planned)**.
+32-bit numbers.
+
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
+firmware does):
+
+```
+rfid write EM 00 DE AD BE EF
+written (T5577): EM4100 00 DE AD BE EF
+```
+
+The tag is read back afterwards; "not written" means a locked or password-protected tag (one
+written by another cloner may be), or a kind that cannot be written. A write to `/dev/rfid` is
+a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
+spaces. Emulating a tag is **(planned)**.
 
 ## The status LED (`/dev/led`)
 
