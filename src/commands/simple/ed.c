@@ -161,7 +161,11 @@ typedef struct line LINE;
 #define MAXPAT	256		/* max number of chars per replacement
 				 * pattern */
 				/* max file name size */
+#ifdef __ARM_ARCH
+#define MAXFNAME 256		/* Flipper: PATH_MAX + 1 (R2a.5) */
+#else
 #define MAXFNAME (sizeof(int) == 2 ? 256 : 1024)
+#endif
 
 extern LINE line0;
 extern int curln, lastln, line1, line2, nlines;
@@ -976,7 +980,7 @@ char *fname;
   int err;
   long bytes;
   int lines;
-  static char str[MAXLINE];
+  char str[MAXLINE];		/* on the stack, not in .bss (R2a.5) */
 
   err = 0;
   nonascii = nullchar = truncated = 0;
@@ -1108,7 +1112,7 @@ char **argv;
 	for (i = 1; i < argc; i++) {
 		if (doread(0, argv[i]) == 0) {
 			curln = 1;
-			strcpy(fname, argv[i]);
+			strncpy(fname, argv[i], MAXFNAME - 1);
 			break;
 		}
 	}
@@ -1293,6 +1297,10 @@ char *getfn()
 
 	cp = file;
 	while (*inptr && *inptr != NL && *inptr != SP && *inptr != HT) {
+		if (cp == &file[sizeof(file) - 1]) {
+			printf("file name too long\n");
+			return(NULL);
+		}
 		*cp++ = *inptr++;
 	}
 	*cp = '\0';

@@ -6,7 +6,8 @@
 #include <unistd.h>
 #include <minix/minlib.h>
 
-#define CHUNK_SIZE	4096
+#define CHUNK_SIZE	4096	/* longest line (on the stack) */
+#define IN_SIZE		512	/* read size: one SD sector (R2a.5) */
 
 #ifndef EOF
 #define	EOF	((char) -1)
@@ -52,7 +53,14 @@ void rev()
 
   do {
 	i = CHUNK_SIZE - 1;
-	while ((output[i] = nextchar()) != '\n' && output[i] != EOF) i--;
+	while ((output[i] = nextchar()) != '\n' && output[i] != EOF) {
+		if (i == 0) {	/* line longer than output[]: write this
+				 * piece and go on (it overran the stack) */
+			write(1, output, CHUNK_SIZE);
+			i = CHUNK_SIZE;
+		}
+		i--;
+	}
 	write(1, &output[i + 1], CHUNK_SIZE - 1 - i); /* write reversed line */
 	if (output[i] == '\n')	/* and write a '\n' */
 		write(1, "\n", 1);
@@ -60,7 +68,7 @@ void rev()
 }
 
 
-char buf[CHUNK_SIZE];
+char buf[IN_SIZE];
 
 int nextchar()
 {				/* Does a sort of buffered I/O */
@@ -68,7 +76,7 @@ int nextchar()
   static int i;			/* Index in input buffer to next character */
 
   if (--n <= 0) {		/* We've had this block. Read in next block */
-	n = read(fd, buf, CHUNK_SIZE);
+	n = read(fd, buf, IN_SIZE);
 	i = 0;			/* Reset index in array */
   }
   return((n <= 0) ? EOF : buf[i++]);	/* Return -1 on EOF */
