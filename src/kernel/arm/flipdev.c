@@ -912,10 +912,15 @@ message *m_ptr;
 	ir_buf = user;				/* count bytes, checked */
 	ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
 	ir_started = ir_done = ir_paused = FALSE;
-	if (!tx_on && ir_rx_arm() < 0) return(ENXIO);
-	if (tx_on) ir_paused = TRUE;		/* armed when it is out */
-	ir_rd = TRUE;
 	proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+	ir_rd = TRUE;			/* first: TIM2's interrupt is the
+					 * transmitter's otherwise, and stops it */
+	if (tx_on) ir_paused = TRUE;		/* armed when it is out */
+	else if (ir_rx_arm() < 0) {
+		ir_rd = FALSE;
+		proc_addr(ir_proc)->p_physio = FALSE;
+		return(ENXIO);
+	}
 	return(SUSPEND);
 
   case BL_MINOR:
