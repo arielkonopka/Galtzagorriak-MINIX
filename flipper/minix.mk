@@ -27,6 +27,7 @@ MCFLAGS	:= $(ARCH) -std=gnu89 -Os -g -fsigned-char -ffreestanding -fno-common \
 	   -Wno-format -Wno-uninitialized -Wno-maybe-uninitialized \
 	   -Wno-stringop-overflow	# FS passes "." for char[NAME_MAX]; reads stop at NUL
 MCFLAGS	+= $(if $(LATTRACE),-DLATTRACE=1)
+MCFLAGS	+= $(if $(WRAPTEST),-DREALTIME_WRAP=$(if $(filter 1,$(WRAPTEST)),10,$(WRAPTEST)))
 MLDFLAGS := $(ARCH) -nostdlib -nostartfiles -Wl,--gc-sections \
 	    -Wl,--no-warn-rwx-segments
 
@@ -355,7 +356,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.71
+BASE_VER := 3.72
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -414,7 +415,7 @@ latcheck:
 versioncheck:
 	@python3 -I tools/versioncheck.py $(MROOT)/include/minix/gzversion.h \
 	   $(MROOT)/CHANGELOG.md
-ramcheck: $(MB)/minix.bin versioncheck bsscheck
+BASE_VER := 3.72
 	@python3 -I tools/ramcheck.py ram-budget.txt $(MB)/kernel.elf \
 	   $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf
 # No base program above 4 KB of .bss except those in bss-exceptions.txt

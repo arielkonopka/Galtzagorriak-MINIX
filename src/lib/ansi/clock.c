@@ -38,11 +38,11 @@ void _getrusage(int who, struct rusage *rusage);
 
 #elif	defined(_POSIX_SOURCE) || defined(__USG)
 
-struct tms {
-	time_t	tms_utime;		/* user time */
-	time_t	tms_stime;		/* system time */
-	time_t	tms_cutime;		/* user time, children */
-	time_t	tms_cstime;		/* system time, children */
+struct tms {			/* as <sys/times.h>: clock_t, not time_t */
+	clock_t	tms_utime;		/* user time */
+	clock_t	tms_stime;		/* system time */
+	clock_t	tms_cutime;		/* user time, children */
+	clock_t	tms_cstime;		/* system time, children */
 };
 
 clock_t _times(struct tms *buffer);
@@ -50,10 +50,10 @@ clock_t _times(struct tms *buffer);
 #else					/* Version 7 UNIX */
 
 struct tbuffer {
-	long proc_user_time;
-	long proc_system_time;
-	long child_user_time;
-	long child_system_time;
+	long proc_user_time;	/* timecheck: ok (ticks) */
+	long proc_system_time;	/* timecheck: ok (ticks) */
+	long child_user_time;	/* timecheck: ok (ticks) */
+	long child_system_time;	/* timecheck: ok (ticks) */
 };
 
 clock_t _times(struct tbuffer *buffer);
@@ -74,7 +74,6 @@ clock(void)
 	struct tms tms;
 
 	_times(&tms);
-	/* Assume that time_t can be converted to clock_t for Sys5 */
 	return tms.tms_utime;
 #else
 	struct tbuffer tbuffer;

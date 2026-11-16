@@ -3,7 +3,7 @@
  *	Galtzagorriak 0.1.0+7.g1a2b3c4
  *	built from a commit of 2026-11-15
  *	based on MINIX 2.0.0
- *	ABI 1
+ *	ABI 2
  *
  *	reset: watchdog (dev mode: a watchdog reset goes to DFU)
  *
