@@ -326,15 +326,16 @@ unsigned hal_disk_mhz;
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
 	l[HAL_FL_SFSA] = 0x00090000;
-	l[HAL_FL_INST] = 0x00030000;		/* after 192 KB of system */
-	l[HAL_FL_INST_SIZE] = 0x00030000;
+	l[HAL_FL_INST] = 0x00040000;		/* after 192 KB of system and
+						 * 64 KB of shared libc */
+	l[HAL_FL_INST_SIZE] = 0x00020000;
 	l[HAL_FL_CACHE] = 0x00060000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
-	l[HAL_FL_ROM] = 0x00030000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM] = 0x00040000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
 
-uint32_t hal_rom_base(void) { return 0x00030000 + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void) { return 0x00040000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {
@@ -493,6 +494,13 @@ uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write)
 
 /* QEMU: the host's clock, seconds since 1970 (semihosting). */
 uint32_t hal_rtc_time(void) { return semihost(SYS_TIME, 0); }
+int hal_rtc_ok(void) { return 0; }	/* the host's clock: not settable */
+int hal_rtc_set(uint32_t t) { (void) t; return -1; }
+int hal_rtc_alarm(uint32_t due, unsigned lead) { (void) due; (void) lead; return -1; }
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags) { *lead = 0; *flags = 0; return 0; }
+int hal_rtc_alarm_irq(void) { return -1; }
+int hal_rtc_alarm_ack(void) { return 0; }
+int hal_rtc_cal(int set, int v) { (void) set; (void) v; return 0; }
 
 /* No radios in QEMU (T14a). */
 void hal_radios_park(void) { }

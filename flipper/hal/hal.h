@@ -297,9 +297,25 @@ const char *hal_reset_cause(void);	/* of the last reset */
 void hal_radios_park(void);
 void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 							int *smps);
-/* The RTC's time, seconds since 1970 (UTC, spec I.1); 0: it is not running
- * or was never set.  Read once at boot (the clock task). */
+/* The RTC (R6.2, R7b.1).  hal_rtc_ok: it runs and can be set (QEMU: 0, the
+ * kernel keeps its own clock).  The time in seconds since 1970 (UTC, spec
+ * I.1); 0: not running or never set.  hal_rtc_set: 2000-2099; -1: no. */
+int hal_rtc_ok(void);
 uint32_t hal_rtc_time(void);
+int hal_rtc_set(uint32_t t);
+/* Alarm A at due (UTC s, at most 27 days ahead; 0 clears it); at power-off
+ * it is moved lead seconds earlier (the boot takes that long; 0 keeps the
+ * stored lead, first 10 s).  -1: in the past, too far, or no RTC. */
+int hal_rtc_alarm(uint32_t due, unsigned lead);
+#define HAL_RTC_ARMED	1		/* it will fire */
+#define HAL_RTC_FIRED	2		/* it fired since it was set */
+#define HAL_RTC_WOKE	4		/* this boot came from it */
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags);  /* due, 0 none */
+int hal_rtc_alarm_irq(void);		/* -1: none */
+int hal_rtc_alarm_ack(void);		/* in the handler: 1 if it fired */
+/* Smooth calibration (RTC_CALR) in steps of 0.954 ppm, positive faster,
+ * -511..512; set != 0 writes v.  Returns the value in force. */
+int hal_rtc_cal(int set, int v);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
 void hal_tone(unsigned hz);		/* speaker; 0 = off */
 void hal_halt(int status) __attribute__((noreturn));

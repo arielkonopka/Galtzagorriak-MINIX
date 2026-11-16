@@ -324,9 +324,15 @@ PUBLIC clock_t clock_idle()
  *===========================================================================*/
 PRIVATE void do_get_time()
 {
-/* Get and return the current clock time in seconds. */
+/* Get and return the current clock time in seconds: from the RTC (R2d.5,
+ * R6.2: it keeps counting in Stop2 and while off, and its calibration
+ * applies), or the uptime from boot_time where there is none (QEMU). */
+  ftime32_t t;
 
-  mc.NEW_TIME = (long) (ftime32_t) (boot_time + realtime/HZ);
+  if (hal_rtc_ok() && (t = (ftime32_t) hal_rtc_time()) != 0)
+	mc.NEW_TIME = (long) t;
+  else
+	mc.NEW_TIME = (long) (ftime32_t) (boot_time + realtime/HZ);
 }
 
 
@@ -336,9 +342,13 @@ PRIVATE void do_get_time()
 PRIVATE void do_set_time(m_ptr)
 message *m_ptr;			/* pointer to request message */
 {
-/* Set the real time clock.  Only the superuser can use this call. */
+/* Set the real time clock.  Only the superuser can use this call.  The RTC
+ * too (R6.2), so the time survives a reset and power-off; INIT hears of it
+ * (SIGRTC, spec F.2: timers are computed again). */
 
   boot_time = (ftime32_t) m_ptr->NEW_TIME - realtime/HZ;
+  if (hal_rtc_ok()) (void) hal_rtc_set((u32_t) (ftime32_t) m_ptr->NEW_TIME);
+  cause_sig(INIT_PROC_NR, SIGRTC);
 }
 
 

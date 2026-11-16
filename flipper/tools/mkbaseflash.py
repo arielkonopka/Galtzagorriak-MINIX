@@ -5,7 +5,8 @@ R2b.6, make base-flash).
 Usage: mkbaseflash.py system.bin out.bin FLASH_BASE REGION_OFFSET [--rom=rom.img] prog.aout ...
 
 out.bin is system.bin padded to REGION_OFFSET (the installed region, which
-starts right after the 192 KB system image on every layout), then the
+starts after the 192 KB system image and the 64 KB of the shared libc,
+R2b.9, on every layout; system.bin = minix.bin, which carries both), then the
 region in the format of src/mm/finst.c:
     page 0   directory "GINB" (made on the PC), generation 1, one 64-byte
              record per program: SHA-256 of the text, address, size, the
