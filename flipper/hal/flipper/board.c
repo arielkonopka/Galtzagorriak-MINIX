@@ -555,6 +555,61 @@ static int i2c1_write(uint8_t addr, const uint8_t *buf, unsigned len)
 	return r;
 }
 
+/* Read len bytes from register reg: the register written, a repeated
+ * start, the bytes.  0 on success, -1 on NACK or timeout. */
+static int i2c1_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
+{
+	uint32_t start = DWT->CYCCNT;
+
+	if (!i2c_ready) return -1;
+	while (I2C1->ISR & I2C_ISR_BUSY)
+		if (ms_since(start) > I2C_TIMEOUT_MS) return -1;
+	I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+	I2C1->CR2 = ((uint32_t) addr << 1) | (1u << I2C_CR2_NBYTES_Pos)
+		  | I2C_CR2_START;			/* no AUTOEND: TC */
+	while (!(I2C1->ISR & (I2C_ISR_TXIS | I2C_ISR_NACKF)))
+		if (ms_since(start) > I2C_TIMEOUT_MS) goto fail;
+	if (I2C1->ISR & I2C_ISR_NACKF) goto fail;
+	I2C1->TXDR = reg;
+	while (!(I2C1->ISR & (I2C_ISR_TC | I2C_ISR_NACKF)))
+		if (ms_since(start) > I2C_TIMEOUT_MS) goto fail;
+	if (I2C1->ISR & I2C_ISR_NACKF) goto fail;
+	I2C1->CR2 = ((uint32_t) addr << 1) | I2C_CR2_RD_WRN
+		  | (len << I2C_CR2_NBYTES_Pos) | I2C_CR2_AUTOEND | I2C_CR2_START;
+	while (len > 0) {
+		if (I2C1->ISR & I2C_ISR_RXNE) {
+			*buf++ = I2C1->RXDR;
+			len--;
+			continue;
+		}
+		if ((I2C1->ISR & I2C_ISR_NACKF)
+				|| ms_since(start) > I2C_TIMEOUT_MS) goto fail;
+	}
+	while (!(I2C1->ISR & I2C_ISR_STOPF))
+		if (ms_since(start) > I2C_TIMEOUT_MS) goto fail;
+	I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+	return 0;
+fail:
+	if (!(I2C1->ISR & I2C_ISR_STOPF)) I2C1->CR2 |= I2C_CR2_STOP;
+	start = DWT->CYCCNT;
+	while (!(I2C1->ISR & I2C_ISR_STOPF) && ms_since(start) <= 1) ;
+	I2C1->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+	return -1;
+}
+
+/* The BQ27220 fuel gauge (T15a): standard commands only, read only.  Its
+ * data memory is flash, and the stock firmware configured it: nothing is
+ * ever written to it here. */
+#define BQ27220_ADDR	0x55
+
+int hal_gauge_read(unsigned cmd)
+{
+	uint8_t b[2];
+
+	if (i2c1_read(BQ27220_ADDR, (uint8_t) cmd, b, 2) < 0) return -1;
+	return b[0] | b[1] << 8;
+}
+
 static int lp5562_write(uint8_t reg, uint8_t val)
 {
 	uint8_t b[2] = { reg, val };

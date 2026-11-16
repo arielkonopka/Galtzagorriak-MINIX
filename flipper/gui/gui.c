@@ -82,6 +82,22 @@ int gui_text(int x, int y, const char *s, int inverse)
 	return x - x0;
 }
 
+int gui_text_big(int x, int y, const char *s, int k)
+{
+	int x0 = x, gx, gy, bits, c;
+
+	for (; *s != 0 && x < GUI_W; s++, x += FONT_W * k) {
+		c = (unsigned char) *s;
+		if (c < 32 || c > 126) c = '?';
+		for (gy = 0; gy < FONT_H * k; gy++) {
+			bits = font_4x6[c - 32][gy / k];
+			for (gx = 0; gx < FONT_W * k; gx++)
+				gui_pixel(x + gx, y + gy, bits & (0x80 >> gx / k));
+		}
+	}
+	return x - x0;
+}
+
 void gui_center(int y, const char *s, int inverse)
 {
 	gui_text((GUI_W - (int) strlen(s) * FONT_W) / 2, y, s, inverse);
