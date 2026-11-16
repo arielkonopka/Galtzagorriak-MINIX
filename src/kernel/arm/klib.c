@@ -917,12 +917,11 @@ PUBLIC void idle_task()
 /*===========================================================================*
  *				Faults					     *
  *===========================================================================*/
-PRIVATE void fault_regs(cfsr, hfsr)
-u32_t cfsr, hfsr;
+PRIVATE void fault_regs(cfsr, hfsr, far)
+u32_t cfsr, hfsr, far;		/* far: read before CFSR was cleared */
 {
-  printf("CFSR=%08lx HFSR=%08lx MMFAR=%08lx BFAR=%08lx\n",
-	(unsigned long) cfsr, (unsigned long) hfsr,
-	(unsigned long) SCB_MMFAR, (unsigned long) SCB_BFAR);
+  printf("CFSR=%08lx HFSR=%08lx fault address=%08lx\n",
+	(unsigned long) cfsr, (unsigned long) hfsr, (unsigned long) far);
 }
 
 PUBLIC void arm_exception(exc)
@@ -933,6 +932,10 @@ unsigned exc;
  */
   struct proc *rp = proc_ptr;
   u32_t cfsr = SCB_CFSR, hfsr = SCB_HFSR;
+  /* The fault address first: once MMARVALID/BFARVALID are cleared the
+   * register is UNKNOWN (the Flipper then reads back 0xE000ED34, MMFAR's
+   * own address: the "addr=e000ed34" of #108 was this, not the fault). */
+  u32_t far = (cfsr & 0x80) ? SCB_MMFAR : (cfsr & 0x8000) ? SCB_BFAR : 0;
   int sig;
 
   SCB_CFSR = cfsr;		/* write 1 to clear */
@@ -955,7 +958,7 @@ unsigned exc;
 		sig == SIGSEGV ? "memory fault" : "fault", exc, rp->p_name,
 		(unsigned long) rp->p_reg.pc, (unsigned long) rp->p_reg.lr,
 		(unsigned long) rp->p_reg.sp);
-	fault_regs(cfsr, hfsr);
+	fault_regs(cfsr, hfsr, far);
 	panic("exception in system code", proc_number(rp));
   }
   /* Report it (the PC kernel is silent here, but a one-line note costs
@@ -964,8 +967,7 @@ unsigned exc;
 	rp->p_name, proc_number(rp), sig, (unsigned long) rp->p_reg.pc,
 	(unsigned long) rp->p_reg.lr, (unsigned long) rp->p_reg.sp,
 	(unsigned long) cfsr,
-	(unsigned long) ((cfsr & 0x80) ? SCB_MMFAR :
-			 (cfsr & 0x8000) ? SCB_BFAR : 0));
+	(unsigned long) far);
   printf("    text %08lx+%lx data %08lx shadow %x\n",
 	(unsigned long) rp->p_map[T].mem_phys << CLICK_SHIFT,
 	(unsigned long) rp->p_map[T].mem_len << CLICK_SHIFT,
@@ -1013,7 +1015,8 @@ unsigned exc;
 	(unsigned long) frame[0], (unsigned long) frame[1],
 	(unsigned long) frame[2], (unsigned long) frame[3],
 	(unsigned long) frame[4]);
-  fault_regs(SCB_CFSR, SCB_HFSR);
+  fault_regs(SCB_CFSR, SCB_HFSR, (SCB_CFSR & 0x80) ? SCB_MMFAR
+				: (SCB_CFSR & 0x8000) ? SCB_BFAR : 0);
   if (k_booted) {
 	struct proc *rp = proc_ptr;
 
