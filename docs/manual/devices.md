@@ -95,12 +95,11 @@ echo off >/dev/led
 | `blink` | a 0.1 s flash about once a second             |
 | `fast`  | flashes about five times a second             |
 | `double`| two short flashes, then a pause of about 1.6 s|
-| `pulse` | fades in and out, about every 2 s             |
+| `pulse` | fades in and out, about every 1.8 s           |
 
 Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
 as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as
-`#080808` are refused). A `pulse` rounds the brightness to one of 12 steps, so close shades
-may pulse alike. An unknown pattern or
+`#080808` are refused). An unknown pattern or
 colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
 stops the pattern; the screen's backlight does not (the chip has three
 program engines: one fades the backlight, two run the LED). The pattern stops with a reset.

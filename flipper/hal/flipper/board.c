@@ -961,16 +961,15 @@ void hal_led(unsigned r, unsigned g, unsigned b)
 #define LP_RAMP(t, up, n) ((t) << 8 | ((up) ? 0 : 0x80) | (n))	/* x 0.49 ms */
 #define LP_LOOP		0xA000			/* to step 0, for ever */
 #define LP_PEAK		0xFFFF			/* in lp_pat: set PWM to the level */
-#define LP_UP		0xFFFE			/* a quarter of the pulse's rise */
-#define LP_DOWN		0xFFFD
+#define LP_PULSE	0xFFFE			/* in lp_pat: see lp_load() */
+#define LP_WAITF(n)	((n) << 8)		/* n x 0.49 ms, n 1..63 */
 static const struct { char name[8]; uint16_t w[12]; } lp_pat[] = {
 	{ "blink",  { LP_PEAK, LP_WAIT(6), LP_SET(0), LP_WAIT(63), LP_LOOP } },
 	{ "fast",   { LP_PEAK, LP_WAIT(6), LP_SET(0), LP_WAIT(6), LP_LOOP } },
 	{ "double", { LP_PEAK, LP_WAIT(5), LP_SET(0), LP_WAIT(8),
 		      LP_PEAK, LP_WAIT(5), LP_SET(0), LP_WAIT(63),
 		      LP_WAIT(40), LP_LOOP } },
-	{ "pulse",  { LP_SET(0), LP_UP, LP_UP, LP_UP, LP_UP, LP_DOWN, LP_DOWN,
-		      LP_DOWN, LP_DOWN, LP_WAIT(63), LP_LOOP } },
+	{ "pulse",  { LP_PULSE } },		/* built by lp_load() */
 };
 /* White is 200:128:96 in PWM (seen on the device); #rrggbb is
  * gamma-coded (light ~ v squared). */
@@ -983,29 +982,45 @@ static void lp5562_cur(unsigned r, unsigned g, unsigned b)
 	lp5562_rmw(0x05, 0xFF, (uint8_t) b);
 }
 
-/* Load pattern k at level pwm into the engine program memory at addr.  A
- * pulse rises in 4 ramps of n steps of 252/n x 0.49 ms (n divides 252),
- * so every level takes the same 494 ms. */
-static void lp_load(uint8_t addr, unsigned k, unsigned pwm)
+/* Load pattern k at level pwm into the engine program memory at addr; top
+ * is the highest level of the colour.  The PWM scale is logarithmic
+ * (LOG_EN, as stock), so a colour stays the same colour while it fades
+ * only if the engines keep the same *difference* of levels: a pulse
+ * rises and falls one level per 1.96 ms on every engine, and a lower one
+ * starts later and ends sooner by its difference.  Every engine runs the
+ * same number of instructions, so they never drift apart. */
+static void lp_load(uint8_t addr, unsigned k, unsigned pwm, unsigned top)
 {
-	static const uint8_t ns[] = { 4, 6, 7, 9, 12, 14, 18, 21, 28, 36, 42,
-									63 };
 	uint8_t prog[1 + 32];
-	unsigned i, n = ns[0];
+	uint16_t w[16];
+	unsigned i, u, q;
 
-	for (i = 1; i < sizeof ns; i++)		/* the nearest 4 n */
-		if ((int) (4 * ns[i] - pwm) * (int) (4 * ns[i] - pwm)
-				< (int) (4 * n - pwm) * (int) (4 * n - pwm))
-			n = ns[i];
+	for (i = 0; i < 16; i++) w[i] = i < 12 ? lp_pat[k].w[i] : 0;
+	if (w[0] == LP_PULSE) {
+		/* the wait before and after: 4 (top - pwm) + 64 x 0.49 ms, as
+		 * q x 15.6 ms (q >= 1) and 1..32 x 0.49 ms */
+		u = 4 * (top - pwm) + 64;
+		q = (u - 1) / 32;
+		u -= 32 * q;
+		i = 0;
+		w[i++] = LP_SET(0);
+		w[i++] = LP_WAIT(q);
+		w[i++] = LP_WAITF(u);
+		w[i++] = LP_RAMP(4, 1, pwm / 2);
+		w[i++] = LP_RAMP(4, 1, pwm - pwm / 2);
+		w[i++] = LP_RAMP(4, 0, pwm - pwm / 2);
+		w[i++] = LP_RAMP(4, 0, pwm / 2);
+		w[i++] = LP_WAIT(q);
+		w[i++] = LP_WAITF(u);
+		w[i++] = LP_WAIT(50);
+		w[i++] = LP_LOOP;
+		while (i < 16) w[i++] = 0;
+	}
 	prog[0] = addr;
 	for (i = 0; i < 16; i++) {
-		uint16_t w = i < 12 ? lp_pat[k].w[i] : 0;
-
-		if (w == LP_PEAK) w = LP_SET(pwm);
-		else if (w == LP_UP) w = LP_RAMP(252 / n, 1, n);
-		else if (w == LP_DOWN) w = LP_RAMP(252 / n, 0, n);
-		prog[1 + 2 * i] = (uint8_t) (w >> 8);
-		prog[2 + 2 * i] = (uint8_t) w;
+		if (w[i] == LP_PEAK) w[i] = LP_SET(pwm);
+		prog[1 + 2 * i] = (uint8_t) (w[i] >> 8);
+		prog[2 + 2 * i] = (uint8_t) w[i];
 	}
 	(void) i2c1_write(LP5562_ADDR, prog, sizeof prog);
 }
@@ -1054,8 +1069,12 @@ int hal_led_pattern(const char *name, unsigned long rgb)
 	hal_led(0, 0, 0);			/* stops a running one */
 	lp5562_rmw(0x01, 0x0F, ne > 1 ? 0x05 : 0x04);	/* load */
 	hal_ow_delay(100);
-	lp_load(0x30, k, lvl[0]);		/* engine 2 */
-	if (ne > 1) lp_load(0x50, k, lvl[1]);	/* engine 3 */
+	if (ne < 2) lvl[1] = 0;
+	for (i = 0; i < ne; i++)		/* a pulse's ramps: >= 1 each */
+		if (lvl[i] < 2) lvl[i] = 2;
+	hi = lvl[0] > lvl[1] ? lvl[0] : lvl[1];
+	lp_load(0x30, k, lvl[0], hi);		/* engine 2 */
+	if (ne > 1) lp_load(0x50, k, lvl[1], hi);	/* engine 3 */
 	lp5562_cur(cur[0], cur[1], cur[2]);
 	for (i = 0; i < 3; i++)		/* engine 2: 10, engine 3: 11 */
 		if (eng[i] < 2) map |= (2 + eng[i]) << (4 - 2 * i);
