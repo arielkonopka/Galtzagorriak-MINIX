@@ -493,6 +493,7 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 int hal_btn_irq(int i) { (void) i; return -1; }
 void hal_btn_arm(int on) { (void) on; }
 int hal_stop2(void) { return -1; }
+unsigned hal_flash_ecc(uint32_t *addr) { *addr = 0; return 0; }
 int hal_can_stop2(void) { return 0; }
 
 /* The ms timer (R4b.2) on the board's CMSDK APB timers, so that it works

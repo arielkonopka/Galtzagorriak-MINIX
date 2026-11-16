@@ -119,6 +119,11 @@ unsigned hal_mt_ack(void);
 #define HAL_WAKE_BTN	1
 #define HAL_WAKE_TIMER	2
 int hal_stop2(void);
+
+/* Flash ECC (R4a.5): flags since the last call (cleared), and where. */
+#define HAL_ECC_FIXED	1		/* a single bit, corrected */
+#define HAL_ECC_DOUBLE	2		/* two bits: the NMI */
+unsigned hal_flash_ecc(uint32_t *addr);
 int hal_can_stop2(void);		/* 0: never (QEMU, no HSE at boot) */
 
 /* Vibration motor; GPIO header pins (the eight free ones, numbered 0..7:
