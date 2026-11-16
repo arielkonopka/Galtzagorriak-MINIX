@@ -5,9 +5,10 @@
  *					-r: also the timings; up to TRIES
  *					reads of 0.5 s (default 4)
  *		rfid write EM B0 B1 B2 B3 B4
- *					make a blank T5577 tag (fob, card)
- *					an EM4100 with that number, then
- *					read it back
+ *					make a blank tag (fob, card) an
+ *					EM4100 with that number: as T5577,
+ *					else as EM4305 (as stock), each
+ *					read back
  *
  * Writing a T5577 is done by gaps in the 125 kHz field, with the stock
  * firmware's timings (lib/lfrfid/tools/t5577.c, in carrier periods of
@@ -123,15 +124,18 @@ static int em_decode(int nd, unsigned char id[5])
 
 static int nt;			/* durations in d[], field on first */
 
-static void put(int on, unsigned long tc)
+static void put_us(int on, unsigned long us)
 {
-	unsigned long us = tc * 8;
-
 	if (nt > 0 && ((nt - 1) & 1) == !on) {	/* the same state: longer */
 		d[nt - 1] += us;
 		return;
 	}
 	if (nt < MAXD) d[nt++] = us;
+}
+
+static void put(int on, unsigned long tc)
+{
+	put_us(on, tc * 8);
 }
 
 static void wbit(int b)
@@ -161,12 +165,80 @@ static void wblock(int blk, unsigned long data)
 	wreset();
 }
 
+/* EM4305 (EM4x05), the other common blank, as stock em4305.c: a 0 is a
+ * short gap, a 1 none; a word is 32 bits in 4 lines of 8 with line and
+ * column parity.  EM4100 goes into word 4 (configuration) and 5-6. */
+#define E_1		32
+#define E_0_OFF		23
+#define E_0_ON		18
+#define E_STOP_OFF	55
+#define E_STOP_ON	18
+#define EM4305_EM4100	(0x40UL | 31 | 6UL << 14)  /* Manchester, RF/64 */
+
+static void ebit(int b)
+{
+	if (b) put(1, E_1);
+	else { put(0, E_0_OFF); put(1, E_0_ON); }
+}
+
+static void eword(int addr, unsigned long data)
+{
+	unsigned long long w = 0;
+	int i, j, p;
+
+	for (i = 0; i < 4; i++) {		/* lines: 8 bits, parity */
+		p = 0;
+		for (j = 0; j < 8; j++) {
+			int bit = (int) (data >> (i * 8 + j)) & 1;
+
+			w = w << 1 | bit;
+			p ^= bit;
+		}
+		w = w << 1 | p;
+	}
+	for (i = 0; i < 8; i++) {		/* columns */
+		p = 0;
+		for (j = 0; j < 4; j++) p ^= (int) (data >> (j * 8 + i)) & 1;
+		w = w << 1 | p;
+	}
+	w <<= 1;				/* bit 44: 0 */
+	put_us(1, 8000);			/* power up */
+	put(0, E_STOP_OFF); put(1, E_STOP_ON);	/* field stop */
+	ebit(0);				/* start */
+	ebit(0); ebit(1); ebit(0); ebit(1);	/* write 010 (LSB first), parity */
+	p = 0;
+	for (i = 0; i < 4; i++) { ebit(addr >> i & 1); p ^= addr >> i & 1; }
+	ebit(0); ebit(0); ebit(p);
+	for (i = 0; i < 45; i++) ebit((int) (w >> (44 - i)) & 1);
+	put_us(1, 1480 + 9340);			/* power check, EEPROM write */
+}
+
+static int send(int fd)
+{
+	if (nt % 2 == 0) put_us(1, 8);		/* odd: ends with the field */
+	if (write(fd, d, nt * 4) != nt * 4) {
+		perror("rfid: write");
+		return -1;
+	}
+	return 0;
+}
+
+static int verify(int fd, unsigned char id[5], unsigned char got[5])
+{
+	int t, n;
+
+	for (t = 0; t < 4; t++) {		/* read it back */
+		if ((n = read(fd, d, sizeof(d))) < 0) break;
+		if (em_decode(n / 4, got)) return memcmp(got, id, 5) == 0 ? 1 : 0;
+	}
+	return -1;
+}
+
 static int write_em(unsigned char id[5])
 {
-	unsigned char b[64];
-	unsigned long blk[2];
-	int r, c, p, i, fd, n, t;
-	unsigned char got[5];
+	unsigned char b[64], got[5];
+	unsigned long blk[2], rev[2];
+	int r, c, p, i, fd, v;
 
 	for (i = 0; i < 9; i++) b[i] = 1;
 	for (r = 0; r < 10; r++) {
@@ -185,37 +257,39 @@ static int write_em(unsigned char id[5])
 		b[59 + c] = p;
 	}
 	b[63] = 0;
-	blk[0] = blk[1] = 0;
+	blk[0] = blk[1] = rev[0] = rev[1] = 0;
 	for (i = 0; i < 64; i++) blk[i / 32] = blk[i / 32] << 1 | b[i];
-	nt = 0;
-	wblock(0, T5577_EM4100);
-	wblock(1, blk[0]);
-	wblock(2, blk[1]);
-	wreset();
-	put(1, T_WAIT);				/* odd: ends with the field */
+	for (i = 63; i >= 0; i--) rev[i / 32] = rev[i / 32] << 1 | b[i];
 	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
 		perror("rfid: /dev/rfid");
 		return 1;
 	}
-	if (write(fd, d, nt * 4) != nt * 4) {
-		perror("rfid: write");
-		return 1;
+	nt = 0;					/* T5577 first, as stock */
+	wblock(0, T5577_EM4100);
+	wblock(1, blk[0]);
+	wblock(2, blk[1]);
+	wreset();
+	if (send(fd) < 0) return 1;
+	if ((v = verify(fd, id, got)) == 1) {
+		printf("written (T5577): EM4100 %02X %02X %02X %02X %02X\n",
+			id[0], id[1], id[2], id[3], id[4]);
+		return 0;
 	}
-	for (t = 0; t < 4; t++) {		/* read it back */
-		if ((n = read(fd, d, sizeof(d))) < 0) break;
-		if (em_decode(n / 4, got)) {
-			if (memcmp(got, id, 5) == 0) {
-				printf("written: EM4100 %02X %02X %02X %02X %02X\n",
-					id[0], id[1], id[2], id[3], id[4]);
-				return 0;
-			}
-			printf("the tag reads EM4100 %02X %02X %02X %02X %02X: "
-				"not written (locked, or not a T5577?)\n",
-				got[0], got[1], got[2], got[3], got[4]);
-			return 1;
-		}
+	nt = 0;					/* then EM4305 */
+	eword(4, EM4305_EM4100);
+	eword(5, rev[0]);
+	eword(6, rev[1]);
+	if (send(fd) < 0) return 1;
+	if ((v = verify(fd, id, got)) == 1) {
+		printf("written (EM4305): EM4100 %02X %02X %02X %02X %02X\n",
+			id[0], id[1], id[2], id[3], id[4]);
+		return 0;
 	}
-	printf("written, but it does not read back as EM4100\n");
+	if (v == 0)
+		printf("the tag still reads EM4100 %02X %02X %02X %02X %02X: "
+			"not written (locked, or neither T5577 nor EM4305?)\n",
+			got[0], got[1], got[2], got[3], got[4]);
+	else printf("written, but it does not read back as EM4100\n");
 	return 1;
 }
 
