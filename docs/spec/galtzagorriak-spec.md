@@ -1004,6 +1004,56 @@ modules that refresh periodically run from `timed` and exit (0 B RAM between ref
 VT100-complete by task T8 (`next-tasks.md`). `ed` stays for scripts. A small text editor is
 part of the base system so scripts and settings can be edited on the device.
 
+**K.6 The graphical system: layers and order (owner, 2026-11-17: "build the graphical system we
+will use").** K.2–K.4 and R5.6a describe the pieces; this section fixes how they fit and in
+which order they are built.
+
+- **Layers**, bottom up. Each layer uses only the ones below it:
+  1. **Kernel:** `/dev/lcd` and `/dev/buttons`, foreground ownership (R4b.8), `FGIOCPREEMPT`
+     (R7b.2), `DEV_SELECT` for `poll()` (R4b.6). Done.
+  2. **Drawing:** two libraries with **one look** (K.2 title bar, R5.6a.7 screen style):
+     - `gui.c` for small plain C programs, linked statically (a few hundred bytes);
+     - `libfuri` + `libapp`, one shared library in flash (#201), for everything bigger and for
+       ported stock apps.
+     The screen-style helpers (title with a counter, hint line, notice line, scroll mark,
+     `[value]` rows) exist once in each and draw the same pixels; a host test compares them.
+  3. **The desktop = the launcher.** The launcher is already resident, owns the screen when no
+     app runs and is the app menu. It grows into the K.2 desktop instead of adding a second
+     resident program: app list (R5.6a), status line (time, battery, unread notifications), a
+     home page of module tiles, the notification list, the Running list (R12.20) and settings
+     pages. Each page is the same Pine-style list screen. The pages sit in a row,
+     Settings ← Apps → Home → Notifications → Running, and Left/Right move along it, which keeps
+     R5.6a's keys (Left from Apps = Settings). RAM budget
+     for the whole desktop: ≤ 3 KB data + heap above today's launcher, 0 B kernel.
+  4. **Modules** (K.2–K.3): separate processes that write TSV records to `/var/run/gui` and
+     read events from their reply FIFO. A C helper in `libapp` (`gm_open`, `gm_tile`, `gm_menu`,
+     `gm_event`) and a shell helper `guimod` (one record per call) come first; the Berry `gui`
+     and `desktop` bindings come with 7c (R7c.3) on the same protocol.
+  5. **Full-screen apps:** `libfuri` apps, ported stock apps (`fam2pkg`, R5.5) and Berry apps
+     take the whole screen as today, in the same style. The desktop is not involved while they
+     run.
+- **Rules kept from K.2–K.4:**
+  - the desktop does navigation locally, so a key press never waits for a module;
+  - alarms ring through `timed` + `alert`, never through the desktop;
+  - tile refreshes run from `timed` and exit;
+  - nothing is written to internal flash.
+- **Order** (tasks T21–T23 in `next-tasks.md`):
+  1. #201: shared `libfuri` + `libapp`;
+  2. T21a: launcher icons and the Pine look;
+  3. T22a/T22b: the other apps restyled;
+  4. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
+     records, `guimod`);
+  5. T23b: `window` records (menu, text, form) and events, the `libapp` helper;
+  6. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
+  7. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
+- **Acceptance:**
+  - ACK.1 A shell module of three lines puts a tile on the home page and changes it.
+  - ACK.2 Killing a module removes its tile, and the desktop keeps working.
+  - ACK.3 With four modules writing as fast as they can, key → frame on the desktop stays
+    within L1.
+  - ACK.4 Desktop RAM within the budget above (`free` in QEMU with 4 tiles and 8
+    notifications).
+
 For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
 C, Berry or shell, and the `mined` key table.
 

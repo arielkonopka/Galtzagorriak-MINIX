@@ -312,6 +312,27 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 - R12.40 HAL: read `DISCARD_SUPPORT` (ACMD13) at init, `hal_disk_discard()` (CMD32/33/38 arg 1, timeout, card-detect), `DIOCDISCARD`; AC12.26 on an SD 5.1 card.
 - AC12.23: GET/PUT times (512 B, 1 KB, 4 KB) and L1/L2 with a background block reader and a foreground 1 MB map scroll; numbers in PORTING.md.
 
+## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, owner request 2026-11-17): milestone M3
+Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
+
+### T23a: desktop core
+- Pages in the launcher, in a row: Settings ← **Apps** → Home → Notifications → Running. Left/Right move along the row, so R5.6a stays as it is (Left from Apps = Settings, Right = the next page, which R5.6a leaves free). Apps is the start page. Notifications and Running appear when T23c and R12.20 add them. The page name is in the title bar.
+- Status line (time, battery percentage, number of unread notifications), redrawn only on change: the minute from a `poll()` timeout, the battery from `/dev/power` at most once a minute while the screen is on.
+- `/var/run/gui` FIFO (mode 0620, group `gui`). Records `tile`, `status`, `notify`, `close` (K.3), one per `write()` ≤ `PIPE_BUF`. A record from an unknown or exited module is dropped. Module id = the writer's uid plus the module's name; a module can only change its own tiles.
+- Fixed table: 16 tiles × 48 B. Parsing in a pure function with a host test (malformed lines, overlong fields, escapes).
+- `guimod` shell command: `guimod tile NAME TEXT`, `guimod close NAME`. Example module in `/usr/share/examples/gui/`: battery tile in 3 lines.
+- RAM and responsiveness numbers in the PR (ACK.3, ACK.4). 0 run-time flash writes.
+
+### T23b: windows and events
+- `window` records (menu, text, form) shown full-screen in the desktop's own style, navigation local; per-module reply FIFO `/var/run/gui.<pid>` with `select`, `back`, `input`, `redraw`.
+- `libapp` helper: `gm_open`, `gm_tile`, `gm_menu`, `gm_event`, `gm_close`; a C example module.
+- Logging switch (`/etc/launcher.conf` `GuiLog: on`) that copies traffic to the console (K.3 debugging).
+
+### T23c: notifications and Running
+- `notify_post()` (libapp) sends `info` and `reminder` notifications to the desktop as well; the Notifications page keeps the last 8, OK opens one, Back clears it. Alarms stay with `alert` (K.4).
+- The Running page when R12.20 (park) is on main: otherwise a follow-up in the same task.
+- Docs: manual chapter "Desktop and modules" (writing a module in C and shell), devguide section, CHANGELOG.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
