@@ -3229,7 +3229,7 @@ the foreground path (the AmigaOS feel: the UI always answers, whatever the rest 
   image tool align every partition start to **4 MiB** (the usual SD allocation unit) instead of
   1 MiB, so the 3 MB of swap slots lie inside one erase unit. New installs only; an existing card
   keeps its layout. Install time only, RAM +0 B.
-- **R12.33 Tell the card what is empty (install time only).** First-boot setup (`/etc/setup`
+- **R12.33 Tell the card what is empty (install time only; DISCARD at run time: R12.40).** First-boot setup (`/etc/setup`
   stage 2) sends **ERASE** (CMD32/CMD33/CMD38, supported in SPI mode) over the new `/usr`, swap and
   `/home` partitions before `mkfs`, with a line on the screen ("Preparing the card..."). A card that
   was once full (camera, phone) gets back its whole free pool for wear levelling. HAL:
@@ -3424,6 +3424,32 @@ noticeable CPU on the foreground path.
     64 GB disk image: `/home` and swap past 4 GiB, mkfs, mount, swap-out and swap-in, a block PUT/GET
     at the last block. Device: a 64 GB or larger card in the Flipper (AC12.25).
 
+- **R12.40 Tell the card what is garbage (DISCARD; owner, 2026-11-17).** SD cards from version 5.1
+  have **DISCARD** (CMD32/CMD33 for the range, CMD38 with argument 1), the SD form of TRIM: the
+  card only marks the range as unused and does not erase it, so its controller stops copying dead
+  data during garbage collection (less wear, faster later writes). R12.33 (no ERASE at run time)
+  stays; DISCARD is the one run-time exception, because it is cheap.
+  - Only if the card says so: the `DISCARD_SUPPORT` bit of the SD Status (ACMD13), read once at
+    card init by the HAL (`hal_disk_discard(first, last)`, `ENOTTY` otherwise, busy wait with the
+    card's timeout and card-detect checks as N.6). WINCHESTER: `DIOCDISCARD` on a partition device,
+    callable by MM and root; QEMU: fills the range with zeros so tests see it.
+  - **`blk_discard(id, n)`** (and `vm_drop()` for whole blocks): the app says it no longer needs
+    those blocks. Always served in the idle class (`BLKWAIT`, R12.37), never on the foreground
+    path; on a card without DISCARD it only invalidates the headers' validity for that caller by
+    doing nothing (the blocks just stay as they were: reading them still gives the old data, so
+    the library treats a discarded block as "contents undefined").
+  - **After a process that used blocks ends:** MM sets bit *i* of a 16-bit "to discard" mask
+    (MM **+2 B**) when the process in slot *i* exits after at least one PUT (a spare `mp_flags`
+    bit, `BLKUSED`, set on the first PUT). `sw_step()` discards marked areas at idle, one area (or
+    256 MB of it) per step, after swap-ins and block requests and before reserve swap-outs. A new
+    process that takes slot *i* clears the bit first (its own blocks must never be discarded; the
+    old ones are invisible to it anyway, R12.35). MM is single-threaded, so no request of the new
+    process can meet a discard in progress.
+  - **At `MMSWAPON`** the mask starts as all ones, so after each boot every block area is
+    discarded once at idle (the swap slots too, in the first step). Nothing else is discarded.
+  - Costs: MM +2 B (12h now +7 B in total, within R12.26's 96 B), kernel 0 B (a few bytes of stack
+    in WINCHESTER), no flash writes, no writes to the card's data.
+
 Acceptance criteria:
 - AC12.18 QEMU `tests/blk`: a fresh process reads block 0 and the last block as zeros; `ERANGE`
   one past the end; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
@@ -3446,11 +3472,15 @@ Acceptance criteria:
 - AC12.25 Device (R12.39): on a card of 64 GB or more, first-boot setup places `/home` and swap past
   4 GiB as R12.34; `fsck`, swap-in of 64 KB and a block GET at the last block work; a card pulled and
   put back (N.6) carries on.
+- AC12.26 QEMU (R12.40): a process PUTs 10 blocks and exits; at idle the trace shows one
+  `DIOCDISCARD` of its area and nothing while keys arrive; a new process in that slot before the
+  idle step clears the bit and no discard ever touches its blocks; on a card without DISCARD no
+  ioctl reaches the HAL. Device: a card with DISCARD (SD 5.1) takes it, L1/L2 unchanged.
 - AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
   frames; VM heap growth ≤ 3 KB.
 
 RAM budget (12h):
-- kernel +0 B; MM +5 B (boot stamp 4 B, number of swap subpartitions 1 B; within R12.26's 96 B) and one `mp_flags` bit; FS and INIT +0 B;
+- kernel +0 B; MM +7 B (boot stamp 4 B, number of swap subpartitions 1 B, discard mask 2 B; within R12.26's 96 B) and two `mp_flags` bits (`BLKWAIT`, `BLKUSED`); FS and INIT +0 B;
 - a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
   frame + the 16 B descriptor;
 - flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
