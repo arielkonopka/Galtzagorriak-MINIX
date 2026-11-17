@@ -33,7 +33,7 @@
 #define GUI_INPUT_PRESS_MS    150U
 #define GUI_INPUT_LONG_COUNTS 2U
 
-#define GUI_THREAD_STACK 1536U
+#define GUI_THREAD_STACK 2048U /* stock: 2 KB; popup text needs ~1.4 KB (vsnprintf) */
 
 ARRAY_DEF(ViewPortArray, ViewPort*, M_PTR_OPLIST);
 

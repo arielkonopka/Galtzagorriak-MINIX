@@ -2,8 +2,9 @@
  * libfuri GUI (spec R5.2): from the stock firmware
  * applications/services/gui/modules/validators.c (GPL-3.0). */
 #include "validators.h"
+#include <sys/types.h>
 #include <sys/stat.h>
-#include <strings.h>
+#include <string.h> /* strcasecmp (MINIX: no strings.h) */
 #include <furi.h>
 
 struct ValidatorIsFile {
@@ -35,15 +36,23 @@ bool validator_is_file_callback(const char* text, FuriString* error, void* conte
     return ret;
 }
 
+/* libfuri: MINIX's C library has no strdup() */
+static char* validator_strdup(const char* s) {
+    size_t n = strlen(s) + 1;
+    char* d = malloc(n);
+    memcpy(d, s, n);
+    return d;
+}
+
 ValidatorIsFile* validator_is_file_alloc_init(
     const char* app_path_folder,
     const char* app_extension,
     const char* current_name) {
     ValidatorIsFile* instance = malloc(sizeof(ValidatorIsFile));
 
-    instance->app_path_folder = strdup(app_path_folder);
+    instance->app_path_folder = validator_strdup(app_path_folder);
     instance->app_extension = app_extension;
-    instance->current_name = current_name != NULL ? strdup(current_name) : NULL;
+    instance->current_name = current_name != NULL ? validator_strdup(current_name) : NULL;
 
     return instance;
 }

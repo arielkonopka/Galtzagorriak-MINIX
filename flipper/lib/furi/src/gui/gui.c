@@ -17,10 +17,12 @@
  * The frame goes to /dev/lcd with one write of 1024 bytes.
  * Window and Desktop layers keep the stock geometry: the 13 pixels on top
  * that the stock firmware uses for its status bar carry the black title
- * bar of flipper/gui (the app's name, white on black). */
+ * bar of flipper/gui: the app's appid in capitals, white on black, 11
+ * pixels high (flipper/gui's is 7; the stock window geometry wins). */
 #include "gui_i.h"
 #include "../furi_i.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -68,9 +70,15 @@ static void gui_redraw_title(Gui* gui) {
     canvas_set_color(canvas, ColorBlack);
     canvas_draw_box(canvas, 0, 0, GUI_STATUS_BAR_WIDTH, GUI_TITLE_BAR_HEIGHT);
     if(gui->title) {
+        /* in capitals, as the flipper/gui apps (devguide 4.3) */
+        char title[24];
+        size_t i;
+        for(i = 0; i < sizeof title - 1 && gui->title[i]; i++)
+            title[i] = (char)toupper((unsigned char)gui->title[i]);
+        title[i] = 0;
         canvas_set_color(canvas, ColorWhite);
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, gui->title);
+        canvas_draw_str_aligned(canvas, 64, 2, AlignCenter, AlignTop, title);
         canvas_set_color(canvas, ColorBlack);
     }
 }
@@ -251,6 +259,13 @@ void fgui_service_start(void) {
     if(gui->lcd_fd >= 0) canvas_add_framebuffer_callback(gui->canvas, gui_lcd_write, gui);
     path = GUI_BUTTONS;
     gui->buttons_fd = path ? open(path, O_RDONLY) : -1;
+    /* Events queued before the app started (another program's keys, the
+     * press that woke the backlight) are not for it. */
+    if(gui->buttons_fd >= 0) {
+        uint8_t ev[16];
+        for(int i = 0; i < 16 && ffd_read(gui->buttons_fd, ev, sizeof ev, 0) > 0; i++)
+            ;
+    }
     gui->thread = furi_thread_alloc_ex("gui", GUI_THREAD_STACK, gui_thread, gui);
     furi_record_create(RECORD_GUI, gui);
     furi_thread_start(gui->thread);
@@ -265,11 +280,8 @@ void gui_add_view_port(Gui* gui, ViewPort* view_port, GuiLayer layer) {
         (layer == GuiLayerFullscreen) || ((orientation != ViewPortOrientationVertical) &&
                                           (orientation != ViewPortOrientationVerticalFlip)));
     furi_check(view_port->gui == NULL, "ViewPort already added");
-    if(!gui->title) {
-        FuriThreadId id = furi_thread_get_current_id();
-        gui->title = furi_thread_get_appid(id);
-        if(!gui->title) gui->title = furi_thread_get_name(id);
-    }
+    /* the title bar: the appid (set by fam2pkg's entry, R5.5) */
+    if(!gui->title) gui->title = furi_thread_get_appid(furi_thread_get_current_id());
     ViewPortArray_push_back(gui->layers[layer], view_port);
     view_port_gui_set(view_port, gui);
     gui_update(gui);
