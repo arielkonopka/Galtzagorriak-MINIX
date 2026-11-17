@@ -474,7 +474,7 @@ $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
 CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
-CHMEM_alert := 4096
+CHMEM_alert := 6144	# R7b.4: gui, poll; measured by tools/timedtest.py (memuse)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@

@@ -512,6 +512,101 @@ static void devpoll_tests(void)
 }
 #endif
 
+#ifdef BOARD_QEMU
+/* R7b.2: an alert preempts the screen and the buttons (FGIOCPREEMPT), a
+ * reader waiting meanwhile is parked and ends empty at the release, a
+ * second alert waits its turn (EBUSY), an alert that exits releases. */
+static int rd_n(int fd)
+{
+	char c;
+	struct pollfd p;
+
+	p.fd = fd; p.events = POLLIN; p.revents = 0;
+	if (poll(&p, 1, 2000) != 1 || read(fd, &c, 1) != 1) return -9;
+	return c - '0';
+}
+
+static void preempt_body(void);
+
+/* INIT (m2test here) may never be the foreground: the alert is a child,
+ * which reports its failures in its exit status. */
+static void preempt_tests(void)
+{
+	pid_t p;
+	int st;
+
+	fflush(stdout);
+	if ((p = fork()) == 0) {
+		fails = 0;
+		preempt_body();
+		fflush(stdout);
+		_exit(fails);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: all of the above");
+}
+
+static void preempt_body(void)
+{
+	unsigned char m[2];
+	int b, l, nb, pr[2], st, r, n;
+	pid_t rd, c;
+
+	b = open("/dev/buttons", O_RDWR);
+	nb = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || nb < 0 || l < 0 || pipe(pr) != 0) {
+		check(0, "preempt: open");
+		return;
+	}
+	furi_tap(b, 0x04);		/* the backlight on */
+	while (read(nb, (char *) m, 2) == 2) ;
+	fflush(stdout);
+	if ((rd = fork()) == 0) {	/* a reader like the launcher */
+		for (n = 0; n < 3; n++) {
+			r = read(b, (char *) m, 2);
+			m[0] = '0' + (r < 0 ? 7 : r);
+			(void) write(pr[1], (char *) m, 1);
+			if (r == 2) break;
+		}
+		_exit(0);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);	/* it waits now */
+	r = ioctl(l, FGIOCPREEMPT, (void *) 0);
+	check(r == 0 && rd_n(pr[0]) == 0,
+		"preempt: taken, the waiting reader gets an empty read");
+	if ((c = fork()) == 0)
+		_exit(ioctl(l, FGIOCPREEMPT, (void *) 0) < 0 && errno == EBUSY
+			? 0 : 1);
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: a second alert gets EBUSY");
+	furi_tap(b, 0x10);
+	r = read(nb, (char *) m, 2);
+	check(r == 2 && m[0] == 0x10 && m[1] == 1,
+		"preempt: the alert gets the keys");
+	while (read(nb, (char *) m, 2) == 2) ;
+	r = ioctl(l, FGIOCRELEASE, (void *) 0);
+	check(r == 0 && rd_n(pr[0]) == 0,
+		"preempt: released, the parked reader gets an empty read");
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	furi_tap(b, 0x20);
+	check(rd_n(pr[0]) == 2 && waitpid(rd, &st, 0) == rd,
+		"preempt: after the release the reader gets the next key");
+	while (read(nb, (char *) m, 2) == 2) ;
+
+	if ((c = fork()) == 0)		/* an alert that just exits */
+		_exit(ioctl(l, FGIOCPREEMPT, (void *) 0) == 0 ? 0 : 1);
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: by a child that exits");
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	r = ioctl(l, FGIOCPREEMPT, (void *) 0);
+	check(r == 0 && ioctl(l, FGIOCRELEASE, (void *) 0) == 0,
+		"preempt: its exit released the screen");
+	close(pr[0]); close(pr[1]);
+	close(b); close(nb); close(l);
+}
+#endif
+
 static void furihello_test(void)
 {
 	static const unsigned char keys[4] = { 0x10, 0x20, 0x02, 0x10 };
@@ -837,6 +932,7 @@ int main(int argc, char **argv)
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	preempt_tests();
 #endif
 	time_tests();
 	finish();

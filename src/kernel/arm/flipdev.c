@@ -97,9 +97,14 @@ PRIVATE message fm;
 
 /* Button events, filled by flipdev_tick() at interrupt level. */
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
-PRIVATE volatile u16_t ev_head, ev_tail;	/* wrap: NEVENTS divides 2^16 */
+PRIVATE volatile u8_t ev_head, ev_tail;	/* wrap: NEVENTS divides 256 */
 PRIVATE u8_t sel_wait;		/* poll(): SEL_RD buttons, SEL_WR speaker */
 PRIVATE u8_t sel_head;		/* ev_head when the buttons registered */
+PRIVATE u8_t fg_pre;		/* R7b.2: an alert preempts (PRE_*), 0: no */
+#define PRE_ON		0x80
+#define PRE_FG		0x40	/* the slot below was the foreground app */
+#define PRE_SLOT	0x3F	/* the preempted foreground's slot + 1 */
+PRIVATE u8_t pre_rd;		/* R7b.2: a reader parked meanwhile, slot + 1 */
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
 #define BL_SAVE		8	/* off, and the LCD in power save (T14d) */
@@ -233,6 +238,8 @@ FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
+FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
+FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
@@ -363,6 +370,7 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
@@ -908,6 +916,10 @@ message *m_ptr;
 	if (fg_other(m_ptr->PROC_NR)) {	/* R4b.8: not yours: wait (until
 					 * a signal; the keys are not kept) */
 		if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+		/* R7b.2: while an alert holds them, one reader is parked:
+		 * its read ends empty at the release, so it redraws and
+		 * reads again */
+		if (fg_pre != 0 && pre_rd == 0) pre_rd = m_ptr->PROC_NR + 1;
 		return(SUSPEND);
 	}
 	if (ev_head != ev_tail) {
@@ -1398,6 +1410,10 @@ PRIVATE void do_hardint()
   int r;
 
   if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
+  if (fg_pre != 0) {		/* R7b.2: the alert exited? */
+	r = FG_SLOT(last_buttons);
+	if (r < 0 || (proc_addr(r)->p_flags & P_SLOT_FREE)) fg_release();
+  }
   bl_apply();
   if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
 						 * interrupt handler */
@@ -1486,6 +1502,9 @@ PUBLIC void flipdev_tick()
 	fg_hold(btn_sample());
 	ge_hold();
   }
+  if (fg_pre != 0 && (FG_SLOT(last_buttons) < 0
+	|| (proc_addr(FG_SLOT(last_buttons))->p_flags & P_SLOT_FREE)))
+	interrupt(PRINTER);		/* R7b.2: the alert exited */
   if ((last_buttons & FG_KILL) && ((unsigned) ((unsigned long) uptime_irq() / HZ)
 		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
 	interrupt(PRINTER);
@@ -1560,6 +1579,13 @@ message *m_ptr;
 	unlock();
 	return(OK);
   }
+  if (m_ptr->TTY_REQUEST == FGIOCPREEMPT) return(fg_preempt(m_ptr->PROC_NR));
+  if (m_ptr->TTY_REQUEST == FGIOCRELEASE) {
+	if (fg_pre == 0 || FG_SLOT(last_buttons) != m_ptr->PROC_NR)
+		return(EPERM);
+	fg_release();
+	return(OK);
+  }
   if (m_ptr->TTY_REQUEST != FGIOCSET) return(ENOTTY);
   if (fg_other(m_ptr->PROC_NR)) return(EPERM);
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
@@ -1581,6 +1607,69 @@ message *m_ptr;
 					| (unsigned) (fg + 1) << 16;
   unlock();
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				fg_preempt				     *
+ *===========================================================================*/
+PRIVATE int fg_preempt(proc)
+int proc;
+{
+/* R7b.2 FGIOCPREEMPT: an alert takes the screen and the buttons from
+ * whoever has them, until FGIOCRELEASE or its exit.  The preempted app
+ * keeps running (its frames are dropped, its button reads wait).  A
+ * reader waiting on the buttons now (the launcher, or the app) gets an
+ * empty read: it reads again and is parked (pre_rd) until the release.
+ * Another alert meanwhile: EBUSY (it waits its turn).  Who may: whoever
+ * can open /dev/lcd or /dev/buttons (group gui, by the device modes).
+ */
+  int fg = FG_SLOT(last_buttons);
+
+  if (proc <= INIT_PROC_NR) return(EPERM);
+  if (fg_pre != 0) {
+	if (fg == proc) return(OK);
+	if (fg >= 0 && !(proc_addr(fg)->p_flags & P_SLOT_FREE)) return(EBUSY);
+	fg_release();			/* the last one has gone */
+	fg = FG_SLOT(last_buttons);
+  }
+  fg_pre = PRE_ON;
+  if (fg >= 0 && fg != proc && !(proc_addr(fg)->p_flags & P_SLOT_FREE))
+	fg_pre |= PRE_FG | (fg + 1);
+  if (rd_waiting && rd_proc != proc) {	/* an empty read: read again */
+	rd_waiting = FALSE;
+	reply(REVIVE, rd_caller, rd_proc, 0);
+  }
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF))
+					| (unsigned) (proc + 1) << 16;
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				fg_release				     *
+ *===========================================================================*/
+PRIVATE void fg_release()
+{
+/* R7b.2: the alert is done (FGIOCRELEASE, or it exited): the preempted
+ * foreground app gets the screen and the buttons back, the parked reader
+ * an empty read (redraw, read again).  The alert puts the old picture
+ * back itself before it releases. */
+  int prev = fg_pre & PRE_FG ? (fg_pre & PRE_SLOT) - 1 : -1, p;
+
+  if (prev >= 0 && (proc_addr(prev)->p_flags & P_SLOT_FREE)) prev = -1;
+  fg_pre = 0;
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF))
+					| (unsigned) (prev + 1) << 16;
+  unlock();
+  if (pre_rd != 0) {
+	p = pre_rd - 1;
+	pre_rd = 0;
+	reply(REVIVE, FS_PROC_NR, p, 0);
+  }
 }
 
 /*===========================================================================*
@@ -1775,7 +1864,7 @@ PRIVATE unsigned btn_sample()
   }
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
-	if ((u16_t) (ev_head - ev_tail) < NEVENTS) {
+	if ((u8_t) (ev_head - ev_tail) < NEVENTS) {
 		ev_key[ev_head % NEVENTS] = b;
 		ev_down[ev_head % NEVENTS] = (now & b) != 0;
 		if (now & b) LAT_EVENT(LE_BTN, b);

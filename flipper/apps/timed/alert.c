@@ -10,20 +10,23 @@
  *	-u	the snooze timer belongs to UID (alert started by root)
  *
  * Shows title, text and the time; OK = done (exit 0), Back = dismiss
- * (1), Up/Down = snooze (2).  It rings every 5 s (sound, vibro, the LED
- * pattern runs in the LED chip) for the ring time (alarm 10 min, else
- * 1 min), then gives up (3: missed).  One line also goes to standard
- * error (the console log when timed started it).
+ * (1), Up/Down = snooze (2).  It rings (sound, vibro, the LED pattern
+ * runs in the LED chip) every 5 s, an alarm faster and faster (step()),
+ * for the ring time (alarm 10 min, else 1 min), then gives up (3:
+ * missed).  One line also goes to standard error (the console log when
+ * timed started it).  The backlight stays on while it rings.
  *
- * It takes the screen only when no app holds it (R4b.8).  Taking it from
- * the foreground app is R7b.2 (FG_PREEMPT, not there yet): until then an
- * alert over a running app only rings and logs, and the app's screen
- * stays as it is.
+ * It takes the screen and the buttons from whatever app has them (R7b.2,
+ * FGIOCPREEMPT), waits while another alert shows, and puts the picture
+ * under it back at the end; the preempted app keeps running.
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/times.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,9 +38,16 @@
 
 #define STEP	5			/* s between rings */
 
-static void onalrm(int sig)
+/* Seconds to the next ring.  An alarm gets more urgent (owner,
+ * 2026-11-17): 5 s twice, then 4, 3 and 2 s twice each, then every second
+ * (the tune itself is half a second: beep-beep without a pause).  Others
+ * ring every STEP s. */
+static int step(int cat, int n)
 {
-	(void) sig;			/* interrupts the button read */
+	static const unsigned char alarm_steps[] = { 5, 5, 4, 4, 3, 3, 2, 2 };
+
+	if (cat != TC_ALARM) return STEP;
+	return n < (int) sizeof alarm_steps ? alarm_steps[n] : 1;
 }
 
 static void put(int fd, const char *s)
@@ -133,11 +143,15 @@ static int snooze(const char *id, int min, int cat, int flags, int uid,
 int main(int argc, char **argv)
 {
 	char now_s[6], *id = NULL, *title, *text;
-	struct sigaction sa;
 	struct tm *tm;
 	time_t now = time((time_t *) 0), end;
 	int i, cat = TC_INFO, flags = NF_ALL, min = 0, uid = -1;
-	int fd, shown = 0, k, me = getpid(), r = 3;
+	static unsigned char under[GUI_W * GUI_H / 8];	/* the old picture */
+	int lfd = -1, bfd = -1, shown = 0, saved = 0, k = -1, n = 0, r = 3;
+	struct pollfd pf;
+	struct tms tms;
+	clock_t t0;
+	long ms, left;
 
 	for (i = 1; i < argc && argv[i][0] == '-'; i++) {
 		if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -177,10 +191,20 @@ int main(int argc, char **argv)
 	put(2, text);
 	put(2, "\n");
 
-	/* The screen, if nobody holds it. */
-	if ((fd = open("/dev/lcd", O_RDONLY)) >= 0) {
-		shown = ioctl(fd, FGIOCSET, &me) == 0;
-		close(fd);
+	end = now + (cat == TC_ALARM ? 600 : 60);
+
+	/* R7b.2: take the screen and the buttons from whoever has them; while
+	 * another alert shows, wait for its turn (EBUSY).  The picture under
+	 * it is saved and put back at the end: the preempted app need not
+	 * redraw.  No screen at all (no /dev/lcd): ring only. */
+	if ((lfd = open("/dev/lcd", O_RDWR)) >= 0) {
+		while ((k = ioctl(lfd, FGIOCPREEMPT, (void *) 0)) < 0
+		       && errno == EBUSY && time((time_t *) 0) < end)
+			sleep(1);
+		shown = k == 0;
+		if (shown && read(lfd, (char *) under, sizeof under)
+							== sizeof under)
+			saved = 1;
 	}
 	if (shown && gui_open() == 0) {
 		gui_title(title);
@@ -192,25 +216,29 @@ int main(int argc, char **argv)
 		gui_backlight(255);
 	} else shown = 0;
 
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sa.sa_handler = onalrm;
-	sigaction(SIGALRM, &sa, NULL);
 	if (flags & NF_LED) led(cat == TC_ALARM ? "fast red\n" : "pulse blue\n");
-	end = now + (cat == TC_ALARM ? 600 : 60);
+	if (shown) bfd = open("/dev/buttons", O_RDONLY);	/* to poll */
 	while (time((time_t *) 0) < end) {
+		t0 = times(&tms);
 		ring(flags, cat);
 		/* Keep the light on while it rings: after the backlight's idle
 		 * timeout the first press only turns it on again, so OK or Back
 		 * seemed to do nothing (seen on the device, #109). */
 		if (shown) gui_backlight(255);
-		if (!shown) {
-			sleep(STEP);	/* no buttons: ring until the end */
-			continue;
+		/* Wait for a key until the next ring, counted from this ring's
+		 * start in ms (poll(): /dev/buttons answers DEV_SELECT, R4b.6;
+		 * alarm() had whole seconds and fired up to 1 s early).  No
+		 * screen, no buttons: just wait, and ring until the end. */
+		ms = step(cat, n++) * 1000L;
+		k = 0;
+		for (;;) {
+			left = ms - (long) (times(&tms) - t0) * 1000 / CLK_TCK;
+			if (left <= 0) break;
+			pf.fd = bfd; pf.events = POLLIN; pf.revents = 0;
+			if (poll(&pf, bfd >= 0 ? 1 : 0, (int) left) > 0
+			    && (k = gui_key_nowait()) != 0)
+				break;
 		}
-		alarm(STEP);
-		k = gui_key();
-		alarm(0);
 		if (k & KEY_OK) { r = 0; break; }
 		if (k & KEY_BACK) { r = 1; break; }
 		if ((k & (KEY_UP | KEY_DOWN)) && id != NULL) {
@@ -221,9 +249,18 @@ int main(int argc, char **argv)
 	}
 	if (flags & NF_LED) led("off\n");
 	if (shown) {
-		gui_clear();
-		gui_flush();
+		if (!saved) {
+			gui_clear();
+			gui_flush();
+		}
 		gui_close();
+		if (saved) {		/* the picture under the alert */
+			lseek(lfd, 0L, SEEK_SET);
+			(void) write(lfd, (char *) under, sizeof under);
+		}
+		(void) ioctl(lfd, FGIOCRELEASE, (void *) 0);
 	}
+	if (lfd >= 0) close(lfd);
+	if (bfd >= 0) close(bfd);
 	return r;		/* the screen is free again when we exit */
 }
