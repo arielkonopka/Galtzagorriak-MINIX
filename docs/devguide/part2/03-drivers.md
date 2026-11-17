@@ -56,7 +56,7 @@ testing every path. A HAL function that the emulator cannot do returns a "not pr
   then gets a `HARD_INT` message and does the rest in `do_hardint()`.
 - `cause_sig()`, replies and copies to users are task work, never handler work.
 - **Interrupt slots are full**: `NR_IRQ_HANDLERS` is 8 and all eight are used (clock, UART,
-  USB, buttons, IR receive, IR transmit, ms timer, SD DMA). A new handler means raising it
+  USB, buttons, RTC alarm, IR transmit, ms timer, SD DMA; IR receive moved to the pulse engine, which needs none). A new handler means raising it
   (+4 bytes) with a reason, or sharing a handler between lines as the buttons do.
 - Masking interrupts (`lock()`/`unlock()`) is allowed for at most **20 µs** (budget L4). The
   one measured exception is the iButton bit slot (≤ 70 µs). Anything longer must be restructured:
