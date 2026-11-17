@@ -363,10 +363,11 @@ CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
-CHMEM_fsck   := 53248	# spec N.4: the maps (fsck_mem: what fits of it, fsck
-			# shrinks its zone window until it does, ~36 KB) +
-			# 16 KB (stack: ~0.5 KB per directory level, stdio).
-			# 52 KB: still runs after login (largest hole 63 KB)
+CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
+			# fit, fsck shrinks its zone window) + 24 KB (stack:
+			# ~0.5 KB per directory level, stdio).  Runs at boot
+			# from /etc/rc, when the RAM is free; later it may need
+			# apps closed first.
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 

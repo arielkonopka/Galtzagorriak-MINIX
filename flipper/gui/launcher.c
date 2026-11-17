@@ -40,6 +40,7 @@ struct app {
 	char *cmd;
 } apps[MAXAPPS];
 int napps;
+int fsck_err;		/* /etc/rc found errors on the card (spec N.3) */
 
 static void free_apps(void)
 {
@@ -52,6 +53,7 @@ static void load_apps(void)
 	char line[128], *a, *b, *m;
 	size_t la, lu, lc;
 
+	fsck_err = access("/etc/.fsck-errors", F_OK) == 0;
 	free_apps();
 	/* the card's copy, else the default in /rom (spec L.3) */
 	if ((f = cfopen("/etc/apps", "r")) == NULL) return;
@@ -82,7 +84,7 @@ static void draw(int sel, int top)
 	int i, y;
 
 	gui_clear();
-	gui_title("GALTZAGORRIAK");
+	gui_title(fsck_err ? "CARD HAS ERRORS: RUN FSCK" : "GALTZAGORRIAK");
 	for (i = 0; i < VISIBLE && top + i < napps; i++) {
 		y = 7 + i * 6;
 		if (top + i == sel) gui_fill(0, y - 1, GUI_W - 1, y + 5, 1);

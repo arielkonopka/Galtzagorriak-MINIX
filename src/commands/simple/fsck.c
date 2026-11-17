@@ -43,7 +43,8 @@
 *   -m KB  memory for the maps (fsck_mem, default 64).  The computed zone
 *       map is a window of the zones; more windows mean more passes.
 *   -L file  append the -v lines to file.  -k  Back (on /dev/buttons)
-*       stops the check (exit 8, CHECK stays set).
+*       stops the check (exit 8, CHECK set).  -w s  after repairs, keep
+*       the summary on the screen until a key or s seconds.
 *   Exit status as BSD: 0 clean, 1 repaired, 2 the mounted root repaired
 *   (reboot now), 4 errors left, 8 not checked.  After a check with
 *   repairs allowed: CHECK = 0, and CLEAN = 1 if not mounted.
@@ -58,6 +59,7 @@
 #include <ctype.h>
 #include <stddef.h>
 #include <time.h>
+#include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -186,6 +188,7 @@ char *vphase = "";		/* -v: what is going on */
 long vdone, vtotal;		/* -v: progress in the phase */
 clock_t vstart, vlast;		/* -v: times() at the start, last redraw */
 int vspin, vcalls;
+int waitsecs;			/* -w: keep the summary of repairs on screen */
 int firstlist;			/* has the listing header been printed? */
 unsigned part_offset;		/* sector offset for this partition */
 char answer[] = "Answer questions with y or n.  Then hit RETURN";
@@ -956,6 +959,7 @@ ino_t ino;
 {
   d_inode inode;
 
+  cur_ino = ino;
   if (firstcnterr) {
 	printf("INODE NLINK COUNT\n");
 	firstcnterr = 0;
@@ -1841,8 +1845,8 @@ char *f, **clist, **ilist, **zlist;
   vstart = times(&tms);
   if (verbose) {
 	sprintf(line, "fsck %.16s: %s", device,
-		!(sb.s_flags & SF_CLEAN) ? "unclean" :
-		(sb.s_flags & SF_CHECK) ? "not checked" : "check");
+		(sb.s_flags & (SF_CLEAN | SF_CHECK)) != SF_CLEAN ? "unclean"
+								 : "check");
 	vline(line);
   }
 
@@ -1913,6 +1917,24 @@ char *f, **clist, **ilist, **zlist;
 							t / 10, t % 10);
 	vline(line);
   }
+  /* Spec N.3: repairs stay on the screen until a key or -w seconds. */
+  if (verbose && waitsecs > 0 && (nfixed > 0 || nleft > 0)) {
+	struct pollfd pf;
+	unsigned char ev[2];
+	int fd = vfd;
+
+	if (fd < 0) fd = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+	if (fd < 0) {
+		sleep(waitsecs);
+	} else {
+		while (read(fd, ev, 2) == 2) {}		/* earlier presses */
+		pf.fd = fd;
+		pf.events = POLLIN;
+		(void) poll(&pf, 1, waitsecs * 1000);
+		while (read(fd, ev, 2) == 2) {}
+		if (fd != vfd) close(fd);
+	}
+  }
   if (stopped) return(8);
   if (nleft > 0) return(4);
   if (nfixed > 0) return(isroot ? 2 : 1);
@@ -1952,6 +1974,9 @@ char **argv;
 		    case 'l':	listing ^= 1;	break;
 		    case 's':	listsuper ^= 1;	break;
 		    case 'p':	preen = 1;	break;
+		    case 'w':
+			if (*argv != 0) waitsecs = atoi(*argv++);
+			break;
 		    case 'k':	keyskip = 1;	break;
 		    case 'v':
 			if (!verbose) {
