@@ -256,6 +256,23 @@ No journaling (owner decision). Spec section N has the details; the points that 
 - N.6: poll PC10 (EXTI 10 is the Up button) before every SD command and per tick while the card is selected or a buffer is dirty; `ENXIO` while out; CID + super block CRCs at boot (kernel ≤ +32 B); same card → resume, other card → never write; "SD card removed" / "Different card" on the screen with a short buzz; R12.25 swap waits for the same card.
 - Device checks: ACN.5 (pull and reinsert during `cp`, then a different card), ACN.6 (unclean boot on the 3.8 GB card: LCD output readable, progress, ≤ 30 s, Back skips `/home`), ACN.7 (low-battery halt, no check at the next boot). Numbers into PORTING.md.
 
+## T18. Less SD card wear from swap (spec 12g, R12.29–R12.33, R12.10a; owner request 2026-11-17): milestone M3
+Owner rule: only measures with **0 B RAM** and no noticeable CPU on the foreground path (responsiveness first). Analysis: `reports/sd-swap-wear-analysis.md` (project files). Swap is off by default (`swap=plain`), so all of this changes nothing until swap is turned on, except R12.32/R12.33 at first-boot setup.
+
+### T18a (`lane:cloud`, QEMU): MM, `mkpart`, setup
+- R12.29 in `src/mm/swap.c`: chunk CRCs (48 × 4 B) in the slot header; swap-out reads the header, writes only changed 4 KB chunks, writes nothing if nothing changed; swap-in checks per chunk; the reserve job re-reads the header each step and writes it last. MM RAM **+0 B** (`ramcheck`), header stays in `mbuf`.
+- R12.30: `SWAPHOT` flag (spare `mp_flags` bit) set on a swap-in by a wake, reserve waits ≥ 120 s for it, cleared after one such wait; on-demand swap ignores it.
+- R12.31 MM side: CRCs first, then header, then chunks in ascending order.
+- R12.32: `mkpart` (and the PC image tool, if it places partitions) aligns to 4 MiB.
+- R12.33 userland: `erase /dev/hdN` (root, refuses a mounted partition, `man 8 erase`), called by `/etc/setup` stage 2 before `mkfs` with a line on the screen; until T18b lands the ioctl answers `ENOTTY` and setup goes on without it (message, no failure). QEMU board: `DIOCERASE` fills the range with the erased value so the test sees it.
+- Tests: `tests/swapwear` for AC12.14 (count sectors written through the WINCHESTER task; QEMU disk hook), AC12.15 (30 s timer, 10 min, swap trace); `tools/swaptest.py` and AC12.13 still pass.
+- Docs: CHANGELOG line, `docs/manual/` swap chapter (which card, `erase`, "a parked app that sleeps costs the card nothing"), 12f notes.
+
+### T18b (`lane:local`, Flipper): disk driver
+- R12.31: `disk.c` hands a multi-sector request to `hal_disk_write` as one CMD25 up to 4 KB (not 1 KB pieces); optional ACMD23. Measure AC12.16: swap-in of 64 KB (today 69 ms) and L1/L2 during a swap-out; trace that a 4 KB swap write is one CMD25.
+- R12.33: `hal_disk_erase(first, last)` (CMD32/CMD33/CMD38, busy wait with the card's erase timeout, card-detect checks as N.6) and the root-only `DIOCERASE` ioctl on a partition device. AC12.17 on a card filled with data first.
+- Kernel RAM +0 B. Numbers into PORTING.md.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
