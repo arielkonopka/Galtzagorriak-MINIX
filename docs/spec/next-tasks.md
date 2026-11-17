@@ -354,10 +354,14 @@ Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and 
 
 - Follow-up when #145 has chord events: a chords page in Settings that lists the chords and maps the free ones (Right+Up, Left+Down) to actions in `/etc/chords.conf` (spec K.6 "Button chords"). Chords never appear in hint lines.
 
-### T23b: windows and events
-- `window` records (menu, text, form) shown full-screen in the desktop's own style, navigation local; per-module reply FIFO `/var/run/gui.<pid>` with `select`, `back`, `input`, `redraw`.
-- `libapp` helper: `gm_open`, `gm_tile`, `gm_menu`, `gm_event`, `gm_close`; a C example module.
+### T23b: the window server (spec K.8): first, before T23a
+- Needs T21a (#234) on main; does not need T23a or #235.
+- The launcher starts `Type: window` packages as children with two pipes (fd 3 events, fd 4 records). Parser for the K.8 records in a pure function with a host test (malformed, overlong, 640 B limit, every row type).
+- Drawing of `list`, `text`, `clock`, `confirm` in the K.2/R5.6a.7 style with `gui.c`; hint line from the row type; local cursor, Left/Right value changes, 2-deep window stack, keyboard for `input` rows, paging with `page`.
+- Busy mark at 150 ms, non-blocking writes, Back closes at once, `SIGTERM` after 2 s; INIT respawns the launcher.
+- `libgm` (static, `src/lib/gm/`): `gm_init`, `gm_win`, `gm_item`, `gm_int`, `gm_enum`, `gm_bool`, `gm_time`, `gm_date`, `gm_days`, `gm_input`, `gm_line`, `gm_action`, `gm_show`, `gm_event`; lines built in a caller buffer, no `malloc`, no stdio. A C example window app in `/usr/share/examples/gui/`.
 - Logging switch (`/etc/launcher.conf` `GuiLog: on`) that copies traffic to the console (K.3 debugging).
+- ACK8.4, ACK8.5, ACK8.6 with the example app; desktop RAM within the K.6 budget (`make ramcheck` style number in the PR).
 
 ### T23c: notifications and Running
 - `notify_post()` (libapp) sends `info` and `reminder` notifications to the desktop as well; the Notifications page keeps the last 8, OK opens one, Back clears it. Alarms stay with `alert` (K.4).
@@ -378,6 +382,17 @@ One plain C program `settings GROUP` on `gui.c`, one source file per group under
 - Pure parsing/formatting in a host test; ACK7.2 and ACK7.4 in QEMU.
 
 ### T24c (later): LED, Power (R7.1 `power` app or a group that starts it), Storage, System; Gestures = R7.2.
+
+## T25. Kanpaia and Ordua as window apps (spec K.8, owner 2026-11-17): milestone M3, after T23b
+Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, snooze, history) stays; the `libfuri` GUI code goes. Package `Type: window`, `Background: exit`, `Flash: yes`; link `libgm` and the needed `libapp` parts statically, not the shared `libfuri`. Remove CHMEM overrides that no longer apply and measure. Manual `remind-alarm.md` updated (screens, RAM).
+
+### T25a: Kanpaia (`remind`)
+- Lists (today, upcoming, history) as `list` windows with paging; new/edit reminder as a form (`input` text, `date`, `time`, `enum` repeat); snooze settings.
+- ACK8.1, ACK8.3 (≤ 4.0 KB open). `nattest`/`timedtest` keep passing.
+
+### T25b: Ordua (`alarm`)
+- Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
+- ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)

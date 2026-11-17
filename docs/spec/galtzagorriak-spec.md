@@ -1110,9 +1110,10 @@ which order they are built.
   1. #201 (shared `libfuri` + `libapp`) and T21a (launcher icons, Pine look, the page table of
      R5.6a.4) run in parallel: T21a uses plain `gui.c` and does not need #201;
   2. T22a/T22b: the other apps restyled (T22b after #201);
-  3. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
+  3. T23b first: the window server of K.8 (owner priority: alarm and reminders), then T25:
+     Kanpaia and Ordua as window apps;
+  4. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
      records, `guimod`);
-  4. T23b: `window` records (menu, text, form) and events, the `libapp` helper;
   5. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
   6. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
 - **Acceptance:**
@@ -1169,7 +1170,118 @@ about, system.
   - ACK7.3 After a reboot the saved values are applied. Deleting the file restores the default.
   - ACK7.4 `free` while a group is open: ≤ 3 KB more than with the launcher alone.
 
-For the manual: the `-t` convention, the desktop/module model and protocol, the SETTINGS groups (K.7), writing a module in
+**K.8 Window apps: the desktop draws, the app only describes (owner, 2026-11-17: "the desktop
+model should be designed now"; alarm and reminders first).** #235 showed that the shared
+`libfuri` saves flash, not RAM: an open `remind` still takes 15.4 KB. In that 15.4 KB, the main
+stack is 3 KB, the gui thread 2 KB, the heap (Canvas, views, list) about 3 KB, the furi data area
+2.4 KB and the MM gap 1.5 KB. All of that is GUI machinery, and every GUI app carries its own
+copy. A window app carries none of it.
+
+- **Two kinds of GUI app.**
+  - **Window app** (`Type: window` in the package): a plain C program with no `libfuri`, no Canvas
+    and no gui thread. It sends **window records** that describe a screen (a list of rows, text,
+    a clock). The desktop (K.6 layer 3, the launcher) draws them, moves the cursor and changes
+    values. The app gets an event only when the person does something that needs the app: OK on
+    a row, Submit, Back from the top window.
+  - **Full-screen app** (K.6 layer 5): `libfuri` and ported stock apps, which draw on their own
+    as today, with their RAM cost. These are for apps that need their own drawing (Sub-GHz
+    waterfall, games).
+  - Alarm (**Ordua**) and reminders (**Kanpaia**), the settings groups (K.7) and most small
+    tools are window apps.
+- **Connection, 0 B kernel.**
+  - The launcher starts a window app as its child with two anonymous pipes: fd 3 carries events
+    to the app, and fd 4 carries records to the desktop.
+  - There is no name in the file system, so no other process can talk to the window, and the
+    pipe itself is the app's identity.
+  - Pipe data never reaches the card (K.6, `PIPE_DIRTY`).
+  - Background modules (tiles, K.3) keep `/var/run/gui`.
+- **Records** (TSV, one per line, one `write()` ≤ 512 B; a window is at most 640 B of text):
+  - `win ID KIND TITLE`, where KIND is `list`, `text`, `clock` or `confirm`, then rows, then `show`.
+  - Rows:
+    - `item KEY LABEL [RIGHT]`: an entry that opens something;
+    - `int KEY LABEL MIN MAX STEP VALUE [UNIT]`, `enum KEY LABEL INDEX OPT|OPT|…`,
+      `bool KEY LABEL 0|1`, `time KEY LABEL HH:MM`, `date KEY LABEL YYYY-MM-DD`,
+      `days KEY LABEL MASK`: values changed with Left/Right **in the desktop**;
+    - `input KEY LABEL TEXT MAX`: text entry with the desktop's keyboard;
+    - `line TEXT`: a static line;
+    - `action KEY LABEL`: a button row.
+  - `clock`: the desktop draws big HH:MM from the RTC, plus two lines of text from the app. It
+    updates the minute itself, only while in the foreground with the screen on (K.6).
+  - `busy` / `idle`, `close`.
+- **Events to the app** (fd 3): `ok WIN KEY`, `submit WIN KEY=VALUE…` (only the changed rows,
+  sent when the person leaves a list whose values changed, or presses an `action` row), `back WIN`,
+  `page WIN FIRST` (long lists, below), `redraw`, `close`.
+- **Look:** the desktop draws every window in the one K.2 / R5.6a.7 style.
+  - The title bar shows the app name.
+  - The hint line is made by the desktop from the row under the cursor: "OK Open", "◀▶ Change",
+    "Back".
+  - The selection bar spans the full row.
+  - Every window app looks the same, with no style code in the app.
+- **Long lists:** a `list` window holds at most 16 rows. For more, the app sends `win … ROWS=N`
+  and the first page, and the desktop asks for the next page with `page` when the cursor
+  reaches the edge. The app reads the page from its file, so its RAM does not grow with the
+  data.
+- **RAM budget for an open window app** (code in flash, `Flash: yes`):
+
+  | | `remind` (Kanpaia) | `alarm` (Ordua) |
+  |---|---|---|
+  | shared libc data area | 0.6 KB | 0.6 KB |
+  | own data + bss (alarm table, ring settings) | ≤ 0.4 KB | ≤ 0.9 KB |
+  | stack (record lines are built in a 128 B buffer on it) | 1.0 KB | 1.0 KB |
+  | heap (no stdio `FILE` buffers: `read`/`write`, or `setvbuf` with 128 B) | ≤ 0.5 KB | ≤ 0.5 KB |
+  | MM gap (today) | 1.5 KB | 1.5 KB |
+  | **total** (Phase 7b budgets: 4 and 5 KB) | **≤ 4.0 KB** | **≤ 4.5 KB** |
+
+  - Window apps link `libgm` and the parts of `libapp` they need **statically**, with
+    `--gc-sections`, and never the shared `libfuri`, whose 2.4 KB data area each process would
+    carry.
+  - A per-program MM gap would save another ≈ 1 KB, but it is not needed for the budget.
+- **Desktop cost:** one window buffer for the current window and one for its parent
+  (2 × 640 B), a table of 4 clients (4 × 16 B) and a 64 B keyboard buffer: ≈ 1.4 KB, inside the
+  K.6 budget of ≤ 3 KB with tiles and notifications. Its code (drawing rows, keyboard, clock
+  digits) runs from flash.
+- **Gain:** three open GUI apps take ≈ 13 KB instead of ≈ 47 KB. A closed window app takes 0 B,
+  because its state lives in files and timers, so it can exit on Back.
+- **Responsiveness:**
+  - **Key → frame** (cursor, value change, page change already loaded, Back to the parent) never
+    waits for the app. The desktop parses at most 640 B (< 1 ms) and draws, so L1 is the same
+    as the launcher's list (≤ 30 ms p99).
+  - **OK / Submit → new window:** one pipe write to the app, the app works and writes ≤ 640 B,
+    and the desktop draws. Targets: ≤ 50 ms p99 with the app in RAM, ≤ 150 ms if it is parked
+    (swap-in of 4 KB ≈ 5 ms at the measured 69 ms per 64 KB, plus the queue).
+  - **No answer within 150 ms:** the desktop puts a busy mark in the title bar and keeps
+    responding. Back always works: it closes the window at once and sends `close`. An app that
+    is still alive 2 s later gets `SIGTERM`.
+  - The desktop never blocks on an app: its writes to fd 3 are non-blocking, and a full pipe
+    marks the app busy.
+  - An idle window app sleeps in `poll()` with no timeout: 0 wakeups and 0 mA. The desk clock
+    ticks in the desktop.
+  - **The alarm never depends on the desktop.** `timed` + `alert` ring as today (K.4), and
+    `alert` stays a small separate `gui.c` program that preempts any app (R7b.2). If the desktop
+    dies, INIT restarts it, and window apps get `EPIPE` and exit.
+- **Swap (spec 12):**
+  - Window apps are cheap to end, so they default to `Background: exit` and need no parking
+    (0 swap writes, 12g).
+  - An app may still declare `Background: park`. Parking then writes ≈ 4 KB instead of ≈ 16 KB,
+    and while the app is out the desktop still shows and navigates its window; only OK/Submit
+    waits for the swap-in.
+  - Swappable blocks (12h) do not belong in the desktop model, since its data is tiny (a whole
+    1-bit screen is 1 KB). They stay for apps with really large data (NFC dumps, Sub-GHz
+    captures, `mined`, Berry `vbytes`).
+- **Acceptance:**
+  - ACK8.1 QEMU with fake buttons: Kanpaia adds a reminder (list → form → keyboard → Submit),
+    and the timer file appears in `/var/timers`.
+  - ACK8.2 Ordua edits an alarm (time, days, ring settings), and the desk clock shows the next
+    alarm.
+  - ACK8.3 `free` with Kanpaia open: ≤ 4.0 KB more than the launcher alone; with Ordua open:
+    ≤ 4.5 KB more.
+  - ACK8.4 A client that never reads fd 3: the desktop stays at L1, a busy mark appears after
+    150 ms, and Back closes it.
+  - ACK8.5 Key → frame on a window app's list within L1 under the L1 load. OK → next window
+    ≤ 50 ms p99 (QEMU timestamps; device numbers in #109).
+  - ACK8.6 An open window app makes 0 wakeups per minute while idle (the `lat`/`ps` counters).
+
+For the manual: the `-t` convention, the desktop/module model and protocol, the SETTINGS groups (K.7), writing a window app (K.8), writing a module in
 C, Berry or shell, and the `mined` key table.
 
 ## L. Flash writes and default settings (owner request, 2026-11-15)
