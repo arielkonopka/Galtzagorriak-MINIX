@@ -64,7 +64,7 @@ static void sd(void)
 	struct partition p;
 	struct tms tm;
 	clock_t t0, t;
-	unsigned long start;
+	unsigned long start, sec;
 	long kb;
 	char b[32];
 	int fd, i, ok;
@@ -89,37 +89,52 @@ static void sd(void)
 	sprintf(b, "1 MB %ld KB/s", kb);
 	line("read", ok ? b : "error", ok);
 
-	/* the scratch sector: just before the first partition */
+	/* The scratch sector: in the gap before the lowest partition, and
+	 * so that its whole 1 KB FS block lies in the gap (FS writes the
+	 * block, both sectors).  The read-back goes to the card, not FS's
+	 * cache: closing an unmounted block device syncs and invalidates
+	 * its cache (fs/open.c), so it is closed and opened again. */
 	lseek(fd, 0L, SEEK_SET);
-	if (read(fd, buf, 512) != 512) {
+	if (read(fd, buf, 512) != 512 || (unsigned char) buf[510] != 0x55
+				|| (unsigned char) buf[511] != 0xAA) {
 		line("write", "no MBR", 0);
 		close(fd);
 		return;
 	}
-	start = (unsigned char) buf[454] | (unsigned char) buf[455] << 8
-		| (unsigned long) (unsigned char) buf[456] << 16
-		| (unsigned long) (unsigned char) buf[457] << 24;
-	if (start < 2 || (unsigned char) buf[510] != 0x55) {
+	start = 0;
+	for (i = 0; i < 4; i++) {
+		unsigned char *e = (unsigned char *) buf + 446 + 16 * i;
+		unsigned long s0 = e[8] | e[9] << 8
+			| (unsigned long) e[10] << 16 | (unsigned long) e[11] << 24;
+
+		if (e[4] != 0 && s0 != 0 && (start == 0 || s0 < start))
+			start = s0;
+	}
+	sec = (start & ~1UL) - 1;		/* odd: block (sec-1, sec) */
+	if (start < 4 || sec < 3) {
 		line("write", "no gap: skipped", 1);
 		close(fd);
 		return;
 	}
-	lseek(fd, (long) (start - 1) * 512, SEEK_SET);
+	lseek(fd, (long) sec * 512, SEEK_SET);
 	ok = read(fd, save, 512) == 512;
 	for (i = 0; i < 512; i++) buf[i] = (char) (i * 7 + 0x5A);
-	lseek(fd, (long) (start - 1) * 512, SEEK_SET);
+	lseek(fd, (long) sec * 512, SEEK_SET);
 	ok = ok && write(fd, buf, 512) == 512;
-	sync();
+	close(fd);				/* sync + invalidate */
+	if ((fd = open("/dev/hd0", O_RDWR)) < 0) {
+		line("write", "cannot open again", 0);
+		return;
+	}
 	memset(buf, 0, sizeof buf);
-	lseek(fd, (long) (start - 1) * 512, SEEK_SET);
-	ok = ok && read(fd, buf, 512) == 512;
+	lseek(fd, (long) sec * 512, SEEK_SET);
+	ok = ok && read(fd, buf, 512) == 512;	/* from the card */
 	for (i = 0; ok && i < 512; i++)
 		if (buf[i] != (char) (i * 7 + 0x5A)) ok = 0;
-	lseek(fd, (long) (start - 1) * 512, SEEK_SET);
+	lseek(fd, (long) sec * 512, SEEK_SET);
 	if (write(fd, save, 512) != 512) ok = 0;	/* put it back */
-	sync();
 	close(fd);
-	sprintf(b, "sector %lu", start - 1);
+	sprintf(b, "sector %lu", sec);
 	line("write", ok ? b : "compare failed", ok);
 }
 
