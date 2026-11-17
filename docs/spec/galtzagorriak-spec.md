@@ -1061,7 +1061,7 @@ Instead:
     that flash range read-only as a block device, read in place (XIP) through the FS cache. FS is
     unchanged.
   - `/etc/rc` mounts it read-only on `/rom` first.
-  - RAM: 0 B static (one of the existing 8 super block slots, one mount).
+  - RAM: 0 B static (one of the existing 4 super block slots, one mount).
 - **L.3 Changes go to the SD card, defaults stay in ROM.** Settings are read with a libc helper,
   `FILE *cfopen(const char *path, const char *mode)`:
   - for reading, open `path` (on the SD card); if it does not exist, open `/rom` + `path`;
@@ -1357,6 +1357,176 @@ For the manual: what CLEAN means, why a check may run after a reset or a pulled 
 screen shows and how to skip, `fsck_mem`, `/usr/adm/fsck.log`, checking the card on a PC with
 `fsck.minix`, "put the card back" and "different card", Left+Back does not save, batch your
 writes.
+
+---
+
+## O. Bigger `/home`: the MINIX V3 file system (owner request, 2026-11-17)
+
+The owner has a 128 GB card and asked for more partitions or bigger ones, assuming bigger ones
+would break the file system. They do not: the limits are in our code, not in the V2 format. The
+owner then preferred **one other partition type with a Unix lineage** that Linux mounts, and named
+**MINIX V3** (2026-11-17). This section turns `/home` into a MINIX V3 file system that fills the
+card between `/usr` and swap. **Status: proposal. The on-disk change needs the owner's yes before
+T23 starts.**
+
+### O.1 What limits a partition today
+
+| Limit | Where | Size | Format or code? |
+|---|---|---|---|
+| Partition ≤ 4 GiB | FS sends byte positions (`off_t`, 32-bit) to the driver; `dv_size` in bytes (R12.39) | 4 GiB | code |
+| Zone numbers | V2 super block `s_zones`, inode zones: 32-bit | 4 Ti zones | format, ample |
+| Zone map size | `s_zmap_blocks`, 16-bit | 256 GiB at 1 KB zones | format, ample |
+| Files per FS | `ino_t` is 16-bit (V2 `s_ninodes` too) | 65 535 | format (V2) and ABI |
+| File name | V2 directory entry: 14 characters (`NAME_MAX` 14) | 14 | **format** |
+| File size | V2 code has no triple indirect zone: 7 + 256 + 256² blocks | ≈ 64 MB | code |
+| Mounted file systems | `NR_SUPERS` 4: `/`, `/usr`, `/home`, `/rom`, all used | 4 | code, ≈ 68 B per slot |
+
+The bit maps are **not** kept in RAM: `alloc_bit` reads them through the buffer cache. A bigger
+partition costs no RAM at run time. What grows with size is the **time** of anything that reads the
+whole zone map: counting free space (`df`) and `fsck` (O.5, O.6).
+
+The 14-character name is the real gap for feature parity: stock files under `/ext` often have
+longer names (`mf_classic_dict_user.nfc`, `demo_windows.txt`, saved `.sub`/`.ir` files named by
+users). Today such a file cannot be copied to the Flipper under its own name.
+
+### O.2 Options compared
+
+| Option | RAM | Compatibility | Risk | Verdict |
+|---|---|---|---|---|
+| More mount slots (`NR_SUPERS` 4 → 6), several ≤ 4 GiB partitions | ≈ +68 B per slot, 2 inodes pinned per mount from the shared table of 40 | no format change | low; but many small partitions, still 14-char names | not chosen (owner: one partition is enough) |
+| Bigger block size (4 KB) | buffer cache 18 × 1 KB → 72 KB, or only 4 buffers | Linux `minix` needs zone = block | high (RAM, responsiveness) | rejected |
+| Bigger zones on V2 (`s_log_zone_size` 2–4) | 0 B | Linux `minix` and util-linux assume zone = block | wastes 4–16 KB per small file; PC tools break | rejected |
+| V2 partitions past 4 GiB (64-bit positions only) | ≈ 0 B | no format change; Linux mounts V2 | low; keeps 14-char names and 64 MB files | part of the plan (O.3), not enough alone |
+| Automount (mount on access, unmount when idle) | a daemon (KBs) or FS hooks | none | complexity, surprise delays | rejected |
+| FAT32 / exFAT `/home` | FS +≈ 300 B, flash +10–15 KB, a second FS model (no inodes, owners, modes, links; inode numbers synthesised) | Windows, macOS, stock Flipper | large FS change; no Unix permissions | not chosen (owner prefers Unix lineage) |
+| ext2 `/home` | FS +≈ 100 B; in-core inode needs 15 block pointers (+20 B × 40) or lazy reads | Linux, WSL, macOS with FUSE; `e2fsck` | new allocator, group descriptors, ≈ 12–20 KB flash | second choice: scales better, costs more |
+| **MINIX V3 `/home`** | **FS ≤ +20 B static, ≤ +256 B stack** | **Linux mounts it (`mount -t minix`), util-linux `mkfs.minix -3`, `fsck.minix`** | **small: same inode and bit maps as V2** | **recommended** |
+
+MINIX V3 (as written by MINIX 3 and by Linux): super block magic `0x4D5A`, 32-bit inode count, a
+`s_blocksize` field, the V2 disk inode unchanged (64 B, 7 direct + indirect + double + triple
+indirect), and **64-byte directory entries: 32-bit inode number + 60-character name**. Everything
+the FS does with inodes, zones and bit maps stays as it is. Windows and macOS do not read it (they
+do not read V2 either; AC10.2 is corrected to Linux).
+
+### O.3 Partitions past 4 GiB (extends R12.39, 0 B RAM)
+
+- **Driver:** on ARM `dv_size` also becomes a sector count (R12.39 already made `dv_base` one). A
+  request's position is 64-bit: `POSITION` (`m2_l1`) holds the low 32 bits and a new `HIGHPOS`
+  (`m2_l2`, unused by disk messages today) the high 32 bits, as in MINIX 3. Every sender of
+  `DEV_READ`/`DEV_WRITE`/`DEV_GATHER`/`DEV_SCATTER` sets `HIGHPOS` (0 if it does not need it):
+  FS `dev_io`, MM swap and block I/O. Drivers other than the SD card ignore it.
+- **FS:** `rw_block`/`rw_scattered` compute `block × 1024` in 64 bits. File offsets stay 32-bit
+  (`off_t`): one file ≤ 4 GiB − 1.
+- **Raw access past 4 GiB** (on-device `fsck`, `mkfs`, `dd`): a block-device ioctl
+  `DIOCPRW { u32 sector; u16 count; u8 write; char *buf; }`, done by the driver straight into the
+  caller's buffer (≤ 64 sectors). FS refuses a write through it on a mounted device. libc wrappers
+  `bread()`/`bwrite()`. Normal `read`/`lseek` on `/dev/hdN` keep their 32-bit range.
+- **Partition ioctls:** `DIOCGETPS` returns first sector and sector count (u32 each, up to 2 TiB);
+  `DIOCGETP` keeps bytes and answers `EOVERFLOW` past 4 GiB (R12.39). `mkpart` drops the 4 GiB
+  partition-size limit for type 0x81 partitions (swap keeps its rules from R12.34).
+- USB mass storage (R10.3) already works in sectors: `READ CAPACITY(10)` reaches 2 TiB.
+- Kernel RAM +0 B (same fields, other units).
+
+### O.4 MINIX V3 in the FS server
+
+- **Mount:** `read_super` recognises `SUPER_V3` (`0x4D5A`) and its layout (`s_ninodes` u32 at 0,
+  `s_imap_blocks` 6, `s_zmap_blocks` 8, `s_firstdatazone` 10, `s_log_zone_size` 12, `s_max_size`
+  16, `s_zones` 20, `s_magic` 24, `s_blocksize` 28, `s_disk_version` 30). Refused with a message
+  unless `s_blocksize` = 1024, `s_log_zone_size` = 0 and `s_ninodes` ≤ 65 535 (`ino_t`). util-linux
+  `mkfs.minix -3` writes exactly this; MINIX 3's own `mkfs` defaults to 4 KB blocks (`-B 1024`
+  needed). The in-core super block keeps its fields; `s_version` = 3. **0 B.**
+- **Clean flags (section N):** V3 has no state field that Linux uses, and offset 18 (V2 `s_pad`)
+  is inside `s_max_size`. N.1's CLEAN/CHECK bits go into the spare 16-bit `s_pad2` at offset 26
+  (check in the PR which pad MINIX 3.3 uses for its `s_flags` and use the same one). Linux
+  ignores them: after a Linux crash, run `fsck.minix -3` on the PC (manual).
+- **Directories:** entry size and name length per super block (V1/V2 16 B / 14, V3 64 B / 60):
+  `search_dir`, `new_node`, `do_mkdir`, `do_rename`, `unlink_file`. Path parsing buffers grow to
+  60 characters; `NAME_MAX` in `<limits.h>` becomes 60, and `pathconf(_PC_NAME_MAX)` answers per
+  file system (14 on V2). A name longer than the FS allows gets `ENAMETOOLONG` (no silent cut).
+- **Reading a directory (0 libc changes):** libc `readdir` already understands MINIX "flex"
+  entries (8-byte slots, `d_name[61]`). On a V3 directory, `read()` turns each 64-byte V3 entry
+  into one 64-byte flex record: the entry (`1 + _EXTENT(len)` slots, 16-bit inode, name with
+  NUL), then a filler entry (inode 0) for the rest of the 8 slots. Offsets stay 1:1, so
+  `telldir`/`seekdir`/`lseek` work, and "." gets extent 0 so `opendir` detects flex. Stack:
+  one 64-byte record.
+- **Triple indirect zone** for V3 files over ≈ 64 MB (`read_map`, `write_map`, `truncate`);
+  V2 stays as it is.
+- Programs that read raw `struct direct` are checked (`ash/dirent.c`, `sh4.c`, `tar`, `de`,
+  `traverse`, `cgrep`, `atrun`, `readfs`, `fsck`, `mkfs`): each uses `readdir` or learns V3.
+- **RAM:** FS static ≤ +20 B (O.5), FS stack ≤ +256 B (longer name buffers on the deepest path,
+  `rename`; the 64-byte record), measured by `ramcheck`. Flash: FS ≈ +3 KB, `fsck`/`mkfs` ≈ +2 KB
+  each.
+
+### O.5 Free space without reading 13 MB
+
+A 100 GiB `/home` with 1 KB zones has a zone map of ≈ 12.6 MB. Counting it takes ≈ 13–40 s, too
+long for `df` or the launcher's storage line.
+- FS keeps a **free-zone counter** per mounted file system (4 B × 4 slots) plus one "changed
+  since the recount started" delta (4 B): **+20 B**. `alloc_bit`/`free_bit` update it. A new FS
+  call `FSTATFS` (libc `fstatfs()`/`statfs()`: total, free zones and inodes) answers from it; `df`
+  and `libfuri` storage info use it.
+- At mount the counter starts from a **hint** stored in the spare bytes of super block 1 (written
+  together with the CLEAN flag, so no extra card writes) and is marked "estimate".
+- An idle-priority job (`update`, R0.8 idle rules) recounts the zone and inode maps a few blocks
+  per idle tick and hands the result to FS (`fsctl`); the delta covers allocations made meanwhile.
+  It never delays a foreground request. Linux cannot invalidate the hint (it does not know it), so
+  the recount always runs once per mount.
+- Allocation itself is unchanged: `s_zsearch` keeps searches short; files are allocated from the
+  bottom, so the used part of the map stays dense.
+
+### O.6 `fsck` on a big `/home`
+
+N.4's zone windows grow with the partition (100 GiB: ≈ 200 windows of 64 KB). Because the FS
+allocates from the bottom, the used zones lie below a **high-water mark** (the highest zone any
+inode owns, found in pass 1).
+- Windows cover only zones up to the high-water mark; the per-inode window byte becomes a first
+  and last window (2 B per used inode, ≈ 10 KB for 5 000 files).
+- Above the mark the only possible error is a leaked zone (marked used, owned by nobody): a space
+  loss, not a danger. `fsck -p` skips that range; `fsck -L` (run at idle or by hand) clears it.
+- Cost then follows the used space, not the card: ACO.3.
+- `fsck` reads past 4 GiB with `bread()` (O.3).
+
+### O.7 Layout and moving an existing `/home`
+
+- `/etc/setup` on a new card: `/home` is MINIX V3 and takes **all space between `/usr` and swap**
+  (R12.34's swap rules unchanged). 128 GB card (≈ 119 GiB): root 64 MB, `/usr` 2 GB, swap 16 GiB
+  at the end → `/home` ≈ 101 GiB, ≈ 12.6 MB zone map, 4 MB inode table (65 535 inodes),
+  first data zone ≈ 17 000 (the V3 field is 16-bit: the format fits up to ≈ 480 GiB with
+  1 KB blocks). Root and `/usr` stay V2.
+- `mkfs -3` leaves room for the zone map of the largest `/home` the card allows, so `/home` can
+  later grow into swap space (R12.34's reserve) with a small `growfs` (later task).
+- **Existing cards:** `setup -H` converts `/home`: swap off, `tar` of `/home` onto the swap
+  partition (disposable, R12.34), compare, `mkfs -3` with the new size, restore, swap on. A power
+  loss in between leaves the copy on the swap partition; `setup -H` resumes from it. Nothing is
+  converted without the user starting it.
+- `NR_SUPERS` stays 4 (no new mount slot).
+
+### O.8 Flash writes, RAM, responsiveness
+
+- Internal flash: 0 run-time writes. SD: the hint rides on the CLEAN write.
+- RAM: kernel +0 B, FS ≤ +20 B static and ≤ +256 B stack, libc 0 B, per `opendir` unchanged.
+- Responsiveness: no step reads the whole zone map in the foreground; the recount and `fsck -L`
+  run only at idle.
+
+Acceptance:
+- ACO.1 (QEMU, sparse 128 GB image) `/home` V3 past 4 GiB: create, write, read back and delete
+  a file whose blocks lie past 100 GiB; `sync`; util-linux `fsck.minix -3 -f` on the host:
+  clean. An image made by `mkfs.minix -3` on the host mounts on the Flipper.
+- ACO.2 (QEMU) Names: a 60-character name works (e.g. the 57-character
+  `galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub`) with `ls`, `cp`, `mv`, `rm`, the archive
+  app; 61 characters gives `ENAMETOOLONG`; on V2 `/usr` 15 characters gives `ENAMETOOLONG`.
+- ACO.3 (QEMU) Unclean boot with 5 000 files and 1 GB used on the 101 GiB `/home`: `fsck -p`
+  ≤ 30 s, peak ≤ `fsck_mem` + 24 KB; damage from ACN.3 repaired.
+- ACO.4 (QEMU) `df` answers in ≤ 50 ms right after mount ("estimate" until the recount ends);
+  the recount finishes at idle and matches `fsck`; L1 (button → frame) holds during it.
+- ACO.5 (QEMU) A 100 MB file (triple indirect) reads back identical; also through Linux.
+- ACO.6 (QEMU) `setup -H` on a 3.8 GB V2 `/home` with 5 000 files: every file identical after;
+  killed at each step, it resumes and loses nothing.
+- ACO.7 (Flipper) A 64 GB or larger card: first-boot setup, `/home` past 4 GiB, ACN.5 card pull
+  during `cp` to a block past 4 GiB, USB mass storage of `/home` mounts on Linux.
+
+For the manual: why `/home` is MINIX V3 and `/usr` V2, reading the card on Linux
+(`mount -t minix`), `fsck.minix -3`, 60-character names, `df` "estimate", `setup -H`.
 
 ---
 
@@ -2934,8 +3104,8 @@ Acceptance:
 
 Acceptance:
 - AC10.1 The console keeps working while HID types 10,000 characters into a PC editor without loss.
-- AC10.2 The SD `/home` partition mounts on Linux, Windows and macOS as a drive; after eject and remount on
-  the Flipper, `fsck` is clean.
+- AC10.2 The SD `/home` partition mounts on Linux as a drive (`mount -t minix`; Windows and macOS do not
+  read MINIX file systems, section O); after eject and remount on the Flipper, `fsck` is clean.
 
 Responsiveness: AC10.R HID report latency ≤ 2 ms from the app's write (USB frame-bound); L1 holds while HID typing runs.
 

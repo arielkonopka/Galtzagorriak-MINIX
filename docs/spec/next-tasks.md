@@ -340,6 +340,21 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
+## T23. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): **waits for the owner's yes to the on-disk change**
+One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
+
+### T23a (`lane:cloud`, QEMU): driver positions, FS V3, tools
+- O.3: `dv_size` in sectors on ARM; `HIGHPOS` (`m2_l2`) set by every disk message sender (FS `dev_io`, MM swap/blocks), 64-bit position in `rw_block`/`rw_scattered`; `DIOCPRW` + libc `bread`/`bwrite` (FS refuses writes on a mounted device); `DIOCGETPS`; `mkpart` without the 4 GiB size limit for 0x81. Builds on R12.39 (T20 lane); if R12.39 is not merged yet, do it first in the same series.
+- O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, ≤ 65 535 inodes, message otherwise); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; V3 → flex translation on directory `read()` (filler entry, "." extent 0); triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
+- O.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
+- O.6: `fsck` V3 (`-3` implied by the magic), high-water mark windows, `fsck -L`; `mkfs -3` (room for the largest zone map); `tools/mkfsimg.py -3`.
+- O.7: `/etc/setup` layout, `setup -H` conversion with resume.
+- Tests: ACO.1–ACO.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +20 B static, stack within budget; flashcheck unchanged.
+- Docs: manual `sdcard.md` (V3 `/home`, Linux access, `setup -H`, `df` estimate), `man` pages for `mkfs -3`, `fsck -L`, `statfs`; devguide note on `NAME_MAX` 60 and `pathconf`; CHANGELOG (ABI: `NAME_MAX`, new FS call, bump per spec J).
+
+### T23b (`lane:local`, Flipper)
+- ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
