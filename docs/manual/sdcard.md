@@ -1,7 +1,8 @@
-# The SD card: power loss and pulling the card out (planned)
+# The SD card: power loss and pulling the card out
 
-**(planned, spec section N, task T17)** Everything below describes how it will work. Today a
-power loss or a pulled card can leave the file systems damaged, and nothing checks them at boot.
+**(partly planned, spec section N, task T17)** Noticing a pulled card and refusing a different one
+work today (below). The clean mark and the check at boot are **(planned, T17a)**: today a power
+loss can leave the file systems damaged, and nothing checks them at boot.
 
 The whole file system (`/`, `/usr`, `/home`) lives on the microSD card. MINIX keeps recent
 changes in memory and writes them to the card every 30 seconds (`update`), or at once with
@@ -42,13 +43,16 @@ it may use; less memory means more passes and a slower check.
 
 ## Pulling the card out
 
-If you take the card out while the Flipper runs, it stops writing at once and keeps the changes
-in memory. The screen says **"SD card removed: put it back"**. Put the **same** card back and
-everything continues with nothing lost. Apps that need files wait or report an error meanwhile.
+If you take the card out while the Flipper runs, it stops using the card at once: the console
+says **"sd: SD card removed: put it back"** and the Flipper buzzes briefly. Put the **same** card
+back and the next file access continues ("sd: the card is back, carrying on"). Apps that need
+files report an error meanwhile; apps running from internal flash keep running.
+**(planned, T17a)** The changes not yet written stay in memory and go to the card when it is
+back (today they can be lost), and the message also appears on the launcher's screen.
 
-If you insert a **different** card, the Flipper never writes to it: it says "Different card: put
-the original back or power off". If you power off instead, the original card is checked at its
-next boot if it was in the middle of a write.
+If you insert a **different** card, the Flipper never touches it: it says "sd: Different card: put
+the original back or power off" (it tells the cards apart by their serial number, the CID). If you
+power off instead, the original card is checked at its next boot if it was in the middle of a write.
 
 ## Things that cannot save your data
 
