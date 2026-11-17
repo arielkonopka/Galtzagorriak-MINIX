@@ -3275,41 +3275,58 @@ nonce logs, the text of a large file in an editor, Berry data arrays). Data that
 process or a reboot stays in files. Owner rule as in 12g: kernel 0 B, MM a few bytes, no
 noticeable CPU on the foreground path.
 
-- **R12.34 Where the blocks are.** The swap partition (R12.1) holds the 16 swap slots in its first
-  3 MB (R12.2). The rest is split into 16 equal **block areas**, area *i* belonging to `mproc[i]`
-  like slot *i*:
-  - area size `A = (partition size − 16 × SW_SLOT) / 16`, rounded down to whole blocks; MM gets the
-    partition size at `MMSWAPON` (it already probes the end) and keeps **no table**: slot number and
-    block number give the position on the card;
-  - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). With
-    the 64 MB partition: 867 blocks, ≈ 3.4 MB per process;
+- **R12.34 Where the blocks are, and who gets how much (owner, 2026-11-17: the app declares it;
+  no fixed equal share).** The swap partition (R12.1) holds the 16 swap slots in its first 3 MB
+  (R12.2). The rest is the **block space**, shared by all processes:
+  - it is cut into **256 extents** of equal size (block space / 256, rounded down to whole blocks;
+    MM gets the partition size at `MMSWAPON`, it already probes the end). 64 MB partition: ≈ 240 KB
+    per extent; 4 GiB: 16 MB; four 4 GiB subpartitions: 64 per subpartition, 64 MB each;
+  - a process gets block space **only by asking**: `blk_open(bytes)` (R12.38) reserves one
+    **contiguous run of extents** (first fit), rounded up to whole extents, and the app's block
+    numbers 0…N−1 are counted from the start of that run. If no free run is large enough the call
+    fails with `ENOSPC` (or, with `BLK_ANY`, gets the largest free run and is told its size);
+    nothing else is evicted or shrunk for it. A run never crosses a subpartition;
+  - **reservation table in MM: 2 B per process slot** (first extent, number of extents; 16 × 2 =
+    **32 B**). That is the price of free sizes instead of a fixed 1/16 (which cost 0 B); it is the
+    only table. Per-request work stays a range check and one addition;
+  - a reservation ends with `blk_close()`, `exec` (the program identity changes, R12.35) or exit.
+    A forked child starts without one. **Resizing at run time:** a second `blk_open` with a
+    smaller size gives the tail back at once (its extents go through R12.40 like a closed run); a
+    larger one grows the run in place if the extents right after it are free, otherwise
+    `ENOSPC` and the old run stays (moving data would cost card writes; the app can close and open
+    again). Run-time sizes cost the same 32 B as sizes fixed at install time would, and need no
+    record on the card; the price is possible fragmentation of the block space, which stays small
+    with at most 16 runs in 256 extents (first fit, the largest free run shown by INFO);
+  - limits: one process may hold at most **half** of the block space unless it runs as root (a
+    rule, 0 B), so one greedy app cannot lock everybody out; the launcher's Running list and
+    `free -v` show each process's reservation, so the user can see and end the holder;
+  - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). The
+    64 MB partition holds ≈ 13 800 blocks (≈ 54 MB of data) in all;
   - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB up to below 32 GB**, first-boot setup
     puts swap **at the end of the card** and gives it **50 %** of the space after `/usr`, at most
     4 GiB − 1 MiB (R12.39: one partition stays below 4 GiB); `/home` comes right after `/usr`
     (also at most 4 GiB − 1 MiB); whatever lies between them stays free for later. The MBR entry
     stays `/dev/hd3` (MBR order need not be disk order): `/usr`, `/home`, free space, swap.
     Smaller cards keep today's 64 MB swap between `/usr` and `/home`. Examples (root ≈ 64 MB,
-    `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 150 MB of blocks per process), `/home` ≈ 2.7 GiB;
-    16 GB and larger → swap 4 GiB (≈ 225 MB of blocks per process), `/home` 4 GiB, the rest free;
+    `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 2.4 GB of blocks to share),
+    `/home` ≈ 2.7 GiB; 16 GB and larger → swap 4 GiB (≈ 3.6 GB of blocks), `/home` 4 GiB, the rest free;
   - **maximum swap on cards of 32 GB or more (owner, 2026-11-17):** swap is the primary partition
     `hd3` at the end of the card, split into **four MINIX subpartitions** `hd3a`…`hd3d` of 4 GiB −
     1 MiB each (≈ 16 GiB). `/etc/rc` gives MM `hd3a`; MM finds the other three itself (their minors
     follow `hd3a`'s, and each must have the swap type 0x82 in `hd3`'s subpartition table; `hd3` itself has the MINIX type 0x81 as a subpartition container, so `MMSWAPON`, R12.1, accepts a subpartition of the SD card whose own table entry is 0x82), and keeps their number (1 B, so MM
-    +5 B for 12h in total). The 16 swap slots stay in `hd3a`; the 16 block areas are spread four per
-    subpartition (area *i* in `hd3`(*i* / 4)), so each process gets ≈ 1 GiB on the card (≈ 900 MB
-    of blocks). A missing or short subpartition only shrinks the areas that would live in it
-    (`ENOSYS` for those slots' processes); swap itself needs only `hd3a`. With root, `/usr` 2 GB and
+    +1 B). The 16 swap slots stay in `hd3a`; the 256 extents are 64 per subpartition (≈ 14 GB of
+    blocks to share; one reservation at most one subpartition, ≈ 3.6 GB). A missing or short
+    subpartition only removes its extents; swap itself needs only `hd3a`. With root, `/usr` 2 GB and
     `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
     partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
   - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
     be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
-    swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and block areas are
+    swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and extents are
     recomputed from the new size), and `/home` takes the freed space. Growing the MINIX file system
     in place needs a small `growfs` tool (new zones and bitmap blocks; the simplest form is `mkfs`
     leaving room for the bitmaps of the largest possible size); that tool is a later task;
   - `mkpart` gets a way to place a partition at the end (e.g. `82:50%@end`), still never moving an
     existing partition; install time only, an existing card keeps its layout;
-  - the fixed split is the quota: no allocation table, no accounting.
 - **R12.35 Block header and validity.** Sector 0 of a block (on the card only, read and written
   through the last sector of `mbuf` like the swap header, R12.26): magic `GZBK`, slot, pid, boot
   stamp, the program's identity (`mp_dev`, `mp_ino`, `mp_ctime`), block number, a CRC-32 of
@@ -3317,10 +3334,10 @@ noticeable CPU on the foreground path.
   - A block is valid only if magic, slot, pid, boot stamp and program identity match the caller.
     Otherwise it is someone else's leftover and reads as **all zeros**: every block 0…N−1 exists
     and starts zeroed (sparse memory), so there is no allocate or free call in MM.
-  - Process exit: **nothing** is done (0 writes, no erase; R12.33 forbids run-time erase). The next
-    process in the slot has another pid and cannot see the old blocks. `exec` of another program
-    changes the identity, so its blocks vanish too. `fork`: the child has its own slot and an empty
-    area (blocks are not inherited).
+  - Process exit, `blk_close` or `exec`: the reservation is freed and nothing is written (0 writes,
+    no erase; R12.33; DISCARD at idle, R12.40). Whoever reserves those extents next has another
+    pid or program and cannot see the old blocks: they read as zeros. `fork`: the child has no
+    reservation (blocks are not inherited).
   - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
     MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
     nonce (R12.10) takes its place.
@@ -3341,8 +3358,11 @@ noticeable CPU on the foreground path.
     header first (≈ 1 ms) and write nothing if every sector CRC matches;
   - **PUT** of a sector range: read the header, write the new header, write the range (two writes;
     for records of 1 KB and less);
-  - **INFO**: number of blocks, block size, mode (`plain`/`crypt`), card present.
-  Error codes: `ENOSYS` (blocks off or no swap partition), `ERANGE`, `EIO`, `ENXIO` (card out,
+  - **OPEN** (bytes, flags) and **CLOSE**: reserve or free the caller's run (R12.34);
+  - **INFO**: the caller's reserved blocks, the largest free run, the whole block space, block
+    size, mode (`plain`/`crypt`), card present.
+  Error codes: `ENOSYS` (blocks off or no swap partition), `ENOSPC` (OPEN: no free run that
+  large), `EBADF` (GET/PUT without a reservation), `ERANGE`, `EIO`, `ENXIO` (card out,
   N.6), `EPERM` (R12.37).
 - **R12.37 Responsiveness, isolation, card.**
   - **Foreground** (`FGAPP`): served at once; the wait is the app's own.
@@ -3355,8 +3375,9 @@ noticeable CPU on the foreground path.
   - One request is at most ≈ 11 ms of disk-task time (PUT of 4.5 KB), and senders to MM are queued
     in order, so other MM calls (`kill`, `alarm`, `exit`) wait at most one block operation; FS,
     the screen and the buttons do not wait at all.
-  - A process reaches only its own area (MM computes the position from the caller's slot; the app
-    gives only a block number). Raw `/dev/hd3` stays root-only.
+  - A process reaches only its own reservation (MM computes the position from the caller's table
+    entry; the app gives only a block number, checked against the run's length). Raw `/dev/hd3`
+    stays root-only.
   - `swap=plain`: blocks are on the card in clear like swap images, so set-uid, set-gid and
     `Secret: yes` images get `EPERM` (the R12.28 `NOSWAP` condition). `swap=crypt` (12b): per-block
     AES-GCM as R12.10a (nonce = boot nonce, slot, block number, the block's counter from its
@@ -3377,7 +3398,13 @@ noticeable CPU on the foreground path.
   - `/etc/rc.conf` `blk=off|on`: before 12b the default is `off` (like `swap=plain`, R12.28); with
     12b it goes on together with `swap=crypt`. Blocks work with `swap=off` if the partition exists
     (MM opens it for blocks only).
-  - libc `<blk.h>` (flash only): `blk_info()`, `blk_get(id, buf)`, `blk_put(id, buf)`,
+  - **Declaring the size.** At run time: `blk_open(bytes, flags)` before the first block, `BLK_ANY`
+    to take what is free, `blk_close()`. In the package: the manifest field `Blocks: 64M` (the most
+    the app will ask for). `pkg install` compares it with the card's block space and warns ("needs
+    64 MB of card memory, this card has 54 MB") but installs anyway, because the card can change;
+    the launcher shows the same line when `blk_open` fails, and the app shows its own message
+    (an app that can live with less uses `BLK_ANY`). MM does not read manifests.
+  - libc `<blk.h>` (flash only): `blk_open(bytes, flags)`, `blk_close()`, `blk_info()`, `blk_get(id, buf)`, `blk_put(id, buf)`,
     `blk_putf(id, buf, flags)`, `blk_read(id, off, buf, len)`, `blk_write(id, off, buf, len)` (off
     and len in multiples of 512).
   - `libblk` (flash only, ≈ 1.5 KB): `vm_open(pool, size, framesize)` with frames of 1, 2 or 4 KB
@@ -3437,26 +3464,31 @@ noticeable CPU on the foreground path.
     those blocks. Always served in the idle class (`BLKWAIT`, R12.37), never on the foreground
     path; on a card without DISCARD it does nothing. Either way a discarded block's contents are
     **undefined** for the app (old data, or zeros on QEMU), and the library treats it so.
-  - **After a process that used blocks ends:** MM sets bit *i* of a 16-bit "to discard" mask
-    (MM **+2 B**) when the process in slot *i* exits after at least one PUT (a spare `mp_flags`
-    bit, `BLKUSED`, set on the first PUT). `sw_step()` discards marked areas at idle, one area (or
-    256 MB of it) per step, after swap-ins and block requests and before reserve swap-outs. A new
-    process that takes slot *i* clears the bit first (its own blocks must never be discarded; the
-    old ones are invisible to it anyway, R12.35). MM is single-threaded, so no request of the new
-    process can meet a discard in progress.
-  - **At `MMSWAPON`** the mask starts as all ones, so after each boot every block area is
-    discarded once at idle (the swap slots too, in the first step). Nothing else is discarded.
-  - Costs: MM +2 B (12h now +7 B in total, within R12.26's 96 B), kernel 0 B (a few bytes of stack
+  - **After a reservation ends** (exit, `exec`, `blk_close`) and the process did at least one PUT
+    (a spare `mp_flags` bit, `BLKUSED`): MM sets bit *i* of a 16-bit "to discard" mask (MM
+    **+2 B**) and keeps table entry *i* as it is, so the run stays taken until `sw_step()` has
+    discarded it at idle (up to 256 MB per step, after swap-ins and block requests, before reserve
+    swap-outs); then the entry is cleared and the extents are free. A new process in slot *i*
+    gets no reservation until then (`blk_open` waits in `BLKWAIT`, at most one idle step). No
+    discard can ever touch a live reservation. On a card without DISCARD the entry is freed at once.
+  - **At `MMSWAPON`** the whole block space and the swap slots are discarded once, at idle, in
+    256 MB steps (progress kept in the reserve job's existing `sw.off`, 0 B). Nothing else is
+    discarded.
+  - Costs: MM +2 B (mask), kernel 0 B (a few bytes of stack
     in WINCHESTER), no flash writes, no writes to the card's data.
 
 Acceptance criteria:
-- AC12.18 QEMU `tests/blk`: a fresh process reads block 0 and the last block as zeros; `ERANGE`
-  one past the end; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
+- AC12.18 QEMU `tests/blk`: GET without `blk_open` gives `EBADF`; after `blk_open(1 MB)` block 0
+  and the last block read as zeros and `ERANGE` comes one past the end; `blk_open` larger than the
+  free space gives `ENOSPC`, with `BLK_ANY` the largest free run; a non-root request for more than
+  half of the block space gives `ENOSPC`; two processes reserve 3 and 5 extents and their runs do
+  not overlap (`free -v`); after the first exits, a 4-extent request fits only where it should; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
   card (raw write as root) gives `EIO` on GET of that sector and not of the others; the process is
   not killed.
-- AC12.19 QEMU: after the writer exits, a new process in the same slot reads zeros; the same after
-  `exec` of another program; after a pid wrap (forced through a test hook) too; a forked child
-  reads zeros; a second process cannot reach the first one's area by any argument.
+- AC12.19 QEMU: after the writer exits, a new process that reserves the same extents reads zeros;
+  the same after `exec` of another program; after a pid wrap (forced through a test hook) too; a
+  forked child has no reservation; a second process cannot reach the first one's run by any
+  argument.
 - AC12.20 QEMU (sector counter in WINCHESTER, as AC12.14): `blk_putf(..., BLK_IFCHANGED)` of
   unchanged data writes 0 sectors; a whole-block PUT is one 9-sector write; process exit writes
   nothing.
@@ -3472,14 +3504,16 @@ Acceptance criteria:
   4 GiB as R12.34; `fsck`, swap-in of 64 KB and a block GET at the last block work; a card pulled and
   put back (N.6) carries on.
 - AC12.26 QEMU (R12.40): a process PUTs 10 blocks and exits; at idle the trace shows one
-  `DIOCDISCARD` of its area and nothing while keys arrive; a new process in that slot before the
-  idle step clears the bit and no discard ever touches its blocks; on a card without DISCARD no
+  `DIOCDISCARD` of its run and nothing while keys arrive; its extents are free only after that;
+  a new process's `blk_open` meanwhile waits one idle step and no discard ever touches a live run; on a card without DISCARD no
   ioctl reaches the HAL. Device: a card with DISCARD (SD 5.1) takes it, L1/L2 unchanged.
 - AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
   frames; VM heap growth ≤ 3 KB.
 
 RAM budget (12h):
-- kernel +0 B; MM +7 B (boot stamp 4 B, number of swap subpartitions 1 B, discard mask 2 B; within R12.26's 96 B) and two `mp_flags` bits (`BLKWAIT`, `BLKUSED`); FS and INIT +0 B;
+- kernel +0 B; MM **+39 B** (reservation table 32 B, boot stamp 4 B, discard mask 2 B, number of
+  swap subpartitions 1 B; with today's ≈ 55 B of swap state this stays within R12.26's 96 B, SHOULD
+  be in SRAM2) and two `mp_flags` bits (`BLKWAIT`, `BLKUSED`); FS and INIT +0 B;
 - a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
   frame + the 16 B descriptor;
 - flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
