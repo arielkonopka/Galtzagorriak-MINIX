@@ -62,7 +62,9 @@ pipes or signals between the two), or an event loop in one process.
 For ported stock apps, the `libfuri` core (spec R5.1, `flipper/lib/furi`) gives **cooperative
 threads inside one process** with the stock API (`furi_thread_*`, `furi_message_queue_*`,
 `furi_event_flag_*`, `furi_mutex_*`, `furi_semaphore_*`, `furi_timer_*`, records,
-`FuriString`, `furi_check`, `FURI_LOG_*`; `#include <furi.h>`, link `libfuri.a`). What to know:
+`FuriString`, `furi_check`, `FURI_LOG_*`; `#include <furi.h>`; add the program to `FURIPROGS` in
+`flipper/minix.mk` to use the one copy in flash, the shared libfuri + libapp (R2b.9; part 2,
+1.6), or link `libfuri.a` statically). What to know:
 
 - A thread runs until it waits (queue, flags, mutex, semaphore, delay, join) or calls
   `furi_thread_yield()`. Priorities are kept but not used. Timer callbacks run when a thread

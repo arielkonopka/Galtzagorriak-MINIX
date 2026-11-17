@@ -278,7 +278,9 @@ only send text records to the desktop are **(planned)** (chapter 7).
 same names and behaviour: `#include <gui/gui.h>`, `<gui/view_dispatcher.h>`,
 `<gui/scene_manager.h>`, `<gui/elements.h>`, `<gui/modules/submenu.h>` (also `popup.h`,
 `dialog_ex.h`, `text_input.h`, `byte_input.h`, `variable_item_list.h`, `widget.h`,
-`loading.h`), `<input/input.h>`, `<assets_icons.h>`; link `libfuri.a`. `flipper/lib/furi/hello.c`
+`loading.h`), `<input/input.h>`, `<assets_icons.h>`; put the program in `FURIPROGS`
+(`flipper/minix.mk`) to use the shared libfuri + libapp in flash (part 2, 1.6; a function the
+library does not export yet goes at the end of `flipper/furi.exports`). `flipper/lib/furi/hello.c`
 (`furihello`) is a complete example. What differs from the stock firmware:
 
 - The GUI service lives in the app's own process. The first `furi_record_open(RECORD_GUI)` starts

@@ -140,6 +140,9 @@ FORWARD _PROTOTYPE( int do_getmap, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_kstacks, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_flash, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_swap, (message *m_ptr) );
+FORWARD _PROTOTYPE( int shlib_in, (struct shlibc_hdr *h, unsigned long magic,
+		unsigned long base, unsigned long max, vir_bytes vir_addr,
+		vir_bytes bytes) );
 #endif
 
 #if (SHADOWING == 1)
@@ -1414,20 +1417,35 @@ vir_bytes bytes;		/* # of bytes required */
  *				shlibc_src				    *
  *==========================================================================*/
 PUBLIC phys_bytes shlibc_src(vir_addr, bytes)
-vir_bytes vir_addr;		/* address in the shared libc's flash */
+vir_bytes vir_addr;		/* address in a shared library's flash */
 vir_bytes bytes;		/* # of bytes required */
 {
-/* The shared libc in flash (spec R2b.9) is code and constants that every
- * process may read (MPU region 0): its strings - error messages, "/bin/sh"
- * of system() - are passed to system calls like a program's own.  Only
+/* The shared libraries in flash (spec R2b.9: the libc, and libfuri +
+ * libapp) are code and constants that every process may read (MPU region
+ * 0): their strings - error messages, "/bin/sh" of system(), libapp's
+ * file names - are passed to system calls like a program's own.  Only
  * ever a source: the flash is never a copy's destination.
  */
-  struct shlibc_hdr *h = SHLIBC_HDR;
+  if (shlib_in(SHLIBC_HDR, SHLIBC_MAGIC, SHLIBC_BASE, SHLIBC_MAX,
+		vir_addr, bytes)
+      || shlib_in(SHFURI_HDR, SHFURI_MAGIC, SHFURI_BASE, SHFURI_MAX,
+		vir_addr, bytes))
+	return((phys_bytes) vir_addr);
+  return(0);
+}
 
-  if (h->sh_magic != SHLIBC_MAGIC || h->sh_size > SHLIBC_MAX) return(0);
-  if (vir_addr < SHLIBC_BASE || bytes > h->sh_size
-		|| vir_addr - SHLIBC_BASE > h->sh_size - bytes) return(0);
-  return((phys_bytes) vir_addr);
+/*==========================================================================*
+ *				shlib_in				    *
+ *==========================================================================*/
+PRIVATE int shlib_in(h, magic, base, max, vir_addr, bytes)
+struct shlibc_hdr *h;		/* the library's header */
+unsigned long magic, base, max;	/* what it must be, where, how big */
+vir_bytes vir_addr;		/* the range asked for */
+vir_bytes bytes;
+{
+  if (h->sh_magic != magic || h->sh_size > max) return(0);
+  return(vir_addr >= base && bytes <= h->sh_size
+		&& vir_addr - base <= h->sh_size - bytes);
 }
 #endif
 
