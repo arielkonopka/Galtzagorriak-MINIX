@@ -438,6 +438,51 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (owner, 2026-11-15). Details in next-tasks T14c.
+- **Wake, do the job, off again (owner, 2026-11-17).** A timer file may say `After: off` (and
+  `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
+  log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
+  and the Flipper goes back to ship mode. The rules:
+  - **Never off if the Flipper was on before the job.** `timed` powers off only when **this** boot
+    was caused by the RTC alarm (wake reason read at boot, F.3 above, kept in an RTC backup
+    register bit, 0 B RAM). If the Flipper was already running when the timer fired, the job runs
+    and the Flipper stays on, exactly as for a timer without `After: off`;
+  - not if a button was pressed since the boot, or a user session (USB console, launcher app in
+    front) is active: the user took it in hand, so it stays on;
+  - several jobs due close together: off only after the last; if the next timer of any kind is
+    due in less than ≈ 4 min, sleep (Stop2) instead of off (a boot costs more than that much sleep;
+    `reports/hibernation-analysis.md`);
+  - a job that hangs is ended after its `Timeout:` (default 60 s; SIGTERM, then SIGKILL after
+    3 s) and the Flipper still goes off, so a stuck beacon cannot drain the battery;
+  - with USB attached ship mode cannot cut power: sleep instead;
+  - the boot after an RTC wake with an `After: off` job due is **quiet**: no splash, backlight
+    off, no CPU2/Bluetooth, no launcher; a button press during it turns it into a normal boot
+    (and cancels the power-off, rule above);
+  - power-off is the normal orderly halt (sync, N.2 clean flags, then ship mode).
+- **Timer type `emergency` (owner, 2026-11-17).** `Type: emergency` is for a rescue signal
+  (beacon, screen flash, Morse). It means `After: off` with the rules above, and in addition:
+  - it ignores do-not-disturb and the notification policy (like an alarm);
+  - it is never skipped: `Missed: fire-once` is forced, and a timer due during a normal session
+    still runs (the signal goes out, the Flipper stays on);
+  - low battery does not cancel it; `timed` **thins it out by halving** (owner, 2026-11-17):
+    below the low-battery threshold (default 20 %) it skips every second occurrence; each time
+    the remaining charge halves again (10 %, 5 %, 2.5 %, ...) it skips every second one of those
+    that are left, so the signal runs at 1/2, 1/4, 1/8 ... of its rate (at most 1/64). Each level
+    then lasts about as long as the one before (half the charge at half the rate), so the beacon
+    keeps going for as long as possible instead of dying early. The level and the occurrence
+    counter live in RTC backup register bits (0 B RAM); the app gets the level in `TIMED_LOWBAT`
+    and may also shorten each signal. Only the charger's own cut-off stops it;
+  - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
+    so an ordinary app can't keep waking a switched-off Flipper.
+  Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
+- **Timer type `wakeup` (owner, 2026-11-17: "wake_up_on_time").** The alarm clock's timers
+  (`alarm`, 7b.2). Normal battery: as today (rings on time, from off too, with the boot lead).
+  **Below 10 %** (configurable) the alarm itself is **not run**: `timed` does not start the app,
+  and instead gives one minimal notice that the alarm was skipped, whichever costs less: a short
+  LED blink pattern (LP5562, a few mA for well under a second) by default, or a short beep
+  (`notify.conf`: `lowbat_notice=led|beep`). The skip is logged (`/var/log/timed`, batched,
+  N.2) and the alarm app shows "Alarm skipped: battery low" when next opened. The notice runs
+  from Stop2 or from a quiet boot (no screen). Note for the manual: an LED blink will not wake
+  a sleeper; the alarm app warns when an alarm is armed and the battery is under 15 %.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
@@ -2857,6 +2902,13 @@ Design rationale: report Part 4.
 - **R12.12** Swap-in:
   - decrypt and verify;
   - on a tag mismatch, the process MUST be killed (SIGKILL), never run.
+- **R12.10a** Per-chunk encryption, so R12.29 (write only what changed) keeps working: each 4 KB
+  chunk has its own nonce (boot nonce, slot, chunk number, the chunk's own write counter) and its
+  own tag, and only changed chunks are re-encrypted. 48 tags × 16 B do not fit in one sector, so
+  the header grows to 2 sectors (on the card only). The chunk counters live in the header, and the
+  header has its own tag over the chunk counters and tags, bound to the slot's RAM write counter
+  (R12.10), so an old chunk or header can't be replayed; RAM stays as R12.26. The header must not hold plaintext CRCs in `crypt` mode (they leak about the
+  data). Decide this before 12b's format is fixed.
 - **R12.13** QEMU build: software AES-GCM behind the same interface (flash only).
 
 ### 12c. Later extension (separate sign-off)
@@ -3002,6 +3054,86 @@ background work must either be very small or be swapped cleverly. Each backgroun
   per-slot write counters (16 × 4 B, needed against rollback, R12.10) and the boot nonce SHOULD
   live in SRAM2 (A.6). Total MM swap state ≤ 96 B.
 
+### 12g. SD card wear (owner request 2026-11-17; milestone M3)
+
+Swap can't avoid wearing the card, but it can write much less, and write in a shape the card's
+controller (FTL) handles well. The analysis is in `reports/sd-swap-wear-analysis.md` (project
+files). In short: typical use writes about 1 MB a day, which is harmless on a card with normal wear
+levelling. The cases worth guarding against are a cheap card whose wear levelling only has a small
+pool of free blocks (a card that was once full and never erased), and **ping-pong**: a parked app
+with a short timer that the reserve writes out after 10 s and its timer brings back a minute later
+(≈ 35 MB a day).
+
+Owner rule for this section: only measures that cost **0 B of RAM** and **no noticeable CPU** on
+the foreground path (the AmigaOS feel: the UI always answers, whatever the rest is doing).
+
+- **R12.29 Write only what changed.** Sector 0 of a slot (R12.2) also holds a **CRC-32 of every
+  4 KB chunk** of the image (192 KB / 4 KB = 48 × 4 B = 192 B, fits in the 512 B header):
+  - swap-out first reads the slot's header (a read does not wear the card, ≈ 1 ms). If its magic,
+    pid, `dstart`, `dlen`, `sstart` and `slen` match the image now, a chunk whose CRC from RAM equals
+    the stored one is **not written**. If nothing changed, nothing is written, not even the header;
+  - otherwise (other pid or layout, bad header) every chunk is written, as today;
+  - the CRC is the one swap-out already computes (R12.28), restarted at each chunk, so the CPU cost is
+    the same as today plus one sector read, and every chunk not written saves a polled SD write
+    (≈ 5–10 ms of disk-task time per 4 KB);
+  - swap-in checks each chunk against its own CRC (this replaces the one CRC of the whole image);
+    a mismatch kills the process as R12.28;
+  - the reserve (R12.5 b) works chunk by chunk as today: each step re-reads the header (MM's `mbuf`
+    does not live between steps) and the new header is written last, from CRCs taken in that job
+    (the process is blocked, so its RAM does not change while the job runs; `sw_touch` still
+    voids the job);
+  - a stale chunk can only survive a CRC-32 collision of a changed chunk (2⁻³² per compared chunk;
+    at ~1000 compares a day, once in about 10 000 years per device). Accepted: it is the same
+    strength as today's card-error check;
+  - RAM: +0 B (header in `mbuf`, as today).
+- **R12.30 The reserve leaves alone what will wake soon.** A process brought back from the card by
+  its own wake (timer, signal) gets a flag (`SWAPHOT`, a spare `mp_flags` bit). The reserve swaps a
+  `SWAPHOT` process out only after it has waited **≥ 120 s** (instead of 10 s); the flag clears
+  when it has waited that long once. On-demand swap-out (R12.5 a) ignores the flag: when RAM is
+  really needed, the foreground wins. A parked app with a 1-minute timer therefore stays in RAM
+  unless memory runs short, and when it is written, R12.29 writes only its changed chunks. RAM +0 B,
+  CPU: one flag test per candidate.
+- **R12.31 Large, sequential writes.** Swap-out computes the chunk CRCs, then writes the header
+  **first** and the chunks to be written in ascending order (no jump back to sector 0 at the end).
+  The WINCHESTER task passes a request of several sectors to the HAL as **one CMD25** (up to 4 KB,
+  the swap chunk; today it splits into 1 KB transfers), optionally with ACMD23 (pre-erase count).
+  Same bytes over SPI, fewer commands and busy waits: the card sees one sequential write. The
+  4 KB chunk stays the unit that other card requests can get in between (R12.23), so no foreground
+  request waits longer than today. RAM +0 B.
+- **R12.32 Partitions aligned to the card's erase unit.** `mkpart` (first-boot setup) and the PC
+  image tool align every partition start to **4 MiB** (the usual SD allocation unit) instead of
+  1 MiB, so the 3 MB of swap slots lie inside one erase unit. New installs only; an existing card
+  keeps its layout. Install time only, RAM +0 B.
+- **R12.33 Tell the card what is empty (install time only).** First-boot setup (`/etc/setup`
+  stage 2) sends **ERASE** (CMD32/CMD33/CMD38, supported in SPI mode) over the new `/usr`, swap and
+  `/home` partitions before `mkfs`, with a line on the screen ("Preparing the card..."). A card that
+  was once full (camera, phone) gets back its whole free pool for wear levelling. HAL:
+  `hal_disk_erase(first, last)`; WINCHESTER: a root-only ioctl (`DIOCERASE`) on a partition device;
+  command: `erase /dev/hdN` (refuses a mounted partition). Never at run time: no erase on swap-in,
+  kill or at every boot (on cheap cards an erase can itself trigger garbage collection, and a 64 MB
+  erase can take seconds). RAM +0 B (kernel: a few bytes of stack in the WINCHESTER task).
+- **Left out on purpose** (they cost RAM, see the report): a swap KB-written counter in `free -v`
+  and a daily reserve budget (≈ 4 B in MM, within R12.26's budget but not 0 B), and rotating the
+  slots over the 64 MB partition per boot (needs a stored offset; helps only very primitive FTLs).
+  They can come back with the owner's yes.
+- **Hibernation.** If a whole-RAM hibernation image is ever added (analysis
+  `reports/hibernation-analysis.md`, level 2), R12.29, R12.31 and R12.32 apply to it too; frequent
+  cycles should use the cold-boot level 1, which writes nothing.
+
+Acceptance criteria:
+- AC12.14 QEMU (`tests/swapwear`, counting sectors written through the WINCHESTER task): swap a
+  32 KB process out, swap it in, park it again without touching its heap: the second swap-out
+  writes **0 sectors**; change 1 byte of the heap: it writes the header and **one** 4 KB chunk.
+  AC12.4/AC12.13 (one flipped byte on the card kills on swap-in) still pass, for a skipped chunk too.
+- AC12.15 QEMU: a parked test app with a 30 s timer, reserve on and free RAM under the reserve,
+  for 10 min: no reserve swap-out of it (swap trace); an `exec` that needs its memory still swaps
+  it out at once.
+- AC12.16 Device: the swap-in time of a 64 KB image (today 69 ms) and L1/L2 during a swap-out are
+  no worse; a 4 KB swap write is one CMD25 (trace). Numbers in PORTING.md.
+- AC12.17 Device: `/etc/setup` on a card filled with data before: ERASE runs on the three partitions,
+  the screen shows the step, `mkfs` and the first boot finish; `erase` on a mounted partition fails
+  with `EBUSY`.
+
 ### 12f. Notes for the system manual
 
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
@@ -3011,6 +3143,10 @@ background work must either be very small or be swapped cleverly. Each backgroun
   it on, with a checksum against card errors; apps marked `Secret: yes` and set-uid programs are
   never swapped). Later `swap=crypt` (12b) encrypts it with a key that is new at every boot and
   becomes the default. Nothing swapped survives a reboot, and removing the card ends the swapped apps.
+- Which card to use with swap (12g): a branded card, best a "High Endurance" or industrial (pSLC)
+  one, 8–32 GB, new or erased. First-boot setup erases the new partitions; `erase` does it by hand.
+  Swap writes only the parts of an app that changed, so a parked app that sleeps costs the card
+  nothing.
 - How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
