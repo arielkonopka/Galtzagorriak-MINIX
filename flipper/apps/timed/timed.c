@@ -112,7 +112,8 @@ static void fire(struct app_timer *t, struct stat *st, time_t now)
 			if (verbose) say(t->id, ": held (do not disturb)", 0);
 			return;
 		}
-		pid = app_alert(t, t->cat, f, (int) st->st_uid);
+		pid = app_alert(t, t->cat, f, notify_volume(&p, t, t->cat),
+							(int) st->st_uid);
 	}
 	if (pid < 0) say(t->id, ": cannot start it", 0);
 	else if (verbose) say(t->id, ": fired", 0);

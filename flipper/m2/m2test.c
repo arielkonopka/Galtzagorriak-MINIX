@@ -18,6 +18,8 @@
 #include <sys/stat.h>
 #include <sys/times.h>
 #include <minix/fg.h>
+#include <minix/ibutton.h>
+#include <minix/partition.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -594,6 +596,51 @@ static void card_tests(void)
 	check(r3 == (int) sizeof b, "card: the same card back carries on");
 }
 
+/* R12.40: DIOCDISCARD on the whole disk's last sector, which no partition
+ * or swap test uses.  QEMU's card zero-fills a discarded range, so the
+ * pattern written first reads back as zeros; empty and too-long ranges
+ * are refused.  /dev/hd0 goes through FS's cache: closing it (not
+ * mounted) writes the pattern out and drops its blocks. */
+static void discard_tests(void)
+{
+	static char b[512];
+	struct partition pt;
+	struct part_range rg;
+	off_t at;
+	int fd, i, zero, r0, r1;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDWR)) < 0
+	    || ioctl(fd, DIOCGETP, &pt) != 0) {
+		check(0, "discard: open /dev/hd0");
+		if (fd >= 0) close(fd);
+		return;
+	}
+	rg.first = pt.size / 512 - 1;
+	at = (off_t) rg.first * 512;
+	memset(b, 0xA5, sizeof b);
+	lseek(fd, at, SEEK_SET);
+	(void) write(fd, b, sizeof b);
+	close(fd);
+	if ((fd = open("/dev/hd0", O_RDWR)) < 0) {
+		check(0, "discard: open /dev/hd0 again");
+		return;
+	}
+	rg.count = 1;
+	r1 = ioctl(fd, DIOCDISCARD, &rg);
+	lseek(fd, at, SEEK_SET);
+	zero = read(fd, b, sizeof b) == (int) sizeof b;
+	for (i = 0; zero && i < (int) sizeof b; i++) if (b[i] != 0) zero = 0;
+	rg.count = 2;			/* one past the end */
+	r0 = ioctl(fd, DIOCDISCARD, &rg);
+	rg.count = 0;
+	i = ioctl(fd, DIOCDISCARD, &rg);
+	close(fd);
+	check(r1 == 0, "discard: DIOCDISCARD of the last sector");
+	check(zero, "discard: the range reads back as zeros (QEMU)");
+	check(r0 < 0 && i < 0, "discard: empty and too-long ranges refused");
+}
+
 
 /* R7b.2: an alert preempts the screen and the buttons (FGIOCPREEMPT), a
  * reader waiting meanwhile is parked and ends empty at the release, a
@@ -766,6 +813,38 @@ static void gpio_tests(void)
 		(void) write(g2, (char *) op, 2);
 		close(g2);
 	}
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
+ * it reads high). */
+static void ibutton_tests(void)
+{
+	struct ib_run q;
+	int fd = open("/dev/ibutton", O_RDWR), r;
+
+	if (fd < 0) {
+		check(0, "ibutton: open");
+		return;
+	}
+	memset(&q, 0, sizeof q);
+	q.op[0] = IB_RESET; q.op[1] = IB_WBYTE; q.op[2] = 0x33;
+	q.op[3] = IB_RBYTE; q.op[4] = IB_W1;
+	q.nop = 5;
+	r = ioctl(fd, IBIOCRUN, &q);
+	check(r == 0 && q.nout == 2 && q.out[0] == 0 && q.out[1] == 0xFF,
+		"ibutton: IBIOCRUN reset (none), write, read (line high)");
+	q.op[0] = 0x55; q.nop = 1;
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: an unknown step -> EINVAL");
+	q.op[0] = IB_WBYTE; q.nop = 1;		/* its value missing */
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: a byte without its value -> EINVAL");
+	q.nop = IB_MAXOP + 1;
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: too many steps -> EINVAL");
+	close(fd);
 }
 #endif
 
@@ -1090,13 +1169,26 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
+	 * render and fill their T5577 blocks; the line "decoders: N B of
+	 * heap" is the R9.0.1 measurement (budget 6 KB). */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/rfid", "rfid", "list", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
 #endif
 	memtest_tests();
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	ibutton_tests();
 	gpio_tests();
 	card_tests();
+	discard_tests();
 	preempt_tests();
 #endif
 	time_tests();

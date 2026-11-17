@@ -1,0 +1,151 @@
+/* tune.c - libapp: tunes for /dev/speaker (spec F.2, 7b.2): the built-in
+ * tones and the user's RTTTL or Flipper Music Format (.fmf) files, turned
+ * into the speaker's notes (4 bytes each: Hz, ms, 16-bit little endian;
+ * 0 Hz is a rest).  No I/O: the host tests run this file as it is.
+ *
+ * RTTTL:	name:d=4,o=5,b=100:8e6,8p,c#.6,...
+ * FMF:		Filetype: Flipper Music Format / Version: 0 / BPM: 120 /
+ *		Duration: 8 / Octave: 5 / Notes: 8A#5., P, C6, ...
+ * A note in either: [duration]letter[#][.][octave][.]; letters a-g (h
+ * is b), p is a rest.  The tunes are short: the alert writes one
+ * /dev/speaker block (TUNE_MAX notes) per ring, longer tunes are cut.
+ */
+#include <string.h>
+#include "app.h"
+
+/* The built-in tones, as RTTTL: the default of an alarm is "beep", of
+ * the others "chime".  const: in flash. */
+const char *const tune_names[] = {
+	"beep", "chime", "rise", "classic", "gentle", "pips", NULL
+};
+static const char *const tune_text[] = {
+	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
+	"chime:d=8,o=6,b=180:g,4c7",
+	"rise:d=16,o=5,b=160:c,e,g,c6,e6,g6,4c7",
+	"classic:d=16,o=7,b=200:c,p,c,p,c,p,c,8p,c,p,c,p,c,p,c",
+	"gentle:d=8,o=5,b=100:e,g,a,4b,p,a,4g",
+	"pips:d=16,o=6,b=120:a,4p,a,4p,a,4p,4a6",
+};
+
+const char *tune_builtin(const char *name)
+{
+	int i;
+
+	for (i = 0; tune_names[i] != NULL; i++)
+		if (strcmp(name, tune_names[i]) == 0) return tune_text[i];
+	return NULL;
+}
+
+/* C4 .. B4 in Hz. */
+static const unsigned short c4[12] = {
+	262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494
+};
+static const signed char semi[7] = { 9, 11, 0, 2, 4, 5, 7 };	/* a..g */
+
+static int lower(int c)
+{
+	return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+static int isdig(int c)
+{
+	return c >= '0' && c <= '9';
+}
+
+/* A decimal number at *p (advanced); -1 if there is none. */
+static int number(const char **p)
+{
+	int v = 0, any = 0;
+
+	while (isdig(**p) && v < 10000) {
+		v = v * 10 + *(*p)++ - '0';
+		any = 1;
+	}
+	return any ? v : -1;
+}
+
+/* The notes from p up to the end of the line or string. */
+static int notes(const char *p, int defd, int defo, int bpm,
+					unsigned char *out, int max)
+{
+	int n = 0, d, o, l, s, dot;
+	unsigned long hz, ms;
+
+	if (bpm < 1 || defd < 1 || defo < 0) return -1;
+	while (n < max) {
+		while (*p == ' ' || *p == '\t' || *p == ',') p++;
+		if (*p == 0 || *p == '\n' || *p == '\r') break;
+		if ((d = number(&p)) < 1) d = defd;
+		l = lower(*p++);
+		if (l == 'h') l = 'b';
+		if (l != 'p' && (l < 'a' || l > 'g')) return -1;
+		s = l == 'p' ? -1 : semi[l - 'a'];
+		dot = 0;
+		if (*p == '#') {
+			p++;
+			if (s >= 0) s++;
+		}
+		if (*p == '.') { p++; dot = 1; }
+		if ((o = number(&p)) < 0) o = defo;
+		if (*p == '.') { p++; dot = 1; }
+		while (*p != 0 && *p != ',' && *p != '\n') p++;
+		if (s == 12) { s = 0; o++; }		/* b# */
+		if (o > 8) o = 8;
+		hz = s < 0 ? 0 : o >= 4 ? (unsigned long) c4[s] << (o - 4)
+					: (unsigned long) c4[s] >> (4 - o);
+		ms = 240000UL / ((unsigned long) bpm * d);
+		if (dot) ms += ms / 2;
+		if (ms == 0) ms = 1;
+		if (ms > 65535) ms = 65535;
+		out[4*n] = hz & 0xFF; out[4*n+1] = hz >> 8;
+		out[4*n+2] = ms & 0xFF; out[4*n+3] = ms >> 8;
+		n++;
+	}
+	return n;
+}
+
+/* The value of "Key:" at the start of a line of an FMF text, or NULL. */
+static const char *fmf_key(const char *src, const char *key)
+{
+	int l = strlen(key);
+	const char *p = src;
+
+	while (p != NULL && *p != 0) {
+		if (strncmp(p, key, l) == 0 && p[l] == ':') {
+			p += l + 1;
+			while (*p == ' ' || *p == '\t') p++;
+			return p;
+		}
+		if ((p = strchr(p, '\n')) != NULL) p++;
+	}
+	return NULL;
+}
+
+int tune_parse(const char *src, unsigned char *out, int max)
+{
+	const char *p, *q;
+	int d = 4, o = 6, b = 63, v;
+
+	if (fmf_key(src, "Notes") != NULL) {
+		if ((p = fmf_key(src, "BPM")) != NULL) b = number(&p);
+		if ((p = fmf_key(src, "Duration")) != NULL) d = number(&p);
+		if ((p = fmf_key(src, "Octave")) != NULL) o = number(&p);
+		return notes(fmf_key(src, "Notes"), d, o, b, out, max);
+	}
+	/* RTTTL: name, then d=,o=,b= settings, then the notes. */
+	if ((p = strchr(src, ':')) == NULL || (q = strchr(p + 1, ':')) == NULL)
+		return -1;
+	for (p++; p < q; ) {
+		int k = lower(*p);
+
+		if (k == ' ' || k == ',') { p++; continue; }
+		if (p[1] != '=') return -1;
+		p += 2;
+		v = number(&p);
+		if (k == 'd') d = v;
+		else if (k == 'o') o = v;
+		else if (k == 'b') b = v;
+		else return -1;
+	}
+	return notes(q + 1, d, o, b, out, max);
+}

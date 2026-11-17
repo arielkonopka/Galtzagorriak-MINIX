@@ -1,0 +1,130 @@
+.TH RFID 1
+.SH NAME
+rfid \- read, write, copy and emulate 125 kHz RFID tags
+.SH SYNOPSIS
+.nf
+\fBrfid\fR [\fB\-r\fR] [\fB\-n\fR \fItries\fR] [\fB\-o\fR \fIfile\fR] [\fB\-c\fR \fB125\fR|\fBpsk\fR|\fB134\fR]
+\fBrfid write\fR [\fB\-n\fR \fIn\fR] [\fB\-pass\fR \fIhex\fR] [\fB\-with\fR \fIhex\fR] [\fB\-lock\fR] [\fB\-em4305\fR] \fIprotocol\fR \fIhex\fR ...
+\fBrfid write\fR [\fIoptions\fR] \fB\-f\fR \fIfile\fR
+\fBrfid copy\fR [\fB\-n\fR \fIn\fR] [\fB\-pass\fR \fIhex\fR] [\fB\-with\fR \fIhex\fR] [\fB\-lock\fR]
+\fBrfid emulate\fR \fIprotocol\fR \fIhex\fR ...
+\fBrfid emulate \-f\fR \fIfile\fR
+\fBrfid clear\fR [\fB\-with\fR \fIhex\fR] [\fB\-n\fR \fIn\fR]
+\fBrfid dump\fR [\fB\-with\fR \fIhex\fR] [\fIblock\fR]
+\fBrfid list\fR
+.fi
+.SH DESCRIPTION
+.B Rfid
+works with the 125 kHz tags (cards, key fobs) held to the back of the
+Flipper, through
+.BR /dev/rfid .
+It knows the 25 protocols of the Unleashed firmware (liblfrfid,
+.BR "rfid list" ):
+EM4100 (RF/64, /32, /16), Electra, H10301, Idteck, Indala26, IoProxXSF,
+AWID, FDX-A, FDX-B, HIDProx, HIDExt, Pyramid, Viking, Jablotron, Paradox,
+PAC/Stanley, Keri, Gallagher, Nexwatch, Radio Key, GProxII, Noralsy and
+Indala224.
+A tag's data is given and shown as the stock app does: the protocol's
+bytes in hex (the \fBData:\fR line of a \fB.rfid\fR file).
+.PP
+Without a command
+.B rfid
+reads a tag and prints its protocol and bytes, then the data as the
+stock app's info screen shows it (facility code, card number...):
+.PP
+.nf
+.ft B
+	$ rfid
+	EM4100 04 00 98 3D C5
+	  FC: 152 Card: 15813 CL:64
+	  DEZ 8: 09977285
+	  DEZ 10: 0009977285
+.ft R
+.fi
+.PP
+EM4100 at RF/64 is read by its own decoder first, as before; every
+other tag goes through all the protocols' decoders, and a protocol counts
+only when it gave the same bytes several times in a row (as stock).
+Today only the protocols that modulate the field's amplitude (ASK:
+Manchester, biphase, direct; the READ column of
+.BR "rfid list" )
+can be read: FSK and PSK ones need a longer capture and another carrier
+from the kernel (planned).
+Exit status 0 when a tag was read.
+.TP
+.B \-r
+also print the edge timings of each read (µs).
+.TP
+.BI \-n " tries"
+reads of half a second (default 4; up to three times as many while a
+protocol has been seen but not yet confirmed).
+.TP
+.BI \-o " file"
+also save the tag as a \fB.rfid\fR file (the stock format;
+\fBKey type:\fR is the protocol's name).
+.SS "write, copy"
+.B "rfid write"
+makes a blank tag (a T5577, the common kind; else an EM4305, as stock)
+carry the given tag: the protocol's own block layout (Unleashed's
+write_data), the data blocks first and the configuration last.
+.I Protocol
+is a name of
+.B "rfid list"
+(case, spaces, \- and / do not matter:
+.BR em4100_32 ,
+.BR "radiokey" ;
+.B EM
+is EM4100);
+.I hex
+its bytes, one per word (\fB00 DE AD\fR) or run together
+(\fB00DEAD\fR), or
+.B \-f
+a \fB.rfid\fR file.
+A tag of an ASK protocol is read back and the write repeated until it
+reads right (\fB\-n\fR rounds, default 20); FSK and PSK tags are
+written once and reported as not read back.
+.B "rfid copy"
+reads a tag, waits for it to go, and writes it to the blank one put on
+next.
+.TP
+.BI \-pass " hex"
+give the T5577 that password too: nothing rewrites it without it.
+Write it down.
+Not for protocols that fill block 7 (HIDExt, Indala224).
+.TP
+.BI \-with " hex"
+the password the tag has now.
+.TP
+.B \-lock
+set the T5577 lock bit: the blocks can never be written again.
+.TP
+.B \-em4305
+write an EM4305 only (the protocols that have an EM4305 layout).
+.SS emulate
+.B "rfid emulate"
+makes the Flipper be that tag for a reader, until Ctrl-C.
+The reader's field is the clock: the kernel loads the antenna in step
+with its carrier (RFIDIOCEMU), so nothing drifts and the CPU is idle.
+One frame must fit 512 segments today: the ASK protocols do (EM4100,
+Electra, FDX-B, Viking, Jablotron, PAC/Stanley, Gallagher, Radio Key,
+GProxII, Noralsy); FSK and PSK frames are 540 to 3534 (planned).
+.SS clear, dump
+.B "rfid clear"
+removes a T5577 password (no password, \fB\-with\fR, then a list of the
+passwords cloners set);
+.B "rfid dump"
+reads one T5577 block.
+.SS list
+The protocols with their maker, modulation, bit rate, data size and
+whether they can be read today, and the heap the decoders take during a
+read.
+.SH FILES
+.TP 20
+.B /dev/rfid
+the antenna (group gui)
+.TP
+.B /home/lfrfid
+where the RFID app keeps its \fB.rfid\fR files
+.SH NOTES
+The protocol code is the Unleashed firmware's (lib/lfrfid, GPLv3),
+compiled unchanged.
