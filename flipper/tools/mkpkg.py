@@ -66,9 +66,10 @@ def main():
     # "any" for a package without programs (spec J.3).
     # Libc: the build id of the shared libc its programs were linked with
     # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
+    # Furi: the same for the shared libfuri + libapp (a_dbase, 0: unused).
     # Secret: yes when a program is marked A_NOSWAP (elf2mnx --secret): in
     # plain swap mode its RAM never goes to the card (spec R12.28).
-    abis, libcs, secret = set(), set(), False
+    abis, libcs, furis, secret = set(), set(), set(), False
     for spec in a.files:
         with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
             h = f.read(48)
@@ -77,15 +78,21 @@ def main():
             secret = secret or bool(h[2] & 0x80)
             if h[2] & 0x08 and h[4] >= 48 and len(h) == 48:
                 libcs.add(struct.unpack_from("<I", h, 40)[0])
+                if struct.unpack_from("<I", h, 44)[0]:
+                    furis.add(struct.unpack_from("<I", h, 44)[0])
     if len(abis) > 1:
         sys.exit(f"mkpkg: programs for different ABIs: {sorted(abis)}")
     if len(libcs) > 1:
         sys.exit("mkpkg: programs for different shared libc builds: "
                  + " ".join(f"{x:08x}" for x in sorted(libcs)))
+    if len(furis) > 1:
+        sys.exit("mkpkg: programs for different shared libfuri builds: "
+                 + " ".join(f"{x:08x}" for x in sorted(furis)))
     control = (f"Package: {a.name}\nVersion: {a.version}\n"
                + (f"Depends: {a.depends}\n" if a.depends else "")
                + f"Abi: {abis.pop() if abis else 'any'}\n"
                + (f"Libc: {libcs.pop():08x}\n" if libcs else "")
+               + (f"Furi: {furis.pop():08x}\n" if furis else "")
                + (f"Os: {a.os}\n" if a.os else "")
                + ("Secret: yes\n" if secret else "")
                + ("Timers: yes\n" if a.timers else "")

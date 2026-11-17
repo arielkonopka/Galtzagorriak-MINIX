@@ -16,8 +16,9 @@ goes to `build/<board>/minix/`.
 
 | Target | Result |
 |---|---|
-| `minix` | `minix.bin`: kernel + MM + FS + INIT (fails above 192 KB), then the shared libc at 192 KB |
+| `minix` | `minix.bin`: kernel + MM + FS + INIT (fails above 192 KB), then the shared libc at 192 KB and the shared libfuri + libapp at 240 KB |
 | `shlibc` | only the shared libc: `shlibc/libc.bin`, its stubs and `libc.json` for `elf2mnx.py` |
+| `shfuri` | only the shared libfuri + libapp: `shfuri/furi.bin`, its stubs and `furi.json` |
 | `base-flash` | `minix-base.bin`: `minix.bin` plus the boot programs in the installed region and the ROM settings image. This is what users flash. |
 | `base` | `pkgs/base_<BASE_VER>.tar`, the system programs as a package |
 | `pkgs` | the other packages (`hello`, `tests`) |

@@ -23,7 +23,9 @@ timed, remind and alarm packages and checks:
   GUI      remind and alarm take the foreground, become their users,
            make a reminder and an alarm through their forms with fake
            keys (and alarm opens the desk clock) and exit 0; free -t
-           shows what they used
+           shows what they used; free -v before and with each of remind,
+           alarm and alert open gives the RAM each one takes (printed as
+           "RAM:" lines, issue #201)
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -75,6 +77,19 @@ def timer(r, tid, lines, owner):
 		tid), 20)
 
 
+def freebytes(r):
+	"""Free RAM in bytes: the sum of the holes free -v lists."""
+	out = r.output("free -v", 20) or b""
+	return sum(int(m.group(1)) for m in
+		   re.finditer(rb"(?m)^  hole at \S+ +(\d+) bytes", out))
+
+
+def ram(r, what, base):
+	now = freebytes(r)
+	print("  RAM: %-6s open: %6d bytes (free %d -> %d)" % (what,
+		base - now, base, now), flush=True)
+
+
 def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
@@ -104,8 +119,10 @@ def main():
 		keyfiles(r)
 
 		# 7b.1: OK on the alert -> one log line, written as remind.
+		base = freebytes(r)
 		r.sh("/usr/lib/alert -c reminder -f 0 -u 21 -l remind remind-1 "
 		     "Reminder Water 2>/dev/null & sleep 2", 20)
+		ram(r, "alert", base)
 		tap(r, "left")		# the first press only lights the screen
 		tap(r, "ok", 2)
 		out = r.output("cat /home/flipper/apps_data/remind/log", 20)
@@ -232,6 +249,15 @@ def main():
 			check(out == b"0\n", "GUI: %s takes the keys and exits 0"
 				% app)
 		r.output("sleep 1; free -t off", 30)
+		# The RAM each app takes while open (issue #201): started
+		# straight from this shell, so no subshell is counted; Back on
+		# the first screen ends it.
+		for app in ("remind", "alarm"):
+			base = freebytes(r)
+			r.sh("/usr/bin/%s & sleep 4" % app, 30)
+			ram(r, app, base)
+			tap(r, "left")
+			tap(r, "back", 2)
 		out = r.output("cat /var/timers/remind-1; ls -l /var/timers/remind-1",
 			20)
 		check(out is not None and b"Kind: interval" in out

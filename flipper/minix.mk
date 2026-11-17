@@ -561,8 +561,12 @@ $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat
 	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
 $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
-CHMEM_remind := 12288	# 7b.1: libfuri main stack 3 KB, gui thread 2 KB, Canvas 1.1 KB, the list
-CHMEM_alarm  := 12288	# 7b.2: the same
+# chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
+# (Canvas 1.1 KB, views, the list: remind 3 KB, alarm 2.75 KB in nattest)
+# and MM's 1.5 KB safety gap above it; nattest: 3.8 / 3.4 KB never used of
+# 12 KB, so 1 KB less leaves the heap 1.2 KB to grow (issue #201).
+CHMEM_remind := 11264	# 7b.1
+CHMEM_alarm  := 11264	# 7b.2
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -673,7 +677,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.01
+BASE_VER := 4.02
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

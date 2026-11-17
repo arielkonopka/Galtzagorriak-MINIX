@@ -112,8 +112,8 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   foreground app is `ioctl(FGIOCPREEMPT)` (R7b.2, `<minix/fg.h>`; chapter 4).
 - **Alarms always ring**, even in do-not-disturb (`/etc/notify.conf`, `~/.config/notify`), as the
   alarm itself says; reminders and info are held back.
-- **`libapp`** (`flipper/lib/app`, `#include "app.h"`, link `$(APP_OBJ)` as `timed` does in
-  `flipper/minix.mk`; it joins the shared library with `libfuri`, R2b.9):
+- **`libapp`** (`flipper/lib/app`, `#include "app.h"`; in the shared libfuri + libapp library
+  in flash, R2b.9: put the program in `FURIPROGS` in `flipper/minix.mk`, as `timed` is):
 
   | call | what it does |
   |---|---|
