@@ -53,4 +53,19 @@ ProtocolId lfrfid_reader_feed_edges(
  * it too.  Returns false if the protocol cannot be written to a T5577. */
 bool lfrfid_normalize(ProtocolDict* dict, ProtocolId p, LFRFIDWriteRequest* req);
 
+/* Emulation (R9.0.3): one frame of protocol p's encoder as RFIDIOCEMU
+ * segments, as the stock emulation's pulse_glue makes them: a segment is
+ * a loaded part and the unloaded rest, dur[i] = its length in carrier
+ * periods - 1, pulse[i] = the loaded part.  The frame is the period of the
+ * encoder's endless output, checked over a whole second frame, and starts
+ * where a loaded part does, so the list repeats seamlessly.  Returns the
+ * number of segments, -1 if more than max (or no period was found). */
+int lfrfid_emu_segments(
+    ProtocolId p,
+    const uint8_t* data,
+    size_t size,
+    uint32_t* dur,
+    uint32_t* pulse,
+    int max);
+
 #endif

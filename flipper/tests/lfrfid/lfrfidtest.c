@@ -90,36 +90,69 @@ static void edge(bool level, uint32_t us) {
     }
 }
 
-/* The encoder's stream for one protocol as reader edges, FRAMES_US long,
- * after skipping `skip` levels (random start in the frame). */
-static void play(ProtocolDict* dict, LFRFIDProtocol p, unsigned skip) {
-    bool psk = protocol_dict_get_features(dict, p) == LFRFIDFeaturePSK;
+/* The channel: a level of d carrier periods from the tag, as the reader
+ * sees it (see the top of the file).  Returns the time it took, us. */
+static int ch_psk, ch_half;
+static bool ch_first;
+
+static uint32_t channel(bool lv, uint32_t d) {
     uint32_t t = 0;
-    unsigned i = 0;
-    int half = 0;
-    bool first = false;
 
-    ne = 0;
-    while(t < FRAMES_US) {
-        LevelDuration ld = protocol_dict_encoder_yield(dict, p);
-        bool lv = level_duration_get_level(ld);
-        uint32_t d = level_duration_get_duration(ld);
-
-        if(level_duration_is_reset(ld) || level_duration_is_wait(ld)) continue;
-        if(i++ < skip) continue;
-        if(!psk) {
-            edge(lv, d * 8);
-            t += d * 8;
-            continue;
-        }
-        /* PSK: the first level of each carrier period is its phase */
-        if(half == 0) first = lv;
-        if(++half == 2) {
-            half = 0;
-            edge(first, 16);
+    if(!ch_psk) {
+        edge(lv, d * 8);
+        return d * 8;
+    }
+    while(d--) { /* PSK: the first level of each carrier period is its phase */
+        if(ch_half == 0) ch_first = lv;
+        if(++ch_half == 2) {
+            ch_half = 0;
+            edge(ch_first, 16);
             t += 16;
         }
     }
+    return t;
+}
+
+static void channel_start(ProtocolDict* dict, LFRFIDProtocol p) {
+    ch_psk = protocol_dict_get_features(dict, p) == LFRFIDFeaturePSK;
+    ch_half = 0;
+    ne = 0;
+}
+
+/* The encoder's stream for one protocol as reader edges, FRAMES_US long,
+ * after skipping `skip` levels (random start in the frame). */
+static void play(ProtocolDict* dict, LFRFIDProtocol p, unsigned skip) {
+    uint32_t t = 0;
+    unsigned i = 0;
+
+    channel_start(dict, p);
+    while(t < FRAMES_US) {
+        LevelDuration ld = protocol_dict_encoder_yield(dict, p);
+
+        if(level_duration_is_reset(ld) || level_duration_is_wait(ld)) continue;
+        if(i++ < skip) continue;
+        t += channel(level_duration_get_level(ld), level_duration_get_duration(ld));
+    }
+}
+
+/* Emulation (rfid emulate): the RFIDIOCEMU segments of one frame, played
+ * round and round as the kernel does (loaded for pulse periods, then not
+ * for the rest of dur + 1), into the reader.  The segment count, or -1. */
+#define MAXSEG 8192
+static uint32_t sdur[MAXSEG], spulse[MAXSEG];
+
+static int emulate(ProtocolDict* dict, LFRFIDProtocol p, const uint8_t* data) {
+    int n = lfrfid_emu_segments(p, data, protocol_dict_get_data_size(dict, p), sdur, spulse, MAXSEG);
+    uint32_t t = 0;
+    int i;
+
+    if(n <= 0) return -1;
+    channel_start(dict, p);
+    for(i = 0; t < FRAMES_US; i = (i + 1) % n) {
+        t += channel(true, spulse[i]);
+        t += channel(false, sdur[i] + 1 - spulse[i]);
+    }
+    return n;
 }
 
 /* Distort the edges: inverted levels; jitter: every edge moves by up to
@@ -510,6 +543,54 @@ int main(int argc, char** argv) {
             fails++;
         }
         vector(dict, fixed[i].p, fixed[i].data, 0);
+    }
+    /* emulation of every protocol's fixed vector: the segments decode back
+     * to the tag; which fit RFIDIOCEMU today (512) is listed */
+    printf("emulation segments per loop (RFIDIOCEMU takes 512; -1: none found):");
+    for(i = 0; i < COUNT_OF(fixed); i++) {
+        uint32_t feature = protocol_dict_get_features(dict, fixed[i].p) == LFRFIDFeaturePSK ?
+                               LFRFIDFeaturePSK :
+                               LFRFIDFeatureASK;
+        uint8_t got[LFRFID_DATA_MAX];
+        ProtocolId res, other;
+        int nseg = emulate(dict, fixed[i].p, fixed[i].data);
+
+        printf(" %s %d%s", protocol_dict_get_name(dict, fixed[i].p), nseg,
+               i + 1 < COUNT_OF(fixed) ? "," : "\n");
+        /* -1 for FSK: its oscillator's phase does not come back to the
+         * same place for more than the 40000 runs looked at, so no loop
+         * of whole frames fits; it is far over 512 segments anyway */
+        if(nseg < 0 && fsk(fixed[i].p)) continue;
+        cases++;
+        res = nseg > 0 ? decide(dict, feature, 0, got, &other) : PROTOCOL_NO;
+        if(res == (ProtocolId)fixed[i].p && other == PROTOCOL_NO &&
+           memcmp(got, fixed[i].data, protocol_dict_get_data_size(dict, fixed[i].p)) == 0)
+            continue;
+        fails++;
+        printf("FAIL %s: its emulation (%d segments) does not read back\n",
+               protocol_dict_get_name(dict, fixed[i].p), nseg);
+    }
+    /* rfid writes EM4100 as before (R6.5): Unleashed's blocks are the same */
+    {
+        LFRFIDWriteRequest req;
+
+        protocol_dict_set_data(dict, LFRFIDProtocolEM4100, fixed[0].data, 5);
+        cases++;
+        if(!lfrfid_normalize(dict, LFRFIDProtocolEM4100, &req) ||
+           req.t5577.block[0] != 0x00148040 || req.t5577.blocks_to_write != 3) {
+            fails++;
+            printf("FAIL EM4100 T5577 config %08X, %u blocks (rfid: 00148040, 3)\n",
+                   (unsigned)req.t5577.block[0], (unsigned)req.t5577.blocks_to_write);
+        }
+        memset(&req, 0, sizeof(req));
+        req.write_type = LFRFIDWriteTypeEM4305;
+        protocol_dict_get_write_data(dict, LFRFIDProtocolEM4100, &req);
+        cases++;
+        if(req.em4305.word[4] != (0x40 | 31 | 6UL << 14) || req.em4305.mask != 0x70) {
+            fails++;
+            printf("FAIL EM4100 EM4305 word 4 %08X mask %X (rfid: %08lX, 70)\n",
+                   (unsigned)req.em4305.word[4], req.em4305.mask, 0x40 | 31 | 6UL << 14);
+        }
     }
     for(i = 0; i < LFRFIDProtocolMax; i++)
         for(v = 0; v < NRAND * 8 && used[i] < NRAND; v++) {

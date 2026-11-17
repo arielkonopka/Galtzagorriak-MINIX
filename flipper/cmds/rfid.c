@@ -873,29 +873,32 @@ static int save_rfid(const char *path, int p, const uint8_t *data)
 	return 0;
 }
 
-/* Hex bytes, spaced or not, from the strings s[0..n-1].  The count, or -1
- * on anything else or more than max. */
+/* Hex bytes from the strings s[0..n-1]: words split at blanks, each one
+ * byte of 1 or 2 digits (as `write EM 0 DE AD BE EF` always took) or an
+ * even run of digits ("00DEADBEEF").  The count, or -1 on anything else or
+ * more than max. */
 static int parse_hex(char **s, int n, uint8_t *out, int max)
 {
-	int k = 0, half = 0, i;
+	int k = 0, i, len, j;
 	const char *c;
 
 	for (i = 0; i < n; i++)
-		for (c = s[i]; *c; c++) {
-			int v;
+		for (c = s[i]; *c; c += len) {
+			if (isspace((unsigned char) *c)) { len = 1; continue; }
+			for (len = 0; c[len] && !isspace((unsigned char) c[len]); len++)
+				if (!isxdigit((unsigned char) c[len])) return -1;
+			if (len > 2 && len % 2) return -1;
+			for (j = 0; j < len; j += 2) {
+				char two[3];
 
-			if (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')
-				continue;
-			if (!isxdigit((unsigned char) *c)) return -1;
-			v = isdigit((unsigned char) *c) ? *c - '0'
-				: tolower((unsigned char) *c) - 'a' + 10;
-			if (!half) {
 				if (k >= max) return -1;
-				out[k] = (uint8_t) (v << 4);
-			} else out[k++] |= (uint8_t) v;
-			half = !half;
+				two[0] = c[j];
+				two[1] = len == 1 ? 0 : c[j + 1];
+				two[2] = 0;
+				out[k++] = (uint8_t) strtoul(two, (char **) NULL, 16);
+			}
 		}
-	return half ? -1 : k;
+	return k;
 }
 
 static int load_rfid(const char *path, uint8_t *data)
@@ -1076,89 +1079,30 @@ static int copy_any(int tries)
 	return write_lf(p, data, tries, 0);
 }
 
-/* rfid emulate PROTO HEX...: the protocol's Unleashed encoder, one frame
- * of it as RFIDIOCEMU segments (as stock's pulse_glue: a segment is a
- * loaded part and the unloaded rest, in carrier periods), played round and
- * round by the kernel at the reader's clock.  The frame is found as the
- * period of the encoder's output (it is endless), checked over a whole
- * second frame by a second encoder.  At most 512 segments today (FSK and
- * PSK frames are longer: T19b, R9.0.6). */
-#define SIGW	48		/* encoder levels that mark a frame's start */
-#define MAXY	40000		/* longest frame looked for, in levels */
-
-static uint32_t ld_word(LevelDuration l)
-{
-	return level_duration_get_duration(l) << 1 | level_duration_get_level(l);
-}
-
-static uint32_t yield(void *proto, const ProtocolBase *b)
-{
-	return ld_word(b->encoder.yield(proto));
-}
-
+/* rfid emulate PROTO HEX...: one frame of the protocol's Unleashed encoder
+ * as RFIDIOCEMU segments (lfrfid_emu_segments: as stock's pulse_glue),
+ * played round and round by the kernel at the reader's clock.  At most 512
+ * segments today (FSK and PSK frames are longer: T19b, R9.0.6). */
 static int emulate_lf(int p, uint8_t *data)
 {
-	const ProtocolBase *b = lfrfid_protocols[p];
-	void *one, *two;
-	uint32_t sig[SIGW], ring[SIGW], w, hi = 0, lo = 0;
-	unsigned long *dur = &d[0], *pulse;
-	long L = -1, i, s, k;
-	int nseg = 0, fd;
+	unsigned long *pulse;
 	struct rfid_emu e;
+	int nseg, fd;
 
-	/* two encoders of the protocol, outside the dictionary */
-	one = b->alloc();
-	two = b->alloc();
-	memcpy(b->get_data(one), data, lf_size(p));
-	memcpy(b->get_data(two), data, lf_size(p));
-	b->encoder.start(one);
-	b->encoder.start(two);
-	for (i = 0; i < SIGW; i++) sig[i] = ring[i] = yield(one, b);
-	for (i = SIGW; i < MAXY && L < 0; i++) {	/* the frame length */
-		ring[i % SIGW] = w = yield(one, b);
-		if (w != sig[SIGW - 1]) continue;
-		for (k = 0; k < SIGW; k++)
-			if (ring[(i - SIGW + 1 + k) % SIGW] != sig[k]) break;
-		if (k == SIGW) L = i - SIGW + 1;
+	/* FSK and PSK loops are 540 to 3534 segments (make lfrfidtest) */
+	nseg = -1;
+	if (lf_readable(lf_config(p, data))) {
+		if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
+		nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
+					(uint32_t *) pulse, MAXD);
 	}
-	if (L < 0) goto toolong;
-	/* check: two runs one frame apart agree for a whole frame */
-	b->encoder.start(one);
-	b->encoder.start(two);
-	for (i = 0; i < L; i++) (void) yield(two, b);
-	for (i = 0; i < L; i++)
-		if (yield(one, b) != yield(two, b)) goto toolong;
-	/* start the loop where a loaded part begins: s, level high after low */
-	b->encoder.start(one);
-	w = yield(one, b);
-	for (s = 0; s < L; s++) {
-		uint32_t x = yield(one, b);
-
-		if ((x & 1) && !(w & 1)) break;
-		w = x;
+	if (nseg < 0) {
+		fprintf(stderr, "rfid: a %s frame is more than %d segments (%s): "
+			"emulating it needs T19b\n", protocol_dict_get_name(lf(), p),
+			MAXD, lf_modulation(lf_config(p, data)));
+		return 1;
 	}
-	if (s >= L) goto toolong;		/* never loaded: no tag */
-	s++;
-	/* glue the frame's levels into segments, beginning at s */
-	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
-	b->encoder.start(one);
-	for (i = 0; i < s; i++) (void) yield(one, b);
-	for (i = 0; i <= L; i++) {
-		w = yield(one, b);
-		if (w & 1) {
-			if (lo != 0) {			/* a segment is done */
-				if (nseg >= MAXD) goto toolong;
-				dur[nseg] = hi + lo - 1;
-				pulse[nseg++] = hi;
-				hi = lo = 0;
-			}
-			if (i == L) break;		/* back at s */
-			hi += w >> 1;
-		} else lo += w >> 1;
-	}
-	b->free(one);
-	b->free(two);
-	e.dur = dur;
+	e.dur = d;
 	e.pulse = pulse;
 	e.n = nseg;
 	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
@@ -1174,11 +1118,7 @@ static int emulate_lf(int p, uint8_t *data)
 	lf_print(p, data);
 	printf("(%d segments); hold to a reader, Ctrl-C to stop\n", nseg);
 	for (;;) sleep(60);		/* Ctrl-C ends it; close stops it */
-toolong:
-	fprintf(stderr, "rfid: a %s frame is more than %d segments (%s): "
-		"emulating it needs T19b\n", protocol_dict_get_name(lf(), p),
-		MAXD, lf_modulation(lf_config(p, data)));
-	return 1;
+	return 0;			/* not reached */
 }
 
 /* rfid list: the protocols, how they are sent, what works today, and the
