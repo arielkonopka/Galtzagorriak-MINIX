@@ -484,7 +484,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_OBJ) $(FURI_GUI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64
+	   swaptime swaptime64 regtest
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
@@ -495,13 +495,24 @@ OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
 OBJS_swaptime64 = $(MB)/cmd/test/swaptime.o
+# regchild (issue #160): regtest's child, its own entry before crtso so
+# it sees the registers exactly as exec left them (regstart.S).
+$(MB)/cmd/test/regstart.o: tests/regstart.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
+$(MB)/user/regchild.elf: $(MB)/cmd/test/regstart.o $(MB)/cmd/test/regtest.o \
+		$(SHL)/stubs.o $(MB)/libc-static.a ld/user-shlibc.ld $(SHL)/shlibc-syms.ld
+	@mkdir -p $(dir $@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -Tld/user-shlibc.ld \
+	   -Wl,-Map=$@.map $(MB)/cmd/test/regstart.o $(MB)/cmd/test/regtest.o \
+	   $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $@
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # The hardware self test (spec 7b.3): the app and its modules, package
 # stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
 # of packages are at most 13 characters).
-ST_MODS	:= board input av
+ST_MODS	:= board memory flash input av gpio
 STPROGS	:= selftest $(ST_MODS)
 $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
@@ -512,6 +523,9 @@ CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
+CHMEM_gpio := 2048
+CHMEM_memory := 2048
+CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
 $(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -525,10 +539,11 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar 
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
 	python3 -I tools/mkbadpkg.py $(PKGDIR)/bad
-$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(BADPKGS) tools/mkpkg.py
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(MB)/bin/regchild $(BADPKGS) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
 	   -D "Security tests (spec Phases 1 and 3)" \
 	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755) \
+	   /usr/tests/regchild=$(MB)/bin/regchild$(COMMA)755 \
 	   $(foreach b,$(BADPKGS),/usr/tests/bad/$(notdir $(b))=$(b)$(COMMA)644)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \

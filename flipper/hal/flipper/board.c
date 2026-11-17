@@ -2204,10 +2204,17 @@ uint32_t hal_rtc_time(void)
 
 int hal_rtc_set(uint32_t t)
 {
-	uint32_t y, m, d, days = t / 86400, s = t % 86400, i;
+	uint32_t y, m, d, days = t / 86400, s = t % 86400, i, fc;
+	int today;
 
 	civil_from_days(days, &y, &m, &d);
 	if (!hal_rtc_ok() || y < 2000 || y > 2099) return -1;
+	/* R2b.11: setting the clock is not a new day for the cache's erase
+	 * budget (a jump there and back gave a fresh budget, #109): what
+	 * today spent moves to the new date.  A word of an older day is left,
+	 * so a day that really began meanwhile still starts afresh. */
+	fc = FC_REG;
+	today = (fc & 0xF0000000u) == FC_MAGIC && (fc & 0xFFF) == fc_day(0);
 	rtc_unlock();
 	RTC->ISR = 0xFFFFFFFF;			/* INIT: stops the calendar */
 	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_INITF); i++) ;
@@ -2217,6 +2224,10 @@ int hal_rtc_set(uint32_t t)
 	RTC->CR &= ~RTC_CR_FMT;			/* 24 hours */
 	RTC->ISR &= ~RTC_ISR_INIT;		/* runs from here */
 	rtc_lock();
+	if (today)	/* fc_day()'s number, from the date just set (the
+			 * shadow registers may still hold the old one) */
+		bkp_set(&FC_REG, (fc & ~0xFFFu)
+			| (((y - 2000) * 372 + m * 31 + d) & 0xFFF));
 	return 0;
 }
 

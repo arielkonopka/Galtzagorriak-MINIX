@@ -43,15 +43,17 @@ it may use; less memory means more passes and a slower check.
 
 ## Pulling the card out
 
-If you take the card out while the Flipper runs, it stops using the card at once: the console
-says **"sd: SD card removed: put it back"** and the Flipper buzzes briefly. Put the **same** card
+If you take the card out while the Flipper runs, it stops using the card at once: the screen
+shows a box **"SD card removed / Put it back"** over whatever was there, the console says the same,
+and the Flipper buzzes briefly. Put the **same** card
 back and the next file access continues ("sd: the card is back, carrying on"). Apps that need
 files report an error meanwhile; apps running from internal flash keep running.
 **(planned, T17a)** The changes not yet written stay in memory and go to the card when it is
-back (today they can be lost), and the message also appears on the launcher's screen.
+back (today they can be lost).
 
-If you insert a **different** card, the Flipper never touches it: it says "sd: Different card: put
-the original back or power off" (it tells the cards apart by their serial number, the CID). If you
+If you insert a **different** card, the Flipper never touches it: it shows "Different card / Put the original
+back" (and on the console "sd: Different card: put the original back or power off"). It tells
+the cards apart by their serial number (the CID). If you
 power off instead, the original card is checked at its next boot if it was in the middle of a write.
 
 ## Things that cannot save your data
