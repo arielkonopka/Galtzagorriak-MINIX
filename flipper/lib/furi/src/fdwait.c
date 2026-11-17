@@ -15,10 +15,13 @@
  * #131), poll() reports a character device (/dev/buttons, the tty) as
  * always ready. So ffd_read() reads with O_NONBLOCK; if poll() said ready
  * and the read still gives EAGAIN, the fd is left out of poll() for the
- * rest of that call and tried again once per clock tick (FPORT_TICK_MS):
- * a device costs one read() per tick while it has no data, never a spin.
+ * rest of that call and tried again after a clock tick (FPORT_TICK_MS;
+ * on MINIX poll() waits at least two tick boundaries, so every 17-33 ms):
+ * a device costs one read() per tick or two while it has no data, never
+ * a spin (QEMU: 3 reads in 100 ms; the host, 10 ms ticks: 9).
  * Drop the retry path (FuriFdWait.retry) once flipdev answers DEV_SELECT:
  * then a ready device is really ready and the path is never taken. */
+#include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
