@@ -80,7 +80,8 @@ threads inside one process** with the stock API (`furi_thread_*`, `furi_message_
   instead of spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
 - Costs on the device: about 13 KB of code (until it moves into the shared library), 84 B per
   thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
-- Not from signal handlers. The GUI, storage and HAL parts come with R5.2–R5.4 **(planned)**.
+- Not from signal handlers. The GUI (R5.2) is in section 4.9; storage and HAL come with R5.3–R5.4
+  **(planned)**.
 
 ## 1.3 Program text runs from flash
 
