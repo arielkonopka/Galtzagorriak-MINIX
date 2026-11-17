@@ -7,10 +7,14 @@ grep '^alarm:' /etc/passwd >/dev/null || {
 	echo 'alarm:*:22:11:Alarm clock:/home/flipper:' >> /etc/passwd
 	echo "alarm: added the user alarm (uid 22, group timers)"
 }
-sed -e 's|^Alarm:root:/usr/bin/alarm$|Alarm:root:@alarm:/usr/bin/alarm|' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
-grep '^Alarm:' /etc/apps >/dev/null || {
-	echo 'Alarm:root:@alarm:/usr/bin/alarm' >> /etc/apps
-	echo "alarm: the launcher now has Alarm"
+# The launcher line: Ordua, a Basque touch (owner 2026-11-17), with its
+# icon; older lines (Alarm, with or without the icon) become it.
+sed -e 's|^Alarm:root:/usr/bin/alarm$|Ordua:root:@alarm:/usr/bin/alarm|' \
+    -e 's|^Alarm:root:@alarm:/usr/bin/alarm$|Ordua:root:@alarm:/usr/bin/alarm|' /etc/apps > /etc/apps.new &&
+	mv /etc/apps.new /etc/apps
+grep ':/usr/bin/alarm$' /etc/apps >/dev/null || {
+	echo 'Ordua:root:@alarm:/usr/bin/alarm' >> /etc/apps
+	echo "alarm: the launcher now has Ordua"
 }
 test -d /home/flipper/apps_data/alarm || mkdir /home/flipper/apps_data/alarm
 chown alarm /home/flipper/apps_data/alarm
