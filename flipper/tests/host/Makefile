@@ -13,11 +13,15 @@ B	:= build
 
 TESTS	:= parttest usbtest
 
-all: $(TESTS:%=run-%) run-libfuri
+all: $(TESTS:%=run-%) run-libfuri run-libapp
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
 	$(MAKE) -C $(MROOT)/flipper/lib/furi test
+
+# libapp (spec R7b.4): the timer rules, the notification policy, the spool.
+run-libapp:
+	$(MAKE) -C $(MROOT)/flipper/lib/app test
 
 run-%: $(B)/%
 	./$<
@@ -51,4 +55,4 @@ $(B)/usbtest: usbtest.c $(B)/usb.c stubs/usb/*.h \
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri
+.PHONY: all clean run-libfuri run-libapp
