@@ -1950,6 +1950,28 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     the launcher itself.
   - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
     at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
+  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17). The launcher's look follows the
+    Pine mail program: text first, every screen says what each button does, nothing hidden; with
+    modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
+    128×64 with the 4×6 font:
+    - **Title bar** (black, as now): the screen name centred; on the right, the position
+      `3/12` of the selected entry (the list only).
+    - **List**: 8 rows (y = 7 + 6·i), the selected row a full-width inverted bar with `>`;
+      when there are more than 8 entries, a 1-pixel scroll mark at x = 127 whose length and
+      place show the visible part (no arrows, no animation).
+    - **Hint line**: a 1-pixel rule at y = 56 and one line at y = 58 naming the buttons in
+      Pine's `key action` style, e.g. `<Setup  OK Run  >Running` (`>Running` only once R12.20
+      exists). Every launcher screen has one: the settings page says `OK Toggle  Back Done`.
+    - **Message line**: short notices that today take the whole screen (`unknown user`, `app
+      crashed`, the park hint of R12.20) replace the hint line for 2 s instead, so the list stays
+      visible; the hint line comes back at the next key or after the 2 s.
+    - **Settings page**: one line per setting, value in brackets (`Icons   [on]`,
+      `Hints   [on]`); Up/Down choose, OK or Left/Right toggles.
+    - `Hints: on|off` in `/etc/launcher.conf` (default `on`): off gives the list its 9th row back
+      and drops the title counter. Hints off and icons off = today's screen exactly.
+    - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
+      stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
+      through `poll`, not a periodic tick).
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -1964,11 +1986,15 @@ Acceptance:
   `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
   frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
   for the empty, unknown and malformed ones; every app still starts.
-- AC5.5 (R5.6a) With `Icons: off` the launcher's frames are byte-identical to the frames of the
+- AC5.5 (R5.6a) With `Icons: off` and `Hints: off` the launcher's frames are byte-identical to the frames of the
   launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
 - AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
   holds the new value, the list redraws without icons; Left, Back without a change writes
   nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
+  moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
+  shows the notice on the message line with the list still drawn, and the hint line is back
+  after 2 s with no key pressed.
 
 Responsiveness: AC5.R A `libfuri` app's view redraw after a key event meets L1; the cooperative threads of one app never block its input thread for more than 10 ms (measured with `lat`).
 

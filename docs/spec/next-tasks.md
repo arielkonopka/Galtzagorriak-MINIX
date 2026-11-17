@@ -312,17 +312,18 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 - R12.40 HAL: read `DISCARD_SUPPORT` (ACMD13) at init, `hal_disk_discard()` (CMD32/33/38 arg 1, timeout, card-detect), `DIOCDISCARD`; AC12.26 on an SD 5.1 card.
 - AC12.23: GET/PUT times (512 B, 1 KB, 4 KB) and L1/L2 with a background block reader and a foreground 1 MB map scroll; numbers in PORTING.md.
 
-## T21. Launcher icons (spec R5.6a, AC5.4–AC5.6; owner request 2026-11-17)
+## T21. Launcher icons and Pine-style look (spec R5.6a, AC5.4–AC5.7; owner request 2026-11-17)
 Owner request outside the milestone order: the launcher may show an icon of at most two characters (8×6 px) before each app. The rest of R5.6 (manifests, categories) stays in M4.
 
 ### T21a (`lane:cloud`, host + QEMU)
 - `/etc/apps` third field (R5.6a.1): empty, `@name`, `#` + 12 hex digits, or 1–2 characters; the old two-field form keeps working. Parsing in one pure function with a host test (`make icontest` or inside an existing host test target, in the `build` CI job): every form, malformed hex, 3 characters, `:` and `/` cases, label/user/command truncation unchanged.
 - Built-in icon table (R5.6a.2), original 8×6 drawings, a host tool that renders them 8× enlarged into a PNG attached to the PR; base `/etc/apps` and base `postinst` lines with icons; `mkpkg.py -i ICON` writes `Icon:`.
 - Drawing (R5.6a.3) with `gui_bits8()`; with icons off byte-identical frames (AC5.5).
-- Setting (R5.6a.4): `/rom/etc/launcher.conf` with `Icons: on`, Left opens the settings page, write on Back only when changed.
-- QEMU test in the M2 self-test (or a launcher test driven with fake buttons, as the `libfuri` test does) for AC5.4–AC5.6; test labels may be Basque (`Kanpaia` with `@bell`, `Ordua` with `@clock`, `Kaixo` with `Zz`).
+- Setting (R5.6a.4): `/rom/etc/launcher.conf` with `Icons: on` and `Hints: on`, Left opens the settings page, write on Back only when changed.
+- Pine-style look (R5.6a.7): title counter, 8 rows + scroll mark, hint line on every screen, notices on the message line for 2 s (timed read via `poll`, no periodic tick), settings page with `[on]` values. Enlarged PNG screenshots (from a QEMU frame dump) of the list and the settings page in the PR.
+- QEMU test in the M2 self-test (or a launcher test driven with fake buttons, as the `libfuri` test does) for AC5.4–AC5.7; test labels may be Basque (`Kanpaia` with `@bell`, `Ordua` with `@clock`, `Kaixo` with `Zz`).
 - RAM (R5.6a.5): give the launcher's `.bss` and the heap of 16 entries with icons before/after in the PR (≤ +8 B `.bss`, ≤ 104 B heap). 0 run-time flash writes (`flashcheck`), BASE_VER bump (new `/etc` file).
-- Docs: CHANGELOG line; new `docs/manual/launcher.md` (the list, icons on/off, the `/etc/apps` line with the icon forms and the built-in names, a picture of the icons); devguide 4.4 (`/etc/apps` format, `Icon:` for packages, postinst example with an icon); `mkpkg.py` help.
+- Docs: CHANGELOG line; new `docs/manual/launcher.md` (the list, the hint line, icons and hints on/off, the `/etc/apps` line with the icon forms and the built-in names, a picture of the icons); devguide 4.4 (`/etc/apps` format, `Icon:` for packages, postinst example with an icon); `mkpkg.py` help.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
