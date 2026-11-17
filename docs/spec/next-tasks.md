@@ -293,10 +293,10 @@ Owner request outside the milestone order (H-lane priority 4, "owner requests").
 - Device checks AC9.0.2–AC9.0.4 (results table in PORTING.md, `lat` numbers in the PR); kernel RAM ≤ +32 B in total.
 
 ## T20. Swappable memory blocks for apps (spec 12h, R12.34–R12.38; owner request 2026-11-17): milestone M4
-Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rules: kernel 0 B, MM ≤ +7 B, no noticeable CPU on the foreground path, writes only for changed data, nothing at process exit. Needs plain swap (12a, `sw_on`, `sw_io`, `sw_step`) on main, which it is.
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rules: kernel 0 B, MM ≤ +39 B, no noticeable CPU on the foreground path, writes only for changed data, nothing at process exit. Needs plain swap (12a, `sw_on`, `sw_io`, `sw_step`) on main, which it is.
 
 ### T20a (`lane:cloud`, QEMU): MM, libraries, Berry
-- R12.34/R12.35 in `src/mm/swap.c` (or a new `src/mm/blk.c` sharing `sw_io`): block areas after the 16 slots, header through the last `mbuf` sector, validity check, boot stamp (+4 B, bumped on pid wrap in `forkexit.c`). `make ramcheck`: MM ≤ +7 B, kernel +0 B.
+- R12.34/R12.35 in `src/mm/swap.c` (or a new `src/mm/blk.c` sharing `sw_io`): 256 extents after the 16 slots, reservation table (2 B per slot) with `blk_open`/`blk_close`, first fit, grow in place, shrink, half-of-space limit for non-root, header through the last `mbuf` sector, validity check, boot stamp (+4 B, bumped on pid wrap in `forkexit.c`). `make ramcheck`: MM ≤ +39 B, kernel +0 B.
 - R12.36: `MEMINFO` request `MI_BLK` with the descriptor in the caller's memory; GET / PUT / partial PUT / `BLK_IFCHANGED` / INFO; buffer bounds checked against the caller's segments.
 - R12.37: `BLKWAIT` deferral of background callers into `sw_step()` (order: user-awaited swap-in, then blocks, then reserve), shared write budget `sw.wkb`; `NOSWAP` → `EPERM` in `plain`; `ENXIO` without a kill on card loss.
 - R12.38: `blk=` in `/etc/rc.conf` (default `off`) and `/etc/rc`; `<blk.h>` in libc; `libblk`; Berry module `blk` with `vbytes` (when the Berry VM is on main; otherwise a follow-up in the same task).
