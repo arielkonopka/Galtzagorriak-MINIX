@@ -56,6 +56,7 @@
 #include <minix/lat.h>
 #include <minix/fg.h>
 #include <minix/rtc.h>
+#include <minix/rfid.h>
 #include <signal.h>
 
 #define LCD_MINOR	0
@@ -165,6 +166,10 @@ PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
 PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
+PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
+					 * T5577 command and its reply */
+PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
+					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;
@@ -259,6 +264,8 @@ FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
 FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
+FORWARD _PROTOTYPE( void rfid_field_off, (void)				);
+FORWARD _PROTOTYPE( int rfid_ioctl, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -317,6 +324,9 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR
+							&& rf_held)
+			rfid_field_off();	/* the holder let go */
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
@@ -327,7 +337,9 @@ PUBLIC void flipdev_task()
 		r = do_rw(&fm);
 		break;
 	case DEV_IOCTL:
-		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm) : fg_ioctl(&fm);
+		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
+		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
+		  : fg_ioctl(&fm);
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
@@ -335,7 +347,10 @@ PUBLIC void flipdev_task()
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
-			if (tx_rfid) rfid_tx_off();
+			if (tx_rfid && rf_held) {	/* the whole session */
+				rfid_field_off();
+				tx_rfid = FALSE;
+			} else if (tx_rfid) rfid_tx_off();
 		}
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
@@ -930,6 +945,8 @@ message *m_ptr;
 		if (ir_rd || tx_on) return(EBUSY);
 		int rr;
 
+		if (rf_held) hal_rfid_pull(1);	/* a command: PA2 high (the
+					 * capture left it low) */
 		tx_rfid = TRUE;
 		rr = ir_write(m_ptr, user, count);
 		if (rr != SUSPEND) tx_rfid = FALSE;
@@ -1339,7 +1356,8 @@ PRIVATE void do_hardint()
   if (tx_on) {
 	if (tx_done) {				/* the frame is out */
 		tx_on = FALSE;
-		if (tx_rfid) rfid_tx_off();
+		if (tx_rfid && !rf_held) rfid_tx_off();
+		else if (tx_rfid) tx_rfid = FALSE;	/* field held: keep it */
 		if (ir_rd && ir_paused) {	/* the reader's capture again */
 			ir_paused = FALSE;
 			if (ir_rx_arm() < 0) ir_rx_end(EIO);
@@ -1827,14 +1845,15 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
   unsigned n = ir_count / 4 - hal_pulse_left();
 
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
-	hal_rfid_stop();		/* the DMA first, then the memory */
+	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
+	else hal_rfid_stop();		/* the DMA first, then the memory */
 	lock();
 	mt_arm(MT_PULSE, 0);
 	unlock();
 	n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
-  pm_busy &= ~PM_PULSE;
+  if (!rf_held) pm_busy &= ~PM_PULSE;	/* a held field still needs them */
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
   ir_rd = FALSE;
@@ -1852,6 +1871,11 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
  * tries both). */
 #define RF_MS		500
 #define RF_POLL_MS	20
+/* A held read follows a T5577 command, whose field gaps leave the antenna's
+ * envelope detector unsettled; the field stays up and the capture is armed
+ * only after it recovers (stock T5577_READ_SETTLE_MS).  No busy wait: the
+ * ms timer counts the delay out (R0.8b). */
+#define RF_SETTLE_MS	450
 
 PRIVATE int rfid_read(m_ptr, user, count)
 message *m_ptr;
@@ -1867,9 +1891,12 @@ int count;
   ir_started = ir_done = ir_paused = FALSE;
   pu_input = 2;
   rf_polls = 0;
+  rf_settle = rf_held ? (RF_SETTLE_MS / RF_POLL_MS) : 0;
+  if (rf_held) hal_rfid_pull(0);	/* the read path: PA2 low before the
+					 * settle, so the envelope settles low */
   proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
   ir_rd = TRUE;
-  if (hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
+  if (!rf_held && hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
 	ir_rd = FALSE;
 	proc_addr(ir_proc)->p_physio = FALSE;
 	return(ENXIO);
@@ -1883,9 +1910,19 @@ int count;
 
 PUBLIC void flipdev_pulse_poll()
 {
-/* The ms timer (interrupt): the RFID read's buffer is full, or its time
- * is up, or look again. */
+/* The ms timer (interrupt): a held read's field is settling, or the read's
+ * buffer is full, or its time is up, or look again. */
   if (!ir_rd || pu_input != 2) return;
+  if (rf_settle) {			/* field up, capture not yet armed */
+	if (--rf_settle == 0
+	    && hal_rfid_capture(ir_buf, (unsigned) ir_count / 4) < 0) {
+		ir_done = TRUE;
+		interrupt(PRINTER);
+		return;
+	}
+	mt_arm(MT_PULSE, RF_POLL_MS);
+	return;
+  }
   if (hal_pulse_left() == 0 || ++rf_polls >= RF_MS / RF_POLL_MS) {
 	ir_done = TRUE;
 	interrupt(PRINTER);
@@ -1898,6 +1935,51 @@ PRIVATE void rfid_tx_off()
   hal_rfid_stop();
   hal_ir_target(0);
   tx_rfid = FALSE;
+}
+
+/*===========================================================================*
+ *				rfid_field_off				     *
+ *===========================================================================*/
+PRIVATE void rfid_field_off()
+{
+/* R6.5 part 3: drop a field held up by RFIDIOCFIELD (ioctl, close or a
+ * cancel).  Any capture in flight is ended first. */
+  if (ir_rd && pu_input == 2) ir_rx_end(1);	/* cancel the capture */
+  hal_rfid_field(0);
+  rf_held = FALSE;
+  lock();
+  pm_busy &= ~PM_PULSE;			/* Stop2 again, also after a close */
+  unlock();
+}
+
+/*===========================================================================*
+ *				rfid_ioctl				     *
+ *===========================================================================*/
+PRIVATE int rfid_ioctl(m_ptr)
+message *m_ptr;
+{
+/* /dev/rfid (R6.5, <minix/rfid.h>): hold the 125 kHz field up across a
+ * T5577 command and its reply, or drop it. */
+  phys_bytes user;
+  int on;
+
+  if (m_ptr->TTY_REQUEST != RFIDIOCFIELD) return(ENOTTY);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) sizeof(on));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
+  if (on) {
+	if (rf_held) return(OK);		/* already ours */
+	if (ir_rd || tx_on || as_proc != 0) return(EBUSY);  /* TIM1, TIM2 */
+	hal_rfid_field(1);
+	rf_held = TRUE;
+	lock();
+	pm_busy |= PM_PULSE;			/* the carrier needs the clocks */
+	unlock();
+  } else if (rf_held) {
+	if (tx_on || (ir_rd && pu_input == 2)) return(EBUSY);	/* in flight */
+	rfid_field_off();
+  }
+  return(OK);
 }
 
 PRIVATE unsigned rf_durations(n)
@@ -2051,7 +2133,11 @@ int irq;
   }
   if (!update) return 1;			/* not the timer's update */
   if (tx_seg >= tx_total) {			/* the last one ended */
-	ir_stop_tx();
+	if (rf_held) {			/* keep the field up for the reply */
+		hal_ir_tx_stop();	/* the tx timer only, not the carrier */
+		hal_ir_carrier(1);	/* the 125 kHz field, continuous */
+	} else
+		ir_stop_tx();
 	tx_done = TRUE;
 	interrupt(PRINTER);
 	return 1;
