@@ -213,7 +213,7 @@ touch: `EIO`, try again. A read takes about 10 ms. Writing and emulating keys ar
 One text line per open, from the fuel gauge, read on demand:
 
 ```
-soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181 usb=0 chg=0 vbus=0
+soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181 usb=0 chg=0 vbus=0 vreg=4208 ichg=2048 otg=0 up=43210 stop2=41877 wbtn=12 wother=3510
 ```
 
 The fields are explained in the [manual's power chapter](../../manual/power.md). Nothing is ever
