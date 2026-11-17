@@ -3294,7 +3294,7 @@ noticeable CPU on the foreground path.
   - **maximum swap on cards of 32 GB or more (owner, 2026-11-17):** swap is the primary partition
     `hd3` at the end of the card, split into **four MINIX subpartitions** `hd3a`…`hd3d` of 4 GiB −
     1 MiB each (≈ 16 GiB). `/etc/rc` gives MM `hd3a`; MM finds the other three itself (their minors
-    follow `hd3a`'s, and each must have the swap type 0x82), and keeps their number (1 B, so MM
+    follow `hd3a`'s, and each must have the swap type 0x82 in `hd3`'s subpartition table; `hd3` itself has the MINIX type 0x81 as a subpartition container, so `MMSWAPON`, R12.1, accepts a subpartition of the SD card whose own table entry is 0x82), and keeps their number (1 B, so MM
     +5 B for 12h in total). The 16 swap slots stay in `hd3a`; the 16 block areas are spread four per
     subpartition (area *i* in `hd3`(*i* / 4)), so each process gets ≈ 1 GiB on the card (≈ 900 MB
     of blocks). A missing or short subpartition only shrinks the areas that would live in it
