@@ -25,6 +25,25 @@
  *		  -lock			the T5577 lock bit instead: the
  *					blocks can then never be written
  *					again, by anyone, you included
+ *		rfid clear [-with HEX] [-n N]
+ *					remove a T5577 password and make the
+ *					tag programmable again: write block 0 =
+ *					CONFIG_OPEN (clears the password bit),
+ *					verified by reading it back.  Tries no
+ *					password, -with HEX, then the proxmark3
+ *					dictionary (known copier passwords); it
+ *					stops at the first that opens the tag
+ *		rfid dump [-with HEX] [BLOCK]
+ *					read one T5577 block (0 by default) and
+ *					print its 32-bit word (block 0 is the
+ *					configuration); -with sends a password
+ *
+ * A block read holds the 125 kHz field up (ioctl RFIDIOCFIELD) across the
+ * read command (field gaps, a write) and the tag's reply (comparator edges,
+ * a read); the reply is the block's 32-bit word repeated, decoded here as
+ * the EM4100 front-end decodes Manchester.  A read-only EM4100, or a
+ * password-protected T5577 read without -with, ignores the command and keeps
+ * broadcasting its number instead.
  *
  * Writing a T5577 is done by gaps in the 125 kHz field, with the stock
  * firmware's timings (lib/lfrfid/tools/t5577.c, in carrier periods of
@@ -527,96 +546,96 @@ static int t5_write_block0(unsigned long data, unsigned long sendpass)
 	return r;
 }
 
+#include "t5577_dict.h"
+
+/* Try one candidate password: write block 0 = CONFIG_OPEN sending `cand`
+ * (0 = no password), then read block 0 back with no password.  The write
+ * clears the password bit only if `cand` is the tag's password (or it had
+ * none), and only then does a no-password read return CONFIG_OPEN.  1 if
+ * the tag opened, 0 if not, -1 on an IO error. */
+static int clear_try(unsigned long cand)
+{
+	int n;
+
+	if (t5_write_block0(T5_CFG_OPEN, cand) < 0) return -1;
+	n = t5_read_block(0, 0, 0);
+	if (n < 0) return -1;
+	return t5_holds(n, T5_CFG_OPEN) ? 1 : 0;
+}
+
 /* rfid clear [-with HEX] [-n N]: remove a T5577 password and return the tag
  * to a standard, programmable EM4100 configuration, by writing block 0 =
- * CONFIG_OPEN (which clears the password bit) and reading it back.  Sweeps
- * no password first, then the one given with -with, and stops at the first
- * that opens the tag - a password frame sent to an already-open tag is read
- * off the wrong bit positions and can hit the lock bit (stock scene_clear). */
+ * CONFIG_OPEN (which clears the password bit) and reading it back.  Tries no
+ * password, the one given with -with, then the proxmark3 dictionary (known
+ * copier and default passwords), and stops at the first that opens the tag -
+ * a password frame sent to an already-open tag is read off the wrong bit
+ * positions and can hit the lock bit (stock scene_clear). */
 static int clear_t5(unsigned long withpass, int haswith, int tries)
 {
-	int n, cand_i, t;
+	int n, t, r;
+	unsigned long w;
+	unsigned i;
 
 	n = t5_read_block(0, 0, 0);		/* see the tag first */
-	if (n < 0) { printf("no tag, or its block 0 cannot be read\n"); return 1; }
-	if (t5_holds(n, T5_CFG_OPEN)) {
-		printf("already open: block 0 is CONFIG_OPEN (%08lX), no password\n",
-			T5_CFG_OPEN);
+	if (n >= 0 && t5_word(n, &w) >= 2 && t5_holds(n, T5_CFG_OPEN)) {
+		printf("already open: block 0 is CONFIG_OPEN (%08lX), "
+			"no password\n", T5_CFG_OPEN);
 		return 0;
 	}
 
-	/* no password, then the typed one; each tried up to `tries` times, as
-	 * a T5577 write only lands when a gap falls where the tag listens */
-	for (cand_i = 0; cand_i <= (haswith ? 1 : 0); cand_i++) {
-		int wp = (cand_i == 1);
-		unsigned long cand = wp ? withpass : 0;
+	/* No password, then the one typed, each tried a few times (a T5577
+	 * write only lands when a gap falls where the tag listens). */
+	for (t = 0; t < tries; t++) {
+		if ((r = clear_try(0)) < 0) return 1;
+		if (r) { printf("cleared: the tag had no password; it is "
+				"programmable again\n"); return 0; }
+	}
+	if (haswith) for (t = 0; t < tries; t++) {
+		if ((r = clear_try(withpass)) < 0) return 1;
+		if (r) { printf("cleared with %08lX: programmable again\n",
+				withpass); return 0; }
+	}
 
-		for (t = 0; t < tries; t++) {
-			if (t5_write_block0(T5_CFG_OPEN, cand) < 0) return 1;
-			n = t5_read_block(0, 0, 0);
-			if (n >= 0 && t5_holds(n, T5_CFG_OPEN)) {
-				printf("cleared%s: block 0 now CONFIG_OPEN, "
-					"the tag is programmable again\n",
-					wp ? " with the given password"
-					   : " (it had no password)");
-				return 0;
-			}
+	/* The dictionary: one try each (the field is re-raised per write, so a
+	 * flaky write just misses that word; the common passwords are few). */
+	printf("sweeping %u known passwords...\n", (unsigned) T5_DICT_N);
+	for (i = 0; i < T5_DICT_N; i++) {
+		if ((i & 15) == 0 && i) printf("  %u/%u\n", i, (unsigned) T5_DICT_N);
+		if ((r = clear_try(t5_dict[i])) < 0) return 1;
+		if (r) {
+			printf("cleared with %08lX (a known password): "
+				"programmable again\n", t5_dict[i]);
+			return 0;
 		}
 	}
-	printf("not cleared: the tag did not open to %s%08lX.\n"
-		"It is password-protected (password not known) or the block 0 "
-		"lock bit is set (permanent).\n",
-		haswith ? "the given password or " : "no password, ",
-		haswith ? withpass : 0);
+	printf("not cleared: no password opened the tag.\n"
+		"Either the block 0 lock bit is set (permanent, not clearable "
+		"by any tool), or it carries a password not in the list - "
+		"a hardware copier may have set a random one.\n");
 	return 1;
 }
 
-/* rfid dump [-with HEX] [BLOCK]: read a T5577 block (0 by default) and
- * print the reply's raw edge durations, to see the tag answering. */
-static int dump_block(int block, int with_pass, unsigned long pass, int nocmd,
-			int settle)
+/* rfid dump [-with HEX] [BLOCK]: read one T5577 block (0 by default) and
+ * print its 32-bit word.  A T5577 answers a block read with its word; a tag
+ * that ignores the command (a read-only EM4100, or a password-protected one
+ * read without its password) is still broadcasting its EM4100 number. */
+static int dump_block(int block, int with_pass, unsigned long pass)
 {
-	int fd, n, i, on = 1, off = 0;
+	int n;
+	unsigned long w;
+	unsigned char id[5];
 
-	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
-		perror("rfid: /dev/rfid");
-		return 1;
-	}
-	if (settle >= 20) ioctl(fd, RFIDIOCFIELD, &settle);	/* settle ms */
-	if (ioctl(fd, RFIDIOCFIELD, &on) < 0) {
-		perror("rfid: field");
-		close(fd);
-		return 1;
-	}
-	if (nocmd) {				/* just the held field + capture:
-					 * a T5577 broadcasts EM4100 here */
-		if ((n = read(fd, d, sizeof(d))) < 0) { perror("rfid"); n = -4; }
-		else n /= 4;
-	} else {
-		n = t5_exchange(fd, with_pass, pass, block);
-		t5_regular_read();		/* leave it broadcasting */
-		(void) send(fd);
-	}
-	ioctl(fd, RFIDIOCFIELD, &off);
-	close(fd);
+	n = t5_read_block(block, with_pass, pass);
 	if (n < 0) return 1;
-	{
-		unsigned long w;
-		int c = t5_word(n, &w);
-		unsigned char id[5];
-		int em = em_decode(n, id);
-
-		printf("%s %d: %d edges", nocmd ? "field" : "block", block, n);
-		if (c >= 2) printf(", word %08lX (x%d) ~%08lX",
-					w, c, (~w) & 0xFFFFFFFFUL);
-		if (em) printf(", EM4100 %02X %02X %02X %02X %02X",
-				id[0], id[1], id[2], id[3], id[4]);
-		if (c < 2 && !em) {
-			printf(", raw;");
-			for (i = 0; i < n && i < 50; i++) printf(" %lu", d[i]);
-		}
-		printf("\n");
-	}
+	if (t5_word(n, &w) >= 2)
+		printf("block %d: %08lX\n", block, w);
+	else if (em_decode(n, id))
+		printf("block %d: no T5577 word; the tag is broadcasting "
+			"EM4100 %02X %02X %02X %02X %02X (read-only, or "
+			"password-protected and read without -with)\n",
+			block, id[0], id[1], id[2], id[3], id[4]);
+	else
+		printf("block %d: no answer (hold the tag to the back)\n", block);
 	return 0;
 }
 
@@ -644,15 +663,12 @@ int main(int argc, char **argv)
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "dump") == 0) {
-		int block = 0, with = 0, nocmd = 0, settle = 0;
+		int block = 0, with = 0;
 		unsigned long pass = 0;
 		char *e;
 
 		for (i = 2; i < argc; i++) {
-			if (strcmp(argv[i], "-q") == 0) nocmd = 1;
-			else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc)
-				settle = atoi(argv[++i]);
-			else if (strcmp(argv[i], "-with") == 0 && i + 1 < argc) {
+			if (strcmp(argv[i], "-with") == 0 && i + 1 < argc) {
 				pass = strtoul(argv[++i], &e, 16);
 				with = 1;
 				if (*e != 0) goto use;
@@ -661,7 +677,7 @@ int main(int argc, char **argv)
 				if (*e != 0 || block < 0 || block > 7) goto use;
 			}
 		}
-		return dump_block(block, with, pass, nocmd, settle);
+		return dump_block(block, with, pass);
 	}
 
 	if (argc >= 2 && (strcmp(argv[1], "write") == 0
@@ -706,7 +722,9 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 				"       rfid write [-n N] [-pass HEX] "
 				"[-with HEX] [-lock] EM B0 B1 B2 B3 B4\n"
 				"       rfid copy [-n N] [-pass HEX] "
-				"[-with HEX] [-lock]\n");
+				"[-with HEX] [-lock]\n"
+				"       rfid clear [-with HEX] [-n N]\n"
+				"       rfid dump [-with HEX] [BLOCK]\n");
 			return 2;
 		}
 	}
