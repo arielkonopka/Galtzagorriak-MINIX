@@ -1679,6 +1679,55 @@ void hal_btn_arm(int on)
 	}
 }
 
+/* R6.4: edges of header pins 0 (PA7, EXTI line 7) and 2 (PA4, line 4), the
+ * only ones with a line nobody uses (buttons 3, 6, 10-13; IR 0, CC1101 1,
+ * NFC 2, iButton 14).  Both edges; they wake the CPU from Stop2.  Line 7
+ * shares the EXTI9_5 vector with button line 6, so the kernel's button
+ * handler acks these too (hal_gpio_edge_ack). */
+#define GP_LINES	(EXTI_IMR1_IM4 | EXTI_IMR1_IM7)
+
+unsigned hal_gpio_edge_pins(void)
+{
+	return 0x05;			/* pins 0 and 2 */
+}
+
+int hal_gpio_edge_irq(void)
+{
+	return EXTI4_IRQn;		/* line 7: the buttons' EXTI9_5 */
+}
+
+int hal_gpio_edge(unsigned pin, int on)
+{
+	uint32_t line;
+
+	if (pin == 0) line = EXTI_IMR1_IM7;
+	else if (pin == 2) line = EXTI_IMR1_IM4;
+	else return -1;
+	if (on) {			/* (SYSCFG is always clocked on the WB) */
+		if (pin == 0)
+			SYSCFG->EXTICR[1] &= ~SYSCFG_EXTICR2_EXTI7; /* port A */
+		else
+			SYSCFG->EXTICR[1] &= ~SYSCFG_EXTICR2_EXTI4;
+		EXTI->RTSR1 |= line;
+		EXTI->FTSR1 |= line;
+		EXTI->PR1 = line;
+		EXTI->IMR1 |= line;
+	} else {
+		EXTI->IMR1 &= ~line;
+		EXTI->PR1 = line;
+	}
+	return 0;
+}
+
+unsigned hal_gpio_edge_ack(void)
+{
+	uint32_t pr = EXTI->PR1 & GP_LINES & EXTI->IMR1;
+
+	if (pr == 0) return 0;
+	EXTI->PR1 = pr;
+	return (pr & EXTI_IMR1_IM7 ? 1u : 0) | (pr & EXTI_IMR1_IM4 ? 4u : 0);
+}
+
 /*===========================================================================*
  *				The ms timer				     *
  *===========================================================================*/
