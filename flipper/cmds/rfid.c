@@ -46,6 +46,11 @@
  *					FDX-B's 134.2 kHz (R9.0.4); the
  *					decoders run on 125 kHz captures,
  *					so -r shows the timings (T19b)
+ *		rfid raw FILE [-c MODE] [-t SECS]
+ *					record the signal as it is (default
+ *					10 s) in Unleashed's .ask.raw/.psk.raw
+ *					format, for tags no decoder knows
+ *					(R9.0.8; files on the SD card)
  *		rfid -s SECS [-c MODE]	capture without a gap (R9.0.5) for
  *					SECS and report halves, edges,
  *					overruns and the durations' range
@@ -93,6 +98,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1382,6 +1388,144 @@ static int stream_test(int secs, int carrier)
 	return over != 0;
 }
 
+/* ---- RAW read (R9.0.8) ----
+ * rfid raw FILE [-c MODE] [-t SECS]: the tag's signal as it is, for tags
+ * no decoder knows, in Unleashed's .ask.raw/.psk.raw format (lib/lfrfid/
+ * lfrfid_raw_file.c): a header (magic "RIFL", version 1, the carrier's
+ * frequency and duty as floats, the largest block), then blocks of a
+ * 32-bit length and varint pairs (LEB128): the time high, then the
+ * period, us, as stock's capture reports them (high width from a rising
+ * edge, period from rising to rising).  The edges come from the stream
+ * (R9.0.5); its level before the first edge gives their polarity.  A
+ * stream overrun skips whole halves of 512 edges, so the polarity stays;
+ * only the pair across the gap is dropped. */
+#define RAW_BLOCK	2048
+
+static volatile int raw_stop;
+
+static void raw_sig(int sig)
+{
+	raw_stop = 1;
+}
+
+static int raw_flush(int out, unsigned char *blk, int *n)
+{
+	unsigned long len = (unsigned long) *n;
+
+	if (*n == 0) return 0;
+	if (write(out, (char *) &len, 4) != 4 || write(out, (char *) blk, *n) != *n)
+		return -1;
+	*n = 0;
+	return 0;
+}
+
+static void raw_varint(unsigned char *blk, int *n, unsigned long v)
+{
+	while (v >= 0x80) {
+		blk[(*n)++] = (unsigned char) (v | 0x80);
+		v >>= 7;
+	}
+	blk[(*n)++] = (unsigned char) v;
+}
+
+static int raw_read(char *path, int secs, int carrier)
+{
+	static const unsigned long hz[3] = { 0x47F42400UL, 0x47742400UL,
+					      0x48030E00UL };	/* floats */
+	unsigned long hdr[5], *ring = malloc(1024 * sizeof(unsigned long));
+	unsigned char *blk = malloc(RAW_BLOCK);
+	unsigned long rise = 0, fall = 0, pairs = 0, over = 0;
+	struct rfid_stream st;
+	int fd, out, h, i, n = 0, level, have_rise = 0, have_fall = 0, r = 0;
+	time_t end = time((time_t *) 0) + secs;
+
+	if (ring == NULL || blk == NULL) {
+		fprintf(stderr, "rfid: no memory\n");
+		return 1;
+	}
+	if ((out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) {
+		perror(path);
+		return 1;
+	}
+	hdr[0] = 0x4C464952UL;			/* "RIFL" */
+	hdr[1] = 1;
+	hdr[2] = hz[carrier];
+	hdr[3] = carrier == RFID_CARRIER_PSK ? 0x3E800000UL : 0x3F000000UL;
+	hdr[4] = RAW_BLOCK;
+	if (write(out, (char *) hdr, sizeof hdr) != sizeof hdr) {
+		perror(path);
+		return 1;
+	}
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
+		return 1;
+	}
+	st.ring = ring;
+	st.words = 1024;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		perror("rfid: stream");
+		return 1;
+	}
+	level = st.level;
+	signal(SIGINT, raw_sig);
+	printf("recording to %s for %d s (Ctrl-C ends it)...\n", path, secs);
+	fflush(stdout);
+	while (!raw_stop && time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 1000) != 1) continue;
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno == EOVERFLOW) {	/* whole halves skipped */
+				over++;
+				have_rise = have_fall = 0;
+				continue;
+			}
+			if (errno == EINTR) continue;
+			perror("rfid: read");
+			r = 1;
+			break;
+		}
+		for (i = h * 512; i < (h + 1) * 512; i++) {
+			level = !level;			/* this edge's new level */
+			if (level) {			/* rising */
+				if (have_rise) {
+					raw_varint(blk, &n, have_fall
+						? fall - rise : 0);
+					raw_varint(blk, &n, ring[i] - rise);
+					pairs++;
+					if (n > RAW_BLOCK - 10
+					    && raw_flush(out, blk, &n) < 0) {
+						perror(path);
+						raw_stop = r = 1;
+						break;
+					}
+				}
+				rise = ring[i];
+				have_rise = 1;
+				have_fall = 0;
+			} else if (have_rise) {
+				fall = ring[i];
+				have_fall = 1;
+			}
+		}
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	close(fd);
+	if (raw_flush(out, blk, &n) < 0 || close(out) < 0) {
+		perror(path);
+		r = 1;
+	}
+	printf("%lu pairs, %lu overruns\n", pairs, over);
+	return r || over != 0;
+}
+
 int main(int argc, char **argv)
 {
 	int carrier = RFID_CARRIER_125, stream = 0;
@@ -1404,6 +1548,25 @@ int main(int argc, char **argv)
 		if (p == LFRFIDProtocolEM4100)
 			return runs ? emulate_em_runs(data) : emulate_em(data);
 		return emulate_lf(p, data);
+	}
+
+	if (argc >= 3 && strcmp(argv[1], "raw") == 0) {	/* R9.0.8 */
+		int secs = 10, c = RFID_CARRIER_125;
+
+		for (i = 3; i < argc; i++) {
+			if (strcmp(argv[i], "-t") == 0 && i + 1 < argc)
+				secs = atoi(argv[++i]);
+			else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+				i++;
+				if (strcmp(argv[i], "psk") == 0)
+					c = RFID_CARRIER_PSK;
+				else if (strcmp(argv[i], "134") == 0)
+					c = RFID_CARRIER_134;
+				else if (strcmp(argv[i], "125") != 0) goto use;
+			} else goto use;
+		}
+		if (secs < 1) goto use;
+		return raw_read(argv[2], secs, c);
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
@@ -1501,6 +1664,7 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
 				"       rfid emulate [-runs] PROTO HEX...|-f FILE\n"
+				"       rfid raw FILE [-c 125|psk|134] [-t SECS]\n"
 				"       rfid list\n");
 			return 2;
 		}
