@@ -77,8 +77,9 @@ EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
 EXTERN clock_t k_input;		/* uptime of the last key or button (T4) */
 EXTERN u32_t pm_busy;		/* sleep blockers (T14b): PM_* in const.h */
 EXTERN struct {			/* T14b statistics, since boot */
-  u32_t stop;			/* time in Stop2, ms timer clocks (36 h) */
+  u32_t stop;			/* time in Stop2, ms timer clocks (< 1 min) */
   u16_t btn, other;		/* wake-ups: a button; anything else */
+  u16_t min;			/* R6.8: and whole minutes of it (45 days) */
 } pm_stat;
 #endif
 
