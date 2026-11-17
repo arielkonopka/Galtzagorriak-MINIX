@@ -83,6 +83,31 @@ static int yesno(const char *v)
 	return -1;
 }
 
+/* "sound,vibro,led,screen" (commas or spaces, any order) or "none" ->
+ * NF_*; 0xFF for anything else. */
+static const char *const outnm[4] = { "sound", "vibro", "led", "screen" };
+static const unsigned char outfl[4] = { NF_SOUND, NF_VIBRO, NF_LED,
+								NF_SCREEN };
+
+static int outs(const char *v)
+{
+	int f = 0, i, l;
+
+	if (strcmp(v, "none") == 0) return 0;
+	while (*v != 0) {
+		while (*v == ',' || *v == ' ') v++;
+		if (*v == 0) break;
+		for (l = 0; v[l] != 0 && v[l] != ',' && v[l] != ' '; l++) ;
+		for (i = 0; i < 4; i++)
+			if ((int) strlen(outnm[i]) == l
+			    && strncmp(v, outnm[i], l) == 0) break;
+		if (i == 4) return 0xFF;
+		f |= outfl[i];
+		v += l;
+	}
+	return f;
+}
+
 static int days(const char *v)
 {
 	int mask = 0, i;
@@ -163,6 +188,35 @@ int timer_parse(struct app_timer *t, char *buf)
 		} else if (strcmp(k, "Snooze") == 0) {
 			n = (unsigned) atoi(v) > 60;
 			t->snooze = atoi(v);
+		} else if (strcmp(k, "Tone") == 0) {
+			n = (v[0] == '/' ? strstr(v, "..") != NULL
+					 : tune_builtin(v) == NULL)
+				|| strlen(v) >= sizeof t->tone;
+			copy(t->tone, v, sizeof t->tone);
+		} else if (strcmp(k, "Ring") == 0) {
+			n = (unsigned) atoi(v) > 60;
+			t->ring = atoi(v);
+		} else if (strcmp(k, "Ramp") == 0) {	/* before Mode: */
+			n = (t->ramp = yesno(v)) > 1;
+		} else if (strcmp(k, "Mode") == 0) {
+			t->ramp = strcmp(v, "escalating") == 0;
+			n = !t->ramp && strcmp(v, "steady") != 0;
+		} else if (strcmp(k, "Volume") == 0) {
+			n = atoi(v);
+			t->volume = n;
+			n = n < 1 || n > 100;
+		} else if (strcmp(k, "Step") == 0) {
+			t->step = atoi(v);
+			n = t->step < 5 || t->step > 120;
+		} else if (strcmp(k, "Out") == 0) {
+			n = (t->flags = outs(v)) > NF_OUT;
+		} else if (strcmp(k, "Sound") == 0
+			   && (strcmp(v, "single") == 0
+			       || strcmp(v, "multi") == 0)) {
+			t->single = v[0] == 's';
+		} else if (strcmp(k, "Log") == 0) {
+			n = !app_id_ok(v);
+			copy(t->log, v, sizeof t->log);
 		} else {
 			int f = strcmp(k, "Sound") == 0 ? NF_SOUND
 				: strcmp(k, "Vibro") == 0 ? NF_VIBRO
@@ -253,15 +307,41 @@ int timer_format(const struct app_timer *t, char *buf, int size)
 	if (t->action == TA_RUN) {
 		n = put(buf, size, n, "run\nProgram: ");
 		n = put(buf, size, n, t->prog);
-	} else {
-		n = put(buf, size, n, "notify\nSound: ");
-		n = put(buf, size, n, t->flags & NF_SOUND ? "yes" : "no");
-		n = put(buf, size, n, t->flags & NF_VIBRO ? "\nVibro: yes"
-							  : "\nVibro: no");
-		n = put(buf, size, n, t->flags & NF_LED ? "\nLed: yes"
-							: "\nLed: no");
-		n = put(buf, size, n, "\nSnooze: ");
-		n = put(buf, size, n, num(nb + sizeof nb, t->snooze));
+	} else n = put(buf, size, n, "notify");
+	/* The notify options also for run: the program may use them. */
+	n = put(buf, size, n, "\nOut: ");
+	if ((t->flags & NF_OUT) == 0) n = put(buf, size, n, "none");
+	for (i = 0, p = nb; i < 4; i++)		/* "sound,vibro,led,screen" */
+		if (t->flags & outfl[i]) {
+			if (p != nb) *p++ = ',';
+			strcpy(p, outnm[i]);
+			p += strlen(p);
+		}
+	*p = 0;
+	n = put(buf, size, n, nb);
+	n = put(buf, size, n, t->single ? "\nSound: single" : "\nSound: multi");
+	n = put(buf, size, n, "\nSnooze: ");
+	n = put(buf, size, n, num(nb + sizeof nb, t->snooze));
+	if (t->tone[0] != 0) {
+		n = put(buf, size, n, "\nTone: ");
+		n = put(buf, size, n, t->tone);
+	}
+	if (t->ring != 0) {
+		n = put(buf, size, n, "\nRing: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->ring));
+	}
+	if (t->ramp) n = put(buf, size, n, "\nMode: escalating");
+	if (t->ramp && t->step != 0) {
+		n = put(buf, size, n, "\nStep: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->step));
+	}
+	if (t->volume != 0) {
+		n = put(buf, size, n, "\nVolume: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->volume));
+	}
+	if (t->log[0] != 0) {
+		n = put(buf, size, n, "\nLog: ");
+		n = put(buf, size, n, t->log);
 	}
 	n = put(buf, size, n, "\nTitle: ");
 	n = put(buf, size, n, t->title);
@@ -393,7 +473,7 @@ int notify_flags(const struct notify_policy *p, int cat, int want, time_t now)
 	struct tm *tm;
 	int m;
 
-	if (cat == TC_ALARM) return NF_SHOW | (want & NF_ALL);
+	if (cat == TC_ALARM) return NF_SHOW | (want & NF_OUT);
 	if (p->dnd_from >= 0 && p->dnd_from != p->dnd_to) {
 		tm = localtime(&now);
 		m = tm->tm_hour * 60 + tm->tm_min;
@@ -404,5 +484,18 @@ int notify_flags(const struct notify_policy *p, int cat, int want, time_t now)
 	if (p->volume == 0) want &= ~NF_SOUND;
 	if (!p->vibro) want &= ~NF_VIBRO;
 	if (!p->led) want &= ~NF_LED;
-	return NF_SHOW | (want & NF_ALL);
+	return NF_SHOW | (want & NF_OUT);
+}
+
+/* The speaker volume (1-100) of a notification of category cat from timer
+ * t: an alarm keeps its own (default 100) whatever the policy says;
+ * reminders and info take the policy's Volume, lowered to the timer's own
+ * if that is lower (0 when the policy says no sound). */
+int notify_volume(const struct notify_policy *p, const struct app_timer *t,
+								int cat)
+{
+	int v = t != NULL ? t->volume : 0;
+
+	if (cat == TC_ALARM) return v != 0 ? v : 100;
+	return v != 0 && v < p->volume ? v : p->volume;
 }

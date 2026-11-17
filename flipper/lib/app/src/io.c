@@ -176,23 +176,55 @@ void notify_policy(struct notify_policy *p, const char *home)
 
 /* Start the alert program for a notification: t gives the title, text,
  * id and snooze (t->id empty: none), flags what notify_flags() allowed;
- * uid >= 0: the owner of a snooze timer (alert started by root).
+ * vol the speaker volume (notify_volume(), 1-100); uid >= 0: the owner of
+ * a snooze timer (alert started by root).
  * Returns the pid, or -1. */
-int app_alert(const struct app_timer *t, int cat, int flags, int uid)
+int app_alert(const struct app_timer *t, int cat, int flags, int vol,
+								int uid)
 {
-	char fb[4], zb[4], ub[8], *argv[14];
+	char fb[4], zb[4], rb[4], sb[4], vb[4], ub[8], *argv[30];
 	int n = 0, pid, i;
 
-	/* alert's -f knows 1 sound, 2 vibro, 4 LED: one digit.  NF_SHOW (8)
-	 * from notify_flags() made it ':'..'?', which atoi() read as 0: no
-	 * sound, vibro or LED (seen on the device, #109 AC7b.R1). */
-	fb[0] = '0' + (flags & NF_ALL); fb[1] = 0;
+	/* alert's -f: 1 sound, 2 vibro, 4 LED, 16 screen, as two digits.
+	 * NF_SHOW (8) must not go along: it once made the flag '?', which
+	 * atoi() read as 0, so nothing rang (#196, #109 AC7b.R1). */
+	flags &= NF_OUT;
+	fb[0] = '0' + flags / 10; fb[1] = '0' + flags % 10; fb[2] = 0;
+	sb[0] = '0' + t->step / 100 % 10; sb[1] = '0' + t->step / 10 % 10;
+	sb[2] = '0' + t->step % 10; sb[3] = 0;
 	zb[0] = '0' + t->snooze / 10; zb[1] = '0' + t->snooze % 10; zb[2] = 0;
+	rb[0] = '0' + t->ring / 10 % 10; rb[1] = '0' + t->ring % 10; rb[2] = 0;
+	if (vol < 1 || vol > 100) vol = 100;
+	vb[0] = '0' + vol / 100; vb[1] = '0' + vol / 10 % 10;
+	vb[2] = '0' + vol % 10; vb[3] = 0;
 	argv[n++] = "alert";
 	argv[n++] = "-c";
 	argv[n++] = (char *) app_cats[cat > 2 ? 0 : cat];
 	argv[n++] = "-f";
 	argv[n++] = fb;
+	if (t->tone[0] != 0) {
+		argv[n++] = "-t";
+		argv[n++] = (char *) t->tone;
+	}
+	if (t->ring != 0) {
+		argv[n++] = "-r";
+		argv[n++] = rb;
+	}
+	if (t->ramp) argv[n++] = "-R";
+	if (t->ramp && t->step != 0) {
+		argv[n++] = "-S";
+		argv[n++] = sb;
+	}
+	if (t->single) argv[n++] = "-1";
+	if (vol != 100) {
+		argv[n++] = "-v";
+		argv[n++] = vb;
+	}
+	if (t->log[0] != 0 && t->id[0] != 0) {
+		argv[n++] = "-l";
+		argv[n++] = (char *) t->log;
+		argv[n++] = (char *) t->id;
+	}
 	if (t->id[0] != 0 && t->snooze != 0) {
 		argv[n++] = "-z";
 		argv[n++] = zb;
@@ -240,7 +272,7 @@ int notify_post(int cat, const char *title, const char *text,
 	notify_policy(&p, getenv("HOME"));
 	if ((f = notify_flags(&p, cat, t.flags, time((time_t *) 0))) == 0)
 		return 0;
-	return app_alert(&t, cat, f, -1);
+	return app_alert(&t, cat, f, notify_volume(&p, &t, cat), -1);
 }
 
 static int settings_path(char *path, int size, const char *app)
@@ -305,6 +337,34 @@ int settings_set(const char *app, const char *key, const char *val)
 	}
 	if (mkdir(dir, 0700) < 0 && errno != EEXIST) return -1;
 	return app_save(dir, "settings", new, 0600);
+}
+
+int app_log(const char *app, const char *id, time_t when)
+{
+	char path[64], dir[48], line[40], *p = line + 24;
+	unsigned long long v = (unsigned long long) when;
+	int fd, n, r;
+
+	if (!app_id_ok(app) || !app_id_ok(id)
+	    || mkpath(path, sizeof path, APP_DATA, app, "log") < 0
+	    || mkpath(dir, sizeof dir, APP_DATA, app, NULL) < 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	*p = 0;
+	do *--p = '0' + (int) (v % 10); while ((v /= 10) != 0);
+	n = 24 - (p - line);
+	memmove(line, p, n);
+	line[n++] = ' ';
+	strcpy(line + n, id);
+	n += strlen(id);
+	line[n++] = '\n';
+	if (mkdir(dir, 0700) < 0 && errno != EEXIST) return -1;
+	if ((fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0600)) < 0)
+		return -1;
+	r = write(fd, line, n) == n ? 0 : -1;	/* one write: one line */
+	if (close(fd) < 0) r = -1;
+	return r;
 }
 
 /* The screen came back (an alert closed): R7b.2 sends SIGWINCH.  Until
