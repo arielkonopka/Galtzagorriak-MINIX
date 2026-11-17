@@ -137,13 +137,16 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    | `/dev/hd3` | (swap) | 64 MB | reserved for swapping apps to the card later |
    | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
 
-2. After the reboot it makes the file systems on `/usr` and `/home`.
-3. It asks for a **root password** on the console (USB or the serial pins). Root has none on a
-   new card, so the boot waits here, before any login prompt and before the launcher: connect
-   USB, open the serial port (see *Logging in* below), press Enter and type the password twice.
+2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
+   Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
+   the launcher. The boot never waits for the console, so a Flipper with no USB host comes up as
+   usual.
+3. Root has no password on a new card, so the console asks for one **before its first login
+   prompt**: connect USB, open the serial port (see *Logging in* below), and you see
+   "root has no password yet. Press Enter to set one." Press Enter and type the password twice.
    It is kept in `/etc/shadow`, readable only by root; `/etc/passwd` holds `##root` in its
-   place. The boot then continues: `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s
-   the first time) and starts the launcher.
+   place. Until it is set, `login` lets nobody in. The same happens after updating an older card
+   whose root had no password.
 
 Do not unplug or reset the Flipper during these steps. If one fails, the boot continues without
 `/usr` and `/home` and says so on the console; rewrite the card (section 4) and start again.

@@ -7,7 +7,9 @@ Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu) like tools/powercut.py, through the first boot, and checks:
 
   AC3.2  the first boot asks for the root password before any login
-         prompt; /etc/passwd holds no hashes (root is ##root), /etc/shadow
+         prompt, on the console's getty after /etc/rc has finished (rc
+         never waits for console input: the launcher starts without a
+         USB host); /etc/passwd holds no hashes (root is ##root), /etc/shadow
          is mode 600 with a $5$ hash; root with an empty password and with
          a wrong one is refused, the wrong one after >= 2 s (R3.3)
   AC3.1  two passwd runs in a row give different salts (R3.2)
@@ -103,6 +105,11 @@ def main():
 		m = r.wait(rb"login: |Press Enter to set one", 180)
 		check(m is not None and m.group(0) != b"login: ",
 			"AC3.2: the first boot asks for the root password first")
+		# /etc/rc ran to its end (motd, then the launcher) before the
+		# question: the boot does not wait for the console.
+		motd = r.out.find(b"Galtzagorriak MINIX  -")
+		check(m is not None and 0 <= motd < r.out.rfind(b"Press Enter"),
+			"R3.4: /etc/rc finished before the password question")
 		if m is None or not r.set_root_password(PW):
 			check(False, "set the root password")
 			return
@@ -153,6 +160,17 @@ def main():
 		check(ok and s2 and s3 and s2 != s3 and s1 != s2,
 			"AC3.1: consecutive passwd runs give different salts "
 			"(%s %s)" % (s2, s3))
+
+		# While root has no password, login lets nobody in (R3.4).
+		out = r.output("cp /etc/shadow /etc/shadow.p3; "
+			"echo 'root::0:0::/:' >/etc/shadow; login root; "
+			"echo login=$?; cp /etc/shadow.p3 /etc/shadow; "
+			"rm /etc/shadow.p3", 60)
+		check(out is not None and b"root has no password yet" in out
+			and b"login=1" in out,
+			"R3.4: login refuses everybody while root has no password")
+		check(r.sh("grep '^root:\\$5\\$' /etc/shadow >/dev/null", 15) == 0,
+			"R3.4: root's hash is back in /etc/shadow")
 
 		check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 120) == 0,
 			"install the tests package")

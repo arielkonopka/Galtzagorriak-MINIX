@@ -32,8 +32,9 @@ char *getpass(const char *prompt)
 	static char password[32+1];
 	int fd, n= 0;
 
-	/* Try to open the controlling terminal.  None (a process of init,
-	 * like /etc/rc asking for the root password at the first boot):
+	/* Try to open the controlling terminal.  None (a process of init
+	 * without one, e.g. passwd run from a getty or a script on the
+	 * console):
 	 * standard input, if that is a terminal (Galtzagorriak, R3.4).
 	 */
 	if ((fd= open("/dev/tty", O_RDONLY)) < 0

@@ -97,7 +97,8 @@ class Run:
 		return m.group(1).replace(b"\r", b"") if m else None
 
 	def set_root_password(self, pw=PASSWORD):
-		"""The first boot's question (/etc/setup, spec R3.4)."""
+		"""The first boot's question: getty runs passwd root before its
+		first login prompt while root has none (spec R3.4)."""
 		self.send("")
 		for prompt in (rb"New password:", rb"Retype password:"):
 			if self.wait(prompt, 30) is None:
