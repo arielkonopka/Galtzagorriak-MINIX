@@ -293,7 +293,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid \
+PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
 	    swapon
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
@@ -576,7 +576,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.95
+BASE_VER := 3.99
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
