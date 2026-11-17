@@ -3435,9 +3435,8 @@ noticeable CPU on the foreground path.
     callable by MM and root; QEMU: fills the range with zeros so tests see it.
   - **`blk_discard(id, n)`** (and `vm_drop()` for whole blocks): the app says it no longer needs
     those blocks. Always served in the idle class (`BLKWAIT`, R12.37), never on the foreground
-    path; on a card without DISCARD it only invalidates the headers' validity for that caller by
-    doing nothing (the blocks just stay as they were: reading them still gives the old data, so
-    the library treats a discarded block as "contents undefined").
+    path; on a card without DISCARD it does nothing. Either way a discarded block's contents are
+    **undefined** for the app (old data, or zeros on QEMU), and the library treats it so.
   - **After a process that used blocks ends:** MM sets bit *i* of a 16-bit "to discard" mask
     (MM **+2 B**) when the process in slot *i* exits after at least one PUT (a spare `mp_flags`
     bit, `BLKUSED`, set on the first PUT). `sw_step()` discards marked areas at idle, one area (or
