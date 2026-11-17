@@ -351,7 +351,7 @@ static int memtest(unsigned long addr)
 static void memtest_tests(void)
 {
 	static int mine = 1;
-	unsigned long holes[2 * 16], a, end;
+	unsigned long holes[2 * 16], blk, end;
 	message m;
 	int i, r = -9;
 
@@ -363,10 +363,10 @@ static void memtest_tests(void)
 		return;
 	}
 	for (i = 0; i < 16 && holes[2 * i + 1] != 0; i++) {
-		a = (holes[2 * i] + MT_BLOCK - 1) & ~(unsigned long) (MT_BLOCK - 1);
+		blk = (holes[2 * i] + MT_BLOCK - 1) & ~(unsigned long) (MT_BLOCK - 1);
 		end = holes[2 * i] + holes[2 * i + 1];
-		if (a + MT_BLOCK <= end) {
-			r = memtest(a);
+		if (blk + MT_BLOCK <= end) {
+			r = memtest(blk);
 			break;
 		}
 	}
