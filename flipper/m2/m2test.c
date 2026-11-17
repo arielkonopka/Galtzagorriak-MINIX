@@ -928,6 +928,174 @@ static void lcell(int x, int y, unsigned char *rows)
 	}
 }
 
+/* T23b / spec K.8: a window app (gmdemo, libgm) in the launcher, driven
+ * by fake keys: the desktop draws its windows, changes values, opens the
+ * keyboard, keeps the parent, asks for a page; the app gets ok, submit,
+ * back, page and close (its -l log).  ACK8.4: a deaf app (-n) gets the
+ * busy mark after 150 ms, Back closes it at once, SIGTERM 2 s later.
+ * ACK8.5: key -> frame and OK -> next window in QEMU (printed). */
+static int has_line(const char *file, const char *want)
+{
+	FILE *f;
+	char line[80];
+	int ok = 0;
+
+	if ((f = fopen(file, "r")) == NULL) return 0;
+	while (fgets(line, sizeof line, f) != NULL)
+		if (strncmp(line, want, strlen(want)) == 0) ok = 1;
+	fclose(f);
+	return ok;
+}
+
+/* A key down, ms until the screen changes (-1: not within 1 s), up.
+ * Not inlined: its 2 KB of stack only while it runs (main's frame would
+ * otherwise carry them and leave malloc 10000 no room). */
+static long __attribute__((noinline)) key_frame(int b, int l, int key)
+{
+	unsigned char m = key, *before = lfb, now[1024];
+	struct tms tm;
+	clock_t t0, t1;
+	long ms = -1;
+
+	lseek(l, 0L, SEEK_SET);
+	if (read(l, (char *) before, 1024) != 1024) return -1;
+	t0 = times(&tm);
+	(void) write(b, (char *) &m, 1);
+	do {
+		(void) poll((struct pollfd *) NULL, 0, 2);
+		lseek(l, 0L, SEEK_SET);
+		if (read(l, (char *) now, 1024) != 1024) break;
+		t1 = times(&tm);
+		if (memcmp(before, now, 1024) != 0) {
+			ms = (long) (t1 - t0) * 1000 / CLK_TCK;
+			break;
+		}
+	} while ((long) (t1 - t0) < CLK_TCK);
+	(void) poll((struct pollfd *) NULL, 0, 20);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 60);
+	return ms;
+}
+
+/* A quick key for the window test (the whole M2 run has 60 s): down,
+ * up, and time for the desktop to draw. */
+static void wtap(int b, int key)
+{
+	unsigned char m = key;
+
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 20);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 60);
+}
+
+static int hourglass(void)
+{
+	return !lpix(121, 1) && !lpix(125, 1) && !lpix(122, 2) && lpix(121, 2)
+		&& !lpix(123, 3) && lpix(121, 3) && !lpix(121, 5);
+}
+
+static void __attribute__((noinline)) window_test(int b, int l)
+{
+	FILE *f;
+	int i, ok;
+	long ms, worst = 0;
+	unsigned long sum;
+
+	/* The launcher of launcher_test (one more launcher run would make
+	 * the run-time cache copy it to flash: an erase over the M2 budget).
+	 * Its list is on "Inor": OK there reloads the files below. */
+	unlink("/tmp/gml");
+	unlink("/tmp/gml2");
+	f = fopen("/tmp/la", "w");
+	fprintf(f, "Demo:root:@app:=/bin/gmdemo -l /tmp/gml -p 2\n"
+		"Deaf:root::=/bin/gmdemo -n -l /tmp/gml2\n");
+	fclose(f);
+	f = fopen("/tmp/lc", "w");
+	fprintf(f, "Icons: on\nHints: on\nBattery: off\nGuiLog: on\n");
+	fclose(f);
+	wtap(b, 0x10);					/* reload */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	wtap(b, 0x01);					/* Up: Demo */
+	fflush(stdout);
+	ms = key_frame(b, l, 0x10);			/* OK: Demo */
+	printf("  K.8 start -> first window: %ld ms\n", ms);
+	lgrab(l, "win-main");
+	check(has_line("/tmp/gml", "start"), "window: the launcher starts the window app");
+	ok = lpix(0, 0) && lpix(0, 8) && !lpix(0, 14) && lpix(0, 56) && lpix(127, 56);
+	check(ok, "window: title bar, the first row selected, hint line (K.2 style)");
+	for (sum = 0, i = 0; i < 1024; i++) sum = sum * 31 + lfb[i];
+	wtap(b, 0x08);					/* Right: Volume 40 -> 45 */
+	lgrab(l, "win-vol");
+	{
+		unsigned long s2 = 0;
+
+		for (i = 0; i < 1024; i++) s2 = s2 * 31 + lfb[i];
+		check(s2 != sum, "window: Right changes a value in the desktop");
+	}
+	worst = key_frame(b, l, 0x02);			/* Down: Name (ACK8.5) */
+	ms = key_frame(b, l, 0x10);			/* OK: the keyboard */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	lgrab(l, "win-kb");
+	ms = key_frame(b, l, 0x10);			/* types 'a' */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	wtap(b, 0x01);					/* Up: the command row */
+	for (i = 0; i < 3; i++) wtap(b, 0x08);		/* Done */
+	wtap(b, 0x10);
+	ms = key_frame(b, l, 0x02);			/* Down: About */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	printf("  ACK8.5 key -> frame on a window app's list and keyboard: max %ld ms (4 keys)\n",
+		worst);
+	check(worst >= 0 && worst < 500, "ACK8.5: every key redrawn by the desktop (QEMU)");
+	ms = key_frame(b, l, 0x10);			/* OK -> the text window */
+	lgrab(l, "win-about");
+	printf("  ACK8.5 OK -> next window: %ld ms\n", ms);
+	check(ms >= 0, "ACK8.5: OK opens the next window");
+	check(has_line("/tmp/gml", "value vol=45") && has_line("/tmp/gml", "value name=Wake upa")
+		&& has_line("/tmp/gml", "ok about"),
+		"window: submit with the changed values (keyboard text), then ok");
+	ms = key_frame(b, l, 0x20);			/* Back: the kept parent */
+	printf("  K.8 Back -> parent window: %ld ms\n", ms);
+	check(has_line("/tmp/gml", "back about") && ms >= 0,
+		"window: Back shows the parent at once, the app hears back");
+	wtap(b, 0x02);					/* Down: Long list */
+	wtap(b, 0x10);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	wtap(b, 0x02);
+	wtap(b, 0x02);					/* past its 2-row page */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "win-page");
+	check(has_line("/tmp/gml", "ok long") && has_line("/tmp/gml", "page 2"),
+		"window: a long list asks for its next page");
+	wtap(b, 0x20);					/* Back: main */
+	wtap(b, 0x20);					/* Back: closes */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	check(has_line("/tmp/gml", "close"), "window: Back on the first window closes the app");
+
+	/* ACK8.4: an app that never reads its events */
+	wtap(b, 0x02);					/* Deaf */
+	wtap(b, 0x10);
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	wtap(b, 0x02);
+	wtap(b, 0x02);					/* About */
+	wtap(b, 0x10);					/* ok: no answer */
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	lgrab(l, "deaf-busy");
+	check(hourglass(), "ACK8.4: the busy mark after 150 ms");
+	ms = key_frame(b, l, 0x01);			/* the desktop still moves */
+	check(ms >= 0 && ms < 500, "ACK8.4: keys still work while the app is busy");
+	ms = key_frame(b, l, 0x20);			/* Back: closed at once */
+	printf("  ACK8.4 Back on a deaf app -> launcher: %ld ms\n", ms);
+	lgrab(l, "deaf-closed");
+	check(ms >= 0 && ms < 500 && !hourglass(), "ACK8.4: Back closes it at once");
+	check(!has_line("/tmp/gml2", "term"), "ACK8.4: no SIGTERM before 2 s");
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	check(has_line("/tmp/gml2", "term"), "ACK8.4: SIGTERM 2 s after Back");
+	(void) poll((struct pollfd *) NULL, 0, 200);	/* the launcher reaps it */
+}
+
 static void launcher_test(void)
 {
 	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
@@ -1018,169 +1186,11 @@ static void launcher_test(void)
 		fclose(f);
 	}
 	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	window_test(b, l);			/* T23b, spec K.8 */
 	kill(pid, SIGKILL);
 	(void) waitpid(pid, &st, 0);
-	close(b);
-	close(l);
-	unlink("/tmp/la");
-	unlink("/tmp/lc");
-}
-
-/* T23b / spec K.8: a window app (gmdemo, libgm) in the launcher, driven
- * by fake keys: the desktop draws its windows, changes values, opens the
- * keyboard, keeps the parent, asks for a page; the app gets ok, submit,
- * back, page and close (its -l log).  ACK8.4: a deaf app (-n) gets the
- * busy mark after 150 ms, Back closes it at once, SIGTERM 2 s later.
- * ACK8.5: key -> frame and OK -> next window in QEMU (printed). */
-static int has_line(const char *file, const char *want)
-{
-	FILE *f;
-	char line[80];
-	int ok = 0;
-
-	if ((f = fopen(file, "r")) == NULL) return 0;
-	while (fgets(line, sizeof line, f) != NULL)
-		if (strncmp(line, want, strlen(want)) == 0) ok = 1;
-	fclose(f);
-	return ok;
-}
-
-/* A key down, ms until the screen changes (-1: not within 1 s), up. */
-static long key_frame(int b, int l, int key)
-{
-	unsigned char m = key, before[1024], now[1024];
-	struct tms tm;
-	clock_t t0, t1;
-	long ms = -1;
-
-	lseek(l, 0L, SEEK_SET);
-	if (read(l, (char *) before, 1024) != 1024) return -1;
-	t0 = times(&tm);
-	(void) write(b, (char *) &m, 1);
-	do {
-		(void) poll((struct pollfd *) NULL, 0, 2);
-		lseek(l, 0L, SEEK_SET);
-		if (read(l, (char *) now, 1024) != 1024) break;
-		t1 = times(&tm);
-		if (memcmp(before, now, 1024) != 0) {
-			ms = (long) (t1 - t0) * 1000 / CLK_TCK;
-			break;
-		}
-	} while ((long) (t1 - t0) < CLK_TCK);
-	(void) poll((struct pollfd *) NULL, 0, 40);
-	m = 0;
-	(void) write(b, (char *) &m, 1);
-	(void) poll((struct pollfd *) NULL, 0, 150);
-	return ms;
-}
-
-static int hourglass(void)
-{
-	return !lpix(121, 1) && !lpix(125, 1) && !lpix(122, 2) && lpix(121, 2)
-		&& !lpix(123, 3) && lpix(121, 3) && !lpix(121, 5);
-}
-
-static void window_test(void)
-{
-	FILE *f;
-	int b, l, i, st, ok;
-	long ms, worst = 0;
-	pid_t pid;
-	unsigned char before[1024];
-
-	unlink("/tmp/gml");
-	unlink("/tmp/gml2");
-	f = fopen("/tmp/la", "w");
-	fprintf(f, "Demo:root:@app:=/bin/gmdemo -l /tmp/gml\n"
-		"Deaf:root::=/bin/gmdemo -n -l /tmp/gml2\n");
-	fclose(f);
-	f = fopen("/tmp/lc", "w");
-	fprintf(f, "Icons: on\nHints: on\nBattery: off\nGuiLog: on\n");
-	fclose(f);
-	b = open("/dev/buttons", O_WRONLY);
-	l = open("/dev/lcd", O_RDWR);
-	if (b < 0 || l < 0) { check(0, "window: open lcd/buttons"); return; }
-	fflush(stdout);
-	if ((pid = fork()) == 0) {
-		execl("/bin/launcher", "launcher", "-a", "/tmp/la", "-c", "/tmp/lc",
-			(char *) NULL);
-		_exit(99);
-	}
-	(void) poll((struct pollfd *) NULL, 0, 600);
-	ms = key_frame(b, l, 0x10);			/* OK: Demo */
-	(void) poll((struct pollfd *) NULL, 0, 300);
-	lgrab(l, "win-main");
-	printf("  K.8 start -> first frame: %ld ms\n", ms);
-	check(has_line("/tmp/gml", "start"), "window: the launcher starts the window app");
-	ok = lpix(0, 0) && lpix(0, 8) && !lpix(0, 14) && lpix(0, 56) && lpix(127, 56);
-	check(ok, "window: title bar, the first row selected, hint line (K.2 style)");
-	memcpy(before, lfb, 1024);
-	furi_tap(b, 0x08);				/* Right: Volume 40 -> 45 */
-	lgrab(l, "win-vol");
-	check(memcmp(before, lfb, 1024) != 0, "window: Right changes a value in the desktop");
-	for (i = 0; i < 6; i++) {			/* Down to Name: ACK8.5 */
-		ms = key_frame(b, l, 0x02);
-		if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
-	}
-	printf("  ACK8.5 key -> frame on a window app's list: max %ld ms (6 keys)\n",
-		worst);
-	check(worst >= 0 && worst < 500, "ACK8.5: every key redrawn by the desktop (QEMU)");
-	furi_tap(b, 0x10);				/* OK: the keyboard */
-	lgrab(l, "win-kb");
-	furi_tap(b, 0x10);				/* types 'a' */
-	for (i = 0; i < 4; i++) furi_tap(b, 0x02);	/* the command row */
-	for (i = 0; i < 3; i++) furi_tap(b, 0x08);	/* Done */
-	furi_tap(b, 0x10);
-	for (i = 0; i < 3; i++) furi_tap(b, 0x02);	/* About */
-	ms = key_frame(b, l, 0x10);			/* OK -> the text window */
-	(void) poll((struct pollfd *) NULL, 0, 200);
-	lgrab(l, "win-about");
-	printf("  ACK8.5 OK -> next window: %ld ms\n", ms);
-	check(ms >= 0, "ACK8.5: OK opens the next window");
-	check(has_line("/tmp/gml", "value vol=45") && has_line("/tmp/gml", "value name=Wake upa")
-		&& has_line("/tmp/gml", "ok about"),
-		"window: submit with the changed values (keyboard text), then ok");
-	ms = key_frame(b, l, 0x20);			/* Back: the kept parent */
-	printf("  K.8 Back -> parent window: %ld ms\n", ms);
-	(void) poll((struct pollfd *) NULL, 0, 200);
-	lgrab(l, "win-back");
-	check(has_line("/tmp/gml", "back about") && ms >= 0,
-		"window: Back shows the parent at once, the app hears back");
-	furi_tap(b, 0x01);				/* Up: Long list */
-	furi_tap(b, 0x10);
-	(void) poll((struct pollfd *) NULL, 0, 300);
-	for (i = 0; i < 16; i++) furi_tap(b, 0x02);	/* past row 16 */
-	(void) poll((struct pollfd *) NULL, 0, 300);
-	lgrab(l, "win-page");
-	check(has_line("/tmp/gml", "ok long") && has_line("/tmp/gml", "page 16"),
-		"window: a long list asks for its next page");
-	furi_tap(b, 0x20);				/* Back: main */
-	furi_tap(b, 0x20);				/* Back: closes */
-	(void) poll((struct pollfd *) NULL, 0, 300);
-	lgrab(l, "win-closed");
-	check(has_line("/tmp/gml", "close"), "window: Back on the first window closes the app");
-
-	/* ACK8.4: an app that never reads its events */
-	furi_tap(b, 0x02);				/* Deaf */
-	furi_tap(b, 0x10);
-	(void) poll((struct pollfd *) NULL, 0, 400);
-	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Desk clock */
-	furi_tap(b, 0x10);				/* ok: no answer */
-	(void) poll((struct pollfd *) NULL, 0, 300);
-	lgrab(l, "deaf-busy");
-	check(hourglass(), "ACK8.4: the busy mark after 150 ms");
-	ms = key_frame(b, l, 0x01);			/* the desktop still moves */
-	check(ms >= 0 && ms < 500, "ACK8.4: keys still work while the app is busy");
-	ms = key_frame(b, l, 0x20);			/* Back: closed at once */
-	printf("  ACK8.4 Back on a deaf app -> launcher: %ld ms\n", ms);
-	(void) poll((struct pollfd *) NULL, 0, 200);
-	lgrab(l, "deaf-closed");
-	check(ms >= 0 && ms < 500 && !hourglass(), "ACK8.4: Back closes it at once");
-	check(!has_line("/tmp/gml2", "term"), "ACK8.4: no SIGTERM before 2 s");
-	(void) poll((struct pollfd *) NULL, 0, 2500);
-	check(has_line("/tmp/gml2", "term"), "ACK8.4: SIGTERM 2 s after Back");
-	kill(pid, SIGKILL);
-	(void) waitpid(pid, &st, 0);
+	/* m2test is process 1: whatever the launcher left is ours now */
+	while (waitpid(-1, &st, WNOHANG) > 0) ;
 	close(b);
 	close(l);
 	unlink("/tmp/la");
@@ -1509,7 +1519,6 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 	launcher_test();
-	window_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
 	 * heap" is the R9.0.1 measurement (budget 6 KB). */

@@ -54,8 +54,9 @@ static short llen;
 static char lskip;			/* the rest of an overlong record */
 static char kbt[WR_INMAX + 1];		/* the keyboard's text */
 static pid_t gone_pid;			/* a closed app not yet ended */
-static char gone_term;			/* it had its SIGTERM */
-static long gone_t;			/* ticks: SIGTERM then */
+static char gone_term;			/* signals sent: 1 SIGTERM, 2 SIGKILL */
+static long gone_t;			/* ticks: look at it again then */
+static long gone_sig;			/* ticks: the next signal then */
 
 #define B_REPLACE	0		/* the same window again (or the first) */
 #define B_CHILD		1		/* a new window over the current one */
@@ -198,19 +199,21 @@ static char *end(struct ses *s, int say_close)
 	win_reap(1);			/* an older one: its time is up */
 	gone_pid = s->pid;
 	gone_term = 0;
-	gone_t = ticks() + ms_ticks(TERM_MS);
+	gone_t = gone_sig = ticks() + ms_ticks(TERM_MS);
 	return NULL;
 }
 
-/* ms until a closed app gets its SIGTERM, -1 if none is due. */
+/* ms until win_reap() has something to do for a closed app, -1: none. */
 int win_pending(void)
 {
-	if (gone_pid <= 0 || gone_term) return -1;
+	if (gone_pid <= 0) return -1;
 	return ms_until(gone_t);
 }
 
-/* A closed app: reaped if it has ended, SIGTERM when its 2 s are over
- * (or now: before another app starts). */
+/* A closed app: reaped as soon as it has ended; SIGTERM when its 2 s are
+ * over (or now: before another app starts), SIGKILL 2 s after that if it
+ * ignores it.  After a signal it is looked at every 100 ms until it is
+ * gone, so no zombie waits for the next key. */
 void win_reap(int now)
 {
 	int st;
@@ -222,10 +225,13 @@ void win_reap(int now)
 		gone_pid = 0;
 		return;
 	}
-	if (!gone_term && (now || ticks() - gone_t >= 0)) {
-		(void) kill(gone_pid, SIGTERM);
-		gone_term = 1;
+	if (!now && ticks() - gone_t < 0) return;
+	if (gone_term < 2 && (now || ticks() - gone_sig >= 0)) {
+		(void) kill(gone_pid, gone_term == 0 ? SIGTERM : SIGKILL);
+		gone_term++;
+		gone_sig = ticks() + ms_ticks(TERM_MS);
 	}
+	gone_t = ticks() + ms_ticks(100);	/* look again */
 }
 
 /*===========================================================================*
@@ -861,7 +867,7 @@ static void draw(struct ses *s)
 
 			if (len < 2) len = 2;
 			for (i = 6 + off; i < 6 + off + len && i < 55; i++)
-				gui_pixel(GUI_W - 1, i, w->kind != WK_LIST
+				if (i > 6) gui_pixel(GUI_W - 1, i, w->kind != WK_LIST
 					  || i < sy - 1 || i > sy + 5);
 		}
 		break;
@@ -993,8 +999,8 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log)
 		return "cannot start";
 	}
 	signal(SIGPIPE, SIG_IGN);	/* EPIPE from a dead app instead */
-	expect(&s);			/* its first window */
-	s.dirty = 1;
+	expect(&s);			/* its first window (the screen as it
+					 * was until it comes or 150 ms pass) */
 	memset(&in, 0, sizeof in);
 	while (!s.ended) {
 		if (s.dirty) draw(&s);

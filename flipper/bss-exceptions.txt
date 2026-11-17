@@ -16,5 +16,5 @@ ir	4344
 # (128 B) and the keyboard's text (64 B); the clock window's localtime()
 # brings libc's TZ state (~400 B).  The rest is the frame buffer (1 KB)
 # and getpwnam/getgrnam's line buffers.  K.6 budget: <= 3 KB above the
-# launcher before the desktop (+1.9 KB here).
-launcher	5280
+# launcher before the desktop (.bss +1.9 KB, .data +0.4 KB here).
+launcher	5284

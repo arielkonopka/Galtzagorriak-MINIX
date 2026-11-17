@@ -3,12 +3,13 @@
  * builds the records in a buffer on the stack and the app sleeps in
  * read() until the person does something that needs it.
  *
- *	gmdemo [-l file] [-n]
+ *	gmdemo [-l file] [-n] [-p rows]
  *
  * -l: append every event it gets to file (the QEMU test reads it);
  * -n: show the first window and never read an event again (a deaf app:
  * the desktop must stay usable, mark it busy and close it on Back; the
- * SIGTERM it gets 2 s later is noted in the -l file).
+ * SIGTERM it gets 2 s later is noted in the -l file); -p: rows of a page of
+ * the long list (8, at most 16).
  *
  * Start it from the launcher with "=" before the program in /etc/apps:
  *
@@ -31,6 +32,7 @@ static short vol = 40, tone = 1, vib = 1, at = 7 * 60 + 30, days = 31;
 static short year = 2026, month = 11, day = 17;
 static char name[21] = "Wake up";
 static char cur;		/* the window shown: m(ain) l(ong) a c q */
+static int psize = 8;		/* rows of a page of the long list (-p) */
 static int logfd = -1;
 
 static void say(const char *a, const char *b)
@@ -48,15 +50,15 @@ static void w_main(void)
 {
 	gm_win("main", "list", "Demo", 0, 0);
 	gm_int("vol", "Volume", 0, 100, 5, vol, "%");
+	gm_input("name", "Name", name, 20);
+	gm_item("about", "About", "");
+	gm_item("long", "Long list", "40");
+	gm_item("clock", "Desk clock", "");
 	gm_enum("tone", "Tone", tone, "classic|rise|pips");
 	gm_bool("vib", "Vibro", vib);
 	gm_time("at", "Time", at / 60, at % 60);
 	gm_date("day", "Date", year, month, day);
 	gm_days("days", "Days", days);
-	gm_input("name", "Name", name, 20);
-	gm_item("clock", "Desk clock", "");
-	gm_item("long", "Long list", "40");
-	gm_item("about", "About", "");
 	gm_action("save", "Save");
 	gm_show();
 	cur = 'm';
@@ -69,7 +71,7 @@ static void w_long(int first)
 
 	if (first < 0 || first >= ROWS) first = 0;
 	gm_win("long", "list", "Long list", ROWS, first);
-	for (i = first; i < first + 16 && i < ROWS; i++) {
+	for (i = first; i < first + psize && i < ROWS; i++) {
 		key[0] = 'r';
 		key[1] = (char) ('0' + i / 10);
 		key[2] = (char) ('0' + i % 10);
@@ -166,6 +168,10 @@ int main(int argc, char **argv)
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-n") == 0) deaf = 1;
+		else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+			psize = atoi(argv[++i]);
+			if (psize < 1 || psize > 16) psize = 8;
+		}
 		else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc)
 			logfd = open(argv[++i], O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}

@@ -311,8 +311,9 @@ static void draw(int pg, int sel, int top, const char *note)
 
 		if (len < 2) len = 2;
 		for (i = 6 + off; i < 6 + off + len; i++)	/* on the selected
-							 * row's bar: inverted */
-			gui_pixel(GUI_W - 1, i, i < ROW_Y(sel - top) - 1
+							 * row's bar: inverted;
+							 * y 6 is the title's */
+			if (i > 6) gui_pixel(GUI_W - 1, i, i < ROW_Y(sel - top) - 1
 						|| i > ROW_Y(sel - top) + 5);
 	}
 	if (pg == PG_APPS && n == 0) gui_center(30, "no apps in /etc/apps", 0);
