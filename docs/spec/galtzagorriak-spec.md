@@ -1037,6 +1037,17 @@ which order they are built.
   5. **Full-screen apps:** `libfuri` apps, ported stock apps (`fam2pkg`, R5.5) and Berry apps
      take the whole screen as today, in the same style. The desktop is not involved while they
      run.
+- **Button chords are hidden system actions (owner, 2026-11-17, on #231).** They never appear
+  in hint lines. They are listed, and later configured, on a chords page in the desktop's
+  Settings (chord → action). The page moves still need no chord: Settings stays on Left.
+  - The two backlight chords of R6.10 stay in the kernel with fixed defaults, so they work even
+    when userland hangs.
+  - Other chords are reported as events (a chord code on `/dev/buttons`) and mapped to actions
+    by userland. The mapping lives in a config file on the SD card (`/etc/chords.conf`, no
+    internal flash), edited from the chords page. Free chords today: Right+Up, Left+Down.
+    Back is never part of a chord (R6.10).
+  - Kernel side (chord events, the chord flag on keys) is `lane:local` with #145; the chords page
+    is a follow-up of T23a.
 - **Pipe data never reaches the card (FS, 0 B, local-lane review of #231).** `PIPE_DEV` is
   `ROOT_DEV`, so a pipe's or FIFO's data lives in its inode's zones on the SD card through the
   buffer cache, and `update` would write the dirty blocks and the inode times every 30 s. With

@@ -324,6 +324,8 @@ Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and 
 - `guimod` shell command: `guimod tile NAME TEXT`, `guimod close NAME`. Example module in `/usr/share/examples/gui/`: battery tile in 3 lines.
 - RAM and responsiveness numbers in the PR (ACK.3, ACK.4). 0 run-time flash writes.
 
+- Follow-up when #145 has chord events: a chords page in Settings that lists the chords and maps the free ones (Right+Up, Left+Down) to actions in `/etc/chords.conf` (spec K.6 "Button chords"). Chords never appear in hint lines.
+
 ### T23b: windows and events
 - `window` records (menu, text, form) shown full-screen in the desktop's own style, navigation local; per-module reply FIFO `/var/run/gui.<pid>` with `select`, `back`, `input`, `redraw`.
 - `libapp` helper: `gm_open`, `gm_tile`, `gm_menu`, `gm_event`, `gm_close`; a C example module.
