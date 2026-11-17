@@ -5,9 +5,9 @@ morning) are **timer files**. Nothing waits in RAM for them: the clock's Alarm A
 time, and when it comes INIT runs `/usr/lib/timed`, which does what is due, sets the alarm for
 the next time and exits (spec F.2).
 
-The apps that use them (the interval reminder `remind` and the alarm clock `alarm`) come next
-**(planned, spec 7b.1, 7b.2)**; this chapter is the machinery underneath, which also works from
-the shell.
+The apps that use them are the interval reminder `remind` and the alarm clock `alarm`
+([their chapter](remind-alarm.md)); this chapter is the machinery underneath, which also works
+from the shell.
 
 ## Installing
 
@@ -53,6 +53,10 @@ Snooze: 5
 | `Title`, `Text` | the alert's text (23 and 63 characters) |
 | `Sound`, `Vibro`, `Led` | `yes` (default) or `no` |
 | `Snooze` | minutes Up/Down snooze for, 0–60 (0: no snooze) |
+| `Tone` | a built-in tone (`beep`, `chime`, `rise`, `classic`, `gentle`, `pips`) or the full path of an RTTTL or `.fmf` file the owner may read |
+| `Ring` | minutes the alert rings, 1–60 (default: alarms 10, others 1) |
+| `Ramp` | `yes`: single beeps for the first 30 s, then the whole tune |
+| `Log` | an app name: OK on the alert appends `TIME ID` to `/home/flipper/apps_data/APP/log`, as the timer's owner |
 
 `daily` and `interval` times are **local time** (`/etc/TZ`, else UTC) and follow summer time;
 `once` is a UTC instant. An `interval` counts from `Start` every day. A `once` timer is deleted
@@ -89,7 +93,8 @@ vibration, and the LED: fast red for alarms, a blue pulse otherwise) and waits f
 | Back | dismiss |
 | Up or Down | snooze (a new `once` timer `_ID`), when the timer has `Snooze:` |
 
-Without a button it gives up after 10 minutes (alarms) or 1 minute. It also writes one line to
+Without a button it gives up after the timer's `Ring:` time (default 10 minutes for alarms,
+1 minute otherwise). It also writes one line to
 the console log, for example `alert: 09:30 reminder: Water: Drink a glass of water`.
 
 **Limitation:** the alert takes the screen only when no app holds it (the launcher's main
@@ -102,6 +107,7 @@ buttons, until foreground preemption (`FG_PREEMPT`, spec R7b.2) arrives.
 /usr/lib/timed -v              # run now, saying what it fires and what it arms (root)
 /usr/lib/timed -v -n SECONDS   # as if the time were SECONDS since 1970 (tests)
 /usr/lib/alert -c alarm Wake "Time to get up"
+/usr/lib/alert -c alarm -t rise -r 5 -R Wake "Time to get up"   # tone, ring 5 min, rising
 rtc                            # the alarm timed has set
 ```
 
