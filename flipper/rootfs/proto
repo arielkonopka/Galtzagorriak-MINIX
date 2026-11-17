@@ -53,8 +53,13 @@ d--755 0 0
       fstab ---644 0 0 rootfs/etc/fstab
       hostname.file ---644 0 0 rootfs/etc/hostname.file
       apps ---644 0 0 rootfs/etc/apps
+      notify.conf ---644 0 0 rootfs/etc/notify.conf
    $
    tmp d--1777 0 0
+   $
+   var d--755 0 0
+      timers d--1770 0 11
+      $
    $
    usr d--755 0 0
    $

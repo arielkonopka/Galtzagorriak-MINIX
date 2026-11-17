@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""timedtest - timers and alerts (spec F.2, R7b.3, R7b.4) in QEMU.
+
+Usage: timedtest.py
+
+Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
+qemu, the real INIT) like tools/powercut.py, logs in as root, installs
+the timed package and checks:
+
+  R7b.3    INIT gets SIGRTC (kill -7 1) and runs /usr/lib/timed, which
+           fires a due notify timer: /usr/lib/alert logs it on the console
+  R7b.4    a once timer is removed after it fired; /var/timers/.last is
+           written; QEMU has no RTC alarm, so timed logs the time it would
+           arm; /var/timers is root:timers 1770
+  AC7b.1.3 do-not-disturb around now holds a reminder back, not an alarm
+  AC7b.1.4 a once timer two hours in the past: Missed: skip does not
+           fire, fire-once does (timed -n, the test time override)
+  F.2      Action: run starts the program as the file's owner with
+           --timer ID; a file that is not mode 600 is ignored
+  F.2      a timer added by the shell is listed by the format timed reads
+
+QEMU's clock is the PC's (semihosting), in UTC: the times below come from
+this script's clock.  Exit status: the number of failures.
+"""
+import importlib.util
+import os
+import re
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.util.spec_from_file_location(
+	"powercut", os.path.join(HERE, "powercut.py"))
+powercut = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(powercut)
+
+fails = 0
+
+
+def check(ok, what):
+	global fails
+	print(("  ok   " if ok else "  FAIL ") + what, flush=True)
+	if not ok:
+		fails += 1
+
+
+def timer(r, tid, lines, mode="600"):
+	"""Write /var/timers/tid from lines (short shell lines: the console
+	takes 256 bytes a line)."""
+	r.sh("rm -f /var/timers/%s" % tid, 20)
+	for i, l in enumerate(lines):
+		r.sh("echo '%s' %s /var/timers/%s" % (l, ">" if i == 0 else ">>",
+			tid), 20)
+	return r.sh("chmod %s /var/timers/%s" % (mode, tid), 20) == 0
+
+
+def hm(t):
+	return time.strftime("%H:%M", time.gmtime(t))
+
+
+def main():
+	r = powercut.Run(0, 0)
+	try:
+		if not r.login():
+			check(False, "login")
+			return 1
+		check(r.sh("pkg install /lib/pkg/timed_1.0.tar", 120) == 0,
+			"install the timed package")
+		out = r.output("ls -ld /var/timers", 20)
+		check(out is not None and re.search(rb"drwxrwx--[^-x ] .*root +timers",
+			out) is not None, "/var/timers is root:timers 1770")
+		if fails: print(out)
+
+		# R7b.3: SIGRTC to INIT -> timed -> alert.
+		now = int(time.time())
+		timer(r, "kaixo", ["Kind: once", "At: %d" % (now - 2),
+			"Category: reminder", "Missed: skip", "Title: Kaixo",
+			"Text: R7b.3 test"])
+		mark = len(r.out)
+		r.sh("kill -7 1", 20)
+		m = r.wait(rb"alert: \d\d:\d\d reminder: Kaixo: R7b.3 test", 30)
+		check(m is not None and r.out.find(b"alert:", mark) >= 0,
+			"kill -7 1: INIT ran timed, which fired the due timer")
+		time.sleep(1)
+		r.wait(rb"@@nothing@@", 2)
+		check(r.out.find(b"timed: no RTC alarm", mark) >= 0,
+			"no RTC alarm in QEMU: timed says so")
+		time.sleep(1)
+		check(r.sh("test -f /var/timers/kaixo", 20) == 1,
+			"the once timer is gone after it fired")
+		check(r.sh("test -f /var/timers/.last", 20) == 0,
+			"/var/timers/.last written")
+
+		# AC7b.1.3: do-not-disturb from an hour ago to an hour ahead.
+		now = int(time.time())
+		r.sh("cp /etc/notify.conf /tmp/nc", 20)
+		r.sh("echo 'Dnd: %s-%s' >> /etc/notify.conf" % (hm(now - 3600),
+			hm(now + 3600)), 20)
+		timer(r, "rem", ["Kind: once", "At: %d" % now,
+			"Category: reminder", "Title: Rem", "Text: quiet"])
+		timer(r, "alm", ["Kind: once", "At: %d" % now,
+			"Category: alarm", "Title: Alm", "Text: loud"])
+		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
+		out = r.output("/usr/lib/timed -v -n %d; sleep 1" % (now + 1), 30)
+		check(out is not None and b"rem: held (do not disturb)" in out,
+			"AC7b.1.3: a reminder is held back in do-not-disturb")
+		check(re.search(rb"alert: \d\d:\d\d alarm: Alm: loud", r.out)
+			is not None, "AC7b.1.3: an alarm rings in do-not-disturb")
+		r.sh("cp /tmp/nc /etc/notify.conf", 20)
+
+		# AC7b.1.4: two hours late (the clock moved, or it was off).
+		now = int(time.time())
+		for tid, missed in (("skip", "skip"), ("once", "fire-once")):
+			timer(r, tid, ["Kind: once", "At: %d" % (now - 7200),
+				"Category: reminder", "Missed: %s" % missed,
+				"Title: M-%s" % tid, "Text: late"])
+		r.sh("echo %d > /var/timers/.last" % (now - 7300), 20)
+		mark = len(r.out)
+		out = r.output("/usr/lib/timed -v -n %d; sleep 1" % now, 30)
+		check(out is not None and b"skip: missed, skipped" in out,
+			"AC7b.1.4: Missed: skip does not fire")
+		check(re.search(rb"alert: \d\d:\d\d reminder: M-once: late",
+			r.out[mark:]) is not None,
+			"AC7b.1.4: Missed: fire-once fires once")
+
+		# Action: run, as the owner (bin); a file of mode 644 ignored.
+		now = int(time.time())
+		timer(r, "runme", ["Kind: once", "At: %d" % now, "Action: run",
+			"Program: /bin/id"])
+		r.sh("chown bin /var/timers/runme", 20)
+		timer(r, "loose", ["Kind: once", "At: %d" % now], "644")
+		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
+		out = r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
+		check(out is not None and re.search(rb"uid=2\(bin\)", out)
+			is not None, "Action: run: the program runs as the owner")
+		check(out is not None and b"loose: not a plain file of mode 600"
+			in out, "a timer file not of mode 600 is ignored")
+
+		# The next time: an interval timer every minute, all day.
+		timer(r, "tick", ["Kind: interval", "Start: 00:00", "End: 24:00",
+			"Every: 1", "Category: info", "Title: Tick", "Text: t"])
+		r.sh("rm -f /var/timers/loose", 20)
+		now = int(time.time())
+		out = r.output("/usr/lib/timed -v -n %d" % now, 30)
+		want = (now // 60 + 1) * 60
+		check(out is not None and ("next at %d" % want).encode() in out,
+			"interval: the next time is the next minute")
+		# RAM (chmem): MM reports what timed and alert never touched.
+		mark = len(r.out)
+		r.sh("free -t on", 20)
+		r.output("/usr/lib/timed -n %d; /usr/lib/alert -f 0 T x & "
+			"sleep 2; kill $!; sleep 1; free -t off" % now, 60)
+		for m in re.finditer(rb"memuse: (timed|alert) .*", r.out[mark:]):
+			print("  " + m.group(0).decode().strip())
+		print(r.out.decode(errors="replace").replace("\r", "")[-3000:]
+			if fails else "", end="")
+	finally:
+		r.close()
+	print("%d failed" % fails)
+	return fails
+
+
+if __name__ == "__main__":
+	sys.exit(main())

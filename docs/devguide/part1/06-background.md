@@ -26,9 +26,9 @@ job (R12.16).
 Anything with a deadline (an alarm, a reminder, logging at a set time) must be tier 0: a fresh
 `exec` always finds room, a swapped image may have to wait for its addresses.
 
-Status: none of the four is wired up yet **(planned)**: tier 0 with `timed` (Phase 7b), tier 1
-with `libapp` (R12.18, may land with 7b), tier 2 with swap (Phase 12), tier 3 per driver.
-What exists today is described next.
+Status: tier 0 works (`timed`, `libapp`, section 6.3; the manifest field `Background:` is not
+read yet); tier 1 **(planned)** with `libapp` (R12.18), tier 2 with swap (Phase 12, plain swap
+landed), tier 3 per driver.
 
 ## 6.2 What works today
 
@@ -90,30 +90,47 @@ of up to `PIPE_BUF` bytes is atomic, so lines from several clients never mix. An
 through a second FIFO per client, or a file. The desktop protocol (chapter 7) uses the same
 pattern. There are no sockets.
 
-## 6.3 Timers and alerts (`timed`, `alert`) **(planned, spec F.2)**
+## 6.3 Timers and alerts (`timed`, `alert`, `libapp`)
 
-The planned tier-0 machinery, so you can design for it now:
+The tier-0 machinery (spec F.2, R7b.3, R7b.4). The user's view, with the file format, is the
+manual chapter [Timers and alerts](../../manual/timers.md).
 
-- **Timers are files.** One file per timer in `/var/timers/`, owned by the app's uid, mode
-  0600. Fields: `Kind` (`once`, `daily` with a weekday mask, `interval` inside a daily window),
-  `Category` (`alarm`, `reminder`, `info`), `Action` (`notify` with title, text, sound, vibro,
-  LED pattern and snooze, or `run`: a program of the same package started with `--timer <id>`),
-  and `Missed` (`fire-once` or `skip`).
-- **Nothing waits in RAM.** A short-lived `timed` reads the spool, fires what is due, programs
-  the earliest next time into the RTC's Alarm A and exits. When the alarm fires, the kernel
-  signals INIT, which forks `timed` again. The same happens after the clock is set.
-- **Alerts take the screen, not the app.** `alert` grabs the screen and buttons with
-  `ioctl(FG_PREEMPT)`, rings, vibrates and blinks (LED patterns run inside the LED chip), and
-  gives the screen back. The foreground app keeps running.
-- **Alarms always ring**, even in do-not-disturb, and never depend on the desktop or a script:
-  scripts only edit the spool.
-- **`libapp`** wraps it: `timer_add()`, `timer_remove()`, `timer_list()`, `notify_post()`,
-  `settings_get/set()`.
+- **Timers are files.** One file per timer in `/var/timers/` (root:timers, mode 1770, on the SD
+  card), owned by the app's user, mode 0600. Fields: `Kind` (`once`, `daily` with a weekday
+  mask, `interval` inside a daily window aligned to its start), `Category` (`alarm`,
+  `reminder`, `info`), `Action` (`notify` with title, text, sound, vibro, LED and snooze, or
+  `run`: a program started as the file's owner with `--timer <id>`), and `Missed` (`fire-once`
+  or `skip`).
+- **Nothing waits in RAM.** `/usr/lib/timed` (package `timed`) reads the spool, fires what is
+  due, sets the earliest next time into RTC Alarm A and exits (≈ 2 KB of stack and heap used,
+  for well under a second). When the alarm fires, or the clock is set, the kernel sends
+  `SIGRTC` to INIT, which runs `timed` again (one at a time; a signal meanwhile runs it once
+  more).
+- **Alerts.** `/usr/lib/alert` shows title, text and time on `/dev/lcd`, rings, vibrates,
+  starts an LED pattern, and waits for OK (done, exit 0), Back (dismiss, 1) or Up/Down
+  (snooze, 2); after the ring time it exits 3. Today it takes the screen only when no app holds
+  it; taking it from the foreground app is `ioctl(FG_PREEMPT)` **(planned, R7b.2)**.
+- **Alarms always ring**, even in do-not-disturb (`/etc/notify.conf`, `~/.config/notify`), as the
+  alarm itself says; reminders and info are held back.
+- **`libapp`** (`flipper/lib/app`, `#include "app.h"`, link `$(APP_OBJ)` as `timed` does in
+  `flipper/minix.mk`; it joins the shared library with `libfuri`, R2b.9):
+
+  | call | what it does |
+  |---|---|
+  | `timer_add(&t)` | writes `/var/timers/<t.id>` (mode 0600, via a new file and `rename()`), and sets the RTC alarm earlier if this timer comes first |
+  | `timer_remove(id)` | deletes it (`timed` re-arms at its next run) |
+  | `timer_list(fn, arg)` | calls `fn` for every timer the caller may read |
+  | `timer_next/prev/due()` | the time rules, for an app's own display ("next at 16:30") |
+  | `notify_post(cat, title, text, opts)` | applies the policy and starts `alert` now; returns its pid, 0 when do-not-disturb holds it back |
+  | `settings_get/set(app, key, ...)` | `Key: value` lines in `/home/flipper/apps_data/<app>/settings` (stock's `/ext/apps_data`) |
+  | `on_redraw(fn)` | `fn` runs when the screen comes back after an alert (`SIGWINCH`, R7b.2; returns -1 with `ENOSYS` until then) |
+
+  The manifest fields `Timers: yes`, `Notify: alarm|reminder|info` and `DeskMode: yes`
+  (`mkpkg.py --timers --notify CAT --deskmode`) are checked by `pkg`; they are granted with the
+  app's own uid (spec A.3) **(planned)**. Until then an app adds timers when its user is root or
+  in group `timers`.
 - The device can even be **off**: before power-off the RTC alarm is wired to the charger's
-  power-on input, so an alarm boots the Flipper and rings (spec F.3).
-
-Until then: an alarm-like program must stay resident and use `sleep()`; it cannot wake the
-device from off.
+  power-on input, so an alarm boots the Flipper and `timed` rings (spec F.3).
 
 ## 6.4 Hibernate and park **(planned, spec R12.18–R12.21)**
 
