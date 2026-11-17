@@ -19,8 +19,20 @@ gives the ROM once, then end of file.
 - With no key on the contacts the read fails at once with "No such device" (ENODEV).
 - A bad touch (wrong CRC, or a line held low) fails with "I/O error" (EIO); touch again.
 
-A read takes about 10 ms. Writing keys, emulating a key and the Cyfral/Metakom keys are
-**(planned)** (spec R6.7, later parts), as is an iButton app in the launcher.
+A read takes about 10 ms.
+
+The `ikey` command works like the stock firmware's:
+
+```
+ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8"
+ikey write Dallas 01A2B3C4D5E6F7A8
+```
+
+`ikey write` copies a key onto an RW1990 blank held on the contacts (both kinds, RW1990.1 and .2,
+are tried) and reads it back; keep the blank on the contacts until it says "Write success" (a few
+seconds). The 16 hex digits are the whole ROM, the CRC byte last, as `ikey read` prints it.
+Emulating a key and the Cyfral/Metakom keys are **(planned)** (spec R6.7, later parts), as is
+an iButton app in the launcher.
 
 ## Voltages on the header pins (`/dev/adc`)
 
