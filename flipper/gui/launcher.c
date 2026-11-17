@@ -210,8 +210,17 @@ static void bat_read(void)
 	close(fd);
 	if (n <= 0) return;
 	b[n] = 0;
-	if ((p = strstr(b, "soc=")) != NULL) soc = atoi(p + 4);
-	if ((p = strstr(b, "chg=")) != NULL) chg = atoi(p + 4);
+	for (p = b; *p != 0; p++) {	/* "soc=N", "chg=C": by hand (no
+					 * strstr/atoi: GOT slots in RAM) */
+		int *v = p[0] == 's' && p[1] == 'o' && p[2] == 'c' && p[3] == '='
+			? &soc : p[0] == 'c' && p[1] == 'h' && p[2] == 'g'
+			&& p[3] == '=' ? &chg : NULL;
+
+		if (v == NULL) continue;
+		for (*v = 0, p += 4; *p >= '0' && *p <= '9'; p++)
+			*v = *v * 10 + *p - '0';
+		p--;
+	}
 	if (soc < 0 || soc > 100) return;
 	bat = (unsigned char) soc | (chg == 1 || chg == 2 ? BAT_CHG : 0);
 }
@@ -291,7 +300,10 @@ static void draw(int pg, int sel, int top, const char *note)
 		int h = vis * 6, len = h * vis / n, off = h * top / n;
 
 		if (len < 2) len = 2;
-		gui_vline(GUI_W - 1, 6 + off, 6 + off + len - 1, 1);
+		for (i = 6 + off; i < 6 + off + len; i++)	/* on the selected
+							 * row's bar: inverted */
+			gui_pixel(GUI_W - 1, i, i < ROW_Y(sel - top) - 1
+						|| i > ROW_Y(sel - top) + 5);
 	}
 	if (pg == PG_APPS && n == 0) gui_center(30, "no apps in /etc/apps", 0);
 	if (hints) {

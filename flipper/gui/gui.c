@@ -201,7 +201,7 @@ int gui_input(struct gui_in *in, int clicks, int ms)
 
 			in->down &= ~k;
 			in->spoilt &= ~k;
-			if ((clicks & k) && alone && (in->down & k) == 0
+			if ((clicks & k) && alone
 			    && ticks() - in->t[b] < CLK_TCK)
 				return k;
 		}

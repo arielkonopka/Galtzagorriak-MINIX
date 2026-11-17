@@ -51,13 +51,14 @@ grep '^RFID:' /etc/apps >/dev/null || {
 }
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
+test -f /etc/apps &&	# a card without its own copy keeps using /rom's
 sed -e 's|^Console:nobody:/bin/console$|Console:nobody:@console:/bin/console|' \
     -e 's|^About:nobody:/bin/info$|About:nobody:@info:/bin/info|' \
     -e 's|^Lights:nobody:/bin/lights$|Lights:nobody:@light:/bin/lights|' \
     -e 's|^Power:nobody:/bin/power$|Power:nobody:@power:/bin/power|' \
     -e 's|^RFID:nobody:/bin/lfrfid$|RFID:nobody:@rfid:/bin/lfrfid|' \
     /etc/apps > /etc/apps.new
-if cmp -s /etc/apps /etc/apps.new
+if test ! -f /etc/apps.new || cmp -s /etc/apps /etc/apps.new
 then rm -f /etc/apps.new
 else mv /etc/apps.new /etc/apps; echo "base: the launcher's apps have icons"
 fi
