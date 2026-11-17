@@ -1072,7 +1072,10 @@ static int copy_any(int tries)
 		q = read_any(fd, 1, 0, got, &n);
 		if (q == -2) break;
 		if (q >= 0 && (q != p || memcmp(got, data, lf_size(p)) != 0)) break;
-		if (q < 0 && n < 16) break;	/* (nearly) no signal: gone */
+		/* EM4100 decodes from every capture: anything else means the
+		 * tag went (as before); a longer frame may need several, so
+		 * only (nearly) no signal means that */
+		if (q < 0 && (p == LFRFIDProtocolEM4100 || n < 16)) break;
 	}
 	close(fd);
 	if (p == LFRFIDProtocolEM4100) return write_em(data, tries);
