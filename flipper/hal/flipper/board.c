@@ -3001,6 +3001,103 @@ void hal_rfid_stop(void)
 	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
 }
 
+/* R6.5 part 3: a T5577 block read needs the field to stay up between the
+ * read command (gaps, played by the IR transmitter onto the antenna,
+ * hal_ir_target) and the tag's reply (the comparator captured below);
+ * dropping the carrier would reset the tag.  hal_rfid_field holds it up
+ * through the whole exchange and hal_rfid_capture arms the comparator on
+ * top of the running field, where hal_rfid_read raises a field of its
+ * own.  The carrier is the transmitter's (TIM1 CH1N), so a gap is its
+ * outputs off, as when writing; the capture is TIM2 as in hal_rfid_read. */
+void hal_rfid_field(int on)
+{
+	if (on) {
+		hal_ir_freq(125000, 50);
+		hal_ir_target(1);		/* pins: iButton low, PC5/PA15
+						 * analog; the carrier on PB13;
+						 * PA2 high, ready for a command */
+		hal_ir_carrier(1);		/* TIM1 CH1N, 125 kHz, held */
+	} else {
+		hal_rfid_stop();		/* TIM2/COMP1 off, TIM1 down */
+		hal_ir_target(0);		/* the transmitter back to IR */
+	}
+}
+
+/* The antenna pull pin (PA2) between the two phases of a block read: a
+ * command wants it released (high), the capture wants it pulled low so the
+ * envelope swings on PC5, as stock's pin_pull_release / pin_pull_pulldown.
+ * The field stays up throughout. */
+void hal_rfid_pull(int release)
+{
+	gpio_set(GPIOA, 2, release ? 1 : 0);
+}
+
+/* Stop the comparator capture but leave the field (and COMP1) up, so the
+ * next command and reply find the tag still powered.  hal_rfid_field(0)
+ * ends the whole session. */
+void hal_rfid_capture_stop(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR2 = 0;
+	TIM2->OR = 0;
+	TIM2->SR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 0;
+}
+
+/* Arm the comparator capture on the already-running field (hal_rfid_field
+ * must be on).  The second half of hal_rfid_read: COMP1 on PC5 into TIM2
+ * channel 4, DMA to dst, n 32-bit timestamps.  hal_pulse_left and
+ * hal_rfid_stop (through hal_rfid_field(0)) belong to it as to a read. */
+int hal_rfid_capture(uint32_t dst, unsigned n)
+{
+	uint32_t t0;
+
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	/* PA2 was pulled low before the settle (hal_rfid_pull(0), the driver),
+	 * so the envelope on PC5 is already swinging by now. */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	if (!(COMP1->CSR & COMP_CSR_EN)) {
+		COMP1->CSR = COMP_CSR_PWRMODE_0		/* medium speed */
+			| COMP_CSR_INMSEL_0 | COMP_CSR_SCALEN | COMP_CSR_BRGEN
+			| COMP_CSR_HYST_1 | COMP_CSR_HYST_0;	/* PC5, VREFINT/2 */
+		COMP1->CSR |= COMP_CSR_EN;
+		t0 = DWT->CYCCNT;
+		while (DWT->CYCCNT - t0 < hal_cpu_hz() / 5000) ;	/* 200 us */
+	}
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 31;			/* TIM2_CH4 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+							| DMA_CCR_EN;
+	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = 0;
+	TIM2->CCMR2 = 1u << TIM_CCMR2_CC4S_Pos;		/* IC4 on TI4 */
+	TIM2->CCER = TIM_CCER_CC4E | TIM_CCER_CC4P | TIM_CCER_CC4NP;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_CC4DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
 /*===========================================================================*
  *				Speaker					     *
  *===========================================================================*/
