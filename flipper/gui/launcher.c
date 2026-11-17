@@ -173,15 +173,38 @@ struct page {
 };
 
 #define PG_APPS	0
-#define PG_SET	1
+#define PG_SYS	1			/* SETTINGS: the groups (K.7) */
+#define PG_SET	2			/* the launcher's own settings */
 static const struct page pages[] = {
-	{ "GALTZAGORRIAK", "<Setup  OK Run", PG_SET, -1 },
+	{ "GALTZAGORRIAK", "<Settings  OK Run", PG_SYS, -1 },
+	{ "SETTINGS", "OK Open  Back Done", -1, -1 },
 	{ "LAUNCHER", "OK Toggle  Back Done", -1, -1 },
 };
 
+/* The SETTINGS page (spec K.7): every group but Launcher is a program run
+ * like an app; "" = not there yet.  Power and About are today's apps
+ * until their groups come (T24b, T24c). */
+static const struct {
+	char name[9];
+	char user[7];
+	char cmd[22];
+} sys_tab[] = {
+	{ "Display", "root", "/bin/settings display" },
+	{ "Sound", "root", "/bin/settings sound" },
+	{ "LED", "", "" },
+	{ "Time", "", "" },
+	{ "Power", "nobody", "/bin/power" },
+	{ "Storage", "", "" },
+	{ "Gestures", "", "" },
+	{ "Launcher", "", "" },
+	{ "About", "nobody", "/bin/info" },
+};
+#define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
+#define SYS_LAUNCHER	7
+
 static int page_rows(int pg)
 {
-	return pg == PG_APPS ? napps : 3;
+	return pg == PG_APPS ? napps : pg == PG_SYS ? SYS_N : 3;
 }
 
 static const char set_name[3][8] = { "Icons", "Hints", "Battery" };
@@ -192,7 +215,11 @@ static void page_row(int pg, int i, int y, int inv)
 {
 	int on;
 
-	if (pg == PG_SET) {
+	if (pg == PG_SYS) {
+		gui_text(6, y, sys_tab[i].name, inv);
+		if (sys_tab[i].cmd[0] == 0 && i != SYS_LAUNCHER)
+			gui_text(50, y, "(later)", inv);
+	} else if (pg == PG_SET) {
 		on = opt & set_bit[i];
 		gui_text(6, y, set_name[i], inv);
 		gui_text(42, y, on ? "[on]" : "[off]", inv);
@@ -449,13 +476,36 @@ int main(int argc, char **argv)
 				pg = pages[pg].left;
 				sel = top = 0;
 			}
-		} else if (pg == PG_SET) {
-			if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
-				opt ^= set_bit[sel];
+		} else if (pg == PG_SYS) {
+			if (k == KEY_OK && sel == SYS_LAUNCHER) {
+				pg = PG_SET;
+				sel = top = 0;
+			} else if (k == KEY_OK && sys_tab[sel].cmd[0] != 0) {
+				struct app a;
+				char cmd[sizeof sys_tab[0].cmd], user[8];
+
+				strcpy(cmd, sys_tab[sel].cmd);
+				strcpy(user, sys_tab[sel].user);
+				a.label = cmd;
+				a.user = user;
+				a.cmd = cmd;
+				note = run(&a);
+				memset(&in, 0, sizeof in);
+				bat_stale();
+			} else if (k == KEY_OK)
+				note = "not there yet";
 			else if (k == KEY_BACK) {
 				if (opt != saved) save_conf(conf_file);	/* only a change */
 				pg = PG_APPS;
 				sel = was;
+				top = 0;
+			}
+		} else if (pg == PG_SET) {
+			if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
+				opt ^= set_bit[sel];
+			else if (k == KEY_BACK) {
+				pg = PG_SYS;
+				sel = SYS_LAUNCHER;
 				top = 0;
 			}
 		}

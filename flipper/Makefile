@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest
+.PHONY: all run flash clean lfrfidtest modemtest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -68,6 +68,11 @@ $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 # liblfrfid on the PC (spec R9.0.2): every LF RFID protocol round trip.
 lfrfidtest:
 	$(MAKE) -C tests/lfrfid test
+
+# libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
+# the RFID line code, the Sub-GHz presets, legal check and duty counter.
+modemtest:
+	$(MAKE) -C tests/modem test
 
 run: $(BUILD)/$(PROG).elf
 	@test "$(BOARD)" = qemu || { echo "run needs BOARD=qemu"; exit 1; }

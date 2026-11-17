@@ -404,15 +404,23 @@ void hal_usb_poll(void)
 	if (started) usbd_poll(&udev);
 }
 
+/* Somebody reads the console: the port is open (DTR) on a configured,
+ * running bus.  A suspended bus is nobody: pulling the cable out shows
+ * only as a suspend (no SOF), while configured and DTR keep their values
+ * from before; a program writing to the console then waited for ring room
+ * until the cable came back (the self test "hung" on battery, owner
+ * 2026-11-17).  The host's own suspend (a laptop asleep) is the same. */
+#define LISTENING	(configured && dtr && started == 1)
+
 int hal_usb_connected(void)
 {
-	return configured && dtr;
+	return LISTENING;
 }
 
 unsigned hal_usb_room(void)
 {
 	/* nobody listening: writes drop the oldest bytes, never wait */
-	if (!configured || !dtr) return TX_RING;
+	if (!LISTENING) return TX_RING;
 	return TX_RING - (tx_head - tx_tail);
 }
 
@@ -424,7 +432,7 @@ unsigned hal_usb_write(const void *buf, unsigned n)
 
 	while (done < n) {
 		if (tx_head - tx_tail >= TX_RING) {
-			if (configured && dtr) break;	/* host reads: wait */
+			if (LISTENING) break;		/* host reads: wait */
 			tx_tail++;	/* nobody listens: keep the newest */
 		}
 		tx_ring[tx_head % TX_RING] = p[done++];

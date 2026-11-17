@@ -1154,7 +1154,7 @@ static void launcher_test(void)
 	lgrab(l, "note-gone");
 	check(ok && lpix(0, 56), "launcher: unknown user noted on the message line, list still drawn");
 	stat("/tmp/lc", &s1);
-	furi_tap(b, 0x04);			/* Left: settings */
+	furi_tap(b, 0x04);			/* Left: SETTINGS (K.7) */
 	lgrab(l, "settings");
 	furi_tap(b, 0x20);			/* Back, no change */
 	(void) poll((struct pollfd *) NULL, 0, 1100);
@@ -1174,10 +1174,13 @@ static void launcher_test(void)
 	lgrab(l, "chord");
 	lcell(6, 7, c);
 	check(lpix(0, 0) && c[0] != 0xFF, "launcher: a Left+Up chord opens no page");
-	furi_tap(b, 0x04);			/* settings */
+	furi_tap(b, 0x04);			/* SETTINGS */
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* to Launcher */
+	furi_tap(b, 0x10);			/* OK: its options */
 	furi_tap(b, 0x10);			/* OK: icons off */
 	lgrab(l, "settings-off");
-	furi_tap(b, 0x20);			/* Back: written */
+	furi_tap(b, 0x20);			/* Back: SETTINGS */
+	furi_tap(b, 0x20);			/* Back: the list, written */
 	lgrab(l, "list-noicons");
 	ok = 0;
 	if ((f = fopen("/tmp/lc", "r")) != NULL) {
@@ -1186,6 +1189,44 @@ static void launcher_test(void)
 		fclose(f);
 	}
 	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	/* ACK7.1 (K.7): SETTINGS -> Display -> Right on Brightness -> Back:
+	 * the backlight changes at once, display.conf is written once */
+	{
+		unsigned long st0 = 0, st1 = 0;
+		int fd = open("/dev/backlight", O_RDWR);
+		unsigned char lv[1];
+
+		lv[0] = 128;			/* 50 %: room to go up */
+		if (fd >= 0) {
+			(void) write(fd, (char *) lv, 1);
+			lseek(fd, 0L, SEEK_SET);
+			(void) read(fd, (char *) &st0, 4);
+		}
+		unlink("/etc/flipper/display.conf");
+		furi_tap(b, 0x04);		/* SETTINGS */
+		furi_tap(b, 0x10);		/* OK on Display */
+		(void) poll((struct pollfd *) NULL, 0, 800);
+		lgrab(l, "display");
+		furi_tap(b, 0x08);		/* Right: brightness +10 % */
+		if (fd >= 0) {
+			lseek(fd, 0L, SEEK_SET);
+			(void) read(fd, (char *) &st1, 4);
+		}
+		furi_tap(b, 0x20);		/* Back: saved, the launcher */
+		(void) poll((struct pollfd *) NULL, 0, 500);
+		ok = 0;
+		if ((f = fopen("/etc/flipper/display.conf", "r")) != NULL) {
+			while (fgets(line, sizeof line, f) != NULL)
+				if (strcmp(line, "Brightness: 60\n") == 0) ok = 1;
+			fclose(f);
+		}
+		check((st1 >> 16 & 0xFF) > (st0 >> 16 & 0xFF),
+			"settings: Display Right raises the brightness at once (ACK7.1)");
+		check(ok, "settings: Back writes /etc/flipper/display.conf (ACK7.1)");
+		furi_tap(b, 0x20);		/* SETTINGS -> list */
+		if (fd >= 0) close(fd);
+		unlink("/etc/flipper/display.conf");
+	}
 	window_test(b, l);			/* T23b, spec K.8 */
 	kill(pid, SIGKILL);
 	(void) waitpid(pid, &st, 0);
@@ -1530,6 +1571,17 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
+	/* libmodem (spec section P) on the target: the RFID line code's
+	 * numbers and every Sub-GHz preset's CC1101 values and legal check
+	 * (64-bit integer arithmetic, no FPU). */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/gmodem", "gmodem", "info", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "gmodem info (libmodem)");
 #endif
 	memtest_tests();
 	poll_tests();
