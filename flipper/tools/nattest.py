@@ -85,8 +85,8 @@ def main():
 		if not r.login():
 			check(False, "login")
 			return 1
-		for p in ("timed", "remind", "alarm"):
-			check(r.sh("pkg install /lib/pkg/%s_1.0.tar" % p, 120) == 0,
+		for p in ("timed_1.2", "remind_1.0", "alarm_1.0"):
+			check(r.sh("pkg install /lib/pkg/%s.tar" % p, 120) == 0,
 				"install the %s package" % p)
 		out = r.output("grep -c '^remind:.:21:11:' /etc/passwd; "
 			"grep -c '^alarm:.:22:11:' /etc/passwd; "

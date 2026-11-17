@@ -304,7 +304,7 @@ static void form_values(void)
 	f->label[F_STEP] = "Stage";
 	if (!t->ramp) strcpy(f->value[F_STEP], "-");
 	else strcat(strcpy(f->value[F_STEP], nat_num(b, t->step ? t->step
-								: 30)), " s");
+								: 10)), " s");
 	f->label[F_VOLUME] = "Volume";
 	strcat(strcpy(f->value[F_VOLUME], nat_num(b, t->volume ? t->volume
 								: 100)), " %");
@@ -393,7 +393,7 @@ static void change(int d)
 	case F_MODE: t->ramp ^= 1; break;
 	case F_STEP:
 		if (t->ramp) t->step = cycle(steps, sizeof steps,
-					     t->step ? t->step : 30, d);
+					     t->step ? t->step : 10, d);
 		break;
 	case F_VOLUME:			/* 10 % steps, 10-100 */
 		i = (t->volume ? t->volume : 100) / 10 + d;

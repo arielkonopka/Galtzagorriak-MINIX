@@ -89,6 +89,7 @@ _PROTOTYPE( int alloc_mem_at, (phys_clicks base, phys_clicks clicks)	);
 _PROTOTYPE( phys_clicks hole_end, (phys_clicks pos)			);
 _PROTOTYPE( phys_clicks hole_with, (phys_clicks base, phys_clicks clicks));
 _PROTOTYPE( phys_clicks mem_free, (void)				);
+_PROTOTYPE( int mem_test, (void)					);
 /* forkexit.c */
 _PROTOTYPE( void wait_retry, (struct mproc *rmp)			);
 _PROTOTYPE( void fc_return, (void)					);

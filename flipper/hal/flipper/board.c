@@ -1106,6 +1106,7 @@ void hal_led_get(unsigned char rgb[3])
 #define CMD0	0	/* GO_IDLE_STATE */
 #define CMD8	8	/* SEND_IF_COND */
 #define CMD9	9	/* SEND_CSD */
+#define CMD10	10	/* SEND_CID */
 #define CMD16	16	/* SET_BLOCKLEN */
 #define CMD12	12	/* STOP_TRANSMISSION */
 #define CMD17	17	/* READ_SINGLE_BLOCK */
@@ -1347,6 +1348,38 @@ fail:
 uint32_t hal_disk_sectors(void)
 {
 	return sd_ready ? sd_nsectors : 0;
+}
+
+/* Spec N.6: the slot's card-detect switch closes to ground with a card in
+ * (PC10, pulled up in hal_disk_init; stock furi_hal_sd_is_present).  Its
+ * EXTI line belongs to the Up button, so it is read, never interrupts. */
+int hal_disk_present(void)
+{
+	return !(GPIOC->IDR & (1u << 10));
+}
+
+/* The card's CID (CMD10), hashed (FNV-1a): the same card has the same
+ * manufacturer, product name, serial number and date. */
+int hal_disk_id(uint32_t *id)
+{
+	uint8_t cid[16];
+	uint32_t h = 2166136261u;
+	int i, r;
+
+	if (!sd_ready) return -1;
+	spi2_speed(sd_fast);
+	r = sd_cmd(CMD10, 0) == 0 && sd_read_data(cid, sizeof cid) == 0;
+	sd_select(0);
+	if (!r) return -1;
+	for (i = 0; i < 15; i++) h = (h ^ cid[i]) * 16777619u;	/* no CRC7 */
+	*id = h;
+	return 0;
+}
+
+int hal_disk_fake(int state)
+{
+	(void) state;
+	return -1;
 }
 
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
@@ -2171,10 +2204,17 @@ uint32_t hal_rtc_time(void)
 
 int hal_rtc_set(uint32_t t)
 {
-	uint32_t y, m, d, days = t / 86400, s = t % 86400, i;
+	uint32_t y, m, d, days = t / 86400, s = t % 86400, i, fc;
+	int today;
 
 	civil_from_days(days, &y, &m, &d);
 	if (!hal_rtc_ok() || y < 2000 || y > 2099) return -1;
+	/* R2b.11: setting the clock is not a new day for the cache's erase
+	 * budget (a jump there and back gave a fresh budget, #109): what
+	 * today spent moves to the new date.  A word of an older day is left,
+	 * so a day that really began meanwhile still starts afresh. */
+	fc = FC_REG;
+	today = (fc & 0xF0000000u) == FC_MAGIC && (fc & 0xFFF) == fc_day(0);
 	rtc_unlock();
 	RTC->ISR = 0xFFFFFFFF;			/* INIT: stops the calendar */
 	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_INITF); i++) ;
@@ -2184,6 +2224,10 @@ int hal_rtc_set(uint32_t t)
 	RTC->CR &= ~RTC_CR_FMT;			/* 24 hours */
 	RTC->ISR &= ~RTC_ISR_INIT;		/* runs from here */
 	rtc_lock();
+	if (today)	/* fc_day()'s number, from the date just set (the
+			 * shadow registers may still hold the old one) */
+		bkp_set(&FC_REG, (fc & ~0xFFFu)
+			| (((y - 2000) * 372 + m * 31 + d) & 0xFFF));
 	return 0;
 }
 

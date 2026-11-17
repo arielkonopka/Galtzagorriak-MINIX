@@ -8,7 +8,7 @@ done today, or use the desk clock.
 ## Installing
 
 ```
-pkg install /lib/pkg/timed_1.0.tar     # needed by both
+pkg install /lib/pkg/timed_1.2.tar     # needed by both
 pkg install /lib/pkg/remind_1.0.tar
 pkg install /lib/pkg/alarm_1.0.tar
 ```

@@ -167,6 +167,14 @@ struct kstack {
 			 * now, 2: act as if the card were pulled */
 #define MI_FGEXEC	11	/* root: the next child's exec is the
 			 * foreground app: placed low (R12.22) */
+#define MI_MEMTEST	12	/* root (selftest, R7b.3.1): m1_i1 the address of
+			 * a 4 KB block of RAM; reply MT_* (MT_FAIL:
+			 * reply_i1 the failing word's address) */
+#define MT_PASS		0	/* free: March C- passed (left zeroed) */
+#define MT_FAIL		1	/* free: a word did not hold its pattern */
+#define MT_INUSE	2	/* a process (or part of one) is there */
+#define MT_OWNED	3	/* not user RAM: kernel, servers, SRAM2 */
+#define MT_BLOCK	4096
 #define SW_OFF		0
 #define SW_PLAIN	1
 #define SW_CRYPT	2

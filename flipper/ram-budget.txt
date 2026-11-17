@@ -42,7 +42,11 @@
 # R6.5 part 2 (/dev/rfid write): kernel +4 B: the frame's target (the
 # RFID antenna or the IR LED) in the device task and in the HAL; the HAL's
 # two carrier flags made bytes (were ints) to win back the rest.
-kernel    160    14652  14812
+# N.6 / T17b (SD card pulled out, #163): kernel +4 B: the card's CID hash
+# taken at the first open, to tell the same card from another when one is
+# put back (spec: <= +32 B).  The card-out state is in the existing
+# 'present' word.
+kernel    160    14656  14816
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows

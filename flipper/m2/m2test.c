@@ -337,6 +337,47 @@ static void poll_tests(void)
 	check(r == -1 && errno == EFAULT, "poll: fds in kernel RAM -> EFAULT");
 }
 
+/* R7b.3.1: MM tests a free 4 KB block of RAM in place (MI_MEMTEST). */
+static int memtest(unsigned long addr)
+{
+	message m;
+
+	m.m1_i1 = (int) addr;
+	m.m1_i2 = MI_MEMTEST;
+	m.m1_p1 = NULL;
+	return _syscall(MM, MEMINFO, &m);
+}
+
+static void memtest_tests(void)
+{
+	static int mine = 1;
+	unsigned long holes[2 * 16], blk, end;
+	message m;
+	int i, r = -9;
+
+	m.m1_i1 = (int) sizeof holes;
+	m.m1_i2 = 0;
+	m.m1_p1 = (char *) holes;
+	if (_syscall(MM, MEMINFO, &m) < 0) {
+		check(0, "memtest: hole list");
+		return;
+	}
+	for (i = 0; i < 16 && holes[2 * i + 1] != 0; i++) {
+		blk = (holes[2 * i] + MT_BLOCK - 1) & ~(unsigned long) (MT_BLOCK - 1);
+		end = holes[2 * i] + holes[2 * i + 1];
+		if (blk + MT_BLOCK <= end) {
+			r = memtest(blk);
+			break;
+		}
+	}
+	check(r == MT_PASS, "memtest: a free block passes March C-");
+	check(memtest((unsigned long) &mine & ~(unsigned long) (MT_BLOCK - 1))
+		== MT_INUSE, "memtest: our own data is in use");
+	check(memtest(0x20000000UL) == MT_OWNED, "memtest: the kernel's RAM is not ours");
+	check(memtest(0x20000100UL) < 0 && errno == EINVAL,
+		"memtest: an unaligned address -> EINVAL");
+}
+
 /* Phase 3: the sticky bit (R3.7, AC3.5) and snprintf (R3.6). */
 static void phase3_tests(void)
 {
@@ -509,6 +550,162 @@ static void devpoll_tests(void)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "poll: speaker child done");
 	close(s);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* Spec N.6 (the card pulled out), kernel part: while the card is out
+ * every transfer fails and the console says so; another card is refused;
+ * the same card back carries on.  QEMU's hook DIOCFAKECARD; raw reads at
+ * offsets the FS cache does not hold. */
+static void card_tests(void)
+{
+	static char b[512];
+	int fd, st, r1, r2, r3;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDONLY)) < 0) {
+		check(0, "card: open /dev/hd0");
+		return;
+	}
+	fflush(stdout);
+	st = 1;
+	if (ioctl(fd, DIOCFAKECARD, &st) != 0) {
+		check(0, "card: DIOCFAKECARD");
+		close(fd);
+		return;
+	}
+	lseek(fd, 1L << 20, SEEK_SET);
+	r1 = read(fd, b, sizeof b);
+	st = 2;				/* another card */
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	lseek(fd, 2L << 20, SEEK_SET);
+	r2 = read(fd, b, sizeof b);
+	st = 0;				/* the original back */
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	lseek(fd, 3L << 20, SEEK_SET);
+	r3 = read(fd, b, sizeof b);
+	close(fd);
+	check(r1 < 0, "card out: a read fails");
+	check(r2 < 0, "card: another card is refused");
+	check(r3 == (int) sizeof b, "card: the same card back carries on");
+}
+
+
+/* R7b.2: an alert preempts the screen and the buttons (FGIOCPREEMPT), a
+ * reader waiting meanwhile is parked and ends empty at the release, a
+ * second alert waits its turn (EBUSY), an alert that exits releases. */
+static int rd_n(int fd)
+{
+	char c;
+	struct pollfd p;
+
+	p.fd = fd; p.events = POLLIN; p.revents = 0;
+	if (poll(&p, 1, 2000) != 1 || read(fd, &c, 1) != 1) return -9;
+	return c - '0';
+}
+
+static void preempt_body(void);
+
+/* INIT (m2test here) may never be the foreground: the alert is a child,
+ * which reports its failures in its exit status. */
+static void preempt_tests(void)
+{
+	pid_t p;
+	int st;
+
+	fflush(stdout);
+	if ((p = fork()) == 0) {
+		fails = 0;
+		preempt_body();
+		fflush(stdout);
+		_exit(fails);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: all of the above");
+}
+
+static void preempt_body(void)
+{
+	unsigned char m[2];
+	int b, l, nb, pr[2], st, r, n;
+	pid_t rd, c;
+
+	b = open("/dev/buttons", O_RDWR);
+	nb = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || nb < 0 || l < 0 || pipe(pr) != 0) {
+		check(0, "preempt: open");
+		return;
+	}
+	furi_tap(b, 0x04);		/* the backlight on */
+	while (read(nb, (char *) m, 2) == 2) ;
+	fflush(stdout);
+	if ((rd = fork()) == 0) {	/* a reader like the launcher */
+		for (n = 0; n < 3; n++) {
+			r = read(b, (char *) m, 2);
+			m[0] = '0' + (r < 0 ? 7 : r);
+			(void) write(pr[1], (char *) m, 1);
+			if (r == 2) break;
+		}
+		_exit(0);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);	/* it waits now */
+	r = ioctl(l, FGIOCPREEMPT, (void *) 0);
+	check(r == 0 && rd_n(pr[0]) == 0,
+		"preempt: taken, the waiting reader gets an empty read");
+	if ((c = fork()) == 0)
+		_exit(ioctl(l, FGIOCPREEMPT, (void *) 0) < 0 && errno == EBUSY
+			? 0 : 1);
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: a second alert gets EBUSY");
+	furi_tap(b, 0x10);
+	r = read(nb, (char *) m, 2);
+	check(r == 2 && m[0] == 0x10 && m[1] == 1,
+		"preempt: the alert gets the keys");
+	while (read(nb, (char *) m, 2) == 2) ;
+	r = ioctl(l, FGIOCRELEASE, (void *) 0);
+	check(r == 0 && rd_n(pr[0]) == 0,
+		"preempt: released, the parked reader gets an empty read");
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	furi_tap(b, 0x20);
+	check(rd_n(pr[0]) == 2 && waitpid(rd, &st, 0) == rd,
+		"preempt: after the release the reader gets the next key");
+	while (read(nb, (char *) m, 2) == 2) ;
+
+	if ((c = fork()) == 0)		/* an alert that just exits */
+		_exit(ioctl(l, FGIOCPREEMPT, (void *) 0) == 0 ? 0 : 1);
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "preempt: by a child that exits");
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	r = ioctl(l, FGIOCPREEMPT, (void *) 0);
+	check(r == 0 && ioctl(l, FGIOCRELEASE, (void *) 0) == 0,
+		"preempt: its exit released the screen");
+
+	/* The foreground app exits: the kernel clears it, so the next process
+	 * in its slot does not seem to hold the screen (#192). */
+	if ((c = fork()) == 0) {
+		n = getpid();
+		_exit(ioctl(l, FGIOCSET, &n) == 0 ? 0 : 1);
+	}
+	(void) waitpid(c, &st, 0);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	if ((c = fork()) == 0) {	/* B, likely in A's slot, starts C */
+		if ((rd = fork()) == 0) {
+			n = getpid();
+			r = ioctl(l, FGIOCSET, &n);
+			n = 0;
+			(void) ioctl(l, FGIOCSET, &n);
+			_exit(r == 0 ? 0 : 1);
+		}
+		_exit(waitpid(rd, &st, 0) == rd && WIFEXITED(st)
+			? WEXITSTATUS(st) : 2);
+	}
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0,
+		"fg: an exited foreground app holds nothing");
+	close(pr[0]); close(pr[1]);
+	close(b); close(nb); close(l);
 }
 #endif
 
@@ -834,9 +1031,12 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 #endif
+	memtest_tests();
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	card_tests();
+	preempt_tests();
 #endif
 	time_tests();
 	finish();

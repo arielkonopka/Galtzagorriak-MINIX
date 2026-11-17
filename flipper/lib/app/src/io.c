@@ -185,6 +185,9 @@ int app_alert(const struct app_timer *t, int cat, int flags, int vol,
 	char fb[4], zb[4], rb[4], sb[4], vb[4], ub[8], *argv[30];
 	int n = 0, pid, i;
 
+	/* alert's -f: 1 sound, 2 vibro, 4 LED, 16 screen, as two digits.
+	 * NF_SHOW (8) must not go along: it once made the flag '?', which
+	 * atoi() read as 0, so nothing rang (#196, #109 AC7b.R1). */
 	flags &= NF_OUT;
 	fb[0] = '0' + flags / 10; fb[1] = '0' + flags % 10; fb[2] = 0;
 	sb[0] = '0' + t->step / 100 % 10; sb[1] = '0' + t->step / 10 % 10;
