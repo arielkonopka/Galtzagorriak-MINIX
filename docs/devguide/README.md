@@ -33,8 +33,9 @@ For advanced users who want to write programs, apps, scripts and background jobs
    `pkg`, scripts run at install, settings with defaults, putting program text into flash.
 6. [Daemons, jobs and background work](part1/06-background.md): what works today, the
    background tiers, timers and alerts (`timed`, `alert`, `libapp`), swap, and how to choose.
-7. [Desktop modules](part1/07-desktop-modules.md) **(planned, outline)**: modules in C, Berry
-   or shell that talk to the desktop over a TSV line protocol (spec K.2–K.4).
+7. [Desktop modules and window apps](part1/07-desktop-modules.md): window apps with `libgm`
+   (spec K.8, in the code), and modules in C, Berry or shell that talk to the desktop over a
+   TSV line protocol (spec K.2–K.4, **planned**).
 8. [Scripting in Berry](part1/08-berry.md) **(planned, outline)**: the Berry runtime, its
    bindings and limits (spec Phase 7c).
 

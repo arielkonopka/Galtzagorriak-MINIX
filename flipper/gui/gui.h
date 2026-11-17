@@ -45,6 +45,10 @@ struct gui_in {
 	long t[6];			/* clock ticks at each key's press */
 };
 int gui_input(struct gui_in *in, int clicks, int ms);
+/* gui_input, and also returns GUI_FD as soon as fd (>= 0, e.g. a window
+ * app's records, spec K.8) is readable or closed.  Keys come first. */
+#define GUI_FD		0x100
+int gui_wait(struct gui_in *in, int clicks, int ms, int fd);
 int gui_click(void);			/* the next click of any key */
 /* An 8-pixel-wide bitmap, n rows of one byte (MSB left) at x, y. */
 void gui_bits8(int x, int y, const unsigned char *rows, int n, int inverse);

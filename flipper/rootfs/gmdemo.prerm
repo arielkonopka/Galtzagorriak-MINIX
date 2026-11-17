@@ -1,0 +1,4 @@
+# prerm of the gmdemo package: off the launcher.
+grep -v ':=/usr/bin/gmdemo$' /etc/apps > /etc/apps.new &&
+	cp /etc/apps.new /etc/apps
+rm -f /etc/apps.new

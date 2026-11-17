@@ -5,9 +5,11 @@
  *
  *	Label:user:/program arg ...		(the old form, no icon)
  *	Label:user:icon:/program arg ...	(icon: see icon_parse)
+ *	Label:user:icon:=/program arg ...	a window app (spec K.8)
  *
- * The field after the user is the program if it starts with '/' (programs
- * in /etc/apps are absolute paths), else the icon.
+ * The field after the user is the program if it starts with '/' or "=/"
+ * (programs in /etc/apps are absolute paths; '=' marks a window app, which
+ * the launcher serves itself: winsrv.c), else the icon.
  */
 #include <string.h>
 #include "appline.h"
@@ -120,7 +122,7 @@ int app_line(char *line, struct app_fields *a)
 	*u++ = 0;
 	if ((r = strchr(u, ':')) == NULL) return -1;
 	*r++ = 0;
-	if (r[0] == '/') {			/* the old form */
+	if (r[0] == '/' || (r[0] == '=' && r[1] == '/')) {	/* the old form */
 		a->icon = NULL;
 		c = r;
 	} else {

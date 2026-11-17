@@ -313,7 +313,7 @@ UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello
+UPROGS	+= furitest furihello gmdemo
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -327,7 +327,7 @@ LIBPROGS := pwdauth
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
 # tools/flsend use their own CRC-checked transfer instead.)
 # Apps: built like commands but shipped as packages (flipper/apps).
-APPS	:= hello
+APPS	:= hello gmdemo
 # Other names of multi-call programs, installed as copies.
 ALIASES	:= mv=cp ln=cp cpdir=cp clone=cp [=test reboot=halt chgrp=chown
 ALIASES	+= $(addsuffix =cp,rm)
@@ -374,6 +374,8 @@ CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 			# from /etc/rc, when the RAM is free; later it may need
 			# apps closed first.
 CHMEM_launcher := 4096
+CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
+			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
@@ -408,7 +410,17 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
-OBJS_launcher += $(MB)/cmd/gui/appline.o
+OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/winrec.o
+# libgm (spec K.8, src/lib/gm): window apps describe their screens, the
+# launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
+# stdio; programs link it with --gc-sections.
+GM_DIR	:= $(MROOT)/src/lib/gm
+$(MB)/gm/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 # settings GROUP (spec K.7): the groups' files are src/commands/settings/
 SETGROUPS := display sound
 OBJS_settings = $(MB)/cmd/port/settings.o $(SETGROUPS:%=$(MB)/cmd/settings/%.o) \
@@ -491,6 +503,7 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 endef
 endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
+OBJS_gmdemo += $(MB)/gm/gm.o	# libgm, statically (spec K.8)
 # libfuri core (spec R5.1, flipper/lib/furi): the stock furi API for apps
 # rebuilt from source.  In the shared furi library (R2b.9, AC5.3, below);
 # furitest links the core statically.  C99 (the stock headers need it).
@@ -655,7 +668,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS),$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -664,7 +677,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
-	   $(PKGDIR)/stest_1.0.tar \
+	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
 	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
@@ -699,6 +712,17 @@ $(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   --timers --notify alarm --deskmode --flash \
 	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
+# The example window app (spec K.8): the program, its launcher line, and
+# its source with libgm in /usr/share/examples/gui.
+$(PKGDIR)/gmdemo_1.0.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \
+		rootfs/gmdemo.prerm apps/gmdemo.c $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	python3 -I tools/mkpkg.py -n gmdemo -v 1.0 -o $(PKGDIR) --window --flash \
+	   -i @app --postinst rootfs/gmdemo.postinst --prerm rootfs/gmdemo.prerm \
+	   -D "Example window app (spec K.8): the launcher draws it" \
+	   /usr/bin/gmdemo=$< \
+	   /usr/share/examples/gui/gmdemo.c=apps/gmdemo.c \
+	   /usr/share/examples/gui/gm.c=$(GM_DIR)/gm.c \
+	   /usr/share/examples/gui/gm.h=$(GM_DIR)/gm.h
 # The hardware self test (spec 7b.3).
 $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/selftest.postinst rootfs/selftest.prerm \
@@ -712,7 +736,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.10
+BASE_VER := 4.12
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -804,7 +828,7 @@ QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
-	timeout 60 $(QEMU_MINIX) -device loader,file=$<,addr=0
+	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }
