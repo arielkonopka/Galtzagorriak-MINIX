@@ -46,4 +46,14 @@ struct rfid_emu {
 };
 #define RFIDIOCEMU	_IOW('r', 2, struct rfid_emu)
 
+/* RFIDIOCCARRIER (spec R9.0.4): the field a read raises, for the next
+ * reads, until set again or the device is closed (then 125 kHz again).
+ * PSK tags are read with the stock firmware's 62.5 kHz at 25 % duty,
+ * FDX-B animal tags with 134.2 kHz (Unleashed's ASK134 mode).  A T5577
+ * block read with the field held (RFIDIOCFIELD) is always 125 kHz. */
+#define RFID_CARRIER_125	0	/* 125 kHz, 50 %: ASK and FSK tags */
+#define RFID_CARRIER_PSK	1	/* 62.5 kHz, 25 %: PSK tags */
+#define RFID_CARRIER_134	2	/* 134.2 kHz, 50 %: FDX-B */
+#define RFIDIOCCARRIER	_IOW('r', 3, int)
+
 #endif /* _MINIX_RFID_H */
