@@ -274,6 +274,24 @@ Owner rule: only measures with **0 B RAM** and no noticeable CPU on the foregrou
 - R12.33: `hal_disk_erase(first, last)` (CMD32/CMD33/CMD38, busy wait with the card's erase timeout, card-detect checks as N.6) and the root-only `DIOCERASE` ioctl on a partition device. AC12.17 on a card filled with data first.
 - Kernel RAM +0 B. Numbers into PORTING.md.
 
+## T19. Every Unleashed LF RFID protocol, decoders and encoders (spec 9.0, R9.0.1–R9.0.9; owner request 2026-11-17)
+Owner request outside the milestone order (H-lane priority 4, "owner requests"). Today 1 of 25 protocols works (EM4100 RF/64); spec 9.0 has the gap table. Reuse the Unleashed code verbatim (GPLv3).
+
+### T19a (`lane:cloud`, host + QEMU): the library and its tests
+- R9.0.1 `src/lib/lfrfid/` with the 25 protocols, `fsk_demod`/`fsk_osc`, `t5577`/`em4305` block builders and the toolbox pieces; thin `furi` shim. Note the Unleashed commit in the file header.
+- R9.0.2 `make lfrfidtest` (host) for all 25 protocols, encoder → decoder, jitter, both polarities, no cross-decodes; added to the `build` CI job.
+- R9.0.3 user side that needs no new kernel call: `rfid` prints the protocol and rendered data from today's 512-edge capture (enough for the ASK protocols: EM4100/32, /16, Electra, FDX-B at 125 kHz, Viking, Jablotron, PAC/Stanley, Gallagher, Radio Key, GProxII, Noralsy); `rfid write PROTO HEX…` for every protocol (T5577; EM4305 where Unleashed has it); `rfid emulate PROTO` for those whose frame fits `RFIDIOCEMU` (≤ 512 segments); `.rfid` files for every protocol. The PR lists the device steps under "Needs on-device test".
+- Measure the decoder heap (`protocol_dict_alloc` of all 25) and say it in the PR (budget ≤ 6 KB, freed at exit). No resident RAM, 0 run-time flash writes.
+- Docs: CHANGELOG line, `docs/manual/` RFID chapter (protocol list), `man` page of `rfid`.
+
+### T19b (`lane:local`, Flipper): the kernel and the device checks
+- R9.0.4 `RFIDIOCCARRIER`: 62.5 kHz/25 % (PSK) and 134.2 kHz/50 % besides 125 kHz/50 %.
+- R9.0.5 streaming capture (ring in the caller's pinned buffer, `poll`, `EOVERFLOW` on overrun).
+- R9.0.6 long emulation (run list, ring refilled in the DMA half/complete interrupt, or a cheaper mechanism of the agent's choice with the same limits).
+- Then switch `rfid` to ASK/PSK alternation and streaming, and long emulation for the FSK/PSK protocols.
+- R9.0.7 Hitag µ / Hitag S write targets, R9.0.8 RAW read, R9.0.9 `lfrfid` app (protocol name, rendered data, "Add manually" for all 25), in that order, after the above.
+- Device checks AC9.0.2–AC9.0.4 (results table in PORTING.md, `lat` numbers in the PR); kernel RAM ≤ +32 B in total.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
