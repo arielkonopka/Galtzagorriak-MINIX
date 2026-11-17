@@ -817,6 +817,50 @@ static void gpio_tests(void)
 #endif
 
 #ifdef BOARD_QEMU
+/* R6.7 part 3: IBIOCEMU's rules (QEMU has no reader; the slots are the
+ * host test's, tests/host/ibemutest.c): the emulating process owns the
+ * contact, others get EBUSY, a master read or IBIOCRUN meanwhile EBUSY,
+ * and its close ends it. */
+static void ibemu_tests(void)
+{
+	static const unsigned char rom[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	struct ib_emu q;
+	struct ib_run r;
+	unsigned char buf[8];
+	pid_t p;
+	int fd, st, e1, e2;
+
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		check(0, "ibemu: open");
+		return;
+	}
+	memset(&q, 0, sizeof q);
+	memcpy(q.rom, rom, 8);
+	q.on = 1;
+	q.served = 99;
+	check(ioctl(fd, IBIOCEMU, &q) == 0 && q.served == 0,
+		"ibemu: IBIOCEMU on, nobody served yet");
+	e1 = read(fd, buf, 8) < 0 && errno == EBUSY;
+	memset(&r, 0, sizeof r);
+	r.op[0] = IB_RESET; r.nop = 1;
+	e2 = ioctl(fd, IBIOCRUN, &r) < 0 && errno == EBUSY;
+	check(e1 && e2, "ibemu: read and IBIOCRUN busy while emulating");
+	if ((p = fork()) == 0) {		/* another process */
+		int f = open("/dev/ibutton", O_RDWR);
+
+		q.on = 1;
+		_exit(f >= 0 && ioctl(f, IBIOCEMU, &q) < 0 && errno == EBUSY
+			? 0 : 1);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "ibemu: another process gets EBUSY");
+	close(fd);				/* ends the emulation */
+	fd = open("/dev/ibutton", O_RDWR);
+	check(fd >= 0 && read(fd, buf, 8) < 0 && errno == ENODEV,
+		"ibemu: after close the contact reads again (no key: ENODEV)");
+	if (fd >= 0) close(fd);
+}
+
 /* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
  * it reads high). */
 static void ibutton_tests(void)
@@ -845,6 +889,7 @@ static void ibutton_tests(void)
 	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
 		"ibutton: too many steps -> EINVAL");
 	close(fd);
+	ibemu_tests();
 }
 #endif
 

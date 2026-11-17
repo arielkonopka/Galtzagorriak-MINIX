@@ -52,7 +52,11 @@
 # T19b R9.0.4 (RFID read carrier modes, #210): kernel +4 B: the mode byte
 # (125 kHz / 62.5 kHz 25 % for PSK / 134.2 kHz) and its padding.  Spec
 # allows <= +4 B for R9.0.4, <= +32 B for R9.0.4-R9.0.6 together.
-kernel    160    14664  14824
+# R6.7 part 3 (Dallas key emulation, 1-Wire slave on EXTI 14): kernel
+# +16 B: the key's ROM (8 B) and the slave's state (slot counter, command,
+# served count, owner, the slot's start as a 16-bit us clock).  R6 budget
+# +300 B.
+kernel    160    14680  14840
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows

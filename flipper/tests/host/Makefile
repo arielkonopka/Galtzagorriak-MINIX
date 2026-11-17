@@ -11,7 +11,7 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest icontest
+TESTS	:= parttest usbtest ibemutest icontest
 
 all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid
 
@@ -59,6 +59,11 @@ $(B)/usbtest: usbtest.c $(B)/usb.c stubs/usb/*.h \
 		$(MROOT)/flipper/vendor/libusb_stm32/src/usbd_core.c
 	$(CC) $(CFLAGS) $(USBINC) -D'T_ASM(...)=((void) 0)' usbtest.c \
 	    $(B)/usb.c $(MROOT)/flipper/vendor/libusb_stm32/src/usbd_core.c -o $@
+
+# ibemu.c: the Dallas key's 1-Wire slave (R6.7 part 3), included whole.
+$(B)/ibemutest: ibemutest.c $(MROOT)/src/kernel/arm/ibemu.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-old-style-definition ibemutest.c -o $@
 
 # appline.c: the launcher's /etc/apps lines and icons (R5.6a, T21a).
 $(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/appline.h
