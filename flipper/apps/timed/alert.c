@@ -4,7 +4,7 @@
  *
  * Usage:	alert [-c CATEGORY] [-f FLAGS] [-z MINUTES ID] [-u UID]
  *		      [-t TONE] [-r MINUTES] [-R] [-S SECONDS] [-1]
- *		      [-l APP ID] TITLE TEXT
+ *		      [-v VOLUME] [-l APP ID] TITLE TEXT
  *	-c	alarm, reminder or info (default info)
  *	-f	what notify_flags() allowed: 1 sound, 2 vibro, 4 LED,
  *		16 screen (blink the backlight), added
@@ -17,6 +17,8 @@
  *	-S	escalating: SECONDS per stage (5-120, default 30)
  *	-1	single tone (Sound: single): beeps of the tone's first note
  *		instead of the melody
+ *	-v	the speaker volume, 1-100 (default 100; libapp's
+ *		notify_volume(): an alarm's own, else the policy's)
  *	-l	OK appends "TIME ID" to APP_DATA/APP/log, written as UID
  *		(the reminder log of spec 7b.1); a snooze timer _ID logs ID
  *
@@ -26,8 +28,11 @@
  * Escalating, one stage per -S: sparse beeps (one every 3 s), denser
  * beeps (one a second), the full sound (the melody, or triple beeps),
  * then the other outputs on top; without sound the other outputs go
- * through the three levels themselves.  /dev/speaker has no volume, so
- * the stages differ in how often it sounds.
+ * through the three levels themselves.  The volume (-v) holds for the
+ * whole ring when steady; escalating ramps it from a fifth of -v at the
+ * start to all of -v at the end of the third stage (/dev/speaker's
+ * volume note, sent when the step changes: a cubic curve, so the low end
+ * is quiet indeed).
  *
  * One blocking loop, no busy waits: a note goes to /dev/speaker in pieces
  * of at most PIECE ms (the write returns when it has played), a rest is a
@@ -68,6 +73,7 @@ static unsigned char tune[4 * TUNE_MAX];
 static int ntune, shown, btn = -1, bl = -1, bl_lit = -1;
 static unsigned char bl_old[4];		/* level, timeout, forced mode */
 static unsigned f0;			/* Hz of the single tone */
+static int vol = 100;			/* -v */
 
 /* The three levels of an output: how often it pulses (ms), and how long
  * vibro and the screen flash are on in a pulse.  Level 2 (full) is
@@ -234,7 +240,7 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 	unsigned hz = 0;
 	long t, edge, q, ph, per, vper = -1;
 	int spk = -1, vib = -1, key = 0, slv = -1, ni = 0, len = 2, olv;
-	int st, other, led_on = 0, lit;
+	int st, other, led_on = 0, lit, v, sv = -1;
 	long left = 0;
 
 	if ((flags & NF_SOUND)
@@ -286,11 +292,28 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 		if (edge - t < q) q = edge - t;
 		if (q < 10) q = 10;
 		if (hz != 0 && spk >= 0) {
-			unsigned char p[4];
+			unsigned char p[8];
+			int np = 0;
 
-			p[0] = hz & 0xFF; p[1] = hz >> 8;
-			p[2] = q & 0xFF; p[3] = q >> 8;
-			if (write(spk, p, 4) != 4) {
+			/* The volume: escalating, a fifth of vol up to vol
+			 * over the three sound stages, in steps of 5 %. */
+			v = vol;
+			if (ramp && t < 3 * stage) {
+				v = vol / 5 + (int) ((vol - vol / 5) * t
+							/ (3 * stage));
+				v = v / 5 * 5;
+				if (v < 1) v = 1;
+			}
+			if (v != sv) {		/* a volume note first */
+				p[0] = p[1] = 0xFF;
+				p[2] = v; p[3] = 0;
+				np = 4;
+				sv = v;
+			}
+			p[np] = hz & 0xFF; p[np+1] = hz >> 8;
+			p[np+2] = q & 0xFF; p[np+3] = q >> 8;
+			np += 4;
+			if (write(spk, p, np) != np) {
 				close(spk);	/* gone: no sound */
 				spk = -1;
 			}
@@ -343,7 +366,7 @@ static void wrap(const char *s, int y, int rows)
 
 /* What a snooze timer keeps besides the text (set by main()). */
 static char *o_tone, *o_log;
-static int o_ring, o_ramp, o_step, o_single;
+static int o_ring, o_ramp, o_step, o_single, o_vol;
 
 static int snooze(const char *id, int min, int cat, int flags, int uid,
 				const char *title, const char *text)
@@ -359,6 +382,7 @@ static int snooze(const char *id, int min, int cat, int flags, int uid,
 	t.ramp = o_ramp;
 	t.step = o_step;
 	t.single = o_single;
+	t.volume = o_vol;
 	t.id[0] = '_';
 	strncpy(t.id + (id[0] != '_'), id, APP_ID_MAX - 1);
 	t.id[APP_ID_MAX] = 0;
@@ -437,6 +461,10 @@ int main(int argc, char **argv)
 			if (step < 5 || step > 120) step = 0;
 		} else if (strcmp(argv[i], "-1") == 0) {
 			single = 1;
+		} else if (strcmp(argv[i], "-v") == 0 && i + 1 < argc) {
+			vol = atoi(argv[++i]);
+			if (vol < 1 || vol > 100) vol = 100;
+			o_vol = vol;
 		} else if (strcmp(argv[i], "-l") == 0 && i + 2 < argc) {
 			logapp = argv[++i];
 			logid = argv[++i];
@@ -447,7 +475,7 @@ int main(int argc, char **argv)
 	if (argc - i != 2) {
 		put(2, "usage: alert [-c CATEGORY] [-f FLAGS] [-z MINUTES ID] "
 		       "[-u UID] [-t TONE] [-r MINUTES] [-R] [-S SECONDS] "
-		       "[-1] [-l APP ID] TITLE TEXT\n");
+		       "[-1] [-v VOLUME] [-l APP ID] TITLE TEXT\n");
 		return 2;
 	}
 	title = argv[i];

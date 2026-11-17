@@ -176,11 +176,13 @@ void notify_policy(struct notify_policy *p, const char *home)
 
 /* Start the alert program for a notification: t gives the title, text,
  * id and snooze (t->id empty: none), flags what notify_flags() allowed;
- * uid >= 0: the owner of a snooze timer (alert started by root).
+ * vol the speaker volume (notify_volume(), 1-100); uid >= 0: the owner of
+ * a snooze timer (alert started by root).
  * Returns the pid, or -1. */
-int app_alert(const struct app_timer *t, int cat, int flags, int uid)
+int app_alert(const struct app_timer *t, int cat, int flags, int vol,
+								int uid)
 {
-	char fb[4], zb[4], rb[4], sb[4], ub[8], *argv[28];
+	char fb[4], zb[4], rb[4], sb[4], vb[4], ub[8], *argv[30];
 	int n = 0, pid, i;
 
 	flags &= NF_OUT;
@@ -189,6 +191,9 @@ int app_alert(const struct app_timer *t, int cat, int flags, int uid)
 	sb[2] = '0' + t->step % 10; sb[3] = 0;
 	zb[0] = '0' + t->snooze / 10; zb[1] = '0' + t->snooze % 10; zb[2] = 0;
 	rb[0] = '0' + t->ring / 10 % 10; rb[1] = '0' + t->ring % 10; rb[2] = 0;
+	if (vol < 1 || vol > 100) vol = 100;
+	vb[0] = '0' + vol / 100; vb[1] = '0' + vol / 10 % 10;
+	vb[2] = '0' + vol % 10; vb[3] = 0;
 	argv[n++] = "alert";
 	argv[n++] = "-c";
 	argv[n++] = (char *) app_cats[cat > 2 ? 0 : cat];
@@ -208,6 +213,10 @@ int app_alert(const struct app_timer *t, int cat, int flags, int uid)
 		argv[n++] = sb;
 	}
 	if (t->single) argv[n++] = "-1";
+	if (vol != 100) {
+		argv[n++] = "-v";
+		argv[n++] = vb;
+	}
 	if (t->log[0] != 0 && t->id[0] != 0) {
 		argv[n++] = "-l";
 		argv[n++] = (char *) t->log;
@@ -260,7 +269,7 @@ int notify_post(int cat, const char *title, const char *text,
 	notify_policy(&p, getenv("HOME"));
 	if ((f = notify_flags(&p, cat, t.flags, time((time_t *) 0))) == 0)
 		return 0;
-	return app_alert(&t, cat, f, -1);
+	return app_alert(&t, cat, f, notify_volume(&p, &t, cat), -1);
 }
 
 static int settings_path(char *path, int size, const char *app)

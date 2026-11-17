@@ -215,6 +215,29 @@ static void policy(void)
 	zone("CET-1CEST,M3.5.0,M10.5.0/3");
 	CHECK(notify_flags(&p, TC_REMINDER, NF_ALL, utc(2026, 11, 16, 21, 30, 0))
 		== 0, "Dnd in local time (22:30 CET)");
+	{			/* the speaker volume (7b.2) */
+		struct app_timer t;
+
+		memset(&t, 0, sizeof t);
+		p.volume = 40;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 100,
+			"volume: an alarm without Volume: 100, not the policy's");
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 40,
+			"volume: a reminder takes the policy's");
+		CHECK(notify_volume(&p, NULL, TC_INFO) == 40,
+			"volume: info without a timer: the policy's");
+		t.volume = 70;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 70,
+			"volume: an alarm keeps its own Volume: 70");
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 40,
+			"volume: a reminder's own is capped by the policy");
+		t.volume = 10;
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 10,
+			"volume: a lower own volume holds for a reminder");
+		p.volume = 0;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 10,
+			"volume: an alarm with the global sound off");
+	}
 }
 
 static void format(void)
@@ -230,6 +253,7 @@ static void format(void)
 		"Kind: once\nAt: 5\nCategory: urgent\n", "Kind: once\nAt: 5\nSnooze: 99\n",
 		"Kind: once\nAt: 5\nSound: maybe\n", "Kind: once\n",
 		"Kind: once\nAt: 5\nAction: run\n",
+		"Kind: once\nAt: 5\nVolume: 0\n", "Kind: once\nAt: 5\nVolume: 101\n",
 	};
 	unsigned i;
 
@@ -249,6 +273,15 @@ static void format(void)
 		&& strcmp(u.prog, "/usr/bin/x") == 0 && u.cat == TC_ALARM,
 		"once/run fields");
 	CHECK(timer_format(&t, buf, 40) == -1, "format: too small -> -1");
+	parse(&t, "Kind: daily\nTime: 07:00\nCategory: alarm\nVolume: 35\n"
+		  "Mode: escalating\n");
+	CHECK(t.volume == 35 && timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nVolume: 35\n") != NULL
+		&& timer_parse(&u, buf) == 0 && u.volume == 35,
+		"Volume: 35 parsed, formatted, parsed again");
+	parse(&t, water);
+	CHECK(t.volume == 0 && timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "Volume") == NULL, "no Volume: the default, not written");
 	for (i = 0; i < sizeof bad / sizeof *bad; i++) {
 		strcpy(buf, bad[i]);
 		if (timer_parse(&u, buf) != -1) {

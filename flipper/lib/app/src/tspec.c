@@ -201,6 +201,10 @@ int timer_parse(struct app_timer *t, char *buf)
 		} else if (strcmp(k, "Mode") == 0) {
 			t->ramp = strcmp(v, "escalating") == 0;
 			n = !t->ramp && strcmp(v, "steady") != 0;
+		} else if (strcmp(k, "Volume") == 0) {
+			n = atoi(v);
+			t->volume = n;
+			n = n < 1 || n > 100;
 		} else if (strcmp(k, "Step") == 0) {
 			t->step = atoi(v);
 			n = t->step < 5 || t->step > 120;
@@ -330,6 +334,10 @@ int timer_format(const struct app_timer *t, char *buf, int size)
 	if (t->ramp && t->step != 0) {
 		n = put(buf, size, n, "\nStep: ");
 		n = put(buf, size, n, num(nb + sizeof nb, t->step));
+	}
+	if (t->volume != 0) {
+		n = put(buf, size, n, "\nVolume: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->volume));
 	}
 	if (t->log[0] != 0) {
 		n = put(buf, size, n, "\nLog: ");
@@ -477,4 +485,17 @@ int notify_flags(const struct notify_policy *p, int cat, int want, time_t now)
 	if (!p->vibro) want &= ~NF_VIBRO;
 	if (!p->led) want &= ~NF_LED;
 	return NF_SHOW | (want & NF_OUT);
+}
+
+/* The speaker volume (1-100) of a notification of category cat from timer
+ * t: an alarm keeps its own (default 100) whatever the policy says;
+ * reminders and info take the policy's Volume, lowered to the timer's own
+ * if that is lower (0 when the policy says no sound). */
+int notify_volume(const struct notify_policy *p, const struct app_timer *t,
+								int cat)
+{
+	int v = t != NULL ? t->volume : 0;
+
+	if (cat == TC_ALARM) return v != 0 ? v : 100;
+	return v != 0 && v < p->volume ? v : p->volume;
 }

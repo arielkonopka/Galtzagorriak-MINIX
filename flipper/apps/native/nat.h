@@ -40,8 +40,8 @@ int nat_become(const char *name);
 #define NAT_ROWS	5		/* rows in the window under the title */
 struct nat_form {
 	int n, cur, top;
-	const char *label[16];
-	char value[16][24];
+	const char *label[20];
+	char value[20][24];
 };
 void nat_form_move(struct nat_form *f, int d);	/* cursor +-1, scroll */
 

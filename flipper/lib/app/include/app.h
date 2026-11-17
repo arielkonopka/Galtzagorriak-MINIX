@@ -42,6 +42,13 @@
  *					go sparse, denser, full).  "Ramp:
  *					yes" in older files = escalating
  *	Step: 30			escalating: seconds per stage, 5-120
+ *	Volume: 100			1-100 (/dev/speaker's cubic curve).
+ *					Alarm: its volume (default 100,
+ *					whatever the policy says); other
+ *					categories: at most the policy's.
+ *					Escalating ramps from a fifth of
+ *					it to all of it over the three
+ *					sound stages; steady: it throughout
  *	Log: remind			OK on the alert appends "TIME ID"
  *					to APP_DATA/<Log>/log, written as
  *					the timer's owner (spec 7b.1)
@@ -52,7 +59,8 @@
  * [A-Za-z0-9._-], not starting with '.'.
  *
  * Notification policy: /etc/notify.conf, then ~/.config/notify (same
- * format): Volume: 0-100 (0: no sound), Vibro: yes|no, Led: yes|no,
+ * format): Volume: 0-100 (0: no sound; the volume of reminders and
+ * info, not of alarms), Vibro: yes|no, Led: yes|no,
  * Dnd: 22:00-07:00 (do not disturb, local time; "Dnd: off").  An alarm
  * always rings (every output as the alarm itself says); reminders and
  * info are not shown during do-not-disturb.
@@ -120,6 +128,7 @@ struct app_timer {
 	unsigned char ramp;		/* 1: Mode: escalating */
 	unsigned char step;		/* escalating: s per stage, 0 = 30 */
 	unsigned char single;		/* 1: Sound: single (one tone) */
+	unsigned char volume;		/* 1-100, 0 = the default */
 	char log[APP_ID_MAX + 1];	/* the app whose log OK appends to */
 };
 
@@ -156,7 +165,10 @@ int notify_flags(const struct notify_policy *p, int cat, int want,
 								time_t now);
 int notify_post(int cat, const char *title, const char *text,
 				const struct app_timer *opts);	/* pid, 0, -1 */
-int app_alert(const struct app_timer *t, int cat, int flags, int uid);
+int notify_volume(const struct notify_policy *p, const struct app_timer *t,
+								int cat);
+int app_alert(const struct app_timer *t, int cat, int flags, int vol,
+								int uid);
 int app_cat(const char *s);		/* category name -> TC_*, -1 */
 extern const char *const app_cats[3];
 

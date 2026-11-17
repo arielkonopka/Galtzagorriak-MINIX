@@ -6,11 +6,13 @@
  *
  * Any number of alarms.  An alarm that is on is one `daily` (weekdays) or
  * `once` timer in /var/timers (libapp, category alarm, id alarm-N): it
- * always rings as it says itself (sound and/or vibro), whatever the
- * foreground app, the volume setting or do-not-disturb (libapp
- * notify_flags()).  It carries its label, tone (built-in or a user RTTTL
- * or .fmf file in APP_DATA/alarm/), ramp, LED, snooze and ring time to
- * alert.  An alarm that is off is kept as APP_DATA/alarm/alarm-N.off in
+ * always rings as it says itself, whatever the foreground app, the
+ * volume setting or do-not-disturb (libapp notify_flags(),
+ * notify_volume()).  It carries its label, ring settings (Mode:
+ * escalating or steady, Step: s per stage, Volume:, the outputs sound,
+ * vibro, LED blink and screen flash, Sound: single tone or melody), tone
+ * (built-in or a user RTTTL or .fmf file in APP_DATA/alarm/), snooze and
+ * ring time to alert.  An alarm that is off is kept as APP_DATA/alarm/alarm-N.off in
  * the same format, so timed never sees it.  Nothing of the app is in RAM
  * while it is closed.
  *
@@ -60,11 +62,13 @@ static const char *const labels[] = {
 #define NLABELS	(int) (sizeof labels / sizeof *labels)
 static const unsigned char snoozes[] = { 0, 5, 10, 15, 20, 30 };
 static const unsigned char rings[] = { 1, 5, 10, 15, 30, 60 };
+static const unsigned char steps[] = { 10, 20, 30, 60, 90, 120 };
 static const char *const lights[] = { "auto", "dim", "on" };
 
 enum { S_LIST, S_EDIT, S_DESK };
-enum { F_HOUR, F_MIN, F_REPEAT, F_DAYS, F_LABEL, F_TONE, F_RAMP, F_SOUND,
-       F_VIBRO, F_LED, F_SNOOZE, F_RING, F_ON, F_SAVE, F_DEL };
+enum { F_HOUR, F_MIN, F_REPEAT, F_DAYS, F_LABEL, F_MODE, F_STEP, F_VOLUME,
+       F_SOUND, F_STYPE, F_TONE, F_VIBRO, F_LED, F_SCREEN, F_SNOOZE, F_RING,
+       F_ON, F_SAVE, F_DEL };
 
 static struct {
 	int screen;
@@ -295,10 +299,21 @@ static void form_values(void)
 	p = t->tone[0] == 0 ? "beep" : strrchr(t->tone, '/') ? strrchr(t->tone,
 							'/') + 1 : t->tone;
 	strncpy(f->value[F_TONE], p, sizeof f->value[0] - 1);
-	yesno(F_RAMP, "Rising", t->ramp);
+	f->label[F_MODE] = "Mode";
+	strcpy(f->value[F_MODE], t->ramp ? "escalating" : "steady");
+	f->label[F_STEP] = "Stage";
+	if (!t->ramp) strcpy(f->value[F_STEP], "-");
+	else strcat(strcpy(f->value[F_STEP], nat_num(b, t->step ? t->step
+								: 30)), " s");
+	f->label[F_VOLUME] = "Volume";
+	strcat(strcpy(f->value[F_VOLUME], nat_num(b, t->volume ? t->volume
+								: 100)), " %");
 	yesno(F_SOUND, "Sound", t->flags & NF_SOUND);
+	f->label[F_STYPE] = "Sound type";
+	strcpy(f->value[F_STYPE], t->single ? "single" : "melody");
 	yesno(F_VIBRO, "Vibro", t->flags & NF_VIBRO);
-	yesno(F_LED, "LED", t->flags & NF_LED);
+	yesno(F_LED, "LED blink", t->flags & NF_LED);
+	yesno(F_SCREEN, "Screen flash", t->flags & NF_SCREEN);
 	f->label[F_SNOOZE] = "Snooze";
 	strcpy(f->value[F_SNOOZE], t->snooze ? strcat(nat_num(b, t->snooze),
 								" min") : "off");
@@ -330,7 +345,7 @@ static void edit(int i)
 		t->kind = TK_DAILY;
 		t->start = 7 * 60;
 		t->days = 0x3E;			/* Mo-Fr */
-		t->flags = NF_ALL;
+		t->flags = NF_OUT;
 		t->snooze = 5;
 		t->ring = 10;
 		t->ramp = 1;
@@ -375,10 +390,20 @@ static void change(int d)
 		strcpy(t->title, labels[i]);
 		break;
 	case F_TONE: tone_step(d); break;
-	case F_RAMP: t->ramp ^= 1; break;
+	case F_MODE: t->ramp ^= 1; break;
+	case F_STEP:
+		if (t->ramp) t->step = cycle(steps, sizeof steps,
+					     t->step ? t->step : 30, d);
+		break;
+	case F_VOLUME:			/* 10 % steps, 10-100 */
+		i = (t->volume ? t->volume : 100) / 10 + d;
+		t->volume = (i < 1 ? 10 : i > 10 ? 1 : i) * 10;
+		break;
 	case F_SOUND: t->flags ^= NF_SOUND; break;
+	case F_STYPE: t->single ^= 1; break;
 	case F_VIBRO: t->flags ^= NF_VIBRO; break;
 	case F_LED: t->flags ^= NF_LED; break;
+	case F_SCREEN: t->flags ^= NF_SCREEN; break;
 	case F_SNOOZE: t->snooze = cycle(snoozes, sizeof snoozes, t->snooze, d); break;
 	case F_RING: t->ring = cycle(rings, sizeof rings, t->ring, d); break;
 	case F_ON: r.on ^= 1; break;
