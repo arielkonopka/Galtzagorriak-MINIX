@@ -3,9 +3,11 @@
  * Usage:	beep			a short beep (1 kHz, 100 ms)
  *		beep HZ MS [HZ MS]...	notes; HZ 0 is a rest
  *		beep -c			call for attention: three rising beeps
+ *		beep -v VOL ...		the same at volume VOL, 0..100
  *
  * Uses /dev/speaker (kernel/arm/flipdev.c): 16-bit frequency and duration
  * per note, little endian; the write returns when the notes have played.
+ * A note of 0xFFFF Hz sets the volume to its duration field.
  */
 #include <sys/types.h>
 #include <fcntl.h>
@@ -33,6 +35,11 @@ int main(int argc, char **argv)
 {
 	int fd, i;
 
+	if (argc >= 3 && strcmp(argv[1], "-v") == 0) {
+		note(0xFFFF, (unsigned) atoi(argv[2]));	/* the volume */
+		argv += 2;
+		argc -= 2;
+	}
 	if (argc == 1) {
 		note(1000, 100);
 	} else if (argc == 2 && strcmp(argv[1], "-c") == 0) {
@@ -44,7 +51,7 @@ int main(int argc, char **argv)
 		for (i = 1; i + 1 < argc; i += 2)
 			note((unsigned) atoi(argv[i]), (unsigned) atoi(argv[i+1]));
 	} else {
-		fprintf(stderr, "Usage: beep [-c | HZ MS [HZ MS]...]\n");
+		fprintf(stderr, "Usage: beep [-v VOL] [-c | HZ MS [HZ MS]...]\n");
 		return 1;
 	}
 	if ((fd = open("/dev/speaker", O_WRONLY)) < 0) {

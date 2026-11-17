@@ -983,6 +983,37 @@ tiles, notification list, app menu), extended by modules.
   `gui` binding and desktop `window` records draw the same bar, so the look stays one across C,
   Berry and shell. Exceptions: the text console, full-screen content where a bar would hide
   data (e.g. a picture viewer), and `alert` screens, which may invert the whole screen to stand out.
+- **Screen style: "Pine meets modern UX" (owner decision, 2026-11-17).** Every GUI screen of the
+  system (launcher, apps, desktop windows, C, `libfuri`, Berry or shell) follows the launcher's
+  look of R5.6a.7, so a user who knows one screen knows them all: text first, every screen says
+  what its buttons do, nothing hidden, modern spacing. The parts:
+  - **Title bar** (above), optionally with a short state on the right: position `3/12` in a
+    list, `REC`, `12%`, at most 6 characters.
+  - **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58 in Pine's
+    `key action` style (`<Back  OK Run  >More`, `OK Toggle  Back Done`). It names every button
+    that does something on that screen, and only those. Long Back is not listed (it always ends
+    or parks the app, R4b.8, R12.20).
+  - **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+  - **Values** of settings in brackets, right-aligned or after the name: `Icons   [on]`.
+  - **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+  - **Message line**: a short notice replaces the hint line for 2 s, then the hints come back; the
+    screen behind stays drawn. Whole-screen notices are only for errors that end the app and for
+    `alert`.
+  - **Icons** (R5.6a): at most 8×6 pixels, two characters of the 4×6 font, before a list entry.
+  - Exceptions, as for the title bar: the text console, full-screen content (pictures, graphs,
+    the map), `alert`, and games or ported stock apps whose own screens would be cut. A ported
+    stock app keeps its layout; its stock `elements_button_left/center/right` hints are already
+    the same idea and stay as they are.
+  - **Free for app authors, no RAM:** the parts come from the shared code, as `const` strings and
+    stack, so an app writes its hints, not the drawing: `gui.c` for plain `/dev/lcd` programs
+    (`gui_title2(title, right)`, `gui_hints(text)`, `gui_note(text)` with a timed key read through
+    `poll`, `gui_scroll(top, shown, total)`, `gui_bits8()`), the `libfuri` standard modules
+    (Submenu, VariableItemList, Popup, DialogEx, TextInput: hints from their button labels; part
+    of the shared library, #201), the Berry `gui` binding (R7c) and the desktop `window` records
+    (K.3, a `hints` field). No periodic redraw is added for any of it.
+  - Existing apps are aligned in task T22: `info`, `lights`, `power`, `lfrfid` and the menu of
+    `console` (`flipper/gui/`), `selftest`, `furihello`, `remind` and `alarm` (7b.1/7b.2), `camfind`
+    and `sbctl` when they get their screens. New apps follow it from the start; reviews check it.
 
 **K.3 Desktop protocol (TSV lines).**
 - Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
@@ -1897,6 +1928,93 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
   groups, chmem, license) and the launcher entry. Assets go under `/usr/share/apps/<appid>`.
 - **R5.6** Launcher: categories, icons, app manifests from installed packages; runs each app as its
   own uid with its declared groups (R4b.4); shows "app crashed" on abnormal exit.
+- **R5.6a Launcher icons** (owner request 2026-11-17, out of milestone order; task T21). The
+  launcher can show a small icon before each label in the app list. An icon is **at most two
+  characters of the list font**: 8×6 pixels, the cell of two 4×6 glyphs, so a row stays 6 pixels
+  high and the list keeps its 9 visible rows. The black title bar stays as it is.
+  - **R5.6a.1 Where an icon comes from.** `/etc/apps` gets an optional third field:
+    `Label:user:icon:/program arg ...`. The old form `Label:user:/program ...` stays valid: the
+    launcher tells them apart by the field after the user, which is the program only if it starts
+    with `/` (programs in `/etc/apps` are absolute paths; the manual says so). The icon field is
+    one of:
+    - empty (`Label:user::/program`): no icon;
+    - `@name`: a built-in icon (R5.6a.2), e.g. `@bell`; an unknown name draws no icon;
+    - `#` and 12 hex digits: an 8×6 bitmap, six rows top to bottom, one byte per row, the most
+      significant bit on the left (the same layout as one row of two font glyphs), e.g. a
+      small bell `#183C3C7E0018`;
+    - otherwise 1 or 2 printable ASCII characters, drawn in the list font, e.g. `>_`, `Zz`, `!`.
+      A text icon cannot contain `:` or start with `/`, `@` or `#` (use the bitmap form).
+    A malformed field (bad hex, too long) is treated as no icon; the entry itself still loads.
+    For packages the same value goes into an `Icon:` line of `CONTROL/control` (mkpkg.py `-i`);
+    until the launcher reads manifests itself (R5.6), the package's `postinst` writes it into
+    its `/etc/apps` line. `fam2pkg` (R5.5) makes the `Icon:` from the stock 10×10 `fap_icon` by
+    a 2×2-box downscale to 8×6 with a threshold, or takes `fap_icon_mini` / an explicit value
+    from the build file.
+  - **R5.6a.2 Built-in icons.** A `const` table in the launcher (in the text segment, i.e. flash,
+    since the launcher runs from the installed region): about 24 icons, each 6 bytes plus a name
+    of at most 8 characters, at most 400 B of text in total and 0 B of RAM. At least: `app`,
+    `console`, `info`, `light`, `power`, `battery`, `rfid`, `nfc`, `subghz`, `ir`, `ibutton`,
+    `gpio`, `usb`, `ble`, `clock`, `alarm`, `bell`, `timer`, `sensor`, `game`, `music`, `tools`,
+    `file`, `settings`. Original drawings (not copies of stock or Unleashed icons), one host tool
+    renders them enlarged into a PNG for review. The base `/etc/apps` uses them for its own apps
+    (`Console` `@console`, `About` `@info`, `Lights` `@light`, `Power` `@power`, `RFID` `@rfid`)
+    and the base `postinst` lines get icons too.
+  - **R5.6a.3 Drawing.** Icons on: `>` at x = 1 as today, the icon at x = 6–13, the label from
+    x = 16 (23 characters still fit). An entry without an icon gets an empty 8×6 cell, so labels
+    stay in one column. The selected row is inverted, icon included. Icons off: the screen is
+    **pixel for pixel** what it is today. `gui` gets one helper,
+    `gui_bits8(x, y, const unsigned char *rows, int n, int inverse)`, which the text drawing can
+    share; text icons are rendered into the 6 bytes when `/etc/apps` is read, so drawing never
+    looks at the font for icons.
+  - **R5.6a.4 The setting.** `/etc/launcher.conf`, stock `Key: value` style, read with `cfopen()`
+    (spec L.3): `Icons: on|off`, default `on` in `/rom/etc/launcher.conf`. In the launcher,
+    **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
+    OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
+    written once, on Back, and only if the value changed; nothing is ever written to internal
+    flash. Right stays free for the next page (Running, R12.20; the desktop pages of K.6).
+    The settings page is a **page**, not a special mode: the launcher keeps a small `const`
+    table of pages (name, row source, OK handler, hint text), the app list and settings are its
+    first two entries, and both use the same list drawing, scrolling and key loop, so later
+    pages (K.6) are new table entries.
+    Page switching (Left to Settings, Right to the next page) acts on the **release of a short
+    press**, never on the press, so the backlight gesture Left+Up (R6.10) never opens a page.
+    The rule is userland only (no kernel flag): `gui.c` gets `gui_click()` next to `gui_key()`,
+    which returns a key on its release if it was pressed alone (no other key went down while it
+    was held) and held less than about 1 s; stack only, no `.bss`. The desktop pages (K.6) reuse it. The launcher reads the setting at
+    start, after its settings page, and together with `/etc/apps` when an app exits (one more
+    `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
+    /etc/launcher.conf`) shows after the next app.
+  - **R5.6a.5 RAM.** Icons cost 6 B of heap per entry that has one, inside the entry's existing
+    `malloc` block (no new allocation per entry); `.bss` grows by at most 8 B; the settings page
+    uses only stack. Worst case, 16 entries with icons: ≤ 104 B. Nothing is resident besides
+    the launcher itself.
+  - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
+    at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
+  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17; the system-wide screen style of K.2
+    starts here). The launcher's look follows the
+    Pine mail program: text first, every screen says what each button does, nothing hidden; with
+    modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
+    128×64 with the 4×6 font:
+    - **Title bar** (black, as now): the screen name centred; on the right, the position
+      `3/12` of the selected entry (the list only).
+    - **List**: 8 rows (y = 7 + 6·i), the selected row a full-width inverted bar with `>`;
+      when there are more than 8 entries, a 1-pixel scroll mark at x = 127 whose length and
+      place show the visible part (no arrows, no animation).
+    - **Hint line**: a 1-pixel rule at y = 56 and one line at y = 58 naming the buttons in
+      Pine's `key action` style, e.g. `<Setup  OK Run  >Running` (`>Running` only once R12.20
+      exists). Every launcher screen has one: the settings page says `OK Toggle  Back Done`.
+    - **Message line**: short notices that today take the whole screen (`unknown user`, `app
+      crashed`, the park hint of R12.20) replace the hint line for 2 s instead, so the list stays
+      visible; the hint line comes back at the next key or after the 2 s.
+    - **Settings page**: one line per setting, value in brackets (`Icons   [on]`,
+      `Hints   [on]`); Up/Down choose, OK or Left/Right toggles.
+    - `Hints: on|off` in `/etc/launcher.conf` (default `on`): off gives the list its 9th row back
+      and drops the title counter. Hints off and icons off = today's screen exactly.
+    - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
+      stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
+      through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
+      later status line) runs only while the launcher is in the foreground and the screen is on;
+      otherwise it waits for a key with no timeout.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -1907,6 +2025,19 @@ Acceptance:
   launcher unchanged except for the build file.
 - AC5.2 A ported app that calls `furi_crash` is ended alone; the launcher comes back.
 - AC5.3 Two `libfuri` apps installed: the shared library (R2b.9) is in flash once (`free -v`).
+- AC5.4 (R5.6a) In QEMU, with the base `/etc/apps` and an extra entry of each icon form (empty,
+  `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
+  frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
+  for the empty, unknown and malformed ones; every app still starts.
+- AC5.5 (R5.6a) With `Icons: off` and `Hints: off` the launcher's frames are byte-identical to the frames of the
+  launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
+- AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
+  holds the new value, the list redraws without icons; Left, Back without a change writes
+  nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
+  moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
+  shows the notice on the message line with the list still drawn, and the hint line is back
+  after 2 s with no key pressed.
 
 Responsiveness: AC5.R A `libfuri` app's view redraw after a key event meets L1; the cooperative threads of one app never block its input thread for more than 10 ms (measured with `lat`).
 
@@ -2210,6 +2341,20 @@ Infrastructure (section F):
 - Each alarm is one `once` or `daily` timer, category `alarm`: it **always** sounds or vibrates
   per its own setting, regardless of the foreground app, the global sound switch and
   do-not-disturb.
+- **Ring settings per alarm** (owner, 2026-11-17), in the timer file: `Mode: escalating|steady`
+  (escalating: by stages of `Step:` seconds, sparse beeps, denser beeps, the full sound, then
+  vibro, LED and screen flash on top; steady: one level for the whole ring time), `Out:` any of
+  sound, vibro, led, screen (the screen flash toggles the backlight from `alert`'s own blocking
+  loop, no kernel work, and restores it on exit), `Sound: single|multi` (one tone or the
+  melody), `Volume: 1-100` (`/dev/speaker` volume note: frequency 0xFFFF, the volume in the
+  duration field, cubic duty curve as stock `furi_hal_speaker_start`, reset to 100 on close).
+  Escalating ramps the volume from a fifth of `Volume:` to all of it over the three sound
+  stages; `/etc/notify.conf` `Volume` is the volume of reminders and info, never of alarms.
+  The ring rhythm (owner, 2026-11-17): escalating rings start 5, 5, 4, 4, 3, 3, 2, 2 s apart,
+  then every second, timed from each ring's start by `poll()` on `/dev/buttons`; steady keeps one
+  interval (alarm 1 s). The default stage is 10 s, so rhythm and volume reach full together.
+  The alert comes over any app with `FGIOCPREEMPT` (R7b.2), waits on `EBUSY`, and writes the
+  saved picture back before `FGIOCRELEASE`.
 - **Desk clock mode:** the app in the foreground shows a large clock and the next alarm; display
   update once a minute from the RTC wake-up timer (CPU in Stop2 in between); backlight level
   chosen in settings (off, dim, on; "on while charging" when `DeskMode` is granted). Buttons work
@@ -3229,7 +3374,7 @@ the foreground path (the AmigaOS feel: the UI always answers, whatever the rest 
   image tool align every partition start to **4 MiB** (the usual SD allocation unit) instead of
   1 MiB, so the 3 MB of swap slots lie inside one erase unit. New installs only; an existing card
   keeps its layout. Install time only, RAM +0 B.
-- **R12.33 Tell the card what is empty (install time only).** First-boot setup (`/etc/setup`
+- **R12.33 Tell the card what is empty (install time only; DISCARD at run time: R12.40).** First-boot setup (`/etc/setup`
   stage 2) sends **ERASE** (CMD32/CMD33/CMD38, supported in SPI mode) over the new `/usr`, swap and
   `/home` partitions before `mkfs`, with a line on the screen ("Preparing the card..."). A card that
   was once full (camera, phone) gets back its whole free pool for wear levelling. HAL:
@@ -3259,6 +3404,269 @@ Acceptance criteria:
   the screen shows the step, `mkfs` and the first boot finish; `erase` on a mounted partition fails
   with `EBUSY`.
 
+### 12h. Swappable blocks for apps (owner request 2026-11-17; milestone M4)
+
+An app written for it may keep **more working data than fits in RAM**: numbered 4 KB blocks on
+the swap partition that it reads into, and writes from, buffers of its own. There is no MMU, so
+this is not transparent paging: like overlays or EMS, the app asks for a block by number and gets
+it in a buffer (a "frame"); pointers never point at data on the card. A library gives the
+comfortable form (frames, LRU, record arrays), and in Berry the illusion is complete (`vbytes`).
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files), which also rejects the
+fully virtual variant (MPU trap + instruction emulation in the kernel: kernel RAM, 100–300× slower
+per access, a large privileged attack surface).
+
+Use: working memory that lives as long as the process (map tiles, Sub-GHz history, NFC dumps and
+nonce logs, the text of a large file in an editor, Berry data arrays). Data that must survive the
+process or a reboot stays in files. Owner rule as in 12g: kernel 0 B, MM a few bytes, no
+noticeable CPU on the foreground path.
+
+- **R12.34 Where the blocks are, and who gets how much (owner, 2026-11-17: the app declares it;
+  no fixed equal share).** The swap partition (R12.1) holds the 16 swap slots in its first 3 MB
+  (R12.2). The rest is the **block space**, shared by all processes:
+  - it is cut into **256 extents** of equal size (block space / 256, rounded down to whole blocks;
+    MM gets the partition size at `MMSWAPON`, it already probes the end). 64 MB partition: ≈ 240 KB
+    per extent; 4 GiB: 16 MB; four 4 GiB subpartitions: 64 per subpartition, 64 MB each;
+  - a process gets block space **only by asking**: `blk_open(bytes)` (R12.38) reserves one
+    **contiguous run of extents** (first fit), rounded up to whole extents, and the app's block
+    numbers 0…N−1 are counted from the start of that run. If no free run is large enough the call
+    fails with `ENOSPC` (or, with `BLK_ANY`, gets the largest free run and is told its size);
+    nothing else is evicted or shrunk for it. A run never crosses a subpartition;
+  - **reservation table in MM: 2 B per process slot** (first extent, number of extents; 16 × 2 =
+    **32 B**). That is the price of free sizes instead of a fixed 1/16 (which cost 0 B); it is the
+    only table. Per-request work stays a range check and one addition;
+  - a reservation ends with `blk_close()`, `exec` (the program identity changes, R12.35) or exit.
+    A forked child starts without one. **Resizing at run time:** a second `blk_open` with a
+    smaller size gives the tail back at once (its extents go through R12.40 like a closed run); a
+    larger one grows the run in place if the extents right after it are free, otherwise
+    `ENOSPC` and the old run stays (moving data would cost card writes; the app can close and open
+    again). Run-time sizes cost the same 32 B as sizes fixed at install time would, and need no
+    record on the card; the price is possible fragmentation of the block space, which stays small
+    with at most 16 runs in 256 extents (first fit, the largest free run shown by INFO);
+  - limits: one process may hold at most **half** of the block space unless it runs as root (a
+    rule, 0 B), so one greedy app cannot lock everybody out; the launcher's Running list and
+    `free -v` show each process's reservation, so the user can see and end the holder;
+  - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). The
+    64 MB partition holds ≈ 13 800 blocks (≈ 54 MB of data) in all;
+  - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB up to below 32 GB**, first-boot setup
+    puts swap **at the end of the card** and gives it **50 %** of the space after `/usr`, at most
+    4 GiB − 1 MiB (R12.39: one partition stays below 4 GiB); `/home` comes right after `/usr`
+    (also at most 4 GiB − 1 MiB); whatever lies between them stays free for later. The MBR entry
+    stays `/dev/hd3` (MBR order need not be disk order): `/usr`, `/home`, free space, swap.
+    Smaller cards keep today's 64 MB swap between `/usr` and `/home`. Examples (root ≈ 64 MB,
+    `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 2.4 GB of blocks to share),
+    `/home` ≈ 2.7 GiB; 16 GB and larger → swap 4 GiB (≈ 3.6 GB of blocks), `/home` 4 GiB, the rest free;
+  - **maximum swap on cards of 32 GB or more (owner, 2026-11-17):** swap is the primary partition
+    `hd3` at the end of the card, split into **four MINIX subpartitions** `hd3a`…`hd3d` of 4 GiB −
+    1 MiB each (≈ 16 GiB). `/etc/rc` gives MM `hd3a`; MM finds the other three itself (their minors
+    follow `hd3a`'s, and each must have the swap type 0x82 in `hd3`'s subpartition table; `hd3` itself has the MINIX type 0x81 as a subpartition container, so `MMSWAPON`, R12.1, accepts a subpartition of the SD card whose own table entry is 0x82), and keeps their number (1 B, so MM
+    +1 B). The 16 swap slots stay in `hd3a`; the 256 extents are 64 per subpartition (≈ 14 GB of
+    blocks to share; one reservation at most one subpartition, ≈ 3.6 GB). A missing or short
+    subpartition only removes its extents; swap itself needs only `hd3a`. With root, `/usr` 2 GB and
+    `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
+    partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
+  - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
+    be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
+    swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and extents are
+    recomputed from the new size), and `/home` takes the freed space. Growing the MINIX file system
+    in place needs a small `growfs` tool (new zones and bitmap blocks; the simplest form is `mkfs`
+    leaving room for the bitmaps of the largest possible size); that tool is a later task;
+  - `mkpart` gets a way to place a partition at the end (e.g. `82:50%@end`), still never moving an
+    existing partition; install time only, an existing card keeps its layout;
+- **R12.35 Block header and validity.** Sector 0 of a block (on the card only, read and written
+  through the last sector of `mbuf` like the swap header, R12.26): magic `GZBK`, slot, pid, boot
+  stamp, the program's identity (`mp_dev`, `mp_ino`, `mp_ctime`), block number, a CRC-32 of
+  **each of the 8 data sectors** (hardware CRC unit, as R12.28), and the space 12b needs.
+  - A block is valid only if magic, slot, pid, boot stamp and program identity match the caller.
+    Otherwise it is someone else's leftover and reads as **all zeros**: every block 0…N−1 exists
+    and starts zeroed (sparse memory), so there is no allocate or free call in MM.
+  - Process exit, `blk_close` or `exec`: the reservation is freed and nothing is written (0 writes,
+    no erase; R12.33; DISCARD at idle, R12.40). Whoever reserves those extents next has another
+    pid or program and cannot see the old blocks: they read as zeros. `fork`: the child has no
+    reservation (blocks are not inherited).
+  - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
+    MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
+    nonce (R12.10) takes its place.
+  - The per-sector CRC lets an app read part of a block (from 512 B) with every sector checked.
+- **R12.36 The MM request.** A new `MEMINFO` request `MI_BLK` (no new call number). `m1_p1` points
+  to a request descriptor **in the caller's memory** (`struct blkreq`: operation and flags, block
+  number, first sector and sector count, buffer, status; ≈ 16 B). MM reads it with `sys_copy`, so
+  MM keeps no request state of its own. Checks: blocks on (R12.38), number in range, sector range
+  within the block, the buffer wholly inside the caller's data or stack segment (WINCHESTER checks
+  again with `numap`), caller not `NOSWAP` in `plain` mode (R12.37). Then:
+  - **GET** (whole block or a sector range): one contiguous read of the header and the sectors
+    needed, **straight into the caller's buffer** (WINCHESTER with `PROC_NR` = the caller, as
+    `sw_io()`; no FS, no buffer cache, no copy); invalid block → the buffer is zeroed; a CRC
+    mismatch or read error → `EIO`. The process is **not** killed: the data is not its image, the
+    app decides;
+  - **PUT** of a whole block: CRCs from the buffer, header + 8 sectors as **one CMD25** (R12.31). No
+    read before the write: the library knows which frames are dirty. Flag `BLK_IFCHANGED`: read the
+    header first (≈ 1 ms) and write nothing if every sector CRC matches;
+  - **PUT** of a sector range: read the header, write the new header, write the range (two writes;
+    for records of 1 KB and less);
+  - **OPEN** (bytes, flags) and **CLOSE**: reserve or free the caller's run (R12.34);
+  - **INFO**: the caller's reserved blocks, the largest free run, the whole block space, block
+    size, mode (`plain`/`crypt`), card present.
+  Error codes: `ENOSYS` (blocks off or no swap partition), `ENOSPC` (OPEN: no free run that
+  large), `EBADF` (GET/PUT without a reservation), `ERANGE`, `EIO`, `ENXIO` (card out,
+  N.6), `EPERM` (R12.37).
+- **R12.37 Responsiveness, isolation, card.**
+  - **Foreground** (`FGAPP`): served at once; the wait is the app's own.
+  - **Background** callers are served like the reserve (R12.5 b, R12.23): if a key came in the last
+    second or a process waits for the CPU, MM sets `BLKWAIT` (a spare `mp_flags` bit) and does not
+    reply; `sw_step()` serves one request per step at idle, after a swap-in the user waits for and
+    before reserve swap-outs, re-reading the descriptor from the caller. Their PUTs count in the
+    reserve's write budget (`sw.wkb`, 256 KB a minute), so a background app can never write more
+    than the reserve could. A `BLKWAIT` process is in an MM call, so it is never a swap victim.
+  - One request is at most ≈ 11 ms of disk-task time (PUT of 4.5 KB), and senders to MM are queued
+    in order, so other MM calls (`kill`, `alarm`, `exit`) wait at most one block operation; FS,
+    the screen and the buttons do not wait at all.
+  - A process reaches only its own reservation (MM computes the position from the caller's table
+    entry; the app gives only a block number, checked against the run's length). Raw `/dev/hd3`
+    stays root-only.
+  - `swap=plain`: blocks are on the card in clear like swap images, so set-uid, set-gid and
+    `Secret: yes` images get `EPERM` (the R12.28 `NOSWAP` condition). `swap=crypt` (12b): per-block
+    AES-GCM as R12.10a (nonce = boot nonce, slot, block number, the block's counter from its
+    header; tag in the header; no plaintext CRCs). Known limit: no protection against rolling one
+    block back to an older version of the same session (it needs the card pulled, edited elsewhere
+    and put back; N.6 notices the pull, not the edit). Accepted; the manual says so.
+  - Card pulled (N.6): the driver answers `ENXIO` while the card is out **and while a different
+    card is in** (CID), until the original is back, and never touches the other card. MM treats
+    `ENXIO` as "wait for the original", not as lost data (as swap does, R-N6.5): a **background**
+    request stays in `BLKWAIT` and `sw_step()` retries it (one card-detect read per try); a
+    **foreground** request gets `ENXIO` at once, so the UI never hangs on the card, and `libblk`
+    keeps its dirty frames and retries on the next call. The process is **not** killed (its image is
+    in RAM). When the original card is back, every block is valid again (headers match). A write cut
+    in half shows as `EIO` on that one block.
+  - Swapped or parked processes: their blocks stay on the card, nothing moves. `app_park()` and
+    `app_hibernate()` (R12.18, R12.19) call `vm_flush()` first.
+- **R12.38 Library, Berry, switch.**
+  - `/etc/rc.conf` `blk=off|on`: before 12b the default is `off` (like `swap=plain`, R12.28); with
+    12b it goes on together with `swap=crypt`. Blocks work with `swap=off` if the partition exists
+    (MM opens it for blocks only).
+  - **Declaring the size.** At run time: `blk_open(bytes, flags)` before the first block, `BLK_ANY`
+    to take what is free, `blk_close()`. In the package: the manifest field `Blocks: 64M` (the most
+    the app will ask for). `pkg install` compares it with the card's block space and warns ("needs
+    64 MB of card memory, this card has 54 MB") but installs anyway, because the card can change;
+    the launcher shows the same line when `blk_open` fails, and the app shows its own message
+    (an app that can live with less uses `BLK_ANY`). MM does not read manifests.
+  - libc `<blk.h>` (flash only): `blk_open(bytes, flags)`, `blk_close()`, `blk_info()`, `blk_get(id, buf)`, `blk_put(id, buf)`,
+    `blk_putf(id, buf, flags)`, `blk_read(id, off, buf, len)`, `blk_write(id, off, buf, len)` (off
+    and len in multiples of 512).
+  - `libblk` (flash only, ≈ 1.5 KB): `vm_open(pool, size, framesize)` with frames of 1, 2 or 4 KB
+    in the app's own memory, `vm_get(v, off, VM_RD|VM_RW|VM_PIN)` (a pointer valid until the next
+    `vm_get` unless pinned), `vm_unpin`, `vm_flush`, `vm_drop` (no write), and `VA_GET(v, T, i)`
+    for arrays of fixed-size records that never cross a frame. 8 B of metadata per frame, in the
+    app.
+  - Berry module `blk` (C, flash): `blk.vbytes(size)`, a bytes-like object whose `[]`, `get` and
+    `setbytes` go through two 1 KB frames. Berry objects themselves stay in the VM heap (pointers,
+    R12.22); only raw data goes to blocks.
+  - **Rule for app authors** (manual): whatever the current screen or a real-time loop needs is in
+    frames or plain RAM; blocks are for what is "behind the screen". Emulation (NFC, RFID,
+    iButton) and radio, DMA or USB streams never wait for a block. Prefer 1 KB frames for records,
+    4 KB for sequential data. Times (before R12.31): GET 512 B ≈ 1.2 ms, 1 KB ≈ 1.7 ms, 4 KB ≈ 5 ms;
+    PUT 4 KB ≈ 6–11 ms; 1 MB sequential ≈ 1.2 s.
+- **Later (not in this step):** asynchronous `PREFETCH` (one request in flight per process, the
+  descriptor's status field set by MM when the read lands, optional new `SIGBLK`; 0 B in MM); a
+  "discard on swap-out" hint for frame pools (+4 B per process); a soft write cap for the
+  foreground app (+4 B in MM); a Merkle root against rollback in `crypt` (32 B per process). Each
+  needs the owner's yes.
+
+- **R12.39 Partitions past 4 GiB (owner, 2026-11-17).** The stock Flipper takes microSD cards up to
+  256 GB (SDHC/SDXC), and the HAL already uses block addresses (CCS, `sd_block_addr`). The 4 GiB
+  limit is only in the WINCHESTER bookkeeping: `struct device` keeps `dv_base` and `dv_size` as
+  32-bit **byte** counts, so `drvlib.c` (`lowsec << SECTOR_SHIFT`) overflows for a partition that
+  starts past 4 GiB, and `mkpart` therefore keeps everything below 4 GiB.
+  - On ARM, `dv_base` holds the partition's **first sector** (32-bit: up to 2 TiB) instead of a byte
+    offset; `dv_size` stays a byte count, so one partition is at most 4 GiB − 512 B (FS and swap
+    positions are 32-bit byte offsets inside a partition, `io_position` taken as unsigned, as
+    `disk.c` already does). Changes: `drvlib.c` (partition and subpartition setup and limits),
+    `src/kernel/arm/disk.c` (`w_schedule`: sector = `dv_base` + offset sector, no more
+    `dv_base >> SECTOR_SHIFT`; `w_init`: whole-disk size and clipping), the partition ioctls (`DIOCGETP`/`DIOCSETP`
+    report and take the base in bytes as before while it fits, `EOVERFLOW` past 4 GiB; `size` stays
+    bytes), and their users are checked in the same PR (`mkpart`, the selftest `board` module that
+    reads `p.size`), with the unit written in `<minix/partition.h>`. Kernel RAM +0 B (same fields,
+    another unit).
+  - `/dev/hd0` (the whole card) stays clipped to 4 GiB as today: only partitions reach past it.
+  - `mkpart`: drops the 4 GiB ceiling for partition **placement** (start and end anywhere up to
+    the card's size, 2 TiB at most); each partition at most 4 GiB − 1 MiB; `-l` prints starts
+    past 4 GiB correctly. `/etc/setup` uses it for the layout in R12.34.
+  - More than four file systems later (space between `/home` and swap on very large cards): MINIX
+    subpartitions of `hd4` (`hd4a`…), each below 4 GiB. Not in this step.
+  - Tests: host `parttest` with partitions starting at 4 GiB, 8 GiB and 255 GiB; QEMU with a sparse
+    64 GB disk image: `/home` and swap past 4 GiB, mkfs, mount, swap-out and swap-in, a block PUT/GET
+    at the last block. Device: a 64 GB or larger card in the Flipper (AC12.25).
+
+- **R12.40 Tell the card what is garbage (DISCARD; owner, 2026-11-17).** SD cards from version 5.1
+  have **DISCARD** (CMD32/CMD33 for the range, CMD38 with argument 1), the SD form of TRIM: the
+  card only marks the range as unused and does not erase it, so its controller stops copying dead
+  data during garbage collection (less wear, faster later writes). R12.33 (no ERASE at run time)
+  stays; DISCARD is the one run-time exception, because it is cheap.
+  - Only if the card says so: the `DISCARD_SUPPORT` bit of the SD Status (ACMD13), read once at
+    card init by the HAL (`hal_disk_discard(first, last)`, `ENOTTY` otherwise, busy wait with the
+    card's timeout and card-detect checks as N.6). WINCHESTER: `DIOCDISCARD` on a partition device,
+    callable by MM and root; QEMU: fills the range with zeros so tests see it.
+  - **`blk_discard(id, n)`** (and `vm_drop()` for whole blocks): the app says it no longer needs
+    those blocks. Always served in the idle class (`BLKWAIT`, R12.37), never on the foreground
+    path; on a card without DISCARD it does nothing. Either way a discarded block's contents are
+    **undefined** for the app (old data, or zeros on QEMU), and the library treats it so.
+  - **After a reservation ends** (exit, `exec`, `blk_close`) and the process did at least one PUT
+    (a spare `mp_flags` bit, `BLKUSED`): MM sets bit *i* of a 16-bit "to discard" mask (MM
+    **+2 B**) and keeps table entry *i* as it is, so the run stays taken until `sw_step()` has
+    discarded it at idle (up to 256 MB per step, after swap-ins and block requests, before reserve
+    swap-outs); then the entry is cleared and the extents are free. A new process in slot *i*
+    gets no reservation until then (`blk_open` waits in `BLKWAIT`, at most one idle step). No
+    discard can ever touch a live reservation. On a card without DISCARD the entry is freed at once.
+  - **At `MMSWAPON`** the whole block space and the swap slots are discarded once, at idle, in
+    256 MB steps (progress kept in the reserve job's existing `sw.off`, 0 B). Nothing else is
+    discarded.
+  - Costs: MM +2 B (mask), kernel 0 B (a few bytes of stack
+    in WINCHESTER), no flash writes, no writes to the card's data.
+
+Acceptance criteria:
+- AC12.18 QEMU `tests/blk`: GET without `blk_open` gives `EBADF`; after `blk_open(1 MB)` block 0
+  and the last block read as zeros and `ERANGE` comes one past the end; `blk_open` larger than the
+  free space gives `ENOSPC`, with `BLK_ANY` the largest free run; a non-root request for more than
+  half of the block space gives `ENOSPC`; two processes reserve 3 and 5 extents and their runs do
+  not overlap (`free -v`); after the first exits, a 4-extent request fits only where it should; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
+  card (raw write as root) gives `EIO` on GET of that sector and not of the others; the process is
+  not killed.
+- AC12.19 QEMU: after the writer exits, a new process that reserves the same extents reads zeros;
+  the same after `exec` of another program; after a pid wrap (forced through a test hook) too; a
+  forked child has no reservation; a second process cannot reach the first one's run by any
+  argument.
+- AC12.20 QEMU (sector counter in WINCHESTER, as AC12.14): `blk_putf(..., BLK_IFCHANGED)` of
+  unchanged data writes 0 sectors; a whole-block PUT is one 9-sector write; process exit writes
+  nothing.
+- AC12.21 QEMU: a background caller while keys arrive is answered only at idle; its PUTs stop at
+  the reserve budget; a foreground caller is answered at once. `MI_SWAPTEST` 2 (card pulled):
+  a foreground GET gets `ENXIO` and the process lives on; a background GET waits and completes
+  when the card is back (QEMU `DIOCFAKECARD`).
+- AC12.22 `swap=plain`: a `Secret: yes` test app and a set-uid image get `EPERM`; `blk=off` gives
+  `ENOSYS`.
+- AC12.23 Device: L1 and L2 within budget while a background app reads blocks in a loop and while
+  the foreground app scrolls a 1 MB block-backed map; measured GET/PUT times in PORTING.md.
+- AC12.25 Device (R12.39): on a card of 64 GB or more, first-boot setup places `/home` and swap past
+  4 GiB as R12.34; `fsck`, swap-in of 64 KB and a block GET at the last block work; a card pulled and
+  put back (N.6) carries on.
+- AC12.26 QEMU (R12.40): a process PUTs 10 blocks and exits; at idle the trace shows one
+  `DIOCDISCARD` of its run and nothing while keys arrive; its extents are free only after that;
+  a new process's `blk_open` meanwhile waits one idle step and no discard ever touches a live run; on a card without DISCARD no
+  ioctl reaches the HAL. Device: a card with DISCARD (SD 5.1) takes it, L1/L2 unchanged.
+- AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
+  frames; VM heap growth ≤ 3 KB.
+
+RAM budget (12h):
+- kernel +0 B; MM **+39 B** (reservation table 32 B, boot stamp 4 B, discard mask 2 B, number of
+  swap subpartitions 1 B; with today's ≈ 55 B of swap state this stays within R12.26's 96 B, SHOULD
+  be in SRAM2) and two `mp_flags` bits (`BLKWAIT`, `BLKUSED`); FS and INIT +0 B;
+- a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
+  frame + the 16 B descriptor;
+- flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
+- Effect (analysis section 7): the RAM free after login does not change (const data is already in
+  XIP flash; servers cannot use blocks), but the peak of data-heavy apps drops by 20–50 % (NFC
+  −4…12 KB, Sub-GHz −3…6 KB, IR −2…4 KB, ports with history −2…8 KB), and parked images get
+  smaller (faster L6, fewer swap writes).
+
 ### 12f. Notes for the system manual
 
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
@@ -3276,6 +3684,9 @@ Acceptance criteria:
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
   secrets in it, size targets).
+- Swappable blocks (12h) for app authors: the `blk`/`libblk` API and the Berry `vbytes` object,
+  the rule "what the screen needs stays in RAM", the times, that blocks die with the process and
+  with a reboot, that `blk=on` before 12b stores them in clear, and the rollback limit of `crypt`.
 
 Acceptance criteria:
 - AC12.1 QEMU: start an app that needs more memory than is free while the launcher and a shell are
@@ -4292,6 +4703,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | USB HID, mass storage, CDC | 10 |
 | Swap (Part 4), A13 | 12 |
 | Background apps: tiers, park/hibernate API, Running list (owner request) | 12d–12f (R12.18 may land with 7b) |
+| Swappable memory blocks for apps: `blk`, `libblk`, Berry `vbytes` (owner request) | 12h |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
