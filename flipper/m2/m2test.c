@@ -410,6 +410,81 @@ static void finish(void)
 	for (;;) pause();
 }
 
+#ifdef BOARD_QEMU
+/* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
+ * and a Popup, driven with fake buttons (QEMU only).  Its frames go to
+ * /dev/lcd (dumped to the console).  OK on "Say hello" -> the popup;
+ * Back -> the menu; Down, OK on "Quit" -> exit 0.  Each press is held
+ * 60 ms (a Short), with 250 ms for the app to redraw. */
+static void furi_tap(int b, int key)
+{
+	unsigned char m = key;
+
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 60);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 250);
+}
+
+static void furihello_test(void)
+{
+	static const unsigned char keys[4] = { 0x10, 0x20, 0x02, 0x10 };
+	unsigned char lcd[1024];
+	int b, l, i, st, popup = 0;
+	pid_t pid, r = 0;
+
+	b = open("/dev/buttons", O_WRONLY);
+	l = open("/dev/lcd", O_RDWR);
+	/* a press while the backlight is off only turns it on */
+	if (b >= 0) furi_tap(b, 0x04);
+	memset(lcd, 0, sizeof lcd);
+	if (l >= 0) (void) write(l, (char *) lcd, sizeof lcd);
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/furihello", "furihello", (char *) NULL);
+		_exit(99);
+	}
+	/* wait for its first frame (the menu's header on the top line) */
+	for (i = 0; l >= 0 && i < 50; i++) {
+		int x, top = 0;
+
+		(void) poll((struct pollfd *) NULL, 0, 100);
+		lseek(l, 0L, SEEK_SET);
+		if (read(l, (char *) lcd, sizeof lcd) != sizeof lcd) break;
+		for (x = 0; x < 128; x++) top |= lcd[x];
+		if (top) break;
+	}
+	for (i = 0; b >= 0 && i < 4; i++) {
+		furi_tap(b, keys[i]);
+		lseek(l, 0L, SEEK_SET);
+		if (i == 0 && l >= 0 && read(l, (char *) lcd, sizeof lcd)
+							== sizeof lcd) {
+			/* the popup: an empty top line, text in rows 20-27 */
+			int x, top = 0, text = 0;
+
+			for (x = 0; x < 128; x++) {
+				top |= lcd[x];
+				text |= lcd[2 * 128 + x] | lcd[3 * 128 + x];
+			}
+			popup = top == 0 && text != 0;
+		}
+	}
+	for (i = 0; i < 40 && (r = waitpid(pid, &st, WNOHANG)) == 0; i++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	if (r == 0) {
+		kill(pid, SIGKILL);
+		r = waitpid(pid, &st, 0);
+	}
+	if (b >= 0) close(b);
+	if (l >= 0) close(l);
+	check(popup, "libfuri GUI: OK on the Submenu shows the Popup on /dev/lcd");
+	check(pid > 0 && r == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		"libfuri GUI: furihello Back, Down, OK on Quit -> exit 0");
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -672,6 +747,7 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
+	furihello_test();
 #endif
 	poll_tests();
 	time_tests();

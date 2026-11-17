@@ -74,6 +74,10 @@ void* furi_record_open(const char* name) {
     furi_check(name);
     r = find_or_add(name);
     r->holders++;
+    /* The GUI service lives in the app's own process (spec R5.2): the
+     * first open starts it. */
+    if(r->data == NULL && fgui_service_start && strcmp(name, "gui") == 0)
+        fgui_service_start();
     while(r->data == NULL)
         fsched_block(&r->wq, FuriWaitForever);
     return r->data;

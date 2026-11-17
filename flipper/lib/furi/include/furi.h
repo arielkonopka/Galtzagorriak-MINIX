@@ -31,8 +31,16 @@ extern "C" {
 void furi_init(void);
 void furi_run(void);
 
-/* malloc that never returns NULL (stock: crashes when out of memory). */
+/* malloc that never returns NULL (stock: crashes when out of memory)
+ * and, as the stock heap, returns zeroed memory. */
 void* furi_malloc_checked(size_t size);
+
+/* Ported stock code (and the stock gui modules, R5.2) relies on the
+ * stock malloc(): zeroed memory, never NULL. Define FURI_LIBC_MALLOC
+ * before including furi.h to keep the C library's. */
+#ifndef FURI_LIBC_MALLOC
+#define malloc(size) furi_malloc_checked(size)
+#endif
 
 #ifdef __cplusplus
 }

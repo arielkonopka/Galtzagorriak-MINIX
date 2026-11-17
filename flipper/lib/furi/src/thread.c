@@ -577,7 +577,7 @@ void furi_run(void) {
 }
 
 void* furi_malloc_checked(size_t size) {
-    void* p = malloc(size ? size : 1);
+    void* p = calloc(1, size ? size : 1);
     furi_check(p, "out of memory");
     return p;
 }
