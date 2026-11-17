@@ -1628,7 +1628,8 @@ byte 4   len    payload bytes (≤ the PHY's MTU)
 5..      payload
 last 2   CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) of bytes 0..4+len-1, big-endian
 types: 1 DATA, 2 ACK, 3 CAR, 4 DGRAM (anything else: dropped)
-flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the stream)
+flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the stream),
+       4 Z (the stream is compressed, P.3a)
 ```
 
 - **RP.4 Three services.**
@@ -1649,6 +1650,33 @@ flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the strea
   parsed by `mdm_unpack()` alone, which checks `len` against the buffer and the PHY's MTU before
   anything else and returns a frame only with a good CRC. Host test: 10⁶ random and mutated frames
   under ASan/UBSan (ACP.2). No length from the air ever sizes a copy without that check.
+
+### P.3a Compression: `gmodem -z` (owner request, 2026-11-17)
+
+The owner asked whether the modems compress. The link layer does not do it by itself (a frame of
+24 B is too small for any compressor to find much in it); the **stream** is compressed before it
+is cut into frames, and only when the user asks for it.
+
+- **RP.9 `-z` on the sender, nothing on the receiver.** `gmodem send -z` compresses the whole
+  input with heatshrink (LZSS, ISC licence, v0.4.1 in `src/lib/modem/heatshrink`) into a scratch
+  file in `/tmp` (created `O_EXCL`, unlinked at once) and sends that, with flag Z on every DATA
+  and CAR frame. The receiver sees Z and unpacks at the end (carousel: frames go to a scratch file
+  at their offsets, unpacked when all are in) or as the frames come (ARQ). Frames of one transfer
+  whose Z differs from the first frame's are refused (`mdm_car_take` -1). A pipe into
+  `gmodem send -z` may be bigger than the 1 KB a plain pipe allows (it is in `/tmp` by then).
+- **The format is fixed:** window 2^8 = 256 B, lookahead 2^4 = 16 B, no index. Both ends must use
+  the same numbers, so changing them is a format change (a new flag). RAM: the encoder ≈ 560 B, the
+  decoder ≈ 300 B, in one union with the 1 KB pipe buffer (never needed at once), so `gmodem`'s
+  `.bss` stays under 4 KB and its RAM is unchanged (RP.5a). CPU: well under the airtime on every
+  medium (a 256 B window without index is ≈ 1 ms per 100 B on the M4 at 64 MHz).
+- **Gain:** text and configuration files shrink to 15–40 % (the host test's text: 14 %);
+  random or already compressed data grows by up to ≈ 12 %, so `-z` stays off by default.
+- **Hostile input:** the decoder never writes past its own window; a forged compressed stream can
+  at most expand ≈ 10× (a 13-bit back reference yields up to 17 bytes), so a carousel of at most
+  4096 × 24 B gives at most ≈ 1 MB on the card. `gmodem` reports "unpacking failed" (exit 1) when
+  the stream does not end cleanly.
+- **Test (ACP.1):** round trip of text and random data through `mdm_zget`/`mdm_zput` with every
+  read and write size, and a 100 KB ARQ transfer with Z through the lossy channel.
 
 ### P.4 Sub-GHz backend: selectable bandwidth and data rate, inside the law
 
@@ -1799,7 +1827,7 @@ and cannot drift.
 - **ACP.R (responsiveness):** during a `gmodem` transfer on any medium L1–L10 stay within
   budget (`lat`), the launcher scrolls without a visible stall, and the SD card keeps working
   (the SPI bus is held for one packet at a time).
-- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
+- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), with or without `-z` (P.3a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
   (RP.8, RP.7), ≤ +8 B for RFID (RP.5c).
 
 ### P.10 Notes for the system manual

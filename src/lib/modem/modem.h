@@ -31,6 +31,7 @@
 
 #define MDM_F_TURN	1		/* the other side may send now */
 #define MDM_F_LAST	2		/* the last frame of the stream */
+#define MDM_F_Z		4		/* the stream is compressed (mdmz.h) */
 
 #define MDM_WMAX	8		/* the ACK bitmap's bits */
 
@@ -71,6 +72,7 @@ struct mdm_stat {
 	long resent;			/* sent again */
 	long bad;			/* frames dropped: CRC, length, sid */
 	long bytes;			/* payload bytes delivered or acked */
+	int flags;			/* recv: MDM_F_Z of the stream */
 };
 
 #define MDM_OK		0
@@ -83,10 +85,11 @@ struct mdm_stat {
 
 /* The ARQ stream (P.3, RP.4).  window: 1..MDM_WMAX; wbuf: window * (mtu +
  * 2) bytes.  The sender's sid is any random byte (another transfer's
- * frames are ignored).  progress (may be NULL) is called after each ACK
+ * frames are ignored).  flags: 0 or MDM_F_Z, put on every DATA frame and
+ * reported in st->flags by the receiver.  progress (may be NULL) is called after each ACK
  * and each delivered frame. */
 int mdm_send(const struct mdm_phy *p, unsigned char sid, int window,
-	mdm_get_fn get, void *u, unsigned char *wbuf, struct mdm_stat *st,
+	int flags, mdm_get_fn get, void *u, unsigned char *wbuf, struct mdm_stat *st,
 	void (*progress)(void *u, const struct mdm_stat *st));
 int mdm_recv(const struct mdm_phy *p, int window, long idle_ms,
 	mdm_put_fn put, void *u, unsigned char *wbuf, struct mdm_stat *st,
@@ -100,14 +103,17 @@ struct mdm_car {
 	int total;			/* -1 until the LAST frame */
 	int have;
 	long size;			/* bytes, known with the LAST frame */
+	int z;				/* MDM_F_Z of the first frame */
 };
 void mdm_car_init(struct mdm_car *c, unsigned char *map);
-/* Frame idx of a carousel of chunk-byte pieces (the last with LAST). */
-int mdm_car_pack(unsigned char sid, int idx, int last,
+/* Frame idx of a carousel of chunk-byte pieces; flags: MDM_F_LAST on the
+ * last frame, MDM_F_Z on every frame of a compressed stream. */
+int mdm_car_pack(unsigned char sid, int idx, int flags,
 	const unsigned char *data, int n, unsigned char *out, int max);
 /* A frame from the air: 1 if new (store f->len bytes at idx * chunk,
  * idx = f->a | f->b << 8), 0 if known or not ours, -1 if it breaks the
- * rules (index past MDM_CAR_MAX, a short frame that is not the last). */
+ * rules (index past MDM_CAR_MAX, a short frame that is not the last, a
+ * frame whose MDM_F_Z differs from the first one's). */
 int mdm_car_take(struct mdm_car *c, const struct mdm_frame *f, int chunk);
 int mdm_car_done(const struct mdm_car *c);
 

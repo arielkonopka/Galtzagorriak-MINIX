@@ -27,7 +27,7 @@ static long ack_wait(const struct mdm_phy *p)
 }
 
 int mdm_send(const struct mdm_phy *p, unsigned char sid, int window,
-	mdm_get_fn get, void *u, unsigned char *wbuf, struct mdm_stat *st,
+	int flags, mdm_get_fn get, void *u, unsigned char *wbuf, struct mdm_stat *st,
 	void (*progress)(void *u, const struct mdm_stat *st))
 {
 	unsigned char fr[MDM_MAXFRAME], rx[MDM_MAXFRAME];
@@ -39,6 +39,7 @@ int mdm_send(const struct mdm_phy *p, unsigned char sid, int window,
 	if (window < 1 || window > MDM_WMAX || p->mtu < 1
 	    || p->mtu > MDM_MAXPAY) return MDM_EARG;
 	st->frames = st->resent = st->bad = st->bytes = 0;
+	st->flags = flags & MDM_F_Z;
 	for (;;) {
 		/* Fill the window from the source, whole frames where it can. */
 		while (!eof && next < base + window) {
@@ -62,7 +63,7 @@ int mdm_send(const struct mdm_phy *p, unsigned char sid, int window,
 			if (s[1] & S_ACKED) continue;
 			f.type = MDM_T_DATA;
 			f.flags = (unsigned char) ((s[1] & S_LAST ? MDM_F_LAST : 0)
-				| (q == lastq ? MDM_F_TURN : 0));
+				| (q == lastq ? MDM_F_TURN : 0) | (flags & MDM_F_Z));
 			f.sid = sid;
 			f.a = (unsigned char) q;
 			f.b = 0;
@@ -127,7 +128,7 @@ int mdm_recv(const struct mdm_phy *p, int window, long idle_ms,
 
 	if (window < 1 || window > MDM_WMAX || p->mtu < 1
 	    || p->mtu > MDM_MAXPAY) return MDM_EARG;
-	st->frames = st->resent = st->bad = st->bytes = 0;
+	st->frames = st->resent = st->bad = st->bytes = st->flags = 0;
 	for (i = 0; i < window; i++) wbuf[i * (p->mtu + 2) + 1] = 0;
 	/* After the LAST frame: long enough for the sender to miss our ACK,
 	 * time out and send its burst again, twice. */
@@ -145,6 +146,7 @@ int mdm_recv(const struct mdm_phy *p, int window, long idle_ms,
 		if (sid < 0) {
 			if (off >= window) { st->bad++; continue; }
 			sid = f.sid;			/* the first burst: ours */
+			st->flags = f.flags & MDM_F_Z;
 		} else if (f.sid != sid) {
 			st->bad++;
 			continue;
