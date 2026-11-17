@@ -62,6 +62,16 @@ if test ! -f /etc/apps.new || cmp -s /etc/apps /etc/apps.new
 then rm -f /etc/apps.new
 else mv /etc/apps.new /etc/apps; echo "base: the launcher's apps have icons"
 fi
+# Cards made before K.7 do not apply the system settings at boot.
+grep 'settings apply' /etc/rc >/dev/null || {
+	(echo '/^launcher &/i'
+	 echo '# The system settings (spec K.7): /etc/flipper/*.conf applied.'
+	 echo 'settings apply'; echo ''; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
+	if grep 'settings apply' /etc/rc >/dev/null
+	then echo "base: /etc/rc now applies the system settings at boot"
+	else echo "base: could not add settings apply to /etc/rc; run pkg install again"
+	fi
+}
 # Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
 if test ! -r /dev/ibutton
 then
