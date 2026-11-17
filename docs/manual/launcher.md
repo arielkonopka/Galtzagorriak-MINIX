@@ -111,7 +111,7 @@ brackets on the right and a hint line that names the buttons for the row under t
 - When the app takes longer than 0.15 s to answer, a small hourglass appears on the right of the
   title bar; the screen still responds. An app that is still running 2 s after Back closed it is
   stopped (`SIGTERM`).
-- Long lists are loaded a page (16 rows) at a time; the title bar shows the position in the
+- Long lists are loaded a page (at most 16 rows) at a time; the title bar shows the position in the
   whole list, e.g. `17/40`.
 - A **clock** screen shows the time in large digits and redraws once a minute while it is shown.
 

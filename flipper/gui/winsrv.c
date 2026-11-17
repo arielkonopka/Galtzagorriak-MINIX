@@ -541,9 +541,10 @@ static void move(struct ses *s, struct wr_win *w, int dir)
 			if (w->total > 0) {	/* a long list */
 				if (dir > 0 && w->first + w->nrows < w->total)
 					page(s, w, w->first + w->nrows, 1);
-				else if (dir < 0 && w->first > 0)
-					page(s, w, w->first > WR_ROWS
-					     ? w->first - WR_ROWS : 0, -1);
+				else if (dir < 0 && w->first > 0)	/* a page
+						 * as long as this one */
+					page(s, w, w->first > w->nrows
+					     ? w->first - w->nrows : 0, -1);
 				return;
 			}
 			i = dir > 0 ? -1 : w->nrows;
@@ -846,6 +847,8 @@ static void draw(struct ses *s)
 	int i, y;
 
 	s->dirty = 0;
+	if (s->cur >= 0 && s->bslot == s->cur)
+		return;			/* being sent again: the old frame stays */
 	if (s->kb && w != NULL) {
 		draw_kb(s);
 		return;
