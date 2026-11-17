@@ -98,5 +98,4 @@ void farray_remove(FArray* a, size_t i, size_t es);
     }                                                                                  \
     static inline void name##_remove(name##_t a, name##_it_t it) {                     \
         farray_remove(a, it->i, sizeof(type));                                         \
-    }                                                                                  \
-    typedef int name##_unused_
+    }
