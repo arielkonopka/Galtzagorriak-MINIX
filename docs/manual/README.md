@@ -12,6 +12,7 @@ that brings them.
 5. [The SD card](sdcard.md): power loss, the boot-time check and pulling the card out (planned).
 6. [Swap](swap.md): idle programs on the SD card (`swap=plain`), what is never swapped, `free -v`.
 7. [Timers and alerts](timers.md): `/var/timers`, `timed`, `alert`, do-not-disturb (`/etc/notify.conf`).
+8. [The self test](selftest.md): the hardware self test (`stest` package, `selftest -a`).
 
 More chapters (using the launcher and apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
