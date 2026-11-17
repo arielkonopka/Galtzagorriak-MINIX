@@ -369,7 +369,7 @@ Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and 
 - Docs: manual chapter "Desktop and modules" (writing a module in C and shell), devguide section, CHANGELOG.
 
 ## T24. System settings (spec K.7, owner decision 2026-11-17 on #110): milestone M3, next after T21a
-One plain C program `settings GROUP` on `gui.c`, one source file per group under `src/commands/settings/`, started from the launcher's SETTINGS page. Writes `/etc/flipper/<group>.conf` with `cfopen()` only on a real change; 0 internal-flash writes; ≤ 3 KB RAM while open.
+One plain C program `settings GROUP`, a window app (K.8, `libgm`; its screens need T23b), one source file per group under `src/commands/settings/`, started from the launcher's SETTINGS page. Writes `/etc/flipper/<group>.conf` with `cfopen()` only on a real change; 0 internal-flash writes; ≤ 3 KB RAM while open.
 
 ### T24a (`lane:local`, the local agent offered it): SETTINGS page and the device groups
 - The launcher's Left page lists the groups (K.7) and runs `settings GROUP`; Launcher's own settings stay inside it (#234).

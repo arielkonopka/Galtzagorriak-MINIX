@@ -1139,11 +1139,14 @@ about, system.
   - Every other group is a **separate small program run like an app**, `settings GROUP` (for
     example `settings display`). The launcher does not grow in RAM, and a group costs RAM only
     while it is open.
-- **Program.** `settings` is one plain C program on `gui.c` (not `libfuri`), with code in flash.
+- **Program.** `settings` is one plain C program with code in flash, and a **window app (K.8)**:
+  it describes its screens with `libgm`, and the desktop draws them. Until T23b is on main, the
+  driver side (applying values, the boot script) can be built first.
   - Each group is its own source file (`src/commands/settings/<group>.c`) with one entry function,
     so the two lanes can work on different groups without conflicts.
-  - Each screen is a list of `[value]` rows in the K.2 screen style (R5.6a.7). Left/Right change a
-    value, OK opens a sub-list, Back returns to the launcher's SETTINGS page.
+  - Each screen is a `list` window of `int`/`enum`/`bool` rows. Left/Right change a value in the
+    desktop, OK opens a sub-list, Back returns to the launcher's SETTINGS page. Values arrive with
+    `submit`.
   - RAM while open: ≤ 3 KB (data + bss + stack), 0 B kernel.
 - **Saving.**
   - A group writes `/etc/flipper/<group>.conf` on the SD card with `cfopen()` (L.3), and only when a
