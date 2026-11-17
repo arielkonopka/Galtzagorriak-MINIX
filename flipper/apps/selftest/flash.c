@@ -21,7 +21,6 @@
 #include "gui.h"
 #include "st.h"
 
-#define FLASH	0x08000000UL
 #define PAGE	4096UL
 #define NPAGE	256
 #define IN_MAGIC 0x534E4947UL		/* "GINS" (mm/finst.c) */
@@ -37,6 +36,7 @@ struct inrec {				/* as mm/finst.c */
 
 enum { C_NONE, C_PASS, C_FAIL, C_FREE, C_CACHE, C_SYS, C_DIR };
 static unsigned char st[NPAGE];
+static unsigned long FLASH;	/* 0x08000000 on the Flipper; QEMU's differs */
 static int gui;
 
 /* SHA-256 (FIPS 180-4), small rather than fast. */
@@ -174,6 +174,7 @@ int main(int argc, char **argv)
 		st_result("SKIP", "no installed region");
 		return 0;
 	}
+	FLASH = fi.inst_base & ~0xFFFFFUL;	/* the 1 MB it lies in */
 	for (p = 0; p < NPAGE; p++) {
 		a = FLASH + p * PAGE;
 		st[p] = a < fi.inst_base ? C_SYS
@@ -215,6 +216,7 @@ int main(int argc, char **argv)
 			for (a = r->addr & ~(PAGE - 1); a < r->addr + r->size;
 								a += PAGE) {
 				p = (a - FLASH) / PAGE;
+				if (p >= NPAGE) break;
 				st[p] = memcmp(sha, r->sha, 32) == 0 ? C_PASS
 								: C_FAIL;
 				cell((int) p);
