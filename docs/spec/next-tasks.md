@@ -184,7 +184,8 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 - **Power-off = BQ25896 ship mode**, as stock `furi_hal_power_off`: enable the RTC alarm output (Alarm A, open-drain, active low) **on PC13**, **switch ext3.3V on** (stock: "shutting down with ext 3V3 off is causing LSE to stop"), short vibro, then the ship-mode command. With USB attached ship mode cannot cut SYS: sleep instead.
 - **Alarm while off:** the RTC (on VBAT) pulls PC13 = Back = charger QON, the charger turns the BATFET on and the Flipper boots. This replaces F.3's "Standby or Shutdown". At boot, read the wake reason (RTC ALRAF, backup register) **before** reading boot key combos (Back looks pressed until the flag is cleared), then turn the alarm output off and send `SIGRTC` as F.2 says.
 - **Boot lead for alarms (owner, 2026-11-15):** a start from off takes QON (~1 s) + L10, so at power-off `timed` arms Alarm A **early** by the boot lead and keeps the real due time in an RTC backup register (0 B RAM). After the boot `timed` waits for the real time, so the alarm rings on the second, not seconds late. The boot lead is measured at each start from off (RTC time at the first frame minus the alarm time, plus a 2 s margin) and kept in the same backup register; first default 10 s. `Missed` (F.2) applies only if the boot ends after the real time.
-- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on.
+- **`After: off` (F.3, owner 2026-11-17):** a timer with `After: off` (or `timed --then-off`) powers the Flipper off again after its job, **only if this boot came from the RTC alarm** (wake-reason bit in a backup register), no button was pressed since and no user session is active; a Flipper that was already on stays on. Last of several close jobs; next timer < ≈ 4 min → Stop2 instead; `Timeout:` (default 60 s) ends a hung job and still powers off; USB attached → sleep; quiet boot (no splash, backlight, CPU2, launcher) when an `After: off` job is due, a button press makes it a normal boot. `Type: emergency` (owner's name for the rescue-signal case) = `After: off` + ignores do-not-disturb, never skipped (`Missed: fire-once`), at low battery `timed` halves its rate per halving of the charge (below 20 % every 2nd skipped, below 10 % every 2nd of the rest, ... max 1/64; level + counter in RTC backup bits, level passed in `TIMED_LOWBAT`), only for packages with `Timers: emergency`. `Type: wakeup` (alarm clock): below 10 % (configurable) the alarm is not run; instead one minimal notice that it was skipped (LED blink by default, or a short beep, `lowbat_notice=`), logged, shown by the alarm app later. The `timed` part is `lane:cloud` (QEMU: fake wake reason), the wake-reason bit and quiet boot are local.
+- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on. With `After: off`: off → RTC wake → job → off again; the same timer while the Flipper is on → job runs, Flipper stays on; a button press during the quiet boot → stays on.
 - RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### T14d. Screen-off state and peripheral power (after T14b)
@@ -255,6 +256,41 @@ No journaling (owner decision). Spec section N has the details; the points that 
 ### T17b (`lane:local`, Flipper): card detect and the device checks
 - N.6: poll PC10 (EXTI 10 is the Up button) before every SD command and per tick while the card is selected or a buffer is dirty; `ENXIO` while out; CID + super block CRCs at boot (kernel ≤ +32 B); same card → resume, other card → never write; "SD card removed" / "Different card" on the screen with a short buzz; R12.25 swap waits for the same card.
 - Device checks: ACN.5 (pull and reinsert during `cp`, then a different card), ACN.6 (unclean boot on the 3.8 GB card: LCD output readable, progress, ≤ 30 s, Back skips `/home`), ACN.7 (low-battery halt, no check at the next boot). Numbers into PORTING.md.
+
+## T18. Less SD card wear from swap (spec 12g, R12.29–R12.33, R12.10a; owner request 2026-11-17): milestone M3
+Owner rule: only measures with **0 B RAM** and no noticeable CPU on the foreground path (responsiveness first). Analysis: `reports/sd-swap-wear-analysis.md` (project files). Swap is off by default (`swap=plain`), so all of this changes nothing until swap is turned on, except R12.32/R12.33 at first-boot setup.
+
+### T18a (`lane:cloud`, QEMU): MM, `mkpart`, setup
+- R12.29 in `src/mm/swap.c`: chunk CRCs (48 × 4 B) in the slot header; swap-out reads the header, writes only changed 4 KB chunks, writes nothing if nothing changed; swap-in checks per chunk; the reserve job re-reads the header each step and writes it last. MM RAM **+0 B** (`ramcheck`), header stays in `mbuf`.
+- R12.30: `SWAPHOT` flag (spare `mp_flags` bit) set on a swap-in by a wake, reserve waits ≥ 120 s for it, cleared after one such wait; on-demand swap ignores it.
+- R12.31 MM side: CRCs first, then header, then chunks in ascending order.
+- R12.32: `mkpart` (and the PC image tool, if it places partitions) aligns to 4 MiB.
+- R12.33 userland: `erase /dev/hdN` (root, refuses a mounted partition, `man 8 erase`), called by `/etc/setup` stage 2 before `mkfs` with a line on the screen; until T18b lands the ioctl answers `ENOTTY` and setup goes on without it (message, no failure). QEMU board: `DIOCERASE` fills the range with the erased value so the test sees it.
+- Tests: `tests/swapwear` for AC12.14 (count sectors written through the WINCHESTER task; QEMU disk hook), AC12.15 (30 s timer, 10 min, swap trace); `tools/swaptest.py` and AC12.13 still pass.
+- Docs: CHANGELOG line, `docs/manual/` swap chapter (which card, `erase`, "a parked app that sleeps costs the card nothing"), 12f notes.
+
+### T18b (`lane:local`, Flipper): disk driver
+- R12.31: `disk.c` hands a multi-sector request to `hal_disk_write` as one CMD25 up to 4 KB (not 1 KB pieces); optional ACMD23. Measure AC12.16: swap-in of 64 KB (today 69 ms) and L1/L2 during a swap-out; trace that a 4 KB swap write is one CMD25.
+- R12.33: `hal_disk_erase(first, last)` (CMD32/CMD33/CMD38, busy wait with the card's erase timeout, card-detect checks as N.6) and the root-only `DIOCERASE` ioctl on a partition device. AC12.17 on a card filled with data first.
+- Kernel RAM +0 B. Numbers into PORTING.md.
+
+## T19. Every Unleashed LF RFID protocol, decoders and encoders (spec 9.0, R9.0.1–R9.0.9; owner request 2026-11-17)
+Owner request outside the milestone order (H-lane priority 4, "owner requests"). Today 1 of 25 protocols works (EM4100 RF/64); spec 9.0 has the gap table. Reuse the Unleashed code verbatim (GPLv3).
+
+### T19a (`lane:cloud`, host + QEMU): the library and its tests
+- R9.0.1 `src/lib/lfrfid/` with the 25 protocols, `fsk_demod`/`fsk_osc`, `t5577`/`em4305` block builders and the toolbox pieces; thin `furi` shim. Note the Unleashed commit in the file header.
+- R9.0.2 `make lfrfidtest` (host) for all 25 protocols, encoder → decoder, jitter, both polarities, no cross-decodes; added to the `build` CI job.
+- R9.0.3 user side that needs no new kernel call: `rfid` prints the protocol and rendered data from today's 512-edge capture (enough for the ASK protocols: EM4100/32, /16, Electra, FDX-B at 125 kHz, Viking, Jablotron, PAC/Stanley, Gallagher, Radio Key, GProxII, Noralsy); `rfid write PROTO HEX…` for every protocol (T5577; EM4305 where Unleashed has it); `rfid emulate PROTO` for those whose frame fits `RFIDIOCEMU` (≤ 512 segments); `.rfid` files for every protocol. The PR lists the device steps under "Needs on-device test".
+- Measure the decoder heap (`protocol_dict_alloc` of all 25) and say it in the PR (budget ≤ 6 KB, freed at exit). No resident RAM, 0 run-time flash writes.
+- Docs: CHANGELOG line, `docs/manual/` RFID chapter (protocol list), `man` page of `rfid`.
+
+### T19b (`lane:local`, Flipper): the kernel and the device checks
+- R9.0.4 `RFIDIOCCARRIER`: 62.5 kHz/25 % (PSK) and 134.2 kHz/50 % besides 125 kHz/50 %.
+- R9.0.5 streaming capture (ring in the caller's pinned buffer, `poll`, `EOVERFLOW` on overrun).
+- R9.0.6 long emulation (run list, ring refilled in the DMA half/complete interrupt, or a cheaper mechanism of the agent's choice with the same limits).
+- Then switch `rfid` to ASK/PSK alternation and streaming, and long emulation for the FSK/PSK protocols.
+- R9.0.7 Hitag µ / Hitag S write targets, R9.0.8 RAW read, R9.0.9 `lfrfid` app (protocol name, rendered data, "Add manually" for all 25), in that order, after the above.
+- Device checks AC9.0.2–AC9.0.4 (results table in PORTING.md, `lat` numbers in the PR); kernel RAM ≤ +32 B in total.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)

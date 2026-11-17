@@ -45,6 +45,7 @@ Call numbers are in `include/minix/callnr.h` (`NCALLS` is 77). Port additions so
 | `MI_INSTALL` | install, flash, bind programs; one step per call (root) | `pkg` |
 | `MI_RESET` | cause of the last reset | `ver` |
 | `MI_FCBUDGET` | run-time cache erase budget and counters (setting it: root) | `pkg budget` |
+| `MI_MEMTEST` | test one free 4 KB block of RAM in place, March C− (root; R7b.3.1): `MT_PASS`, `MT_FAIL` (+ address), `MT_INUSE`, `MT_OWNED` | selftest `memory` |
 
 This MINIX has no `svrctl`, so MM settings go through here. A new MM control is a new `MI_*`
 value, a branch in `do_meminfo()`, the permission check first (`mp->mp_effuid != SUPER_USER`

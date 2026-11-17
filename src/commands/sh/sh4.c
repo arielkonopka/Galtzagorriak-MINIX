@@ -27,6 +27,7 @@ _PROTOTYPE(static int grave, (int quoted ));
 _PROTOTYPE(void globname, (char *we, char *pp ));
 _PROTOTYPE(static char *generate, (char *start1, char *end1, char *middle, char *end ));
 _PROTOTYPE(static int anyspcl, (struct wdblock *wb ));
+_PROTOTYPE(static struct wdblock *roomword, (struct wdblock *wb, int n ));
 _PROTOTYPE(static int xstrcmp, (char *p1, char *p2 ));
 _PROTOTYPE(void glob0, (char *a0, unsigned int a1, int a2, int (*a3)(char *, char *)));
 _PROTOTYPE(void glob1, (char *base, char *lim ));
@@ -414,7 +415,10 @@ register char *as;
  */
 
 #define	scopy(x) strsave((x), areanum)
-#define	BLKSIZ	512
+#define	NSTART	16	/* default number of words to allow for initially */
+/* Galtzagorriak: the directory is read 256 bytes at a time (was 512):
+ * 256 B less stack while globbing. */
+#define	BLKSIZ	256
 #define	NDENT	((BLKSIZ+sizeof(struct direct)-1)/sizeof(struct direct))
 
 static	struct wdblock	*cl, *nl;
@@ -438,7 +442,7 @@ struct wdblock *wb;
 			*pp &= ~QUOTE;
 	if (i != 0) {
 		for (cl = addword(scopy(cp), (struct wdblock *)0); anyspcl(cl); cl = nl) {
-			nl = newword(cl->w_nword*2);
+			nl = newword(cl->w_nword*2 > NSTART? cl->w_nword*2: NSTART);
 			for(i=0; i<cl->w_nword; i++) { /* for each argument */
 				for (pp = cl->w_words[i]; *pp; pp++)
 					if (any(*pp, spcl)) {
@@ -456,6 +460,8 @@ struct wdblock *wb;
 			unquote(cl->w_words[i]);
 		glob0((char *)cl->w_words, cl->w_nword, sizeof(char *), xstrcmp);
 		if (cl->w_nword) {
+			/* Galtzagorriak: make room once, not by doubling */
+			wb = roomword(wb, cl->w_nword);
 			for (i=0; i<cl->w_nword; i++)
 				wb = addword(cl->w_words[i], wb);
 			DELETE(cl);
@@ -574,7 +580,6 @@ char *p1, *p2;
 /* #include "sh.h" */
 /* #include "word.h" */
 
-#define	NSTART	16	/* default number of words to allow for initially */
 
 struct wdblock *
 newword(nw)
@@ -609,23 +614,49 @@ register struct wdblock *wb;
 	return(wb);
 }
 
+/*
+ * Galtzagorriak: wb with room for n more words: one new block of the
+ * size needed (and a few spare), instead of doubling it word by word.
+ */
+static struct wdblock *
+roomword(wb, n)
+register struct wdblock *wb;
+int n;
+{
+	register struct wdblock *wb2;
+	register nw;
+
+	nw = wb == NULL? 0: wb->w_nword;
+	if (wb != NULL && nw + n <= wb->w_bsize)
+		return(wb);
+	wb2 = newword(nw + n + 4);
+	if (wb != NULL) {
+		memcopy((char *)wb2->w_words, (char *)wb->w_words, nw*sizeof(char *));
+		wb2->w_nword = nw;
+		DELETE(wb);
+	}
+	return(wb2);
+}
+
 char **
 getwords(wb)
 register struct wdblock *wb;
 {
-	register char **wd;
-	register nb;
-
 	if (wb == NULL)
 		return((char **)NULL);
 	if (wb->w_nword == 0) {
 		DELETE(wb);
 		return((char **)NULL);
 	}
-	wd = (char **) space(nb = sizeof(*wd) * wb->w_nword);
-	memcopy((char *)wd, (char *)wb->w_words, nb);
-	DELETE(wb);	/* perhaps should done by caller */
-	return(wd);
+	{
+		register char **wd;
+		register nb;
+
+		wd = (char **) space(nb = sizeof(*wd) * wb->w_nword);
+		memcopy((char *)wd, (char *)wb->w_words, nb);
+		DELETE(wb);	/* perhaps should done by caller */
+		return(wd);
+	}
 }
 
 _PROTOTYPE(int (*func), (char *, char *));

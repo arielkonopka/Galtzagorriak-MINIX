@@ -438,6 +438,51 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (owner, 2026-11-15). Details in next-tasks T14c.
+- **Wake, do the job, off again (owner, 2026-11-17).** A timer file may say `After: off` (and
+  `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
+  log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
+  and the Flipper goes back to ship mode. The rules:
+  - **Never off if the Flipper was on before the job.** `timed` powers off only when **this** boot
+    was caused by the RTC alarm (wake reason read at boot, F.3 above, kept in an RTC backup
+    register bit, 0 B RAM). If the Flipper was already running when the timer fired, the job runs
+    and the Flipper stays on, exactly as for a timer without `After: off`;
+  - not if a button was pressed since the boot, or a user session (USB console, launcher app in
+    front) is active: the user took it in hand, so it stays on;
+  - several jobs due close together: off only after the last; if the next timer of any kind is
+    due in less than ≈ 4 min, sleep (Stop2) instead of off (a boot costs more than that much sleep;
+    `reports/hibernation-analysis.md`);
+  - a job that hangs is ended after its `Timeout:` (default 60 s; SIGTERM, then SIGKILL after
+    3 s) and the Flipper still goes off, so a stuck beacon cannot drain the battery;
+  - with USB attached ship mode cannot cut power: sleep instead;
+  - the boot after an RTC wake with an `After: off` job due is **quiet**: no splash, backlight
+    off, no CPU2/Bluetooth, no launcher; a button press during it turns it into a normal boot
+    (and cancels the power-off, rule above);
+  - power-off is the normal orderly halt (sync, N.2 clean flags, then ship mode).
+- **Timer type `emergency` (owner, 2026-11-17).** `Type: emergency` is for a rescue signal
+  (beacon, screen flash, Morse). It means `After: off` with the rules above, and in addition:
+  - it ignores do-not-disturb and the notification policy (like an alarm);
+  - it is never skipped: `Missed: fire-once` is forced, and a timer due during a normal session
+    still runs (the signal goes out, the Flipper stays on);
+  - low battery does not cancel it; `timed` **thins it out by halving** (owner, 2026-11-17):
+    below the low-battery threshold (default 20 %) it skips every second occurrence; each time
+    the remaining charge halves again (10 %, 5 %, 2.5 %, ...) it skips every second one of those
+    that are left, so the signal runs at 1/2, 1/4, 1/8 ... of its rate (at most 1/64). Each level
+    then lasts about as long as the one before (half the charge at half the rate), so the beacon
+    keeps going for as long as possible instead of dying early. The level and the occurrence
+    counter live in RTC backup register bits (0 B RAM); the app gets the level in `TIMED_LOWBAT`
+    and may also shorten each signal. Only the charger's own cut-off stops it;
+  - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
+    so an ordinary app can't keep waking a switched-off Flipper.
+  Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
+- **Timer type `wakeup` (owner, 2026-11-17: "wake_up_on_time").** The alarm clock's timers
+  (`alarm`, 7b.2). Normal battery: as today (rings on time, from off too, with the boot lead).
+  **Below 10 %** (configurable) the alarm itself is **not run**: `timed` does not start the app,
+  and instead gives one minimal notice that the alarm was skipped, whichever costs less: a short
+  LED blink pattern (LP5562, a few mA for well under a second) by default, or a short beep
+  (`notify.conf`: `lowbat_notice=led|beep`). The skip is logged (`/var/log/timed`, batched,
+  N.2) and the alarm app shows "Alarm skipped: battery low" when next opened. The notice runs
+  from Stop2 or from a quiet boot (no screen). Note for the manual: an LED blink will not wake
+  a sleeper; the alarm app warns when an alarm is armed and the battery is under 15 %.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
@@ -2461,6 +2506,131 @@ Acceptance:
 
 Flash: ≈ 85 KB installed (protocols are the bulk).
 
+### 9.0 LF RFID: every protocol of the Unleashed firmware (owner request 2026-11-17)
+
+The owner wants every 125 kHz decoder of the Unleashed firmware (DarkFlippers/unleashed-firmware,
+`lib/lfrfid/protocols/`, checked at commit `53818b1`, 2026-11-16) working on MINIX. GPLv3: the
+protocol files are copied almost verbatim (rule of the whole project), not rewritten.
+
+What MINIX has today (R6.5 parts 1–5, #174–#194): `/dev/rfid` read at 125 kHz with 50 % duty,
+one-shot capture of up to 512 edges; `rfid` decodes **EM4100 at RF/64 only**; T5577/EM4305 write
+of an EM4100 number, T5577 block read, password clear (proxmark3 dictionary); EM4100 emulation
+(`RFIDIOCEMU`, ≤ 512 segments); the `lfrfid` launcher app (read, save `.rfid`, write, emulate).
+
+**Gap table** (Unleashed protocol list order; "seg/frame" is the number of `RFIDIOCEMU` segments
+one frame needs today, where one segment is one PWM period of the pull pin):
+
+| # | Protocol (Unleashed name) | Maker | Modulation, rate | Frame | Read mode | seg/frame | MINIX read | emulate | write |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | EM4100 | EM-Micro | Manchester RF/64 | 64 b | ASK 125 k | ≤ 128 | ✅ | ✅ | ✅ T5577, EM4305 |
+| 2 | EM4100/32 | EM-Micro | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 3 | EM4100/16 | EM-Micro | Manchester RF/16 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 4 | Electra | Electra | Manchester RF/64 (EM4100 + 64-bit epilogue) | 128 b | ASK | ≤ 256 | ❌ | ❌ | ❌ |
+| 5 | H10301 | HID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 6 | Idteck | IDTECK | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 7 | Indala26 | Motorola | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 8 | IoProxXSF | Kantech | FSK2a RF/64 | 64 b | ASK | ≈ 460 | ❌ | ❌ (tight) | ❌ |
+| 9 | AWID | AWID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 10 | FDX-A | FECAVA | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 11 | FDX-B | ISO 11784/5 (animals) | Biphase (diphase) RF/32 | 128 b | ASK; Unleashed also 134.2 kHz | ≤ 256 | ❌ | ❌ | ❌ |
+| 12 | HIDProx (generic) | Generic | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 13 | HIDExt (generic) | Generic | FSK2a RF/50 | 6 blocks, 192 b | ASK | ≈ 1080 | ❌ | ❌ > 512 | ❌ |
+| 14 | Pyramid | Farpointe | FSK2a RF/50 | 128 b | ASK | ≈ 720 | ❌ | ❌ > 512 | ❌ |
+| 15 | Viking | Viking | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 16 | Jablotron | Jablotron | Biphase (diphase) RF/64 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 17 | Paradox | Paradox | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 18 | PAC/Stanley | N/A | Direct (NRZ) RF/32 | 128 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 19 | Keri | Keri | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 20 | Gallagher | Gallagher | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 21 | Nexwatch | Honeywell | PSK1 RF/32 | 96 b | PSK | ≈ 3072 | ❌ | ❌ > 512 | ❌ |
+| 22 | Radio Key (Securakey) | Securakey | Manchester RF/40 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 23 | GProxII | Guardall | Biphase RF/64 | 90 b | ASK | ≤ 180 | ❌ | ❌ | ❌ |
+| 24 | Noralsy | Noralsy | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 25 | Indala224 | Motorola | PSK2 RF/32 | 224 b | PSK | ≈ 7168 | ❌ | ❌ > 512 | ❌ |
+
+**Encoders** (owner, 2026-11-17: "and the encoders too"): every one of the 25 Unleashed protocols
+has an encoder (`encoder_yield`, used for emulation) and a `write_data` that fills T5577 blocks;
+8 of them can also be written to an EM4305 (EM4100 and its /32, /16 variants, Electra, FDX-B,
+Gallagher, GProxII, Jablotron, Radio Key, Viking). MINIX has the encoder and both write paths for
+EM4100 RF/64 only, so 24 encoders and 24 T5577 / 9 EM4305 write paths are missing; R9.0.3 and
+R9.0.6 bring all of them.
+
+Also in Unleashed `lib/lfrfid`, not protocols: write targets **Hitag µ (ID8265, ID8210, H55)** and
+**Hitag S (ID8268)** besides T5577/EM4305 (MINIX: T5577/EM4305 only); **RAW read/emulate**
+(`.ask.raw`/`.psk.raw`, varint pairs; MINIX: none); the **134.2 kHz ASK read mode** (MINIX: none);
+`.rfid` save/load for every protocol (MINIX: EM4100 only).
+
+Result: 1 of 25 protocols done (EM4100 RF/64): 24 decoders and 24 encoders missing. What blocks them is mostly not the
+decoders (pure C, host-testable) but four kernel gaps: the PSK carrier, the 134.2 kHz carrier, a
+capture longer than 512 edges, and emulation of more than 512 segments.
+
+Requirements:
+
+- **R9.0.1 `liblfrfid`** (user space, `src/lib/lfrfid/`): the Unleashed `lib/lfrfid/protocols/*`,
+  `tools/fsk_demod`, `tools/fsk_osc`, `tools/t5577`, `tools/em4305` and the toolbox pieces they use
+  (`protocol_dict`, `manchester_decoder`, `bit_lib`, `level_duration`, `varint_pair`) copied with a
+  thin `furi` shim (`furi_assert`, `malloc`, `FuriString` → fixed `char` buffers). The worker
+  threads, `furi_hal_rfid` and the GUI are not ported: the caller feeds edges and plays segments.
+  One protocol table, so a new Unleashed protocol is one more file and one table line.
+  - RAM: the decoders' state is allocated only while a read runs (`protocol_dict_alloc` of all 25:
+    measure it; budget ≤ 6 KB heap in the `rfid` process, freed at exit). Nothing resident.
+  - Flash: ≈ 25 KB text (XIP), linked into `rfid` (no shared library needed). 0 run-time flash
+    writes.
+- **R9.0.2 Host tests** (`flipper/tests/lfrfid/`, `make lfrfidtest` on the PC and in CI): for each
+  of the 25 protocols, encoder → edge timings (± jitter, random start phase, inverted polarity) →
+  all decoders: exactly that protocol decodes, the same bytes, `render_data` text equal to
+  Unleashed's for a fixed vector per protocol. Also EM4100 vectors captured on the Flipper by
+  `rfid -r` (from #174) still decode. No hardware needed.
+- **R9.0.3 `rfid` uses the library:** `rfid` (read) prints `PROTOCOL HEXDATA` and the rendered
+  text (as the stock app's info screen); `rfid write PROTO HEX…` writes any protocol whose
+  `write_data` fills T5577 (or EM4305) blocks, verified by reading back and decoding (as stock);
+  `rfid emulate PROTO HEX…`; `rfid copy` for every protocol. EM4100 behaviour and options stay as
+  they are (`write EM …` kept as an alias). `.rfid` files in the stock format for every protocol
+  (`Key type:` = the Unleashed protocol name). Read alternates ASK and PSK windows as the stock
+  worker does (ASK 2 s, PSK 2 s; `-a`/`-p` for one only).
+- **R9.0.4 Kernel: read carrier modes** (`/dev/rfid`, `ioctl RFIDIOCCARRIER`): 125 kHz/50 % (ASK
+  and FSK, today's default), **62.5 kHz/25 % (PSK, as stock `furi_hal_rfid_tim_read_start(62500,
+  0.25)`)** and **134.2 kHz/50 %** (FDX-B, Unleashed's ASK134 mode). One byte of state, kernel
+  RAM ≤ +4 B. The mode resets to 125 kHz at close.
+- **R9.0.5 Kernel: continuous capture.** A PSK or FSK frame is far longer than 512 edges
+  (Indala26 ≈ 33 ms; Indala224 ≈ 115 ms; FSK edges every 32–40 µs). `/dev/rfid` gets a streaming
+  read: the comparator capture keeps running into a ring in the caller's pinned buffer (two
+  halves; `read` returns a full half; `poll` readable when one is full), without losing an edge
+  between reads; an overrun is reported (`EOVERFLOW` on the next read), never silent. The decoder
+  runs in the `rfid` process at normal priority: the UI stays responsive (AC9.0.4). Kernel RAM ≤
+  +8 B.
+- **R9.0.6 Kernel: long emulation.** FSK and PSK frames need 460–7200 PWM segments (table), so
+  `RFIDIOCEMU` with ≤ 512 pinned words cannot play them. Add a compact run list, e.g.
+  `struct rfid_emu_run { u16 period_minus_1; u16 pulse; u16 count; }` (count = how many equal
+  segments in a row: an FSK bit is one run, a PSK bit one or two runs), at most 512 runs, played by
+  the kernel: the DMA keeps reading a small ping-pong ring of ARR/CCR pairs in the caller's pinned
+  memory, refilled from the run list in the DMA half/complete interrupt (as stock refills from the
+  encoder in its DMA ISR). The interrupt is O(ring half), ≤ 10 µs, at ≤ 2 kHz (PSK worst case).
+  The agent may pick a different mechanism with the same limits (no CPU work per carrier period,
+  kernel RAM ≤ +16 B, the reader's clock drives it). `RFIDIOCEMU` stays for EM4100.
+- **R9.0.7 Hitag µ / Hitag S write targets** (Unleashed `tools/hitagmicro.c`, `tools/hitags.c`): as
+  extra targets of `rfid write` for EM4100 data, after R9.0.1–R9.0.6. Uses the existing field-gap
+  write and the held-field capture (R6.5 part 3); kernel unchanged if the timings fit.
+- **R9.0.8 RAW read** (`rfid raw FILE`, `.ask.raw`/`.psk.raw` as Unleashed, varint pairs) on the
+  SD card, for tags no decoder knows; RAW emulate optional. Writes go to the SD card only.
+- **R9.0.9 `lfrfid` app:** the read screen shows the protocol name and the rendered data; saved
+  files of every protocol load, write and emulate; "Add manually" lists all 25 protocols (data
+  entered as hex bytes). Black title bar as every GUI app.
+
+Acceptance:
+- AC9.0.1 `make lfrfidtest`: all 25 protocols round-trip encoder → decoder on the PC, with jitter
+  and both polarities, and no protocol decodes another's frame.
+- AC9.0.2 On the Flipper, with real tags or a T5577 written by `rfid write PROTO …`: each protocol
+  is read, written, read back, and emulated to a second reader (the owner's stock/Unleashed Flipper
+  or a reader) — at least EM4100 RF/32, H10301, Indala26, FDX-B, Viking, Paradox, Keri, Nexwatch,
+  PAC/Stanley, Indala224; the others where a T5577 can carry them. Results table in PORTING.md.
+- AC9.0.3 A PSK read of 10 s and an FSK emulation of 60 s lose no edge and no segment (overrun
+  counter 0).
+- AC9.0.4 While `rfid` reads (streaming, all decoders) or emulates PSK, L1 (button → pixel) stays
+  within budget and the launcher scrolls without a visible hitch; `lat` numbers in the PR.
+- AC9.0.5 Kernel RAM growth for R9.0.4–R9.0.6 together ≤ 32 B (`ramcheck`); no internal flash
+  writes at run time (`flashcheck`).
+
 ### 9.1 Hidden camera finder `camfind`, version 1 (gadget, F.5)
 
 **Depends on:** 6 (UART bridge, IR, LED), 8 (Sub-GHz). Wi-Fi needs the optional ESP32 devboard.
@@ -2857,6 +3027,13 @@ Design rationale: report Part 4.
 - **R12.12** Swap-in:
   - decrypt and verify;
   - on a tag mismatch, the process MUST be killed (SIGKILL), never run.
+- **R12.10a** Per-chunk encryption, so R12.29 (write only what changed) keeps working: each 4 KB
+  chunk has its own nonce (boot nonce, slot, chunk number, the chunk's own write counter) and its
+  own tag, and only changed chunks are re-encrypted. 48 tags × 16 B do not fit in one sector, so
+  the header grows to 2 sectors (on the card only). The chunk counters live in the header, and the
+  header has its own tag over the chunk counters and tags, bound to the slot's RAM write counter
+  (R12.10), so an old chunk or header can't be replayed; RAM stays as R12.26. The header must not hold plaintext CRCs in `crypt` mode (they leak about the
+  data). Decide this before 12b's format is fixed.
 - **R12.13** QEMU build: software AES-GCM behind the same interface (flash only).
 
 ### 12c. Later extension (separate sign-off)
@@ -3002,6 +3179,86 @@ background work must either be very small or be swapped cleverly. Each backgroun
   per-slot write counters (16 × 4 B, needed against rollback, R12.10) and the boot nonce SHOULD
   live in SRAM2 (A.6). Total MM swap state ≤ 96 B.
 
+### 12g. SD card wear (owner request 2026-11-17; milestone M3)
+
+Swap can't avoid wearing the card, but it can write much less, and write in a shape the card's
+controller (FTL) handles well. The analysis is in `reports/sd-swap-wear-analysis.md` (project
+files). In short: typical use writes about 1 MB a day, which is harmless on a card with normal wear
+levelling. The cases worth guarding against are a cheap card whose wear levelling only has a small
+pool of free blocks (a card that was once full and never erased), and **ping-pong**: a parked app
+with a short timer that the reserve writes out after 10 s and its timer brings back a minute later
+(≈ 35 MB a day).
+
+Owner rule for this section: only measures that cost **0 B of RAM** and **no noticeable CPU** on
+the foreground path (the AmigaOS feel: the UI always answers, whatever the rest is doing).
+
+- **R12.29 Write only what changed.** Sector 0 of a slot (R12.2) also holds a **CRC-32 of every
+  4 KB chunk** of the image (192 KB / 4 KB = 48 × 4 B = 192 B, fits in the 512 B header):
+  - swap-out first reads the slot's header (a read does not wear the card, ≈ 1 ms). If its magic,
+    pid, `dstart`, `dlen`, `sstart` and `slen` match the image now, a chunk whose CRC from RAM equals
+    the stored one is **not written**. If nothing changed, nothing is written, not even the header;
+  - otherwise (other pid or layout, bad header) every chunk is written, as today;
+  - the CRC is the one swap-out already computes (R12.28), restarted at each chunk, so the CPU cost is
+    the same as today plus one sector read, and every chunk not written saves a polled SD write
+    (≈ 5–10 ms of disk-task time per 4 KB);
+  - swap-in checks each chunk against its own CRC (this replaces the one CRC of the whole image);
+    a mismatch kills the process as R12.28;
+  - the reserve (R12.5 b) works chunk by chunk as today: each step re-reads the header (MM's `mbuf`
+    does not live between steps) and the new header is written last, from CRCs taken in that job
+    (the process is blocked, so its RAM does not change while the job runs; `sw_touch` still
+    voids the job);
+  - a stale chunk can only survive a CRC-32 collision of a changed chunk (2⁻³² per compared chunk;
+    at ~1000 compares a day, once in about 10 000 years per device). Accepted: it is the same
+    strength as today's card-error check;
+  - RAM: +0 B (header in `mbuf`, as today).
+- **R12.30 The reserve leaves alone what will wake soon.** A process brought back from the card by
+  its own wake (timer, signal) gets a flag (`SWAPHOT`, a spare `mp_flags` bit). The reserve swaps a
+  `SWAPHOT` process out only after it has waited **≥ 120 s** (instead of 10 s); the flag clears
+  when it has waited that long once. On-demand swap-out (R12.5 a) ignores the flag: when RAM is
+  really needed, the foreground wins. A parked app with a 1-minute timer therefore stays in RAM
+  unless memory runs short, and when it is written, R12.29 writes only its changed chunks. RAM +0 B,
+  CPU: one flag test per candidate.
+- **R12.31 Large, sequential writes.** Swap-out computes the chunk CRCs, then writes the header
+  **first** and the chunks to be written in ascending order (no jump back to sector 0 at the end).
+  The WINCHESTER task passes a request of several sectors to the HAL as **one CMD25** (up to 4 KB,
+  the swap chunk; today it splits into 1 KB transfers), optionally with ACMD23 (pre-erase count).
+  Same bytes over SPI, fewer commands and busy waits: the card sees one sequential write. The
+  4 KB chunk stays the unit that other card requests can get in between (R12.23), so no foreground
+  request waits longer than today. RAM +0 B.
+- **R12.32 Partitions aligned to the card's erase unit.** `mkpart` (first-boot setup) and the PC
+  image tool align every partition start to **4 MiB** (the usual SD allocation unit) instead of
+  1 MiB, so the 3 MB of swap slots lie inside one erase unit. New installs only; an existing card
+  keeps its layout. Install time only, RAM +0 B.
+- **R12.33 Tell the card what is empty (install time only).** First-boot setup (`/etc/setup`
+  stage 2) sends **ERASE** (CMD32/CMD33/CMD38, supported in SPI mode) over the new `/usr`, swap and
+  `/home` partitions before `mkfs`, with a line on the screen ("Preparing the card..."). A card that
+  was once full (camera, phone) gets back its whole free pool for wear levelling. HAL:
+  `hal_disk_erase(first, last)`; WINCHESTER: a root-only ioctl (`DIOCERASE`) on a partition device;
+  command: `erase /dev/hdN` (refuses a mounted partition). Never at run time: no erase on swap-in,
+  kill or at every boot (on cheap cards an erase can itself trigger garbage collection, and a 64 MB
+  erase can take seconds). RAM +0 B (kernel: a few bytes of stack in the WINCHESTER task).
+- **Left out on purpose** (they cost RAM, see the report): a swap KB-written counter in `free -v`
+  and a daily reserve budget (≈ 4 B in MM, within R12.26's budget but not 0 B), and rotating the
+  slots over the 64 MB partition per boot (needs a stored offset; helps only very primitive FTLs).
+  They can come back with the owner's yes.
+- **Hibernation.** If a whole-RAM hibernation image is ever added (analysis
+  `reports/hibernation-analysis.md`, level 2), R12.29, R12.31 and R12.32 apply to it too; frequent
+  cycles should use the cold-boot level 1, which writes nothing.
+
+Acceptance criteria:
+- AC12.14 QEMU (`tests/swapwear`, counting sectors written through the WINCHESTER task): swap a
+  32 KB process out, swap it in, park it again without touching its heap: the second swap-out
+  writes **0 sectors**; change 1 byte of the heap: it writes the header and **one** 4 KB chunk.
+  AC12.4/AC12.13 (one flipped byte on the card kills on swap-in) still pass, for a skipped chunk too.
+- AC12.15 QEMU: a parked test app with a 30 s timer, reserve on and free RAM under the reserve,
+  for 10 min: no reserve swap-out of it (swap trace); an `exec` that needs its memory still swaps
+  it out at once.
+- AC12.16 Device: the swap-in time of a 64 KB image (today 69 ms) and L1/L2 during a swap-out are
+  no worse; a 4 KB swap write is one CMD25 (trace). Numbers in PORTING.md.
+- AC12.17 Device: `/etc/setup` on a card filled with data before: ERASE runs on the three partitions,
+  the screen shows the step, `mkfs` and the first boot finish; `erase` on a mounted partition fails
+  with `EBUSY`.
+
 ### 12f. Notes for the system manual
 
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
@@ -3011,6 +3268,10 @@ background work must either be very small or be swapped cleverly. Each backgroun
   it on, with a checksum against card errors; apps marked `Secret: yes` and set-uid programs are
   never swapped). Later `swap=crypt` (12b) encrypts it with a key that is new at every boot and
   becomes the default. Nothing swapped survives a reboot, and removing the card ends the swapped apps.
+- Which card to use with swap (12g): a branded card, best a "High Endurance" or industrial (pSLC)
+  one, 8–32 GB, new or erased. First-boot setup erases the new partitions; `erase` does it by hand.
+  Swap writes only the parts of an app that changed, so a parked app that sleeps costs the card
+  nothing.
 - How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no

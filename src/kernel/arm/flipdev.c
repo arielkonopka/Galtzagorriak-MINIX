@@ -105,6 +105,12 @@ PRIVATE u8_t fg_pre;		/* R7b.2: an alert preempts (PRE_*), 0: no */
 #define PRE_FG		0x40	/* the slot below was the foreground app */
 #define PRE_SLOT	0x3F	/* the preempted foreground's slot + 1 */
 PRIVATE u8_t pre_rd;		/* R7b.2: a reader parked meanwhile, slot + 1 */
+PRIVATE u8_t nt_st;		/* N.6: the card notice (NT_*) */
+#define NT_KIND		3	/* the notice over every frame: */
+#define NT_OUT		1	/*   the card is out */
+#define NT_OTHER	2	/*   another card, or one that does not answer */
+#define NT_NEW		0x40	/* the task draws it, flushes and buzzes */
+#define NT_SEEN		0x80	/* the switch said "card in" at the last tick */
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
 #define BL_SAVE		8	/* off, and the LCD in power save (T14d) */
@@ -241,6 +247,9 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void nt_over, (void)				);
+FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
+FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
 FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
@@ -916,6 +925,7 @@ message *m_ptr;
 		}
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
 		LAT_EVENT(LE_LCD, m_ptr->PROC_NR);
+		if (nt_st & NT_KIND) nt_over();		/* N.6 */
 		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	}
 	return(count);
@@ -1425,6 +1435,16 @@ PRIVATE void do_hardint()
   int r;
 
   if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
+  if (nt_st & NT_NEW) {		/* N.6: a card notice to show */
+	nt_st &= ~NT_NEW;
+	nt_over();
+	lc_dirty = TRUE;
+	k_input = get_uptime();		/* the light on, as for a key */
+	lock();
+	mt_arm(MT_VIBRO, 150);		/* and a short buzz */
+	unlock();
+	hal_vibro(1);
+  }
   if (fg_pre != 0) {		/* R7b.2: the alert exited? */
 	r = FG_SLOT(last_buttons);
 	if (r < 0 || (proc_addr(r)->p_flags & P_SLOT_FREE)) fg_release();
@@ -1510,6 +1530,16 @@ PUBLIC void flipdev_tick()
 		hal_tone(0);
 		interrupt(PRINTER);
 	}
+  }
+  /* N.6: the card-detect switch, one GPIO read (its EXTI line is Up's) */
+  if (hal_disk_present()) {
+	if (!(nt_st & NT_SEEN)) {		/* in again */
+		nt_st |= NT_SEEN;
+		if ((nt_st & NT_KIND) == NT_OUT) nt_st &= ~NT_KIND;
+	}
+  } else if (nt_st & NT_SEEN) {		/* just pulled out */
+	nt_st = (nt_st & ~(NT_SEEN | NT_KIND)) | NT_OUT | NT_NEW;
+	interrupt(PRINTER);
   }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
@@ -1910,6 +1940,71 @@ int code, replyee, proc, status;
   m.REP_PROC_NR = proc;
   m.REP_STATUS = status;
   send(replyee, &m);
+}
+
+
+/*===========================================================================*
+ *				flipdev_notice				     *
+ *===========================================================================*/
+PRIVATE void nt_text(s, y)
+char *s;
+int y;
+{
+  const unsigned char *g;
+  int n = 0, x, row, col, px;
+
+  while (s[n] != 0) n++;
+  if (n > (LCD_W - 16) / 4) n = (LCD_W - 16) / 4;
+  x = (LCD_W - n * 4) / 2;
+  for (; n > 0; n--, s++, x += 4) {
+	if (*s < ' ' || *s > '~') continue;
+	g = font_4x6[*s - ' '];
+	for (row = 0; row < 6; row++)
+		for (col = 0, px = x; col < 4; col++, px++)
+			if (g[row] & (0x80 >> col))
+				fbuf[((y + row) >> 3) * LCD_W + px]
+					|= 1 << ((y + row) & 7);
+  }
+}
+
+PRIVATE void nt_box(l1, l2)
+char *l1, *l2;
+{
+/* A framed box with two lines in the middle of the screen, into fbuf. */
+  int x, y, edge;
+
+  for (y = 17; y <= 46; y++)
+	for (x = 4; x < LCD_W - 4; x++) {
+		edge = y == 17 || y == 46 || x == 4 || x == LCD_W - 5;
+		if (edge) fbuf[(y >> 3) * LCD_W + x] |= 1 << (y & 7);
+		else fbuf[(y >> 3) * LCD_W + x] &= ~(1 << (y & 7));
+	}
+  nt_text(l1, 23);
+  nt_text(l2, 34);
+}
+
+PRIVATE void nt_over()
+{
+/* N.6: while the card is out (or another one is in) the notice stays over
+ * every frame, whoever draws it. */
+  if ((nt_st & NT_KIND) == NT_OUT) nt_box("SD card removed", "Put it back");
+  if ((nt_st & NT_KIND) == NT_OTHER)
+	nt_box("Card not usable", "Put the original back");
+}
+
+PUBLIC void flipdev_notice(kind)
+int kind;
+{
+/* From the disk task (N.6): NT_OTHER, another card or one that does not
+ * answer: the notice stays until the card goes; 0, the card is back: the
+ * notice goes, and "carrying on" shows until the app's next frame. */
+  nt_st = (nt_st & ~NT_KIND) | (kind == NT_OTHER ? NT_OTHER | NT_NEW : 0);
+  if (kind != NT_OTHER) {
+	nt_box("SD card is back", "Carrying on");
+	lc_dirty = TRUE;
+  }
+  k_input = get_uptime();		/* the light on, as for a key */
+  interrupt(PRINTER);
 }
 
 

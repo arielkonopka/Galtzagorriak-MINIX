@@ -337,6 +337,47 @@ static void poll_tests(void)
 	check(r == -1 && errno == EFAULT, "poll: fds in kernel RAM -> EFAULT");
 }
 
+/* R7b.3.1: MM tests a free 4 KB block of RAM in place (MI_MEMTEST). */
+static int memtest(unsigned long addr)
+{
+	message m;
+
+	m.m1_i1 = (int) addr;
+	m.m1_i2 = MI_MEMTEST;
+	m.m1_p1 = NULL;
+	return _syscall(MM, MEMINFO, &m);
+}
+
+static void memtest_tests(void)
+{
+	static int mine = 1;
+	unsigned long holes[2 * 16], blk, end;
+	message m;
+	int i, r = -9;
+
+	m.m1_i1 = (int) sizeof holes;
+	m.m1_i2 = 0;
+	m.m1_p1 = (char *) holes;
+	if (_syscall(MM, MEMINFO, &m) < 0) {
+		check(0, "memtest: hole list");
+		return;
+	}
+	for (i = 0; i < 16 && holes[2 * i + 1] != 0; i++) {
+		blk = (holes[2 * i] + MT_BLOCK - 1) & ~(unsigned long) (MT_BLOCK - 1);
+		end = holes[2 * i] + holes[2 * i + 1];
+		if (blk + MT_BLOCK <= end) {
+			r = memtest(blk);
+			break;
+		}
+	}
+	check(r == MT_PASS, "memtest: a free block passes March C-");
+	check(memtest((unsigned long) &mine & ~(unsigned long) (MT_BLOCK - 1))
+		== MT_INUSE, "memtest: our own data is in use");
+	check(memtest(0x20000000UL) == MT_OWNED, "memtest: the kernel's RAM is not ours");
+	check(memtest(0x20000100UL) < 0 && errno == EINVAL,
+		"memtest: an unaligned address -> EINVAL");
+}
+
 /* Phase 3: the sticky bit (R3.7, AC3.5) and snprintf (R3.6). */
 static void phase3_tests(void)
 {
@@ -990,6 +1031,7 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 #endif
+	memtest_tests();
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();

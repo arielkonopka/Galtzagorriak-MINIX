@@ -275,15 +275,21 @@ PRIVATE int w_card()
 	return(ENXIO);
   }
   if (!(wn->present & W_OUT)) return(OK);
-  if (hal_disk_init() != 0 || hal_disk_id(&id) != 0) return(ENXIO);
-  if (id != w_id) {
-	if (!(wn->present & W_OTHER))
-		w_tell("Different card: put the original back or power off");
+  if (hal_disk_init() != 0 || hal_disk_id(&id) != 0 || id != w_id) {
+	/* another card, or one that does not answer (a card in another
+	 * format, half in): never touched; said once until it goes */
+	if (!(wn->present & W_OTHER)) {
+		w_tell(hal_disk_sectors() == 0
+			? "the card in the slot does not answer: put the original back"
+			: "Different card: put the original back or power off");
+		flipdev_notice(NOTICE_OTHER);
+	}
 	wn->present |= W_OTHER;
 	return(ENXIO);
   }
   wn->present &= ~(W_OUT | W_OTHER);
   printf("%s: the card is back, carrying on\n", w_name());
+  flipdev_notice(NOTICE_BACK);
   return(OK);
 }
 
@@ -294,12 +300,10 @@ PRIVATE int w_card()
 PRIVATE void w_tell(what)
 char *what;
 {
-/* N.6: on the console (the LCD console too) with a short buzz. */
+/* N.6: on the console.  The screen and the buzz are flipdev's: it reads
+ * the card-detect switch every tick and keeps the notice over every
+ * frame (R-N6.2: over any app; the launcher's files are on the card). */
   printf("%s: %s\n", w_name(), what);
-  lock();
-  mt_arm(MT_VIBRO, 150);
-  unlock();
-  hal_vibro(1);
 }
 
 

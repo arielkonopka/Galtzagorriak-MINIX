@@ -464,9 +464,10 @@ char **wp;
 	return(t);
 }
 
-struct res {
-	char	*r_name;
-	int	r_val;
+/* Galtzagorriak: const and in flash, the names inline (no pointers). */
+static const struct res {
+	char	r_name[6];
+	short	r_val;
 } restab[] = {
 	"for",		FOR,
 	"case",		CASE,
@@ -488,16 +489,16 @@ struct res {
 	"{",		'{',
 	"}",		'}',
 
-	0,
+	"",
 };
 
 int
 rlookup(n)
 register char *n;
 {
-	register struct res *rp;
+	register const struct res *rp;
 
-	for (rp = restab; rp->r_name; rp++)
+	for (rp = restab; rp->r_name[0]; rp++)
 		if (strcmp(rp->r_name, n) == 0)
 			return(rp->r_val);
 	return(0);
