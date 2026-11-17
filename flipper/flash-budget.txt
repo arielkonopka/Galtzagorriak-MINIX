@@ -23,5 +23,9 @@
 # 2026-11-17 (7b.3 part 2, #203): 6.  m2test's memtest checks took its text
 # from 16124 to 16576 B, past 16 KB: one more 4 KB page.  Nothing changed
 # in how often the cache writes.
-m2      cache   6
+# 2026-11-17 (T21a launcher test, #234): 7.  m2test drives the launcher
+# with fake keys and checks its frames: its text grew from 18312 to
+# 20708 B, past 20 KB: one more 4 KB page.  Nothing changed in how often
+# the cache writes.
+m2      cache   7
 m2      inst    0

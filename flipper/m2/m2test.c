@@ -817,6 +817,50 @@ static void gpio_tests(void)
 #endif
 
 #ifdef BOARD_QEMU
+/* R6.7 part 3: IBIOCEMU's rules (QEMU has no reader; the slots are the
+ * host test's, tests/host/ibemutest.c): the emulating process owns the
+ * contact, others get EBUSY, a master read or IBIOCRUN meanwhile EBUSY,
+ * and its close ends it. */
+static void ibemu_tests(void)
+{
+	static const unsigned char rom[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	struct ib_emu q;
+	struct ib_run r;
+	unsigned char buf[8];
+	pid_t p;
+	int fd, st, e1, e2;
+
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		check(0, "ibemu: open");
+		return;
+	}
+	memset(&q, 0, sizeof q);
+	memcpy(q.rom, rom, 8);
+	q.on = 1;
+	q.served = 99;
+	check(ioctl(fd, IBIOCEMU, &q) == 0 && q.served == 0,
+		"ibemu: IBIOCEMU on, nobody served yet");
+	e1 = read(fd, buf, 8) < 0 && errno == EBUSY;
+	memset(&r, 0, sizeof r);
+	r.op[0] = IB_RESET; r.nop = 1;
+	e2 = ioctl(fd, IBIOCRUN, &r) < 0 && errno == EBUSY;
+	check(e1 && e2, "ibemu: read and IBIOCRUN busy while emulating");
+	if ((p = fork()) == 0) {		/* another process */
+		int f = open("/dev/ibutton", O_RDWR);
+
+		q.on = 1;
+		_exit(f >= 0 && ioctl(f, IBIOCEMU, &q) < 0 && errno == EBUSY
+			? 0 : 1);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "ibemu: another process gets EBUSY");
+	close(fd);				/* ends the emulation */
+	fd = open("/dev/ibutton", O_RDWR);
+	check(fd >= 0 && read(fd, buf, 8) < 0 && errno == ENODEV,
+		"ibemu: after close the contact reads again (no key: ENODEV)");
+	if (fd >= 0) close(fd);
+}
+
 /* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
  * it reads high). */
 static void ibutton_tests(void)
@@ -845,8 +889,142 @@ static void ibutton_tests(void)
 	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
 		"ibutton: too many steps -> EINVAL");
 	close(fd);
+	ibemu_tests();
 }
 #endif
+
+/* T21a / R5.6a: the launcher with icons, hints and its settings page,
+ * driven by fake keys (AC5.4-AC5.7).  Its own apps and conf files in /tmp
+ * (-a, -c).  Frames are read from /dev/lcd; FRAME lines in the log are
+ * the frames for tools/frame2png.py. */
+static unsigned char lfb[1024];
+
+static int lpix(int x, int y)
+{
+	return lfb[(y >> 3) * 128 + x] >> (y & 7) & 1;
+}
+
+static void lgrab(int l, const char *name)
+{
+	int i;
+
+	(void) poll((struct pollfd *) NULL, 0, 150);
+	lseek(l, 0L, SEEK_SET);
+	if (read(l, (char *) lfb, sizeof lfb) != sizeof lfb) memset(lfb, 0, 1024);
+	printf("FRAME %s ", name);
+	for (i = 0; i < 1024; i++) printf("%02x", lfb[i]);
+	printf("\n");
+}
+
+/* the 6 rows of the 8x6 cell at x, y as bytes (MSB left) */
+static void lcell(int x, int y, unsigned char *rows)
+{
+	int gx, gy;
+
+	for (gy = 0; gy < 6; gy++) {
+		rows[gy] = 0;
+		for (gx = 0; gx < 8; gx++)
+			rows[gy] |= (unsigned char) (lpix(x + gx, y + gy) << (7 - gx));
+	}
+}
+
+static void launcher_test(void)
+{
+	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
+	unsigned char c[6];
+	struct stat s1, s2;
+	FILE *f;
+	char line[40];
+	int b, l, i, st, ok, rule, blank;
+	pid_t pid;
+
+	f = fopen("/tmp/la", "w");
+	fprintf(f, "Kanpaia:root:#183C3C7E0018:/bin/true\n"
+		"Ordua:root:@clock:/bin/true\nKaixo:root:Zz:/bin/true\n"
+		"Hutsa:root::/bin/true\nEz:root:@nosuch:/bin/true\n"
+		"Txarra:root:#12XY:/bin/true\nGezi:root:>_:/bin/true\n"
+		"Bat:root:!:/bin/true\nZaharra:root:/bin/true\n"
+		"Inor:nosuchuser:@bell:/bin/true\n"
+		"K:root:@app:/bin/true\nL:root:@app:/bin/true\n");
+	fclose(f);
+	f = fopen("/tmp/lc", "w");
+	fprintf(f, "Icons: on\nHints: on\n");
+	fclose(f);
+	b = open("/dev/buttons", O_WRONLY);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || l < 0) { check(0, "launcher: open lcd/buttons"); return; }
+	furi_tap(b, 0x20);	/* the backlight on (Back: no page action) */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl("/bin/launcher", "launcher", "-a", "/tmp/la", "-c", "/tmp/lc",
+			(char *) NULL);
+		_exit(99);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "list");
+	lcell(6, 7, c);
+	for (i = 0; i < 6; i++) c[i] = (unsigned char) ~c[i];	/* selected */
+	check(memcmp(c, bell, 6) == 0, "launcher: # bitmap icon at x 6-13, inverted on the selected row");
+	lcell(6, 13, c);
+	check(c[0] | c[1] | c[2] | c[3] | c[4] | c[5], "launcher: @clock drawn");
+	blank = 1;
+	for (i = 3; i <= 5; i++) {		/* Hutsa, Ez, Txarra: no icon */
+		lcell(6, 7 + 6 * i, c);
+		if (c[0] | c[1] | c[2] | c[3] | c[4] | c[5]) blank = 0;
+	}
+	check(blank, "launcher: empty, unknown and malformed icons: a blank cell");
+	for (rule = 1, i = 0; i < 128; i++) if (!lpix(i, 56)) rule = 0;
+	check(rule && lpix(127, 6), "launcher: hint line rule at y 56, scroll mark (12 entries)");
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Down to the 8th */
+	lgrab(l, "list-8");
+	for (i = 0; i < 2; i++) furi_tap(b, 0x02);	/* "Inor": unknown user */
+	furi_tap(b, 0x10);
+	lgrab(l, "note");
+	ok = 0;
+	for (i = 1; i < 60; i++) if (lpix(i, 59)) ok = 1;
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	lgrab(l, "note-gone");
+	check(ok && lpix(0, 56), "launcher: unknown user noted on the message line, list still drawn");
+	stat("/tmp/lc", &s1);
+	furi_tap(b, 0x04);			/* Left: settings */
+	lgrab(l, "settings");
+	furi_tap(b, 0x20);			/* Back, no change */
+	(void) poll((struct pollfd *) NULL, 0, 1100);
+	stat("/tmp/lc", &s2);
+	check(s1.st_mtime == s2.st_mtime && s1.st_size == s2.st_size,
+		"launcher: settings and Back without a change write nothing");
+	/* Left+Up together (the backlight chord): no page */
+	{
+		unsigned char m = 0x05;
+
+		(void) write(b, (char *) &m, 1);
+		(void) poll((struct pollfd *) NULL, 0, 100);
+		m = 0;
+		(void) write(b, (char *) &m, 1);
+		(void) poll((struct pollfd *) NULL, 0, 250);
+	}
+	lgrab(l, "chord");
+	lcell(6, 7, c);
+	check(lpix(0, 0) && c[0] != 0xFF, "launcher: a Left+Up chord opens no page");
+	furi_tap(b, 0x04);			/* settings */
+	furi_tap(b, 0x10);			/* OK: icons off */
+	lgrab(l, "settings-off");
+	furi_tap(b, 0x20);			/* Back: written */
+	lgrab(l, "list-noicons");
+	ok = 0;
+	if ((f = fopen("/tmp/lc", "r")) != NULL) {
+		while (fgets(line, sizeof line, f) != NULL)
+			if (strcmp(line, "Icons: off\n") == 0) ok = 1;
+		fclose(f);
+	}
+	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	kill(pid, SIGKILL);
+	(void) waitpid(pid, &st, 0);
+	close(b);
+	close(l);
+	unlink("/tmp/la");
+	unlink("/tmp/lc");
+}
 
 static void furihello_test(void)
 {
@@ -1169,6 +1347,7 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
 	 * heap" is the R9.0.1 measurement (budget 6 KB). */

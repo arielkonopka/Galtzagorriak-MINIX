@@ -5,7 +5,7 @@
  * into internal flash once, at install time, and every exec of that file
  * runs it in place from there - no RAM for text, no run-time cache write.
  *
- * Region (hal_flash_layout(): from 0x08040000, after the shared libc, up to
+ * Region (hal_flash_layout(): from 0x08048000, after the shared libraries, up to
  * the run-time cache):
  *   page 0, 1	directories, ping-pong like fcache.c: header (8 bytes)
  *		magic, generation; then 63 records of 64 bytes, each written

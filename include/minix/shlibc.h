@@ -16,6 +16,14 @@
  * program fits only the library build it was linked with: a.out flag
  * A_LIBC, and a_tbase holds the build's id (sh_id).  MM's exec refuses
  * any other with ENOEXEC (mm/exec.c), before allocating anything.
+ *
+ * The second shared library, libfuri + libapp (the "furi" library, spec
+ * R2b.9, R5.2, 7b; flipper/furi.exports, ld/shfuri.ld), has the same
+ * header at SHFURI_BASE, right after the libc's slot.  It calls the libc
+ * through the libc's stubs, so its per-process data (the "furi area")
+ * follows the libc area at r9 and its build id covers the libc's.  Only
+ * the GUI apps carry it: a_dbase of their long header holds its id
+ * (0: the program does not use it).
  */
 #ifndef _MINIX_SHLIBC_H
 #define _MINIX_SHLIBC_H
@@ -25,8 +33,12 @@
 #else
 #define SHLIBC_BASE	0x00030000UL	/* QEMU: flash at 0 */
 #endif
-#define SHLIBC_MAX	0x10000UL	/* 64 KB; installed programs follow */
+#define SHLIBC_MAX	0xC000UL	/* 48 KB; the furi library follows */
 #define SHLIBC_MAGIC	0x434C5A47UL	/* "GZLC" */
+#define SHFURI_BASE	(SHLIBC_BASE + SHLIBC_MAX)	/* + 240 KB */
+#define SHFURI_MAX	0xC000UL	/* 48 KB; installed programs follow */
+#define SHFURI_MAGIC	0x464C5A47UL	/* "GZLF" */
+#define SHLIB_END	(SHFURI_BASE + SHFURI_MAX)	/* + 288 KB */
 
 struct shlibc_hdr {
   unsigned long sh_magic;	/* SHLIBC_MAGIC */
@@ -40,5 +52,6 @@ struct shlibc_hdr {
 };
 
 #define SHLIBC_HDR	((struct shlibc_hdr *) SHLIBC_BASE)
+#define SHFURI_HDR	((struct shlibc_hdr *) SHFURI_BASE)
 
 #endif /* _MINIX_SHLIBC_H */
