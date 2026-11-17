@@ -139,6 +139,7 @@ FORWARD _PROTOTYPE( int do_getmap, (message *m_ptr) );
 #if (CHIP == ARM_CM)
 FORWARD _PROTOTYPE( int do_kstacks, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_flash, (message *m_ptr) );
+FORWARD _PROTOTYPE( int do_swap, (message *m_ptr) );
 #endif
 
 #if (SHADOWING == 1)
@@ -164,6 +165,7 @@ PUBLIC void sys_task()
 #if (CHIP == ARM_CM)
 	    case SYS_KSTACKS:	r = do_kstacks(&m);	break;
 	    case SYS_FLASH:	r = do_flash(&m);	break;
+	    case SYS_SWAP:	r = do_swap(&m);	break;
 #endif
 	    case SYS_EXEC:	r = do_exec(&m);	break;
 	    case SYS_XIT:	r = do_xit(&m);		break;
@@ -1245,6 +1247,36 @@ PUBLIC void inform()
 }
 
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				do_swap					     *
+ *===========================================================================*/
+PRIVATE int do_swap(m_ptr)
+message *m_ptr;			/* PROC1: the process, m1_i2: 1 out, 0 in */
+{
+/* MM moved a process's image to the swap device (R12.4) or back (R12.6).
+ * While P_SWAPPED is set the process is never scheduled (p_flags != 0),
+ * umap() gives 0 for it and nobody may send to it (R12.7).  Only for a
+ * user process that waits for MM's reply (RECEIVING), is not shadowed or
+ * doing physical I/O.  The reply clears mpu_proc: the MPU is reloaded.
+ */
+  struct proc *rp;
+
+  if (m_ptr->m_source != MM_PROC_NR || !isokusern(m_ptr->PROC1))
+	return(E_BAD_PROC);
+  rp = proc_addr(m_ptr->PROC1);
+  if (m_ptr->m1_i2 == 0) {
+	rp->p_flags &= ~P_SWAPPED;
+	return(OK);
+  }
+  if ((rp->p_flags & (P_SLOT_FREE | RECEIVING)) != RECEIVING
+		|| rp->p_shadow != 0 || rp->p_physio) return(EBUSY);
+  rp->p_flags |= P_SWAPPED;
+  return(OK);
+}
+#endif
+
+
 /*===========================================================================*
  *				umap					     *
  *===========================================================================*/
@@ -1271,6 +1303,9 @@ vir_bytes bytes;		/* # of bytes to be copied */
    */
 
   if (bytes <= 0) return( (phys_bytes) 0);
+#if (CHIP == ARM_CM)
+  if (rp->p_flags & P_SWAPPED) return( (phys_bytes) 0);	/* R12.7 */
+#endif
   vc = (vir_addr + bytes - 1) >> CLICK_SHIFT;	/* last click of data */
 
 #if (CHIP == ARM_CM)

@@ -362,3 +362,4 @@ wctomb
 write
 snprintf
 vsnprintf
+sys_swap

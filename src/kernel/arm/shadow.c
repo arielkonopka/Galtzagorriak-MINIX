@@ -86,7 +86,8 @@ int resident;			/* look for the resident one? */
   struct proc *q;
 
   for (q = BEG_USER_ADDR; q < END_PROC_ADDR; q++) {
-	if (q == p || (q->p_flags & P_SLOT_FREE)) continue;
+	/* a swapped process's addresses are not its own now (R12.4) */
+	if (q == p || (q->p_flags & (P_SLOT_FREE | P_SWAPPED))) continue;
 	if (q->p_map[D].mem_phys != p->p_map[D].mem_phys) continue;
 	if (resident ? q->p_shadow == 0 : q->p_shadow != 0) return q;
   }
