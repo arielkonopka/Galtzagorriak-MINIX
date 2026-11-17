@@ -48,7 +48,11 @@ PUBLIC int do_chmod()
   }
 
   /* Now make the change. Clear setgid bit if file is not in caller's grp */
-  rip->i_mode = (rip->i_mode & ~ALL_MODES) | (mode & ALL_MODES);
+  rip->i_mode = (rip->i_mode & ~(ALL_MODES | I_SET_STCKY_BIT))
+						| (mode & ALL_MODES);
+  /* The sticky bit (R3.7): on directories, set by their owner or root. */
+  if ((mode & I_SET_STCKY_BIT) && (rip->i_mode & I_TYPE) == I_DIRECTORY)
+	rip->i_mode |= I_SET_STCKY_BIT;
   if (!super_user && rip->i_gid != fp->fp_effgid)rip->i_mode &= ~I_SET_GID_BIT;
   rip->i_update |= CTIME;
   rip->i_dirt = DIRTY;

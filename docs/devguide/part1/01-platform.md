@@ -142,6 +142,8 @@ What eats the reserve, from experience in this tree:
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
   - `cfopen(path, mode)` reads a settings file from the card and falls back to the default in
     `/rom` (chapter 5);
+  - `snprintf`/`vsnprintf` store at most n - 1 characters and a null; unlike C99 they return
+    -1 when the output was cut (use them for every path or line built from outside data);
   - `printf` handles floating point, in software. Floating point is slow and makes code bigger;
     integer arithmetic (millivolts, tenths of a degree) is the habit here.
 - **Headers**: `<minix/...>` for system-specific things such as `<minix/fg.h>` (foreground

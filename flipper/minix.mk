@@ -428,7 +428,8 @@ $(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
 	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
-TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
+	   pkgbad pkgplant sticky pwdcheck
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
@@ -441,17 +442,22 @@ $(MB)/cmd/app/%.o: apps/%.c
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
-$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) tools/mkpkg.py
+# Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
+BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
+$(BADPKGS) &: tools/mkbadpkg.py
+	python3 -I tools/mkbadpkg.py $(PKGDIR)/bad
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(BADPKGS) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
-	   -D "Security tests (spec Phase 1)" \
-	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755)
+	   -D "Security tests (spec Phases 1 and 3)" \
+	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755) \
+	   $(foreach b,$(BADPKGS),/usr/tests/bad/$(notdir $(b))=$(b)$(COMMA)644)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.78
+BASE_VER := 3.80
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
