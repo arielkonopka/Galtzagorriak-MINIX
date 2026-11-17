@@ -108,8 +108,8 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   more).
 - **Alerts.** `/usr/lib/alert` shows title, text and time on `/dev/lcd`, rings, vibrates,
   starts an LED pattern, and waits for OK (done, exit 0), Back (dismiss, 1) or Up/Down
-  (snooze, 2); after the ring time it exits 3. Today it takes the screen only when no app holds
-  it; taking it from the foreground app is `ioctl(FG_PREEMPT)` **(planned, R7b.2)**.
+  (snooze, 2); after the ring time it exits 3. Taking the screen and the buttons from the
+  foreground app is `ioctl(FGIOCPREEMPT)` (R7b.2, `<minix/fg.h>`; chapter 4).
 - **Alarms always ring**, even in do-not-disturb (`/etc/notify.conf`, `~/.config/notify`), as the
   alarm itself says; reminders and info are held back.
 - **`libapp`** (`flipper/lib/app`, `#include "app.h"`, link `$(APP_OBJ)` as `timed` does in
@@ -123,7 +123,7 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   | `timer_next/prev/due()` | the time rules, for an app's own display ("next at 16:30") |
   | `notify_post(cat, title, text, opts)` | applies the policy and starts `alert` now; returns its pid, 0 when do-not-disturb holds it back |
   | `settings_get/set(app, key, ...)` | `Key: value` lines in `/home/flipper/apps_data/<app>/settings` (stock's `/ext/apps_data`) |
-  | `on_redraw(fn)` | `fn` runs when the screen comes back after an alert (`SIGWINCH`, R7b.2; returns -1 with `ENOSYS` until then) |
+  | `on_redraw(fn)` | `fn` runs when the screen comes back after an alert (R7b.2; returns -1 with `ENOSYS` until then: the kernel side ends a waiting button read with 0 bytes instead of a `SIGWINCH`, see chapter 4) |
 
   The manifest fields `Timers: yes`, `Notify: alarm|reminder|info` and `DeskMode: yes`
   (`mkpkg.py --timers --notify CAT --deskmode`) are checked by `pkg`; they are granted with the
