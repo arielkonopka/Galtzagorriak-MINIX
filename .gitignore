@@ -5,3 +5,4 @@ flipper_assets/
 __pycache__/
 flipper/lib/*/build/
 flipper/apps/*/build/
+flipper/tests/*/build/

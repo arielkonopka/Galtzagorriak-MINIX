@@ -19,8 +19,20 @@ gives the ROM once, then end of file.
 - With no key on the contacts the read fails at once with "No such device" (ENODEV).
 - A bad touch (wrong CRC, or a line held low) fails with "I/O error" (EIO); touch again.
 
-A read takes about 10 ms. Writing keys, emulating a key and the Cyfral/Metakom keys are
-**(planned)** (spec R6.7, later parts), as is an iButton app in the launcher.
+A read takes about 10 ms.
+
+The `ikey` command works like the stock firmware's:
+
+```
+ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8"
+ikey write Dallas 01A2B3C4D5E6F7A8
+```
+
+`ikey write` copies a key onto an RW1990 blank held on the contacts (both kinds, RW1990.1 and .2,
+are tried) and reads it back; keep the blank on the contacts until it says "Write success" (a few
+seconds). The 16 hex digits are the whole ROM, the CRC byte last, as `ikey read` prints it.
+Emulating a key and the Cyfral/Metakom keys are **(planned)** (spec R6.7, later parts), as is
+an iButton app in the launcher.
 
 ## Voltages on the header pins (`/dev/adc`)
 
@@ -83,17 +95,43 @@ Hold a tag (a card, a key fob) flat against the middle of the Flipper's back:
 ```
 rfid
 EM4100 04 00 98 3D C5
+  FC: 152 Card: 15813 CL:64
+  DEZ 8: 09977285
+  DEZ 10: 0009977285
 ```
 
-The number is the one the stock app shows and saves (`Data:` in its `.rfid` files). `rfid -r`
-also prints the timings, `-n N` makes up to N attempts of half a second (default 4). Without a
-tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
-as a summary. `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
-62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders follow
-(spec 9.0), so for now use them with `-r` to see the timings. Members of `gui` and root may read
-`/dev/rfid`: each read turns the field on for half a second and returns the times between the
-changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)` chooses the field
-(`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
+The first line is the protocol and the tag's data as the stock app shows and saves it (`Data:` in
+its `.rfid` files); the lines under it are what the stock app's info screen shows. `rfid -r` also
+prints the timings, `-n N` makes up to N attempts of half a second (default 4, more while a tag
+has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. Without a
+tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
+62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
+use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
+and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
+times between the changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)`
+chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
+
+`rfid` knows the 25 protocols of the Unleashed firmware (its `lib/lfrfid`, compiled unchanged);
+`rfid list` shows them:
+
+| Protocol | Maker | Modulation | Read today | Emulate today |
+|---|---|---|---|---|
+| EM4100, EM4100/32, EM4100/16 | EM-Micro | Manchester RF/64, /32, /16 | yes | yes |
+| Electra | Electra | Manchester RF/64 | yes | yes |
+| FDX-B (animal tags) | ISO 11784/5 | diphase RF/32 | yes | yes |
+| Viking, Gallagher, Noralsy | | Manchester RF/32 | yes | yes |
+| Radio Key | Securakey | Manchester RF/40 | yes | yes |
+| Jablotron | Jablotron | diphase RF/64 | yes | yes |
+| GProxII | Guardall | biphase RF/64 | yes | yes |
+| PAC/Stanley | | direct RF/32 | yes | yes |
+| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox, IoProxXSF | HID and others | FSK | **(planned)** | **(planned)** |
+| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | **(planned)** |
+
+Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
+tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
+Reading and emulating the FSK and PSK ones waits for
+more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
+already there), and emulation longer than 512 segments (their frames are 540 to 3534).
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
@@ -103,7 +141,22 @@ rfid write EM 00 DE AD BE EF
 written (T5577): EM4100 00 DE AD BE EF
 ```
 
-Or copy one tag onto another, without typing the number:
+Any protocol is written the same way: its name from `rfid list` (case, spaces, `-` and `/` do
+not matter; `EM` is EM4100) and its data bytes, or `-f FILE` for a saved `.rfid` file:
+
+```
+rfid write viking 12 34 56 78
+written (T5577): Viking 12 34 56 78
+  ID: 12345678
+rfid write H10301 2A 30 39
+written (T5577), not read back: H10301 is FSK2a, which rfid reads after T19b
+```
+
+Each protocol uses its own block layout (the stock firmware's). A tag of a protocol `rfid` can
+read is read back until it is right; an FSK or PSK tag is written once and said to be unchecked.
+`-em4305` writes an EM4305 only (the protocols that have an EM4305 layout).
+
+Or copy one tag onto another, without typing the number (any protocol `rfid` can read):
 
 ```
 rfid copy
@@ -117,8 +170,8 @@ written by another cloner may be), or a kind that cannot be written. Each round 
 both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), because a tag that
 wants a password only answers now and then.
 
-`-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
-word (some door entry systems try to overwrite a copy they find). Write the password down:
+`-pass HEX` gives a T5577 that password as well (not for HIDExt and Indala224, which fill
+block 7), so that nothing can rewrite it without the word (some door entry systems try to overwrite a copy they find). Write the password down:
 changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
 unless `-pass` gives a new one). `-lock` instead sets the chip's lock bit, which can
 never be undone by anyone, you included. A write to `/dev/rfid` is
@@ -127,18 +180,24 @@ spaces.
 
 ### Emulating a tag
 
-`rfid emulate EM B0 B1 B2 B3 B4` makes the Flipper pretend to be that EM4100 tag for a
-reader — hold its back to the reader, Ctrl-C stops:
+`rfid emulate PROTOCOL BYTES` (or `rfid emulate -f FILE`) makes the Flipper pretend to be that
+tag for a reader — hold its back to the reader, Ctrl-C stops:
 
 ```
 rfid emulate EM 04 00 98 3D C5
 emulating EM4100 04 00 98 3D C5; hold to a reader, Ctrl-C to stop
+rfid emulate fdx-b 00 12 34 56 78 A0 7C 00 01 00 00
+emulating FDX-B 00 12 34 56 78 A0 7C 00 01 00 00
+  ID: 020-130630305792
+  ...
+(215 segments); hold to a reader, Ctrl-C to stop
 ```
 
 The reader's own field is the clock: the kernel counts the reader's carrier and loads the
 antenna in step with it (`ioctl` `RFIDIOCEMU` on `/dev/rfid`), so the waveform cannot drift and
 the CPU does nothing while it runs. With no reader near, nothing is sent (a tag is passive).
-Only EM4100 is emulated for now; the other protocols (HID, Indala) are **(planned)**.
+One frame of the tag must fit 512 steps of the antenna: the protocols marked "Emulate today"
+above do; the FSK and PSK ones are **(planned)**.
 
 ### The RFID app
 
@@ -150,7 +209,9 @@ The **RFID** app on the launcher ties reading, saving, writing and emulating tog
   **Write to tag** (onto a blank fob) or **Delete**.
 - **Add manually** — type a number (Left/Right pick a byte, Up/Down change it) and save it.
 
-Reading and writing use the `rfid` command underneath; emulating is `RFIDIOCEMU`.
+Reading and writing use the `rfid` command underneath; emulating is `RFIDIOCEMU`. The app
+handles EM4100 tags; it skips `.rfid` files of other protocols (saved with `rfid -o`), which
+`rfid write -f` and `rfid emulate -f` take. All protocols in the app are **(planned)**.
 
 ### Clearing a password and reading blocks
 

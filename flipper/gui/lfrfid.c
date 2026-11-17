@@ -166,7 +166,12 @@ static int load_tag(const char *base, unsigned char id[5])
 
 	sprintf(path, "%s/%s", DIR_RFID, base);
 	if ((f = fopen(path, "r")) == NULL) return 0;
-	while (fgets(line, sizeof line, f) != NULL)
+	while (fgets(line, sizeof line, f) != NULL) {
+		/* `rfid -o` saves every protocol (T19a): this app plays
+		 * EM4100 only, until R9.0.9 (a FDX-A also has 5 bytes) */
+		if (strncmp(line, "Key type:", 9) == 0
+		    && strcmp(line + 9, " EM4100\n") != 0
+		    && strcmp(line + 9, " EM4100\r\n") != 0) break;
 		if ((p = strstr(line, "Data:")) != NULL
 		    && sscanf(p + 5, "%x %x %x %x %x",
 				&v[0], &v[1], &v[2], &v[3], &v[4]) == 5) {
@@ -174,6 +179,7 @@ static int load_tag(const char *base, unsigned char id[5])
 			ok = 1;
 			break;
 		}
+	}
 	fclose(f);
 	return ok;
 }

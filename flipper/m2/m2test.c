@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/times.h>
 #include <minix/fg.h>
+#include <minix/ibutton.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -769,6 +770,38 @@ static void gpio_tests(void)
 }
 #endif
 
+#ifdef BOARD_QEMU
+/* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
+ * it reads high). */
+static void ibutton_tests(void)
+{
+	struct ib_run q;
+	int fd = open("/dev/ibutton", O_RDWR), r;
+
+	if (fd < 0) {
+		check(0, "ibutton: open");
+		return;
+	}
+	memset(&q, 0, sizeof q);
+	q.op[0] = IB_RESET; q.op[1] = IB_WBYTE; q.op[2] = 0x33;
+	q.op[3] = IB_RBYTE; q.op[4] = IB_W1;
+	q.nop = 5;
+	r = ioctl(fd, IBIOCRUN, &q);
+	check(r == 0 && q.nout == 2 && q.out[0] == 0 && q.out[1] == 0xFF,
+		"ibutton: IBIOCRUN reset (none), write, read (line high)");
+	q.op[0] = 0x55; q.nop = 1;
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: an unknown step -> EINVAL");
+	q.op[0] = IB_WBYTE; q.nop = 1;		/* its value missing */
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: a byte without its value -> EINVAL");
+	q.nop = IB_MAXOP + 1;
+	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
+		"ibutton: too many steps -> EINVAL");
+	close(fd);
+}
+#endif
+
 static void furihello_test(void)
 {
 	static const unsigned char keys[4] = { 0x10, 0x20, 0x02, 0x10 };
@@ -1090,11 +1123,23 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
+	 * render and fill their T5577 blocks; the line "decoders: N B of
+	 * heap" is the R9.0.1 measurement (budget 6 KB). */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/rfid", "rfid", "list", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
 #endif
 	memtest_tests();
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	ibutton_tests();
 	gpio_tests();
 	card_tests();
 	preempt_tests();

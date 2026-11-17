@@ -73,6 +73,7 @@
 #include <minix/fg.h>
 #include <minix/rtc.h>
 #include <minix/rfid.h>
+#include <minix/ibutton.h>
 #include <signal.h>
 
 #define LCD_MINOR	0
@@ -263,6 +264,7 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
@@ -397,6 +399,7 @@ PUBLIC void flipdev_task()
 	case DEV_IOCTL:
 		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
+		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
 		  : fg_ioctl(&fm);
 		break;
 	case DEV_SELECT:
@@ -808,6 +811,55 @@ phys_bytes user;
   if (crc != rom[7] || rom[0] == 0) return(EIO);	/* a bad touch */
   phys_copy(vir2phys(rom), user, (phys_bytes) 8);
   return(8);
+}
+
+
+/*===========================================================================*
+ *				ow_run					     *
+ *===========================================================================*/
+PRIVATE int ow_run(m_ptr)
+message *m_ptr;
+{
+/* IBIOCRUN (R6.7 part 2): 1-Wire master steps for a program (an RW1990
+ * blank written by ikey).  The struct is on the task's stack (no static
+ * RAM); each bit slot masks interrupts as ow_bit does; pauses are the
+ * caller's.  At most IB_MAXOP steps a call (a few ms). */
+  struct ib_run q;
+  phys_bytes user;
+  int i, j, v;
+
+  if (m_ptr->TTY_REQUEST != IBIOCRUN) return(ENOTTY);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.nop > IB_MAXOP) return(EINVAL);
+  q.nout = 0;
+  for (i = 0; i < q.nop; i++) {
+	switch (q.op[i]) {
+	case IB_W0:
+	case IB_W1:
+		(void) ow_bit(q.op[i]);
+		break;
+	case IB_RESET:
+		if (q.nout >= IB_MAXOUT) return(EINVAL);
+		q.out[q.nout++] = ow_reset();
+		break;
+	case IB_WBYTE:
+		if (++i >= q.nop) return(EINVAL);
+		for (j = 0; j < 8; j++) (void) ow_bit(q.op[i] >> j & 1);
+		break;
+	case IB_RBYTE:
+		if (q.nout >= IB_MAXOUT) return(EINVAL);
+		for (v = j = 0; j < 8; j++) v |= ow_bit(1) << j;
+		q.out[q.nout++] = (unsigned char) v;
+		break;
+	default:
+		return(EINVAL);
+	}
+  }
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
 }
 
 
