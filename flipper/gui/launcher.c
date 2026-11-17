@@ -11,6 +11,11 @@
  * apps marked "root" keep root's rights.  The launcher waits until the app
  * exits (BACK in every app), then redraws.
  *
+ * A window app ("=" before its program, spec K.8) does not get the screen:
+ * it describes its windows on a pipe and the launcher draws them and
+ * moves through them itself (winsrv.c), so the app needs no GUI code and
+ * an open one costs about 4 KB.
+ *
  * Pages (R5.6a.4): the app list, and Left to the settings page (icons and
  * the hint line on or off, /etc/launcher.conf).  A page is an entry of
  * pages[]: its name, rows, OK and hint text; later pages (the desktop,
@@ -39,6 +44,7 @@
 #include <unistd.h>
 #include "gui.h"
 #include "appline.h"
+#include "winsrv.h"
 
 #define MAXAPPS	16
 #define MAXARGS	8
@@ -62,6 +68,7 @@ static unsigned char opt;		/* OPT_* below */
 #define OPT_ICONS	1
 #define OPT_HINTS	2
 #define OPT_BATT	4
+#define OPT_LOG		8		/* GuiLog: on (spec K.3, K.8) */
 /* The battery on the title bar (owner 2026-11-17): the charge in percent
  * (BAT_NONE: not read yet or no gauge) and BAT_CHG while charging, read
  * from /dev/power at a redraw when the last reading is a minute old - so
@@ -116,8 +123,9 @@ static void load_apps(const char *apps_file)
 	fclose(f);
 }
 
-/* /etc/launcher.conf: "Icons: on|off", "Hints: on|off" (stock Key: value).
- * Missing file or key: on. */
+/* /etc/launcher.conf: "Icons: on|off", "Hints: on|off", "Battery: on|off"
+ * (stock Key: value; missing file or key: on) and "GuiLog: on|off" (off
+ * when missing): the window apps' records and events on the console. */
 static void load_conf(const char *conf_file)
 {
 	FILE *f;
@@ -128,7 +136,8 @@ static void load_conf(const char *conf_file)
 	while (fgets(line, sizeof line, f) != NULL) {
 		int bit = strncmp(line, "Icons:", 6) == 0 ? OPT_ICONS
 			: strncmp(line, "Hints:", 6) == 0 ? OPT_HINTS
-			: strncmp(line, "Battery:", 8) == 0 ? OPT_BATT : 0;
+			: strncmp(line, "Battery:", 8) == 0 ? OPT_BATT
+			: strncmp(line, "GuiLog:", 7) == 0 ? OPT_LOG : 0;
 		char *v = strchr(line, ':') + 1;
 
 		if (bit == 0) continue;
@@ -147,6 +156,7 @@ static void save_conf(const char *conf_file)
 	fprintf(f, "Icons: %s\nHints: %s\nBattery: %s\n",
 		opt & OPT_ICONS ? "on" : "off", opt & OPT_HINTS ? "on" : "off",
 		opt & OPT_BATT ? "on" : "off");
+	if (opt & OPT_LOG) fprintf(f, "GuiLog: on\n");
 	fclose(f);
 }
 
@@ -340,6 +350,9 @@ static char *run(struct app *ap)
 		sleep(2);
 		return NULL;
 	}
+	if (ap->cmd[0] == '=')		/* a window app: the launcher draws */
+		return win_run(ap->label, ap->cmd + 1, pw, (opt & OPT_LOG) != 0);
+	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
 	gr = getgrnam("gui");		/* before: stdio state is ours */
@@ -408,8 +421,16 @@ int main(int argc, char **argv)
 		if (sel >= top + vis) top = sel - vis + 1;
 		if (top > 0 && top + vis > n) top = n > vis ? n - vis : 0;
 		draw(pg, sel, top, note);
-		/* a notice: the hint line back after NOTE_MS or at a key */
-		k = gui_input(&in, KEY_LEFT | KEY_RIGHT, note != NULL ? NOTE_MS : -1);
+		/* a notice: the hint line back after NOTE_MS or at a key; a
+		 * closed window app: its SIGTERM when its 2 s are over */
+		win_reap(0);
+		i = win_pending();
+		if (note != NULL && (i < 0 || i > NOTE_MS)) i = NOTE_MS;
+		k = gui_input(&in, KEY_LEFT | KEY_RIGHT, i);
+		if (k == 0 && note != NULL && win_pending() >= 0) {
+			win_reap(0);	/* only the window app's time */
+			continue;
+		}
 		note = NULL;
 		if (k == 0) continue;
 		if (k == KEY_UP) sel = sel > 0 ? sel - 1 : (n > 0 ? n - 1 : 0);

@@ -16,7 +16,7 @@
  *	gm_show();
  *	for (;;) switch (gm_event(ev, sizeof ev, f, GM_FIELDS)) {
  *	case GM_OK: ... f[1] the window, f[2] the row's key
- *	case GM_SUBMIT: ... f[2..] KEY=VALUE, see gm_kv()
+ *	case GM_SUBMIT: ... f[2..] KEY=VALUE up to a NULL, see gm_kv()
  *	case GM_CLOSE: exit(0);
  *	}
  *

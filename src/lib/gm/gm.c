@@ -2,6 +2,7 @@
  * of state, the records built in the caller's buffer and written with
  * write(2) whole lines at a time (one write <= PIPE_BUF, so a record never
  * arrives cut in two). */
+#include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -270,8 +271,9 @@ static int split(char *s, char **f, int nf)
 
 /* The next event (waits for it: the app sleeps in read, 0 wakeups).  buf
  * is the same buffer at every call (it keeps the bytes of the next
- * events); f gets the fields (f[0] the event, f[1] the window), valid
- * until the next call.  An overlong event is dropped. */
+ * events); f gets the fields (f[0] the event, f[1] the window) and a
+ * NULL after the last (at most nf - 1 fields), valid until the next call.
+ * An overlong event is dropped. */
 int gm_event(char *buf, int size, char **f, int nf)
 {
 	char *nl;
@@ -306,12 +308,14 @@ int gm_event(char *buf, int size, char **f, int nf)
 		if (n <= 0) {			/* the desktop is gone */
 			ev_len = 0;
 			f[0] = buf;
+			f[1] = NULL;
 			buf[0] = 0;
 			return GM_CLOSE;
 		}
 		ev_len = (short) (ev_len + n);
 	}
-	n = split(buf, f, nf);
+	n = split(buf, f, nf - 1);
+	f[n] = NULL;
 	if (strcmp(f[0], "ok") == 0 && n >= 3) return GM_OK;
 	if (strcmp(f[0], "submit") == 0 && n >= 2) return GM_SUBMIT;
 	if (strcmp(f[0], "back") == 0 && n >= 2) return GM_BACK;
