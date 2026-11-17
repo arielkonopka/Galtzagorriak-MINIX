@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __minix
+#include <sys/ioctl.h>
+#include <minix/fg.h>
+#endif
 #include "nat.h"
 
 char *nat_hm(char *b, int m)
@@ -87,6 +91,20 @@ static int passwd(const char *name, uid_t *uid, gid_t *gid)
 	}
 	close(fd);
 	return r;
+}
+
+int nat_foreground(void)
+{
+#ifdef __minix
+	int fd, me = getpid(), r;
+
+	if ((fd = open("/dev/lcd", O_RDONLY)) < 0) return -1;
+	r = ioctl(fd, FGIOCSET, &me);
+	close(fd);
+	return r;
+#else
+	return 0;
+#endif
 }
 
 int nat_become(const char *name)

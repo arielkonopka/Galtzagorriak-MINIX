@@ -114,16 +114,16 @@ static void load(void)
 	if (r.sel > r.n) r.sel = r.n;
 }
 
-/* The lowest free id remind-N. */
+/* The lowest id remind-N not in the list (no file lookups). */
 static void new_id(char* id)
 {
-	struct app_timer t;
-	int i;
+	int i, j;
 
-	for (i = 1; i < 10000; i++) {
+	for (i = 1; ; i++) {
 		strcpy(id, PREFIX);
 		nat_num(id + sizeof PREFIX - 1, i);
-		if (timer_read(id, &t) < 0 && errno == ENOENT) return;
+		for (j = 0; j < r.n && strcmp(r.list[j].id, id) != 0; j++) ;
+		if (j == r.n) return;
 	}
 }
 
@@ -363,7 +363,8 @@ static void input(InputEvent* e, void* ctx)
 {
 	FuriMessageQueue* q = ctx;
 
-	if (e->type == InputTypeShort || (e->type == InputTypeRepeat
+	/* on the press, as flipper/gui (T3: L1 counts from the press) */
+	if (e->type == InputTypePress || (e->type == InputTypeRepeat
 	    && e->key != InputKeyOk && e->key != InputKeyBack))
 		furi_message_queue_put(q, e, 0);
 }
@@ -429,6 +430,7 @@ int main(int argc, char** argv)
 	vp = view_port_alloc();
 	view_port_draw_callback_set(vp, draw, NULL);
 	view_port_input_callback_set(vp, input, q);
+	(void) nat_foreground();		/* as root, before the GUI */
 	gui = furi_record_open(RECORD_GUI);	/* opens the screen, buttons */
 	if (nat_become(APP) < 0) {
 		fprintf(stderr, "remind: no user " APP " (pkg install remind)\n");

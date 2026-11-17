@@ -187,18 +187,16 @@ static int next(time_t now, time_t* when)
 	return best;
 }
 
+/* The lowest id alarm-N not in the list (on or off; no file lookups). */
 static void new_id(char* id)
 {
-	struct app_timer t;
-	char path[64];
-	int i;
+	int i, j;
 
-	for (i = 1; i < 10000; i++) {
+	for (i = 1; ; i++) {
 		strcpy(id, PREFIX);
 		nat_num(id + sizeof PREFIX - 1, i);
-		if (timer_read(id, &t) < 0 && errno == ENOENT
-		    && (off_path(path, id) < 0 || access(path, F_OK) < 0))
-			return;
+		for (j = 0; j < r.n && strcmp(r.list[j].id, id) != 0; j++) ;
+		if (j == r.n) return;
 	}
 }
 
@@ -610,7 +608,8 @@ static void input(InputEvent* e, void* ctx)
 {
 	FuriMessageQueue* q = ctx;
 
-	if (e->type == InputTypeShort || (e->type == InputTypeRepeat
+	/* on the press, as flipper/gui (T3: L1 counts from the press) */
+	if (e->type == InputTypePress || (e->type == InputTypeRepeat
 	    && e->key != InputKeyOk && e->key != InputKeyBack))
 		furi_message_queue_put(q, e, 0);
 }
@@ -694,6 +693,7 @@ int main(int argc, char** argv)
 	view_port_draw_callback_set(vp, draw, NULL);
 	view_port_input_callback_set(vp, input, q);
 	r.bl_fd = open("/dev/backlight", O_RDWR);	/* group gui: now */
+	(void) nat_foreground();		/* as root, before the GUI */
 	gui = furi_record_open(RECORD_GUI);	/* the screen, the buttons */
 	if (nat_become(APP) < 0) {
 		fprintf(stderr, "alarm: no user " APP " (pkg install alarm)\n");

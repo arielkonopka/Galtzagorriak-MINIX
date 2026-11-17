@@ -484,8 +484,8 @@ $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat
 	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
 $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(APP_OBJ) $(FURI_OBJ) $(FURI_GUI_OBJ)))
-CHMEM_remind := 4096	# 7b.1: gui stack 2 KB + Canvas + the list
-CHMEM_alarm  := 4096	# 7b.2
+CHMEM_remind := 12288	# 7b.1: libfuri main stack 3 KB, gui thread 2 KB, Canvas 1.1 KB, the list
+CHMEM_alarm  := 12288	# 7b.2: the same
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -511,7 +511,8 @@ $(MB)/cmd/app/%.o: apps/%.c
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.0.tar \
+	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -531,6 +532,19 @@ $(PKGDIR)/timed_1.0.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
+# The native apps (spec 7b.1, 7b.2): their own users, the launcher line.
+$(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
+		rootfs/remind.prerm
+	python3 -I tools/mkpkg.py -n remind -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify reminder --flash \
+	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
+	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
+$(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+		rootfs/alarm.prerm
+	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify alarm --deskmode --flash \
+	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
+	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.

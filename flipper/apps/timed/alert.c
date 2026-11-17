@@ -31,6 +31,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -324,8 +325,14 @@ int main(int argc, char **argv)
 		}
 		if (k == 0) {
 			alarm(STEP);
+			errno = 0;
 			k = gui_key();
 			alarm(0);
+			/* EIO: another program's read of /dev/buttons is
+			 * waiting (the launcher's main screen; the kernel
+			 * hands it the next key, R4b.8).  Never spin: look
+			 * again in a second. */
+			if (k == 0 && errno == EIO) sleep(1);
 		}
 		if (k & KEY_OK) { r = 0; break; }
 		if (k & KEY_BACK) { r = 1; break; }

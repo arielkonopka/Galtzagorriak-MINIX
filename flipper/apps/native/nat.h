@@ -18,6 +18,11 @@ time_t nat_midnight(time_t t, int off);
 /* A small unsigned number into b (returns b). */
 char *nat_num(char *b, unsigned v);
 
+/* Take the screen and the buttons (R4b.8) when nobody holds them: the
+ * launcher gives them to the apps it starts; started from a shell (tests)
+ * the launcher would read the keys.  0 or -1 (someone else has them). */
+int nat_foreground(void);
+
 /* Run as the app's own user (spec A.3) from here on: started as root
  * (by the launcher, /etc/apps "Remind:root:..."), after it has opened the
  * screen, the buttons and the backlight it keeps the descriptors and
