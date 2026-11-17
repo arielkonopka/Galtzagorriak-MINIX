@@ -155,6 +155,21 @@ struct kstack {
 			 * install its text in flash (reply 1: call again
 			 * with m1_i3 4, one flash step each, until not 1),
 			 * 1: remove it, 2: bind, 3: count unbound */
+/* Swap to the SD card (Phase 12, R12.28).  MMSWAPON and MMSWAPRES are the
+ * spec's svrctl() names; here they are MEMINFO requests like the above. */
+#define MI_SWAPON	7	/* root: m1_i1 the partition (0: off), m1_i3
+			 * SW_PLAIN or SW_CRYPT (12b, not yet: ENOSYS) */
+#define MMSWAPON	MI_SWAPON
+#define MI_SWAPRES	8	/* root: m1_i1 the idle reserve, KB (0: off) */
+#define MMSWAPRES	MI_SWAPRES
+#define MI_SWAPINFO	9	/* struct swinfo to m1_p1 (free -v) */
+#define MI_SWAPTEST	10	/* root, tests: m1_i1 1: swap out pid m1_i3
+			 * now, 2: act as if the card were pulled */
+#define MI_FGEXEC	11	/* root: the next child's exec is the
+			 * foreground app: placed low (R12.22) */
+#define SW_OFF		0
+#define SW_PLAIN	1
+#define SW_CRYPT	2
 
 /* sys_flash() operations. */
 #define FL_INFO		0	/* cache region: base, size; with addr: */
@@ -181,6 +196,19 @@ struct fcinfo {
   unsigned long inst_used;	/* bytes in pages of installed programs */
   int inst_entries;		/* programs installed */
   unsigned long sfsa;		/* CPU2's flash starts here */
+};
+
+struct swinfo {			/* MI_SWAPINFO (R12.8) */
+  int mode;			/* SW_OFF, SW_PLAIN; 0x80: card lost */
+  int dev;			/* the swap partition, 0: none */
+  unsigned res_kb;		/* the idle reserve, KB */
+  unsigned short nout, nin;	/* swap-outs and swap-ins since boot */
+  int nproc;			/* swapped processes, in p[] */
+  struct {
+	int pid, slot;
+	char name[8];
+	unsigned long bytes;	/* RAM it gave back */
+  } p[16];
 };
 
 struct fccount {		/* MI_FCBUDGET (R2b.11) */

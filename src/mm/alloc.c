@@ -287,6 +287,94 @@ phys_clicks clicks;		/* amount of memory requested */
 }
 
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				alloc_mem_at				     *
+ *===========================================================================*/
+PUBLIC int alloc_mem_at(base, clicks)
+phys_clicks base;		/* exactly here */
+phys_clicks clicks;		/* this much */
+{
+/* Allocate [base, base + clicks) if it is all free (a swap-in, R12.6: an
+ * image goes back to its own addresses).  OK or NO_MEM-like ENOMEM. */
+  register struct hole *hp, *prev_ptr, *new_ptr;
+  phys_clicks tail;
+
+  prev_ptr = NIL_HOLE;
+  for (hp = hole_head; hp != NIL_HOLE; prev_ptr = hp, hp = hp->h_next) {
+	if (hp->h_base > base) break;
+	if (hp->h_base + hp->h_len < base + clicks) continue;
+	tail = hp->h_base + hp->h_len - (base + clicks);
+	if (hp->h_base == base) {
+		hp->h_base += clicks;
+		hp->h_len -= clicks;
+		if (hp->h_len == 0) del_slot(prev_ptr, hp);
+		return(OK);
+	}
+	if (tail != 0) {		/* the hole splits in two */
+		if ((new_ptr = free_slots) == NIL_HOLE) return(ENOMEM);
+		free_slots = new_ptr->h_next;
+		new_ptr->h_base = base + clicks;
+		new_ptr->h_len = tail;
+		new_ptr->h_next = hp->h_next;
+		hp->h_next = new_ptr;
+	}
+	hp->h_len = base - hp->h_base;
+	return(OK);
+  }
+  return(ENOMEM);
+}
+
+
+/*===========================================================================*
+ *				hole_end				     *
+ *===========================================================================*/
+PUBLIC phys_clicks hole_end(pos)
+phys_clicks pos;
+{
+/* The end of the hole that holds click pos, or 0. */
+  register struct hole *hp;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+	if (pos >= hp->h_base && pos < hp->h_base + hp->h_len)
+		return(hp->h_base + hp->h_len);
+  return(0);
+}
+
+
+/*===========================================================================*
+ *				hole_with				     *
+ *===========================================================================*/
+PUBLIC phys_clicks hole_with(base, clicks)
+phys_clicks base, clicks;
+{
+/* How big a hole freeing [base, base + clicks) would make, with the holes
+ * on either side (swap victims, R12.5). */
+  register struct hole *hp;
+  phys_clicks n = clicks;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+	if (hp->h_base + hp->h_len == base || hp->h_base == base + clicks)
+		n += hp->h_len;
+  return(n);
+}
+
+
+/*===========================================================================*
+ *				mem_free				     *
+ *===========================================================================*/
+PUBLIC phys_clicks mem_free()
+{
+/* All free memory, in clicks. */
+  register struct hole *hp;
+  phys_clicks n = 0;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next) n += hp->h_len;
+  return(n);
+}
+#endif
+
+
 /*===========================================================================*
  *				do_meminfo				     *
  *===========================================================================*/
@@ -333,6 +421,8 @@ PUBLIC int do_meminfo()
   }
   if (mm_in.m1_i2 == MI_INSTALL) return(do_install());
   if (mm_in.m1_i2 == MI_RESET) return(sys_kstacks(who, (char *) 0, 0));
+  if (mm_in.m1_i2 >= MI_SWAPON && mm_in.m1_i2 <= MI_FGEXEC)
+	return(sw_ctl());			/* swap.c (Phase 12) */
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);
