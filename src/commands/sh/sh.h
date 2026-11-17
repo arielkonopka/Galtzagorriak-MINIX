@@ -180,11 +180,7 @@ extern	char	*elinep;
 /*
  * other functions
  */
-#ifdef __STDC__
-int (*inbuilt(char *s ))(void);
-#else
-int (*inbuilt())();
-#endif
+_PROTOTYPE(int inbuilt , (char *s ));
 _PROTOTYPE(char *rexecve , (char *c , char **v , char **envp ));
 _PROTOTYPE(char *space , (int n ));
 _PROTOTYPE(char *strsave , (char *s , int a ));
@@ -376,8 +372,12 @@ _PROTOTYPE(void setarea , (char *cp , int a ));
 _PROTOTYPE(int getarea , (char *cp ));
 _PROTOTYPE(void freearea , (int a ));
 _PROTOTYPE(void freecell , (char *cp ));
+_PROTOTYPE(void freeshared , (void));
 
 Extern	int	areanum;	/* current allocation area */
+/* Galtzagorriak: set in a vfork child (it runs in our memory): the heap
+ * must not grow there, MM would give the room to the child, not to us. */
+Extern	int	invfork;
 
 #define	NEW(type) (type *)getcell(sizeof(type))
 #define	DELETE(obj)	freecell((char *)obj)
