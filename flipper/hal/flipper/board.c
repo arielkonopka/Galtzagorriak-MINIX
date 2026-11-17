@@ -3023,8 +3023,10 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM2->EGR = TIM_EGR_UG;
 	TIM2->SR = 0;
 	TIM2->DIER = TIM_DIER_CC4DE;
+	t0 = (COMP1->CSR & COMP_CSR_VALUE) != 0;	/* the level the first
+						 * captured edge leaves */
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
-	return 0;
+	return (int) t0;
 }
 
 /* R9.0.5: the stream's DMA interrupts (the half and the end of the ring):
