@@ -292,6 +292,26 @@ Owner request outside the milestone order (H-lane priority 4, "owner requests").
 - R9.0.7 Hitag µ / Hitag S write targets, R9.0.8 RAW read, R9.0.9 `lfrfid` app (protocol name, rendered data, "Add manually" for all 25), in that order, after the above.
 - Device checks AC9.0.2–AC9.0.4 (results table in PORTING.md, `lat` numbers in the PR); kernel RAM ≤ +32 B in total.
 
+## T20. Swappable memory blocks for apps (spec 12h, R12.34–R12.38; owner request 2026-11-17): milestone M4
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rules: kernel 0 B, MM ≤ +39 B, no noticeable CPU on the foreground path, writes only for changed data, nothing at process exit. Needs plain swap (12a, `sw_on`, `sw_io`, `sw_step`) on main, which it is.
+
+### T20a (`lane:cloud`, QEMU): MM, libraries, Berry
+- R12.34/R12.35 in `src/mm/swap.c` (or a new `src/mm/blk.c` sharing `sw_io`): 256 extents after the 16 slots, reservation table (2 B per slot) with `blk_open`/`blk_close`, first fit, grow in place, shrink, half-of-space limit for non-root, header through the last `mbuf` sector, validity check, boot stamp (+4 B, bumped on pid wrap in `forkexit.c`). `make ramcheck`: MM ≤ +39 B, kernel +0 B.
+- R12.36: `MEMINFO` request `MI_BLK` with the descriptor in the caller's memory; GET / PUT / partial PUT / `BLK_IFCHANGED` / INFO; buffer bounds checked against the caller's segments.
+- R12.37: `BLKWAIT` deferral of background callers into `sw_step()` (order: user-awaited swap-in, then blocks, then reserve), shared write budget `sw.wkb`; `NOSWAP` → `EPERM` in `plain`; `ENXIO` without a kill on card loss.
+- R12.38: `blk=` in `/etc/rc.conf` (default `off`) and `/etc/rc`; `<blk.h>` in libc; `libblk`; Berry module `blk` with `vbytes` (when the Berry VM is on main; otherwise a follow-up in the same task).
+- R12.39 first (the layout needs it): `dv_base` in sectors in `drvlib.c`/`disk.c`, partition ioctls, `mkpart` placement past 4 GiB (each partition < 4 GiB), host `parttest` cases at 4/8/255 GiB, QEMU sparse 64 GB image. Kernel RAM +0 B (`make ramcheck`).
+- `mkpart` + `/etc/setup` (R12.34): on cards of 8 GB up to below 32 GB swap = 50 % of the space after `/usr`, placed at the end of the card, at most 4 GiB − 1 MiB each for swap and `/home` (`82:50%@end`, MBR entry still hd3), `/home` before it; smaller cards unchanged; new installs only. QEMU tests with sparse 8 GB and 64 GB images. `growfs` is a later task, not this one.
+- Cards ≥ 32 GB (R12.34): swap = `hd3` at the end with four 4 GiB swap subpartitions `hd3a`–`hd3d` (`mkpart` writes the subpartition table), MM uses `hd3a` for slots and spreads the block areas 4 per subpartition (+1 B). QEMU with a sparse 64 GB image; a missing `hd3c` only disables those 4 areas.
+- R12.40 MM side: `BLKUSED` bit, 16-bit discard mask, idle discard in `sw_step()`, `blk_discard()`/`vm_drop()`; QEMU `DIOCDISCARD` zero-fills.
+- Tests AC12.18–AC12.22 and AC12.24, AC12.26 in `tests/blk` and the M2 self-test; a test hook to force a pid wrap.
+- Docs: CHANGELOG line, `man 3 blk`, `man 3 libblk`, manual chapter for app authors (12f), devguide note.
+
+### T20b (`lane:local`, Flipper): measurements only
+- AC12.25: a 64 GB or larger card, setup and use past 4 GiB.
+- R12.40 HAL: read `DISCARD_SUPPORT` (ACMD13) at init, `hal_disk_discard()` (CMD32/33/38 arg 1, timeout, card-detect), `DIOCDISCARD`; AC12.26 on an SD 5.1 card.
+- AC12.23: GET/PUT times (512 B, 1 KB, 4 KB) and L1/L2 with a background block reader and a foreground 1 MB map scroll; numbers in PORTING.md.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.

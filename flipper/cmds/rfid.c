@@ -41,6 +41,11 @@
  *					password, -with HEX, then the proxmark3
  *					dictionary (known copier passwords); it
  *					stops at the first that opens the tag
+ *		rfid -c 125|psk|134	read with that field: 125 kHz (the
+ *					default), PSK tags' 62.5 kHz at 25 %,
+ *					FDX-B's 134.2 kHz (R9.0.4); the
+ *					decoders run on 125 kHz captures,
+ *					so -r shows the timings (T19b)
  *		rfid dump [-with HEX] [BLOCK]
  *					read one T5577 block (0 by default) and
  *					print its 32-bit word (block 0 is the
@@ -51,9 +56,9 @@
  *					what works with them today
  *
  * The protocols are the Unleashed firmware's (liblfrfid, src/lib/lfrfid,
- * spec 9.0): all 25 decode, encode and fill T5577/EM4305 blocks.  What the
- * kernel does not do yet (T19b: the PSK carrier, captures longer than 512
- * edges, emulation longer than 512 segments) limits reading to the ASK
+ * spec 9.0): all 25 decode, encode and fill T5577/EM4305 blocks.  What is
+ * not done yet (T19b: PSK decoding on the -c psk carrier, captures longer
+ * than 512 edges, emulation longer than 512 segments) limits reading to the ASK
  * protocols (Manchester, biphase, direct), read-back after a write to
  * those, and emulation to frames of up to 512 segments; the others say so.
  * EM4100 at RF/64 keeps its own decoder, writer and emulation (R6.5).
@@ -1154,6 +1159,7 @@ static int list(void)
 
 int main(int argc, char **argv)
 {
+	int carrier = RFID_CARRIER_125;
 	int fd, n, i, tries = 4, raw = 0, p;
 	unsigned char id[5];
 	uint8_t data[LFRFID_DATA_MAX];
@@ -1245,8 +1251,18 @@ int main(int argc, char **argv)
 			tries = atoi(argv[++i]);
 		else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			out = argv[++i];
-		else {
-use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE]\n"
+		else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+			i++;		/* R9.0.4: the read carrier */
+			if (strcmp(argv[i], "125") == 0)
+				carrier = RFID_CARRIER_125;
+			else if (strcmp(argv[i], "psk") == 0)
+				carrier = RFID_CARRIER_PSK;
+			else if (strcmp(argv[i], "134") == 0)
+				carrier = RFID_CARRIER_134;
+			else goto use;
+		} else {
+use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
+				"[-c 125|psk|134]\n"
 				"       rfid write [-n N] [-pass HEX] [-with HEX] "
 				"[-lock] [-em4305] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
@@ -1260,6 +1276,11 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE]\n"
 	}
 	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
 		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
 		return 1;
 	}
 	if ((p = read_any(fd, tries, raw, data, &n)) >= 0) {

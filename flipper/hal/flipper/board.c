@@ -2958,9 +2958,13 @@ int hal_random(uint32_t *w)
  * writes 32-bit timestamps into the reader's buffer; the kernel makes
  * durations of them.  TIM1 and TIM2 are the IR transmitter's too: the
  * kernel runs one at a time. */
-int hal_rfid_read(uint32_t dst, unsigned n)
+int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 {
-	uint32_t t0;
+	/* R9.0.4: the field: 125 kHz/50 %, PSK 62.5 kHz/25 % (stock
+	 * furi_hal_rfid_tim_read_start(62500, 0.25)), 134.2 kHz/50 % */
+	uint32_t t0, hz = carrier == 1 ? 62500u : carrier == 2 ? 134200u
+								: 125000u;
+	uint32_t period = (SystemCoreClock + hz / 2) / hz;
 
 	if (n == 0) return -1;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
@@ -2977,8 +2981,8 @@ int hal_rfid_read(uint32_t dst, unsigned n)
 	/* the field */
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;
-	TIM1->ARR = SystemCoreClock / 125000u - 1;
-	TIM1->CCR1 = SystemCoreClock / 125000u / 2;
+	TIM1->ARR = period - 1;
+	TIM1->CCR1 = carrier == 1 ? period / 4 : period / 2;
 	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 	TIM1->CCMR2 = 0;
 	TIM1->CCER = TIM_CCER_CC1NE;

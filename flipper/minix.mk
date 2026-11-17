@@ -535,8 +535,12 @@ $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 # The hardware self test (spec 7b.3): the app and its modules, package
 # stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
 # of packages are at most 13 characters).
-ST_MODS	:= board memory flash input av gpio
+ST_MODS	:= board memory flash input av pins	# module names must not be base commands (gpio!)
 STPROGS	:= selftest $(ST_MODS)
+# Programs share one build directory: a module named like a base command
+# would replace it (it happened with gpio).
+$(if $(filter $(STPROGS),$(UPROGS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(APPS)),\
+  $(error selftest: $(filter $(STPROGS),$(UPROGS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(APPS)) also names another program))
 $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
@@ -546,7 +550,7 @@ CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
-CHMEM_gpio := 2048
+CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
 $(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
@@ -591,7 +595,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.94
+BASE_VER := 3.97
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

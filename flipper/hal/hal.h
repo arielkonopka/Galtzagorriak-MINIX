@@ -204,7 +204,8 @@ void hal_pulse_stop(void);
  * captured on both edges, n 32-bit timestamps (us) by DMA into dst (the
  * caller pins it; hal_pulse_left tells the words not yet written);
  * hal_rfid_stop turns it all off.  -1: no reader. */
-int hal_rfid_read(uint32_t dst, unsigned n);
+int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier);
+/* carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz */
 void hal_rfid_stop(void);
 /* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
  * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
