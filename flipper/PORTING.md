@@ -727,7 +727,10 @@ R2b.9 part 2, libfuri + libapp as one shared library (issue #201,
   "RAM:" lines; remind and alarm installed in flash, alert from RAM):
   remind 16 128 -> 15 616 B, alarm 16 384 -> 16 128 B, alert 24 320 ->
   18 688 B, furihello 16 896 B after (about 43 KB before, from its
-  sizes).  remind and alarm gain from a smaller chmem (12 KB -> 11 KB
+  sizes); data + bss + chmem, which is what exec takes: remind 15 432,
+  alarm 16 048, alert 11 824 + 6 408 of text (one alarm run gave 14 080:
+  a free delta can pick up another process).  remind and alarm gain from
+  a smaller chmem (12 KB -> 11 KB
   and 11.5 KB: nattest leaves 3.8-4.0 KB and 3.2-3.4 KB of 12 KB never
   used; what is left keeps at least 1 KB for the heap above MM's 1.5 KB
   safety gap); alert and timed from the text they no longer load.  timed
