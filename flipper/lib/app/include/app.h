@@ -19,7 +19,13 @@
  *	Action: notify			notify | run
  *	Title: Water
  *	Text: Drink a glass of water
- *	Sound: yes			notify: yes | no (also Vibro:, Led:)
+ *	Out: sound,vibro,led,screen	what the alert uses (any of the
+ *					four, or "none"); "screen" blinks
+ *					the backlight.  Older files: Sound:,
+ *					Vibro:, Led: yes | no
+ *	Sound: multi			single (one tone, beeping) | multi
+ *					(the melody of Tone:); yes | no
+ *					switch the sound as in Out:
  *	Snooze: 5			notify: minutes, 0 = no snooze
  *	Tone: chime			a built-in tone (tune_builtin) or
  *					an absolute path to an RTTTL or
@@ -27,8 +33,15 @@
  *					readable)
  *	Ring: 10			minutes the alert rings, 1-60
  *					(0/missing: alarm 10, else 1)
- *	Ramp: yes			start quietly (single beeps), the
- *					whole tune after 30 s
+ *	Mode: escalating		steady: every output at full from
+ *					the start.  escalating: sparse
+ *					beeps, denser beeps, the full
+ *					sound, then vibro, LED and screen
+ *					on top, one stage per Step:
+ *					(without sound: the other outputs
+ *					go sparse, denser, full).  "Ramp:
+ *					yes" in older files = escalating
+ *	Step: 30			escalating: seconds per stage, 5-120
  *	Log: remind			OK on the alert appends "TIME ID"
  *					to APP_DATA/<Log>/log, written as
  *					the timer's owner (spec 7b.1)
@@ -41,7 +54,7 @@
  * Notification policy: /etc/notify.conf, then ~/.config/notify (same
  * format): Volume: 0-100 (0: no sound), Vibro: yes|no, Led: yes|no,
  * Dnd: 22:00-07:00 (do not disturb, local time; "Dnd: off").  An alarm
- * always rings (sound and vibro as the alarm itself says); reminders and
+ * always rings (every output as the alarm itself says); reminders and
  * info are not shown during do-not-disturb.
  *
  * Settings: APP_DATA/<app>/settings, "Key: value" lines.
@@ -83,6 +96,8 @@
 #define NF_LED		0x04
 #define NF_SHOW		0x08		/* notify_flags(): show it at all */
 #define NF_ALL		(NF_SOUND | NF_VIBRO | NF_LED)
+#define NF_SCREEN	0x10		/* blink the backlight (7b.2) */
+#define NF_OUT		(NF_ALL | NF_SCREEN)	/* every output */
 
 struct app_timer {
 	char id[APP_ID_MAX + 1];
@@ -90,7 +105,8 @@ struct app_timer {
 	unsigned char missed;		/* 1: fire-once, 0: skip */
 	unsigned char days;		/* bit 0 Sunday .. bit 6 Saturday */
 	unsigned char incl;		/* interval: End is an occurrence */
-	unsigned char flags;		/* NF_SOUND | NF_VIBRO | NF_LED */
+	unsigned char flags;		/* NF_SOUND | NF_VIBRO | NF_LED |
+					 * NF_SCREEN */
 	unsigned char snooze;		/* minutes */
 	unsigned short start, end;	/* minutes after local midnight;
 					 * daily: start = Time */
@@ -101,7 +117,9 @@ struct app_timer {
 	char prog[48];			/* run */
 	char tone[40];			/* "" = the category's default */
 	unsigned char ring;		/* minutes, 0 = default */
-	unsigned char ramp;		/* 1: rising */
+	unsigned char ramp;		/* 1: Mode: escalating */
+	unsigned char step;		/* escalating: s per stage, 0 = 30 */
+	unsigned char single;		/* 1: Sound: single (one tone) */
 	char log[APP_ID_MAX + 1];	/* the app whose log OK appends to */
 };
 

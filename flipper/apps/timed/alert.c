@@ -3,25 +3,41 @@
  * and by libapp's notify_post().
  *
  * Usage:	alert [-c CATEGORY] [-f FLAGS] [-z MINUTES ID] [-u UID]
- *		      [-t TONE] [-r MINUTES] [-R] [-l APP ID] TITLE TEXT
+ *		      [-t TONE] [-r MINUTES] [-R] [-S SECONDS] [-1]
+ *		      [-l APP ID] TITLE TEXT
  *	-c	alarm, reminder or info (default info)
- *	-f	what notify_flags() allowed: 1 sound, 2 vibro, 4 LED, added
+ *	-f	what notify_flags() allowed: 1 sound, 2 vibro, 4 LED,
+ *		16 screen (blink the backlight), added
  *	-z	Up or Down snoozes: timer _ID fires again in MINUTES
  *	-u	the timer belongs to UID (alert started by root)
  *	-t	the tone: a built-in name (libapp tune_names) or an RTTTL or
  *		.fmf file (as root: only one of UID's or a world-readable one)
  *	-r	ring for MINUTES (1-60; default alarm 10, else 1)
- *	-R	ramp: single short beeps for the first 30 s, then the tune
+ *	-R	escalating (Mode: escalating; else steady)
+ *	-S	escalating: SECONDS per stage (5-120, default 30)
+ *	-1	single tone (Sound: single): beeps of the tone's first note
+ *		instead of the melody
  *	-l	OK appends "TIME ID" to APP_DATA/APP/log, written as UID
  *		(the reminder log of spec 7b.1); a snooze timer _ID logs ID
  *
  * Shows title, text and the time; OK = done (exit 0), Back = dismiss
- * (1), Up/Down = snooze (2).  It rings every 5 s (the tune, vibro, the
- * LED pattern runs in the LED chip) for the ring time, then gives up
- * (3: missed).  The tune goes to /dev/speaker one note piece (at most
- * PIECE ms) per write, with a look at the buttons in between, so a key
- * stops it within a piece.  One line also goes to standard error (the
- * console log when timed started it).
+ * (1), Up/Down = snooze (2).  It rings for the ring time, then gives up
+ * (3: missed).  Steady: every output at its full level from the start.
+ * Escalating, one stage per -S: sparse beeps (one every 3 s), denser
+ * beeps (one a second), the full sound (the melody, or triple beeps),
+ * then the other outputs on top; without sound the other outputs go
+ * through the three levels themselves.  /dev/speaker has no volume, so
+ * the stages differ in how often it sounds.
+ *
+ * One blocking loop, no busy waits: a note goes to /dev/speaker in pieces
+ * of at most PIECE ms (the write returns when it has played), a rest is a
+ * poll() on /dev/buttons with that timeout, and between the two it looks
+ * at the buttons and switches the outputs: vibro pulses end by
+ * themselves (the kernel's ms timer), the LED pattern runs in the LED
+ * chip, and the screen flash writes the backlight on and off.  So a key
+ * ends the alert within PIECE ms.  The backlight is set back as it was
+ * (level, timeout, forced mode) when the alert ends.  One line also goes
+ * to standard error (the console log when timed started it).
  *
  * It takes the screen only when no app holds it (R4b.8).  Taking it from
  * the foreground app is R7b.2 (FG_PREEMPT, not there yet): until then an
@@ -33,27 +49,33 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/times.h>
 #include <minix/fg.h>
 #include "gui.h"
 #include "app.h"
 
 #define GID_NOGROUP	99		/* /etc/group nogroup */
-#define STEP	5			/* s between rings */
 #define PIECE	100			/* ms of tune per /dev/speaker write */
 #define TUNE_MS	3000			/* at most this much tune per ring */
+#define STAGE_S	30			/* escalating: default s per stage */
 
 static unsigned char tune[4 * TUNE_MAX];
-static int ntune, shown;
+static int ntune, shown, btn = -1, bl = -1, bl_lit = -1;
+static unsigned char bl_old[4];		/* level, timeout, forced mode */
+static unsigned f0;			/* Hz of the single tone */
 
-static void onalrm(int sig)
-{
-	(void) sig;			/* interrupts the button read */
-}
+/* The three levels of an output: how often it pulses (ms), and how long
+ * vibro and the screen flash are on in a pulse.  Level 2 (full) is
+ * slower for reminders and info (as their ring every 5 s before). */
+static const unsigned short l_per[3] = { 3000, 1000, 1000 };
+static const unsigned short l_vib[3] = { 150, 150, 400 };
+static const unsigned short l_scr[3] = { 300, 300, 500 };
+#define FULL_REST(cat)	((cat) == TC_ALARM ? 1000 : 5000)
 
 static void put(int fd, const char *s)
 {
@@ -97,42 +119,193 @@ static void load_tune(const char *name, int cat, int uid)
 		ms += tune[4*i+2] | tune[4*i+3] << 8;
 		if (ms > TUNE_MS) { ntune = i > 0 ? i : 1; break; }
 	}
+	if (ntune < 1) {			/* nothing at all: one beep */
+		tune[0] = 2000 & 0xFF; tune[1] = 2000 >> 8;
+		tune[2] = 200; tune[3] = 0;
+		ntune = 1;
+	}
+	for (i = 0, f0 = 0; i < ntune && f0 == 0; i++)	/* the single tone */
+		f0 = tune[4*i] | tune[4*i+1] << 8;
+	if (f0 == 0) f0 = 2000;
 }
 
-/* Play notes [0, n) in pieces; a key pressed meanwhile is returned (and
- * ends the tune), else 0. */
-static int play(int fd, int n)
+/* Note i of the sound pattern of level lv (0 sparse, 1 denser, 2 full):
+ * its Hz in *hz, its ms returned; *len: the notes in the pattern (it
+ * repeats).  Full: the melody, or three short beeps (single), then a
+ * rest. */
+static unsigned pnote(int lv, int single, int cat, int i, unsigned *hz,
+								int *len)
 {
-	unsigned char p[4];
-	unsigned ms, d;
-	int i, k;
-
-	for (i = 0; i < n; i++) {
-		ms = tune[4*i+2] | tune[4*i+3] << 8;
-		p[0] = tune[4*i]; p[1] = tune[4*i+1];
-		for (; ms > 0; ms -= d) {
-			d = ms > PIECE ? PIECE : ms;
-			p[2] = d & 0xFF; p[3] = d >> 8;
-			if (write(fd, p, 4) != 4) return 0;
-			if (shown && (k = gui_key_nowait()) != 0) return k;
+	*hz = 0;
+	if (lv < 2) {
+		*len = 2;
+		if (i == 0) { *hz = f0; return 150; }
+		return l_per[lv] - 150;
+	}
+	if (single) {
+		*len = 6;
+		if (i < 5) {
+			*hz = i & 1 ? 0 : f0;
+			return i & 1 ? 100 : 200;
 		}
+		return FULL_REST(cat) - 300;
 	}
-	return 0;
+	*len = ntune + 1;
+	if (i < ntune) {
+		*hz = tune[4*i] | tune[4*i+1] << 8;
+		return tune[4*i+2] | tune[4*i+3] << 8;
+	}
+	return FULL_REST(cat);
 }
 
-/* One ring (number k of this alert): vibro and the tune.  Ramp: the
- * first 6 rings (30 s) only the tune's first note, short vibro. */
-static int ring(int flags, int cat, int ramp, int k)
+/* Wait up to ms for a key (only a pure wait when the screen is not ours):
+ * the key, or 0.  poll() rounds up to the clock tick.  If it fails (an
+ * old kernel), wait a second: never spin. */
+static int wait_key(int ms)
 {
-	int fd, key = 0, soft = ramp && k < 6;
+	struct pollfd p;
+	int n;
 
-	if ((flags & NF_VIBRO) && (fd = open("/dev/vibro", O_WRONLY)) >= 0) {
-		put(fd, soft ? "150" : cat == TC_ALARM ? "400" : "200");
-		close(fd);
+	p.fd = shown ? btn : -1;
+	p.events = POLLIN;
+	p.revents = 0;
+	if ((n = poll(&p, 1, ms)) < 0) {
+		sleep(1);
+		return 0;
 	}
-	if ((flags & NF_SOUND) && (fd = open("/dev/speaker", O_WRONLY)) >= 0) {
-		key = play(fd, soft ? 1 : ntune);
-		close(fd);
+	return n > 0 && shown ? gui_key_nowait() : 0;
+}
+
+/* The backlight: on (255) or off, in auto mode with the timeout kept;
+ * -1: back as it was (bl_old). */
+static void screen(int on)
+{
+	unsigned char b[4];
+
+	if (bl < 0 || on == bl_lit) return;
+	if (on < 0) memcpy(b, bl_old, 4);
+	else {
+		b[0] = on ? 255 : 0;
+		b[1] = bl_old[1]; b[2] = bl_old[2];
+		b[3] = 0;			/* forced off: not now */
+	}
+	(void) write(bl, b, 4);
+	bl_lit = on;
+}
+
+static void bl_save(void)
+{
+	unsigned char b[4];
+	unsigned long st;
+
+	if ((bl = open("/dev/backlight", O_RDWR)) < 0) return;
+	if (read(bl, b, 4) != 4) {
+		close(bl);
+		bl = -1;
+		return;
+	}
+	st = b[0] | b[1] << 8 | (unsigned long) b[2] << 16
+					| (unsigned long) b[3] << 24;
+	bl_old[0] = st >> 16 & 0xFF;		/* hal.h HAL_BL_* */
+	if (bl_old[0] == 0) bl_old[0] = 255;
+	bl_old[1] = st & 0xFF;
+	bl_old[2] = st >> 8 & 0x3F;
+	bl_old[3] = st >> 14 & 3;
+	if (bl_old[3] > 2) bl_old[3] = 0;
+}
+
+static long ms_since(clock_t t0)
+{
+	struct tms tb;
+
+	return (long) (times(&tb) - t0) * 1000L / CLK_TCK;
+}
+
+static void led(const char *pattern);
+
+/* Ring for ring_ms (see the top): the key that ended it (OK, Back, or
+ * Up/Down when snz), or 0. */
+static int ring(int flags, int cat, int ramp, int single, long stage,
+						long ring_ms, int snz)
+{
+	struct tms tb;
+	clock_t t0 = times(&tb);
+	char vb[4];
+	unsigned hz = 0;
+	long t, edge, q, ph, per, vper = -1;
+	int spk = -1, vib = -1, key = 0, slv = -1, ni = 0, len = 2, olv;
+	int st, other, led_on = 0, lit;
+	long left = 0;
+
+	if ((flags & NF_SOUND)
+	    && (spk = open("/dev/speaker", O_WRONLY)) < 0) flags &= ~NF_SOUND;
+	if (flags & NF_VIBRO) vib = open("/dev/vibro", O_WRONLY);
+	while ((t = ms_since(t0)) < ring_ms) {
+		st = ramp ? (int) (t / stage) : 3;
+		if (st > 3) st = 3;
+		edge = ramp && st < 3 ? (st + 1) * stage : ring_ms;
+		if (edge > ring_ms) edge = ring_ms;
+		/* The sound: its pattern from the start at a new level. */
+		if ((st > 2 ? 2 : st) != slv) {
+			slv = st > 2 ? 2 : st;
+			ni = 0;
+			left = pnote(slv, single, cat, 0, &hz, &len);
+		}
+		while (left <= 0) {
+			ni = (ni + 1) % len;
+			left = pnote(slv, single, cat, ni, &hz, &len);
+		}
+		/* The other outputs: with the sound from stage 3 (steady:
+		 * at once), without it through the levels themselves. */
+		other = !(flags & NF_SOUND) || st >= 3;
+		olv = flags & NF_SOUND ? 2 : slv;
+		if (cat != TC_ALARM && olv == 2) per = 5000;
+		else per = l_per[olv];
+		ph = t % per;
+		if (other && (flags & NF_LED) && !led_on) {
+			led(cat == TC_ALARM ? "fast red\n" : "pulse blue\n");
+			led_on = 1;
+		}
+		if (other && vib >= 0 && t / per != vper) {
+			vper = t / per;
+			q = cat != TC_ALARM && olv == 2 ? 200 : l_vib[olv];
+			vb[0] = '0' + q / 100;
+			vb[1] = '0' + q / 10 % 10;
+			vb[2] = '0' + q % 10;
+			(void) write(vib, vb, 3);	/* ends by itself */
+		}
+		if (other && (flags & NF_SCREEN) && bl >= 0) {
+			lit = ph < l_scr[olv];
+			screen(lit);
+			q = t - ph + (lit ? l_scr[olv] : per);
+			if (q < edge) edge = q;
+		} else if (other && vib >= 0 && t - ph + per < edge)
+			edge = t - ph + per;
+		/* One piece: a note to the speaker, or a wait for a key. */
+		q = left < PIECE ? left : PIECE;
+		if (edge - t < q) q = edge - t;
+		if (q < 10) q = 10;
+		if (hz != 0 && spk >= 0) {
+			unsigned char p[4];
+
+			p[0] = hz & 0xFF; p[1] = hz >> 8;
+			p[2] = q & 0xFF; p[3] = q >> 8;
+			if (write(spk, p, 4) != 4) {
+				close(spk);	/* gone: no sound */
+				spk = -1;
+			}
+			if (shown) key = gui_key_nowait();
+		} else key = wait_key((int) q);
+		left -= q;
+		if ((key & (KEY_OK | KEY_BACK))
+		    || ((key & (KEY_UP | KEY_DOWN)) && snz)) break;
+		key = 0;			/* another key: ring on */
+	}
+	if (led_on) led("off\n");
+	if (spk >= 0) close(spk);
+	if (vib >= 0) {
+		(void) write(vib, "0", 1);
+		close(vib);
 	}
 	return key;
 }
@@ -170,7 +343,7 @@ static void wrap(const char *s, int y, int rows)
 
 /* What a snooze timer keeps besides the text (set by main()). */
 static char *o_tone, *o_log;
-static int o_ring, o_ramp;
+static int o_ring, o_ramp, o_step, o_single;
 
 static int snooze(const char *id, int min, int cat, int flags, int uid,
 				const char *title, const char *text)
@@ -184,6 +357,8 @@ static int snooze(const char *id, int min, int cat, int flags, int uid,
 	if (o_log != NULL) strcpy(t.log, o_log);
 	t.ring = o_ring;
 	t.ramp = o_ramp;
+	t.step = o_step;
+	t.single = o_single;
 	t.id[0] = '_';
 	strncpy(t.id + (id[0] != '_'), id, APP_ID_MAX - 1);
 	t.id[APP_ID_MAX] = 0;
@@ -191,7 +366,7 @@ static int snooze(const char *id, int min, int cat, int flags, int uid,
 	t.at = time((time_t *) 0) + 60L * min;
 	t.cat = cat;
 	t.missed = 1;
-	t.flags = flags & NF_ALL;
+	t.flags = flags & NF_OUT;
 	t.snooze = min;
 	t.days = 0x7F;
 	strncpy(t.title, title, sizeof t.title - 1);
@@ -233,11 +408,11 @@ int main(int argc, char **argv)
 {
 	char now_s[6], *id = NULL, *title, *text, *tone = NULL;
 	char *logapp = NULL, *logid = NULL;
-	struct sigaction sa;
 	struct tm *tm;
-	time_t now = time((time_t *) 0), end;
+	time_t now = time((time_t *) 0);
 	int i, cat = TC_INFO, flags = NF_ALL, min = 0, uid = -1, ringmin = 0;
-	int fd, fg = -1, k, me = getpid(), none = 0, r = 3, ramp = 0, n;
+	int fg = -1, k, me = getpid(), none = 0, r = 3, ramp = 0, step = 0;
+	int single = 0;
 
 	for (i = 1; i < argc && argv[i][0] == '-'; i++) {
 		if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -257,6 +432,11 @@ int main(int argc, char **argv)
 			if (ringmin < 1 || ringmin > 60) ringmin = 0;
 		} else if (strcmp(argv[i], "-R") == 0) {
 			ramp = 1;
+		} else if (strcmp(argv[i], "-S") == 0 && i + 1 < argc) {
+			step = atoi(argv[++i]);
+			if (step < 5 || step > 120) step = 0;
+		} else if (strcmp(argv[i], "-1") == 0) {
+			single = 1;
 		} else if (strcmp(argv[i], "-l") == 0 && i + 2 < argc) {
 			logapp = argv[++i];
 			logid = argv[++i];
@@ -266,8 +446,8 @@ int main(int argc, char **argv)
 	}
 	if (argc - i != 2) {
 		put(2, "usage: alert [-c CATEGORY] [-f FLAGS] [-z MINUTES ID] "
-		       "[-u UID] [-t TONE] [-r MINUTES] [-R] [-l APP ID] "
-		       "TITLE TEXT\n");
+		       "[-u UID] [-t TONE] [-r MINUTES] [-R] [-S SECONDS] "
+		       "[-1] [-l APP ID] TITLE TEXT\n");
 		return 2;
 	}
 	title = argv[i];
@@ -278,6 +458,9 @@ int main(int argc, char **argv)
 	o_log = logapp;
 	o_ring = ringmin;
 	o_ramp = ramp;
+	o_step = step;
+	o_single = single;
+	flags &= NF_OUT;
 	load_tune(tone, cat, uid);
 	tm = localtime(&now);
 	now_s[0] = '0' + tm->tm_hour / 10; now_s[1] = '0' + tm->tm_hour % 10;
@@ -308,42 +491,26 @@ int main(int argc, char **argv)
 		gui_text(0, GUI_H - 6, id != NULL ? "Back:off OK:done ^v:snooze"
 						  : "Back:off  OK:done", 1);
 		gui_flush();
-		gui_backlight(255);
 	} else shown = 0;
-
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sa.sa_handler = onalrm;
-	sigaction(SIGALRM, &sa, NULL);
-	if (flags & NF_LED) led(cat == TC_ALARM ? "fast red\n" : "pulse blue\n");
-	if (ringmin == 0) ringmin = cat == TC_ALARM ? 10 : 1;
-	end = now + 60L * ringmin;
-	for (n = 0; time((time_t *) 0) < end; n++) {
-		k = ring(flags, cat, ramp, n);
-		if (!shown) {
-			sleep(STEP);	/* no buttons: ring until the end */
-			continue;
-		}
-		if (k == 0) {
-			alarm(STEP);
-			errno = 0;
-			k = gui_key();
-			alarm(0);
-			/* EIO: another program's read of /dev/buttons is
-			 * waiting (the launcher's main screen; the kernel
-			 * hands it the next key, R4b.8).  Never spin: look
-			 * again in a second. */
-			if (k == 0 && errno == EIO) sleep(1);
-		}
-		if (k & KEY_OK) { r = 0; break; }
-		if (k & KEY_BACK) { r = 1; break; }
-		if ((k & (KEY_UP | KEY_DOWN)) && id != NULL) {
-			r = snooze(id, min, cat, flags, uid, title, text) == 0
-				? 2 : 1;
-			break;
-		}
+	if (shown) btn = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+	bl_save();				/* to set it back at the end */
+	if (shown) {
+		if (bl >= 0) screen(1);		/* on, also when forced off */
+		else gui_backlight(255);
 	}
-	if (flags & NF_LED) led("off\n");
+
+	if (ringmin == 0) ringmin = cat == TC_ALARM ? 10 : 1;
+	k = ring(flags, cat, ramp, single, (step ? step : STAGE_S) * 1000L,
+					60000L * ringmin, id != NULL);
+	if (k & KEY_OK) r = 0;
+	else if (k & KEY_BACK) r = 1;
+	else if (k & (KEY_UP | KEY_DOWN))
+		r = snooze(id, min, cat, flags, uid, title, text) == 0 ? 2 : 1;
+	if (bl >= 0) {
+		screen(-1);			/* as it was */
+		close(bl);
+	}
+	if (btn >= 0) close(btn);
 	if (shown) {
 		gui_clear();
 		gui_flush();

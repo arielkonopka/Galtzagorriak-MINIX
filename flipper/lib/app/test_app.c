@@ -206,6 +206,10 @@ static void policy(void)
 		"reminder at 07:00: shown, no sound (Volume 0), no LED");
 	CHECK(notify_flags(&p, TC_ALARM, NF_ALL, night) == (NF_SHOW | NF_ALL),
 		"alarm at 23:00: rings with sound despite Volume 0");
+	CHECK(notify_flags(&p, TC_ALARM, NF_OUT, night) == (NF_SHOW | NF_OUT),
+		"7b.2: an alarm keeps every output, the screen too, in DND");
+	CHECK(notify_flags(&p, TC_REMINDER, NF_SOUND | NF_SCREEN, day)
+		== (NF_SHOW | NF_SCREEN), "a reminder: the screen flash kept");
 	CHECK(notify_flags(&p, TC_ALARM, NF_VIBRO, night) == (NF_SHOW | NF_VIBRO),
 		"vibro-only alarm: only vibrates");
 	zone("CET-1CEST,M3.5.0,M10.5.0/3");
@@ -369,6 +373,42 @@ static void tunes(void)
 	CHECK(timer_parse(&u, buf) == -1, "Ring over 60 refused");
 	strcpy(buf, "Kind: once\nAt: 5\nLog: ../x\n");
 	CHECK(timer_parse(&u, buf) == -1, "bad Log refused");
+
+	/* 7b.2: ring settings. */
+	parse(&t, "Kind: daily\nTime: 06:30\nCategory: alarm\n"
+		  "Mode: escalating\nStep: 20\nOut: vibro, led,screen\n"
+		  "Sound: single\n");
+	CHECK(t.ramp == 1 && t.step == 20 && t.single == 1
+		&& t.flags == (NF_VIBRO | NF_LED | NF_SCREEN),
+		"Mode, Step, Out, Sound: single");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nOut: vibro,led,screen\n") != NULL
+		&& strstr(buf, "\nSound: single\n") != NULL
+		&& strstr(buf, "\nMode: escalating\nStep: 20\n") != NULL,
+		"ring settings written");
+	strcpy(u.id, "t");
+	CHECK(timer_parse(&u, buf) == 0 && memcmp(&t, &u, sizeof t) == 0,
+		"ring settings: format and parse again");
+	parse(&t, "Kind: once\nAt: 5\nOut: none\nSound: multi\n"
+		  "Mode: steady\n");
+	CHECK(t.flags == 0 && t.single == 0 && t.ramp == 0, "Out: none, steady");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nOut: none\nSound: multi\n") != NULL
+		&& strstr(buf, "Mode:") == NULL, "Out: none written");
+	parse(&t, "Kind: once\nAt: 5\nOut: sound\nSound: yes\nVibro: yes\n");
+	CHECK(t.flags == (NF_SOUND | NF_VIBRO), "older Sound:/Vibro: after Out:");
+	parse(&t, "Kind: once\nAt: 5\nOut: led\nSound: single\n");
+	CHECK(t.flags == NF_LED && t.single, "Sound: single keeps Out:");
+	parse(&t, "Kind: once\nAt: 5\nRamp: yes\n");
+	CHECK(t.ramp == 1 && t.flags == NF_ALL, "Ramp: yes = escalating");
+	strcpy(buf, "Kind: once\nAt: 5\nOut: sound,horn\n");
+	CHECK(timer_parse(&u, buf) == -1, "unknown output refused");
+	strcpy(buf, "Kind: once\nAt: 5\nMode: loud\n");
+	CHECK(timer_parse(&u, buf) == -1, "unknown Mode refused");
+	strcpy(buf, "Kind: once\nAt: 5\nStep: 4\n");
+	CHECK(timer_parse(&u, buf) == -1, "Step under 5 refused");
+	strcpy(buf, "Kind: once\nAt: 5\nStep: 121\n");
+	CHECK(timer_parse(&u, buf) == -1, "Step over 120 refused");
 }
 
 static void logs(void)

@@ -180,10 +180,13 @@ void notify_policy(struct notify_policy *p, const char *home)
  * Returns the pid, or -1. */
 int app_alert(const struct app_timer *t, int cat, int flags, int uid)
 {
-	char fb[4], zb[4], rb[4], ub[8], *argv[24];
+	char fb[4], zb[4], rb[4], sb[4], ub[8], *argv[28];
 	int n = 0, pid, i;
 
-	fb[0] = '0' + (flags & 0xF); fb[1] = 0;
+	flags &= NF_OUT;
+	fb[0] = '0' + flags / 10; fb[1] = '0' + flags % 10; fb[2] = 0;
+	sb[0] = '0' + t->step / 100 % 10; sb[1] = '0' + t->step / 10 % 10;
+	sb[2] = '0' + t->step % 10; sb[3] = 0;
 	zb[0] = '0' + t->snooze / 10; zb[1] = '0' + t->snooze % 10; zb[2] = 0;
 	rb[0] = '0' + t->ring / 10 % 10; rb[1] = '0' + t->ring % 10; rb[2] = 0;
 	argv[n++] = "alert";
@@ -200,6 +203,11 @@ int app_alert(const struct app_timer *t, int cat, int flags, int uid)
 		argv[n++] = rb;
 	}
 	if (t->ramp) argv[n++] = "-R";
+	if (t->ramp && t->step != 0) {
+		argv[n++] = "-S";
+		argv[n++] = sb;
+	}
+	if (t->single) argv[n++] = "-1";
 	if (t->log[0] != 0 && t->id[0] != 0) {
 		argv[n++] = "-l";
 		argv[n++] = (char *) t->log;
