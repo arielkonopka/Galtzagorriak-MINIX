@@ -522,6 +522,7 @@ $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
 $(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
+CHMEM_rfid := 8192	# R9.0.5: rfid -s mallocs its 4 KB capture ring
 CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
@@ -572,7 +573,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.94
+BASE_VER := 3.95
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

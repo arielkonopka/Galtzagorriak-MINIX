@@ -95,6 +95,12 @@ as a summary. `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatc
 changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)` chooses the field
 (`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
 
+For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
+edges go round and round into a ring in the program's memory, `read` says which half is new, and
+falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
+tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
+a quick check that nothing is lost.
+
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
 

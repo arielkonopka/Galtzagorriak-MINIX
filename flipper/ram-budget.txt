@@ -52,7 +52,9 @@
 # T19b R9.0.4 (RFID read carrier modes, #210): kernel +4 B: the mode byte
 # (125 kHz / 62.5 kHz 25 % for PSK / 134.2 kHz) and its padding.  Spec
 # allows <= +4 B for R9.0.4, <= +32 B for R9.0.4-R9.0.6 together.
-kernel    160    14664  14824
+# T19b R9.0.5 (RFID streaming capture): kernel +4 B: who streams, halves
+# filled and handed out, a waiting read (spec: <= +8 B).
+kernel    160    14668  14828
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows
