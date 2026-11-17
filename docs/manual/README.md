@@ -15,6 +15,7 @@ that brings them.
 8. [The self test](selftest.md): the hardware self test (`stest` package, `selftest -a`).
 9. [Reminders and the alarm clock](remind-alarm.md): the `remind` and `alarm` apps, the desk clock.
 10. [The launcher](launcher.md): the app list, icons, the settings page, `/etc/apps`.
+11. [Data modems](modem.md): files between two Flippers over RFID (Sub-GHz, NFC and BLE planned), `gmodem`.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in

@@ -13,7 +13,7 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid
+all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -30,6 +30,10 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
+# libmodem (spec section P, ACP.1, ACP.2): data modems between two
+# Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
+run-modem:
+	$(MAKE) -C $(MROOT)/flipper/tests/modem test
 
 run-%: $(B)/%
 	./$<

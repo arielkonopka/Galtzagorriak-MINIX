@@ -21,6 +21,8 @@ Addition (2026-11-15): Phase 19 rewritten (lwIP as a low-priority `udrv` driver,
 BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with frequency hopping on
 CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
 report `tcpip-stack-analysis.md` (Polish, not in the repo).
+Addition (2026-11-17): section P (data modems between two Flippers over RFID, NFC, Sub-GHz and
+BLE: one link layer, four backends, the `gmodem` command; owner request).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -1542,6 +1544,270 @@ Acceptance:
 
 For the manual: why `/home` is MINIX V3 and `/usr` V2, reading the card on Linux
 (`mount -t minix`), `fsck.minix -3`, 60-character names, `df` "estimate", `setup -H`.
+
+---
+
+## P. Data modems: RFID, NFC, Sub-GHz and BLE between two Flippers (owner request, 2026-11-17)
+
+The owner asked whether two Flippers can stream data over 125 kHz RFID, and then for modems over
+all four radios: RFID, NFC, Sub-GHz (with a selectable bandwidth and data rate) and BLE. This
+section is the design: one link layer, four physical backends, one command. Milestones: the link
+layer, its host tests and the RFID backend on today's kernel now (owner request outside the
+milestone order, like T19); the Sub-GHz backend with Phase 8's transmit path (M5); NFC with
+Phase 13 (M6); BLE with Phase 15 (M7). Task: T26 in `next-tasks.md`.
+
+What it is for: moving a file, a note or a log from one Flipper to the other without a PC or a
+phone, a text chat, and later the MAC under PPP (R19.10, R19.11) and the BLE bridge (R19.12).
+What it is not: a network stack, a resident daemon or a secure channel (P.8).
+
+### P.1 The four media compared
+
+| | 125 kHz RFID | NFC 13.56 MHz | Sub-GHz (CC1101) | BLE (CPU2) |
+|---|---|---|---|---|
+| Roles | reader (makes the field) + tag (loads it) | initiator + target | two equal transceivers | central + peripheral |
+| Duplex | half, very asymmetric | half (command/response) | half | full (radio is TDD, the stack hides it) |
+| Raw rate | tag→reader 4.5 kbit/s (`fast`) or 2.2 (`robust`); reader→tag ≈ 1–2 kbit/s by field gaps | 106 kbit/s (NFC-A), 212/424 (NFC-F) | 0.6–500 kBaud, presets P.4 | 1 or 2 Mbit/s PHY |
+| Net, estimate | today ≈ 50–100 B/s one way (carousel); ≈ 400 B/s with R9.0.5/R9.0.6 | ≈ 5–10 KB/s at 106 kbit/s | ≈ 0.1–14 KB/s by preset, **capped by the band's duty cycle** (P.4) | ≈ 10–80 KB/s |
+| Range | 1–3 cm, backs together | ≤ 4 cm | metres to hundreds of metres by preset | 10–30 m |
+| Link MTU (payload) | 24 B | 250 B | 54 B (FIFO-only, v1); 248 B with FIFO refill (v2, as R19.11) | 240 B (L2CAP CoC SDU) |
+| Driver today | `/dev/rfid`: read ≤ 512 edges, `RFIDIOCEMU` ≤ 512 segments, field hold, gap writes | none (Phase 13) | `/dev/subghz` receive only, `/dev/subghzraw` timings; **no transmit** (R8.1 part 2, R8.2) | none (Phase 15, R16.1.0) |
+| Milestone | now (simplex), reverse channel with RP.5 | M6 | M5 | M7 |
+
+Numbers marked "estimate" are to be measured with `gmodem info -m MEDIUM` and `twoflip.py`
+(P.9) and written into PORTING.md; the manual quotes measured numbers only.
+
+### P.2 Layers and the user interface
+
+```
+ gmodem send / recv / chat / info        (flipper/cmds/gmodem.c, one process, nothing resident)
+ ─────────────────────────────────────
+ libmodem link layer                     (src/lib/modem: frames, CRC, ARQ, carousel, datagrams)
+ ─────────────────────────────────────
+ PHY backend: rfid | nfc | subghz | ble  (a struct of 3 functions + MTU + airtime)
+ ─────────────────────────────────────
+ /dev/rfid   /dev/nfc   /dev/subghz   /dev/ble*  (kernel drivers / bled)
+```
+
+- **RP.1 No modem daemon, no `/dev/modem`.** The link layer is a library linked into the program
+  that uses it; a transfer is one process for its duration and nothing stays in RAM afterwards.
+  A shared modem server would cost RAM all the time for a feature used now and then. The PPP
+  links of Phase 19 link the same library into their link process.
+- **RP.2 The command** `gmodem` ("Galtzagorriak modem"; MINIX's own `modem(1)` switches a serial line
+  between dial-in and dial-out). Access through the group of the medium's device (`rfid`, `nfc`,
+  `subghz`, `ble`):
+  ```
+  gmodem send -m MEDIUM [-p PRESET] [-f MHZ] [-n ROUNDS] [FILE]   send FILE (stdin if none)
+  gmodem recv -m MEDIUM [-p PRESET] [-f MHZ] [-o FILE] [-t SEC]
+  gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]                lines both ways (datagrams)
+  gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]                presets, rates, the region's
+                                                             limits, the duty budget left
+  ```
+  Unix pipes work: `tar cf - notes | gmodem send -m subghz`, `gmodem recv -m subghz | tar xf -`.
+  Exit status 0 only when every byte arrived with a good CRC. Progress (`12/40 frames, 1.2 KB/s`)
+  goes to stderr at most twice a second. A medium whose driver is not there yet prints
+  `gmodem: MEDIUM: not implemented yet (needs ...)` and exits 2.
+- **RP.3 The library API** (`<modem.h>`): a PHY is
+  `struct mdm_phy { void *ctx; int mtu; long turn_ms; int (*send)(ctx, buf, n);
+  int (*recv)(ctx, buf, max, ms); long (*airtime)(ctx, n); }`. `mdm_send()` and `mdm_recv()`
+  move a byte stream through source/sink callbacks with the ARQ of P.3; `mdm_car_*` is the
+  carousel for simplex media; a datagram is one `MDM_T_DGRAM` frame (`mdm_pack`/`mdm_unpack`).
+  All of it is plain C89 without `malloc` (the caller passes the window buffers), so a Berry
+  binding (7c) and the PPP link process can use it.
+
+### P.3 The link layer (`libmodem`, every medium)
+
+One frame format on every medium; the PHY adds only its own sync and (for the CC1101) its own
+length byte.
+
+```
+byte 0   type (high nibble) | flags (low nibble)
+byte 1   sid    session id: random per transfer; frames of another sid are ignored
+byte 2   a      DATA: seq   ACK: next expected seq   CAR: index, low byte
+byte 3   b      DATA: 0     ACK: bitmap, bit i = seq a+1+i arrived   CAR: index, high byte
+byte 4   len    payload bytes (≤ the PHY's MTU)
+5..      payload
+last 2   CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) of bytes 0..4+len-1, big-endian
+types: 1 DATA, 2 ACK, 3 CAR, 4 DGRAM (anything else: dropped)
+flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the stream)
+```
+
+- **RP.4 Three services.**
+  - **ARQ stream** (half or full duplex): selective repeat with a window of W ≤ 8 frames
+    (default 4). The sender sends every unacknowledged frame of its window, the last with TURN;
+    the receiver answers one ACK (cumulative `a` + bitmap `b`, TURN). Missing frames go again in
+    the next burst. The sender waits the ACK's airtime + 2 turnarounds, each with the
+    scheduler's slack (≥ 25 ms on MINIX); after 20 bursts in a row without progress the
+    transfer fails (exit 1). The receiver locks on the `sid` of the first DATA frame inside its
+    window, stays long enough after the LAST frame to answer a repeated burst (its ACK was
+    lost), then ends. A receiver that hears nothing for `-t SEC` (default 30) gives up.
+  - **Carousel** (simplex, no way back): the sender repeats every frame, numbered 0..N-1, the
+    last with LAST, round and round (`-n ROUNDS`, default until Ctrl-C). The receiver keeps a
+    bitmap (N/8 bytes, N ≤ 4096), writes each new frame at its offset and ends when all N are in.
+    Used by the RFID backend until the reverse channel (RP.5c) exists.
+  - **Datagrams** (DGRAM): one frame, CRC-checked, no ACK; `gmodem chat` and beacons.
+- **Inputs are hostile** (security rule, owner 2026-11-16): every byte the radio delivers is
+  parsed by `mdm_unpack()` alone, which checks `len` against the buffer and the PHY's MTU before
+  anything else and returns a frame only with a good CRC. Host test: 10⁶ random and mutated frames
+  under ASan/UBSan (ACP.2). No length from the air ever sizes a copy without that check.
+
+### P.4 Sub-GHz backend: selectable bandwidth and data rate, inside the law
+
+**Physical layer.** CC1101 packet mode, 2-FSK/GFSK (OOK only on request), preamble 4 B, sync word
+`0xD3 0x91` twice (30/32 sync bits), variable length (length byte), hardware CRC on with
+auto-flush (bad packets never reach the CPU) and our CRC on top (one format for every PHY),
+data whitening on, CCA (carrier sense) before every transmit.
+
+**Presets** (`-p`; the bandwidth is the receive filter; values are what the CC1101 really gets
+from its 26 MHz crystal, computed by `mdm_cc1101_regs()` and printed by `gmodem info`):
+
+| Preset | Modulation | Data rate | Deviation | RX filter | Occupied ≈ 2·dev + rate | Use |
+|---|---|---|---|---|---|---|
+| `narrow` | GFSK | 1.2 kBaud | 5.2 kHz | 58 kHz | 12 kHz | longest range, slow |
+| `slow` | GFSK | 4.8 kBaud | 11.9 kHz | 68 kHz | 29 kHz | |
+| `std` (default) | GFSK | 38.4 kBaud | 20.6 kHz | 102 kHz | 80 kHz | |
+| `wide` | GFSK | 100 kBaud | 47.6 kHz | 325 kHz | 195 kHz | |
+| `max` | GFSK | 250 kBaud | 127 kHz | 650 kHz | 504 kHz | short range, only bands ≥ 0.6 MHz wide |
+
+`-b BAUD -d DEV -w BW` set a custom PHY (each rounded to the nearest CC1101 value, printed).
+
+**Legal limits.** The region is `/etc/flipper/region` (I.4). The table below is the first
+version; like R19.11 it MUST be checked against the current ERC/REC 70-03 Annex 1, EN 300 220 and
+FCC part 15 text, and against the stock firmware's region data, before transmit is enabled
+(T26b). Everything is `const` in flash.
+
+| Region | Band (MHz) | Max power | Duty cycle | Note |
+|---|---|---|---|---|
+| EU | 433.050–434.790 | 10 mW e.r.p. | ≤ 10 % | default `-f 433.92` |
+| EU | 868.000–868.600 | 25 mW e.r.p. | ≤ 1 % | |
+| EU | 868.700–869.200 | 25 mW e.r.p. | ≤ 0.1 % | |
+| EU | 869.400–869.650 | 500 mW e.r.p. (the Flipper gives ≈ 10 mW) | ≤ 10 % | |
+| EU | 869.700–870.000 | 5 mW e.r.p. | none | sustained transfers |
+| US | 902–928 | FCC 15.249 field strength (≈ −1 dBm EIRP) | none | default `-f 915` |
+| US | 315, 433.92 | — | — | FCC 15.231 does not allow data: refused |
+| other | — | — | — | refused until the table has the region |
+
+- **RP.6 Every transmit is checked** (in the kernel, R8.2, and before that in `libmodem` so the
+  user gets a clear message instead of `EPERM`): the **whole occupied bandwidth**
+  (centre ± (dev + rate/2), plus 2 × 20 ppm crystal error) lies inside one band of the region;
+  the output power is the highest PATABLE step ≤ the band's limit assuming a 0 dBi antenna (the
+  Flipper's antenna has less); the duty cycle of that band is respected.
+- **RP.7 Duty cycle, counted strictly** (EN 300 220 defines it over one hour): transmit time in
+  10 ms units in 7 slots of 10 minutes (14 B); a packet may go only if the sum of the 7 slots plus
+  its airtime stays ≤ the limit, so every possible 60-minute window holds. Other bands used in the
+  last hour keep one 4 B summary each (2 entries). Kernel RAM ≤ +24 B; the library keeps the same
+  count only to tell the user how long to wait ("duty limit 10 %: next packet in 41 s"); it never
+  busy-waits (rule 0.8). The kernel's counter is the one that is binding.
+- **What the law means for speed** (to put in the manual): with 10 % the 433 MHz band carries on
+  average ≈ 1/10 of the preset's rate, 868.0–868.6 MHz ≈ 1/100. Long transfers in the EU belong on
+  869.7–870.0 MHz (no duty limit, 5 mW) or on BLE.
+- **RP.8 Kernel interface (T26b, Phase 8 R8.1 part 2):** `ioctl(SGIOCPHY, struct sg_phy)` with
+  frequency, modulation, rate, deviation, filter, power (all in Hz/dBm; the kernel computes the
+  registers with the same `cc1101calc.c` the library uses, so the check and the setting cannot
+  disagree), `write()` = one packet (blocks until sent; `EAGAIN` when the duty budget is spent),
+  `read()` = one packet with good CRC + RSSI + LQI, `poll()` for timeouts. The packet goes
+  between the caller's pinned buffer and the 64 B FIFO; the GDO0 interrupt does ≤ 100 µs of SPI
+  (rule R0.8b). Kernel RAM ≤ +32 B with RP.7. 61 B packets in v1; longer ones by FIFO refill
+  later (shared with R19.11).
+- Interoperability: the presets are our own. A preset matching Unleashed's `subghz chat` would
+  let the Unleashed reference Flipper test the MINIX PHY (P.9); it is added if its parameters are
+  confirmed from the Unleashed source.
+
+### P.5 RFID backend: a line code for the tag→reader direction
+
+The reader (`gmodem recv -m rfid`) makes the 125 kHz field; the tag (`gmodem send -m rfid`) loads
+its antenna in step with that field (`RFIDIOCEMU`), so the bit clock is the reader's own carrier
+and cannot drift.
+
+- **Line code "P4"** (2 bits per antenna cycle, one `RFIDIOCEMU` segment per cycle): a cycle is
+  Q carrier periods loaded, then (L−1)·Q unloaded, with L = 2, 3, 4, 5 for the bit pairs 00, 01,
+  10, 11 (most significant pair first). A sync cycle has L = 7. Q = 16 periods (128 µs, preset
+  `fast`, average 3.5·Q per 2 bits ≈ 4.5 kbit/s) or Q = 32 (`robust`, ≈ 2.2 kbit/s).
+- **Why this code:** the comparator's edges one way are exact and the other way drift while the
+  envelope settles (as `rfid`'s EM4100 decoder found). P4 puts the information only in the time
+  between two edges *of the same kind* (one full cycle), so the drift cancels; the decoder tries
+  both edge kinds and both polarities and the CRC picks. Cycle lengths are ≥ 2·Q apart from the
+  sync and Q apart from each other, the same 128 µs resolution `rfid` already decodes at RF/32.
+  It also needs one segment per 2 bits, where Manchester needs up to two per bit: four times
+  more data per 512-segment emulation list.
+- **RP.5a Today's kernel (simplex carousel):** a frame is sync + 31 B (5 B header, 24 B payload,
+  CRC) = 125 cycles ≈ 56 ms; a capture of 512 edges (256 cycles) always holds one whole frame.
+  The tag plays a list of 2 frames (250 segments, 2 KB of pinned buffer) and moves to the next
+  pair every 0.6 s (`-p fast`; 1.2 s `robust`); the reader reads again and again and keeps what
+  it has not got yet. Estimate ≈ 50–100 B/s. RAM: one 2 KB buffer (the tag's pattern or the
+  reader's capture, never both), 1 KB for a pipe's data, the 512 B bitmap, the default 6 KB
+  stack and heap: ≈ 11 KB while `gmodem` runs.
+- **RP.5b With R9.0.5/R9.0.6 (streaming capture, long emulation):** the carousel streams
+  without the per-read restart: ≈ 400 B/s. No change in the format.
+- **RP.5c Reverse channel (kernel, T26b):** while `RFIDIOCEMU` runs, the kernel timestamps the
+  reader's field gaps (no carrier for > 8 periods) into a ring in the caller's pinned buffer
+  (`poll()` POLLIN), ≤ +8 B kernel RAM. The reader already has what it needs: `RFIDIOCFIELD`
+  holds the field, `write()` plays gaps (T5577 style: gap 16 periods, then 24 periods for 0, 56
+  for 1). Then the reader polls the tag ("send frames from k", ACK bitmap) and RFID uses the ARQ
+  stream of P.3 with the reader as master: no more blind repetition.
+- Exclusive with `/dev/nfc` (shared pin, R8.4) and with IR transmit (shared timers), as today.
+
+### P.6 NFC backend (Phase 13, M6)
+
+- ST25R3916 as **initiator** on one Flipper and **target in card-emulation mode** (NFC-A, the
+  chip's automatic anticollision answers the polling) on the other. After SELECT the initiator
+  sends our frames inside ISO 14443-4 I-blocks (FSD/FSC 256) and the target answers each with
+  its own (the turn is natural: command/response). v2: NFC-F at 212/424 kbit/s.
+- MTU 250 B, ARQ with W = 1 (every response is the ACK), net ≈ 5–10 KB/s at 106 kbit/s
+  (estimate). The target side has to answer within the frame waiting time the initiator set
+  (FWI): the driver answers S(WTX) itself while the process prepares the data, so a busy system
+  never drops the link (rule 0.8).
+- Needs `/dev/nfc` (Phase 13): raw ISO 14443-A initiator and card-emulation modes. Shares SPI
+  with the CC1101: one at a time (as R19.11).
+
+### P.7 BLE backend (Phase 15, M7)
+
+- One **L2CAP connection-oriented channel** (LE credit-based, the same as R19.12's bridge)
+  between the two Flippers, bonded and encrypted with LE Secure Connections before data flows
+  (R19.14). The link layer runs in "reliable" mode: framing and CRC only, no ARQ (L2CAP already
+  retransmits). MTU 240 B, 2M PHY when both sides have it.
+- Pairing: `gmodem pair -m ble` on both (6-digit numeric comparison on both screens). Bonds on
+  the SD card (R15.4).
+- Needs the full BLE stack on CPU2 (R16.1.0) and `bled`'s L2CAP CoC API.
+
+### P.8 Security
+
+- The modem carries **no encryption** except on BLE (P.7). Anyone in range can listen to RFID,
+  NFC and Sub-GHz transfers. `gmodem info` and the manual say so plainly. AES-CCM with a shared
+  passphrase over the AES1 block (12b's driver) is a later option (milestone M6 or later).
+- Everything received is hostile input (P.3); `gmodem recv` writes only the file the user named
+  (created with the user's umask; never follows a name sent over the air).
+- No reception path runs as root; the group of the device gives access.
+
+### P.9 Tests
+
+- **ACP.1 (host, `make modemtest`, run by `tests/host` in CI):** the ARQ stream moves 100 KB
+  through a simulated half-duplex channel with 20 % frame loss, 5 % corrupted frames and
+  reordering, byte-exact; the carousel completes with 30 % loss; the P4 code round-trips random
+  frames through synthetic comparator edges with ±15 µs jitter, ±40 µs edge skew, both
+  polarities and any start phase, in both presets; the CC1101 register values equal the
+  datasheet's examples for every preset; the legal check refuses every frequency and preset
+  combination that leaves a band and accepts the rest; the duty counter never allows more than
+  the limit in any 60-minute window over a simulated week of random traffic.
+- **ACP.2 (host):** 10⁶ random and mutated frames and edge streams into the decoders under
+  ASan/UBSan: no fault, no frame with a bad CRC accepted.
+- **ACP.3 (two Flippers, both on MINIX):** `twoflip.py --peer-minix` (devguide part 2,
+  chapter 6) sends 1 KB with each available medium and compares checksums; with the usual
+  Unleashed peer these rows are N/A, since the Unleashed firmware has no such modem. **A
+  MINIX-to-MINIX test needs a second Flipper running MINIX**; until there is one, the RFID rows
+  can be run by flashing the reference Flipper with MINIX for the session and back to Unleashed
+  afterwards.
+- **ACP.R (responsiveness):** during a `gmodem` transfer on any medium L1–L10 stay within
+  budget (`lat`), the launcher scrolls without a visible stall, and the SD card keeps working
+  (the SPI bus is held for one packet at a time).
+- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
+  (RP.8, RP.7), ≤ +8 B for RFID (RP.5c).
+
+### P.10 Notes for the system manual
+
+What each medium can do (the table of P.1 with measured numbers), the command, pipes, the
+range and how to hold two Flippers for RFID and NFC (backs together), the presets and the
+trade-off of bandwidth against range, the legal limits and why 433 MHz transfers pause (duty
+cycle), the region setting, "nothing is encrypted except BLE", and the exit statuses.
 
 ---
 
@@ -4921,4 +5187,5 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (owner request; no journaling) | section N, T17 |
+| Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (owner request) | section P, T26; 8, 13, 15 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

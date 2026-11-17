@@ -1,0 +1,80 @@
+.TH GMODEM 1
+.SH NAME
+gmodem \- move files between two Flippers over RFID, Sub-GHz, NFC or BLE
+.SH SYNOPSIS
+.nf
+\fBgmodem send \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-n\fR \fIrounds\fR] [\fIfile\fR]
+\fBgmodem recv \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-o\fR \fIfile\fR] [\fB\-t\fR \fIsec\fR]
+\fBgmodem chat \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
+\fBgmodem info\fR [\fB\-m\fR \fImedium\fR] [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
+.fi
+.SH DESCRIPTION
+.B Gmodem
+sends a file from one Flipper to another that also runs Galtzagorriak
+MINIX.
+.I Medium
+is
+.BR rfid ,
+.BR subghz ,
+.B nfc
+or
+.BR ble .
+Today
+.B rfid
+works; the others print "not implemented yet" and exit 2 until their
+drivers can send (Sub-GHz: spec RP.8; NFC: Phase 13; BLE: Phase 15).
+.PP
+.B "RFID."
+Hold the two Flippers back to back.
+.B "gmodem send \-m rfid"
+makes the Flipper a tag that plays the file over and over, in frames of
+24 bytes, until Ctrl-C or
+.I rounds
+rounds;
+.B "gmodem recv \-m rfid"
+makes the other a reader that keeps every frame it has not got yet and
+exits when the whole file is there, or after
+.I sec
+seconds (default 30) without a new frame.
+Presets:
+.B fast
+(default) and
+.BR robust .
+One way only, a few tens of bytes a second.
+The file to send may come from a pipe if it is at most 1 KB; the received
+file goes to
+.B \-o
+.I file
+or to standard output if that is a file (a pipe takes at most 1 KB).
+.PP
+.B "Sub-GHz."
+Presets
+.BR narrow ,
+.BR slow ,
+.B std
+(default),
+.B wide
+and
+.BR max :
+more bandwidth is faster and reaches less far.
+Only frequencies and presets the region in
+.B /etc/flipper/region
+allows are used; in the EU the 433 and 868 MHz bands also limit the share
+of time a transmitter may send (duty cycle).
+.B "gmodem info \-m subghz"
+shows what each preset does on the chosen frequency and whether it is
+allowed.
+.PP
+Nothing is encrypted except over BLE: anyone near can receive it.
+.SH "EXIT STATUS"
+0 everything arrived with a good CRC; 1 the transfer failed or timed out;
+2 not possible here (usage, medium not there yet).
+.SH EXAMPLES
+.nf
+gmodem recv \-m rfid \-o /tmp/notes.txt     # on the reader
+gmodem send \-m rfid /home/flipper/notes.txt  # on the tag
+gmodem info \-m subghz \-f 869.85
+.fi
+.SH "SEE ALSO"
+.BR rfid (1).
+Spec section P; manual chapter "Data modems".

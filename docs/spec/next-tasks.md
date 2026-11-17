@@ -355,6 +355,21 @@ One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts 
 ### T27b (`lane:local`, Flipper)
 - ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
 
+## T26. Data modems between two Flippers: RFID, Sub-GHz, NFC, BLE (spec section P; owner request 2026-11-17)
+Owner request outside the milestone order (like T19). Analysis and design: spec section P. The second Flipper of the two-device tests runs Unleashed, which has no such modem: MINIX-to-MINIX rows need a second MINIX Flipper for the session (`twoflip.py --peer-minix`, devguide part 2, 6.12).
+
+### T26a (`lane:cloud`, host + QEMU): DONE in the PR that added section P
+- `src/lib/modem` (frames, CRC, ARQ, carousel, RFID line code P4, CC1101 presets, band table, duty counter), `make modemtest` (ACP.1, ACP.2) in `tests/host`; `gmodem` with the RFID backend on today's `/dev/rfid` and `gmodem info`; `gmodem info` in the M2 self-test; `twoflip.py` `modem` rows and `--peer-minix`; manual chapter "Data modems", `gmodem(1)`.
+
+### T26b (`lane:local`, Flipper): the device side
+- RFID first, no kernel change: two MINIX Flippers back to back, `twoflip.py --peer-minix modem-rfid` (or 6.12 "By hand"); write the measured B/s of `fast` and `robust` and the best spacer into PORTING.md and the manual's table. If P4 fails on the real comparator, tune Q or the dwell in `gmodem.c` and the decoder tolerance in `p4.c` (host tests must stay green).
+- RP.5c reverse channel: field-gap timestamps while `RFIDIOCEMU` runs (ring in the caller's pinned buffer, `poll`), kernel ≤ +8 B; then the RFID ARQ mode in `gmodem`.
+- RP.8 + RP.7, with Phase 8 R8.1 part 2 / R8.2: `/dev/subghz` transmit in packet mode, `SGIOCPHY` computed by `src/lib/modem/cc1101.c` compiled into the kernel, the region band table (check every number of spec P.4 against the current ERC/REC 70-03, EN 300 220 and FCC 15.249 texts and the stock firmware's region data first, and say in the PR what was checked), the duty counter (7 slots, ≤ +24 B), CCA before transmit; kernel ≤ +32 B in total. Then the Sub-GHz PHY in `gmodem` (ARQ, W = 4) and ACP.R with `lat` during a transfer.
+- Never enabled by default without the device checks; Sub-GHz transmit is RF, so this whole item is local-only (Autonomy rules).
+
+### T26c NFC (M6, after Phase 13) and T26d BLE (M7, after Phase 15)
+- P.6: ISO 14443-4 frames between an NFC-A initiator and a card-emulating target, S(WTX) answered by the driver. P.7: one L2CAP CoC, bonded and encrypted, `gmodem pair -m ble`.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
