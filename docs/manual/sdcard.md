@@ -52,7 +52,8 @@ files report an error meanwhile; apps running from internal flash keep running.
 back (today they can be lost).
 
 If you insert a **different** card, the Flipper never touches it: it shows "Different card / Put the original
-back" (on the console: "sd: Different card: put the original back or power off") (it tells the cards apart by their serial number, the CID). If you
+back" (and on the console "sd: Different card: put the original back or power off"). It tells
+the cards apart by their serial number (the CID). If you
 power off instead, the original card is checked at its next boot if it was in the middle of a write.
 
 ## Things that cannot save your data
