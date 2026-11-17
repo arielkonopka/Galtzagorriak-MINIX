@@ -562,11 +562,11 @@ $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat
 $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
 # chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
-# (Canvas 1.1 KB, views, the list: remind 3 KB, alarm 2.75 KB in nattest)
-# and MM's 1.5 KB safety gap above it; nattest: 3.8 / 3.4 KB never used of
-# 12 KB, so 1 KB less leaves the heap 1.2 KB to grow (issue #201).
+# (Canvas 1.1 KB, views, the lists) and MM's 1.5 KB safety gap above it.
+# nattest (3 runs, 12 KB): never used remind 3.8-4.0 KB, alarm 3.2-3.4 KB;
+# what is left keeps at least 1 KB for the heap to grow (issue #201).
 CHMEM_remind := 11264	# 7b.1
-CHMEM_alarm  := 11264	# 7b.2
+CHMEM_alarm  := 11776	# 7b.2
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@

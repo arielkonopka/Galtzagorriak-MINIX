@@ -249,15 +249,6 @@ def main():
 			check(out == b"0\n", "GUI: %s takes the keys and exits 0"
 				% app)
 		r.output("sleep 1; free -t off", 30)
-		# The RAM each app takes while open (issue #201): started
-		# straight from this shell, so no subshell is counted; Back on
-		# the first screen ends it.
-		for app in ("remind", "alarm"):
-			base = freebytes(r)
-			r.sh("/usr/bin/%s & sleep 4" % app, 30)
-			ram(r, app, base)
-			tap(r, "left")
-			tap(r, "back", 2)
 		out = r.output("cat /var/timers/remind-1; ls -l /var/timers/remind-1",
 			20)
 		check(out is not None and b"Kind: interval" in out
@@ -279,6 +270,14 @@ def main():
 		for m in re.finditer(rb"memuse: (remind|alarm|alert) .*",
 				     r.out[mark:]):
 			print("  " + m.group(0).decode().strip())
+		# The RAM each app takes while open (issue #201): started
+		# straight from this shell, so no subshell is counted, and
+		# killed after the count (the last thing this test does).
+		for app in ("remind", "alarm"):
+			base = freebytes(r)
+			r.sh("/usr/bin/%s & sleep 4" % app, 30)
+			ram(r, app, base)
+			r.sh("kill $!; sleep 2", 30)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:
 				f.write(r.out)
