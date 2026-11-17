@@ -3363,9 +3363,14 @@ noticeable CPU on the foreground path.
     header; tag in the header; no plaintext CRCs). Known limit: no protection against rolling one
     block back to an older version of the same session (it needs the card pulled, edited elsewhere
     and put back; N.6 notices the pull, not the edit). Accepted; the manual says so.
-  - Card pulled (N.6): `ENXIO`, the process is **not** killed (its image is in RAM). The same card
-    back: the blocks are valid again. A write cut in half shows as `EIO` on that block. Another card:
-    never written (N.6), and its blocks read as zeros; `libblk` reports `ENXIO` until the process ends.
+  - Card pulled (N.6): the driver answers `ENXIO` while the card is out **and while a different
+    card is in** (CID), until the original is back, and never touches the other card. MM treats
+    `ENXIO` as "wait for the original", not as lost data (as swap does, R-N6.5): a **background**
+    request stays in `BLKWAIT` and `sw_step()` retries it (one card-detect read per try); a
+    **foreground** request gets `ENXIO` at once, so the UI never hangs on the card, and `libblk`
+    keeps its dirty frames and retries on the next call. The process is **not** killed (its image is
+    in RAM). When the original card is back, every block is valid again (headers match). A write cut
+    in half shows as `EIO` on that one block.
   - Swapped or parked processes: their blocks stay on the card, nothing moves. `app_park()` and
     `app_hibernate()` (R12.18, R12.19) call `vm_flush()` first.
 - **R12.38 Library, Berry, switch.**
@@ -3403,9 +3408,12 @@ noticeable CPU on the foreground path.
     offset; `dv_size` stays a byte count, so one partition is at most 4 GiB − 512 B (FS and swap
     positions are 32-bit byte offsets inside a partition, `io_position` taken as unsigned, as
     `disk.c` already does). Changes: `drvlib.c` (partition and subpartition setup and limits),
-    `disk.c` (sector = `dv_base` + offset sector), the partition ioctls (`DIOCGETP`/`DIOCSETP`
-    report and take the base in bytes as before while it fits, `EOVERFLOW` past 4 GiB). Kernel RAM
-    +0 B (same fields, another unit).
+    `src/kernel/arm/disk.c` (`w_schedule`: sector = `dv_base` + offset sector, no more
+    `dv_base >> SECTOR_SHIFT`; `w_init`: whole-disk size and clipping), the partition ioctls (`DIOCGETP`/`DIOCSETP`
+    report and take the base in bytes as before while it fits, `EOVERFLOW` past 4 GiB; `size` stays
+    bytes), and their users are checked in the same PR (`mkpart`, the selftest `board` module that
+    reads `p.size`), with the unit written in `<minix/partition.h>`. Kernel RAM +0 B (same fields,
+    another unit).
   - `/dev/hd0` (the whole card) stays clipped to 4 GiB as today: only partitions reach past it.
   - `mkpart`: drops the 4 GiB ceiling for partition **placement** (start and end anywhere up to
     the card's size, 2 TiB at most); each partition at most 4 GiB − 1 MiB; `-l` prints starts
@@ -3429,7 +3437,8 @@ Acceptance criteria:
   nothing.
 - AC12.21 QEMU: a background caller while keys arrive is answered only at idle; its PUTs stop at
   the reserve budget; a foreground caller is answered at once. `MI_SWAPTEST` 2 (card pulled):
-  `ENXIO`, the process lives on.
+  a foreground GET gets `ENXIO` and the process lives on; a background GET waits and completes
+  when the card is back (QEMU `DIOCFAKECARD`).
 - AC12.22 `swap=plain`: a `Secret: yes` test app and a set-uid image get `EPERM`; `blk=off` gives
   `ENOSYS`.
 - AC12.23 Device: L1 and L2 within budget while a background app reads blocks in a loop and while
