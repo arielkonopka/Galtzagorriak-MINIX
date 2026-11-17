@@ -1490,6 +1490,16 @@ inode owns, found in pass 1).
   loss, not a danger. `fsck -p` skips that range; `fsck -L` (run at idle or by hand) clears it.
 - Cost then follows the used space, not the card: ACO.3.
 - `fsck` reads past 4 GiB with `bread()` (O.3).
+- **Many files (32-bit `ino_t`).** Time follows the used inodes and directories (64 B each, read
+  multi-block at ≈ 1–2 MB/s): 10 000 files ≈ 2–5 s, 100 000 ≈ 10–45 s, 800 000 ≈ 1.5–6 min.
+  The link-count byte per inode (and the 2-byte window record) no longer fit `fsck_mem` above
+  ≈ 30 000 used inodes: past that, `fsck` keeps them in a scratch area at the start of the swap
+  partition (`hd3`/`hd3a`, swap is still off during boot checks), 1 KB pages through a small LRU,
+  so RAM stays ≤ `fsck_mem` + 24 KB whatever the count.
+- **Large directories.** Lookup is linear (16 V3 entries per block, 18-block cache): a missing
+  name in a 10 000-entry directory reads ≈ 625 KB (≈ 0.5–2 s). The manual advises ≤ ≈ 1 000
+  entries per directory (≤ ≈ 100 ms); apps that store many files (Sub-GHz, NFC, IR libraries)
+  use subdirectories. Run-time RAM does not depend on the number of files.
 
 ### O.7 Layout and moving an existing `/home`
 
