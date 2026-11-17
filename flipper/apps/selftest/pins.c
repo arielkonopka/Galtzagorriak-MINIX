@@ -1,4 +1,4 @@
-/* gpio - self test module (spec R7b.3.5): GPIO loopback.  The user puts
+/* pins - self test module (spec R7b.3.5): GPIO loopback.  The user puts
  * jumpers on the header pin pairs 2-3, 4-5, 6-7 and 15-16; each pin of a
  * pair drives high and low while the other reads, once with a pull-down
  * and once with a pull-up on the reading pin (without a jumper the pull

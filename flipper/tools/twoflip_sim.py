@@ -1,16 +1,16 @@
 """twoflip_sim - two simulated Flippers on pseudo-terminals, for
-"twoflip.py --selftest": checks twoflip's command lines, its waiting and its
-parsing without hardware.
+"twoflip.py --selftest": checks twoflip's command lines, its waiting, its
+parsing and its statuses without hardware.
 
-The Unleashed side imitates unleashed-firmware 53818b1's CLI output (prompt
-">: ", "Press Ctrl+C to abort", ANSI colours, CR LF); the MINIX side the
-shell with the commands of flipper/cmds (rfid, ir, od) and /dev/subghz as
-they are on main.  A shared World carries what one emulates or sends to
-the other.  MINIX's rfid knows only EM4100 here, as on main, so the
---rfid case is expected to FAIL until T19 lands.
+The Unleashed side imitates unleashed-firmware 53818b1's CLI (prompt ">: ",
+"Press Ctrl+C to abort", ANSI colours, CR LF; it refuses to transmit at
+868 MHz, as with a region that forbids it).  The MINIX side imitates the
+shell with what main has today: rfid (EM4100 only), ir (all 14 protocols
+and raw), od on /dev/ibutton, /dev/subghz and /dev/subghzraw, ver; no
+ikey, subghz or nfc command.  A shared World carries what one emulates or
+sends to the other.  expected() says what each row must give then.
 """
 import os
-import re
 import threading
 import time
 import tty
@@ -18,10 +18,9 @@ import tty
 
 class World:
 	def __init__(self):
-		self.lock = threading.Lock()
 		self.ul_em = None	# (protocol, hex) the Unleashed one emulates
 		self.mx_em = None	# hex the MINIX one emulates (EM4100)
-		self.ikey = None	# bytes the Unleashed one emulates
+		self.ikey = None	# (type, hex) the Unleashed one emulates
 		self.sg_tx = 0		# time the Unleashed tx ends
 		self.ul = self.mx = None
 
@@ -36,14 +35,13 @@ class Sim(threading.Thread):
 		self.line = b""
 		self.busy = None	# the long command running
 		self.lock = threading.Lock()
-		self.stopped = False
 
 	def out(self, s):
 		with self.lock:
 			os.write(self.master, s.encode() if isinstance(s, str) else s)
 
 	def run(self):
-		while not self.stopped:
+		while True:
 			try:
 				d = os.read(self.master, 1024)
 			except OSError:
@@ -59,7 +57,7 @@ class Sim(threading.Thread):
 			pass			# the long command does not read
 		elif c in (b"\r", b"\n"):
 			self.out("\r\n")
-			ln, self.line = self.line.decode(), b""
+			ln, self.line = self.line.decode("latin-1"), b""
 			self.command(ln)
 		else:
 			self.line += c
@@ -92,29 +90,45 @@ class UlSim(Sim):
 			self.w.ul_em = (a[2], a[3])
 			self.busy = "emulate"
 			return self.ready("Emulating RFID...")
-		if a[:3] == ["rfid", "read", "normal"]:
+		if a[:2] == ["rfid", "read"]:
 			self.busy = "read"
 			self.ready("Reading RFID...")
 			threading.Thread(target=self.read_rfid, daemon=True).start()
 			return
-		if a[:2] == ["ikey", "emulate"] and a[2] == "Dallas":
-			self.w.ikey = bytes.fromhex(a[3])
+		if a[:2] == ["ikey", "emulate"] and len(a) == 4:
+			self.w.ikey = (a[2], a[3])
 			self.busy = "ikey"
-			self.out("Emulating key Dallas %s\r\n" % a[3])
+			self.out("Emulating key %s %s\r\n" % (a[2], a[3]))
 			return self.out("Press Ctrl+C to abort\r\n")
+		if a == ["ikey", "read"]:
+			self.busy = "ikey"
+			return self.out("Reading iButton...\r\nPress Ctrl+C to abort\r\n")
 		if a == ["ir", "rx"]:
 			self.busy = "irrx"
 			return self.ready("Receiving  INFRARED...")
+		if a == ["ir", "rx", "raw"]:
+			self.busy = "irraw"
+			return self.ready("Receiving RAW INFRARED...")
+		if a[:3] == ["ir", "tx", "RAW"]:
+			self.w.mx.ir_raw_in([int(x) for x in a[5:]])
+			return self.prompt()
 		if a[:2] == ["ir", "tx"] and len(a) == 5:
 			self.w.mx.ir_in(a[2], int(a[3], 16), int(a[4], 16))
 			return self.prompt()
 		if a[:2] == ["subghz", "tx"]:
+			if a[3] == "868350000":
+				self.out("Transmission on this frequency is restricted in "
+					"your settings\r\n")
+				return self.prompt()
 			self.busy = "tx"
 			self.out("Transmitting at %s, key %s, te 403, repeat 100 "
 				"device 0. Press CTRL+C to stop\r\n" % (a[3], a[2]))
 			self.w.sg_tx = time.time() + 1.5
 			threading.Thread(target=self.tx_end, daemon=True).start()
 			return
+		if a[:2] == ["info", "device"]:
+			self.out("firmware.version              : unlshd-083\r\n")
+			return self.prompt()
 		self.out("`%s` command not found\r\n" % a[0])
 		self.prompt()
 
@@ -139,6 +153,15 @@ class UlSim(Sim):
 	def ir_in(self, p, a, c):
 		if self.busy == "irrx":
 			self.out("\x1b[32m%s, A:0x%02X, C:0x%02X\x1b[0m\r\n" % (p, a, c))
+
+	def ir_raw_in(self, d):
+		if self.busy == "irraw":
+			self.out("RAW, %d samples:\r\n%s \r\n" % (len(d),
+				" ".join(str(x + 20) for x in d)))
+
+
+IR14 = ["NEC", "NECext", "NEC42", "NEC42ext", "Samsung32", "RC5", "RC5X",
+	"RC6", "SIRC", "SIRC15", "SIRC20", "Kaseikyo", "RCA", "Pioneer"]
 
 
 class MxSim(Sim):
@@ -170,63 +193,86 @@ class MxSim(Sim):
 			self.state = "shell" if ln == "Kaixo-test1" else "login"
 			self.out("\r\n")
 			return self.prompt()
-		m = re.match(r'(.*?)(?:; echo @@R""=\$\?)?$', ln)
-		cmd, marked = m.group(1).strip(), ln.endswith('=$?')
-		rc = 0
+		marked = ln.endswith('; echo @@R""=$?')
+		cmd = ln[:-len('; echo @@R""=$?')] if marked else ln
+		rc = self.do(cmd.strip())
+		if rc is None:		# a long command: it prompts itself
+			return
+		if marked:
+			self.say("@@R=%d\n" % rc)
+		self.prompt()
+
+	def do(self, cmd):
 		a = cmd.split()
 		if cmd == 'echo @@S""Y':
 			self.say("@@SY\n")
-		elif not a:
-			pass
-		elif a[0] == "rfid" and a[1:2] == ["emulate"]:
+			return 0
+		if not a:
+			return 0
+		if a[0] == "rfid" and a[1:2] in (["emulate"], ["write"]):
+			if len(a) != 8 or a[2] != "EM":
+				self.say("usage: rfid [-r] [-n TRIES]\n")
+				return 1
 			self.w.mx_em = "".join(a[3:8])
 			self.busy = "emulate"
 			self.say("emulating EM4100 %s; hold to a reader, Ctrl-C to "
 				"stop\n" % " ".join(a[3:8]))
-			return
-		elif a[0] == "rfid":
-			time.sleep(0.5)
+			return None
+		if a[0] == "rfid":
+			time.sleep(0.3)
 			e = self.w.ul_em
 			if e and e[0] == "EM4100":
 				h = e[1]
 				self.say("EM4100 %s\n" % " ".join(h[i:i + 2]
 					for i in range(0, 10, 2)))
-			elif e:
+				return 0
+			if e:
 				self.say("no EM4100; 812 changes, 7-90 us, mean 25 us\n")
 			else:
 				self.say("no tag (no signal)\n")
-				rc = 1
-		elif a[:3] == ["ir", "rx", "-n"]:
-			self.busy = "irrx"
-			return
-		elif a[:2] == ["ir", "rx"]:	# -r -n 1 -d /dev/subghzraw
+			return 1
+		if a[:2] == ["ir", "rx"] and "/dev/subghzraw" in a:
 			time.sleep(0.3)
 			if time.time() < self.w.sg_tx:
 				self.say("48: 403 1209 403 1209 1209 403 77 5 403 1209"
 					+ " 403" * 38 + "\nunknown\n")
 			else:
 				self.say("200: " + " 9" * 200 + "\n")
-		elif a[:2] == ["ir", "tx"]:
+			return 0
+		if a[:2] == ["ir", "rx"]:
+			self.busy = "irraw" if "-r" in a else "irrx"
+			return None
+		if a[:3] == ["ir", "tx", "raw"]:
+			self.w.ul.ir_raw_in([int(x) for x in a[3:]])
+			return 0
+		if a[:2] == ["ir", "tx"] and len(a) == 5:
+			if a[2] not in IR14:
+				self.say("Usage: ir rx [-r] [-n COUNT] [-d DEV]\n")
+				return 1
 			self.w.ul.ir_in(a[2], int(a[3], 0), int(a[4], 0))
-		elif a[:2] == ["od", "-b"]:
+			return 0
+		if a[:2] == ["od", "-b"]:
 			k = self.w.ikey
-			if k:
-				self.say("0000000 " + " ".join("%03o" % x for x in k)
+			if k and k[0] == "Dallas":
+				b = bytes.fromhex(k[1])
+				self.say("0000000 " + " ".join("%03o" % x for x in b)
 					+ "\n0000010\n")
-			else:
-				self.say("od: read error: No such device\n")
-				rc = 1
-		elif a[0] == "echo" and a[-1] == "/dev/subghz":
-			pass
-		elif a[:2] == ["cat", "/dev/subghz"]:
+				return 0
+			self.say("od: read error: No such device\n")
+			return 1
+		if a[0] == "echo" and a[-1] == "/dev/subghz":
+			return 0
+		if a[:2] == ["cat", "/dev/subghz"]:
 			pk = -28 if time.time() < self.w.sg_tx else -93
 			self.say("rssi=-96 peak=%d freq=433919830\n" % pk)
-		else:
+			return 0
+		if a[0] == "ver":
+			self.say("Galtzagorriak MINIX 0.1.1 (sim)\n")
+			return 0
+		if a[0] not in ("echo",):
 			self.say("sh: %s: not found\n" % a[0])
-			rc = 127
-		if marked:
-			self.say("@@R=%d\n" % rc)
-		self.prompt()
+			return 127
+		return 0
 
 	def ir_in(self, p, a, c):
 		if self.busy == "irrx":
@@ -234,16 +280,40 @@ class MxSim(Sim):
 			self.say("%s address 0x%02x command 0x%02x\n" % (p, a, c))
 			self.prompt()
 
+	def ir_raw_in(self, d):
+		if self.busy == "irraw":
+			self.busy = None
+			self.say("%d: %s\nunknown\n" % (len(d), " ".join(str(x - 30)
+				for x in d)))
+			self.prompt()
 
-EXPECT = {
-	"rfid-u2m": "PASS", "rfid-m2u": "PASS", "rfid-proto-u2m": "FAIL",
-	"ir-u2m": "PASS", "ir-m2u": "PASS", "ibutton-u2m": "PASS",
-	"ibutton-m2u": "SKIP", "subghz-u2m": "PASS", "subghz-raw-u2m": "INFO",
-	"subghz-m2u": "SKIP", "nfc-u2m": "SKIP", "nfc-m2u": "SKIP",
-}
+
+def expected(rid):
+	"""What each row gives against this simulation."""
+	if rid.startswith("rfid-write") or rid.startswith("ibutton-write"):
+		return "N/A"
+	if rid in ("rfid-EM4100-u2m", "rfid-EM4100-m2u"):
+		return "PASS"
+	if rid == "rfid-Radio_Key-u2m":
+		return "BLOCKED"
+	if rid.startswith("rfid-"):
+		return "MISSING"
+	if rid.startswith("ir-"):
+		return "PASS"
+	if rid == "ibutton-Dallas_dev_ibutton-u2m":
+		return "PASS"
+	if rid.startswith("ibutton-"):
+		return "MISSING"
+	if rid.startswith("subghz-level_868"):
+		return "BLOCKED"
+	if rid.startswith("subghz-level"):
+		return "PASS"
+	if rid == "subghz-raw_timings-u2m":
+		return "INFO"
+	return "MISSING"		# subghz tx/chat/decode, nfc
 
 
-def selftest(tf, opt):
+def selftest(tf, opt, rows):
 	w = World()
 	w.ul, w.mx = UlSim(w), MxSim(w)
 	w.ul.start()
@@ -260,12 +330,11 @@ def selftest(tf, opt):
 	if not ul.sync() or not tf.login(mx, "Kaixo-test1") or not mx.sync():
 		print("selftest: FAIL no prompt or login on the simulated Flippers")
 		return 1
-	if not opt.rfid:
-		opt.rfid = ["H10301:1A2B3C"]
-	res = {}
-	tf.run_cases(ul, mx, opt, opt.cases, res)
-	bad = [n for n in res if res[n] != EXPECT[n]]
-	for n in bad:
-		print("selftest: %s gave %s, expected %s" % (n, res[n], EXPECT[n]))
-	print("selftest: %s (%d cases)" % ("FAIL" if bad else "ok", len(res)))
+	tf.finish(ul, mx, opt, rows)
+	bad = [r for r in opt.results if r["status"] != expected(r["id"])]
+	for r in bad:
+		print("selftest: %s gave %s, expected %s" % (r["id"], r["status"],
+			expected(r["id"])))
+	print("selftest: %s (%d rows)" % ("FAIL" if bad else "ok",
+		len(opt.results)))
 	return len(bad)
