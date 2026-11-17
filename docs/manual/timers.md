@@ -56,8 +56,8 @@ Snooze: 5
 | `Snooze` | minutes Up/Down snooze for, 0–60 (0: no snooze) |
 | `Tone` | a built-in tone (`beep`, `chime`, `rise`, `classic`, `gentle`, `pips`) or the full path of an RTTTL or `.fmf` file the owner may read |
 | `Ring` | minutes the alert rings, 1–60 (default: alarms 10, others 1) |
-| `Mode` | `steady` (default): every output at its full level from the start. `escalating`: the alert gets stronger the longer nobody answers, one stage per `Step:` — sparse beeps (one every 3 s), denser beeps (one a second), the full sound, then vibro, LED and screen flash on top. The volume rises with it, from a fifth of `Volume:` to all of it over the three sound stages. Without sound the other outputs go through the stages themselves. Older files: `Ramp: yes` |
-| `Step` | `escalating`: seconds per stage, 5–120 (default 30) |
+| `Mode` | `steady` (default): every output at its full level from the start, one ring every second for alarms and every 5 s otherwise. `escalating`: the alert gets stronger the longer nobody answers. The rings come closer: 5, 5, 4, 4, 3, 3, 2, 2 s apart, then every second (counted from the start of each ring). Per `Step:` stage: one beep a ring in the first two stages, the full sound (melody, or three beeps) from the third, then vibro, LED and screen flash on top. The volume rises from a fifth of `Volume:` to all of it over the first three stages; with the default `Step:` of 10 s it reaches full together with the rhythm, about 30 s in. Without sound the other outputs ring from the start. Older files: `Ramp: yes` |
+| `Step` | `escalating`: seconds per stage, 5–120 (default 10) |
 | `Volume` | the speaker volume, 1–100 (default 100). An alarm keeps its own; a reminder or info gets at most `Volume` from the settings below |
 | `Log` | an app name: OK on the alert appends `TIME ID` to `/home/flipper/apps_data/APP/log`, as the timer's owner |
 
@@ -105,9 +105,10 @@ Without a button it gives up after the timer's `Ring:` time (default 10 minutes 
 is set back as it was. It also writes one line to
 the console log, for example `alert: 09:30 reminder: Water: Drink a glass of water`.
 
-**Limitation:** the alert takes the screen only when no app holds it (the launcher's main
-screen). Over a running app it only rings, vibrates and logs, and cannot be answered with the
-buttons, until foreground preemption (`FG_PREEMPT`, spec R7b.2) arrives.
+The alert comes **over any app** (spec R7b.2): it takes the screen and the buttons, and when it
+ends the picture of the app underneath comes back as it was; the app keeps running meanwhile.
+When another alert is already showing, it waits its turn (a second at a time) within its own ring
+time.
 
 ## Commands
 

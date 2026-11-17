@@ -67,8 +67,8 @@ your alarms with time, days (or `once`) and label. OK edits, Back closes the app
 | Repeat | `on days` (with Days) or `once` (the next time it comes) |
 | Days | as in Remind |
 | Label | Alarm, Wake up, Work, School, Medicine, Nap is over |
-| Mode | `escalating` (new alarms): it gets stronger the longer you do not answer, by stages — sparse beeps, denser beeps, the full sound, then vibro, LED and screen flash on top; the volume rises from a fifth of **Volume** to all of it over the three sound stages. `steady`: everything at once, at **Volume** |
-| Stage | `escalating`: 10, 20, 30, 60, 90, 120 s per stage |
+| Mode | `escalating` (new alarms): it gets stronger the longer you do not answer. The rings come closer (5, 5, 4, 4, 3, 3, 2, 2 s apart, then every second), a single beep becomes the full sound, then vibro, LED and screen flash join in, and the volume rises from a fifth of **Volume** to all of it. `steady`: everything at once, at **Volume**, a ring every second |
+| Stage | `escalating`: 10 (default), 20, 30, 60, 90, 120 s per stage; with 10 s the sound and volume reach full together with the rhythm, about 30 s in |
 | Volume | 10–100 % in steps of 10 (a cubic curve, as on the stock firmware: 50 % is much quieter than 100 %) |
 | Sound | `yes`/`no`: the speaker |
 | Sound type | `melody` (the tone's tune) or `single` (beeps of one note) |
@@ -102,8 +102,6 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 
 ## Limitations
 
-- An alarm or reminder rings **over a running app** but cannot be answered with the buttons there
-  until foreground preemption arrives (spec R7b.2); see [the alert](timers.md#the-alert).
 - An app uses about **15–16 KB of RAM while it is open** (its own copy of the `libfuri` GUI,
   its thread stacks and screen buffer); nothing while it is closed.
 - The desk clock wakes once a minute from a timed wait; the RTC wake-up timer (planned, R7b.1)

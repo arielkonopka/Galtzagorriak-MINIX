@@ -2219,6 +2219,11 @@ Infrastructure (section F):
   duration field, cubic duty curve as stock `furi_hal_speaker_start`, reset to 100 on close).
   Escalating ramps the volume from a fifth of `Volume:` to all of it over the three sound
   stages; `/etc/notify.conf` `Volume` is the volume of reminders and info, never of alarms.
+  The ring rhythm (owner, 2026-11-17): escalating rings start 5, 5, 4, 4, 3, 3, 2, 2 s apart,
+  then every second, timed from each ring's start by `poll()` on `/dev/buttons`; steady keeps one
+  interval (alarm 1 s). The default stage is 10 s, so rhythm and volume reach full together.
+  The alert comes over any app with `FGIOCPREEMPT` (R7b.2), waits on `EBUSY`, and writes the
+  saved picture back before `FGIOCRELEASE`.
 - **Desk clock mode:** the app in the foreground shows a large clock and the next alarm; display
   update once a minute from the RTC wake-up timer (CPU in Stop2 in between); backlight level
   chosen in settings (off, dim, on; "on while charging" when `DeskMode` is granted). Buttons work

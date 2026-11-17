@@ -163,24 +163,47 @@ static unsigned rnote(int full, int single, int i, unsigned *hz)
 	return tune[4*i+2] | tune[4*i+3] << 8;
 }
 
-/* Wait up to ms for a key (only a pure wait when the screen is not ours):
- * the key, or 0.  poll() rounds up to the clock tick.  If the buttons
- * fail, they are dropped and later waits are pure timeouts: never spin.
- * A read of 0 bytes (a preemption, R7b.2) is no key. */
+/* A key that ends the alert, if one went down (the press, T3), else 0.
+ * Our own non-blocking descriptor: an empty queue is EAGAIN, a
+ * preemption (R7b.2) 0 bytes; neither is a key.  *empty: nothing read. */
+static long ms_since(clock_t t0);
+
+static int key_now(int *empty)
+{
+	unsigned char ev[2];
+	int k = 0, n;
+
+	*empty = 1;
+	while (btn >= 0 && (n = read(btn, (char *) ev, 2)) == 2) {
+		*empty = 0;
+		if (ev[1]) k |= ev[0] & ends;	/* releases: no */
+	}
+	return k;
+}
+
+/* Wait up to ms for a key (a pure wait when the screen is not ours):
+ * the key, or 0.  poll() rounds up to the clock tick.  Never spins: if
+ * poll() says ready and nothing can be read (seen in timedtest before
+ * R7b.2: the next poll() said ready again at once, and the loop took the
+ * CPU from the shell), or it fails, the rest of the wait is a pure
+ * timeout. */
 static int wait_key(int ms)
 {
+	struct tms tb;
+	clock_t t0 = times(&tb);
 	struct pollfd p;
-	int n;
+	int n, k, empty;
+	long left;
 
 	p.fd = btn;
 	p.events = POLLIN;
 	p.revents = 0;
-	if ((n = poll(&p, btn >= 0 ? 1 : 0, ms)) < 0 && btn >= 0
-	    && errno != EINTR) {
-		close(btn);
-		btn = -1;
-	}
-	return n > 0 && shown ? gui_key_nowait() & ends : 0;
+	n = poll(&p, btn >= 0 ? 1 : 0, ms);
+	if (n <= 0 || !shown) return 0;
+	if ((k = key_now(&empty)) != 0) return k;
+	if (empty && (left = ms - ms_since(t0)) > 0)
+		(void) poll(&p, 0, (int) left);
+	return 0;
 }
 
 /* The backlight: on (255) or off, in auto mode with the timeout kept;
@@ -242,7 +265,7 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 	unsigned hz, d;
 	long t, start = 0, per, q, scr_off = -1;
 	int spk = -1, vib = -1, key = 0, n = 0, st, other, led_on = 0;
-	int v, sv = -1, i, np, full;
+	int v, sv = -1, i, np, full, empty;
 
 	if (snz) ends |= KEY_UP | KEY_DOWN;	/* other keys: ring on */
 
@@ -310,7 +333,7 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 				} else if (write(spk, p, np) != np) {
 					close(spk);	/* gone: no sound */
 					spk = -1;
-				} else if (shown) key = gui_key_nowait() & ends;
+				} else if (shown) key = key_now(&empty);
 				d -= q;
 				if (scr_off >= 0 && ms_since(t0) >= scr_off) {
 					screen(0);
@@ -547,7 +570,7 @@ int main(int argc, char **argv)
 						  : "Back:off  OK:done", 1);
 		gui_flush();
 	} else shown = 0;
-	if (shown) btn = open("/dev/buttons", O_RDONLY);	/* to poll */
+	if (shown) btn = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
 	bl_save();				/* to set it back at the end */
 
 	k = ring_ms < 1000 ? 0 : ring(flags, cat, ramp, single,
