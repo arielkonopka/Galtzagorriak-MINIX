@@ -37,6 +37,11 @@
  *					default), PSK tags' 62.5 kHz at 25 %,
  *					FDX-B's 134.2 kHz (R9.0.4); -r shows
  *					the timings (decoders: T19)
+ *		rfid emulate [-runs] EM B0 B1 B2 B3 B4
+ *					be that EM4100 tag for a reader; -runs
+ *					plays it from a run list through a
+ *					small refilled ring (R9.0.6, the path
+ *					FSK/PSK frames need)
  *		rfid -s SECS [-c MODE]	capture without a gap (R9.0.5) for
  *					SECS and report halves, edges,
  *					overruns and the durations' range
@@ -696,6 +701,53 @@ static int emulate_em(unsigned char id[5])
 	return 0;			/* not reached */
 }
 
+/* rfid emulate -runs EM ...: the same EM4100, played from a run list
+ * (RFIDIOCEMURUN, R9.0.6) through the smallest ring (16 pairs: a refill
+ * every 8 segments, ~2 ms), so a reader that reads it proves the refill
+ * path the FSK and PSK encoders (T19) will use. */
+static int emulate_em_runs(unsigned char id[5])
+{
+	unsigned char b[64], h[128];
+	struct rfid_emu_run *ru = (struct rfid_emu_run *) &d[0];  /* <= 1 KB */
+	unsigned long *ring = &d[256];
+	struct rfid_emu_runs q;
+	int k, n = 0, fd;
+
+	em_bits(id, b);
+	for (k = 0; k < 64; k++) {		/* half bits: loaded or not */
+		h[2 * k] = b[k] != 0;
+		h[2 * k + 1] = b[k] == 0;
+	}
+	for (k = 0; k < 128; k++) {		/* equal neighbours: one run */
+		if (n > 0 && (ru[n - 1].pulse != 0) == h[k]) {
+			ru[n - 1].count++;
+			continue;
+		}
+		ru[n].period_m1 = 31;
+		ru[n].pulse = h[k] ? 32 : 0;
+		ru[n].count = 1;
+		ru[n].pad = 0;
+		n++;
+	}
+	q.runs = ru;
+	q.nruns = n;
+	q.ring = ring;
+	q.ring_n = 16;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMURUN, &q) < 0) {
+		perror("rfid: emulate (runs)");
+		close(fd);
+		return 1;
+	}
+	printf("emulating EM4100 %02X %02X %02X %02X %02X from %d runs; hold to "
+		"a reader, Ctrl-C to stop\n", id[0], id[1], id[2], id[3], id[4], n);
+	for (;;) sleep(60);
+	return 0;
+}
+
 /* ---- streaming capture (R9.0.5) ----
  * rfid -s SECONDS [-c MODE]: capture without a gap for that long and say
  * how it went (halves, edges, overruns, the range of the durations): the
@@ -771,16 +823,18 @@ int main(int argc, char **argv)
 
 	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
 		unsigned char id[5];
+		int runs = argc >= 3 && strcmp(argv[2], "-runs") == 0;
 
-		if (argc != 8 || strcmp(argv[2], "EM") != 0) goto use;
+		if (argc != 8 + runs || strcmp(argv[2 + runs], "EM") != 0)
+			goto use;
 		for (n = 0; n < 5; n++) {
 			char *e;
-			unsigned long v = strtoul(argv[3 + n], &e, 16);
+			unsigned long v = strtoul(argv[3 + runs + n], &e, 16);
 
 			if (*e != 0 || v > 255) goto use;
 			id[n] = (unsigned char) v;
 		}
-		return emulate_em(id);
+		return runs ? emulate_em_runs(id) : emulate_em(id);
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
@@ -875,7 +929,7 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-c 125|psk|134] [-s SECS]\n
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
-				"       rfid emulate EM B0 B1 B2 B3 B4\n");
+				"       rfid emulate [-runs] EM B0 B1 B2 B3 B4\n");
 			return 2;
 		}
 	}

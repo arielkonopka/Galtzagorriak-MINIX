@@ -99,7 +99,9 @@ For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures witho
 edges go round and round into a ring in the program's memory, `read` says which half is new, and
 falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
 tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
-a quick check that nothing is lost.
+a quick check that nothing is lost. Long frames are emulated the same way in reverse: `ioctl(RFIDIOCEMURUN)` takes a list of runs
+(segments of equal length and load) and the kernel refills a small ring from it while the reader's
+own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
