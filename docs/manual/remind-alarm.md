@@ -67,13 +67,20 @@ your alarms with time, days (or `once`) and label. OK edits, Back closes the app
 | Repeat | `on days` (with Days) or `once` (the next time it comes) |
 | Days | as in Remind |
 | Label | Alarm, Wake up, Work, School, Medicine, Nap is over |
+| Mode | `escalating` (new alarms): it gets stronger the longer you do not answer, by stages — sparse beeps, denser beeps, the full sound, then vibro, LED and screen flash on top; the volume rises from a fifth of **Volume** to all of it over the three sound stages. `steady`: everything at once, at **Volume** |
+| Stage | `escalating`: 10, 20, 30, 60, 90, 120 s per stage |
+| Volume | 10–100 % in steps of 10 (a cubic curve, as on the stock firmware: 50 % is much quieter than 100 %) |
+| Sound | `yes`/`no`: the speaker |
+| Sound type | `melody` (the tone's tune) or `single` (beeps of one note) |
 | Tone | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, then your own files |
-| Rising | `yes`: single beeps for the first 30 s, then the whole tune |
-| Sound, Vibro, LED | what it uses; an alarm **always rings** as set, also in do-not-disturb |
+| Vibro, LED blink, Screen flash | `yes`/`no` each; the screen flash blinks the backlight and leaves it as it was afterwards |
 | Snooze | 0, 5, 10, 15, 20, 30 minutes |
 | Ring for | 1, 5, 10, 15, 30, 60 minutes before it gives up |
 | On | `no` keeps the alarm but switches it off |
 | Save, Delete | OK on them |
+
+An alarm **always rings** as set — its outputs and its own volume — also in do-not-disturb and
+when the volume of reminders (`/etc/notify.conf`, `Volume`) is 0.
 
 **Your own tones:** put RTTTL (`.rtttl` or `.txt`) or Flipper music (`.fmf`) files into
 `/home/flipper/apps_data/alarm/` (as root or the user `alarm`, mode readable by `alarm`); the
@@ -97,7 +104,6 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 
 - An alarm or reminder rings **over a running app** but cannot be answered with the buttons there
   until foreground preemption arrives (spec R7b.2); see [the alert](timers.md#the-alert).
-- The speaker has no volume steps yet: **Rising** is single beeps first, not a volume ramp.
 - An app uses about **15–16 KB of RAM while it is open** (its own copy of the `libfuri` GUI,
   its thread stacks and screen buffer); nothing while it is closed.
 - The desk clock wakes once a minute from a timed wait; the RTC wake-up timer (planned, R7b.1)

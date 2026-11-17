@@ -51,11 +51,14 @@ Snooze: 5
 | `Missed` | `skip` (default) or `fire-once`: what to do when its time passed while the Flipper was off or the clock jumped forward |
 | `Action` | `notify` (default): show an alert; `run` with `Program: /path`: start it as the file's owner with `--timer ID` |
 | `Title`, `Text` | the alert's text (23 and 63 characters) |
-| `Sound`, `Vibro`, `Led` | `yes` (default) or `no` |
+| `Out` | what the alert uses: any of `sound`, `vibro`, `led`, `screen` (blinks the backlight), comma-separated, or `none`. Default `sound,vibro,led`. Older files: `Sound:`, `Vibro:`, `Led:` `yes`/`no` |
+| `Sound` | `multi` (default): the melody of `Tone:`; `single`: beeps of one tone (its first note) |
 | `Snooze` | minutes Up/Down snooze for, 0–60 (0: no snooze) |
 | `Tone` | a built-in tone (`beep`, `chime`, `rise`, `classic`, `gentle`, `pips`) or the full path of an RTTTL or `.fmf` file the owner may read |
 | `Ring` | minutes the alert rings, 1–60 (default: alarms 10, others 1) |
-| `Ramp` | `yes`: single beeps for the first 30 s, then the whole tune |
+| `Mode` | `steady` (default): every output at its full level from the start. `escalating`: the alert gets stronger the longer nobody answers, one stage per `Step:` — sparse beeps (one every 3 s), denser beeps (one a second), the full sound, then vibro, LED and screen flash on top. The volume rises with it, from a fifth of `Volume:` to all of it over the three sound stages. Without sound the other outputs go through the stages themselves. Older files: `Ramp: yes` |
+| `Step` | `escalating`: seconds per stage, 5–120 (default 30) |
+| `Volume` | the speaker volume, 1–100 (default 100). An alarm keeps its own; a reminder or info gets at most `Volume` from the settings below |
 | `Log` | an app name: OK on the alert appends `TIME ID` to `/home/flipper/apps_data/APP/log`, as the timer's owner |
 
 `daily` and `interval` times are **local time** (`/etc/TZ`, else UTC) and follow summer time;
@@ -72,20 +75,24 @@ A time counts as on time up to 60 s late. If `timed` finds the latest occurrence
 may get attention:
 
 ```
-Volume: 80          # 0 = no sound (the speaker has no volume steps yet)
+Volume: 80          # reminders and info, 0-100; 0 = no sound
 Vibro: yes
 Led: yes
 Dnd: 22:00-07:00    # do not disturb, local time; "Dnd: off"
 ```
 
-An **alarm always rings** as it is set (sound and vibro), also during do-not-disturb and with
-`Volume: 0`; an alarm with `Sound: no` only vibrates. **Reminders and info** are not shown during
-do-not-disturb, and use only what the settings allow otherwise.
+An **alarm always rings** as it is set (its outputs and its own `Volume:`), also during
+do-not-disturb and with `Volume: 0` here; an alarm without `sound` in `Out:` only vibrates,
+blinks or flashes. **Reminders and info** are not shown during do-not-disturb, use only what the
+settings allow otherwise, and play at this `Volume` (or at their own `Volume:`, if that is
+lower). The volume follows a cubic curve, as on the stock firmware: 50 is already much quieter
+than 100, 20 is quiet.
 
 ## The alert
 
-`alert` shows the title, the time and the text on the screen, rings every 5 s (a short tune,
-vibration, and the LED: fast red for alarms, a blue pulse otherwise) and waits for a button:
+`alert` shows the title, the time and the text on the screen, rings (as `Mode:` says: steady,
+or escalating by stages; the tune, vibration, the LED — fast red for alarms, a blue pulse
+otherwise — and the screen flash) and waits for a button:
 
 | button | meaning |
 |---|---|
@@ -94,7 +101,8 @@ vibration, and the LED: fast red for alarms, a blue pulse otherwise) and waits f
 | Up or Down | snooze (a new `once` timer `_ID`), when the timer has `Snooze:` |
 
 Without a button it gives up after the timer's `Ring:` time (default 10 minutes for alarms,
-1 minute otherwise). It also writes one line to
+1 minute otherwise). A key stops it within 0.1 s, also while it flashes or vibrates; the backlight
+is set back as it was. It also writes one line to
 the console log, for example `alert: 09:30 reminder: Water: Drink a glass of water`.
 
 **Limitation:** the alert takes the screen only when no app holds it (the launcher's main
@@ -107,7 +115,8 @@ buttons, until foreground preemption (`FG_PREEMPT`, spec R7b.2) arrives.
 /usr/lib/timed -v              # run now, saying what it fires and what it arms (root)
 /usr/lib/timed -v -n SECONDS   # as if the time were SECONDS since 1970 (tests)
 /usr/lib/alert -c alarm Wake "Time to get up"
-/usr/lib/alert -c alarm -t rise -r 5 -R Wake "Time to get up"   # tone, ring 5 min, rising
+/usr/lib/alert -c alarm -t rise -r 5 -R Wake "Time to get up"   # tone, ring 5 min, escalating
+/usr/lib/alert -c alarm -f 17 -1 -v 30 Wake "Up"   # sound + screen flash, single tone, volume 30
 rtc                            # the alarm timed has set
 ```
 

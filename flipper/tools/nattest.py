@@ -13,8 +13,10 @@ timed, remind and alarm packages and checks:
            to apps_data/remind/log, written as the user remind; remind -s
            counts it today; Back does not count; timed -n fires a
            reminder and OK on it writes the log line
-  7b.2     snooze makes the timer _ID with the tone, ring time, ramp and
-           log of the alert; alarm -n gives the next alarm that is on (an
+  7b.2     snooze makes the timer _ID with the tone, ring time, mode,
+           stage, volume, sound type, outputs and log of the alert; the
+           backlight is as before after a screen flash; /dev/speaker takes
+           the volume note (0xFFFF) and beep -v; alarm -n gives the next alarm that is on (an
            alarm that is off, apps_data/alarm/alarm-N.off, is not); timed
            fires an alarm that has a tone; each alert gives the screen
            back when it ends (the next one shows)
@@ -121,20 +123,40 @@ def main():
 			is not None, "7b.1: remind -s counts the OK, not the Back")
 		if fails: print(out)
 
-		# 7b.2: snooze keeps the alarm's tone, ring time, ramp.
+		# 7b.2: snooze keeps the alarm's ring settings.  -f 16: only
+		# the screen flash; the backlight is as before afterwards.
 		r.sh("rm -f /var/timers/_alarm-9", 20)
-		r.sh("/usr/lib/alert -c alarm -f 0 -t rise -r 15 -R -z 5 alarm-9 "
-		     "-u 22 Wake Wake 2>/dev/null & sleep 2", 20)
+		bl0 = r.output("od -An -tx1 /dev/backlight", 20)
+		r.sh("/usr/lib/alert -c alarm -f 16 -t rise -r 15 -R -S 20 -1 "
+		     "-v 40 -z 5 alarm-9 -u 22 Wake Wake 2>/dev/null & sleep 2", 20)
 		tap(r, "left")
 		tap(r, "up", 2)
 		out = r.output("cat /var/timers/_alarm-9; ls -l /var/timers/_alarm-9",
 			20)
 		check(out is not None and b"Tone: rise" in out and b"Ring: 15" in out
-			and b"Ramp: yes" in out and b"Category: alarm" in out
+			and b"Mode: escalating\nStep: 20" in out
+			and b"Volume: 40" in out and b"Sound: single" in out
+			and b"Out: screen" in out and b"Category: alarm" in out
 			and re.search(rb"-rw------- .*alarm ", out) is not None,
-			"7b.2: snooze: _alarm-9 with the tone, ring time, ramp")
+			"7b.2: snooze: _alarm-9 keeps tone, ring, mode, stage, "
+			"volume, sound type, outputs")
 		if fails: print(out)
+		bl1 = r.output("od -An -tx1 /dev/backlight", 20)
+		check(bl0 is not None and bl0 == bl1,
+			"7b.2: the backlight is as before after the screen flash")
+		if bl0 != bl1: print(bl0, bl1)
 		r.sh("rm -f /var/timers/_alarm-9", 20)
+
+		# The speaker volume (/dev/speaker note 0xFFFF): a volume-only
+		# write returns at once; beep -v plays.
+		r.sh("echo xxyz | tr xyz '\\377\\036\\000' | dd of=/tmp/vol bs=1 "
+		     "count=4 2>/dev/null", 20)
+		out = r.output("cat /tmp/vol >/dev/speaker; echo st=$?; "
+			"beep -v 30 1000 50 1500 50; echo st=$?; "
+			"beep -v 101 1000 20; echo st=$?", 30)
+		check(out is not None and out.count(b"st=0") == 3,
+			"/dev/speaker: the volume note, beep -v")
+		if fails: print(out)
 
 		# 7b.2: the next alarm; one that is off does not count.
 		now = int(time.time())
@@ -191,12 +213,13 @@ def main():
 		mark = len(r.out)
 		r.sh("free -t on", 20)
 		# remind: OK (the list), OK (+ New), Up (Save), OK, Back, Back
-		# alarm: OK (desk clock), Back, Down (+ New), OK, Up (Save), OK,
-		# Back
+		# alarm: OK (desk clock), Back, Down (+ New), OK, Down x7
+		# (Volume), Left (90 %), Up x8 (Save), OK, Back
 		for app, keys in (("remind", ("ok", "ok", "up", "ok", "back",
 					       "back")),
-				  ("alarm", ("ok", "back", "down", "ok", "up",
-					      "ok", "back"))):
+				  ("alarm", ("ok", "back", "down", "ok")
+					    + ("down",) * 7 + ("left",)
+					    + ("up",) * 8 + ("ok", "back"))):
 			r.sh("rm -f /tmp/st; (/usr/bin/%s; echo $? > /tmp/st) & "
 			     "sleep 4" % app, 30)
 			tap(r, "left")
@@ -221,8 +244,11 @@ def main():
 		out = r.output("cat /var/timers/alarm-1; /usr/bin/alarm -n", 20)
 		check(out is not None and b"Kind: daily" in out
 			and b"Time: 07:00" in out and b"Category: alarm" in out
+			and b"Out: sound,vibro,led,screen" in out
+			and b"Mode: escalating" in out and b"Volume: 90" in out
 			and re.search(rb"alarm-1 \d+ 07:00 Alarm\n", out) is not None,
-			"GUI: alarm's form made alarm-1 (07:00 Mo-Fr), alarm -n")
+			"GUI: alarm's form made alarm-1 (07:00 Mo-Fr, escalating, "
+			"every output, Volume 90), alarm -n")
 		if fails: print(out)
 		for m in re.finditer(rb"memuse: (remind|alarm|alert) .*",
 				     r.out[mark:]):

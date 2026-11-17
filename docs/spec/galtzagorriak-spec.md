@@ -2165,6 +2165,15 @@ Infrastructure (section F):
 - Each alarm is one `once` or `daily` timer, category `alarm`: it **always** sounds or vibrates
   per its own setting, regardless of the foreground app, the global sound switch and
   do-not-disturb.
+- **Ring settings per alarm** (owner, 2026-11-17), in the timer file: `Mode: escalating|steady`
+  (escalating: by stages of `Step:` seconds, sparse beeps, denser beeps, the full sound, then
+  vibro, LED and screen flash on top; steady: one level for the whole ring time), `Out:` any of
+  sound, vibro, led, screen (the screen flash toggles the backlight from `alert`'s own blocking
+  loop, no kernel work, and restores it on exit), `Sound: single|multi` (one tone or the
+  melody), `Volume: 1-100` (`/dev/speaker` volume note: frequency 0xFFFF, the volume in the
+  duration field, cubic duty curve as stock `furi_hal_speaker_start`, reset to 100 on close).
+  Escalating ramps the volume from a fifth of `Volume:` to all of it over the three sound
+  stages; `/etc/notify.conf` `Volume` is the volume of reminders and info, never of alarms.
 - **Desk clock mode:** the app in the foreground shows a large clock and the next alarm; display
   update once a minute from the RTC wake-up timer (CPU in Stop2 in between); backlight level
   chosen in settings (off, dim, on; "on while charging" when `DeskMode` is granted). Buttons work
