@@ -2,16 +2,19 @@
  * libfuri core tests (spec R5.1): every primitive, on the host
  * (make -C flipper/lib/furi test) and on MINIX in QEMU (/bin/furitest,
  * run by m2test). Exit status 0 when all pass.
- * Times differ: the host sleeps in ms, MINIX in whole seconds until
- * poll() (R4b.6), so the timing checks are loose there. */
+ * Times differ: the host sleeps in ms, MINIX in clock ticks (1/60 s),
+ * so some timing checks are looser there. */
 #include <sys/types.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <errno.h>
+#include <poll.h>
 #include <unistd.h>
 #include <furi.h>
+#include "src/furi_i.h"
 
 static int fails, checks;
 
@@ -336,10 +339,12 @@ static void test_timer(void) {
           "a once timer wakes a queue reader");
     CHECK(once_seen == 1 && !furi_timer_is_running(once), "once: one call, then stopped");
     furi_delay_ms(110);
+    /* 150 ms after the start (the queue get took 40 of them) */
 #ifdef FURI_HOST
     CHECK(ticks_seen >= 5 && ticks_seen <= 8, "periodic 20 ms over 150 ms");
 #else
-    CHECK(ticks_seen >= 1, "periodic timer runs (whole-second sleeps until R4b.6)");
+    /* ticks of 16.7 ms: a 20 ms period fires at 33, 50, 67, 83 ... */
+    CHECK(ticks_seen >= 4 && ticks_seen <= 8, "periodic 20 ms over 150 ms (60 Hz)");
 #endif
     furi_timer_stop(per);
     ticks_seen = 0;
@@ -350,6 +355,152 @@ static void test_timer(void) {
     CHECK(pend_seen == 5, "pending callback");
     furi_timer_free(per);
     furi_timer_free(once);
+    furi_message_queue_free(q);
+}
+
+/* ---------------------------------------------------- fd waits (#181) */
+
+static char fd_got[8];
+static ssize_t fd_n;
+static uint32_t fd_woke;
+
+static int32_t fd_reader(void* ctx) {
+    int fd = *(int*)ctx;
+
+    fd_n = ffd_read(fd, fd_got, sizeof(fd_got), FuriWaitForever);
+    fd_woke = furi_get_tick();
+    return 0;
+}
+
+static ssize_t fd_n2;
+
+static int32_t fd_reader2(void* ctx) {
+    int fd = *(int*)ctx;
+    char c;
+
+    fd_n2 = ffd_read(fd, &c, 1, FuriWaitForever);
+    return 0;
+}
+
+static void on_fd_timer(void* ctx) {
+    uint32_t v = furi_get_tick();
+    furi_message_queue_put(ctx, &v, 0);
+}
+
+/* A child writes to the pipe after ms: the parent sleeps in poll(). */
+static pid_t write_later(int fd, int ms, const char* s) {
+    pid_t pid;
+
+    fflush(stdout);
+    pid = fork();
+    if(pid == 0) {
+        poll(NULL, 0, ms);
+        _exit(write(fd, s, strlen(s)) == (ssize_t)strlen(s) ? 0 : 1);
+    }
+    return pid;
+}
+
+static void test_fdwait(void) {
+    FuriMessageQueue* q = furi_message_queue_alloc(1, sizeof(uint32_t));
+    FuriTimer* tm = furi_timer_alloc(on_fd_timer, FuriTimerTypeOnce, q);
+    FuriThread* r;
+    int p[2], st;
+    uint32_t start, d, v;
+    pid_t pid;
+#ifdef FURI_HOST
+    extern unsigned long fport_host_idles;
+    unsigned long idles;
+#endif
+
+    printf("fd waits, idle in poll()\n");
+    /* 1: a 100 ms delay with nothing else to do */
+    start = furi_get_tick();
+    furi_delay_ms(100);
+    d = furi_get_tick() - start;
+    printf("  furi_delay_ms(100): %lu ms\n", (unsigned long)d);
+    CHECK(d >= 100 && d <= 135, "100 ms delay takes 100-135 ms");
+
+    CHECK(pipe(p) == 0, "pipe");
+    /* 2: a thread on an empty pipe; nobody else ready; a child writes */
+    r = furi_thread_alloc_ex("fdr", 1024, fd_reader, &p[0]);
+    fd_n = -2;
+    furi_thread_start(r);
+    furi_thread_yield();
+    CHECK(fd_n == -2, "reader waits on the empty pipe");
+#ifdef FURI_HOST
+    idles = fport_host_idles;
+#endif
+    start = furi_get_tick();
+    pid = write_later(p[1], 60, "hi");
+    furi_thread_join(r); /* the only wake-up: the pipe */
+    d = fd_woke - start;
+    printf("  pipe wake after %lu ms (child writes at 60)\n", (unsigned long)d);
+    CHECK(fd_n == 2 && memcmp(fd_got, "hi", 2) == 0, "pipe data wakes the reader");
+    CHECK(d >= 40 && d <= 1000, "woken when the data came");
+#ifdef FURI_HOST
+    CHECK(fport_host_idles - idles <= 3, "slept in poll(), no spinning");
+#endif
+    waitpid(pid, &st, 0);
+
+    /* 3: a thread blocked on an empty pipe does not stop a 50 ms timer */
+    fd_n = -2;
+    furi_thread_start(r);
+    furi_thread_yield();
+    start = furi_get_tick();
+    furi_timer_start(tm, 50);
+    v = 0;
+    CHECK(furi_message_queue_get(q, &v, 1000) == FuriStatusOk, "timer fired");
+    d = v - start;
+    printf("  50 ms timer beside a blocked reader: %lu ms\n", (unsigned long)d);
+    CHECK(d >= 50 && d <= 85, "50 ms timer on time beside a blocked reader");
+    CHECK(fd_n == -2, "reader still waits");
+    CHECK(ffd_read(p[0], fd_got, 1, 0) == -1 && errno == EAGAIN, "timeout 0: EAGAIN");
+    start = furi_get_tick();
+    CHECK(ffd_read(p[0], fd_got, 1, 30) == -1 && errno == EAGAIN, "timeout 30: EAGAIN");
+    CHECK(furi_get_tick() - start >= 30, "waited the timeout");
+    CHECK(write(p[1], "x", 1) == 1, "write");
+    furi_thread_join(r);
+    CHECK(fd_n == 1 && fd_got[0] == 'x', "reader woken by a write from a thread");
+
+    /* 4: "ready" only a hint (as a device that does not answer
+     * DEV_SELECT): two readers, one byte; the loser reads EAGAIN after
+     * poll() said ready and must go on per tick, not spin */
+    {
+        FuriThread* r2 = furi_thread_alloc_ex("fdr2", 1024, fd_reader2, &p[0]);
+        uint32_t n0;
+
+        fd_n = fd_n2 = -2;
+        furi_thread_start(r);
+        furi_thread_start(r2);
+        furi_thread_yield();
+        CHECK(write(p[1], "a", 1) == 1, "write a");
+        furi_delay_ms(50);
+        CHECK((fd_n == 1) != (fd_n2 == 1), "one reader got the byte");
+        n0 = ffd_reads;
+        furi_delay_ms(100);
+        n0 = ffd_reads - n0;
+        printf("  loser's reads in 100 ms: %lu (one per tick)\n", (unsigned long)n0);
+        CHECK(n0 >= 1 && n0 <= 100 / FPORT_TICK_MS + 2, "loser retries once per tick, no spin");
+        CHECK(write(p[1], "b", 1) == 1, "write b");
+        furi_thread_join(r);
+        furi_thread_join(r2);
+        CHECK(fd_n == 1 && fd_n2 == 1, "the loser gets the next byte (tick retry)");
+        furi_thread_free(r2);
+    }
+    start = furi_get_tick();
+    CHECK(ffd_wait(p[0], POLLIN, FuriWaitForever, true) == POLLIN, "retry wait: woken");
+    d = furi_get_tick() - start;
+    CHECK(d <= 3 * FPORT_TICK_MS, "retry wait: about one tick");
+
+    /* 5: end of file: the writer closes */
+    furi_thread_start(r);
+    furi_thread_yield();
+    close(p[1]);
+    furi_thread_join(r);
+    CHECK(fd_n == 0, "EOF wakes the reader");
+    close(p[0]);
+    furi_thread_free(r);
+    furi_timer_free(tm);
     furi_message_queue_free(q);
 }
 
@@ -542,6 +693,8 @@ static void report_ram(void) {
            (unsigned)furi_debug_sizeof(2), (unsigned)furi_debug_sizeof(3),
            (unsigned)furi_debug_sizeof(4), (unsigned)furi_debug_sizeof(5),
            (unsigned)furi_debug_sizeof(6));
+    printf("  fd wait %u per waiting fd (on the waiting thread's stack)\n",
+           (unsigned)fdebug_sizeof_fdwait());
 }
 
 int main(void) {
@@ -552,6 +705,7 @@ int main(void) {
     test_mutex();
     test_semaphore();
     test_timer();
+    test_fdwait();
     test_record();
     test_string();
     test_crash();

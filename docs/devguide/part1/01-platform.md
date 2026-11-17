@@ -69,10 +69,16 @@ threads inside one process** with the stock API (`furi_thread_*`, `furi_message_
   A 16-byte canary at the bottom of each stack is checked at every switch.
 - `furi_check`/`furi_crash` write the message to `/dev/log` and stderr and `abort()` the process;
   the rest of the system keeps running.
-- Until libfuri waits with `poll()` (R4b.6, in FS now) a blocking `read()` stops every thread of
-  the process, and an idle process sleeps in whole seconds (`alarm()`; libfuri owns `SIGALRM`
-  while it sleeps).
-- Costs on the device: about 12 KB of code (until it moves into the shared library), 84 B per
+- When no thread is ready, the process sleeps in `poll()` (R4b.6) until the earliest delay or
+  timer, in ticks of 1/60 s: `furi_delay_ms(100)` takes 100–117 ms, a 20 ms timer fires every
+  one or two ticks. libfuri does not use `SIGALRM`.
+- A plain `read()` that blocks still stops every thread of the process. Inside libfuri (and for
+  R5.2/R5.4) the internal `ffd_read()`/`ffd_wait()` (`src/furi_i.h`) block only the calling
+  thread: the idle `poll()` also watches the fds threads wait for. Until the drivers answer
+  `DEV_SELECT` (#131), a terminal or `/dev/buttons` counts as always ready, so `ffd_read()` reads
+  with `O_NONBLOCK` and, when "ready" gave nothing, tries the device again once a tick or two
+  instead of spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
+- Costs on the device: about 13 KB of code (until it moves into the shared library), 84 B per
   thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
 - Not from signal handlers. The GUI, storage and HAL parts come with R5.2–R5.4 **(planned)**.
 

@@ -6,10 +6,13 @@
  * that has to wait) or furi_thread_yield(). Waiting threads sit on the
  * wait queue of their object and, with a timeout, on the timed list.
  * When nothing is ready, the scheduler runs due timers, then sleeps in
- * fport_idle() until the next deadline. */
+ * ffd_idle() (one poll() over the fds threads wait for) until the next
+ * deadline or a ready fd. */
 #ifndef FURI_I_H
 #define FURI_I_H
 
+#include <sys/types.h>
+#include <poll.h>
 #include <stdarg.h>
 #include "furi.h"
 
@@ -27,8 +30,17 @@ typedef struct {
 
 /* Milliseconds, monotonic, wraps at 2^32. */
 uint32_t fport_now(void);
-/* Sleep at most ms (> 0). May return early. */
-void fport_idle(uint32_t ms);
+/* poll(fds, n, ms): wait at most ms (FuriWaitForever: no limit) for one
+ * of the n fds (n may be 0: a plain sleep). May return early (a signal).
+ * The number of ready entries, 0 on a timeout or a signal. */
+int fport_poll(struct pollfd* fds, unsigned n, uint32_t ms);
+/* One clock tick in ms, rounded up: how often a device whose "ready"
+ * was only a hint is tried again (fdwait.c). */
+#ifdef FURI_HOST
+#define FPORT_TICK_MS 10U
+#else
+#define FPORT_TICK_MS 17U /* 60 Hz */
+#endif
 /* vsnprintf: the length, or -1 if it did not fit in size bytes. */
 int fport_vformat(char* buf, size_t size, const char* fmt, va_list ap);
 /* A stack for a thread: size bytes, 8-aligned; NULL if no room. */
@@ -103,6 +115,28 @@ bool ftimer_armed(void);
 bool ftimer_run(uint32_t now, uint32_t* next);
 extern uint8_t ftimer_in_callback;
 
+/* ---- fd waits (fdwait.c), internal (for R5.2/R5.4) ---- */
+typedef struct FuriFdWait FuriFdWait;
+#define FFD_MAX 8 /* fds waited for at once (poll set on the idle stack) */
+#define FFD_PEEK 16 /* switches between two looks while threads run */
+/* Block the calling thread (only it) until fd is ready for events
+ * (POLLIN, POLLOUT) or timeout ms. The revents (POLLERR, POLLHUP and
+ * POLLNVAL included), 0 on a timeout. retry: the last "ready" was only a
+ * hint (a non-blocking read found nothing): leave fd out of poll() and
+ * wake after one tick (FPORT_TICK_MS) with revents = events. */
+int ffd_wait(int fd, int events, uint32_t timeout, bool retry);
+/* read() that blocks only the calling thread, at most timeout ms (0: do
+ * not wait). Reads with O_NONBLOCK; -1 with errno EAGAIN on a timeout. */
+ssize_t ffd_read(int fd, void* buf, size_t n, uint32_t timeout);
+/* Any thread waiting for an fd? */
+bool ffd_waiting(void);
+/* Nothing ready: poll the waited fds for at most ms (FuriWaitForever: no
+ * limit), wake the threads whose fd is ready. */
+void ffd_idle(uint32_t ms);
+/* Threads ready: every FFD_PEEK calls, ffd_idle(0). */
+void ffd_peek(void);
+extern uint32_t ffd_reads; /* read() calls by ffd_read() */
+
 /* ---- log (check.c) ---- */
 void flog_write(const char* s, size_t n);
 
@@ -110,6 +144,7 @@ void flog_write(const char* s, size_t n);
 size_t fdebug_sizeof_thread(void);
 size_t fdebug_sizeof_timer(void);
 size_t fdebug_sizeof_string(void);
+size_t fdebug_sizeof_fdwait(void);
 size_t furi_debug_sizeof(int what);
 
 #endif
