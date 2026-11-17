@@ -5,7 +5,7 @@ CC	?= cc
 SAN	:= -fsanitize=undefined -fno-sanitize-recover=undefined
 CFLAGS	?= -O1 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(SAN)
 SRC	:= src/thread.c src/sync.c src/timer.c src/record.c src/string.c \
-	   src/check.c src/port_host.c
+	   src/check.c src/fdwait.c src/port_host.c
 B	:= build
 
 test: $(B)/test_furi

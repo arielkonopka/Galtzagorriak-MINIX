@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * libfuri (spec R5.1, D.1): software timers (stock furi/core/timer.h).
  * The stock firmware runs callbacks in the FreeRTOS timer task; here the
- * scheduler runs them whenever a thread blocks or yields. Until poll()
- * (R4b.6) an idle process sleeps with alarm() (port_minix.c). */
+ * scheduler runs them whenever a thread blocks or yields. An idle
+ * process sleeps in poll() until the earliest one (fdwait.c). */
 #include <stdlib.h>
 #include "furi_i.h"
 

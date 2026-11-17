@@ -148,9 +148,13 @@ static void schedule(bool due_done) {
             due_done = false;
             continue;
         }
-        if(!armed) furi_crash("deadlock: every thread waits forever");
-        if(wait) fport_idle(wait);
+        if(!armed) {
+            if(!ffd_waiting()) furi_crash("deadlock: every thread waits forever");
+            wait = FuriWaitForever; /* until an fd is ready */
+        }
+        if(wait) ffd_idle(wait);
     }
+    ffd_peek(); /* fd waiters get a look while others run */
     next = ready_get();
     if(next == prev) return;
     current = next;
@@ -223,6 +227,7 @@ void furi_thread_yield(void) {
 
     fsched_check_not_in_callback(1);
     run_due(&wait);
+    ffd_peek(); /* a thread that only yields must not starve fd waiters */
     if(!ready_head) return; /* nobody else to run */
     ready_put(current);
     schedule(true);
