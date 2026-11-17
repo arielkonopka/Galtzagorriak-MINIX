@@ -8,13 +8,18 @@
  *     library's id, changed) -> ENOEXEC
  *  5. a string in the library's flash (strerror()) is a valid source for a
  *     system call, like a constant in the program's own text
+ *  6. a program linked with another build of the shared libfuri + libapp
+ *     (a_dbase, that library's id) -> ENOEXEC; with this build's id it runs
+ *     (issue #201)
  * The copies are made of this test itself in /tmp.
  */
 #include "t.h"
 #include <a.out.h>
 #include <minix/gzversion.h>
+#include <minix/shlibc.h>
 
 static int libc_other;			/* copy: flip the libc id */
+static unsigned long furi_as;		/* copy: a_dbase (0: as it is) */
 
 static int copy_stamped(char *from, char *to, unsigned short abi)
 {
@@ -31,6 +36,12 @@ static int copy_stamped(char *from, char *to, unsigned short abi)
 			buf[6] = abi & 0xFF;
 			buf[7] = abi >> 8;
 			if (libc_other && n >= 48) buf[40] ^= 1; /* a_tbase */
+			if (furi_as != 0 && n >= 48) {	/* a_dbase */
+				buf[44] = furi_as & 0xFF;
+				buf[45] = (furi_as >> 8) & 0xFF;
+				buf[46] = (furi_as >> 16) & 0xFF;
+				buf[47] = (furi_as >> 24) & 0xFF;
+			}
 			first = 0;
 		}
 		if (write(out, buf, n) != n) n = -1;
@@ -58,6 +69,18 @@ static void runlib(void)
 {
 	execl("/tmp/abilib", "abilib", "child", (char *) 0);
 	_exit(errno == ENOEXEC ? 0 : 1);	/* another libc: must fail */
+}
+
+static void runfuri(void)
+{
+	execl("/tmp/abifuri", "abifuri", "child", (char *) 0);
+	_exit(errno == ENOEXEC ? 0 : 1);	/* another libfuri: must fail */
+}
+
+static void runfurok(void)
+{
+	execl("/tmp/abifurok", "abifurok", "child", (char *) 0);
+	_exit(1);				/* exec must work */
 }
 
 static void runcur(void)
@@ -102,6 +125,27 @@ int main(int argc, char **argv)
 		t_result("exec of a program for another shared libc build",
 			st == 0, st == 0 ? "ENOEXEC" : "it ran or failed otherwise");
 		unlink("/tmp/abilib");
+		if (SHFURI_HDR->sh_magic == SHFURI_MAGIC) {
+			furi_as = SHFURI_HDR->sh_id ^ 1;
+			if (copy_stamped(self, "/tmp/abifuri", GZ_ABI) < 0)
+				return 1;
+			furi_as = SHFURI_HDR->sh_id;
+			if (copy_stamped(self, "/tmp/abifurok", GZ_ABI) < 0)
+				return 1;
+			furi_as = 0;
+			st = t_child(runfuri);
+			t_result("exec of a program for another shared libfuri "
+				"build", st == 0, st == 0 ? "ENOEXEC"
+				: "it ran or failed otherwise");
+			st = t_child(runfurok);
+			t_result("exec of a program for this shared libfuri "
+				"build", WIFEXITED(st) && WEXITSTATUS(st) == 7,
+				NULL);
+			unlink("/tmp/abifuri");
+			unlink("/tmp/abifurok");
+		} else {
+			printf("SKIP abiexec: no shared libfuri in flash\n");
+		}
 	} else {
 		printf("SKIP abiexec: not linked with the shared libc\n");
 	}

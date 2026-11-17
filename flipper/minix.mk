@@ -99,6 +99,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 # member that needs one of them.  SHLIBC=0: every program static, as before.
 SHLIBC	?= 1
 SHL	:= $(MB)/shlibc
+SHF	:= $(MB)/shfuri
 SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
 SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
@@ -128,7 +129,8 @@ $(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) ld/shlibc.ld
 $(SHL)/libc.bin $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld &: \
 		$(SHL)/libc.elf libc.exports tools/mkshlibc.py
 	python3 -I tools/mkshlibc.py image $< libc.exports $(SHL)/libc.bin \
-	   $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld
+	   $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld \
+	   --name SHLIBC --max 0xC000
 $(SHL)/stubs.o: $(SHL)/stubs.S
 	$(CC) $(MCFLAGS) -c $< -o $@
 $(MB)/libc-static.a: $(LIBCP_STATIC) minix.mk
@@ -250,14 +252,16 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 	$(call link_server,init,$(MB)/fs.elf)
 
 # The system image (192 KB at most), then the shared libc at 192 KB
-# (SHLIBC_BASE, 64 KB at most); the installed programs start at 256 KB
-# (hal_flash_layout(), R2b.1).
+# (SHLIBC_BASE, 48 KB at most) and the shared libfuri + libapp at 240 KB
+# (SHFURI_BASE, 48 KB at most); the installed programs start at 288 KB
+# (hal_flash_layout(), R2b.1; <minix/shlibc.h>).
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
-		 tools/mkflash.py $(SHL)/libc.bin
+		 tools/mkflash.py $(SHL)/libc.bin $(SHF)/furi.bin
 	python3 -I tools/mkflash.py --libc=0x30000,$(SHL)/libc.bin \
+	   --lib=0x3C000,$(SHF)/furi.bin \
 	   $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@test $$(stat -c %s $@) -le 262144 || \
-	   { echo "$@ is over 256 KB: it would overlap the installed programs"; \
+	@test $$(stat -c %s $@) -le 294912 || \
+	   { echo "$@ is over 288 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
 # make base-flash: minix-base.bin = minix.bin with the programs used at boot
@@ -273,7 +277,7 @@ BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
-	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x40000 \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x48000 \
 	   --rom=$(MB)/rom.img $(BASE_FLASH:%=$(MB)/bin/%)
 
 # The default settings image (spec L.2): /etc as built, read-only, 32 KB;
@@ -298,7 +302,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon
+	    swapon gmodem
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
@@ -352,6 +356,7 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
+CHMEM_settings := 3072	# K.7: a group screen; stdio for its one file
 CHMEM_m2test := 16384
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
@@ -403,6 +408,15 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
+OBJS_launcher += $(MB)/cmd/gui/appline.o
+# settings GROUP (spec K.7): the groups' files are src/commands/settings/
+SETGROUPS := display sound
+OBJS_settings = $(MB)/cmd/port/settings.o $(SETGROUPS:%=$(MB)/cmd/settings/%.o) \
+		$(MB)/cmd/gui/gui.o
+$(MB)/cmd/settings/%.o: $(MROOT)/src/commands/settings/%.c \
+		$(MROOT)/src/commands/settings/sgroup.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # liblfrfid (spec R9.0.1, src/lib/lfrfid): the Unleashed LF RFID protocols,
 # linked into rfid (code in flash; the decoders' state is malloc'd only
 # while a read runs).  Third-party C11 code: built quietly (-w).
@@ -419,7 +433,26 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
-$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
+# libmodem (spec section P, src/lib/modem): the link layer, the RFID line
+# code and the Sub-GHz presets and legal tables, linked into gmodem (not
+# MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
+MODEM_DIR := $(MROOT)/src/lib/modem
+# heatshrink (ISC, src/lib/modem/heatshrink) is C99: gnu11 and quiet.
+MODEM_C	:= $(notdir $(wildcard $(MODEM_DIR)/*.c))
+MODEM_HS := $(notdir $(wildcard $(MODEM_DIR)/heatshrink/*.c))
+MODEM_OBJ := $(MODEM_C:%.c=$(MB)/modem/%.o) $(MODEM_HS:%.c=$(MB)/modem/hs/%.o)
+MODEM_CFLAGS := $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 -I$(MODEM_DIR)
+$(MB)/modem/%.o: $(MODEM_DIR)/%.c $(MODEM_DIR)/modem.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(MODEM_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/modem/hs/%.o: $(MODEM_DIR)/heatshrink/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(MODEM_CFLAGS) -w -MMD -MP -c $< -o $@
+$(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
+OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
@@ -436,7 +469,19 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \
 	   $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $$@
 endef
 ELF2MNX_LIBC := --libc $(SHL)/libc.json
+# Against both shared libraries (FURIPROGS): the furi stubs first.
+define furi_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \
+		$(SHF)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a \
+		ld/user-shfuri.ld $(SHL)/shlibc-syms.ld $(SHF)/shfuri-syms.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -L$(SHF) -Tld/user-shfuri.ld \
+	   -Wl,-Map=$$@.map $(MB)/user/crtso-sh.o $(call objs_of,$(1)) \
+	   $(SHF)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $$@
+endef
+ELF2MNX_FURI = $(if $(filter $*,$(FURIPROGS)),--furi $(SHF)/furi.json)
 else
+furi_prog = $(call user_prog,$(1))
 define user_prog
 $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 		ld/user-pic.ld
@@ -447,8 +492,8 @@ endef
 endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # libfuri core (spec R5.1, flipper/lib/furi): the stock furi API for apps
-# rebuilt from source.  Linked into each app until it moves into the shared
-# library (R2b.9, AC5.3).  C99 (the stock headers need it).
+# rebuilt from source.  In the shared furi library (R2b.9, AC5.3, below);
+# furitest links the core statically.  C99 (the stock headers need it).
 FURI_DIR := lib/furi
 FURI_OBJ := $(addprefix $(MB)/furi/,thread.o sync.o timer.o record.o \
 	    string.o check.o fdwait.o port_minix.o ctx_arm.o)
@@ -485,9 +530,9 @@ $(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
 	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # libapp (spec F.2, R7b.4, flipper/lib/app): timers, notifications,
-# settings for native apps.  Linked into each user until it moves into the
-# shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
-# use it; they ship as the package timed (/usr/lib).
+# settings for native apps.  In the shared furi library with libfuri
+# (R2b.9, below).  timed and alert (flipper/apps/timed) use it; they ship
+# as the package timed (/usr/lib).
 APP_DIR := lib/app
 APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o $(MB)/app/tune.o
 APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
@@ -498,12 +543,47 @@ $(MB)/libapp.a: $(APP_OBJ)
 	$(AR) rcs $@.new $^ && mv -f $@.new $@
 .PHONY: libapp
 libapp: $(MB)/libapp.a
+# The shared libfuri + libapp library in flash (spec R2b.9, R5.2, 7b; the
+# "furi" library, <minix/shlibc.h>, ld/shfuri.ld, tools/mkshlibc.py): one
+# copy of libfuri (core, GUI, u8g2, fonts) and libapp at SHFURI_BASE, after
+# the shared libc, in minix.bin.  Only the functions the apps call are
+# exported (furi.exports, frozen order, append only; spec J.3), and only
+# what they reach is linked (--gc-sections).  Its per-process data (the
+# furi area) follows the libc area in the data of the programs that use
+# it (FURIPROGS, ld/user-shfuri.ld); the others do not carry it.
+SHFURI_BASE := $(if $(filter flipper,$(BOARD)),0x0803C000,0x0003C000)
+SHFURI_LIBOBJ := $(FURI_OBJ) $(FURI_GUI_OBJ) $(APP_OBJ)
+$(SHF)/tab.S: furi.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	python3 -I tools/mkshlibc.py tab $< $@ --furi
+$(SHF)/tab.o: $(SHF)/tab.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+$(SHF)/furi.elf: $(SHF)/tab.o $(SHFURI_LIBOBJ) $(SHL)/stubs.o \
+		$(MB)/libc-static.a $(SHL)/shlibc-syms.ld ld/shfuri.ld
+	@echo "  LD $@"
+	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
+	   -Wl,--gc-sections -Wl,-q -L$(SHL) \
+	   -Wl,--defsym=SHFURI_BASE=$(SHFURI_BASE) -Tld/shfuri.ld \
+	   -Wl,-Map=$@.map $(SHF)/tab.o $(SHFURI_LIBOBJ) $(SHL)/stubs.o \
+	   $(MB)/libc-static.a -lgcc -o $@
+$(SHF)/furi.bin $(SHF)/furi.json $(SHF)/stubs.S $(SHF)/shfuri-syms.ld &: \
+		$(SHF)/furi.elf furi.exports tools/mkshlibc.py $(SHL)/libc.json
+	python3 -I tools/mkshlibc.py image $< furi.exports $(SHF)/furi.bin \
+	   $(SHF)/furi.json $(SHF)/stubs.S $(SHF)/shfuri-syms.ld \
+	   --dep $(SHL)/libc.json --name SHFURI --max 0xC000
+$(SHF)/stubs.o: $(SHF)/stubs.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+.PHONY: shfuri
+shfuri: $(SHF)/furi.bin
+# Programs linked against it; with SHLIBC=0 they link both statically.
+FURIPROGS := furihello remind alarm timed alert
+FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
-OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
-OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
+OBJS_timed = $(MB)/cmd/timed/timed.o $(FURI_LINK)
+OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
@@ -515,13 +595,17 @@ $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat
 	@mkdir -p $(dir $@)
 	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
 $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
-	$(MB)/cmd/nat/native/nat_core.o $(APP_OBJ) $(FURI_OBJ) $(FURI_GUI_OBJ)))
-CHMEM_remind := 12288	# 7b.1: libfuri main stack 3 KB, gui thread 2 KB, Canvas 1.1 KB, the list
-CHMEM_alarm  := 12288	# 7b.2: the same
+	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
+# chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
+# (Canvas 1.1 KB, views, the lists) and MM's 1.5 KB safety gap above it.
+# nattest (3 runs, 12 KB): never used remind 3.8-4.0 KB, alarm 3.2-3.4 KB;
+# what is left keeps at least 1 KB for the heap to grow (issue #201).
+CHMEM_remind := 11264	# 7b.1
+CHMEM_alarm  := 11776	# 7b.2
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
-OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_OBJ) $(FURI_GUI_OBJ)
+OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
@@ -571,7 +655,8 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS),$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -627,7 +712,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.04
+BASE_VER := 4.10
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -648,7 +733,9 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 		$(if $(filter 1,$(SHLIBC)),$(SHL)/libc.json)
 	@mkdir -p $(dir $@)
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
-	   $(if $(filter $*,$(SECRETPROGS)),--secret) $(ELF2MNX_LIBC)
+	   $(if $(filter $*,$(SECRETPROGS)),--secret) $(ELF2MNX_LIBC) \
+	   $(ELF2MNX_FURI)
+$(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the

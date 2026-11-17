@@ -98,8 +98,9 @@ share.
 | Region | Written by | Contents |
 |---|---|---|
 | system image, from `0x08000000`, ≤ 192 KB | DFU only | kernel, MM, FS, INIT (`minix.bin`); the build fails above 192 KB |
-| shared libc, from `0x08030000`, ≤ 64 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
-| installed region, from `0x08040000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
+| shared libc, from `0x08030000`, ≤ 48 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
+| shared libfuri + libapp, from `0x0803C000`, ≤ 48 KB | DFU only | the GUI and app library, once, for the apps that use it (`minix.bin`; R2b.9, see below) |
+| installed region, from `0x08048000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
 | run-time text cache, 128 KB | MM in the background | texts of programs run often, within a daily erase budget |
 | guard pages, then the radio stack and FUS | never | the top of flash, from `SFSA` (read from `FLASH->SFR` at boot) |
 
@@ -128,6 +129,19 @@ Members with big per-process data stay static, linked into the programs that use
 (`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, `scanf`, the time
 zone code, the float tables, `regexp`, `getopt`, `termcap`, math, ...). `SHLIBC=0` builds every
 program static, as before.
+
+**The shared libfuri + libapp** (the "furi" library; `ld/shfuri.ld`, `flipper/furi.exports`,
+`tools/mkshlibc.py image --dep`). `libfuri` (core, GUI, u8g2, fonts) and `libapp` are linked once
+at `SHFURI_BASE`, right after the libc's slot, with the same header (magic `GZLF`) and a frozen,
+append-only entry table. Only the functions the apps call are exported, and only what they reach
+is in the library (`--gc-sections`): a ported app that needs another function appends it to
+`furi.exports`. The library calls the libc through the libc's stubs, so its per-process data
+(its GOT, data and bss, the *furi area*, about 2.4 KB) follows the libc area at `r9`, and its
+build id covers the libc's. Only the programs in `FURIPROGS` (`minix.mk`; `ld/user-shfuri.ld`,
+`elf2mnx.py --furi`) carry that area; `a_dbase` of their header holds the library's id, which
+exec checks like `a_tbase` (`ENOEXEC` on a mismatch, `0` = not used), and `mkpkg.py` writes
+`Furi: <id>`, which `pkg` checks. The static libc members the library needs (`localtime`,
+`mktime`) are inside it and exported, so an app does not get a second copy.
 
 ## 1.7 RTC backup registers
 

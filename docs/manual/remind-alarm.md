@@ -14,7 +14,8 @@ pkg install /lib/pkg/alarm_1.0.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
-on the launcher (**Remind**, **Alarm**) and its data directory
+on the launcher (**Kanpaia**, "bell" in Basque, for the reminders, and **Ordua**, "the hour",
+for the alarm clock) and its data directory
 `/home/flipper/apps_data/remind` or `…/alarm` (mode 700, the app's user). The programs go into
 the internal flash at install time (`Flash: yes`), so their code is not copied into RAM.
 `pkg remove` takes the app off the launcher; your timers, your data and the user stay, and
@@ -102,8 +103,9 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 
 ## Limitations
 
-- An app uses about **15–16 KB of RAM while it is open** (its own copy of the `libfuri` GUI,
-  its thread stacks and screen buffer); nothing while it is closed.
+- An app uses about **15–16 KB of RAM while it is open** (`remind` 15.6 KB, `alarm` 16.1 KB:
+  its thread stacks, screen buffer and the data of the GUI library; the library's code is in
+  flash once for all apps, `free -v` shows it as `shared libfuri`); nothing while it is closed.
 - The desk clock wakes once a minute from a timed wait; the RTC wake-up timer (planned, R7b.1)
   will replace it.
 

@@ -75,6 +75,7 @@
 #include <minix/rfid.h>
 #include <minix/ibutton.h>
 #include <signal.h>
+#include "ibemu.c"		/* the Dallas key's 1-Wire slave (R6.7) */
 
 #define LCD_MINOR	0
 #define BTN_MINOR	1
@@ -117,6 +118,7 @@ PRIVATE volatile u8_t gp_watch;	/* R6.4: header pins watched for edges */
 PRIVATE volatile u8_t gp_last;	/*   their levels at the last tick */
 PRIVATE volatile u8_t gp_chg;	/*   changed since the last read */
 PRIVATE u8_t gp_proc;		/*   who watches, slot + 1 (its close ends it) */
+PRIVATE struct ie_state ie;	/* R6.7 part 3: a Dallas key emulated */
 #define SEL_GPIO	4	/* sel_wait: a poller waits for an edge */
 PRIVATE u8_t nt_st;		/* N.6: the card notice (NT_*) */
 #define NT_KIND		3	/* the notice over every frame: */
@@ -182,6 +184,9 @@ PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define SPK_VOL		0xFFFF		/* the volume note's "frequency" */
+#define SPK_VOLDEF	0xFFFE		/* the same, and the system default
+					 * (K.7 Sound; kept in a backup
+					 * register by the HAL) */
 
 /* Infrared (/dev/ir).  Durations in the rings are 16 bits: microseconds
  * below 32768, else bit 15 and units of 64 us (up to 2 s). */
@@ -265,6 +270,9 @@ FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void ib_stop, (void)				);
+FORWARD _PROTOTYPE( void ib_edge, (void)				);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
@@ -351,6 +359,7 @@ PUBLIC void flipdev_task()
 	mt_arm(MT_BUTTONS, BTN_MS);
 	unlock();
   }
+  sp_quiet = 100 - hal_vol_default();	/* K.7: the system's volume */
   {	/* the backlight as it was set before the reset, and on */
 	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS | HAL_BL_MODES);
 
@@ -378,9 +387,12 @@ PUBLIC void flipdev_task()
 	case DEV_CLOSE:
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SPK_MINOR
 							&& !sp_waiting)
-			sp_quiet = 0;		/* full volume again */
+			sp_quiet = 100 - hal_vol_default();	/* the default
+							 * again (K.7) */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
+				&& ie.proc == fm.PROC_NR + 1) ib_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
 			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
@@ -815,6 +827,92 @@ phys_bytes user;
 
 
 /*===========================================================================*
+ *				ib_emu					     *
+ *===========================================================================*/
+PRIVATE int ib_emu(m_ptr)
+message *m_ptr;
+{
+/* IBIOCEMU (R6.7 part 3): be the Dallas key q.rom for a reader on the
+ * contact (on 1), or stop (on 0); the caller's close stops it too.  Asked
+ * again while on: a new ROM takes over, and q.served says how many times
+ * a reader got the whole ROM.  Stop2 waits meanwhile: waking from it
+ * takes longer than a 1-Wire slot. */
+  struct ib_emu q;
+  phys_bytes user;
+  int i;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (ie.st != IE_OFF && ie.proc != m_ptr->PROC_NR + 1) return(EBUSY);
+  if (!q.on) {
+	if (ie.st != IE_OFF) ib_stop();
+  } else {
+	lock();				/* the edges read rom[] */
+	for (i = 0; i < 8; i++) ie.rom[i] = q.rom[i];
+	if (ie.st == IE_OFF) {
+		ie.st = IE_IDLE;
+		ie.low = ie.served = 0;
+		ie.proc = m_ptr->PROC_NR + 1;
+		pm_busy |= PM_IBUTTON;
+		hal_ib_emu(1);
+	}
+	unlock();
+  }
+  q.served = ie.served;
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
+}
+
+PRIVATE void ib_stop()
+{
+  lock();
+  hal_ib_emu(0);
+  ie.st = IE_OFF;
+  ie.proc = 0;
+  pm_busy &= ~PM_IBUTTON;
+  unlock();
+  hal_ow_line(0);			/* the contact released */
+}
+
+
+/*===========================================================================*
+ *				ib_edge					     *
+ *===========================================================================*/
+PRIVATE void ib_edge()
+{
+/* An edge on the contact while a key is emulated (interrupt, from
+ * btn_int): ie_step() decides, this drives the line.  The only waits are
+ * the 1-Wire times themselves (devguide 3.5: bounded microsecond timing):
+ * a 0 bit held until 30 us after the reader's fall, the presence pulse
+ * 20 + 120 us.  The edges of our own presence pulse are forgotten; the
+ * end of a held 0 is the slot's rising edge and is taken as such. */
+  int low = !hal_ow_read(), t;
+  unsigned us = 0;
+
+  if (low) ie.fall = hal_ow_now();
+  else us = (u16_t) (hal_ow_now() - ie.fall);
+  switch (ie_step(&ie, !low, us)) {
+  case IE_HOLD0:
+	hal_ow_line(1);
+	t = IE_HOLD_US - (int) (u16_t) (hal_ow_now() - ie.fall);
+	if (t > 0) hal_ow_delay((unsigned) t);
+	hal_ow_line(0);
+	break;
+  case IE_PRESENCE:
+	hal_ow_delay(IE_PRES_WAIT_US);
+	hal_ow_line(1);
+	hal_ow_delay(IE_PRES_US);
+	hal_ow_line(0);
+	hal_ow_delay(2);		/* the pull-up's rise */
+	hal_ib_clear();
+	break;
+  }
+}
+
+
+/*===========================================================================*
  *				ow_run					     *
  *===========================================================================*/
 PRIVATE int ow_run(m_ptr)
@@ -828,7 +926,9 @@ message *m_ptr;
   phys_bytes user;
   int i, j, v;
 
+  if (m_ptr->TTY_REQUEST == IBIOCEMU) return(ib_emu(m_ptr));
   if (m_ptr->TTY_REQUEST != IBIOCRUN) return(ENOTTY);
+  if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(q));
   if (user == 0) return(EFAULT);
@@ -1097,6 +1197,10 @@ message *m_ptr;
 	for (i = 0; i < n; i++) {
 		unsigned ms = nb[4*i+2] | nb[4*i+3] << 8;
 		note_hz[i] = nb[4*i] | nb[4*i+1] << 8;
+		if (note_hz[i] == SPK_VOLDEF) {	/* also the default */
+			hal_vol_default_set(ms > 100 ? 100 : (int) ms);
+			note_hz[i] = SPK_VOL;
+		}
 		if (note_hz[i] == SPK_VOL) {	/* the volume, kept as is */
 			note_ticks[i] = ms > 100 ? 100 : ms;
 			continue;
@@ -1181,6 +1285,7 @@ message *m_ptr;
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (m_ptr->POSITION != 0) return(0);	/* one ROM, then EOF */
 	if (count < 8) return(EINVAL);
+	if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
 	return(ow_read_rom(user));
 
   case POWER_MINOR:
@@ -2003,6 +2108,10 @@ int irq;
 /* An edge on a button (T14b): take it now, then turn the edges off; the
  * ms timer samples while any is down, which also debounces.
  */
+  if (ie.st != IE_OFF && hal_ib_edge()) {	/* R6.7: iButton line 14 */
+	ib_edge();
+	if (!hal_btn_pending()) return 1;	/* no button's edge too */
+  }
   hal_btn_arm(0);
   last_buttons |= BTN_POLL;
   (void) btn_sample();

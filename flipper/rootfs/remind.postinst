@@ -7,9 +7,14 @@ grep '^remind:' /etc/passwd >/dev/null || {
 	echo 'remind:*:21:11:Reminders:/home/flipper:' >> /etc/passwd
 	echo "remind: added the user remind (uid 21, group timers)"
 }
-grep '^Remind:' /etc/apps >/dev/null || {
-	echo 'Remind:root:/usr/bin/remind' >> /etc/apps
-	echo "remind: the launcher now has Remind"
+# The launcher line: Kanpaia, a Basque touch (owner 2026-11-17), with its
+# icon; older lines (Remind, with or without the icon) become it.
+sed -e 's|^Remind:root:/usr/bin/remind$|Kanpaia:root:@bell:/usr/bin/remind|' \
+    -e 's|^Remind:root:@bell:/usr/bin/remind$|Kanpaia:root:@bell:/usr/bin/remind|' /etc/apps > /etc/apps.new &&
+	mv /etc/apps.new /etc/apps
+grep ':/usr/bin/remind$' /etc/apps >/dev/null || {
+	echo 'Kanpaia:root:@bell:/usr/bin/remind' >> /etc/apps
+	echo "remind: the launcher now has Kanpaia"
 }
 test -d /home/flipper/apps_data/remind || mkdir /home/flipper/apps_data/remind
 chown remind /home/flipper/apps_data/remind
