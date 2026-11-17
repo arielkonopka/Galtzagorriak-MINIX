@@ -59,6 +59,26 @@ Check the files after unpacking: `sha256sum -c SHA256SUMS`.
     cd Galtzagorriak-MINIX/flipper
     make BOARD=flipper minix card base-flash base
 
+> **A broken `arm-none-eabi-gcc`.** Some distributions (seen with Debian's
+> `gcc-arm-none-eabi` 15.3) ship the compiler without its own freestanding
+> `stdint.h`, while keeping `stdbool.h`, `stddef.h` and the rest. The build
+> uses `-nostdinc` with only the compiler's include directory, so a missing
+> `stdint.h` stops `libfuri` with `fatal error: stdint.h: No such file or
+> directory`. Check with
+>
+>     echo '#include <stdint.h>' | arm-none-eabi-gcc -nostdinc \
+>       -isystem "$(arm-none-eabi-gcc -print-file-name=include)" \
+>       -ffreestanding -xc -c - -o /dev/null
+>
+> If it fails, drop in the freestanding `stdint.h` the compiler should have
+> shipped — a self-contained one that uses only GCC's built-in type macros is
+> in `flipper/tools/stdint-gcc.h`:
+>
+>     sudo cp flipper/tools/stdint-gcc.h \
+>       "$(arm-none-eabi-gcc -print-file-name=include)/stdint.h"
+>
+> This touches only the `arm-none-eabi` compiler, not the host toolchain.
+
 This takes a minute or two and writes, under `build/flipper/minix/` (the downloads hold the
 same files, without the directories):
 
