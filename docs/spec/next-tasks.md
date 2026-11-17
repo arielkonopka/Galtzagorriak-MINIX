@@ -319,6 +319,7 @@ Owner request outside the milestone order: the launcher may show an icon of at m
 - `/etc/apps` third field (R5.6a.1): empty, `@name`, `#` + 12 hex digits, or 1–2 characters; the old two-field form keeps working. Parsing in one pure function with a host test (`make icontest` or inside an existing host test target, in the `build` CI job): every form, malformed hex, 3 characters, `:` and `/` cases, label/user/command truncation unchanged.
 - Built-in icon table (R5.6a.2), original 8×6 drawings, a host tool that renders them 8× enlarged into a PNG attached to the PR; base `/etc/apps` and base `postinst` lines with icons; `mkpkg.py -i ICON` writes `Icon:`.
 - Drawing (R5.6a.3) with `gui_bits8()`; with icons off byte-identical frames (AC5.5).
+- `gui_click()` in `gui.c` (R5.6a.4): release of a key pressed alone and held < ~1 s; page keys (Left, Right) use it.
 - Setting (R5.6a.4): `/rom/etc/launcher.conf` with `Icons: on` and `Hints: on`, Left opens the settings page, write on Back only when changed.
 - Pine-style look (R5.6a.7): title counter, 8 rows + scroll mark, hint line on every screen, notices on the message line for 2 s (timed read via `poll`, no periodic tick), settings page with `[on]` values. Enlarged PNG screenshots (from a QEMU frame dump) of the list and the settings page in the PR.
 - QEMU test in the M2 self-test (or a launcher test driven with fake buttons, as the `libfuri` test does) for AC5.4–AC5.7; test labels may be Basque (`Kanpaia` with `@bell`, `Ordua` with `@clock`, `Kaixo` with `Zz`).
