@@ -458,7 +458,7 @@ OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
 # use it; they ship as the package timed (/usr/lib).
 APP_DIR := lib/app
-APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o
+APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o $(MB)/app/tune.o
 APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
 $(MB)/app/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)

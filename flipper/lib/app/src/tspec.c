@@ -163,6 +163,19 @@ int timer_parse(struct app_timer *t, char *buf)
 		} else if (strcmp(k, "Snooze") == 0) {
 			n = (unsigned) atoi(v) > 60;
 			t->snooze = atoi(v);
+		} else if (strcmp(k, "Tone") == 0) {
+			n = (v[0] == '/' ? strstr(v, "..") != NULL
+					 : tune_builtin(v) == NULL)
+				|| strlen(v) >= sizeof t->tone;
+			copy(t->tone, v, sizeof t->tone);
+		} else if (strcmp(k, "Ring") == 0) {
+			n = (unsigned) atoi(v) > 60;
+			t->ring = atoi(v);
+		} else if (strcmp(k, "Ramp") == 0) {
+			n = (t->ramp = yesno(v)) > 1;
+		} else if (strcmp(k, "Log") == 0) {
+			n = !app_id_ok(v);
+			copy(t->log, v, sizeof t->log);
 		} else {
 			int f = strcmp(k, "Sound") == 0 ? NF_SOUND
 				: strcmp(k, "Vibro") == 0 ? NF_VIBRO
@@ -253,15 +266,27 @@ int timer_format(const struct app_timer *t, char *buf, int size)
 	if (t->action == TA_RUN) {
 		n = put(buf, size, n, "run\nProgram: ");
 		n = put(buf, size, n, t->prog);
-	} else {
-		n = put(buf, size, n, "notify\nSound: ");
-		n = put(buf, size, n, t->flags & NF_SOUND ? "yes" : "no");
-		n = put(buf, size, n, t->flags & NF_VIBRO ? "\nVibro: yes"
-							  : "\nVibro: no");
-		n = put(buf, size, n, t->flags & NF_LED ? "\nLed: yes"
-							: "\nLed: no");
-		n = put(buf, size, n, "\nSnooze: ");
-		n = put(buf, size, n, num(nb + sizeof nb, t->snooze));
+	} else n = put(buf, size, n, "notify");
+	/* The notify options also for run: the program may use them. */
+	n = put(buf, size, n, "\nSound: ");
+	n = put(buf, size, n, t->flags & NF_SOUND ? "yes" : "no");
+	n = put(buf, size, n, t->flags & NF_VIBRO ? "\nVibro: yes"
+						  : "\nVibro: no");
+	n = put(buf, size, n, t->flags & NF_LED ? "\nLed: yes" : "\nLed: no");
+	n = put(buf, size, n, "\nSnooze: ");
+	n = put(buf, size, n, num(nb + sizeof nb, t->snooze));
+	if (t->tone[0] != 0) {
+		n = put(buf, size, n, "\nTone: ");
+		n = put(buf, size, n, t->tone);
+	}
+	if (t->ring != 0) {
+		n = put(buf, size, n, "\nRing: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->ring));
+	}
+	if (t->ramp) n = put(buf, size, n, "\nRamp: yes");
+	if (t->log[0] != 0) {
+		n = put(buf, size, n, "\nLog: ");
+		n = put(buf, size, n, t->log);
 	}
 	n = put(buf, size, n, "\nTitle: ");
 	n = put(buf, size, n, t->title);
