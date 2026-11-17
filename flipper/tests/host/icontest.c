@@ -37,6 +37,12 @@ int main(void)
 	CHECK(parse("Kanpaia:nobody:@bell:/bin/remind -x\n", &a, buf) == 0
 		&& strcmp(a.icon, "@bell") == 0
 		&& strcmp(a.cmd, "/bin/remind -x") == 0, "new form: icon field");
+	CHECK(parse("Demo:nobody:=/bin/gmdemo -l /tmp/x\n", &a, buf) == 0
+		&& a.icon == NULL && strcmp(a.cmd, "=/bin/gmdemo -l /tmp/x") == 0,
+		"old form: a window app (=/program, spec K.8)");
+	CHECK(parse("Demo:nobody:@app:=/bin/gmdemo\n", &a, buf) == 0
+		&& strcmp(a.icon, "@app") == 0 && strcmp(a.cmd, "=/bin/gmdemo") == 0,
+		"new form: a window app");
 	CHECK(parse("E:root::/bin/x", &a, buf) == 0 && a.icon != NULL
 		&& a.icon[0] == 0 && !icon_parse(a.icon, r, glyph),
 		"empty icon field: no icon");

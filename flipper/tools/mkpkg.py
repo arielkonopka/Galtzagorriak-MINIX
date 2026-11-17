@@ -5,6 +5,7 @@ Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
            [--postinst FILE] [--prerm FILE] [--timers]
            [--notify alarm|reminder|info] [--deskmode] [--flash] [-i ICON]
+           [--window]
            -o OUTDIR
            dest=source ...
 
@@ -16,6 +17,9 @@ charging).
 built-in icon (e.g. @bell), # and 12 hex digits (8x6 pixels, one byte a
 row, top first, MSB left), or 1-2 characters.  Until the launcher reads
 manifests, the package's postinst writes it into its /etc/apps line.
+--window: Type: window, a window app (spec K.8): the launcher starts it
+with its event and record pipes on fd 3 and 4 and draws its windows; its
+postinst writes "=" before the program in its /etc/apps line.
 --flash: Flash: yes, the programs go into the installed region (internal
 flash) as with pkg install --flash: their text is not copied into RAM.
 
@@ -65,6 +69,7 @@ def main():
     ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
     ap.add_argument("--flash", action="store_true", help="Flash: yes")
     ap.add_argument("-i", "--icon", help="Icon: the launcher icon (R5.6a.1)")
+    ap.add_argument("--window", action="store_true", help="Type: window (K.8)")
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
@@ -106,6 +111,7 @@ def main():
                + ("DeskMode: yes\n" if a.deskmode else "")
                + ("Flash: yes\n" if a.flash else "")
                + (f"Icon: {a.icon}\n" if a.icon else "")
+               + ("Type: window\n" if a.window else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)

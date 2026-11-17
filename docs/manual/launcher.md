@@ -78,9 +78,12 @@ One line per app:
 ```
 Label:user:icon:/program arg ...
 Label:user:/program arg ...          (no icon: the older form, still valid)
+Label:user:icon:=/program arg ...    (a window app, see below)
 ```
 
 The program must be an absolute path (starting with `/`). The app runs as `user`, in group `gui`.
+With `=` before the program it is a **window app**: it runs as `user` in that user's own group
+and never touches the screen.
 The icon is one of:
 
 - **empty** (`Label:user::/program`): no icon;
@@ -103,3 +106,42 @@ The built-in icons:
 `/etc/apps` is read from the SD card, or from `/rom/etc/apps` if the card has none. Updating the
 system adds icons to the base apps' lines as they were shipped; lines you changed stay as they
 are.
+
+## Window apps
+
+Some apps do not draw on their own: they only describe their screens, and the launcher draws
+them (spec K.8). Such an app needs no graphics code, so it takes about 4 KB of RAM while open
+instead of about 15 KB. Its package says `Type: window`, and its line in `/etc/apps` has `=`
+before the program. The example `gmdemo` package (`pkg install /lib/pkg/gmdemo_1.0.tar`) puts
+**Demo** on the list.
+
+A window app's screens look like the launcher's: the title bar, a selection bar, values in
+brackets on the right and a hint line that names the buttons for the row under the cursor:
+
+| Row | Buttons |
+|---|---|
+| an entry that opens something (`>` before it) | OK opens it |
+| a number, a choice, on/off (`[40 %]`, `[rise]`, `[on]`) | Left/Right change it (OK too) |
+| a time, a date, week days (`[07:30]`, `[2026-11-17]`, `[MTWTF--]`) | OK starts editing: Left/Right choose the part, Up/Down change it, OK ends |
+| a text (`[Wake up]`) | OK opens the keyboard |
+| a button row (`> Save`) | OK presses it |
+
+- **The keyboard**: four rows of letters, digits and signs, then `Aa` (capitals), `Del`, `Spc`
+  and `Done`. The arrows move, OK types the key under the cursor, `Done` keeps the text, Back
+  leaves it as it was.
+- **Back** goes to the previous screen of the app at once, and on its first screen it closes the
+  app. Back always works, even when the app does not answer.
+- Values change on the screen at once. The app gets the changed values when you leave the screen
+  or press a button row.
+- When the app takes longer than 0.15 s to answer, a small hourglass appears on the right of the
+  title bar; the screen still responds. An app that is still running 2 s after Back closed it is
+  stopped (`SIGTERM`).
+- Long lists are loaded a page (at most 16 rows) at a time; the title bar shows the position in the
+  whole list, e.g. `17/40`.
+- A **clock** screen shows the time in large digits and redraws once a minute while it is shown.
+
+**Watching the traffic.** With `GuiLog: on` in `/etc/launcher.conf` the launcher copies every
+record it gets from a window app (`gui< ...`) and every event it sends (`gui> ...`) to the
+console. It is off when the line is missing, and the settings page keeps it as it is.
+
+Writing a window app: the [Development Guide, chapter 7](../devguide/part1/07-desktop-modules.md).

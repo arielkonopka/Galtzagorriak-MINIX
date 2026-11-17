@@ -27,5 +27,8 @@
 # with fake keys and checks its frames: its text grew from 18312 to
 # 20708 B, past 20 KB: one more 4 KB page.  Nothing changed in how often
 # the cache writes.
-m2      cache   7
+# 2026-11-17 (T23b window_test + T24a settings test, #250): 8.  m2test's
+# text grew from 23104 to 25104 B, past 24 KB: one more 4 KB page.
+# Nothing changed in how often the cache writes.
+m2      cache   8
 m2      inst    0

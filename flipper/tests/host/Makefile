@@ -11,7 +11,7 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest
+TESTS	:= parttest usbtest ibemutest icontest wintest
 
 all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
 
@@ -73,6 +73,13 @@ $(B)/ibemutest: ibemutest.c $(MROOT)/src/kernel/arm/ibemu.c
 $(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/appline.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) icontest.c $(MROOT)/flipper/gui/appline.c -o $@
+
+# winrec.c and libgm: the window records of spec K.8 (T23b).
+$(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
+		$(MROOT)/src/lib/gm/gm.c $(MROOT)/src/lib/gm/gm.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
+	    $(MROOT)/src/lib/gm/gm.c -o $@
 
 clean:
 	rm -rf $(B)

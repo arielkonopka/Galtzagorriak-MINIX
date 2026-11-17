@@ -25,7 +25,8 @@
  *				app manifest (spec F.2): Timers: yes|no,
  *				Notify: alarm|reminder|info, DeskMode:
  *				yes|no, checked here, granted with the
- *				app's own uid (A.3)
+ *				app's own uid (A.3); Type: app|window
+ *				(window: a window app, spec K.8)
  *	CONTROL/postinst	optional, run with sh after installing
  *	CONTROL/prerm		optional, run with sh before removing
  * The database is /usr/var/pkg/info: NAME.control, NAME.list (the files),
@@ -302,6 +303,9 @@ static int read_control(const char *path)
 			   || strcmp(line, "DeskMode") == 0) {
 			if (strcmp(v, "yes") != 0 && strcmp(v, "no") != 0)
 				why = "Timers:/DeskMode: is not yes or no";
+		} else if (strcmp(line, "Type") == 0) {
+			if (strcmp(v, "app") != 0 && strcmp(v, "window") != 0)
+				why = "Type: is not app or window";
 		} else if (strcmp(line, "Notify") == 0) {
 			if (strcmp(v, "alarm") != 0 && strcmp(v, "reminder") != 0
 			    && strcmp(v, "info") != 0)

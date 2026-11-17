@@ -11,3 +11,10 @@ lat	9832
 # buffer is the /dev/ir transmit format (first word: carrier), and long
 # air-conditioner frames need several hundred durations.
 ir	4344
+# launcher: the desktop (spec K.6, K.8, T23b).  Its window server keeps
+# the window on the screen and its parent (2 x 658 B), a record line
+# (128 B) and the keyboard's text (64 B); the clock window's localtime()
+# brings libc's TZ state (~400 B).  The rest is the frame buffer (1 KB)
+# and getpwnam/getgrnam's line buffers.  K.6 budget: <= 3 KB above the
+# launcher before the desktop (.bss +1.9 KB, .data +0.4 KB here).
+launcher	5284
