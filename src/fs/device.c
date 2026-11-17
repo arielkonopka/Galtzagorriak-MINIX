@@ -11,6 +11,7 @@
  *   do_ioctl:	 perform the IOCTL system call
  *   call_task:	 procedure that actually calls the kernel tasks
  *   call_ctty:	 procedure that actually calls task for /dev/tty
+ *   dev_select: ask a device task which ops are ready (DEV_SELECT, R4b.6)
  */
 
 #include "fs.h"
@@ -63,6 +64,27 @@ char *buff;			/* virtual address of the buffer */
   }
 
   return(dev_mess.REP_STATUS);
+}
+
+
+/*===========================================================================*
+ *				dev_select				     *
+ *===========================================================================*/
+PUBLIC int dev_select(dev, ops, proc)
+dev_t dev;			/* major-minor device number (not /dev/tty) */
+int ops;			/* SEL_* bits; 0: forget the registration */
+int proc;			/* the poller (for the task's checks and logs) */
+{
+/* poll() (R4b.6): the ops ready now (>= 0), or an error: the task does not
+ * know DEV_SELECT. */
+
+  find_dev(dev);
+  dev_mess.m_type   = DEV_SELECT;
+  dev_mess.DEVICE   = (dev >> MINOR) & BYTE;
+  dev_mess.PROC_NR  = proc;
+  dev_mess.COUNT    = ops;
+  (*dmap[major].dmap_rw)(task, &dev_mess);
+  return(dev_mess.REP_STATUS == SUSPEND ? EIO : dev_mess.REP_STATUS);
 }
 
 
@@ -271,8 +293,15 @@ message *mess_ptr;		/* pointer to message for task */
 	 * sent a completion reply, ignore the reply and abort the cancel
 	 * request. The caller will do the revive for the process. 
 	 */
-	if (mess_ptr->m_type == CANCEL && local_m.REP_PROC_NR == proc_nr)
+	if (mess_ptr->m_type == CANCEL && local_m.REP_PROC_NR == proc_nr
+					&& local_m.m_type != DEV_SELECTED)
 		return;
+
+	/* Or a poll() registration's DEV_SELECTED (R4b.6). */
+	if (local_m.m_type == DEV_SELECTED) {
+		poll_selected(task_nr, local_m.DEVICE);
+		continue;
+	}
 
 	/* Otherwise it should be a REVIVE. */
 	if (local_m.m_type != REVIVE) {
@@ -291,6 +320,14 @@ message *mess_ptr;		/* pointer to message for task */
    */
   for (;;) {
 	if (r != OK) panic("call_task: can't send/receive", NO_NUM);
+
+	/* A DEV_SELECTED (R4b.6) is not the reply: its DEVICE is where
+	 * REP_PROC_NR would be. */
+	if (mess_ptr->m_type == DEV_SELECTED) {
+		poll_selected(task_nr, mess_ptr->DEVICE);
+		r = receive(task_nr, mess_ptr);
+		continue;
+	}
 
   	/* Did the process we did the sendrec() for get a result? */
   	if (mess_ptr->REP_PROC_NR == proc_nr) break;
