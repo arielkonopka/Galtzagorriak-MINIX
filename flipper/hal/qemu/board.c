@@ -185,7 +185,7 @@ void hal_halt(int status)
 /* No watchdog, speaker or DFU in QEMU: "reboot -d" just stops it. */
 void hal_wdt_start(void) { }
 void hal_wdt_kick(void) { }
-void hal_tone(unsigned hz) { (void) hz; }
+void hal_tone(unsigned hz, unsigned vol) { (void) hz; (void) vol; }
 void hal_vibro(int on) { (void) on; }
 /* GPIO: remembered levels only, so programs can be tried in QEMU. */
 static unsigned char gpio_level[HAL_GPIO_PINS];
