@@ -55,7 +55,7 @@ FORWARD _PROTOTYPE( int w_do_close, (struct driver *dp, message *m_ptr)	);
 FORWARD _PROTOTYPE( void w_geometry, (struct partition *entry)		);
 FORWARD _PROTOTYPE( int w_init, (void)					);
 FORWARD _PROTOTYPE( int w_card, (void)					);
-FORWARD _PROTOTYPE( void w_tell, (char *what)				);
+FORWARD _PROTOTYPE( void w_tell, (char *what, char *l1, char *l2)		);
 FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
 
 PRIVATE struct driver w_dtab = {
@@ -269,7 +269,8 @@ PRIVATE int w_card()
   if (!hal_disk_present()) {
 	if (!(wn->present & W_OUT)) {
 		wn->present |= W_OUT;
-		w_tell("SD card removed: put it back");
+		w_tell("SD card removed: put it back", "SD card removed",
+							"Put it back");
 	}
 	wn->present &= ~W_OTHER;	/* a next other card: say it again */
 	return(ENXIO);
@@ -278,12 +279,14 @@ PRIVATE int w_card()
   if (hal_disk_init() != 0 || hal_disk_id(&id) != 0) return(ENXIO);
   if (id != w_id) {
 	if (!(wn->present & W_OTHER))
-		w_tell("Different card: put the original back or power off");
+		w_tell("Different card: put the original back or power off",
+			"Different card", "Put the original back");
 	wn->present |= W_OTHER;
 	return(ENXIO);
   }
   wn->present &= ~(W_OUT | W_OTHER);
   printf("%s: the card is back, carrying on\n", w_name());
+  flipdev_notice("SD card is back", "Carrying on");
   return(OK);
 }
 
@@ -291,11 +294,13 @@ PRIVATE int w_card()
 /*===========================================================================*
  *				w_tell					     *
  *===========================================================================*/
-PRIVATE void w_tell(what)
-char *what;
+PRIVATE void w_tell(what, l1, l2)
+char *what, *l1, *l2;
 {
-/* N.6: on the console (the LCD console too) with a short buzz. */
+/* N.6: on the console, on the screen (R-N6.2: over any app; the launcher
+ * may have no files to run while the card is out) and a short buzz. */
   printf("%s: %s\n", w_name(), what);
+  flipdev_notice(l1, l2);
   lock();
   mt_arm(MT_VIBRO, 150);
   unlock();

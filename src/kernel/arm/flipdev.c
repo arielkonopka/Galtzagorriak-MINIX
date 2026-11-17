@@ -1899,6 +1899,53 @@ int code, replyee, proc, status;
 
 
 /*===========================================================================*
+ *				flipdev_notice				     *
+ *===========================================================================*/
+PRIVATE void nt_text(s, y)
+char *s;
+int y;
+{
+  const unsigned char *g;
+  int n = 0, x, row, col, px;
+
+  while (s[n] != 0) n++;
+  if (n > (LCD_W - 16) / 4) n = (LCD_W - 16) / 4;
+  x = (LCD_W - n * 4) / 2;
+  for (; n > 0; n--, s++, x += 4) {
+	if (*s < ' ' || *s > '~') continue;
+	g = font_4x6[*s - ' '];
+	for (row = 0; row < 6; row++)
+		for (col = 0, px = x; col < 4; col++, px++)
+			if (g[row] & (0x80 >> col))
+				fbuf[((y + row) >> 3) * LCD_W + px]
+					|= 1 << ((y + row) & 7);
+  }
+}
+
+PUBLIC void flipdev_notice(l1, l2)
+char *l1, *l2;
+{
+/* A notice that must be seen now (N.6: the SD card pulled out), from a
+ * kernel task: a framed box with two lines in the middle of the screen,
+ * over whatever is there (the app's next frame replaces it), and the light
+ * on as for a key.  The flipdev task flushes it (lc_dirty). */
+  int x, y, edge;
+
+  for (y = 17; y <= 46; y++)
+	for (x = 4; x < LCD_W - 4; x++) {
+		edge = y == 17 || y == 46 || x == 4 || x == LCD_W - 5;
+		if (edge) fbuf[(y >> 3) * LCD_W + x] |= 1 << (y & 7);
+		else fbuf[(y >> 3) * LCD_W + x] &= ~(1 << (y & 7));
+	}
+  nt_text(l1, 23);
+  nt_text(l2, 34);
+  k_input = get_uptime();
+  lc_dirty = TRUE;
+  interrupt(PRINTER);
+}
+
+
+/*===========================================================================*
  *				lcd_cons_putc				     *
  *===========================================================================*/
 PUBLIC void lcd_cons_putc(c)
