@@ -1971,7 +1971,11 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
     OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
     written once, on Back, and only if the value changed; nothing is ever written to internal
-    flash. Right stays free for the Running list (R12.20). The launcher reads the setting at
+    flash. Right stays free for the next page (Running, R12.20; the desktop pages of K.6).
+    The settings page is a **page**, not a special mode: the launcher keeps a small `const`
+    table of pages (name, row source, OK handler, hint text), the app list and settings are its
+    first two entries, and both use the same list drawing, scrolling and key loop, so later
+    pages (K.6) are new table entries. The launcher reads the setting at
     start, after its settings page, and together with `/etc/apps` when an app exits (one more
     `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
     /etc/launcher.conf`) shows after the next app.
