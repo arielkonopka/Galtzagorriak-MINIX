@@ -1169,6 +1169,17 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
+	 * render and fill their T5577 blocks; the line "decoders: N B of
+	 * heap" is the R9.0.1 measurement (budget 6 KB). */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/rfid", "rfid", "list", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
 #endif
 	memtest_tests();
 	poll_tests();
