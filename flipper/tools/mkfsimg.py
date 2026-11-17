@@ -39,6 +39,7 @@ NAME_MAX = 14
 NR_DZONES = 7
 NINDIR = BLOCK // 4
 SUPER_V2 = 0x2468
+SF_CLEAN = 1		# s_flags: clean (spec N.1, Linux MINIX_VALID_FS)
 
 S_IFREG, S_IFDIR, S_IFCHR, S_IFBLK = 0o100000, 0o040000, 0o020000, 0o060000
 TYPES = {"-": S_IFREG, "d": S_IFDIR, "c": S_IFCHR, "b": S_IFBLK}
@@ -170,11 +171,11 @@ class FS:
         for bit in list(range(0, used + 1)) + \
                 list(range(nbits, self.zmap_blocks * BLOCK * 8)):
             self.img[zmap + bit // 8] |= 1 << (bit % 8)
-        # super block
-        sb = struct.pack("<HHhhHhIhhI", self.ninodes,
+        # super block; s_flags (ex s_pad) = 1: CLEAN (spec N.1)
+        sb = struct.pack("<HHhhHhIhHI", self.ninodes,
                          min(self.nblocks, 0xFFFF), self.imap_blocks,
                          self.zmap_blocks, self.first, 0, 0x7FFFFFFF,
-                         SUPER_V2, 0, self.nblocks)
+                         SUPER_V2, SF_CLEAN, self.nblocks)
         self.put_block(1, sb)
         return used
 
