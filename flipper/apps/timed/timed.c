@@ -126,7 +126,7 @@ int main(int argc, char **argv)
 	struct dirent *e;
 	DIR *d;
 	time_t now = 0, last, next = 0, n;
-	int i, due;
+	int i, due, fd, m, r = 0;
 	static char next_id[APP_ID_MAX + 1];
 
 	for (i = 1; i < argc; i++) {
@@ -157,14 +157,27 @@ int main(int argc, char **argv)
 		if (!app_id_ok(e->d_name)) continue;	/* ., .., .last */
 		strcpy(path, APP_TIMERS "/");
 		strcat(path, e->d_name);
-		if (stat(path, &st) < 0) continue;
-		if (!S_ISREG(st.st_mode) || (st.st_mode & 07777) != 0600
-		    || st.st_nlink != 1) {
+		/* Checked on the open file (fstat), not the name: a group
+		 * timers user could swap the name for a link to a root file
+		 * between a stat() and the read.  The stat() first keeps
+		 * timed from opening a device or FIFO linked in. */
+		if (stat(path, &st) < 0 || !S_ISREG(st.st_mode)
+		    || (fd = open(path, O_RDONLY | O_NONBLOCK)) < 0) {
 			say(e->d_name, ": not a plain file of mode 600, ignored", 0);
 			continue;
 		}
-		if (ff_load(path, buf, sizeof buf) < 0
-		    || (strcpy(t.id, e->d_name), timer_parse(&t, buf)) < 0) {
+		if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)
+		    || (st.st_mode & 07777) != 0600 || st.st_nlink != 1) {
+			close(fd);
+			say(e->d_name, ": not a plain file of mode 600, ignored", 0);
+			continue;
+		}
+		m = 0;
+		while (m < (int) sizeof buf
+		       && (r = read(fd, buf + m, sizeof buf - m)) > 0) m += r;
+		close(fd);
+		if (r < 0 || m >= (int) sizeof buf || (buf[m] = 0,
+		    strcpy(t.id, e->d_name), timer_parse(&t, buf)) < 0) {
 			say(e->d_name, ": bad timer file, ignored", 0);
 			continue;
 		}

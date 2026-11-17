@@ -302,9 +302,10 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
-# libfuri's test (spec R5.1) only on the QEMU image, where m2test runs it.
+# libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
+# runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest
+UPROGS	+= furitest furihello
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -347,6 +348,7 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
+CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
 			# files to ~7 KB (~3.5 KB copying all of it); out of memory -> <file>.save
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
@@ -419,15 +421,31 @@ $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 FURI_DIR := lib/furi
 FURI_OBJ := $(addprefix $(MB)/furi/,thread.o sync.o timer.o record.o \
 	    string.o check.o fdwait.o port_minix.o ctx_arm.o)
+# libfuri GUI (spec R5.2): Canvas on u8g2, Gui, ViewDispatcher, modules.
+# Programs link with --gc-sections: only what an app calls is in flash.
+FURI_GUI_C := $(wildcard $(FURI_DIR)/src/gui/*.c $(FURI_DIR)/src/gui/modules/*.c \
+	    $(FURI_DIR)/src/gui/modules/widget_elements/*.c $(FURI_DIR)/u8g2/*.c)
+FURI_GUI_OBJ := $(patsubst $(FURI_DIR)/%.c,$(MB)/furi/%.o,$(FURI_GUI_C))
+FURI_HDR := $(wildcard $(FURI_DIR)/include/*.h $(FURI_DIR)/include/*/*.h \
+	    $(FURI_DIR)/include/gui/*/*.h $(FURI_DIR)/include/gui/modules/*/*.h \
+	    $(FURI_DIR)/src/*.h $(FURI_DIR)/src/gui/*.h $(FURI_DIR)/src/gui/*/*/*.h \
+	    $(FURI_DIR)/u8g2/*.h)
 FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
-$(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(wildcard $(FURI_DIR)/include/*.h \
-		$(FURI_DIR)/include/core/*.h) $(FURI_DIR)/src/furi_i.h
+FURI_GUI_CFLAGS = $(FURI_CFLAGS) -I$(FURI_DIR)/include/gui \
+	    -I$(FURI_DIR)/include/gui/modules -I$(FURI_DIR)/u8g2 -I$(FURI_DIR)/src/gui
+$(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(FURI_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/src/gui/%.o: $(FURI_DIR)/src/gui/%.c $(FURI_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/u8g2/%.o: $(FURI_DIR)/u8g2/%.c $(FURI_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -MMD -MP -c $< -o $@
 $(MB)/furi/%.o: $(FURI_DIR)/src/%.S
 	@mkdir -p $(dir $@)
 	@$(CC) $(MCFLAGS) -c $< -o $@
-$(MB)/libfuri.a: $(FURI_OBJ)
+$(MB)/libfuri.a: $(FURI_OBJ) $(FURI_GUI_OBJ)
 	$(AR) rcs $@.new $^ && mv -f $@.new $@
 .PHONY: libfuri
 libfuri: $(MB)/libfuri.a
@@ -457,10 +475,17 @@ OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
 CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
 CHMEM_alert := 4096
+$(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
+OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_OBJ) $(FURI_GUI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
+TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
+endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 # swapsmall: the same, a small image (placement, AC12.10)
@@ -498,7 +523,7 @@ $(PKGDIR)/timed_1.0.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.81
+BASE_VER := 3.82
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

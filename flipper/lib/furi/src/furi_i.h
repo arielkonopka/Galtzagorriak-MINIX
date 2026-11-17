@@ -128,6 +128,10 @@ int ffd_wait(int fd, int events, uint32_t timeout, bool retry);
 /* read() that blocks only the calling thread, at most timeout ms (0: do
  * not wait). Reads with O_NONBLOCK; -1 with errno EAGAIN on a timeout. */
 ssize_t ffd_read(int fd, void* buf, size_t n, uint32_t timeout);
+/* Wake the threads waiting in ffd_wait() for fd now, with revents
+ * FFD_KICK: another thread has work for them (gui.c: a redraw). */
+#define FFD_KICK 0x4000
+void ffd_kick(int fd);
 /* Any thread waiting for an fd? */
 bool ffd_waiting(void);
 /* Nothing ready: poll the waited fds for at most ms (FuriWaitForever: no
@@ -136,6 +140,11 @@ void ffd_idle(uint32_t ms);
 /* Threads ready: every FFD_PEEK calls, ffd_idle(0). */
 void ffd_peek(void);
 extern uint32_t ffd_reads; /* read() calls by ffd_read() */
+
+/* ---- services started on the first furi_record_open() (record.c) ---- */
+/* gui.c: creates the "gui" record (weak: only apps that use the GUI
+ * link it). */
+void fgui_service_start(void) __attribute__((weak));
 
 /* ---- log (check.c) ---- */
 void flog_write(const char* s, size_t n);

@@ -111,6 +111,13 @@ void ffd_idle(uint32_t ms) {
     }
 }
 
+void ffd_kick(int fd) {
+    FuriFdWait* w;
+
+    for(w = waits; w; w = w->next)
+        if(w->fd == fd && !w->revents) wake(w, FFD_KICK);
+}
+
 void ffd_peek(void) {
     static uint8_t count;
 

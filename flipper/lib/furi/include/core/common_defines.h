@@ -4,6 +4,9 @@
 #ifndef FURI_CORE_COMMON_DEFINES_H
 #define FURI_CORE_COMMON_DEFINES_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "core/check.h"
 
 #ifndef FURI_WARN_UNUSED
@@ -56,6 +59,9 @@
 #endif
 #ifndef ALIGN
 #define ALIGN(n) __attribute__((aligned(n)))
+#endif
+#ifndef FURI_DEPRECATED
+#define FURI_DEPRECATED __attribute__((deprecated))
 #endif
 #ifndef UNUSED
 #define UNUSED(X) (void)(X)
