@@ -355,6 +355,8 @@ CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
+CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 
@@ -481,7 +483,8 @@ $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_OBJ) $(FURI_GUI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
-	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall
+	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
+	   swaptime swaptime64
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
@@ -490,6 +493,8 @@ endif
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
+# swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
+OBJS_swaptime64 = $(MB)/cmd/test/swaptime.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
