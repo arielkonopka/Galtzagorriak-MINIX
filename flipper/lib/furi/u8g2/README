@@ -1,0 +1,15 @@
+u8g2 (https://github.com/olikraus/u8g2/, BSD-2-Clause, see the notice at
+the top of each file), as trimmed in the stock Flipper Zero firmware's
+lib/u8g2 (commit a8a24de3, 2026-11-14), for libfuri's Canvas (spec R5.2).
+
+Changes for Galtzagorriak MINIX:
+- u8g2_fonts.c keeps only the four fonts the stock Canvas uses
+  (helvB08_tr, haxrcorp4089_tr, profont11_mr, profont22_tn); u8g2.h
+  declares only those.
+- u8g2_buffer.c: the PBM/XBM capture functions are under #if 0 (no
+  u8x8_capture.c).
+- No display driver (u8g2_glue.c, u8x8_d_*): the page buffer is written to
+  /dev/lcd by libfuri (src/gui/gui.c).
+Programs are linked with --gc-sections, so only the u8g2 functions the
+Canvas calls end up in flash.
+- u8g2_null.c (ours): stubs for the u8x8 bus/GPIO calls and kerning.
