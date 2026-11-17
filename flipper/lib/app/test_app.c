@@ -206,11 +206,38 @@ static void policy(void)
 		"reminder at 07:00: shown, no sound (Volume 0), no LED");
 	CHECK(notify_flags(&p, TC_ALARM, NF_ALL, night) == (NF_SHOW | NF_ALL),
 		"alarm at 23:00: rings with sound despite Volume 0");
+	CHECK(notify_flags(&p, TC_ALARM, NF_OUT, night) == (NF_SHOW | NF_OUT),
+		"7b.2: an alarm keeps every output, the screen too, in DND");
+	CHECK(notify_flags(&p, TC_REMINDER, NF_SOUND | NF_SCREEN, day)
+		== (NF_SHOW | NF_SCREEN), "a reminder: the screen flash kept");
 	CHECK(notify_flags(&p, TC_ALARM, NF_VIBRO, night) == (NF_SHOW | NF_VIBRO),
 		"vibro-only alarm: only vibrates");
 	zone("CET-1CEST,M3.5.0,M10.5.0/3");
 	CHECK(notify_flags(&p, TC_REMINDER, NF_ALL, utc(2026, 11, 16, 21, 30, 0))
 		== 0, "Dnd in local time (22:30 CET)");
+	{			/* the speaker volume (7b.2) */
+		struct app_timer t;
+
+		memset(&t, 0, sizeof t);
+		p.volume = 40;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 100,
+			"volume: an alarm without Volume: 100, not the policy's");
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 40,
+			"volume: a reminder takes the policy's");
+		CHECK(notify_volume(&p, NULL, TC_INFO) == 40,
+			"volume: info without a timer: the policy's");
+		t.volume = 70;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 70,
+			"volume: an alarm keeps its own Volume: 70");
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 40,
+			"volume: a reminder's own is capped by the policy");
+		t.volume = 10;
+		CHECK(notify_volume(&p, &t, TC_REMINDER) == 10,
+			"volume: a lower own volume holds for a reminder");
+		p.volume = 0;
+		CHECK(notify_volume(&p, &t, TC_ALARM) == 10,
+			"volume: an alarm with the global sound off");
+	}
 }
 
 static void format(void)
@@ -226,6 +253,7 @@ static void format(void)
 		"Kind: once\nAt: 5\nCategory: urgent\n", "Kind: once\nAt: 5\nSnooze: 99\n",
 		"Kind: once\nAt: 5\nSound: maybe\n", "Kind: once\n",
 		"Kind: once\nAt: 5\nAction: run\n",
+		"Kind: once\nAt: 5\nVolume: 0\n", "Kind: once\nAt: 5\nVolume: 101\n",
 	};
 	unsigned i;
 
@@ -245,6 +273,15 @@ static void format(void)
 		&& strcmp(u.prog, "/usr/bin/x") == 0 && u.cat == TC_ALARM,
 		"once/run fields");
 	CHECK(timer_format(&t, buf, 40) == -1, "format: too small -> -1");
+	parse(&t, "Kind: daily\nTime: 07:00\nCategory: alarm\nVolume: 35\n"
+		  "Mode: escalating\n");
+	CHECK(t.volume == 35 && timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nVolume: 35\n") != NULL
+		&& timer_parse(&u, buf) == 0 && u.volume == 35,
+		"Volume: 35 parsed, formatted, parsed again");
+	parse(&t, water);
+	CHECK(t.volume == 0 && timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "Volume") == NULL, "no Volume: the default, not written");
 	for (i = 0; i < sizeof bad / sizeof *bad; i++) {
 		strcpy(buf, bad[i]);
 		if (timer_parse(&u, buf) != -1) {
@@ -303,6 +340,123 @@ static void spool(void)
 		"settings_set: refuses ':' in keys, newlines in values");
 }
 
+static unsigned hz(const unsigned char *n, int i)
+{
+	return n[4*i] | n[4*i+1] << 8;
+}
+
+static unsigned ms(const unsigned char *n, int i)
+{
+	return n[4*i+2] | n[4*i+3] << 8;
+}
+
+/* Tones (7b.2): built-in, RTTTL, FMF; the alarm's fields. */
+static void tunes(void)
+{
+	unsigned char n[4 * TUNE_MAX];
+	struct app_timer t, u;
+	char buf[APP_FILE_MAX];
+	int i, c;
+
+	for (i = 0; tune_names[i] != NULL; i++) {
+		c = tune_parse(tune_builtin(tune_names[i]), n, TUNE_MAX);
+		if (c < 1) printf("FAIL: built-in tone %s\n", tune_names[i]);
+		fails += c < 1;
+		checks++;
+	}
+	CHECK(tune_builtin("nope") == NULL, "unknown tone");
+	/* d=4 at 120 bpm: 500 ms; a4 440 Hz; 8c#6: 1109 Hz, 250 ms */
+	c = tune_parse("t:d=4,o=5,b=120:a4,8c#6,p,4e.,16b#", n, TUNE_MAX);
+	CHECK(c == 5 && hz(n, 0) == 440 && ms(n, 0) == 500 && hz(n, 1) == 1108
+		&& ms(n, 1) == 250 && hz(n, 2) == 0 && hz(n, 3) == 660
+		&& ms(n, 3) == 750 && hz(n, 4) == 1048 && ms(n, 4) == 125,
+		"RTTTL notes");
+	c = tune_parse("Filetype: Flipper Music Format\nVersion: 0\nBPM: 60\n"
+		"Duration: 8\nOctave: 4\nNotes: A, 4C5, P, 2G#3.\n", n, TUNE_MAX);
+	CHECK(c == 4 && hz(n, 0) == 440 && ms(n, 0) == 500 && hz(n, 1) == 524
+		&& ms(n, 1) == 1000 && hz(n, 2) == 0 && hz(n, 3) == 207
+		&& ms(n, 3) == 3000, "FMF notes");
+	CHECK(tune_parse("t:d=4,o=5,b=120:a,b,c,d,e,f,g,a", n, 3) == 3,
+		"at most max notes");
+	CHECK(tune_parse("just text", n, TUNE_MAX) == -1
+		&& tune_parse("t:x=4:a", n, TUNE_MAX) == -1
+		&& tune_parse("t:d=4,o=5,b=120:a,z", n, TUNE_MAX) == -1
+		&& tune_parse("t:b=0:a", n, TUNE_MAX) == -1, "bad tunes");
+
+	parse(&t, "Kind: daily\nTime: 07:00\nCategory: alarm\nTone: rise\n"
+		  "Ring: 15\nRamp: yes\nSnooze: 9\nTitle: Wake\n");
+	CHECK(strcmp(t.tone, "rise") == 0 && t.ring == 15 && t.ramp == 1,
+		"Tone, Ring, Ramp");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0, "format alarm");
+	strcpy(u.id, "t");
+	CHECK(timer_parse(&u, buf) == 0 && memcmp(&t, &u, sizeof t) == 0,
+		"alarm: format and parse again");
+	parse(&t, "Kind: interval\nStart: 09:00\nEnd: 17:00\nEvery: 30\n"
+		  "Category: reminder\nLog: remind\nTone: /home/f/a.fmf\n");
+	CHECK(strcmp(t.log, "remind") == 0 && strcmp(t.tone, "/home/f/a.fmf")
+		== 0, "Log, Tone: a file");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0 && (strcpy(u.id, "t"),
+		timer_parse(&u, buf)) == 0 && memcmp(&t, &u, sizeof t) == 0,
+		"reminder: format and parse again");
+	strcpy(buf, "Kind: once\nAt: 5\nTone: nope\n");
+	CHECK(timer_parse(&u, buf) == -1, "unknown built-in tone refused");
+	strcpy(buf, "Kind: once\nAt: 5\nTone: /a/../b\n");
+	CHECK(timer_parse(&u, buf) == -1, "tone path with .. refused");
+	strcpy(buf, "Kind: once\nAt: 5\nRing: 61\n");
+	CHECK(timer_parse(&u, buf) == -1, "Ring over 60 refused");
+	strcpy(buf, "Kind: once\nAt: 5\nLog: ../x\n");
+	CHECK(timer_parse(&u, buf) == -1, "bad Log refused");
+
+	/* 7b.2: ring settings. */
+	parse(&t, "Kind: daily\nTime: 06:30\nCategory: alarm\n"
+		  "Mode: escalating\nStep: 20\nOut: vibro, led,screen\n"
+		  "Sound: single\n");
+	CHECK(t.ramp == 1 && t.step == 20 && t.single == 1
+		&& t.flags == (NF_VIBRO | NF_LED | NF_SCREEN),
+		"Mode, Step, Out, Sound: single");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nOut: vibro,led,screen\n") != NULL
+		&& strstr(buf, "\nSound: single\n") != NULL
+		&& strstr(buf, "\nMode: escalating\nStep: 20\n") != NULL,
+		"ring settings written");
+	strcpy(u.id, "t");
+	CHECK(timer_parse(&u, buf) == 0 && memcmp(&t, &u, sizeof t) == 0,
+		"ring settings: format and parse again");
+	parse(&t, "Kind: once\nAt: 5\nOut: none\nSound: multi\n"
+		  "Mode: steady\n");
+	CHECK(t.flags == 0 && t.single == 0 && t.ramp == 0, "Out: none, steady");
+	CHECK(timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nOut: none\nSound: multi\n") != NULL
+		&& strstr(buf, "Mode:") == NULL, "Out: none written");
+	parse(&t, "Kind: once\nAt: 5\nOut: sound\nSound: yes\nVibro: yes\n");
+	CHECK(t.flags == (NF_SOUND | NF_VIBRO), "older Sound:/Vibro: after Out:");
+	parse(&t, "Kind: once\nAt: 5\nOut: led\nSound: single\n");
+	CHECK(t.flags == NF_LED && t.single, "Sound: single keeps Out:");
+	parse(&t, "Kind: once\nAt: 5\nRamp: yes\n");
+	CHECK(t.ramp == 1 && t.flags == NF_ALL, "Ramp: yes = escalating");
+	strcpy(buf, "Kind: once\nAt: 5\nOut: sound,horn\n");
+	CHECK(timer_parse(&u, buf) == -1, "unknown output refused");
+	strcpy(buf, "Kind: once\nAt: 5\nMode: loud\n");
+	CHECK(timer_parse(&u, buf) == -1, "unknown Mode refused");
+	strcpy(buf, "Kind: once\nAt: 5\nStep: 4\n");
+	CHECK(timer_parse(&u, buf) == -1, "Step under 5 refused");
+	strcpy(buf, "Kind: once\nAt: 5\nStep: 121\n");
+	CHECK(timer_parse(&u, buf) == -1, "Step over 120 refused");
+}
+
+static void logs(void)
+{
+	char buf[128];
+
+	CHECK(app_log("remind", "remind-1", 1790000000) == 0
+		&& app_log("remind", "remind-2", 5) == 0, "app_log");
+	CHECK(ff_load(APP_DATA "/remind/log", buf, sizeof buf) > 0
+		&& strcmp(buf, "1790000000 remind-1\n5 remind-2\n") == 0,
+		"the log lines");
+	CHECK(app_log("../x", "a", 1) == -1 && app_log("remind", "a/b", 1)
+		== -1, "app_log: bad names refused");
+}
+
 int main(void)
 {
 	interval_week("UTC0", 0);
@@ -317,6 +471,8 @@ int main(void)
 	policy();
 	format();
 	spool();
+	tunes();
+	logs();
 	printf("libapp: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

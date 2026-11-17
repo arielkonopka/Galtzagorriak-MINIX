@@ -1,0 +1,97 @@
+[EM4100]
+FC: 069 Card: 26505 CL:64
+DEZ 8: 04548489
+DEZ 10: 0591751049
+[EM4100/32]
+FC: 060 Card: 19806 CL:32
+DEZ 8: 03951966
+DEZ 10: 0725372254
+[EM4100/16]
+FC: 190 Card: 61185 CL:16
+DEZ 8: 12513025
+DEZ 10: 2914971393
+[Electra]
+Epilogue: 0000000000000000
+[H10301]
+FC: 42
+Card: 12345
+[Idteck]
+FC: 4944544B
+Card: 3456789A
+[Indala26]
+FC: 35
+Card: 11414
+Parity: -
+Checksum: -
+[IoProxXSF]
+FC: 1
+V: 2
+Card: 12345
+[AWID]
+Format: 26
+FC: 86
+Card: 30874
+[FDX-A]
+ID: 123456781A
+Parity: +
+[FDX-B]
+ID: 020-130630305792
+Country Code: 20
+Country: Unknown
+Temperature: 37.56C
+Animal: No
+Visual Start Digit: 7
+Replacement Number: 0
+User Info: 0
+Data Block: Absent
+RUDI Bit: Yes
+RFU: 1
+
+[HIDProx]
+26-bit HID Proximity
+[HIDExt]
+Type: Generic HID Extended
+Data: Unknown
+[Pyramid]
+Format: 26
+FC: 000; Card: 10800
+[Viking]
+ID: 12345678
+[Jablotron]
+Card: 542EAF4E
+[Paradox]
+FC: 72
+Card: 53593
+CRC: 226
+Calc CRC: 197
+CRC Mismatch, Invalid Card!
+[PAC/Stanley]
+CIN: 12345678
+[Keri]
+Internal ID: 12345
+FC: 1
+Card: 12544
+[Gallagher]
+FC: 22136
+Card: 12377840
+Region: 1
+Issue Level: 2
+[Nexwatch]
+ID: 125540522
+Mode: 0
+Type: Unknown
+[Radio Key]
+RKKT 26-bit format
+Facility code: 26
+Card number: 18
+[GProxII]
+FC: 96 Card: 29247 LEN: 26
+XOR: 1 CRC: 0 P: 0012
+[Noralsy]
+Card ID: 9001b1e
+Year: 200a
+[Indala224]
+Raw: 80000001 B23EAEB0
+FFE8063A B156010F
+19D3457F 5A3C96E1
+2D4B78A5

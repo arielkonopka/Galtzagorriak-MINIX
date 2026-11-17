@@ -1,0 +1,50 @@
+liblfrfid - the LF RFID protocols of the Unleashed firmware (spec R9.0.1)
+==========================================================================
+
+Every 125 kHz protocol of the Flipper Zero's Unleashed firmware: decoders,
+encoders, render functions and T5577/EM4305 block builders, for `rfid`.
+
+Source: DarkFlippers/unleashed-firmware, lib/ at commit
+53818b18f63e105baaf37ed8eac9a7def58ec8b1 (2026-11-16), GPLv3 (as this
+project).  The files below are copied byte for byte (the commit is named
+here, not in their headers, so that `cmp` against a newer Unleashed shows
+what changed); this directory has the layout of Unleashed's lib/, so their
+#include lines work unchanged:
+
+  lfrfid/protocols/*            all of lib/lfrfid/protocols (25 protocols,
+                                lfrfid_protocols.c's table, write_fill)
+  lfrfid/tools/fsk_demod.*, fsk_ocs.c, fsk_osc.h, varint_pair.*
+  lfrfid/tools/t5577.h, em4305.h, hitagmicro.h, hitags.h, iso_3166.h
+                                headers only: their .c files drive the
+                                Flipper's timer and pins (furi_hal_rfid);
+                                on MINIX `rfid` plays the same field gaps
+                                through /dev/rfid (flipper/cmds/rfid.c)
+  toolbox/protocols/*           protocol.h, protocol_dict.*
+  toolbox/manchester_decoder.*, level_duration.h, hex.*, varint.*
+  bit_lib/bit_lib.*
+
+Ours (GPLv3):
+
+  shim/                         the thin furi shim: furi.h (furi_check,
+                                FURI_LOG_*, FuriString as a fixed 256 B
+                                buffer with its own printf: MINIX's has no
+                                %ll or %hh), core/check.h, storage/storage.h,
+                                furi_hal_rtc.h, forwarding headers for
+                                Unleashed's other include paths, and
+                                iso_3166.c (the country table read with
+                                stdio from /usr/lib/lfrfid/lfrfid/assets/
+                                iso3166.lfrfid if present; else "Unknown",
+                                as stock without the file)
+  lfrfid_read.*                 the stock read worker's decision (the same
+                                bytes validate_count + 1 times in a row),
+                                fed by the caller: /dev/rfid captures in
+                                `rfid`, synthetic edges in the tests
+
+Not ported: the worker threads, furi_hal_rfid, the GUI, raw files, Hitag
+writers (R9.0.7, T19b).
+
+Tests: flipper/tests/lfrfid (make lfrfidtest; run by tests/host in CI).
+
+Updating to a newer Unleashed: copy the same files over, run
+`make -C flipper/tests/lfrfid test`; a new protocol is its two files plus
+its line in lfrfid_protocols.c/.h (and one fixed vector in the test).
