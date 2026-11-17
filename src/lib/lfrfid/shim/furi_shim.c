@@ -11,7 +11,6 @@
  * argument slot is undefined, so it is cut off). */
 #include <furi.h>
 #include <furi_hal_rtc.h>
-#include <unistd.h>
 
 #undef malloc
 #undef furi_string_cat
@@ -338,3 +337,11 @@ int furi_string_printf(FuriString* s, const char* format, ...) {
     va_end(ap);
     return n;
 }
+
+#ifdef __minix
+/* MINIX 2.0's libm is C89: no roundf (PAC/Stanley rounds a duration to
+ * bits with it).  Halves away from zero, as C99's. */
+float roundf(float x) {
+    return x < 0 ? -(float)(long)(-x + 0.5f) : (float)(long)(x + 0.5f);
+}
+#endif

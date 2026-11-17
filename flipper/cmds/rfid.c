@@ -1,15 +1,23 @@
 /* rfid - read a 125 kHz tag (Galtzagorriak MINIX, spec R6.5; /dev/rfid)
  *
- * Usage:	rfid [-r] [-n TRIES]	read: print the tag's EM4100 number
- *					(as the stock app: 5 bytes, hex);
- *					-r: also the timings; up to TRIES
- *					reads of 0.5 s (default 4)
- *		rfid write [OPTS] EM B0 B1 B2 B3 B4
- *					make a blank tag (fob, card) an
- *					EM4100 with that number: as T5577,
- *					else as EM4305 (as stock), read back
- *		rfid copy [OPTS]	read a tag, then write its number
- *					to the blank one put on next
+ * Usage:	rfid [-r] [-n TRIES] [-o FILE]
+ *					read: print the tag's protocol and
+ *					data (hex, as the stock app), then
+ *					the data as the stock info screen
+ *					shows it; -r: also the timings; up
+ *					to TRIES reads of 0.5 s (default 4,
+ *					more while a tag is half read);
+ *					-o: also save it as a .rfid file
+ *		rfid write [OPTS] PROTO HEX...
+ *		rfid write [OPTS] -f FILE
+ *					make a blank tag (fob, card) that
+ *					tag: as T5577, else as EM4305 (as
+ *					stock), read back.  PROTO: a name
+ *					of `rfid list` (case, spaces and /
+ *					do not matter; EM = EM4100); HEX:
+ *					its data bytes, or a .rfid file
+ *		rfid copy [OPTS]	read a tag, then write it to the
+ *					blank one put on next
  *		  -n TRIES		rounds, default 20 (a tag that
  *					wants a password may need many)
  *		  -pass HEX		also give the T5577 a password, so
@@ -37,6 +45,18 @@
  *					read one T5577 block (0 by default) and
  *					print its 32-bit word (block 0 is the
  *					configuration); -with sends a password
+ *		rfid emulate PROTO HEX...
+ *		rfid emulate -f FILE	be that tag for a reader (Ctrl-C ends)
+ *		rfid list		the protocols, their modulation and
+ *					what works with them today
+ *
+ * The protocols are the Unleashed firmware's (liblfrfid, src/lib/lfrfid,
+ * spec 9.0): all 25 decode, encode and fill T5577/EM4305 blocks.  What the
+ * kernel does not do yet (T19b: the PSK carrier, captures longer than 512
+ * edges, emulation longer than 512 segments) limits reading to the ASK
+ * protocols (Manchester, biphase, direct), read-back after a write to
+ * those, and emulation to frames of up to 512 segments; the others say so.
+ * EM4100 at RF/64 keeps its own decoder, writer and emulation (R6.5).
  *
  * A block read holds the 125 kHz field up (ioctl RFIDIOCFIELD) across the
  * read command (field gaps, a write) and the tag's reply (comparator edges,
@@ -54,16 +74,20 @@
  * 32-bit), the level of the first unknown.  EM4100 (EM4102, and blank
  * T5577 fobs in their default mode): Manchester, RF/64 (512 us a bit), 64
  * bits: nine 1s, ten rows of 4 data bits + even parity, 4 column parity
- * bits, a 0.  Other kinds (HID, Indala: FSK, PSK) are shown as a summary.
+ * bits, a 0.  Other kinds go to liblfrfid; what none decodes is shown as a
+ * summary.
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <minix/rfid.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <furi.h>			/* liblfrfid's shim: FuriString */
+#include <lfrfid_read.h>
 
 #define MAXD	512		/* ~3 EM frames; .bss under 4 KB (R2a.5) */
 #define MAXH	(2 * MAXD)
@@ -363,38 +387,6 @@ static int write_em(unsigned char id[5], int tries)
 	return 1;
 }
 
-/* Read a tag, then write its number to the blank one put on next. */
-static int copy_em(int tries)
-{
-	unsigned char id[5], got[5];
-	int fd, n, t;
-
-	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
-		perror("rfid: /dev/rfid");
-		return 1;
-	}
-	for (t = 0; t < 20; t++) {
-		if ((n = read(fd, d, sizeof(d))) < 0) {
-			perror("rfid");
-			return 1;
-		}
-		if (em_decode(n / 4, id)) break;
-	}
-	if (t == 20) {
-		printf("no tag to copy (hold it to the back)\n");
-		return 1;
-	}
-	printf("read EM4100 %02X %02X %02X %02X %02X\n",
-		id[0], id[1], id[2], id[3], id[4]);
-	printf("now put the blank one on\n");
-	for (t = 0; t < 600; t++) {		/* until that one is away */
-		if ((n = read(fd, d, sizeof(d))) < 0) break;
-		if (!em_decode(n / 4, got) || memcmp(got, id, 5) != 0) break;
-	}
-	close(fd);
-	return write_em(id, tries);
-}
-
 /* ---- reading a T5577 block (R6.5 part 3) ----
  *
  * The field is held up (RFIDIOCFIELD) across a read command and the tag's
@@ -686,23 +678,554 @@ static int emulate_em(unsigned char id[5])
 	return 0;			/* not reached */
 }
 
-int main(int argc, char **argv)
+/* ---- every Unleashed protocol (liblfrfid, spec R9.0.1, R9.0.3) ---- */
+
+static ProtocolDict *dict;	/* the 25 protocols; heap, while rfid runs */
+
+static ProtocolDict *lf(void)
 {
-	int fd, n, i, tries = 4, raw = 0, t;
+	if (dict == NULL) dict = lfrfid_dict_alloc();
+	return dict;
+}
+
+/* Letters and digits of a name, lower case: "EM4100/32" = "em4100_32". */
+static int same_name(const char *a, const char *b)
+{
+	for (;;) {
+		while (*a && !isalnum((unsigned char) *a)) a++;
+		while (*b && !isalnum((unsigned char) *b)) b++;
+		if (tolower((unsigned char) *a) != tolower((unsigned char) *b))
+			return 0;
+		if (*a == 0) return 1;
+		a++, b++;
+	}
+}
+
+/* A protocol by name (EM = EM4100), or -1. */
+static int lf_find(const char *name)
+{
+	int i;
+
+	if (same_name(name, "EM")) return LFRFIDProtocolEM4100;
+	for (i = 0; i < LFRFIDProtocolMax; i++)
+		if (same_name(name, protocol_dict_get_name(lf(), i))) return i;
+	return -1;
+}
+
+static size_t lf_size(int p)
+{
+	return protocol_dict_get_data_size(lf(), p);
+}
+
+/* "NAME B0 B1 ..." (the stock "Data:" bytes), then the stock info text. */
+static void lf_print(int p, const uint8_t *data)
+{
+	FuriString *s;
+	const char *t;
+	size_t i;
+
+	printf("%s", protocol_dict_get_name(lf(), p));
+	for (i = 0; i < lf_size(p); i++) printf(" %02X", data[i]);
+	printf("\n");
+	s = furi_string_alloc();
+	protocol_dict_set_data(lf(), p, data, lf_size(p));
+	protocol_dict_render_data(lf(), s, p);
+	for (t = furi_string_get_cstr(s); *t; ) {
+		const char *e = strchr(t, '\n');
+		int n = e ? (int) (e - t) : (int) strlen(t);
+
+		if (n > 0) printf("  %.*s\n", n, t);
+		t += n + (e != NULL);
+	}
+	furi_string_free(s);
+}
+
+/* The T5577 configuration word the protocol's writer uses. */
+static uint32_t lf_config(int p, const uint8_t *data)
+{
+	LFRFIDWriteRequest req;
+
+	protocol_dict_set_data(lf(), p, data, lf_size(p));
+	if (!lfrfid_normalize(lf(), p, &req)) return 0;
+	return req.t5577.block[0];
+}
+
+/* Can today's /dev/rfid capture (125 kHz, 512 edges) read it?  ASK: the
+ * comparator sees Manchester, biphase or direct.  FSK has to be told apart
+ * at 64/80 us in a frame longer than one capture, PSK needs the 62.5 kHz
+ * carrier: T19b (R9.0.4, R9.0.5). */
+static int lf_readable(uint32_t cfg)
+{
+	switch (t5577_config_modulation(cfg)) {
+	case LFRFID_T5577_MODULATION_MANCHESTER:
+	case LFRFID_T5577_MODULATION_BIPHASE:
+	case LFRFID_T5577_MODULATION_DIPHASE:
+	case LFRFID_T5577_MODULATION_DIRECT:
+		return 1;
+	}
+	return 0;
+}
+
+static const char *lf_modulation(uint32_t cfg)
+{
+	switch (t5577_config_modulation(cfg)) {
+	case LFRFID_T5577_MODULATION_DIRECT:	return "direct";
+	case LFRFID_T5577_MODULATION_PSK1:	return "PSK1";
+	case LFRFID_T5577_MODULATION_PSK2:	return "PSK2";
+	case LFRFID_T5577_MODULATION_PSK3:	return "PSK3";
+	case LFRFID_T5577_MODULATION_FSK1:	return "FSK1";
+	case LFRFID_T5577_MODULATION_FSK2:	return "FSK2";
+	case LFRFID_T5577_MODULATION_FSK1a:	return "FSK1a";
+	case LFRFID_T5577_MODULATION_FSK2a:	return "FSK2a";
+	case LFRFID_T5577_MODULATION_MANCHESTER: return "Manchester";
+	case LFRFID_T5577_MODULATION_BIPHASE:	return "biphase";
+	case LFRFID_T5577_MODULATION_DIPHASE:	return "diphase";
+	}
+	return "?";
+}
+
+static int lf_rate(uint32_t cfg)
+{
+	static const unsigned char rf[8] = { 8, 16, 32, 40, 50, 64, 100, 128 };
+
+	return rf[(cfg & LFRFID_T5577_BITRATE_MASK) >> LFRFID_T5577_BITRATE_SHIFT];
+}
+
+/* The readers of one read: the capture's first level is unknown, so it is
+ * fed both ways, each with its own count of equal reads (lfrfid_read.c:
+ * the stock rule, validate_count + 1 in a row, across captures). */
+static LfrfidReader rd[2];
+static int rd_on;
+
+/* One capture d[0..n-1] through liblfrfid: the protocol once validated
+ * (its data in *data), else -1.  *half: a protocol is half validated. */
+static int lf_capture(int n, uint8_t *data, int *half)
+{
+	int pol;
+	ProtocolId p;
+
+	if (!rd_on) {
+		lfrfid_reader_start(&rd[0], lf(), LFRFIDFeatureASK);
+		lfrfid_reader_start(&rd[1], lf(), LFRFIDFeatureASK);
+		rd_on = 1;
+	}
+	for (pol = 0; pol < 2; pol++) {
+		p = lfrfid_reader_feed_edges(&rd[pol], (const uint32_t *) d,
+						(size_t) n, pol == 0);
+		lfrfid_reader_gap(&rd[pol]);	/* the next capture is apart */
+		if (p != PROTOCOL_NO) {
+			memcpy(data, rd[pol].data, lf_size(p));
+			return p;
+		}
+	}
+	*half = rd[0].last != PROTOCOL_NO || rd[1].last != PROTOCOL_NO;
+	return -1;
+}
+
+/* Read a tag with fd open: EM4100 RF/64 by its own decoder (R6.5), else
+ * any ASK protocol.  The protocol (data in data[]), or -1.  TRIES reads,
+ * up to 3 times as many while a protocol is half validated. */
+static int read_any(int fd, int tries, int raw, uint8_t *data, int *nlast)
+{
+	int t, n = 0, i, p, half = 0;
 	unsigned char id[5];
 
-	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
-		unsigned char id[5];
-
-		if (argc != 8 || strcmp(argv[2], "EM") != 0) goto use;
-		for (n = 0; n < 5; n++) {
-			char *e;
-			unsigned long v = strtoul(argv[3 + n], &e, 16);
-
-			if (*e != 0 || v > 255) goto use;
-			id[n] = (unsigned char) v;
+	rd_on = 0;
+	for (t = 0; t < tries || (half && t < 3 * tries); t++) {
+		if ((n = read(fd, d, sizeof(d))) < 0) {
+			perror("rfid");
+			return -2;
 		}
-		return emulate_em(id);
+		n /= 4;
+		if (raw) {
+			printf("%d:", n);
+			for (i = 0; i < n && i < 200; i++) printf(" %lu", d[i]);
+			printf("\n");
+		}
+		if (em_decode(n, id)) {
+			memcpy(data, id, 5);
+			*nlast = n;
+			return LFRFIDProtocolEM4100;
+		}
+		if ((p = lf_capture(n, data, &half)) >= 0) {
+			*nlast = n;
+			return p;
+		}
+	}
+	*nlast = n;
+	return -1;
+}
+
+/* ---- .rfid files (the stock format: Key type = the Unleashed name) ---- */
+
+static int save_rfid(const char *path, int p, const uint8_t *data)
+{
+	FILE *f;
+	size_t i;
+
+	if ((f = fopen(path, "w")) == NULL) { perror(path); return -1; }
+	fprintf(f, "Filetype: Flipper RFID key\nVersion: 1\nKey type: %s\n"
+		"# Data size for %s is %u\nData:", protocol_dict_get_name(lf(), p),
+		protocol_dict_get_name(lf(), p), (unsigned) lf_size(p));
+	for (i = 0; i < lf_size(p); i++) fprintf(f, " %02X", data[i]);
+	fprintf(f, "\n");
+	if (fclose(f) != 0) { perror(path); return -1; }
+	return 0;
+}
+
+/* Hex bytes, spaced or not, from the strings s[0..n-1].  The count, or -1
+ * on anything else or more than max. */
+static int parse_hex(char **s, int n, uint8_t *out, int max)
+{
+	int k = 0, half = 0, i;
+	const char *c;
+
+	for (i = 0; i < n; i++)
+		for (c = s[i]; *c; c++) {
+			int v;
+
+			if (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r')
+				continue;
+			if (!isxdigit((unsigned char) *c)) return -1;
+			v = isdigit((unsigned char) *c) ? *c - '0'
+				: tolower((unsigned char) *c) - 'a' + 10;
+			if (!half) {
+				if (k >= max) return -1;
+				out[k] = (uint8_t) (v << 4);
+			} else out[k++] |= (uint8_t) v;
+			half = !half;
+		}
+	return half ? -1 : k;
+}
+
+static int load_rfid(const char *path, uint8_t *data)
+{
+	char line[200], *v;
+	FILE *f;
+	int p = -1, n = -1;
+
+	if ((f = fopen(path, "r")) == NULL) { perror(path); return -1; }
+	while (fgets(line, sizeof line, f) != NULL) {
+		if (strncmp(line, "Key type:", 9) == 0) {
+			for (v = line + 9; *v == ' '; v++) ;
+			v[strcspn(v, "\r\n")] = 0;
+			if ((p = lf_find(v)) < 0)
+				fprintf(stderr, "rfid: %s: unknown key type %s\n",
+					path, v);
+		} else if (strncmp(line, "Data:", 5) == 0) {
+			v = line + 5;
+			n = parse_hex(&v, 1, data, LFRFID_DATA_MAX);
+		}
+	}
+	fclose(f);
+	if (p < 0) return -1;
+	if (n != (int) lf_size(p)) {
+		fprintf(stderr, "rfid: %s: %s data is %u bytes\n", path,
+			protocol_dict_get_name(lf(), p), (unsigned) lf_size(p));
+		return -1;
+	}
+	return p;
+}
+
+/* PROTO HEX... or -f FILE from argv[i..argc-1]: the protocol, data in
+ * data[], or -1 after saying why. */
+static int tag_args(int argc, char **argv, int i, uint8_t *data)
+{
+	int p, n;
+
+	if (i + 2 == argc && strcmp(argv[i], "-f") == 0)
+		return load_rfid(argv[i + 1], data);
+	if (i >= argc) return -1;
+	if ((p = lf_find(argv[i])) < 0) {
+		fprintf(stderr, "rfid: no protocol %s (see rfid list)\n", argv[i]);
+		return -1;
+	}
+	n = parse_hex(argv + i + 1, argc - i - 1, data, LFRFID_DATA_MAX);
+	if (n != (int) lf_size(p)) {
+		fprintf(stderr, "rfid: %s takes %u data bytes\n",
+			protocol_dict_get_name(lf(), p), (unsigned) lf_size(p));
+		return -1;
+	}
+	return p;
+}
+
+/* Read the tag back as protocol p with data: 1 yes, 0 something else
+ * (got[] then holds what), -1 nothing. */
+static int verify_lf(int fd, int p, const uint8_t *data, int *gotp,
+	uint8_t *got)
+{
+	int n;
+
+	*gotp = read_any(fd, 4, 0, got, &n);
+	if (*gotp < 0) return -1;
+	return *gotp == p && memcmp(got, data, lf_size(p)) == 0;
+}
+
+/* rfid write PROTO HEX...: any protocol, through its Unleashed writer
+ * (write_data fills the T5577 blocks, or the EM4305 words), played as the
+ * EM4100 write is.  The data blocks first and the configuration last (once
+ * the PWD bit is set a write needs the password).  A tag of an ASK
+ * protocol is read back, as stock; FSK and PSK ones cannot be read until
+ * T19b, so they are written once and said to be unverified. */
+static int write_lf(int p, uint8_t *data, int tries, int em_only)
+{
+	LFRFIDWriteRequest req, ereq;
+	uint8_t got[LFRFID_DATA_MAX];
+	const char *name = protocol_dict_get_name(lf(), p);
+	int fd, i, v = -1, gp, can_em, readable;
+	uint32_t cfg;
+
+	protocol_dict_set_data(lf(), p, data, lf_size(p));
+	if (!lfrfid_normalize(lf(), p, &req)) {
+		fprintf(stderr, "rfid: %s cannot be written\n", name);
+		return 1;
+	}
+	protocol_dict_get_data(lf(), p, data, lf_size(p)); /* as written */
+	memset(&ereq, 0, sizeof ereq);
+	ereq.write_type = LFRFIDWriteTypeEM4305;
+	can_em = protocol_dict_get_write_data(lf(), p, &ereq);
+	cfg = req.t5577.block[0];
+	readable = lf_readable(cfg);
+	if (wpass && req.t5577.blocks_to_write > LFRFID_T5577_PASSWORD_BLOCK) {
+		fprintf(stderr, "rfid: %s fills block 7: no room for -pass\n", name);
+		return 1;
+	}
+	if (em_only && !can_em) {
+		fprintf(stderr, "rfid: %s has no EM4305 layout\n", name);
+		return 1;
+	}
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (!readable) tries = 1;
+	while (tries-- > 0) {
+		if (!em_only) {
+			nt = 0;
+			for (i = 1; i < (int) req.t5577.blocks_to_write; i++)
+				wblock(i, req.t5577.block[i]);
+			if (wpass) wblock(7, wpass);
+			wblock(0, cfg | (wpass || (wsend && !wlock) ? T5577_PWD : 0));
+			wreset();
+			if (send(fd) < 0) return 1;
+			if (!readable) {
+				printf("written (T5577%s), not read back: %s is %s, "
+					"which rfid reads after T19b\n",
+					wlock ? ", locked for ever"
+					      : wpass ? ", password set" : "",
+					name, lf_modulation(cfg));
+				return 0;
+			}
+			if ((v = verify_lf(fd, p, data, &gp, got)) == 1) {
+				printf("written (T5577%s): ", wlock ? ", locked for ever"
+					: wpass ? ", password set" : "");
+				lf_print(p, data);
+				return 0;
+			}
+		}
+		if (!can_em) continue;
+		nt = 0;				/* then EM4305 */
+		for (i = 0; i < EM4x05_WORD_COUNT; i++)
+			if (ereq.em4305.mask & (1u << i))
+				eword(i, ereq.em4305.word[i]);
+		if (send(fd) < 0) return 1;
+		if (!readable) {
+			printf("written (EM4305), not read back: %s is %s\n",
+				name, lf_modulation(cfg));
+			return 0;
+		}
+		if ((v = verify_lf(fd, p, data, &gp, got)) == 1) {
+			printf("written (EM4305): ");
+			lf_print(p, data);
+			return 0;
+		}
+	}
+	if (v == 0) {
+		printf("not written (locked, or a password?); the tag still reads ");
+		lf_print(gp, got);
+	} else printf("written, but it does not read back as %s\n", name);
+	return 1;
+}
+
+/* rfid copy: read a tag (any ASK protocol), then write it to the blank one
+ * put on next. */
+static int copy_any(int tries)
+{
+	uint8_t data[LFRFID_DATA_MAX], got[LFRFID_DATA_MAX];
+	int fd, p, q, n, t;
+
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if ((p = read_any(fd, 20, 0, data, &n)) < 0) {
+		if (p == -1) printf("no tag to copy (hold it to the back)\n");
+		return 1;
+	}
+	printf("read ");
+	lf_print(p, data);
+	printf("now put the blank one on\n");
+	for (t = 0; t < 600; t++) {		/* until that one is away */
+		q = read_any(fd, 1, 0, got, &n);
+		if (q == -2) break;
+		if (q >= 0 && (q != p || memcmp(got, data, lf_size(p)) != 0)) break;
+		if (q < 0 && n < 16) break;	/* (nearly) no signal: gone */
+	}
+	close(fd);
+	if (p == LFRFIDProtocolEM4100) return write_em(data, tries);
+	return write_lf(p, data, tries, 0);
+}
+
+/* rfid emulate PROTO HEX...: the protocol's Unleashed encoder, one frame
+ * of it as RFIDIOCEMU segments (as stock's pulse_glue: a segment is a
+ * loaded part and the unloaded rest, in carrier periods), played round and
+ * round by the kernel at the reader's clock.  The frame is found as the
+ * period of the encoder's output (it is endless), checked over a whole
+ * second frame by a second encoder.  At most 512 segments today (FSK and
+ * PSK frames are longer: T19b, R9.0.6). */
+#define SIGW	48		/* encoder levels that mark a frame's start */
+#define MAXY	40000		/* longest frame looked for, in levels */
+
+static uint32_t ld_word(LevelDuration l)
+{
+	return level_duration_get_duration(l) << 1 | level_duration_get_level(l);
+}
+
+static uint32_t yield(void *proto, const ProtocolBase *b)
+{
+	return ld_word(b->encoder.yield(proto));
+}
+
+static int emulate_lf(int p, uint8_t *data)
+{
+	const ProtocolBase *b = lfrfid_protocols[p];
+	void *one, *two;
+	uint32_t sig[SIGW], ring[SIGW], w, hi = 0, lo = 0;
+	unsigned long *dur = &d[0], *pulse;
+	long L = -1, i, s, k;
+	int nseg = 0, fd;
+	struct rfid_emu e;
+
+	/* two encoders of the protocol, outside the dictionary */
+	one = b->alloc();
+	two = b->alloc();
+	memcpy(b->get_data(one), data, lf_size(p));
+	memcpy(b->get_data(two), data, lf_size(p));
+	b->encoder.start(one);
+	b->encoder.start(two);
+	for (i = 0; i < SIGW; i++) sig[i] = ring[i] = yield(one, b);
+	for (i = SIGW; i < MAXY && L < 0; i++) {	/* the frame length */
+		ring[i % SIGW] = w = yield(one, b);
+		if (w != sig[SIGW - 1]) continue;
+		for (k = 0; k < SIGW; k++)
+			if (ring[(i - SIGW + 1 + k) % SIGW] != sig[k]) break;
+		if (k == SIGW) L = i - SIGW + 1;
+	}
+	if (L < 0) goto toolong;
+	/* check: two runs one frame apart agree for a whole frame */
+	b->encoder.start(one);
+	b->encoder.start(two);
+	for (i = 0; i < L; i++) (void) yield(two, b);
+	for (i = 0; i < L; i++)
+		if (yield(one, b) != yield(two, b)) goto toolong;
+	/* start the loop where a loaded part begins: s, level high after low */
+	b->encoder.start(one);
+	w = yield(one, b);
+	for (s = 0; s < L; s++) {
+		uint32_t x = yield(one, b);
+
+		if ((x & 1) && !(w & 1)) break;
+		w = x;
+	}
+	if (s >= L) goto toolong;		/* never loaded: no tag */
+	s++;
+	/* glue the frame's levels into segments, beginning at s */
+	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
+	b->encoder.start(one);
+	for (i = 0; i < s; i++) (void) yield(one, b);
+	for (i = 0; i <= L; i++) {
+		w = yield(one, b);
+		if (w & 1) {
+			if (lo != 0) {			/* a segment is done */
+				if (nseg >= MAXD) goto toolong;
+				dur[nseg] = hi + lo - 1;
+				pulse[nseg++] = hi;
+				hi = lo = 0;
+			}
+			if (i == L) break;		/* back at s */
+			hi += w >> 1;
+		} else lo += w >> 1;
+	}
+	b->free(one);
+	b->free(two);
+	e.dur = dur;
+	e.pulse = pulse;
+	e.n = nseg;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMU, &e) < 0) {
+		perror("rfid: emulate");
+		close(fd);
+		return 1;
+	}
+	printf("emulating ");
+	lf_print(p, data);
+	printf("(%d segments); hold to a reader, Ctrl-C to stop\n", nseg);
+	for (;;) sleep(60);		/* Ctrl-C ends it; close stops it */
+toolong:
+	fprintf(stderr, "rfid: a %s frame is more than %d segments (%s): "
+		"emulating it needs T19b\n", protocol_dict_get_name(lf(), p),
+		MAXD, lf_modulation(lf_config(p, data)));
+	return 1;
+}
+
+/* rfid list: the protocols, how they are sent, what works today, and the
+ * heap the decoders of a read take (R9.0.1 budget: 6 KB). */
+static int list(void)
+{
+	uint8_t zero[LFRFID_DATA_MAX];
+	size_t heap;
+	int i;
+
+	lfrfid_heap_bytes = 0;
+	(void) lf();
+	heap = lfrfid_heap_bytes;
+	memset(zero, 0, sizeof zero);
+	printf("%-12s %-10s %-10s %5s %5s  %s\n", "PROTOCOL", "MAKER",
+		"MODULATION", "RATE", "BYTES", "READ");
+	for (i = 0; i < LFRFIDProtocolMax; i++) {
+		uint32_t cfg = lf_config(i, zero);
+
+		printf("%-12s %-10.10s %-10s RF/%-3d %4u  %s\n",
+			protocol_dict_get_name(lf(), i),
+			protocol_dict_get_manufacturer(lf(), i),
+			lf_modulation(cfg), lf_rate(cfg), (unsigned) lf_size(i),
+			lf_readable(cfg) ? "yes" : "after T19b");
+	}
+	printf("decoders: %u B of heap while reading\n", (unsigned) heap);
+	return 0;
+}
+
+
+int main(int argc, char **argv)
+{
+	int fd, n, i, tries = 4, raw = 0, p;
+	unsigned char id[5];
+	uint8_t data[LFRFID_DATA_MAX];
+	const char *out = NULL;
+
+	if (argc >= 2 && strcmp(argv[1], "list") == 0) {
+		if (argc != 2) goto use;
+		return list();
+	}
+
+	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
+		if ((p = tag_args(argc, argv, 2, data)) < 0) goto use;
+		/* EM4100 at RF/64 keeps its own waveform (R6.5 part 4) */
+		if (p == LFRFIDProtocolEM4100) return emulate_em(data);
+		return emulate_lf(p, data);
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
@@ -743,12 +1266,14 @@ int main(int argc, char **argv)
 
 	if (argc >= 2 && (strcmp(argv[1], "write") == 0
 				|| strcmp(argv[1], "copy") == 0)) {
-		int tries = 20, cp = argv[1][0] == 'c';
+		int tries = 20, cp = argv[1][0] == 'c', em_only = 0;
 
-		for (i = 2; i < argc && argv[i][0] == '-'; i++) {
+		for (i = 2; i < argc && argv[i][0] == '-'
+				&& strcmp(argv[i], "-f") != 0; i++) {
 			char *e;
 
 			if (strcmp(argv[i], "-lock") == 0) wlock = 1;
+			else if (strcmp(argv[i], "-em4305") == 0) em_only = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				tries = atoi(argv[++i]);
 			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
@@ -760,33 +1285,33 @@ int main(int argc, char **argv)
 			} else goto use;
 		}
 		if (tries < 1 || (wlock && wpass)) goto use;
+		if (em_only && (wlock || wpass || wsend)) goto use;
 		if (cp) {
-			if (i != argc) goto use;
-			return copy_em(tries);
+			if (i != argc || em_only) goto use;
+			return copy_any(tries);
 		}
-		if (i + 6 != argc || strcmp(argv[i], "EM") != 0) goto use;
-		for (i++, n = 0; n < 5; n++) {
-			char *e;
-			unsigned long v = strtoul(argv[i + n], &e, 16);
-
-			if (*e != 0 || v > 255) goto use;
-			id[n] = (unsigned char) v;
-		}
-		return write_em(id, tries);
+		if ((p = tag_args(argc, argv, i, data)) < 0) goto use;
+		/* EM4100 at RF/64: its own writer, as before (R6.5) */
+		if (p == LFRFIDProtocolEM4100 && !em_only)
+			return write_em(data, tries);
+		return write_lf(p, data, tries, em_only);
 	}
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-r") == 0) raw = 1;
 		else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 			tries = atoi(argv[++i]);
+		else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+			out = argv[++i];
 		else {
-use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
-				"       rfid write [-n N] [-pass HEX] "
-				"[-with HEX] [-lock] EM B0 B1 B2 B3 B4\n"
+use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE]\n"
+				"       rfid write [-n N] [-pass HEX] [-with HEX] "
+				"[-lock] [-em4305] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
-				"       rfid emulate EM B0 B1 B2 B3 B4\n");
+				"       rfid emulate PROTO HEX...|-f FILE\n"
+				"       rfid list\n");
 			return 2;
 		}
 	}
@@ -794,23 +1319,12 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 		perror("rfid: /dev/rfid");
 		return 1;
 	}
-	for (t = 0; t < tries; t++) {
-		if ((n = read(fd, d, sizeof(d))) < 0) {
-			perror("rfid");
-			return 1;
-		}
-		n /= 4;
-		if (raw) {
-			printf("%d:", n);
-			for (i = 0; i < n && i < 200; i++) printf(" %lu", d[i]);
-			printf("\n");
-		}
-		if (em_decode(n, id)) {
-			printf("EM4100 %02X %02X %02X %02X %02X\n",
-				id[0], id[1], id[2], id[3], id[4]);
-			return 0;
-		}
+	if ((p = read_any(fd, tries, raw, data, &n)) >= 0) {
+		lf_print(p, data);
+		if (out != NULL && save_rfid(out, p, data) < 0) return 1;
+		return 0;
 	}
+	if (p == -2) return 1;
 	if (n == 0) printf("no tag (no signal)\n");
 	else {
 		unsigned long lo = ~0UL, hi = 0, sum = 0;
@@ -820,8 +1334,8 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 			if (d[i] > hi) hi = d[i];
 			sum += d[i];
 		}
-		printf("no EM4100; %d changes, %lu-%lu us, mean %lu us\n",
-			n, lo, hi, sum / n);
+		printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
+			"mean %lu us\n", n, lo, hi, sum / n);
 	}
 	return 1;
 }
