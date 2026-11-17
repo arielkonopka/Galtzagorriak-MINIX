@@ -458,6 +458,17 @@ provides them as small shared services, so each new app is only its UI plus a fe
     off, no CPU2/Bluetooth, no launcher; a button press during it turns it into a normal boot
     (and cancels the power-off, rule above);
   - power-off is the normal orderly halt (sync, N.2 clean flags, then ship mode).
+- **Timer type `emergency` (owner, 2026-11-17).** `Type: emergency` is for a rescue signal
+  (beacon, screen flash, Morse). It means `After: off` with the rules above, and in addition:
+  - it ignores do-not-disturb and the notification policy (like an alarm);
+  - it is never skipped: `Missed: fire-once` is forced, and a timer due during a normal session
+    still runs (the signal goes out, the Flipper stays on);
+  - low battery does not cancel it: below the low-battery threshold the app gets
+    `TIMED_LOWBAT` in its environment and should signal shorter or less often; only the
+    charger's own cut-off stops it;
+  - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
+    so an ordinary app can't keep waking a switched-off Flipper.
+  Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
