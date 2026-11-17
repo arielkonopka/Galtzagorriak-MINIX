@@ -47,6 +47,7 @@ OBJECTS	= \
 	$(LIBRARY)(scanf.o) \
 	$(LIBRARY)(setbuf.o) \
 	$(LIBRARY)(setvbuf.o) \
+	$(LIBRARY)(snprintf.o) \
 	$(LIBRARY)(sprintf.o) \
 	$(LIBRARY)(sscanf.o) \
 	$(LIBRARY)(tmpfile.o) \
@@ -181,6 +182,9 @@ $(LIBRARY)(setbuf.o):	setbuf.c
 
 $(LIBRARY)(setvbuf.o):	setvbuf.c
 	$(CC1) setvbuf.c
+
+$(LIBRARY)(snprintf.o):	snprintf.c
+	$(CC1) snprintf.c
 
 $(LIBRARY)(sprintf.o):	sprintf.c
 	$(CC1) sprintf.c

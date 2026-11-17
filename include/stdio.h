@@ -98,6 +98,9 @@ _PROTOTYPE( int vfprintf,
 		(FILE *_stream, const char *_format, _VA_LIST _arg)	);
 _PROTOTYPE( int vprintf, (const char *_format, _VA_LIST _arg)		);
 _PROTOTYPE( int vsprintf, (char *_s, const char *_format, _VA_LIST _arg)	);
+_PROTOTYPE( int snprintf, (char *_s, size_t _n, const char *_format, ...)	);
+_PROTOTYPE( int vsnprintf, (char *_s, size_t _n, const char *_format,
+							_VA_LIST _arg)	);
 _PROTOTYPE( int fscanf, (FILE *_stream, const char *_format, ...)	);
 _PROTOTYPE( int scanf, (const char *_format, ...)			);
 _PROTOTYPE( int sscanf, (const char *_s, const char *_format, ...)	);

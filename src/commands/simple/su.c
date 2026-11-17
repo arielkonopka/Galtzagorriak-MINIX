@@ -45,6 +45,10 @@ char *argv[];
 	std_err("\n");
 	exit(1);
   }
+  /* Real root from here (set-uid root): pwdauth answers a shadow ("##")
+   * check only for real uid 0 or the user itself (spec R3.3).
+   */
+  if (geteuid() == 0) setuid(0);
   if (!privileged() && strcmp(pwd->pw_passwd, crypt("", pwd->pw_passwd)) != 0) {
 	password = getpass("Password:");
 	if (strcmp(pwd->pw_passwd, crypt(password, pwd->pw_passwd))) {

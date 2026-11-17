@@ -360,3 +360,5 @@ waitpid
 wcstombs
 wctomb
 write
+snprintf
+vsnprintf
