@@ -1479,7 +1479,9 @@ PRIVATE void do_hardint()
 
   if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
   if (nt_st & NT_NEW) {		/* N.6: a card notice to show */
+	lock();				/* the tick shares the byte */
 	nt_st &= ~NT_NEW;
+	unlock();
 	nt_over();
 	lc_dirty = TRUE;
 	k_input = get_uptime();		/* the light on, as for a key */
@@ -2052,7 +2054,9 @@ int kind;
 /* From the disk task (N.6): NT_OTHER, another card or one that does not
  * answer: the notice stays until the card goes; 0, the card is back: the
  * notice goes, and "carrying on" shows until the app's next frame. */
+  lock();			/* the tick changes NT_SEEN in the same byte */
   nt_st = (nt_st & ~NT_KIND) | (kind == NT_OTHER ? NT_OTHER | NT_NEW : 0);
+  unlock();
   if (kind != NT_OTHER) {
 	nt_box("SD card is back", "Carrying on");
 	lc_dirty = TRUE;
