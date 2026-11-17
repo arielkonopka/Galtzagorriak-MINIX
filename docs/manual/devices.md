@@ -92,9 +92,12 @@ The first line is the protocol and the tag's data as the stock app shows and sav
 its `.rfid` files); the lines under it are what the stock app's info screen shows. `rfid -r` also
 prints the timings, `-n N` makes up to N attempts of half a second (default 4, more while a tag
 has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. Without a
-tag it says "no tag". Members of `gui` and root may read `/dev/rfid`: each read turns the
-125 kHz field on for half a second and returns the times between the changes of the tag's
-signal, in µs, as 32-bit numbers.
+tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
+62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
+use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
+and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
+times between the changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)`
+chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
 
 `rfid` knows the 25 protocols of the Unleashed firmware (its `lib/lfrfid`, compiled unchanged);
 `rfid list` shows them:
@@ -115,8 +118,8 @@ signal, in µs, as 32-bit numbers.
 Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
 tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
 Reading and emulating the FSK and PSK ones waits for
-kernel work: a capture longer than 512 edges, the PSK carrier, and emulation longer than 512
-segments (their frames are 540 to 3534).
+more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
+already there), and emulation longer than 512 segments (their frames are 540 to 3534).
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
