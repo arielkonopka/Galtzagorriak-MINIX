@@ -301,7 +301,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon fmodem
+	    swapon gmodem
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
@@ -428,7 +428,7 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
 # libmodem (spec section P, src/lib/modem): the link layer, the RFID line
-# code and the Sub-GHz presets and legal tables, linked into fmodem (not
+# code and the Sub-GHz presets and legal tables, linked into gmodem (not
 # MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
 MODEM_DIR := $(MROOT)/src/lib/modem
 MODEM_C	:= $(notdir $(wildcard $(MODEM_DIR)/*.c))
@@ -436,10 +436,10 @@ MODEM_OBJ := $(MODEM_C:%.c=$(MB)/modem/%.o)
 $(MB)/modem/%.o: $(MODEM_DIR)/%.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(MB)/cmd/port/fmodem.o: cmds/fmodem.c $(MODEM_DIR)/modem.h
+$(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
-OBJS_fmodem = $(MB)/cmd/port/fmodem.o $(MODEM_OBJ)
+OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@

@@ -26,7 +26,7 @@ Unleashed Flipper sends or emulates, MINIX receives or reads. "M→U" (`m2u`): t
 | `subghz` | signal level at 315, 433.92, 868.35 MHz; raw timings; Princeton `tx`; chat × both | Unleashed sends, MINIX measures; MINIX sends, Unleashed decodes |
 | `subghz-decode` | 37 remote protocols × both | Unleashed's own test recordings (`.sub` key files) sent by one, decoded by the other |
 | `nfc` | 7 tag types (ISO14443-3A, NTAG215, Ultralight 11/21/C, FeliCa, SLIX) × both | one emulates a tag file, the other scans it |
-| `fmodem` | the data modems of spec section P: RFID `fast`/`robust`, Sub-GHz `narrow`/`std`/`wide`/`max`, NFC, BLE × both | **two MINIX Flippers** (`--peer-minix`, 6.12): one sends 1 KB with `fmodem send`, the other receives it; checksums must match. N/A against Unleashed |
+| `gmodem` | the data modems of spec section P: RFID `fast`/`robust`, Sub-GHz `narrow`/`std`/`wide`/`max`, NFC, BLE × both | **two MINIX Flippers** (`--peer-minix`, 6.12): one sends 1 KB with `gmodem send`, the other receives it; checksums must match. N/A against Unleashed |
 
 Each row ends with one status:
 
@@ -36,7 +36,7 @@ Each row ends with one status:
 | **FAIL** | MINIX has the feature, but the result is wrong (wrong data, wrong protocol, or the side it drove got nothing) |
 | **MISSING** | MINIX does not have it yet: the command or option is not there, or MINIX got the signal but has no decoder for it |
 | **BLOCKED** | the Unleashed Flipper could not do its part here (region settings forbid the frequency, its command line cannot express it); the reason is given |
-| **N/A** | needs a blank tag or key that was not offered (`--t5577`, `--rw1990`), or a second MINIX Flipper (`--peer-minix`, the `fmodem` rows) |
+| **N/A** | needs a blank tag or key that was not offered (`--t5577`, `--rw1990`), or a second MINIX Flipper (`--peer-minix`, the `gmodem` rows) |
 | **INFO** | a measurement only |
 
 Where MINIX does not have a feature yet, the row still runs: it uses the command the spec plans
@@ -475,10 +475,10 @@ MISSING; anything else that does not match is FAIL.
 
 ## 6.12 Two MINIX Flippers: the data modems (`--peer-minix`)
 
-The `fmodem` command (spec section P, manual chapter [Data modems](../../manual/modem.md)) moves
+The `gmodem` command (spec section P, manual chapter [Data modems](../../manual/modem.md)) moves
 files between two Flippers that **both run MINIX**. The Unleashed firmware has nothing like it,
 so the reference Flipper of the rest of this chapter cannot be the partner: against Unleashed
-the 16 `fmodem` rows are **N/A**. To run them you need a second Flipper with MINIX for the
+the 16 `gmodem` rows are **N/A**. To run them you need a second Flipper with MINIX for the
 session.
 
 ### What you need
@@ -499,7 +499,7 @@ session.
   the spacer thin (1–3 mm): the modem's tag side reaches no further than `rfid emulate`.
 - **Sub-GHz rows (when `/dev/subghz` can transmit, T26b):** the two Flippers 1–2 m apart on the
   table, antennas (the top left corner) not touching anything metal. Set the region first, on
-  both: `echo EU > /etc/flipper/region` (or `US`); `fmodem info -m subghz` must say `ok` for the
+  both: `echo EU > /etc/flipper/region` (or `US`); `gmodem info -m subghz` must say `ok` for the
   preset before the row can pass.
 - **NFC and BLE rows:** MISSING until their drivers exist (Phases 13 and 15).
 
@@ -512,12 +512,12 @@ python3 twoflip.py --peer-minix --log modem.log --map modem.md modem
 
 Without `-m` and `-u` the first MINIX port found is "M" and the second the peer "P" (`u2m` in
 the row names means the peer sends). Give them by hand to fix the order:
-`-m /dev/ttyACM0 -u /dev/ttyACM1`. With `--peer-minix` only the `fmodem` rows run; everything
+`-m /dev/ttyACM0 -u /dev/ttyACM1`. With `--peer-minix` only the `gmodem` rows run; everything
 else needs the Unleashed partner.
 
 Each row: the sender gets `/tmp/mdm.in` (1 KB of text, a few Basque words in it: "Kaixo,
-galtzagorriak! Datuak irratiz doaz"), the receiver starts `fmodem recv -m MEDIUM -p PRESET -o
-/tmp/mdm.out -t 60`, the sender `fmodem send -m MEDIUM -p PRESET /tmp/mdm.in`; when the receiver
+galtzagorriak! Datuak irratiz doaz"), the receiver starts `gmodem recv -m MEDIUM -p PRESET -o
+/tmp/mdm.out -t 60`, the sender `gmodem send -m MEDIUM -p PRESET /tmp/mdm.in`; when the receiver
 ends, the script stops the sender (Ctrl-C) and compares `cksum` on both. A row takes up to three
 minutes. PASS shows the bytes and the seconds (`1152 B in 14 s`): put those numbers in the
 report, they are the measured rates the manual quotes.
@@ -534,11 +534,11 @@ report, they are the measured rates the manual quotes.
 On the receiving Flipper, then on the sending one within a few seconds:
 
 ```
-fmodem recv -m rfid -o /tmp/got.txt          # reader: waits, shows frames as they come
-fmodem send -m rfid /etc/motd                # tag: plays the file until Ctrl-C
+gmodem recv -m rfid -o /tmp/got.txt          # reader: waits, shows frames as they come
+gmodem send -m rfid /etc/motd                # tag: plays the file until Ctrl-C
 ```
 
 The reader prints `N bytes, F frames, T s` and exits 0 when everything arrived; then
-`cksum /tmp/got.txt` on one and `cksum /etc/motd` on the other must agree. `fmodem info` on
+`cksum /tmp/got.txt` on one and `cksum /etc/motd` on the other must agree. `gmodem info` on
 either shows the rates and, for Sub-GHz, what the region allows.
 

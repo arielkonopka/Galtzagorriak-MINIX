@@ -926,34 +926,34 @@ MODEM_MEDIA = [("rfid", ["fast", "robust"]),
 
 
 def modem_row(ul, mx, opt, medium, preset, dirn):
-	"""MINIX sends MODEM_TEXT with `fmodem send`, the other MINIX Flipper
-	receives it with `fmodem recv`; PASS when the checksums agree."""
+	"""MINIX sends MODEM_TEXT with `gmodem send`, the other MINIX Flipper
+	receives it with `gmodem recv`; PASS when the checksums agree."""
 	if not opt.peer_minix:
 		return "N/A", "needs a second Flipper with MINIX (--peer-minix): " \
 			"the Unleashed firmware has no such modem"
 	tx, rx = (mx, ul) if dirn == "m2u" else (ul, mx)
 	for side, name in ((tx, "sender"), (rx, "receiver")):
-		if not side.exists("fmodem"):
-			return "MISSING", "no fmodem command on the " + name
+		if not side.exists("gmodem"):
+			return "MISSING", "no gmodem command on the " + name
 	p = " -p " + preset if preset else ""
 	if not tx.upload(MODEM_IN, MODEM_TEXT):
 		return "FAIL", "could not write " + MODEM_IN
 	rc, want = tx.run("cksum < " + MODEM_IN, 10)
 	rx.run("rm -f " + MODEM_OUT, 5)
-	rx.start("fmodem recv -m %s%s -o %s -t 60; echo @@M\"\"=$?"
+	rx.start("gmodem recv -m %s%s -o %s -t 60; echo @@M\"\"=$?"
 		% (medium, p, MODEM_OUT))
 	time.sleep(1)
-	tx.start("fmodem send -m %s%s %s" % (medium, p, MODEM_IN))
+	tx.start("gmodem send -m %s%s %s" % (medium, p, MODEM_IN))
 	m = rx.wait(rb"@@M=(\d+)", 180)
 	txt = tx.stop()
 	got = rx.stop()
 	if missing(None, txt) or missing(None, got):
-		return "MISSING", "fmodem: " + last(txt if missing(None, txt)
+		return "MISSING", "gmodem: " + last(txt if missing(None, txt)
 			else got)
 	if not m:
 		return "FAIL", "the receiver did not finish in 180 s: " + last(got)
 	if m.group(1) != b"0":
-		return "FAIL", "fmodem recv exit %s: %s" % (m.group(1).decode(),
+		return "FAIL", "gmodem recv exit %s: %s" % (m.group(1).decode(),
 			last(got))
 	rc, have = rx.run("cksum < " + MODEM_OUT, 10)
 	if last(have) != last(want):

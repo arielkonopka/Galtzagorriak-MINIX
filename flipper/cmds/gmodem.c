@@ -1,15 +1,15 @@
-/* fmodem - move data between two Flippers (Galtzagorriak MINIX, spec
+/* gmodem - move data between two Flippers (Galtzagorriak MINIX, spec
  * section P; libmodem in src/lib/modem).  Not MINIX's own modem(1), which
  * switches a serial line between dial-in and dial-out.
  *
- * Usage:	fmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]
- *		fmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]
- *		fmodem chat -m MEDIUM [-p PRESET] [-f MHZ]
- *		fmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]
+ * Usage:	gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]
+ *		gmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]
+ *		gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]
+ *		gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]
  *
  * MEDIUM is rfid, nfc, subghz or ble.  Today rfid works (one way, the
  * sender is the tag, the receiver the reader: hold the two Flippers back to
- * back); subghz has its presets and legal limits in `fmodem info` and sends
+ * back); subghz has its presets and legal limits in `gmodem info` and sends
  * once /dev/subghz can transmit (spec RP.8, T26b); nfc and ble follow their
  * drivers (Phases 13 and 15).
  *
@@ -53,17 +53,17 @@ static int rounds, idle = 30;
 static void usage(void)
 {
 	fprintf(stderr,
-"usage: fmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]\n"
-"       fmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]\n"
-"       fmodem chat -m MEDIUM [-p PRESET] [-f MHZ]\n"
-"       fmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]\n"
+"usage: gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]\n"
+"       gmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]\n"
+"       gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]\n"
+"       gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]\n"
 "MEDIUM: rfid (works), subghz, nfc, ble\n");
 	exit(2);
 }
 
 static int notyet(const char *what, const char *needs)
 {
-	fprintf(stderr, "fmodem: %s: not implemented yet (needs %s)\n", what,
+	fprintf(stderr, "gmodem: %s: not implemented yet (needs %s)\n", what,
 		needs);
 	return 2;
 }
@@ -94,7 +94,7 @@ static int rfid_q(void)
 {
 	if (preset == NULL || strcmp(preset, "fast") == 0) return MDM_P4_FAST;
 	if (strcmp(preset, "robust") == 0) return MDM_P4_ROBUST;
-	fprintf(stderr, "fmodem: rfid presets: fast, robust\n");
+	fprintf(stderr, "gmodem: rfid presets: fast, robust\n");
 	exit(2);
 }
 
@@ -111,7 +111,7 @@ static int rfid_send(char *name)
 		return 1;
 	}
 	if (name == NULL && isatty(0)) {
-		fprintf(stderr, "fmodem: give a FILE, or send through a pipe\n");
+		fprintf(stderr, "gmodem: give a FILE, or send through a pipe\n");
 		return 2;
 	}
 	size = (long) lseek(in, 0L, SEEK_END);	/* off_t is unsigned here */
@@ -120,23 +120,23 @@ static int rfid_send(char *name)
 		for (size = 0; size < SMALL && (n = read(in, small + size,
 				(size_t) (SMALL - size))) > 0; size += n) ;
 		if (size == SMALL && read(in, chunk, 1) > 0) {
-			fprintf(stderr, "fmodem: more than %d bytes from a pipe: "
+			fprintf(stderr, "gmodem: more than %d bytes from a pipe: "
 				"give a file\n", SMALL);
 			return 2;
 		}
 	}
 	nf = size == 0 ? 1 : (size + MDM_RFID_MTU - 1) / MDM_RFID_MTU;
 	if (nf > MDM_CAR_MAX) {
-		fprintf(stderr, "fmodem: at most %d bytes over RFID\n",
+		fprintf(stderr, "gmodem: at most %d bytes over RFID\n",
 			MDM_CAR_MAX * MDM_RFID_MTU);
 		return 2;
 	}
 	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
-		perror("fmodem: /dev/rfid");
+		perror("gmodem: /dev/rfid");
 		return 1;
 	}
 	dwell = q == MDM_P4_FAST ? 600 : 1200;
-	fprintf(stderr, "fmodem: %ld bytes, %ld frames; hold the reader to the "
+	fprintf(stderr, "gmodem: %ld bytes, %ld frames; hold the reader to the "
 		"back, Ctrl-C to stop\n", size, nf);
 	for (r = 0; rounds == 0 || r < rounds; r++) {
 		for (k = 0; k < nf; k += 2) {
@@ -147,7 +147,7 @@ static int rfid_send(char *name)
 				if (seek) {
 					if (lseek(in, j * MDM_RFID_MTU, SEEK_SET) == (off_t) -1
 					    || read(in, chunk, (size_t) len) != len) {
-						perror("fmodem: read");
+						perror("gmodem: read");
 						return 1;
 					}
 				} else memcpy(chunk, small + j * MDM_RFID_MTU, (size_t) len);
@@ -160,14 +160,14 @@ static int rfid_send(char *name)
 			e.pulse = pat + 256;
 			e.n = (unsigned) ns;
 			if (ioctl(fd, RFIDIOCEMU, &e) < 0) {
-				perror("fmodem: rfid emulate");
+				perror("gmodem: rfid emulate");
 				return 1;
 			}
 			(void) poll((struct pollfd *) NULL, 0, dwell);
 			e.n = 0;
 			(void) ioctl(fd, RFIDIOCEMU, &e);
 		}
-		fprintf(stderr, "\rfmodem: round %d", r + 1);
+		fprintf(stderr, "\rgmodem: round %d", r + 1);
 	}
 	fprintf(stderr, "\n");
 	close(fd);
@@ -188,7 +188,7 @@ static void rfid_frame(void *u, const unsigned char *b, int n)
 	at = (long) (f.a | f.b << 8) * MDM_RFID_MTU;
 	if (!out_seek) {
 		if (at + f.len > SMALL) {
-			fprintf(stderr, "\nfmodem: more than %d bytes to a pipe: "
+			fprintf(stderr, "\ngmodem: more than %d bytes to a pipe: "
 				"use -o FILE\n", SMALL);
 			failed = 1;
 		} else memcpy(small + at, f.pay, f.len);
@@ -196,7 +196,7 @@ static void rfid_frame(void *u, const unsigned char *b, int n)
 	}
 	if (lseek(out, at, SEEK_SET) == (off_t) -1
 	    || write(out, f.pay, f.len) != (int) f.len) {
-		perror("fmodem: write");
+		perror("gmodem: write");
 		failed = 1;
 	}
 }
@@ -213,15 +213,15 @@ static int rfid_recv(void)
 	}
 	out_seek = lseek(out, 0L, SEEK_CUR) != (off_t) -1;
 	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
-		perror("fmodem: /dev/rfid");
+		perror("gmodem: /dev/rfid");
 		return 1;
 	}
 	mdm_car_init(&car, map);
 	start = last = time(NULL);
-	fprintf(stderr, "fmodem: reading; hold the sender to the back\n");
+	fprintf(stderr, "gmodem: reading; hold the sender to the back\n");
 	while (!mdm_car_done(&car) && !failed) {
 		if ((n = read(fd, pat, sizeof(pat))) < 0) {
-			perror("fmodem: /dev/rfid");
+			perror("gmodem: /dev/rfid");
 			return 1;
 		}
 		mdm_p4_decode(pat, n / 4, q, MDM_RFID_MTU, rfid_frame, NULL);
@@ -232,15 +232,15 @@ static int rfid_recv(void)
 		if (time(NULL) != shown) {	/* at most once a second */
 			shown = time(NULL);
 			if (car.total >= 0)
-				fprintf(stderr, "\rfmodem: %d/%d frames", car.have,
+				fprintf(stderr, "\rgmodem: %d/%d frames", car.have,
 					car.total);
-			else fprintf(stderr, "\rfmodem: %d frames", car.have);
+			else fprintf(stderr, "\rgmodem: %d frames", car.have);
 		}
 		if (time(NULL) - last > idle) {
 			if (car.total >= 0)
-				fprintf(stderr, "\nfmodem: nothing new for %d s: "
+				fprintf(stderr, "\ngmodem: nothing new for %d s: "
 					"%d of %d frames\n", idle, car.have, car.total);
-			else fprintf(stderr, "\nfmodem: nothing new for %d s: "
+			else fprintf(stderr, "\ngmodem: nothing new for %d s: "
 				"%d frames, the last one not seen\n", idle, car.have);
 			return 1;
 		}
@@ -248,10 +248,10 @@ static int rfid_recv(void)
 	close(fd);
 	if (failed) return 1;
 	if (!out_seek && write(out, small, (size_t) car.size) != car.size) {
-		perror("fmodem: write");
+		perror("gmodem: write");
 		return 1;
 	}
-	fprintf(stderr, "\rfmodem: %ld bytes, %d frames, %ld s\n", car.size,
+	fprintf(stderr, "\rgmodem: %ld bytes, %d frames, %ld s\n", car.size,
 		car.total, (long) (time(NULL) - start));	/* timecheck: ok (a duration) */
 	return 0;
 }

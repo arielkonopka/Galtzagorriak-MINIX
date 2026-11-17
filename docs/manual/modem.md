@@ -1,6 +1,6 @@
 # Data modems: files between two Flippers
 
-`fmodem` moves a file from one Flipper to another that also runs Galtzagorriak MINIX, without a
+`gmodem` moves a file from one Flipper to another that also runs Galtzagorriak MINIX, without a
 PC or a phone. It is one command for four radios: 125 kHz RFID, Sub-GHz, NFC and Bluetooth LE.
 The design is spec section P.
 
@@ -18,13 +18,13 @@ The design is spec section P.
 2. On the receiving Flipper:
 
    ```
-   fmodem recv -m rfid -o /home/flipper/nota.txt
+   gmodem recv -m rfid -o /home/flipper/nota.txt
    ```
 
 3. On the sending Flipper:
 
    ```
-   fmodem send -m rfid /home/flipper/nota.txt
+   gmodem send -m rfid /home/flipper/nota.txt
    ```
 
 The sender repeats the file in frames of 24 bytes; the receiver shows `12/40 frames` while it
@@ -36,8 +36,8 @@ arrives is exactly what was sent.
 `-p robust` is half as fast and copes with a worse position. `-t 60` waits 60 seconds instead
 of 30 for a new frame before giving up.
 
-Small things can go through pipes: `echo "Kaixo, lagun!" | fmodem send -m rfid` and
-`fmodem recv -m rfid | cat` (up to 1 KB; for more use files).
+Small things can go through pipes: `echo "Kaixo, lagun!" | gmodem send -m rfid` and
+`gmodem recv -m rfid | cat` (up to 1 KB; for more use files).
 
 At most 98 KB per transfer over RFID. It is one way only: the receiver cannot tell the sender
 which frames it is missing, so the sender just repeats everything. A way back is planned
@@ -45,7 +45,7 @@ which frames it is missing, so the sender just repeats everything. A way back is
 
 ## Sub-GHz (planned): bandwidth, speed and the law
 
-`fmodem info -m subghz` already shows the presets and what the region allows:
+`gmodem info -m subghz` already shows the presets and what the region allows:
 
 | Preset | Data rate | Bandwidth used | For |
 |---|---|---|---|
@@ -67,7 +67,7 @@ In the US data may not be sent at 315 or 433 MHz; 902–928 MHz is used instead.
 
 - **Nothing is encrypted** over RFID, Sub-GHz and NFC: anyone near enough can receive what you
   send. Send nothing secret this way.
-- `fmodem` runs only while a transfer runs and takes about 11 KB of RAM; nothing stays in memory
+- `gmodem` runs only while a transfer runs and takes about 11 KB of RAM; nothing stays in memory
   afterwards.
 - Exit status: 0 when everything arrived, 1 when the transfer failed or timed out, 2 when it is
   not possible (wrong options, a medium that is not there yet).

@@ -10,7 +10,7 @@
  * duty-cycle counter (P.4).
  *
  * Plain C89 (long long in cc1101.c), no malloc: the caller passes every
- * buffer, so the same code serves the `fmodem` command, the PPP link of
+ * buffer, so the same code serves the `gmodem` command, the PPP link of
  * Phase 19 and Berry.  Every byte from the air is hostile (P.3): only
  * mdm_unpack() reads a frame, and it checks the length against the buffer and the MTU before the CRC.
  */

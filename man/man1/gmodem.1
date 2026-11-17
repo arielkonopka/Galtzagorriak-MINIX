@@ -1,15 +1,15 @@
-.TH FMODEM 1
+.TH GMODEM 1
 .SH NAME
-fmodem \- move files between two Flippers over RFID, Sub-GHz, NFC or BLE
+gmodem \- move files between two Flippers over RFID, Sub-GHz, NFC or BLE
 .SH SYNOPSIS
 .nf
-\fBfmodem send \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-n\fR \fIrounds\fR] [\fIfile\fR]
-\fBfmodem recv \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-o\fR \fIfile\fR] [\fB\-t\fR \fIsec\fR]
-\fBfmodem chat \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
-\fBfmodem info\fR [\fB\-m\fR \fImedium\fR] [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
+\fBgmodem send \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-n\fR \fIrounds\fR] [\fIfile\fR]
+\fBgmodem recv \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-o\fR \fIfile\fR] [\fB\-t\fR \fIsec\fR]
+\fBgmodem chat \-m\fR \fImedium\fR [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
+\fBgmodem info\fR [\fB\-m\fR \fImedium\fR] [\fB\-p\fR \fIpreset\fR] [\fB\-f\fR \fImhz\fR]
 .fi
 .SH DESCRIPTION
-.B Fmodem
+.B Gmodem
 sends a file from one Flipper to another that also runs Galtzagorriak
 MINIX.
 .I Medium
@@ -26,12 +26,12 @@ drivers can send (Sub-GHz: spec RP.8; NFC: Phase 13; BLE: Phase 15).
 .PP
 .B "RFID."
 Hold the two Flippers back to back.
-.B "fmodem send \-m rfid"
+.B "gmodem send \-m rfid"
 makes the Flipper a tag that plays the file over and over, in frames of
 24 bytes, until Ctrl-C or
 .I rounds
 rounds;
-.B "fmodem recv \-m rfid"
+.B "gmodem recv \-m rfid"
 makes the other a reader that keeps every frame it has not got yet and
 exits when the whole file is there, or after
 .I sec
@@ -61,7 +61,7 @@ Only frequencies and presets the region in
 .B /etc/flipper/region
 allows are used; in the EU the 433 and 868 MHz bands also limit the share
 of time a transmitter may send (duty cycle).
-.B "fmodem info \-m subghz"
+.B "gmodem info \-m subghz"
 shows what each preset does on the chosen frequency and whether it is
 allowed.
 .PP
@@ -71,9 +71,9 @@ Nothing is encrypted except over BLE: anyone near can receive it.
 2 not possible here (usage, medium not there yet).
 .SH EXAMPLES
 .nf
-fmodem recv \-m rfid \-o /tmp/notes.txt     # on the reader
-fmodem send \-m rfid /home/flipper/notes.txt  # on the tag
-fmodem info \-m subghz \-f 869.85
+gmodem recv \-m rfid \-o /tmp/notes.txt     # on the reader
+gmodem send \-m rfid /home/flipper/notes.txt  # on the tag
+gmodem info \-m subghz \-f 869.85
 .fi
 .SH "SEE ALSO"
 .BR rfid (1).

@@ -22,7 +22,7 @@ BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with freq
 CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
 report `tcpip-stack-analysis.md` (Polish, not in the repo).
 Addition (2026-11-17): section P (data modems between two Flippers over RFID, NFC, Sub-GHz and
-BLE: one link layer, four backends, the `fmodem` command; owner request).
+BLE: one link layer, four backends, the `gmodem` command; owner request).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -1388,13 +1388,13 @@ What it is not: a network stack, a resident daemon or a secure channel (P.8).
 | Driver today | `/dev/rfid`: read ≤ 512 edges, `RFIDIOCEMU` ≤ 512 segments, field hold, gap writes | none (Phase 13) | `/dev/subghz` receive only, `/dev/subghzraw` timings; **no transmit** (R8.1 part 2, R8.2) | none (Phase 15, R16.1.0) |
 | Milestone | now (simplex), reverse channel with RP.5 | M6 | M5 | M7 |
 
-Numbers marked "estimate" are to be measured with `fmodem info -m MEDIUM` and `twoflip.py`
+Numbers marked "estimate" are to be measured with `gmodem info -m MEDIUM` and `twoflip.py`
 (P.9) and written into PORTING.md; the manual quotes measured numbers only.
 
 ### P.2 Layers and the user interface
 
 ```
- fmodem send / recv / chat / info        (flipper/cmds/fmodem.c, one process, nothing resident)
+ gmodem send / recv / chat / info        (flipper/cmds/gmodem.c, one process, nothing resident)
  ─────────────────────────────────────
  libmodem link layer                     (src/lib/modem: frames, CRC, ARQ, carousel, datagrams)
  ─────────────────────────────────────
@@ -1407,20 +1407,20 @@ Numbers marked "estimate" are to be measured with `fmodem info -m MEDIUM` and `t
   that uses it; a transfer is one process for its duration and nothing stays in RAM afterwards.
   A shared modem server would cost RAM all the time for a feature used now and then. The PPP
   links of Phase 19 link the same library into their link process.
-- **RP.2 The command** `fmodem` ("Flipper modem"; MINIX's own `modem(1)` switches a serial line
+- **RP.2 The command** `gmodem` ("Galtzagorriak modem"; MINIX's own `modem(1)` switches a serial line
   between dial-in and dial-out). Access through the group of the medium's device (`rfid`, `nfc`,
   `subghz`, `ble`):
   ```
-  fmodem send -m MEDIUM [-p PRESET] [-f MHZ] [-n ROUNDS] [FILE]   send FILE (stdin if none)
-  fmodem recv -m MEDIUM [-p PRESET] [-f MHZ] [-o FILE] [-t SEC]
-  fmodem chat -m MEDIUM [-p PRESET] [-f MHZ]                lines both ways (datagrams)
-  fmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]                presets, rates, the region's
+  gmodem send -m MEDIUM [-p PRESET] [-f MHZ] [-n ROUNDS] [FILE]   send FILE (stdin if none)
+  gmodem recv -m MEDIUM [-p PRESET] [-f MHZ] [-o FILE] [-t SEC]
+  gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]                lines both ways (datagrams)
+  gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]                presets, rates, the region's
                                                              limits, the duty budget left
   ```
-  Unix pipes work: `tar cf - notes | fmodem send -m subghz`, `fmodem recv -m subghz | tar xf -`.
+  Unix pipes work: `tar cf - notes | gmodem send -m subghz`, `gmodem recv -m subghz | tar xf -`.
   Exit status 0 only when every byte arrived with a good CRC. Progress (`12/40 frames, 1.2 KB/s`)
   goes to stderr at most twice a second. A medium whose driver is not there yet prints
-  `fmodem: MEDIUM: not implemented yet (needs ...)` and exits 2.
+  `gmodem: MEDIUM: not implemented yet (needs ...)` and exits 2.
 - **RP.3 The library API** (`<modem.h>`): a PHY is
   `struct mdm_phy { void *ctx; int mtu; long turn_ms; int (*send)(ctx, buf, n);
   int (*recv)(ctx, buf, max, ms); long (*airtime)(ctx, n); }`. `mdm_send()` and `mdm_recv()`
@@ -1459,7 +1459,7 @@ flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the strea
     last with LAST, round and round (`-n ROUNDS`, default until Ctrl-C). The receiver keeps a
     bitmap (N/8 bytes, N ≤ 4096), writes each new frame at its offset and ends when all N are in.
     Used by the RFID backend until the reverse channel (RP.5c) exists.
-  - **Datagrams** (DGRAM): one frame, CRC-checked, no ACK; `fmodem chat` and beacons.
+  - **Datagrams** (DGRAM): one frame, CRC-checked, no ACK; `gmodem chat` and beacons.
 - **Inputs are hostile** (security rule, owner 2026-11-16): every byte the radio delivers is
   parsed by `mdm_unpack()` alone, which checks `len` against the buffer and the PHY's MTU before
   anything else and returns a frame only with a good CRC. Host test: 10⁶ random and mutated frames
@@ -1473,7 +1473,7 @@ auto-flush (bad packets never reach the CPU) and our CRC on top (one format for 
 data whitening on, CCA (carrier sense) before every transmit.
 
 **Presets** (`-p`; the bandwidth is the receive filter; values are what the CC1101 really gets
-from its 26 MHz crystal, computed by `mdm_cc1101_regs()` and printed by `fmodem info`):
+from its 26 MHz crystal, computed by `mdm_cc1101_regs()` and printed by `gmodem info`):
 
 | Preset | Modulation | Data rate | Deviation | RX filter | Occupied ≈ 2·dev + rate | Use |
 |---|---|---|---|---|---|---|
@@ -1529,7 +1529,7 @@ FCC part 15 text, and against the stock firmware's region data, before transmit 
 
 ### P.5 RFID backend: a line code for the tag→reader direction
 
-The reader (`fmodem recv -m rfid`) makes the 125 kHz field; the tag (`fmodem send -m rfid`) loads
+The reader (`gmodem recv -m rfid`) makes the 125 kHz field; the tag (`gmodem send -m rfid`) loads
 its antenna in step with that field (`RFIDIOCEMU`), so the bit clock is the reader's own carrier
 and cannot drift.
 
@@ -1550,7 +1550,7 @@ and cannot drift.
   pair every 0.6 s (`-p fast`; 1.2 s `robust`); the reader reads again and again and keeps what
   it has not got yet. Estimate ≈ 50–100 B/s. RAM: one 2 KB buffer (the tag's pattern or the
   reader's capture, never both), 1 KB for a pipe's data, the 512 B bitmap, the default 6 KB
-  stack and heap: ≈ 11 KB while `fmodem` runs.
+  stack and heap: ≈ 11 KB while `gmodem` runs.
 - **RP.5b With R9.0.5/R9.0.6 (streaming capture, long emulation):** the carousel streams
   without the per-read restart: ≈ 400 B/s. No change in the format.
 - **RP.5c Reverse channel (kernel, T26b):** while `RFIDIOCEMU` runs, the kernel timestamps the
@@ -1580,16 +1580,16 @@ and cannot drift.
   between the two Flippers, bonded and encrypted with LE Secure Connections before data flows
   (R19.14). The link layer runs in "reliable" mode: framing and CRC only, no ARQ (L2CAP already
   retransmits). MTU 240 B, 2M PHY when both sides have it.
-- Pairing: `fmodem pair -m ble` on both (6-digit numeric comparison on both screens). Bonds on
+- Pairing: `gmodem pair -m ble` on both (6-digit numeric comparison on both screens). Bonds on
   the SD card (R15.4).
 - Needs the full BLE stack on CPU2 (R16.1.0) and `bled`'s L2CAP CoC API.
 
 ### P.8 Security
 
 - The modem carries **no encryption** except on BLE (P.7). Anyone in range can listen to RFID,
-  NFC and Sub-GHz transfers. `fmodem info` and the manual say so plainly. AES-CCM with a shared
+  NFC and Sub-GHz transfers. `gmodem info` and the manual say so plainly. AES-CCM with a shared
   passphrase over the AES1 block (12b's driver) is a later option (milestone M6 or later).
-- Everything received is hostile input (P.3); `fmodem recv` writes only the file the user named
+- Everything received is hostile input (P.3); `gmodem recv` writes only the file the user named
   (created with the user's umask; never follows a name sent over the air).
 - No reception path runs as root; the group of the device gives access.
 
@@ -1611,10 +1611,10 @@ and cannot drift.
   MINIX-to-MINIX test needs a second Flipper running MINIX**; until there is one, the RFID rows
   can be run by flashing the reference Flipper with MINIX for the session and back to Unleashed
   afterwards.
-- **ACP.R (responsiveness):** during a `fmodem` transfer on any medium L1–L10 stay within
+- **ACP.R (responsiveness):** during a `gmodem` transfer on any medium L1–L10 stay within
   budget (`lat`), the launcher scrolls without a visible stall, and the SD card keeps working
   (the SPI bus is held for one packet at a time).
-- **RAM:** `fmodem` ≈ 11 KB while it runs (RP.5a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
+- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
   (RP.8, RP.7), ≤ +8 B for RFID (RP.5c).
 
 ### P.10 Notes for the system manual
@@ -4993,5 +4993,5 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (owner request; no journaling) | section N, T17 |
-| Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `fmodem` (owner request) | section P, T26; 8, 13, 15 |
+| Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (owner request) | section P, T26; 8, 13, 15 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

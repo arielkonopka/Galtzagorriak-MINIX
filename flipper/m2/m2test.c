@@ -1406,11 +1406,11 @@ int main(int argc, char **argv)
 	fflush(stdout);
 	pid = fork();
 	if (pid == 0) {
-		execl("/bin/fmodem", "fmodem", "info", (char *) NULL);
+		execl("/bin/gmodem", "gmodem", "info", (char *) NULL);
 		_exit(99);
 	}
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
-		&& WEXITSTATUS(st) == 0, "fmodem info (libmodem)");
+		&& WEXITSTATUS(st) == 0, "gmodem info (libmodem)");
 #endif
 	memtest_tests();
 	poll_tests();
