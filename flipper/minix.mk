@@ -513,7 +513,7 @@ CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
 CHMEM_memory := 2048
-CHMEM_flash := 3072	# SHA-256 work space, a path
+CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
 $(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
