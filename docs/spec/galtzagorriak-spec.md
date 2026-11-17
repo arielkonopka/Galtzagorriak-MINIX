@@ -3259,6 +3259,148 @@ Acceptance criteria:
   the screen shows the step, `mkfs` and the first boot finish; `erase` on a mounted partition fails
   with `EBUSY`.
 
+### 12h. Swappable blocks for apps (owner request 2026-11-17; milestone M4)
+
+An app written for it may keep **more working data than fits in RAM**: numbered 4 KB blocks on
+the swap partition that it reads into, and writes from, buffers of its own. There is no MMU, so
+this is not transparent paging: like overlays or EMS, the app asks for a block by number and gets
+it in a buffer (a "frame"); pointers never point at data on the card. A library gives the
+comfortable form (frames, LRU, record arrays), and in Berry the illusion is complete (`vbytes`).
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files), which also rejects the
+fully virtual variant (MPU trap + instruction emulation in the kernel: kernel RAM, 100–300× slower
+per access, a large privileged attack surface).
+
+Use: working memory that lives as long as the process (map tiles, Sub-GHz history, NFC dumps and
+nonce logs, the text of a large file in an editor, Berry data arrays). Data that must survive the
+process or a reboot stays in files. Owner rule as in 12g: kernel 0 B, MM a few bytes, no
+noticeable CPU on the foreground path.
+
+- **R12.34 Where the blocks are.** The swap partition (R12.1) holds the 16 swap slots in its first
+  3 MB (R12.2). The rest is split into 16 equal **block areas**, area *i* belonging to `mproc[i]`
+  like slot *i*:
+  - area size `A = (partition size − 16 × SW_SLOT) / 16`, rounded down to whole blocks; MM gets the
+    partition size at `MMSWAPON` (it already probes the end) and keeps **no table**: slot number and
+    block number give the position on the card;
+  - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). With
+    the 64 MB partition: 867 blocks, ≈ 3.4 MB per process. First-boot setup (`mkpart`, R12.32)
+    SHOULD make the swap partition **256 MB** on cards of 8 GB or more (≈ 3 600 blocks, ≈ 14 MB per
+    process); install time only, an existing card keeps its layout;
+  - the fixed split is the quota: no allocation table, no accounting.
+- **R12.35 Block header and validity.** Sector 0 of a block (on the card only, read and written
+  through the last sector of `mbuf` like the swap header, R12.26): magic `GZBK`, slot, pid, boot
+  stamp, the program's identity (`mp_dev`, `mp_ino`, `mp_ctime`), block number, a CRC-32 of
+  **each of the 8 data sectors** (hardware CRC unit, as R12.28), and the space 12b needs.
+  - A block is valid only if magic, slot, pid, boot stamp and program identity match the caller.
+    Otherwise it is someone else's leftover and reads as **all zeros**: every block 0…N−1 exists
+    and starts zeroed (sparse memory), so there is no allocate or free call in MM.
+  - Process exit: **nothing** is done (0 writes, no erase; R12.33 forbids run-time erase). The next
+    process in the slot has another pid and cannot see the old blocks. `exec` of another program
+    changes the identity, so its blocks vanish too. `fork`: the child has its own slot and an empty
+    area (blocks are not inherited).
+  - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
+    MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
+    nonce (R12.10) takes its place.
+  - The per-sector CRC lets an app read part of a block (from 512 B) with every sector checked.
+- **R12.36 The MM request.** A new `MEMINFO` request `MI_BLK` (no new call number). `m1_p1` points
+  to a request descriptor **in the caller's memory** (`struct blkreq`: operation and flags, block
+  number, first sector and sector count, buffer, status; ≈ 16 B). MM reads it with `sys_copy`, so
+  MM keeps no request state of its own. Checks: blocks on (R12.38), number in range, sector range
+  within the block, the buffer wholly inside the caller's data or stack segment (WINCHESTER checks
+  again with `numap`), caller not `NOSWAP` in `plain` mode (R12.37). Then:
+  - **GET** (whole block or a sector range): one contiguous read of the header and the sectors
+    needed, **straight into the caller's buffer** (WINCHESTER with `PROC_NR` = the caller, as
+    `sw_io()`; no FS, no buffer cache, no copy); invalid block → the buffer is zeroed; a CRC
+    mismatch or read error → `EIO`. The process is **not** killed: the data is not its image, the
+    app decides;
+  - **PUT** of a whole block: CRCs from the buffer, header + 8 sectors as **one CMD25** (R12.31). No
+    read before the write: the library knows which frames are dirty. Flag `BLK_IFCHANGED`: read the
+    header first (≈ 1 ms) and write nothing if every sector CRC matches;
+  - **PUT** of a sector range: read the header, write the new header, write the range (two writes;
+    for records of 1 KB and less);
+  - **INFO**: number of blocks, block size, mode (`plain`/`crypt`), card present.
+  Error codes: `ENOSYS` (blocks off or no swap partition), `ERANGE`, `EIO`, `ENXIO` (card out,
+  N.6), `EPERM` (R12.37).
+- **R12.37 Responsiveness, isolation, card.**
+  - **Foreground** (`FGAPP`): served at once; the wait is the app's own.
+  - **Background** callers are served like the reserve (R12.5 b, R12.23): if a key came in the last
+    second or a process waits for the CPU, MM sets `BLKWAIT` (a spare `mp_flags` bit) and does not
+    reply; `sw_step()` serves one request per step at idle, after a swap-in the user waits for and
+    before reserve swap-outs, re-reading the descriptor from the caller. Their PUTs count in the
+    reserve's write budget (`sw.wkb`, 256 KB a minute), so a background app can never write more
+    than the reserve could. A `BLKWAIT` process is in an MM call, so it is never a swap victim.
+  - One request is at most ≈ 11 ms of disk-task time (PUT of 4.5 KB), and senders to MM are queued
+    in order, so other MM calls (`kill`, `alarm`, `exit`) wait at most one block operation; FS,
+    the screen and the buttons do not wait at all.
+  - A process reaches only its own area (MM computes the position from the caller's slot; the app
+    gives only a block number). Raw `/dev/hd3` stays root-only.
+  - `swap=plain`: blocks are on the card in clear like swap images, so set-uid, set-gid and
+    `Secret: yes` images get `EPERM` (the R12.28 `NOSWAP` condition). `swap=crypt` (12b): per-block
+    AES-GCM as R12.10a (nonce = boot nonce, slot, block number, the block's counter from its
+    header; tag in the header; no plaintext CRCs). Known limit: no protection against rolling one
+    block back to an older version of the same session (it needs the card pulled, edited elsewhere
+    and put back; N.6 notices the pull, not the edit). Accepted; the manual says so.
+  - Card pulled (N.6): `ENXIO`, the process is **not** killed (its image is in RAM). The same card
+    back: the blocks are valid again. A write cut in half shows as `EIO` on that block. Another card:
+    never written (N.6), and its blocks read as zeros; `libblk` reports `ENXIO` until the process ends.
+  - Swapped or parked processes: their blocks stay on the card, nothing moves. `app_park()` and
+    `app_hibernate()` (R12.18, R12.19) call `vm_flush()` first.
+- **R12.38 Library, Berry, switch.**
+  - `/etc/rc.conf` `blk=off|on`: before 12b the default is `off` (like `swap=plain`, R12.28); with
+    12b it goes on together with `swap=crypt`. Blocks work with `swap=off` if the partition exists
+    (MM opens it for blocks only).
+  - libc `<blk.h>` (flash only): `blk_info()`, `blk_get(id, buf)`, `blk_put(id, buf)`,
+    `blk_putf(id, buf, flags)`, `blk_read(id, off, buf, len)`, `blk_write(id, off, buf, len)` (off
+    and len in multiples of 512).
+  - `libblk` (flash only, ≈ 1.5 KB): `vm_open(pool, size, framesize)` with frames of 1, 2 or 4 KB
+    in the app's own memory, `vm_get(v, off, VM_RD|VM_RW|VM_PIN)` (a pointer valid until the next
+    `vm_get` unless pinned), `vm_unpin`, `vm_flush`, `vm_drop` (no write), and `VA_GET(v, T, i)`
+    for arrays of fixed-size records that never cross a frame. 8 B of metadata per frame, in the
+    app.
+  - Berry module `blk` (C, flash): `blk.vbytes(size)`, a bytes-like object whose `[]`, `get` and
+    `setbytes` go through two 1 KB frames. Berry objects themselves stay in the VM heap (pointers,
+    R12.22); only raw data goes to blocks.
+  - **Rule for app authors** (manual): whatever the current screen or a real-time loop needs is in
+    frames or plain RAM; blocks are for what is "behind the screen". Emulation (NFC, RFID,
+    iButton) and radio, DMA or USB streams never wait for a block. Prefer 1 KB frames for records,
+    4 KB for sequential data. Times (before R12.31): GET 512 B ≈ 1.2 ms, 1 KB ≈ 1.7 ms, 4 KB ≈ 5 ms;
+    PUT 4 KB ≈ 6–11 ms; 1 MB sequential ≈ 1.2 s.
+- **Later (not in this step):** asynchronous `PREFETCH` (one request in flight per process, the
+  descriptor's status field set by MM when the read lands, optional new `SIGBLK`; 0 B in MM); a
+  "discard on swap-out" hint for frame pools (+4 B per process); a soft write cap for the
+  foreground app (+4 B in MM); a Merkle root against rollback in `crypt` (32 B per process). Each
+  needs the owner's yes.
+
+Acceptance criteria:
+- AC12.18 QEMU `tests/blk`: a fresh process reads block 0 and the last block as zeros; `ERANGE`
+  one past the end; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
+  card (raw write as root) gives `EIO` on GET of that sector and not of the others; the process is
+  not killed.
+- AC12.19 QEMU: after the writer exits, a new process in the same slot reads zeros; the same after
+  `exec` of another program; after a pid wrap (forced through a test hook) too; a forked child
+  reads zeros; a second process cannot reach the first one's area by any argument.
+- AC12.20 QEMU (sector counter in WINCHESTER, as AC12.14): `blk_putf(..., BLK_IFCHANGED)` of
+  unchanged data writes 0 sectors; a whole-block PUT is one 9-sector write; process exit writes
+  nothing.
+- AC12.21 QEMU: a background caller while keys arrive is answered only at idle; its PUTs stop at
+  the reserve budget; a foreground caller is answered at once. `MI_SWAPTEST` 2 (card pulled):
+  `ENXIO`, the process lives on.
+- AC12.22 `swap=plain`: a `Secret: yes` test app and a set-uid image get `EPERM`; `blk=off` gives
+  `ENOSYS`.
+- AC12.23 Device: L1 and L2 within budget while a background app reads blocks in a loop and while
+  the foreground app scrolls a 1 MB block-backed map; measured GET/PUT times in PORTING.md.
+- AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
+  frames; VM heap growth ≤ 3 KB.
+
+RAM budget (12h):
+- kernel +0 B; MM +4 B (boot stamp; within R12.26's 96 B) and one `mp_flags` bit; FS and INIT +0 B;
+- a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
+  frame + the 16 B descriptor;
+- flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
+- Effect (analysis section 7): the RAM free after login does not change (const data is already in
+  XIP flash; servers cannot use blocks), but the peak of data-heavy apps drops by 20–50 % (NFC
+  −4…12 KB, Sub-GHz −3…6 KB, IR −2…4 KB, ports with history −2…8 KB), and parked images get
+  smaller (faster L6, fewer swap writes).
+
 ### 12f. Notes for the system manual
 
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
@@ -3276,6 +3418,9 @@ Acceptance criteria:
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
   secrets in it, size targets).
+- Swappable blocks (12h) for app authors: the `blk`/`libblk` API and the Berry `vbytes` object,
+  the rule "what the screen needs stays in RAM", the times, that blocks die with the process and
+  with a reboot, that `blk=on` before 12b stores them in clear, and the rollback limit of `crypt`.
 
 Acceptance criteria:
 - AC12.1 QEMU: start an app that needs more memory than is free while the launcher and a shell are
@@ -4292,6 +4437,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | USB HID, mass storage, CDC | 10 |
 | Swap (Part 4), A13 | 12 |
 | Background apps: tiers, park/hibernate API, Running list (owner request) | 12d–12f (R12.18 may land with 7b) |
+| Swappable memory blocks for apps: `blk`, `libblk`, Berry `vbytes` (owner request) | 12h |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
