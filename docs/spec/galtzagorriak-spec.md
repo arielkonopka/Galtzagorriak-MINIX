@@ -463,9 +463,14 @@ provides them as small shared services, so each new app is only its UI plus a fe
   - it ignores do-not-disturb and the notification policy (like an alarm);
   - it is never skipped: `Missed: fire-once` is forced, and a timer due during a normal session
     still runs (the signal goes out, the Flipper stays on);
-  - low battery does not cancel it: below the low-battery threshold the app gets
-    `TIMED_LOWBAT` in its environment and should signal shorter or less often; only the
-    charger's own cut-off stops it;
+  - low battery does not cancel it; `timed` **thins it out by halving** (owner, 2026-11-17):
+    below the low-battery threshold (default 20 %) it skips every second occurrence; each time
+    the remaining charge halves again (10 %, 5 %, 2.5 %, ...) it skips every second one of those
+    that are left, so the signal runs at 1/2, 1/4, 1/8 ... of its rate (at most 1/64). Each level
+    then lasts about as long as the one before (half the charge at half the rate), so the beacon
+    keeps going for as long as possible instead of dying early. The level and the occurrence
+    counter live in RTC backup register bits (0 B RAM); the app gets the level in `TIMED_LOWBAT`
+    and may also shorten each signal. Only the charger's own cut-off stops it;
   - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
     so an ordinary app can't keep waking a switched-off Flipper.
   Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
