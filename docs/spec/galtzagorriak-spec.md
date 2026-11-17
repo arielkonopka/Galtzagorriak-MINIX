@@ -474,6 +474,15 @@ provides them as small shared services, so each new app is only its UI plus a fe
   - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
     so an ordinary app can't keep waking a switched-off Flipper.
   Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
+- **Timer type `wakeup` (owner, 2026-11-17: "wake_up_on_time").** The alarm clock's timers
+  (`alarm`, 7b.2). Normal battery: as today (rings on time, from off too, with the boot lead).
+  **Below 10 %** (configurable) the alarm itself is **not run**: `timed` does not start the app,
+  and instead gives one minimal notice that the alarm was skipped, whichever costs less: a short
+  LED blink pattern (LP5562, a few mA for well under a second) by default, or a short beep
+  (`notify.conf`: `lowbat_notice=led|beep`). The skip is logged (`/var/log/timed`, batched,
+  N.2) and the alarm app shows "Alarm skipped: battery low" when next opened. The notice runs
+  from Stop2 or from a quiet boot (no screen). Note for the manual: an LED blink will not wake
+  a sleeper; the alarm app warns when an alarm is armed and the battery is under 15 %.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
