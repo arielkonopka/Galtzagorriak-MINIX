@@ -237,7 +237,7 @@ int main(int argc, char **argv)
 	struct tm *tm;
 	time_t now = time((time_t *) 0), end;
 	int i, cat = TC_INFO, flags = NF_ALL, min = 0, uid = -1, ringmin = 0;
-	int fd, k, me = getpid(), r = 3, ramp = 0, n;
+	int fd, fg = -1, k, me = getpid(), none = 0, r = 3, ramp = 0, n;
 
 	for (i = 1; i < argc && argv[i][0] == '-'; i++) {
 		if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -296,9 +296,10 @@ int main(int argc, char **argv)
 	put(2, "\n");
 
 	/* The screen, if nobody holds it. */
-	if ((fd = open("/dev/lcd", O_RDONLY)) >= 0) {
-		shown = ioctl(fd, FGIOCSET, &me) == 0;
-		close(fd);
+	if ((fg = open("/dev/lcd", O_RDONLY)) >= 0
+	    && !(shown = ioctl(fg, FGIOCSET, &me) == 0)) {
+		close(fg);
+		fg = -1;
 	}
 	if (shown && gui_open() == 0) {
 		gui_title(title);
@@ -348,6 +349,12 @@ int main(int argc, char **argv)
 		gui_flush();
 		gui_close();
 	}
+	/* Give the screen back: the kernel keeps the foreground by process
+	 * slot, and the next process in ours would seem to hold it. */
+	if (fg >= 0) {
+		(void) ioctl(fg, FGIOCSET, &none);
+		close(fg);
+	}
 	if (r == 0) done(logapp, logid, uid, now);
-	return r;		/* the screen is free again when we exit */
+	return r;
 }

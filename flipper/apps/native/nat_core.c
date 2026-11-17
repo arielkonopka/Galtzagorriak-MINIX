@@ -1,5 +1,5 @@
 /* nat_core.c - the native apps' shared helpers without the GUI (spec
- * 7b.1, 7b.2); host-tested by apps/remind/test_remind.c.  See nat.h. */
+ * 7b.1, 7b.2); host-tested by test_nat.c (make test).  See nat.h. */
 #include <sys/types.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -93,17 +93,36 @@ static int passwd(const char *name, uid_t *uid, gid_t *gid)
 	return r;
 }
 
+#ifdef __minix
+static int fg_fd = -1;		/* /dev/lcd, kept for nat_background() */
+#endif
+
 int nat_foreground(void)
 {
 #ifdef __minix
-	int fd, me = getpid(), r;
+	int me = getpid(), r;
 
-	if ((fd = open("/dev/lcd", O_RDONLY)) < 0) return -1;
-	r = ioctl(fd, FGIOCSET, &me);
-	close(fd);
+	if (fg_fd < 0 && (fg_fd = open("/dev/lcd", O_RDONLY)) < 0) return -1;
+	r = ioctl(fg_fd, FGIOCSET, &me);
+	if (r < 0) {
+		close(fg_fd);
+		fg_fd = -1;
+	}
 	return r;
 #else
 	return 0;
+#endif
+}
+
+void nat_background(void)
+{
+#ifdef __minix
+	int none = 0;
+
+	if (fg_fd < 0) return;
+	(void) ioctl(fg_fd, FGIOCSET, &none);
+	close(fg_fd);
+	fg_fd = -1;
 #endif
 }
 
@@ -151,7 +170,7 @@ int nat_log_days(int fd, time_t day0, int days, int *counts)
 	char buf[LOG_CHUNK + LOG_LINE];
 	time_t start[9];
 	off_t pos;
-	int carry = 0, n, i, e, r, total = 0;
+	int carry = 0, skip = 0, n, i, e, r, total = 0;
 
 	if (days < 1 || days > 8) return -1;
 	for (i = 0; i < days; i++) {
@@ -172,7 +191,9 @@ int nat_log_days(int fd, time_t day0, int days, int *counts)
 		for (e = n; ; ) {
 			for (i = e - 1; i >= 0 && buf[i] != '\n'; i--) ;
 			if (i < 0 && pos > 0) break;	/* cut: the next chunk */
-			if (e - i - 1 > 0) {
+			if (skip)		/* the head of a long line */
+				skip = 0;
+			else if (e - i - 1 > 0) {
 				if ((r = log_line(buf + i + 1, e - i - 1, start,
 						days, counts)) < 0) return total;
 				total += r;
@@ -181,7 +202,10 @@ int nat_log_days(int fd, time_t day0, int days, int *counts)
 			e = i;
 		}
 		carry = e;		/* buf[0, e): the start of a line */
-		if (carry > LOG_LINE) carry = 0;	/* too long: not ours */
+		if (carry > LOG_LINE) {		/* too long: not ours */
+			carry = 0;
+			skip = 1;	/* nor is the rest, in the next chunk */
+		}
 	}
 	return total;
 }

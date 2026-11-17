@@ -22,6 +22,12 @@ char *nat_num(char *b, unsigned v);
  * launcher gives them to the apps it starts; started from a shell (tests)
  * the launcher would read the keys.  0 or -1 (someone else has them). */
 int nat_foreground(void);
+/* Give the screen and buttons back before exit.  The kernel remembers
+ * the foreground app by its process slot: once the app has exited, the
+ * next process in that slot (a shell's cat, an alert) would seem to hold
+ * them, and alerts could not show.  The launcher clears it when its app
+ * exits; started from a shell (tests) nobody else would. */
+void nat_background(void);
 
 /* Run as the app's own user (spec A.3) from here on: started as root
  * (by the launcher, /etc/apps "Remind:root:..."), after it has opened the

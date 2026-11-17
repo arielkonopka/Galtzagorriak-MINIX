@@ -11,11 +11,13 @@ timed, remind and alarm packages and checks:
            the launcher; apps_data/<app> belongs to that user
   7b.1     OK on a reminder's alert (Log: remind) appends "TIME remind-N"
            to apps_data/remind/log, written as the user remind; remind -s
-           counts it today; Back does not count
+           counts it today; Back does not count; timed -n fires a
+           reminder and OK on it writes the log line
   7b.2     snooze makes the timer _ID with the tone, ring time, ramp and
            log of the alert; alarm -n gives the next alarm that is on (an
            alarm that is off, apps_data/alarm/alarm-N.off, is not); timed
-           fires an alarm that has a tone
+           fires an alarm that has a tone; each alert gives the screen
+           back when it ends (the next one shows)
   GUI      remind and alarm take the foreground, become their users,
            make a reminder and an alarm through their forms with fake
            keys (and alarm opens the desk clock) and exit 0; free -t
@@ -164,6 +166,24 @@ def main():
 		tap(r, "left")
 		tap(r, "back", 2)	# dismiss it
 
+		# 7b.1: timed fires a reminder (Log: remind); OK on its alert
+		# writes the log line.
+		timer(r, "remind-2", ["Kind: once", "At: %d" % now,
+			"Category: reminder", "Title: Reminder", "Text: Stretch",
+			"Log: remind"], "remind")
+		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
+		mark = len(r.out)
+		r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
+		check(re.search(rb"alert: \d\d:\d\d reminder: Reminder: Stretch",
+			r.out[mark:]) is not None, "7b.1: timed fires the reminder")
+		tap(r, "left")
+		tap(r, "ok", 2)
+		out = r.output("grep remind-2 /home/flipper/apps_data/remind/log",
+			20)
+		check(out is not None and re.match(rb"\d+ remind-2\n$", out)
+			is not None, "7b.1: OK on it appends TIME remind-2 to the log")
+		if fails: print(out)
+
 		# The GUIs: they take the foreground, become their users, make
 		# a timer through the form and exit 0.
 		r.sh("rm -f /var/timers/remind-* /var/timers/alarm-* "
@@ -184,6 +204,8 @@ def main():
 				tap(r, k)
 			r.sh("sleep 2", 20)
 			out = r.output("cat /tmp/st", 20)
+			# (free -t prints its memuse lines in between)
+			out = out and re.sub(rb"(?m)^memuse: .*\n", b"", out)
 			check(out == b"0\n", "GUI: %s takes the keys and exits 0"
 				% app)
 		r.output("sleep 1; free -t off", 30)

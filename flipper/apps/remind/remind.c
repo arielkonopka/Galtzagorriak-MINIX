@@ -435,6 +435,7 @@ int main(int argc, char** argv)
 	if (nat_become(APP) < 0) {
 		fprintf(stderr, "remind: no user " APP " (pkg install remind)\n");
 		furi_record_close(RECORD_GUI);
+		nat_background();
 		return 1;
 	}
 	gui->title = APP;
@@ -449,6 +450,7 @@ int main(int argc, char** argv)
 	gui_remove_view_port(gui, vp);
 	view_port_free(vp);
 	furi_record_close(RECORD_GUI);
+	nat_background();
 	furi_message_queue_free(q);
 	free(r.list);
 	return 0;
