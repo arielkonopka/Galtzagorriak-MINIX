@@ -16,9 +16,15 @@ partition /dev/hd3, type 82), logs in as root and checks:
            swap-in, a damaged slot killed by the CRC, Secret: yes and
            set-uid images never swapped, programs started past the free
            RAM
-  AC12.1   the login shell is swapped while a big program runs and keeps
-           its variables
-  R12.5 b  the idle reserve swaps out processes idle for 10 s
+  AC12.1   a shell is swapped on demand while big programs start, and
+           keeps its variables (a copy of sh with its text in flash,
+           /tmp/swsh: QEMU's own programs run their text from RAM, which
+           is never swapped, R12.3; on the Flipper they are in flash).
+           The launcher part needs parking (M4): today it waits in FS,
+           not in MM, so it is not swapped.
+  AC12.10  placement: tests/swapper -c 50 (two parked apps, a foreground
+           app placed low)
+  R12.5 b  the idle reserve swaps out a process idle for 10 s
   R12.8    free -v shows the mode, the slots and the swapped processes
   AC12.12  "card pulled" (swapon -X, the test hook) with two programs
            swapped: both reported lost, the shell goes on
@@ -72,11 +78,15 @@ def main():
 			"install the tests package")
 		# Only text in flash is swapped (R12.3): install the test
 		# programs (install-time flash writes, before the count).
+		# (short lines: the console's line buffer takes 256 bytes)
 		check(r.sh("pkg budget 0 && cp /usr/tests/swapper /tmp/swplain "
 			"&& cp /usr/tests/swapper /tmp/swsuid && chmod 4755 "
-			"/tmp/swsuid && sync && pkg flash /usr/tests/swapper && "
-			"pkg flash /usr/tests/swapsecret && pkg flash /tmp/swplain "
-			"&& pkg flash /tmp/swsuid", 600) == 0,
+			"/tmp/swsuid && cp /bin/sh /tmp/swsh && sync", 120) == 0
+			and r.sh("pkg flash /usr/tests/swapper && "
+			"pkg flash /usr/tests/swapsecret && "
+			"pkg flash /usr/tests/swapsmall", 300) == 0
+			and r.sh("pkg flash /tmp/swplain && pkg flash /tmp/swsuid "
+			"&& pkg flash /tmp/swsh", 300) == 0,
 			"run-time cache off, test programs installed in flash")
 		before = flash_counts(r)
 
@@ -108,30 +118,43 @@ def main():
 		# AC12.1 with the shell: it waits for a big program, is swapped
 		# out to make room and keeps its variables.
 		mark = len(r.out)
-		out = r.output("X=kaixo; /usr/tests/swapper -f; echo X=$X", 600)
-		check(out is not None and b"X=kaixo" in out,
+		out = r.output("/tmp/swsh -c 'X=kaixo; /usr/tests/swapper -f; "
+			"echo X=$X'", 600)
+		sys.stdout.write((out or b"").decode(errors="replace"))
+		check(out is not None and b"X=kaixo" in out
+			and b"FAIL" not in out,
 			"AC12.1: the shell keeps its variables")
-		check(re.search(rb"swap: out (sh|-sh) ", r.out[mark:]) is not None
-			and re.search(rb"swap: in  (sh|-sh) ", r.out[mark:])
+		check(re.search(rb"swap: out swsh ", r.out[mark:]) is not None
+			and re.search(rb"swap: in  swsh ", r.out[mark:])
 			is not None, "AC12.1: the shell was swapped out and in")
 
+		# AC12.10: placement
+		out = r.output("/usr/tests/swapper -c 50; echo st=$?", 1200)
+		sys.stdout.write((out or b"").decode(errors="replace"))
+		check(out is not None and b"st=0" in out,
+			"AC12.10: placement, 50 cycles")
+
 		# R12.5 b: the reserve.  All of RAM as the reserve (192 KB):
-		# idle processes (update, getty, ...) go after 10 s.
+		# an idle process with its text in flash goes after 10 s.
 		mark = len(r.out)
-		r.sh("swapon -r 192", 30)
-		r.wait(rb"\0never\0", 40)
+		r.sh("/usr/tests/swapper -p & rp=$!; swapon -r 192", 30)
+		r.wait(rb"\0never\0", 30)
 		out = r.output("swapon; free -v | grep '^swap'", 30)
 		sys.stdout.write((out or b"").decode(errors="replace"))
-		check(re.search(rb"swap: out ", r.out[mark:]) is not None,
-			"R12.5 b: the idle reserve swapped out idle processes")
+		check(re.search(rb"swap: out swapper ", r.out[mark:]) is not None,
+			"R12.5 b: the idle reserve swapped out an idle process")
 		check(out is not None and b"  swapped: pid" in out,
 			"R12.8: free -v lists the swapped processes")
 		r.sh("swapon -r 0", 30)
+		out = r.output("kill -10 $rp; wait $rp; echo st=$?", 60)  # USR1
+		check(out is not None and b"st=0" in out,
+			"R12.5 b: it comes back intact on a signal")
 
 		# AC12.12: two programs swapped, the card "pulled"
 		mark = len(r.out)
-		r.sh("/usr/tests/swapper -p & p1=$!; /usr/tests/swapper -p & "
-			"p2=$!; sleep 2; swapon -o $p1; swapon -o $p2", 60)
+		r.sh("/usr/tests/swapper -p & p1=$!; sleep 2; swapon -o $p1; "
+			"/usr/tests/swapper -p & p2=$!; sleep 2; swapon -o $p2",
+			60)
 		r.sh("swapon -X; sleep 2", 60)
 		lost = re.findall(rb"swap: swapper +\(pid \d+\) lost: SD card",
 					r.out[mark:])
@@ -148,7 +171,11 @@ def main():
 			"after %s" % (before, after))
 		check(before is not None and before == after,
 			"rule 0.2: swap erased 0 internal flash pages")
-		bad = powercut.BAD.search(r.out)
+		# "damaged" is expected: the CRC test's console message and
+		# its PASS/FAIL line
+		bad = powercut.BAD.search(re.sub(
+			rb"lost: swap image damaged|(PASS|FAIL) damaged slot", b"",
+			r.out))
 		check(bad is None and b"panic" not in r.out,
 			"console: no panic")
 	except (OSError, ValueError) as e:

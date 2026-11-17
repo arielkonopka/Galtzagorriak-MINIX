@@ -352,6 +352,7 @@ CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
+CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 
@@ -436,10 +437,12 @@ $(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
 OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
-	   pkgbad pkgplant sticky pwdcheck swapper swapsecret
+	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
+# swapsmall: the same, a small image (placement, AC12.10)
+OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
