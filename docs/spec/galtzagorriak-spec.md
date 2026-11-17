@@ -3282,9 +3282,23 @@ noticeable CPU on the foreground path.
     partition size at `MMSWAPON` (it already probes the end) and keeps **no table**: slot number and
     block number give the position on the card;
   - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). With
-    the 64 MB partition: 867 blocks, ≈ 3.4 MB per process. First-boot setup (`mkpart`, R12.32)
-    SHOULD make the swap partition **256 MB** on cards of 8 GB or more (≈ 3 600 blocks, ≈ 14 MB per
-    process); install time only, an existing card keeps its layout;
+    the 64 MB partition: 867 blocks, ≈ 3.4 MB per process;
+  - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB or more**, first-boot setup
+    puts swap **at the end** of the usable window and gives it **50 %** of the space after `/usr`;
+    `/home` gets the other half, right after `/usr`. The MBR entry stays `/dev/hd3` (MBR order
+    need not be disk order): `/usr`, `/home`, a 4 MiB-aligned gap if any, swap. Smaller cards keep
+    today's 64 MB swap between `/usr` and `/home`. The usable window is below **4 GiB**, because
+    MINIX 2.0 addresses a partition with 32-bit byte offsets (`mkpart`), so the space past 4 GiB of
+    a big card stays unused until the disk path uses sector numbers. With a root of about 64 MB and
+    `/usr` of 2 GB that is ≈ 1 GB of swap (≈ 60 MB of blocks per process) and ≈ 1 GB of `/home`;
+  - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
+    be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
+    swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and block areas are
+    recomputed from the new size), and `/home` takes the freed space. Growing the MINIX file system
+    in place needs a small `growfs` tool (new zones and bitmap blocks; the simplest form is `mkfs`
+    leaving room for the bitmaps of the largest possible size); that tool is a later task;
+  - `mkpart` gets a way to place a partition at the end (e.g. `82:50%@end`), still never moving an
+    existing partition; install time only, an existing card keeps its layout;
   - the fixed split is the quota: no allocation table, no accounting.
 - **R12.35 Block header and validity.** Sector 0 of a block (on the card only, read and written
   through the last sector of `mbuf` like the swap header, R12.26): magic `GZBK`, slot, pid, boot

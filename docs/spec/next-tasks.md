@@ -300,7 +300,7 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 - R12.36: `MEMINFO` request `MI_BLK` with the descriptor in the caller's memory; GET / PUT / partial PUT / `BLK_IFCHANGED` / INFO; buffer bounds checked against the caller's segments.
 - R12.37: `BLKWAIT` deferral of background callers into `sw_step()` (order: user-awaited swap-in, then blocks, then reserve), shared write budget `sw.wkb`; `NOSWAP` → `EPERM` in `plain`; `ENXIO` without a kill on card loss.
 - R12.38: `blk=` in `/etc/rc.conf` (default `off`) and `/etc/rc`; `<blk.h>` in libc; `libblk`; Berry module `blk` with `vbytes` (when the Berry VM is on main; otherwise a follow-up in the same task).
-- `mkpart`: 256 MB swap partition on cards ≥ 8 GB (R12.34), new installs only.
+- `mkpart` + `/etc/setup` (R12.34): on cards ≥ 8 GB swap = 50 % of the space after `/usr`, placed at the end of the 4 GiB window (`82:50%@end`, MBR entry still hd3), `/home` before it; smaller cards unchanged; new installs only. QEMU test with an 8 GB disk image (sparse file). `growfs` is a later task, not this one.
 - Tests AC12.18–AC12.22 and AC12.24 in `tests/blk` and the M2 self-test; a test hook to force a pid wrap.
 - Docs: CHANGELOG line, `man 3 blk`, `man 3 libblk`, manual chapter for app authors (12f), devguide note.
 
