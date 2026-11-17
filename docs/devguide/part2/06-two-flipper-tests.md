@@ -2,33 +2,49 @@
 
 Many drivers can only be tested with a partner: a reader for an emulated tag, a sender for a
 receiver. A second Flipper Zero running the stock-based **Unleashed** firmware is that partner.
-It has a command line on its USB port, so one computer can drive both Flippers at once:
-`flipper/tools/twoflip.py` makes one Flipper send or emulate, has the other receive or read,
-compares the two and prints PASS or FAIL.
+It has a command line on its USB port, so one computer can drive both Flippers at once.
+`flipper/tools/twoflip.py` tries **everything the Unleashed Flipper can do with a partner**, in
+both directions, and produces a **coverage map**: for each feature, does MINIX work, is it
+broken, or is it not there yet.
 
 This chapter is written so that it can be followed on a computer that has never seen this
 project: it covers the hardware, the physical setup, installing Python, finding the serial
-ports and their permissions on Linux, macOS and Windows, running the tests and what to do
-when they fail.
+ports and their permissions on Linux, macOS and Windows, running the tests, reading the map and
+what to do when something fails.
 
-What is tested today (the cases marked *planned* are listed by the script as SKIP until MINIX
-has the feature; they turn into real tests when it lands):
+### What is covered
 
-| Case | Direction | What happens |
+About 230 rows, each one direction of one feature. "U→M" (`u2m` in the row names): the
+Unleashed Flipper sends or emulates, MINIX receives or reads. "M→U" (`m2u`): the other way.
+
+| Area | Rows | What happens |
 |---|---|---|
-| `rfid-u2m` | Unleashed → MINIX | Unleashed emulates an EM4100 tag, MINIX `rfid` reads it |
-| `rfid-m2u` | MINIX → Unleashed | MINIX `rfid emulate`, Unleashed `rfid read normal` reads it |
-| `rfid-proto-u2m` | Unleashed → MINIX | other 125 kHz protocols (only with `--rfid`, for T19 / issue #210) |
-| `ir-u2m` | Unleashed → MINIX | Unleashed `ir tx`, MINIX `ir rx` decodes (NEC, NECext, Samsung32, RC5, RC6, SIRC) |
-| `ir-m2u` | MINIX → Unleashed | MINIX `ir tx`, Unleashed `ir rx` decodes |
-| `ibutton-u2m` | Unleashed → MINIX | Unleashed emulates a Dallas key on the 1-Wire line, MINIX reads `/dev/ibutton` |
-| `subghz-u2m` | Unleashed → MINIX | Unleashed sends a 433.92 MHz remote code, MINIX `/dev/subghz` sees the level rise |
-| `subghz-raw-u2m` | Unleashed → MINIX | the same, MINIX records the timings from `/dev/subghzraw` (INFO only, never fails) |
-| `ibutton-m2u` | MINIX → Unleashed | *planned*: MINIX emulates a key (spec R6.7, later parts) |
-| `subghz-m2u` | MINIX → Unleashed | *planned*: MINIX transmits (spec R8.1, later parts) |
-| `nfc-u2m`, `nfc-m2u` | both | *planned*: no NFC driver on MINIX yet (spec Phase 14) |
+| `rfid` | all 25 Unleashed 125 kHz protocols × both directions | one emulates, the other reads; protocol and data must match |
+| `rfid-write` | the same 25 × both | one writes a blank T5577, the other reads it (only with `--t5577`) |
+| `ir` | all 14 protocols + raw timings × both | `ir tx` on one, `ir rx` on the other |
+| `ibutton` | Dallas through `/dev/ibutton`; Dallas, Cyfral, Metakom × both; writing a Dallas key × both | one emulates on the 1-Wire line, the other reads (writing only with `--rw1990`) |
+| `subghz` | signal level at 315, 433.92, 868.35 MHz; raw timings; Princeton `tx`; chat × both | Unleashed sends, MINIX measures; MINIX sends, Unleashed decodes |
+| `subghz-decode` | 37 remote protocols × both | Unleashed's own test recordings (`.sub` key files) sent by one, decoded by the other |
+| `nfc` | 7 tag types (ISO14443-3A, NTAG215, Ultralight 11/21/C, FeliCa, SLIX) × both | one emulates a tag file, the other scans it |
 
-A full run takes about two minutes.
+Each row ends with one status:
+
+| Status | Meaning |
+|---|---|
+| **PASS** | the other side got exactly what was sent |
+| **FAIL** | MINIX has the feature, but the result is wrong (wrong data, wrong protocol, or the side it drove got nothing) |
+| **MISSING** | MINIX does not have it yet: the command or option is not there, or MINIX got the signal but has no decoder for it |
+| **BLOCKED** | the Unleashed Flipper could not do its part here (region settings forbid the frequency, its command line cannot express it); the reason is given |
+| **N/A** | needs a blank tag or key that was not offered (`--t5577`, `--rw1990`) |
+| **INFO** | a measurement only |
+
+Where MINIX does not have a feature yet, the row still runs: it uses the command the spec plans
+for it, which mirrors the stock command line, and reports MISSING when the command is not there.
+When the feature lands with that command, the row turns into PASS or FAIL by itself. The
+commands MINIX is expected to have are listed in 6.10.
+
+A full run takes about 15 minutes today (rows that MINIX does not have yet end in a second); it
+gets longer as MINIX gains features.
 
 ## 6.1 What you need
 
@@ -65,7 +81,7 @@ No 3D printer and no soldering are needed.
 4. Turn off **5 V on GPIO** if it is on (Unleashed: **GPIO → 5V on GPIO → OFF**). It is off by
    default.
 5. Sub-GHz transmitting must be allowed at 433.92 MHz. It is by default in most regions. If
-   the test says SKIP with "region settings", choose another frequency with `--freq` (one that
+   a Sub-GHz row says BLOCKED with "transmit", choose another frequency with `--freq` (one that
    is legal where you are) or check the region in the Unleashed settings.
 6. Close **qFlipper** before running the tests: it keeps the serial port open, and then the
    script cannot use it.
@@ -251,14 +267,14 @@ on GitHub, press **Download raw file** on each, and put both into the same folde
 All commands are run in the folder with `twoflip.py` (`flipper/tools` in a clone). On
 Windows write `py` instead of `python3`.
 
-1. **Self-test, no hardware.** It runs every case against two simulated Flippers and checks
-   the script itself works on this computer:
+1. **Self-test, no hardware.** It runs every row against two simulated Flippers and checks
+   the script itself works on this computer (a few minutes):
 
    ```
    python3 twoflip.py --selftest
    ```
 
-   The last line must be `selftest: ok (12 cases)`.
+   The last line must be `selftest: ok (234 rows)` (the number grows with the rows).
 
 2. **Find the Flippers.**
 
@@ -278,10 +294,10 @@ Windows write `py` instead of `python3`.
    IDE...). Both firmwares use the same USB id, so on Windows the description may be the same
    for both; the second column is what tells them apart.
 
-3. **Run all cases.**
+3. **Run everything and write the map.**
 
    ```
-   python3 twoflip.py --log run.log
+   python3 twoflip.py --log run.log --map coverage.md
    ```
 
    It finds both Flippers by itself. If it does not, give the ports:
@@ -293,114 +309,165 @@ Windows write `py` instead of `python3`.
    `TWOFLIP_PASSWORD=... python3 twoflip.py` (Windows: `set TWOFLIP_PASSWORD=...` first), or
    pass `--password`.
 
-4. **Read the result.** One line per case:
+4. **Read the result.** One line per row while it runs:
 
    ```
    MINIX on /dev/ttyACM0, Unleashed on /dev/ttyACM1
-   PASS  rfid-u2m        U>M  MINIX read EM4100 1A2B3C4D5E
-   PASS  rfid-m2u        M>U  Unleashed read EM4100 1A2B3C4D5E
-   SKIP  rfid-proto-u2m  U>M  no --rfid PROTO:HEX given
-   PASS  ir-u2m          U>M  6 protocols
-   FAIL  ir-m2u          M>U  RC6: nothing decoded
-   PASS  ibutton-u2m     U>M  MINIX read ROM 01 A1 B2 C3 D4 E5 F6 8F
-   SKIP  ibutton-m2u     M>U  MINIX cannot emulate an iButton key yet (...)
-   PASS  subghz-u2m      U>M  quiet -96 dBm, during Unleashed tx -24 dBm
-   INFO  subghz-raw-u2m  U>M  187 durations, 61 near TE/3TE (403/1209 us)
+   MINIX Galtzagorriak MINIX 0.1.1, Unleashed unlshd-083; 234 rows
+   PASS    rfid-EM4100-u2m                          MINIX read EM4100 1A2B3C4D5E
+   PASS    rfid-EM4100-m2u                          Unleashed read EM4100 1A2B3C4D5E
+   MISSING rfid-H10301-u2m                          not decoded: no EM4100; 812 changes, 7-90 us, mean 25 us
+   MISSING rfid-H10301-m2u                          rfid emulate: usage: rfid [-r] [-n TRIES]
+   ...
+   PASS    ir-RC6-u2m                               RC6 0x94 0xA0
+   FAIL    ir-Kaseikyo-m2u                          Unleashed decoded nothing
+   ...
+   BLOCKED subghz-level_868.35_MHz-u2m              Unleashed does not transmit at 868350000 Hz here: ...
+   MISSING subghz-decode-CAME-u2m                   no subghz command (MINIX: subghz rx FREQ)
+   ```
+
+   and at the end a count per area:
+
+   ```
+                      PASS     FAIL  MISSING  BLOCKED      N/A     INFO
+   rfid                  2        0       47        1        0        0
+   rfid-write            0        0        0        0       50        0
+   ir                   28        2        0        0        0        0
    ...
    ```
 
-   - **PASS**: the receiving side got exactly what the other sent.
-   - **FAIL**: it did not; the text says what was seen. The exit status of the script is the
-     number of FAILs, so `0` means everything that can run passed.
-   - **SKIP**: not run (planned feature, or not possible with these settings).
-   - **INFO**: a measurement only, never a failure.
+   `coverage.md` is the map: a summary table, then per area one line per feature with the
+   U→M and M→U result side by side. `coverage.json` next to it has the same rows for scripts
+   and for the next comparison. `run.log` has everything both consoles said, with times; attach
+   it when reporting a FAIL.
 
-   `run.log` has everything both consoles said, with times. Attach it when reporting a FAIL.
+   The exit status is the number of FAILs (plus regressions with `--baseline`), so `0` means
+   nothing that MINIX has is broken.
+
+5. **Next time, compare.** Keep `coverage.json` and pass it to the next run:
+
+   ```
+   python3 twoflip.py --map coverage2.md --baseline coverage.json
+   ```
+
+   It lists every row whose status changed: `NEW PASS` (a feature arrived), `REGRESSED` (a row
+   that passed before and does not now; these count in the exit status) and the other changes.
 
 ### Useful options
 
 | Option | Meaning |
 |---|---|
-| `CASE ...` | run only these cases, e.g. `python3 twoflip.py rfid-u2m rfid-m2u` |
-| `--list` | list all cases, the planned ones too |
-| `-r N` | run each case N times and report how many passed (e.g. `-r 10`): shows marginal distance or alignment as "7/10 passed" |
-| `--em HEX` | the EM4100 number to use (10 hex digits; default `1A2B3C4D5E`) |
-| `--ir P:A:C` | IR messages to send instead of the default set, hex address and command, repeatable: `--ir NEC:04:08 --ir RC5:01:10` |
-| `--freq HZ` | Sub-GHz frequency (default `433920000`) |
-| `--rfid P:HEX` | also test 125 kHz protocol P (see below), repeatable |
+| `PATTERN ...` | run only the rows whose id matches (shell pattern or prefix): `rfid`, `ir-*-m2u`, `subghz-decode-CAME*`, `rfid-EM4100-u2m`; `--list PATTERN` shows which |
+| `--list` | list all rows |
+| `-r N` | run each row N times; a row that passed only sometimes is FAIL "k/N passed" (shows marginal distance or alignment) |
+| `--map FILE` | write the coverage map (Markdown) and FILE.json |
+| `--baseline FILE.json` | compare with an earlier run |
+| `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
+| `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |
+| `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`) |
 | `--log FILE` | full transcript of both consoles |
 | `--password PW` | MINIX root password (else `TWOFLIP_PASSWORD`, else asked) |
 
-### Other 125 kHz protocols (T19, issue #210)
+### Test data
 
-`--rfid` makes Unleashed emulate any of its protocols and checks that MINIX's `rfid` names
-the protocol and prints the same data:
-
-```
-python3 twoflip.py --rfid H10301:1A2B3C --rfid Indala26:1A2B3C4D rfid-proto-u2m
-```
-
-The data is hex, without spaces, exactly as many bytes as the protocol has. To see the names
-and sizes, ask the Unleashed console (6.8) for an unknown protocol: `rfid emulate X 00` prints
-the list ("H10301, 3 bytes long", ...). Until T19 lands, MINIX knows only EM4100, so these
-FAIL; that is the gap list of #210 measured on hardware. "Radio Key" has a space in its name
-and cannot be given on Unleashed's command line.
+- **125 kHz:** each protocol gets the first bytes of a fixed pattern (`1A2B3C4D5E...`) of its
+  data length (Unleashed's `rfid emulate X 00` lists names and lengths). If a row says the
+  protocol was read but the data differs in both directions, the protocol may not carry every
+  bit of the pattern: compare with what Unleashed read in the M→U row and change the vector in
+  `LF_PROTOCOLS`/`lf_data`. "Radio Key" has a space in its name, which Unleashed's command line
+  cannot take, so its U→M row is BLOCKED.
+- **Infrared:** one message per protocol, from Unleashed's infrared unit tests where it has them
+  (`IR_VECTORS`).
+- **Sub-GHz:** `flipper/tools/twoflip_data/subghz/*.sub`, the key files of Unleashed's own unit
+  tests (real recordings, valid checksums), all at 433.92 MHz. Rolling-code protocols (KeeLoq,
+  Security+, Phoenix V2) change their code on every send, so only the protocol name is
+  compared for them. The script copies each file to `/ext/twoflip/` on the Unleashed SD card
+  (and to `/tmp` on MINIX) before sending it.
+- **NFC:** `flipper/tools/twoflip_data/nfc/*.nfc`, Unleashed's unit-test tag files plus one
+  plain ISO14443-3A file. A row passes when the reader names the tag type.
 
 ## 6.7 When something fails
+
+MISSING rows are not problems: they are the part of the map MINIX has not reached yet. The
+table is about FAIL and BLOCKED rows and about the script not starting.
 
 | Symptom | What to do |
 |---|---|
 | `did not find both Flippers` | Run `--ports`. A missing port: other cable (data cable), other USB socket, is the Flipper on? `busy`: close qFlipper, screen, minicom, PuTTY, Arduino IDE. `None`: see the next lines. |
 | `Permission denied` (Linux) | 6.5 Linux step 2 or the udev rule of step 3; log out and in after `usermod`. |
 | `no '>: ' prompt from the Unleashed Flipper` | Go back to the Flipper's main screen (press Back until the dolphin shows); unplug and replug it; close Bad USB/U2F apps. |
-| Unleashed says "command not found" in the log | Its SD card is missing or lacks the resources: put the card in, reinstall Unleashed with qFlipper (6.2). |
+| Many Unleashed rows BLOCKED, or "command not found" in the log | Its SD card is missing or lacks the resources: put the card in, reinstall Unleashed with qFlipper (6.2). |
 | `no root shell on the MINIX Flipper` | Wrong password, or a user other than root is logged in at the console (the script logs a `$` shell out and retries once). Log in by hand with a terminal program to check, then close it. |
 | Random characters in the log right after plugging in (Linux) | ModemManager: 6.5 Linux step 3. |
-| `rfid-u2m` / `rfid-m2u` FAIL | Line the Flippers up exactly, use a thinner spacer, take off cases, keep metal (laptop, table frame) a few cm away. Run `-r 10` to see whether it is marginal. Note which direction fails: emulation by MINIX (`m2u`) is the newer code. |
-| `ibutton-u2m` FAIL "no ROM" | The wires: pin 17 to 17 and 18 to 18 (count from the printed numbers), pins pushed fully in. 5V on GPIO off on Unleashed. |
-| `ir-...` FAIL "nothing decoded" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder bug: report it. |
-| `subghz-u2m` SKIP "region" | Unleashed refuses to send there: use `--freq` with a frequency allowed in your region and band list, e.g. `--freq 868350000` in Europe. |
-| `subghz-u2m` FAIL with a small rise | Another 433 MHz transmitter nearby during the quiet reading; repeat the case. |
-| A case hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun with `--log` and report the log. |
+| `rfid-EM4100-*` FAIL | Line the Flippers up exactly, use a thinner spacer, take off cases, keep metal (laptop, table frame) a few cm away. Run `python3 twoflip.py -r 10 rfid-EM4100` to see whether it is marginal. |
+| `ibutton-Dallas_dev_ibutton-u2m` FAIL "no ROM" | The wires: pin 17 to 17 and 18 to 18 (count from the printed numbers), pins pushed fully in. 5V on GPIO off on Unleashed. |
+| `ir-*` FAIL "received nothing" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder or encoder bug: report it. |
+| `subghz-level_*` BLOCKED | Unleashed may not transmit at that frequency with its region settings. Normal for 315 or 868 MHz in some regions. |
+| `subghz-level_*` FAIL with a small rise | Another transmitter nearby during the quiet reading; run that row again. |
+| A row hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun that row with `--log` and report the log. |
 
 ## 6.8 Doing it by hand
 
-Each case is just two console commands, so a single case can also be tried by hand with two
+Each row is just two console commands, so a single row can also be tried by hand with two
 terminal windows (`screen /dev/ttyACM1` on Linux and macOS, PuTTY "Serial" on Windows; any
-speed). The commands the script uses:
+speed). The commands the script uses today, on main:
 
 | | Unleashed console (`>: `) | MINIX shell (`# `) |
 |---|---|---|
 | RFID U→M | `rfid emulate EM4100 1A2B3C4D5E` (Ctrl-C ends) | `rfid -n 8` |
-| RFID M→U | `rfid read normal` | `rfid emulate EM 1A 2B 3C 4D 5E` (Ctrl-C ends) |
+| RFID M→U | `rfid read` | `rfid emulate EM 1A 2B 3C 4D 5E` (Ctrl-C ends) |
 | IR U→M | `ir tx NEC 04 08` | `ir rx -n 1` |
 | IR M→U | `ir rx` (Ctrl-C ends) | `ir tx NEC 0x04 0x08` |
+| IR raw | `ir tx RAW F:38000 DC:33 3000 1000 ...` / `ir rx raw` | `ir rx -r -n 1` / `ir tx raw 3000 1000 ...` |
 | iButton U→M | `ikey emulate Dallas 01A1B2C3D4E5F68F` (Ctrl-C ends) | `od -b /dev/ibutton` |
-| Sub-GHz U→M | `subghz tx 74BADE 433920000 403 100 0` | `echo 433920000 > /dev/subghz`, `cat /dev/subghz`, `echo 0 > /dev/subghz` |
+| Sub-GHz level | `subghz tx 74BADE 433920000 403 100 0` | `echo 433920000 > /dev/subghz`, `cat /dev/subghz`, `echo 0 > /dev/subghz` |
 | Sub-GHz raw | (as above) | `ir rx -r -n 1 -d /dev/subghzraw` |
+| Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 1 0`; `subghz rx 433920000 0` | (planned, 6.10) |
+| NFC | `nfc`, then `emulate -f /ext/twoflip/Ntag215.nfc` or `scanner`, then `exit` | (planned, 6.10) |
 
 The Unleashed sources these were checked against: `applications/main/lfrfid/lfrfid_cli.c`,
-`infrared/infrared_cli.c`, `ibutton/ibutton_cli.c`, `subghz/subghz_cli.c` and
-`nfc/cli/` (commit `53818b1`). The prompt `>: ` comes from `lib/toolbox/cli/shell/`.
-
-**Writing a blank T5577 tag** is not automated (it needs a blank tag in the stack): put the
-tag on the MINIX Flipper, `rfid write EM 1A 2B 3C 4D 5E`, then hold it to the Unleashed one and
-`rfid read normal`.
+`infrared/infrared_cli.c`, `ibutton/ibutton_cli.c`, `subghz/subghz_cli.c`, `nfc/cli/` and
+`applications/services/storage/storage_cli.c` (commit `53818b1`). The prompt `>: ` comes from
+`lib/toolbox/cli/shell/`.
 
 ## 6.9 Reporting
 
-Paste the result lines into the device-check issue (#109 for the backlog, #210 for the RFID
-protocols) with: the date, the MINIX version (`ver` on the MINIX console), the Unleashed
-version (**Settings → About** on the Flipper, or `info device` on its console), the spacer you
-used and, for any FAIL, the `--log` file.
+Attach `coverage.md` (and `coverage.json`) to the device-check issue (#109 for the backlog,
+#210 for the 125 kHz protocols) with the spacer you used and, for any FAIL, the `--log` file.
+The map already names the MINIX version (`ver`) and the Unleashed version (`info device`).
 
-## 6.10 For developers: changing the script
+## 6.10 For developers: the commands MINIX is expected to have
 
-- A case is a function `(ul, mx, opt) -> (status, detail)` in `twoflip.py`, listed in `CASES`.
-  `ul.start(cmd)` / `ul.stop()` run a long Unleashed command (one that ends with Ctrl-C),
-  `ul.run(cmd)` a short one; `mx.run(cmd)` runs a MINIX command and returns its exit status and
-  output, `mx.start` / `mx.stop` the long ones. `wait(regex, secs)` waits for output.
-- When MINIX gets a planned feature (iButton emulation, Sub-GHz transmit, NFC), replace the
-  `None` in its `CASES` entry with a function and drop its `PLANNED` text.
-- Teach the simulator (`twoflip_sim.py`) the new command and update its `EXPECT` table, and
-  keep `python3 -I twoflip.py --selftest` passing.
+The rows for features MINIX does not have yet use these commands. They mirror the stock
+command line (spec 4.x "cli commands → Unix commands", and R9.0.3 for `rfid`), so the stock
+apps' habits carry over. A different syntax is fine, but then change the row in `twoflip.py`
+in the same PR.
+
+| Command | Output the row looks for |
+|---|---|
+| `rfid -n 8` (read, any protocol) | `PROTOCOL HEXDATA` (spaces between bytes allowed), e.g. `H10301 1A 2B 3C` |
+| `rfid emulate PROTOCOL HEX`, `rfid write PROTOCOL HEX` | emulate prints a line with "emulating" and runs until Ctrl-C; the name is quoted when it has a space (`"Radio Key"`). EM4100 keeps `rfid emulate EM B0 B1 B2 B3 B4` |
+| `ikey read` | `Dallas HEX`, `Cyfral HEX`, `Metakom HEX` (as stock) |
+| `ikey emulate TYPE HEX`, `ikey write Dallas HEX` | emulate prints "Emulating..." and runs until Ctrl-C |
+| `subghz rx FREQ` | each decoded packet with the protocol name and its key in hex (as stock) |
+| `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` | sends, then exits 0 |
+| `subghz chat FREQ` | lines typed are sent, lines received are printed |
+| `nfc scanner` | the detected protocol names as stock (`ISO14443-3A`, `NTAG/Ultralight`, `FeliCa`, `SLIX`) |
+| `nfc emulate -f FILE` | prints "Emulating..." and runs until Ctrl-C |
+
+A command that is missing, or answers with a usage message or "unknown protocol", makes the row
+MISSING; anything else that does not match is FAIL.
+
+## 6.11 For developers: changing the script
+
+- A row is a function `(ul, mx, opt, *args) -> (status, detail)` in `twoflip.py`, added in
+  `build_rows()`. `ul.start(cmd)` / `ul.stop()` run a long Unleashed command (one that ends
+  with Ctrl-C), `ul.run(cmd)` a short one, `ul.upload(path, bytes)` writes a file to its SD
+  card; `mx.run(cmd)` runs a MINIX command and returns its exit status and output,
+  `mx.start` / `mx.stop` the long ones, `mx.exists(word)` whether a command exists,
+  `mx.upload(path, text)` writes a file. `wait(regex, secs)` waits for output.
+- New test files go into `twoflip_data/subghz/` or `twoflip_data/nfc/`; they become rows by
+  themselves.
+- The simulator `twoflip_sim.py` imitates both Flippers as main has them; when MINIX gains a
+  command, teach the simulator the command and change `expected()`, and keep
+  `python3 -I twoflip.py --selftest` passing.
