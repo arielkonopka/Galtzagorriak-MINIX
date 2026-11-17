@@ -183,7 +183,10 @@ int app_alert(const struct app_timer *t, int cat, int flags, int uid)
 	char fb[4], zb[4], ub[8], *argv[14];
 	int n = 0, pid, i;
 
-	fb[0] = '0' + (flags & 0xF); fb[1] = 0;
+	/* alert's -f knows 1 sound, 2 vibro, 4 LED: one digit.  NF_SHOW (8)
+	 * from notify_flags() made it ':'..'?', which atoi() read as 0: no
+	 * sound, vibro or LED (seen on the device, #109 AC7b.R1). */
+	fb[0] = '0' + (flags & NF_ALL); fb[1] = 0;
 	zb[0] = '0' + t->snooze / 10; zb[1] = '0' + t->snooze % 10; zb[2] = 0;
 	argv[n++] = "alert";
 	argv[n++] = "-c";
