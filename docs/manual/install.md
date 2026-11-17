@@ -134,7 +134,7 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    |---|---|---|---|
    | `/dev/hd1` | `/` | 32 MB | the system, `/etc` settings |
    | `/dev/hd2` | `/usr` | 2 GB | programs and packages |
-   | `/dev/hd3` | (swap) | 64 MB | reserved for swapping apps to the card later |
+   | `/dev/hd3` | (swap) | 64 MB | swap for idle programs, off by default ([Swap](swap.md)) |
    | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
 
 2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.

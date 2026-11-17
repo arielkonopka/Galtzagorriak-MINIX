@@ -82,6 +82,8 @@ struct proc {
 #define PENDING          020	/* set when inform() of signal pending */
 #define SIG_PENDING      040	/* keeps to-be-signalled proc from running */
 #define P_STOP		0100	/* set when process is being traced */
+#define P_SWAPPED	0200	/* image on the swap device (R12.4, SYS_SWAP):
+				 * never scheduled, no umap, no messages */
 
 /* Magic process table addresses. */
 #define BEG_PROC_ADDR (&proc[0])

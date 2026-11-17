@@ -82,6 +82,7 @@ PUBLIC int do_exec()
   unsigned long fc_text;	/* flash address of the text, 0: in RAM */
   off_t text_off;
   int text_read;		/* fc_sync() has read the text already */
+  int secret;			/* A_NOSWAP: a Secret: yes package */
 #endif
 
   /* Do some validity checks. */
@@ -112,6 +113,9 @@ PUBLIC int do_exec()
 	close(fd);		/* something wrong with header */
 	return(ENOEXEC);
   }
+#if (CHIP == ARM_CM)
+  secret = (m == 1);		/* never swapped in plain mode (R12.28) */
+#endif
 #if (CHIP == ARM_CM)
   text_off = lseek(fd, 0L, SEEK_CUR);	/* where the text is in the file */
 #endif
@@ -233,6 +237,15 @@ PUBLIC int do_exec()
 				text_crc, (unsigned long) s_buf.st_uid))
 #endif
   close(fd);			/* don't need exec file any more */
+
+#if (CHIP == ARM_CM)
+  /* Swap (R12.28, R12.22): set-uid, set-gid and secret images never go to
+   * the card in clear; the launcher's child is the foreground app. */
+  rmp->mp_flags &= ~NOSWAP;
+  if (secret || (s_buf.st_mode & (I_SET_UID_BIT | I_SET_GID_BIT)))
+	rmp->mp_flags |= NOSWAP;
+  if (rmp->mp_flags & FGEXEC) rmp->mp_flags = (rmp->mp_flags & ~FGEXEC) | FGAPP;
+#endif
 
   /* Take care of setuid/setgid bits. */
   if ((rmp->mp_flags & TRACED) == 0 && !reloc_bad) {
@@ -360,7 +373,7 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 	    || !(hdr.a_flags & A_SEP))
 		return(ENOEXEC);
   }
-  if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC)) != 0)
+  if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC | A_NOSWAP)) != 0)
 	return(ENOEXEC);
 #else
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
@@ -418,6 +431,9 @@ vir_bytes *pc;			/* program entry point (initial PC) */
   m = size_ok(*ft, tc, dc, sc, dvir, s_vir);
   ct = hdr.a_hdrlen & BYTE;		/* header length */
   if (ct > A_MINHDR) lseek(fd, (off_t) ct, SEEK_SET); /* skip unused hdr */
+#if (CHIP == ARM_CM)
+  if (m == OK && (hdr.a_flags & A_NOSWAP)) m = 1;	/* Secret: yes */
+#endif
   return(m);
 }
 
@@ -474,6 +490,12 @@ unsigned long fc_text;		/* the text in the flash cache, or 0 */
    * releasing the old core image before allocating the new one, since we
    * know it will succeed.  If there is not enough, return failure.
    */
+#if (CHIP == ARM_CM)
+  /* R12.5: swap idle processes out to make the hole, if the header buffer
+   * (mbuf's last sector, swap.c) is not part of the stack image. */
+  if (text_clicks + tot_clicks > max_hole() && stk_bytes <= ARG_MAX - 512)
+	sw_room(text_clicks + tot_clicks);
+#endif
   if (text_clicks + tot_clicks > max_hole()) return(EAGAIN);
 
   /* There is enough memory for the new core image.  Release the old one. */
@@ -495,7 +517,10 @@ unsigned long fc_text;		/* the text in the flash cache, or 0 */
 #if (CHIP == ARM_CM)
   /* Program images from the top, fork copies from the bottom: see
    * alloc_mem_high() - this keeps free memory in one piece. */
-  new_base = alloc_mem_high(text_clicks + tot_clicks);
+  /* R12.22: the foreground app from the bottom, the rest from the top, so
+   * that a swapped image usually finds its addresses free again. */
+  new_base = (mp->mp_flags & FGEXEC) ? alloc_mem(text_clicks + tot_clicks)
+				: alloc_mem_high(text_clicks + tot_clicks);
 #else
   new_base = alloc_mem(text_clicks + tot_clicks);	/* new core image */
 #endif

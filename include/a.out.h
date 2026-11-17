@@ -55,6 +55,8 @@ struct	exec {			/* a.out header */
 #define A_SEP	0x20	/* separate I/D */
 #define A_PURE	0x40	/* pure text */		/* not used */
 #define A_TOVLY	0x80	/* text overlay */	/* not used */
+#define A_NOSWAP 0x80	/* ARM_CM: never swap it in plain mode, the package
+			 * says Secret: yes (R12.28; A_TOVLY was unused) */
 
 /* Offsets of various things. */
 #define A_MINHDR	32

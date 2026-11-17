@@ -45,7 +45,11 @@
 kernel    160    14652  14812
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
-mm        32     10140  10172
+# R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows
+# +96 B): when each process began to wait (16 x 2 B), the reserve job
+# (CRC, slot, offset), the device, mode, reserve and its rate window, and
+# swap-out/in counters.  The header goes through mbuf; kernel +0 B.
+mm        32     10196  10228
 # Phase 2d (UTC, 64-bit time_t): FS -72 B, its two static clock messages
 # moved to the stack (+1 B: the once-only "past 2106" note); kernel, MM 0.
 # R4b.6 poll() (#169): FS +268 B: one poll record per process (16 B x 16:

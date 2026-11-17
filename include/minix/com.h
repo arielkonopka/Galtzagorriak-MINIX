@@ -154,6 +154,8 @@
 #	define SYS_GETMAP    20	/* fcn code for sys_getmap(procno, map_ptr) */
 #	define SYS_FLASH     22	/* fcn code for sys_flash(op, addr, buf, len)
 				 * (ARM_CM: the flash text cache, MM only) */
+#	define SYS_SWAP      23	/* fcn code for sys_swap(procno, out):
+				 * P_SWAPPED on/off (R12.4, ARM_CM) */
 #	define SYS_KSTACKS   21	/* fcn code for sys_kstacks(procno, buf, len)
 				 * (ARM_CM: kernel task stack use) */
 

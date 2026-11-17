@@ -365,3 +365,4 @@ vsnprintf
 # Appended after the freeze:
 _poll			# R4b.6 poll(), 2026-11-17
 poll
+sys_swap		# R12.28 plain swap, 2026-11-17
