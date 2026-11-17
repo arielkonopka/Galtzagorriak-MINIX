@@ -295,6 +295,7 @@ register int oflags;
 	release(rip, CREAT, susp_count);
   }
   rip->i_pipe = I_PIPE; 
+  if (poll_npipe) poll_pipe();	/* a FIFO's other end came (R4b.6) */
 
   return(OK);
 }
@@ -427,6 +428,7 @@ PUBLIC int do_close()
   if (rip->i_pipe == I_PIPE) {
 	rw = (rfilp->filp_mode & R_BIT ? WRITE : READ);
 	release(rip, rw, NR_PROCS);
+	if (poll_npipe) poll_pipe();	/* a hangup to see (R4b.6) */
   }
 
   /* If a write has been done, the inode is already marked as DIRTY. */

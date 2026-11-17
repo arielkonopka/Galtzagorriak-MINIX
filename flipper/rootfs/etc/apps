@@ -4,3 +4,4 @@ Console:nobody:/bin/console
 About:nobody:/bin/info
 Lights:nobody:/bin/lights
 Power:nobody:/bin/power
+RFID:nobody:/bin/lfrfid

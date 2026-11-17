@@ -43,6 +43,15 @@
  * the reader's buffer, one interrupt at the start and one at the end).
  * Nobody busy-waits.
  *
+ * poll() (R4b.6, protocol #131): DEV_SELECT says which ops are ready.
+ * /dev/buttons is readable with an event queued for the caller (not while
+ * another app owns the buttons, R4b.8), /dev/speaker writable when no tune
+ * plays; every other minor is always ready (IR, RFID and Sub-GHz capture
+ * only while a read waits: nothing is "readable" before the read).  With
+ * SEL_NOTIFY the two remember what FS waits for and send one DEV_SELECTED:
+ * the buttons on a new event (not on a queue the owner has not read yet:
+ * that would wake FS again and again), the speaker when the tune ends.
+ *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
  * from clock.c).
@@ -56,6 +65,7 @@
 #include <minix/lat.h>
 #include <minix/fg.h>
 #include <minix/rtc.h>
+#include <minix/rfid.h>
 #include <signal.h>
 
 #define LCD_MINOR	0
@@ -87,7 +97,20 @@ PRIVATE message fm;
 
 /* Button events, filled by flipdev_tick() at interrupt level. */
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
-PRIVATE volatile unsigned ev_head, ev_tail;
+PRIVATE volatile u8_t ev_head, ev_tail;	/* wrap: NEVENTS divides 256 */
+PRIVATE u8_t sel_wait;		/* poll(): SEL_RD buttons, SEL_WR speaker */
+PRIVATE u8_t sel_head;		/* ev_head when the buttons registered */
+PRIVATE u8_t fg_pre;		/* R7b.2: an alert preempts (PRE_*), 0: no */
+#define PRE_ON		0x80
+#define PRE_FG		0x40	/* the slot below was the foreground app */
+#define PRE_SLOT	0x3F	/* the preempted foreground's slot + 1 */
+PRIVATE u8_t pre_rd;		/* R7b.2: a reader parked meanwhile, slot + 1 */
+PRIVATE u8_t nt_st;		/* N.6: the card notice (NT_*) */
+#define NT_KIND		3	/* the notice over every frame: */
+#define NT_OUT		1	/*   the card is out */
+#define NT_OTHER	2	/*   another card, or one that does not answer */
+#define NT_NEW		0x40	/* the task draws it, flushes and buzzes */
+#define NT_SEEN		0x80	/* the switch said "card in" at the last tick */
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
 #define BL_SAVE		8	/* off, and the LCD in power save (T14d) */
@@ -165,6 +188,11 @@ PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
 PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
+PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
+					 * T5577 command and its reply */
+PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
+PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
+					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
 PRIVATE short ir_caller, ir_proc, tx_caller, tx_proc;
 PRIVATE u16_t ir_count, tx_count;
@@ -216,6 +244,13 @@ FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
+FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
+FORWARD _PROTOTYPE( void fg_release, (void)				);
+FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void nt_over, (void)				);
+FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
+FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
+FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
@@ -259,6 +294,10 @@ FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
 FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
+FORWARD _PROTOTYPE( void rfid_field_off, (void)				);
+FORWARD _PROTOTYPE( int rfid_ioctl, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rfid_emu_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -317,6 +356,10 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
+			if (rf_held) rfid_field_off();	/* the holder let go */
+			if (rf_emu != 0) rfid_emu_off();
+		}
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
@@ -327,16 +370,26 @@ PUBLIC void flipdev_task()
 		r = do_rw(&fm);
 		break;
 	case DEV_IOCTL:
-		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm) : fg_ioctl(&fm);
+		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
+		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
+		  : fg_ioctl(&fm);
+		break;
+	case DEV_SELECT:
+		r = do_select(&fm);
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
-			if (tx_rfid) rfid_tx_off();
+			if (tx_rfid && rf_held) {	/* the whole session */
+				rfid_field_off();
+				tx_rfid = FALSE;
+			} else if (tx_rfid) rfid_tx_off();
 		}
+		if (rf_emu == fm.PROC_NR + 1) rfid_emu_off();	/* R6.5 p4 */
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
@@ -349,6 +402,65 @@ PUBLIC void flipdev_task()
 		r = EINVAL;
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
+	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
+  }
+}
+
+
+/*===========================================================================*
+ *				do_select				     *
+ *===========================================================================*/
+PRIVATE int do_select(m_ptr)
+message *m_ptr;
+{
+/* DEV_SELECT (R4b.6): the ops of COUNT ready now; with SEL_NOTIFY remember
+ * the buttons' and the speaker's that are not; ops 0: forget them.  One
+ * registration per minor for all pollers (FS keeps who they are).
+ */
+  int ops = m_ptr->COUNT, want = ops & (SEL_RD | SEL_WR), r = want;
+
+  if (ops == 0) {
+	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
+	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
+	return(0);
+  }
+  switch (m_ptr->DEVICE) {
+  case BTN_MINOR:		/* a write is the QEMU tests' fake: ready */
+	if (ev_head == ev_tail || fg_other(m_ptr->PROC_NR)) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) {
+		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
+		sel_wait |= SEL_RD;
+	}
+	break;
+  case SPK_MINOR:		/* a read fails at once: ready */
+	if (sp_waiting) r &= ~SEL_WR;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_WR)) sel_wait |= SEL_WR;
+	break;
+  default:
+#if LATTRACE
+	if (m_ptr->DEVICE == LAT_MINOR) break;
+#endif
+	if ((unsigned) m_ptr->DEVICE > LAST_MINOR) return(ENXIO);
+  }
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				sel_check				     *
+ *===========================================================================*/
+PRIVATE void sel_check()
+{
+/* In the task: what FS waits for has happened, tell it once (DEV_SELECTED,
+ * DEVICE where a reply has REP_PROC_NR).  The pollers that still wait
+ * register again. */
+  if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
+	sel_wait &= ~SEL_RD;
+	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_WR) && !sp_waiting) {
+	sel_wait &= ~SEL_WR;
+	reply(DEV_SELECTED, FS_PROC_NR, SPK_MINOR, SEL_WR);
   }
 }
 
@@ -798,6 +910,7 @@ message *m_ptr;
 		}
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
 		LAT_EVENT(LE_LCD, m_ptr->PROC_NR);
+		if (nt_st & NT_KIND) nt_over();		/* N.6 */
 		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	}
 	return(count);
@@ -813,6 +926,10 @@ message *m_ptr;
 	if (fg_other(m_ptr->PROC_NR)) {	/* R4b.8: not yours: wait (until
 					 * a signal; the keys are not kept) */
 		if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+		/* R7b.2: while an alert holds them, one reader is parked:
+		 * its read ends empty at the release, so it redraws and
+		 * reads again */
+		if (fg_pre != 0 && pre_rd == 0) pre_rd = m_ptr->PROC_NR + 1;
 		return(SUSPEND);
 	}
 	if (ev_head != ev_tail) {
@@ -930,6 +1047,8 @@ message *m_ptr;
 		if (ir_rd || tx_on) return(EBUSY);
 		int rr;
 
+		if (rf_held) hal_rfid_pull(1);	/* a command: PA2 high (the
+					 * capture left it low) */
 		tx_rfid = TRUE;
 		rr = ir_write(m_ptr, user, count);
 		if (rr != SUSPEND) tx_rfid = FALSE;
@@ -1301,6 +1420,20 @@ PRIVATE void do_hardint()
   int r;
 
   if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
+  if (nt_st & NT_NEW) {		/* N.6: a card notice to show */
+	nt_st &= ~NT_NEW;
+	nt_over();
+	lc_dirty = TRUE;
+	k_input = get_uptime();		/* the light on, as for a key */
+	lock();
+	mt_arm(MT_VIBRO, 150);		/* and a short buzz */
+	unlock();
+	hal_vibro(1);
+  }
+  if (fg_pre != 0) {		/* R7b.2: the alert exited? */
+	r = FG_SLOT(last_buttons);
+	if (r < 0 || (proc_addr(r)->p_flags & P_SLOT_FREE)) fg_release();
+  }
   bl_apply();
   if (last_buttons & (FG_LONG | FG_KILL)) {	/* R4b.8, here: not in the
 						 * interrupt handler */
@@ -1339,7 +1472,8 @@ PRIVATE void do_hardint()
   if (tx_on) {
 	if (tx_done) {				/* the frame is out */
 		tx_on = FALSE;
-		if (tx_rfid) rfid_tx_off();
+		if (tx_rfid && !rf_held) rfid_tx_off();
+		else if (tx_rfid) tx_rfid = FALSE;	/* field held: keep it */
 		if (ir_rd && ir_paused) {	/* the reader's capture again */
 			ir_paused = FALSE;
 			if (ir_rx_arm() < 0) ir_rx_end(EIO);
@@ -1348,11 +1482,13 @@ PRIVATE void do_hardint()
 	} else
 		ir_fill();
   }
-  if (!rd_waiting || ev_head == ev_tail) return;
-  rd_waiting = FALSE;
-  LAT_EVENT(LE_BREPLY, rd_proc);
-  r = deliver(rd_proc, rd_vir, rd_count);
-  reply(REVIVE, rd_caller, rd_proc, r);
+  if (rd_waiting && ev_head != ev_tail) {
+	rd_waiting = FALSE;
+	LAT_EVENT(LE_BREPLY, rd_proc);
+	r = deliver(rd_proc, rd_vir, rd_count);
+	reply(REVIVE, rd_caller, rd_proc, r);
+  }
+  if (sel_wait) sel_check();		/* poll(), R4b.6 */
 }
 
 
@@ -1380,12 +1516,31 @@ PUBLIC void flipdev_tick()
 		interrupt(PRINTER);
 	}
   }
+  /* N.6: the card-detect switch, one GPIO read (its EXTI line is Up's) */
+  if (hal_disk_present()) {
+	if (!(nt_st & NT_SEEN)) {		/* in again */
+		nt_st |= NT_SEEN;
+		if ((nt_st & NT_KIND) == NT_OUT) nt_st &= ~NT_KIND;
+	}
+  } else if (nt_st & NT_SEEN) {		/* just pulled out */
+	nt_st = (nt_st & ~(NT_SEEN | NT_KIND)) | NT_OUT | NT_NEW;
+	interrupt(PRINTER);
+  }
   /* the backlight's idle timeout: the task does the I2C (bl_apply) */
   if (bl_want(st, uptime_irq()) != bl_state(st)) interrupt(PRINTER);
   if (!(last_buttons & BTN_EXTI)) {
 	fg_hold(btn_sample());
 	ge_hold();
   }
+  if (FG_SLOT(last_buttons) >= 0
+	&& (proc_addr(FG_SLOT(last_buttons))->p_flags & P_SLOT_FREE)) {
+	/* The foreground app has exited: clear it now, before its slot is
+	 * used again and the next process there seems to hold the screen
+	 * (#192).  An alert's exit (R7b.2) is a release: the task's job. */
+	if (fg_pre != 0) interrupt(PRINTER);
+	else last_buttons &= ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF);
+  } else if (fg_pre != 0 && FG_SLOT(last_buttons) < 0)
+	interrupt(PRINTER);
   if ((last_buttons & FG_KILL) && ((unsigned) ((unsigned long) uptime_irq() / HZ)
 		- FG_STAMP(last_buttons) & 0xFF) >= FG_KILL_S)
 	interrupt(PRINTER);
@@ -1460,6 +1615,13 @@ message *m_ptr;
 	unlock();
 	return(OK);
   }
+  if (m_ptr->TTY_REQUEST == FGIOCPREEMPT) return(fg_preempt(m_ptr->PROC_NR));
+  if (m_ptr->TTY_REQUEST == FGIOCRELEASE) {
+	if (fg_pre == 0 || FG_SLOT(last_buttons) != m_ptr->PROC_NR)
+		return(EPERM);
+	fg_release();
+	return(OK);
+  }
   if (m_ptr->TTY_REQUEST != FGIOCSET) return(ENOTTY);
   if (fg_other(m_ptr->PROC_NR)) return(EPERM);
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
@@ -1481,6 +1643,69 @@ message *m_ptr;
 					| (unsigned) (fg + 1) << 16;
   unlock();
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				fg_preempt				     *
+ *===========================================================================*/
+PRIVATE int fg_preempt(proc)
+int proc;
+{
+/* R7b.2 FGIOCPREEMPT: an alert takes the screen and the buttons from
+ * whoever has them, until FGIOCRELEASE or its exit.  The preempted app
+ * keeps running (its frames are dropped, its button reads wait).  A
+ * reader waiting on the buttons now (the launcher, or the app) gets an
+ * empty read: it reads again and is parked (pre_rd) until the release.
+ * Another alert meanwhile: EBUSY (it waits its turn).  Who may: whoever
+ * can open /dev/lcd or /dev/buttons (group gui, by the device modes).
+ */
+  int fg = FG_SLOT(last_buttons);
+
+  if (proc <= INIT_PROC_NR) return(EPERM);
+  if (fg_pre != 0) {
+	if (fg == proc) return(OK);
+	if (fg >= 0 && !(proc_addr(fg)->p_flags & P_SLOT_FREE)) return(EBUSY);
+	fg_release();			/* the last one has gone */
+	fg = FG_SLOT(last_buttons);
+  }
+  fg_pre = PRE_ON;
+  if (fg >= 0 && fg != proc && !(proc_addr(fg)->p_flags & P_SLOT_FREE))
+	fg_pre |= PRE_FG | (fg + 1);
+  if (rd_waiting && rd_proc != proc) {	/* an empty read: read again */
+	rd_waiting = FALSE;
+	reply(REVIVE, rd_caller, rd_proc, 0);
+  }
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF))
+					| (unsigned) (proc + 1) << 16;
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				fg_release				     *
+ *===========================================================================*/
+PRIVATE void fg_release()
+{
+/* R7b.2: the alert is done (FGIOCRELEASE, or it exited): the preempted
+ * foreground app gets the screen and the buttons back, the parked reader
+ * an empty read (redraw, read again).  The alert puts the old picture
+ * back itself before it releases. */
+  int prev = fg_pre & PRE_FG ? (fg_pre & PRE_SLOT) - 1 : -1, p;
+
+  if (prev >= 0 && (proc_addr(prev)->p_flags & P_SLOT_FREE)) prev = -1;
+  fg_pre = 0;
+  lock();
+  last_buttons = (last_buttons & ~(FG_BITS | FG_LONG | FG_KILL | GE_OFF))
+					| (unsigned) (prev + 1) << 16;
+  unlock();
+  if (pre_rd != 0) {
+	p = pre_rd - 1;
+	pre_rd = 0;
+	reply(REVIVE, FS_PROC_NR, p, 0);
+  }
 }
 
 /*===========================================================================*
@@ -1675,7 +1900,7 @@ PRIVATE unsigned btn_sample()
   }
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
-	if (ev_head - ev_tail < NEVENTS) {
+	if ((u8_t) (ev_head - ev_tail) < NEVENTS) {
 		ev_key[ev_head % NEVENTS] = b;
 		ev_down[ev_head % NEVENTS] = (now & b) != 0;
 		if (now & b) LAT_EVENT(LE_BTN, b);
@@ -1683,7 +1908,7 @@ PRIVATE unsigned btn_sample()
 	}
   }
   last_buttons = now | flags;
-  if (rd_waiting) interrupt(PRINTER);
+  if (rd_waiting || (sel_wait & SEL_RD)) interrupt(PRINTER);
   return(now);
 }
 
@@ -1700,6 +1925,71 @@ int code, replyee, proc, status;
   m.REP_PROC_NR = proc;
   m.REP_STATUS = status;
   send(replyee, &m);
+}
+
+
+/*===========================================================================*
+ *				flipdev_notice				     *
+ *===========================================================================*/
+PRIVATE void nt_text(s, y)
+char *s;
+int y;
+{
+  const unsigned char *g;
+  int n = 0, x, row, col, px;
+
+  while (s[n] != 0) n++;
+  if (n > (LCD_W - 16) / 4) n = (LCD_W - 16) / 4;
+  x = (LCD_W - n * 4) / 2;
+  for (; n > 0; n--, s++, x += 4) {
+	if (*s < ' ' || *s > '~') continue;
+	g = font_4x6[*s - ' '];
+	for (row = 0; row < 6; row++)
+		for (col = 0, px = x; col < 4; col++, px++)
+			if (g[row] & (0x80 >> col))
+				fbuf[((y + row) >> 3) * LCD_W + px]
+					|= 1 << ((y + row) & 7);
+  }
+}
+
+PRIVATE void nt_box(l1, l2)
+char *l1, *l2;
+{
+/* A framed box with two lines in the middle of the screen, into fbuf. */
+  int x, y, edge;
+
+  for (y = 17; y <= 46; y++)
+	for (x = 4; x < LCD_W - 4; x++) {
+		edge = y == 17 || y == 46 || x == 4 || x == LCD_W - 5;
+		if (edge) fbuf[(y >> 3) * LCD_W + x] |= 1 << (y & 7);
+		else fbuf[(y >> 3) * LCD_W + x] &= ~(1 << (y & 7));
+	}
+  nt_text(l1, 23);
+  nt_text(l2, 34);
+}
+
+PRIVATE void nt_over()
+{
+/* N.6: while the card is out (or another one is in) the notice stays over
+ * every frame, whoever draws it. */
+  if ((nt_st & NT_KIND) == NT_OUT) nt_box("SD card removed", "Put it back");
+  if ((nt_st & NT_KIND) == NT_OTHER)
+	nt_box("Card not usable", "Put the original back");
+}
+
+PUBLIC void flipdev_notice(kind)
+int kind;
+{
+/* From the disk task (N.6): NT_OTHER, another card or one that does not
+ * answer: the notice stays until the card goes; 0, the card is back: the
+ * notice goes, and "carrying on" shows until the app's next frame. */
+  nt_st = (nt_st & ~NT_KIND) | (kind == NT_OTHER ? NT_OTHER | NT_NEW : 0);
+  if (kind != NT_OTHER) {
+	nt_box("SD card is back", "Carrying on");
+	lc_dirty = TRUE;
+  }
+  k_input = get_uptime();		/* the light on, as for a key */
+  interrupt(PRINTER);
 }
 
 
@@ -1827,14 +2117,15 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
   unsigned n = ir_count / 4 - hal_pulse_left();
 
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
-	hal_rfid_stop();		/* the DMA first, then the memory */
+	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
+	else hal_rfid_stop();		/* the DMA first, then the memory */
 	lock();
 	mt_arm(MT_PULSE, 0);
 	unlock();
 	n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
-  pm_busy &= ~PM_PULSE;
+  if (!rf_held) pm_busy &= ~PM_PULSE;	/* a held field still needs them */
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
   ir_rd = FALSE;
@@ -1852,6 +2143,11 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
  * tries both). */
 #define RF_MS		500
 #define RF_POLL_MS	20
+/* A held read follows a T5577 command, whose field gaps leave the antenna's
+ * envelope detector unsettled; the field stays up and the capture is armed
+ * only after it recovers (stock T5577_READ_SETTLE_MS).  No busy wait: the
+ * ms timer counts the delay out (R0.8b). */
+#define RF_SETTLE_MS	450
 
 PRIVATE int rfid_read(m_ptr, user, count)
 message *m_ptr;
@@ -1867,9 +2163,12 @@ int count;
   ir_started = ir_done = ir_paused = FALSE;
   pu_input = 2;
   rf_polls = 0;
+  rf_settle = rf_held ? (RF_SETTLE_MS / RF_POLL_MS) : 0;
+  if (rf_held) hal_rfid_pull(0);	/* the read path: PA2 low before the
+					 * settle, so the envelope settles low */
   proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
   ir_rd = TRUE;
-  if (hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
+  if (!rf_held && hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
 	ir_rd = FALSE;
 	proc_addr(ir_proc)->p_physio = FALSE;
 	return(ENXIO);
@@ -1883,9 +2182,19 @@ int count;
 
 PUBLIC void flipdev_pulse_poll()
 {
-/* The ms timer (interrupt): the RFID read's buffer is full, or its time
- * is up, or look again. */
+/* The ms timer (interrupt): a held read's field is settling, or the read's
+ * buffer is full, or its time is up, or look again. */
   if (!ir_rd || pu_input != 2) return;
+  if (rf_settle) {			/* field up, capture not yet armed */
+	if (--rf_settle == 0
+	    && hal_rfid_capture(ir_buf, (unsigned) ir_count / 4) < 0) {
+		ir_done = TRUE;
+		interrupt(PRINTER);
+		return;
+	}
+	mt_arm(MT_PULSE, RF_POLL_MS);
+	return;
+  }
   if (hal_pulse_left() == 0 || ++rf_polls >= RF_MS / RF_POLL_MS) {
 	ir_done = TRUE;
 	interrupt(PRINTER);
@@ -1898,6 +2207,111 @@ PRIVATE void rfid_tx_off()
   hal_rfid_stop();
   hal_ir_target(0);
   tx_rfid = FALSE;
+}
+
+/*===========================================================================*
+ *				rfid_field_off				     *
+ *===========================================================================*/
+PRIVATE void rfid_field_off()
+{
+/* R6.5 part 3: drop a field held up by RFIDIOCFIELD (ioctl, close or a
+ * cancel).  Any capture in flight is ended first. */
+  if (ir_rd && pu_input == 2) ir_rx_end(1);	/* cancel the capture */
+  hal_rfid_field(0);
+  rf_held = FALSE;
+  lock();
+  pm_busy &= ~PM_PULSE;			/* Stop2 again, also after a close */
+  unlock();
+}
+
+/*===========================================================================*
+ *				rfid_ioctl				     *
+ *===========================================================================*/
+PRIVATE int rfid_ioctl(m_ptr)
+message *m_ptr;
+{
+/* /dev/rfid (R6.5, <minix/rfid.h>): hold the 125 kHz field up across a
+ * T5577 command and its reply, or drop it. */
+  phys_bytes user;
+  int on;
+
+  if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
+  if (m_ptr->TTY_REQUEST != RFIDIOCFIELD) return(ENOTTY);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) sizeof(on));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
+  if (on) {
+	if (rf_held) return(OK);		/* already ours */
+	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0)
+		return(EBUSY);			/* TIM1, TIM2 */
+	hal_rfid_field(1);
+	rf_held = TRUE;
+	lock();
+	pm_busy |= PM_PULSE;			/* the carrier needs the clocks */
+	unlock();
+  } else if (rf_held) {
+	if (tx_on || (ir_rd && pu_input == 2)) return(EBUSY);	/* in flight */
+	rfid_field_off();
+  }
+  return(OK);
+}
+
+/*===========================================================================*
+ *				rfid_emu_start				     *
+ *===========================================================================*/
+PRIVATE int rfid_emu_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCEMU (R6.5 part 4): load the antenna in step with a reader's own
+ * carrier, from the caller's pattern, until it asks to stop (n = 0), closes
+ * or is cancelled.  Nothing runs on the CPU meanwhile: the reader's field
+ * clocks the timer and the DMA walks the pattern (hal_rfid_emulate).  The
+ * two buffers stay the caller's, pinned while this runs (R4b.5). */
+  struct rfid_emu e;
+  phys_bytes user, dur, pulse;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(e));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&e), (phys_bytes) sizeof(e));
+  if (e.n == 0) {				/* stop */
+	if (rf_emu == m_ptr->PROC_NR + 1) rfid_emu_off();
+	return(OK);
+  }
+  if (e.n > 512) return(EINVAL);
+  if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held) return(EBUSY);	/* TIM2 */
+  dur = numap(m_ptr->PROC_NR, (vir_bytes) e.dur, (vir_bytes) (e.n * 4));
+  pulse = numap(m_ptr->PROC_NR, (vir_bytes) e.pulse, (vir_bytes) (e.n * 4));
+  if (dur == 0 || pulse == 0) return(EFAULT);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA reads them */
+  if (hal_rfid_emulate(dur, pulse, e.n) < 0) {
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  rf_emu = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timer and DMA need the clocks */
+  unlock();
+  return(OK);
+}
+
+/*===========================================================================*
+ *				rfid_emu_off				     *
+ *===========================================================================*/
+PRIVATE void rfid_emu_off()
+{
+/* Stop emulating and let the pattern's memory go (and Stop2 in again). */
+  int pr;
+
+  if (rf_emu == 0) return;
+  hal_rfid_emulate_stop();
+  pr = rf_emu - 1;
+  rf_emu = 0;
+  proc_addr(pr)->p_physio = FALSE;
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
 }
 
 PRIVATE unsigned rf_durations(n)
@@ -2051,7 +2465,11 @@ int irq;
   }
   if (!update) return 1;			/* not the timer's update */
   if (tx_seg >= tx_total) {			/* the last one ended */
-	ir_stop_tx();
+	if (rf_held) {			/* keep the field up for the reply */
+		hal_ir_tx_stop();	/* the tx timer only, not the carrier */
+		hal_ir_carrier(1);	/* the 125 kHz field, continuous */
+	} else
+		ir_stop_tx();
 	tx_done = TRUE;
 	interrupt(PRINTER);
 	return 1;

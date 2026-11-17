@@ -189,6 +189,7 @@ ioctl (2) - control device
 creat (2) - create a new file
 fork (2) - create a new process
 pipe (2) - create an interprocess communication channel
+poll (2) - wait for one of several file descriptors
 setsid, getpgrp (2) - create process group, get process group id
 close (2) - delete a descriptor
 access (2) - determine accessibility of file

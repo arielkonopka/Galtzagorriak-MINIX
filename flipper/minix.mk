@@ -183,10 +183,10 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c fcache.c finst.c
+	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
-	   protect.c time.c lock.c misc.c utility.c table.c putk.c
+	   protect.c time.c lock.c misc.c utility.c table.c putk.c poll.c
 next_sym = $$($(NM) $(1) | awk '$$3 == "$(2)" { print "0x" $$1 }')
 
 $(MB)/mm/%.o: $(MROOT)/src/mm/%
@@ -293,17 +293,27 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid
+PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid \
+	    swapon
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power
+GUIAPPS	:= launcher info lights console power lfrfid
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
+# libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
+# runs them; furihello is also in the tests package (/usr/tests).
+ifeq ($(BOARD),qemu)
+UPROGS	+= furitest furihello
+endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su
+# Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
+# never swapped to the card in plain mode (spec R12.28).  login runs as
+# root without set-uid, so the set-uid rule alone would not cover it.
+SECRETPROGS := login passwd su swapsecret
 LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
@@ -339,9 +349,16 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
+CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
+CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
 			# files to ~7 KB (~3.5 KB copying all of it); out of memory -> <file>.save
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
+CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
+CHMEM_swapsecret := 32768
+CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
+CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 
@@ -404,31 +421,158 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 endef
 endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
+# libfuri core (spec R5.1, flipper/lib/furi): the stock furi API for apps
+# rebuilt from source.  Linked into each app until it moves into the shared
+# library (R2b.9, AC5.3).  C99 (the stock headers need it).
+FURI_DIR := lib/furi
+FURI_OBJ := $(addprefix $(MB)/furi/,thread.o sync.o timer.o record.o \
+	    string.o check.o fdwait.o port_minix.o ctx_arm.o)
+# libfuri GUI (spec R5.2): Canvas on u8g2, Gui, ViewDispatcher, modules.
+# Programs link with --gc-sections: only what an app calls is in flash.
+FURI_GUI_C := $(wildcard $(FURI_DIR)/src/gui/*.c $(FURI_DIR)/src/gui/modules/*.c \
+	    $(FURI_DIR)/src/gui/modules/widget_elements/*.c $(FURI_DIR)/u8g2/*.c)
+FURI_GUI_OBJ := $(patsubst $(FURI_DIR)/%.c,$(MB)/furi/%.o,$(FURI_GUI_C))
+FURI_HDR := $(wildcard $(FURI_DIR)/include/*.h $(FURI_DIR)/include/*/*.h \
+	    $(FURI_DIR)/include/gui/*/*.h $(FURI_DIR)/include/gui/modules/*/*.h \
+	    $(FURI_DIR)/src/*.h $(FURI_DIR)/src/gui/*.h $(FURI_DIR)/src/gui/*/*/*.h \
+	    $(FURI_DIR)/u8g2/*.h)
+FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
+FURI_GUI_CFLAGS = $(FURI_CFLAGS) -I$(FURI_DIR)/include/gui \
+	    -I$(FURI_DIR)/include/gui/modules -I$(FURI_DIR)/u8g2 -I$(FURI_DIR)/src/gui
+$(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(FURI_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/src/gui/%.o: $(FURI_DIR)/src/gui/%.c $(FURI_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/u8g2/%.o: $(FURI_DIR)/u8g2/%.c $(FURI_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/%.o: $(FURI_DIR)/src/%.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(MCFLAGS) -c $< -o $@
+$(MB)/libfuri.a: $(FURI_OBJ) $(FURI_GUI_OBJ)
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+.PHONY: libfuri
+libfuri: $(MB)/libfuri.a
+$(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
+# libapp (spec F.2, R7b.4, flipper/lib/app): timers, notifications,
+# settings for native apps.  Linked into each user until it moves into the
+# shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
+# use it; they ship as the package timed (/usr/lib).
+APP_DIR := lib/app
+APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o
+APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
+$(MB)/app/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/libapp.a: $(APP_OBJ)
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+.PHONY: libapp
+libapp: $(MB)/libapp.a
+TIMEDPROGS := timed alert
+$(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
+OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
+OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
+CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
+CHMEM_alert := 4096
+$(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
+OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_OBJ) $(FURI_GUI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
-TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck
+TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
+	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
+	   swaptime swaptime64 regtest
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
+TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
+endif
+# swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
+OBJS_swapsecret = $(MB)/cmd/test/swapper.o
+# swapsmall: the same, a small image (placement, AC12.10)
+OBJS_swapsmall = $(MB)/cmd/test/swapper.o
+# swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
+OBJS_swaptime64 = $(MB)/cmd/test/swaptime.o
+# regchild (issue #160): regtest's child, its own entry before crtso so
+# it sees the registers exactly as exec left them (regstart.S).
+$(MB)/cmd/test/regstart.o: tests/regstart.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
+$(MB)/user/regchild.elf: $(MB)/cmd/test/regstart.o $(MB)/cmd/test/regtest.o \
+		$(SHL)/stubs.o $(MB)/libc-static.a ld/user-shlibc.ld $(SHL)/shlibc-syms.ld
+	@mkdir -p $(dir $@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -Tld/user-shlibc.ld \
+	   -Wl,-Map=$@.map $(MB)/cmd/test/regstart.o $(MB)/cmd/test/regtest.o \
+	   $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $@
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS),$(eval $(call user_prog,$(p))))
+# The hardware self test (spec 7b.3): the app and its modules, package
+# stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
+# of packages are at most 13 characters).
+ST_MODS	:= board memory flash input av gpio
+STPROGS	:= selftest $(ST_MODS)
+$(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
+$(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
+CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
+			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
+CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
+CHMEM_input := 2048
+CHMEM_av := 2048
+CHMEM_gpio := 2048
+CHMEM_memory := 2048
+CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
-$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) tools/mkpkg.py
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar \
+	   $(PKGDIR)/stest_1.0.tar
+# Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
+BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
+$(BADPKGS) &: tools/mkbadpkg.py
+	python3 -I tools/mkbadpkg.py $(PKGDIR)/bad
+$(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(MB)/bin/regchild $(BADPKGS) tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n tests -v 1.0 -o $(PKGDIR) \
-	   -D "Security tests (spec Phase 1)" \
-	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755)
+	   -D "Security tests (spec Phases 1 and 3)" \
+	   $(foreach t,$(TESTS),/usr/tests/$(t)=$(MB)/bin/$(t)$(COMMA)755) \
+	   /usr/tests/regchild=$(MB)/bin/regchild$(COMMA)755 \
+	   $(foreach b,$(BADPKGS),/usr/tests/bad/$(notdir $(b))=$(b)$(COMMA)644)
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
+# Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
+$(PKGDIR)/timed_1.1.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+		rootfs/timed.postinst
+	python3 -I tools/mkpkg.py -n timed -v 1.1 -o $(PKGDIR) \
+	   --postinst rootfs/timed.postinst \
+	   -D "Timers and alerts for apps (timed, alert)" \
+	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
+# The hardware self test (spec 7b.3).
+$(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+		rootfs/selftest.postinst rootfs/selftest.prerm \
+		$(ST_MODS:%=rootfs/selftest/%.d)
+	python3 -I tools/mkpkg.py -n stest -v 1.0 -o $(PKGDIR) \
+	   --postinst rootfs/selftest.postinst --prerm rootfs/selftest.prerm \
+	   -D "Hardware self test (spec 7b.3)" \
+	   /usr/bin/selftest=$(MB)/bin/selftest$(COMMA)755 \
+	   $(foreach m,$(ST_MODS),/usr/lib/selftest/$(m)=$(MB)/bin/$(m)$(COMMA)755) \
+	   $(foreach m,$(ST_MODS),/usr/lib/selftest/$(m).d=rootfs/selftest/$(m).d$(COMMA)644)
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.78
+BASE_VER := 3.92
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -449,7 +593,7 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 		$(if $(filter 1,$(SHLIBC)),$(SHL)/libc.json)
 	@mkdir -p $(dir $@)
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
-	   $(ELF2MNX_LIBC)
+	   $(if $(filter $*,$(SECRETPROGS)),--secret) $(ELF2MNX_LIBC)
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
@@ -494,7 +638,7 @@ versioncheck:
 TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
 	   $(MROOT)/src/commands/sh $(MROOT)/src/commands/mined \
 	   $(MROOT)/src/commands/reboot/halt.c $(MROOT)/src/commands/reboot/log.c \
-	   cmds gui apps tests m2 $(MROOT)/src/tools/init.c \
+	   cmds gui apps lib/app tests m2 $(MROOT)/src/tools/init.c \
 	   $(LIBDIRS:%=$(MROOT)/src/lib/%) $(MROOT)/include
 .PHONY: timecheck check
 timecheck:

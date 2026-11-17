@@ -7,6 +7,13 @@ mythology.  This tree is MINIX 2.0.0 ported to run bare-metal on the Flipper Zer
 Flipper firmware.  The root file system lives on the microSD card.  A QEMU
 target (mps2-an386, also a Cortex-M4) runs the same system for testing.
 
+A machine's tribute to a machine: this project quietly honours AmigaOS.
+It was not the best system of its time, nor the worst, nor even the fastest,
+but it always answered: the pointer moved and a window could be dragged even
+while everything else had hung, and people loved it for that.  Galtzagorriak
+tries to keep that spirit: the screen and the buttons answer first, whatever
+the rest of the system is doing.
+
 The original PC sources are still here and the PC-specific code is
 untouched; the port adds a new machine type (MACHINE FLIPPER, CHIP ARM_CM).
 The full design, status and notes are in flipper/PORTING.md.

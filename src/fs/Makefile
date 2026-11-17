@@ -14,7 +14,7 @@ LDFLAGS = -i
 OBJ =	main.o open.o read.o write.o pipe.o \
 	device.o path.o mount.o link.o super.o inode.o \
 	cache.o cache2.o filedes.o stadir.o protect.o time.o \
-	lock.c misc.o utility.o table.o putk.o
+	lock.c misc.o utility.o table.o putk.o poll.o
 
 fs:	$(OBJ)
 	$(CC) -o $@ $(LDFLAGS) $(OBJ)

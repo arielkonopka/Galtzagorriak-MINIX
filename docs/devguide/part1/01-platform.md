@@ -53,8 +53,36 @@ and a copy on each switch.
 ### Threads
 
 There are none, and none are planned in the kernel. A second activity is a second process (with
-pipes or signals between the two), or an event loop in one process. Cooperative threads inside
-one process come with `libfuri` (Phase 5) for ported stock apps **(planned)**.
+pipes or signals between the two), or an event loop in one process.
+
+For ported stock apps, the `libfuri` core (spec R5.1, `flipper/lib/furi`) gives **cooperative
+threads inside one process** with the stock API (`furi_thread_*`, `furi_message_queue_*`,
+`furi_event_flag_*`, `furi_mutex_*`, `furi_semaphore_*`, `furi_timer_*`, records,
+`FuriString`, `furi_check`, `FURI_LOG_*`; `#include <furi.h>`, link `libfuri.a`). What to know:
+
+- A thread runs until it waits (queue, flags, mutex, semaphore, delay, join) or calls
+  `furi_thread_yield()`. Priorities are kept but not used. Timer callbacks run when a thread
+  waits or yields and must not block.
+- Thread stacks are cut from the program's stack gap, not the heap (MM accepts a stack pointer
+  only there), so the program's `chmem` must hold the main stack (libfuri leaves it 3 KB), every
+  thread stack and the heap. The C library's `printf` family alone needs about 1.2 KB of stack.
+  A 16-byte canary at the bottom of each stack is checked at every switch.
+- `furi_check`/`furi_crash` write the message to `/dev/log` and stderr and `abort()` the process;
+  the rest of the system keeps running.
+- When no thread is ready, the process sleeps in `poll()` (R4b.6) until the earliest delay or
+  timer, in ticks of 1/60 s: `furi_delay_ms(100)` takes 100–117 ms, a 20 ms timer fires every
+  one or two ticks. libfuri does not use `SIGALRM`.
+- A plain `read()` that blocks still stops every thread of the process. Inside libfuri (and for
+  R5.2/R5.4) the internal `ffd_read()`/`ffd_wait()` (`src/furi_i.h`) block only the calling
+  thread: the idle `poll()` also watches the fds threads wait for. Terminals and
+  `/dev/buttons` answer `DEV_SELECT`, so a waiting thread costs nothing until a key comes;
+  `ffd_read()` still reads with `O_NONBLOCK` and, when "ready" gave nothing (two threads on one
+  fd, or a device that counts as always ready), tries again once a tick or two instead of
+  spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
+- Costs on the device: about 13 KB of code (until it moves into the shared library), 84 B per
+  thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
+- Not from signal handlers. The GUI (R5.2) is in section 4.9; storage and HAL come with R5.3–R5.4
+  **(planned)**.
 
 ## 1.3 Program text runs from flash
 
@@ -114,11 +142,16 @@ What eats the reserve, from experience in this tree:
   call it in place, and each process keeps only its data (about 0.6 KB). Notable points:
   - POSIX.1 (1990) calls: files, directories, `fork`/`vfork`/`exec`, signals with
     `sigaction`, `termios`, `pipe`, `mkfifo`, `alarm`, `pause`, `sigsuspend`;
-  - **not present**: `select`/`poll` (`poll()` is spec R4b.6, **(planned)**), `usleep`,
+  - `poll()` (`<poll.h>`, R4b.6): pipes and FIFOs, character devices whose driver answers
+    `DEV_SELECT` (terminals, `/dev/buttons`, `/dev/speaker`; other devices count as always
+    ready), a timeout in ms rounded up to the 1/60 s tick, `EINTR` on a signal;
+  - **not present**: `select`, `usleep`,
     `nanosleep`, `setitimer`, `mmap`, sockets, threads, `setgroups` (R4b.4, **(planned)**);
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
   - `cfopen(path, mode)` reads a settings file from the card and falls back to the default in
     `/rom` (chapter 5);
+  - `snprintf`/`vsnprintf` store at most n - 1 characters and a null; unlike C99 they return
+    -1 when the output was cut (use them for every path or line built from outside data);
   - `printf` handles floating point, in software. Floating point is slow and makes code bigger;
     integer arithmetic (millivolts, tenths of a degree) is the habit here.
 - **Headers**: `<minix/...>` for system-specific things such as `<minix/fg.h>` (foreground

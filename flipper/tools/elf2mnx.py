@@ -61,6 +61,7 @@ PC_RELATIVE = {
 }
 SHN_UNDEF, SHN_ABS = 0, 0xFFF1
 A_EXEC, A_SEP, A_ARMCM, A_LIBC = 0x10, 0x20, 0x18, 0x08
+A_NOSWAP = 0x80      # never swapped in plain mode (Secret: yes, R12.28)
 A_DATA_LINK = 0x10000000
 # Resolved at link time against the GOT origin (= start of data): no fixup.
 GOT_RELATIVE = {24, 26}    # R_ARM_GOTOFF32, R_ARM_GOT_BREL
@@ -73,6 +74,9 @@ def main():
     ap.add_argument("--stack", type=int, default=6144,
                     help="bytes for stack and heap (like chmem)")
     ap.add_argument("--libc", help="shared libc description (mkshlibc.py)")
+    ap.add_argument("--secret", action="store_true",
+                    help="A_NOSWAP: it holds secrets, never swap it in "
+                    "plain mode (Secret: yes, spec R12.28)")
     a = ap.parse_args()
     a.lib = None
     if a.libc:
@@ -165,7 +169,8 @@ def main():
         stream.append(0)
 
     a_total = a_text + a_data + a_bss + a.stack
-    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC, A_ARMCM, 32, 0, GZ_ABI,
+    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03,
+                      A_EXEC | (A_NOSWAP if a.secret else 0), A_ARMCM, 32, 0, GZ_ABI,
                       a_text, a_data, a_bss, e_entry, a_total, 0)
     with open(a.out, "wb") as f:
         f.write(hdr + image + stream)
@@ -280,7 +285,7 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     a_text, a_data = len(t_bytes), len(data)
     a_total = a_data + a_bss + a.stack
     crc = zlib.crc32(t_bytes) & 0xFFFFFFFF
-    flags = A_EXEC | A_SEP | (A_LIBC if lib else 0)
+    flags = A_EXEC | A_SEP | (A_LIBC if lib else 0) | (A_NOSWAP if a.secret else 0)
     hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, flags, A_ARMCM,
                       48 if lib else 32, 0, GZ_ABI, a_text, a_data, a_bss,
                       e_entry, a_total, crc)

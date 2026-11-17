@@ -117,11 +117,69 @@ wants a password only answers now and then.
 `-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
 word (some door entry systems try to overwrite a copy they find). Write the password down:
 changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
-unless `-pass` gives a new one). A tag written by another cloner may have a password you do
-not know; then it cannot be rewritten. `-lock` instead sets the chip's lock bit, which can
+unless `-pass` gives a new one). `-lock` instead sets the chip's lock bit, which can
 never be undone by anyone, you included. A write to `/dev/rfid` is
 a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
-spaces. Emulating a tag is **(planned)**.
+spaces.
+
+### Emulating a tag
+
+`rfid emulate EM B0 B1 B2 B3 B4` makes the Flipper pretend to be that EM4100 tag for a
+reader — hold its back to the reader, Ctrl-C stops:
+
+```
+rfid emulate EM 04 00 98 3D C5
+emulating EM4100 04 00 98 3D C5; hold to a reader, Ctrl-C to stop
+```
+
+The reader's own field is the clock: the kernel counts the reader's carrier and loads the
+antenna in step with it (`ioctl` `RFIDIOCEMU` on `/dev/rfid`), so the waveform cannot drift and
+the CPU does nothing while it runs. With no reader near, nothing is sent (a tag is passive).
+Only EM4100 is emulated for now; the other protocols (HID, Indala) are **(planned)**.
+
+### The RFID app
+
+The **RFID** app on the launcher ties reading, saving, writing and emulating together:
+
+- **Read** — hold a tag to the back; the number is shown, OK saves it to the SD card as
+  `/home/lfrfid/<number>.rfid` (the stock `.rfid` format).
+- **Saved** — the saved numbers; pick one to **Emulate** (hold the Flipper to a reader),
+  **Write to tag** (onto a blank fob) or **Delete**.
+- **Add manually** — type a number (Left/Right pick a byte, Up/Down change it) and save it.
+
+Reading and writing use the `rfid` command underneath; emulating is `RFIDIOCEMU`.
+
+### Clearing a password and reading blocks
+
+A tag written by a hardware cloner is often locked with a password, so `rfid write` says
+"not written". `rfid clear` takes the password off and makes the tag programmable again:
+
+```
+rfid clear
+sweeping 126 known passwords...
+cleared with 51243648 (a known password): programmable again
+```
+
+It writes block 0 with the password bit clear (which is the whole of removing a password) and
+reads it back to check, trying no password first, then one given with `-with HEX`, then a
+built-in list of the passwords hardware cloners and tools commonly set (from the proxmark3
+project). It stops at the first that opens the tag. Many cloners use one of these known
+passwords, so a tag they locked is usually recoverable; a truly random password (2^32 of them)
+is not, and `rfid clear` says so. The tag's EM4100 number is untouched — only the password is
+removed — so after `rfid clear` you can `rfid write` a new number. `-n N` sets how many times
+each password is tried (default 20).
+
+`rfid dump [BLOCK]` reads one of a T5577's eight blocks (0 by default) and prints its 32-bit
+word; block 0 is the configuration, block 7 holds the password. `-with HEX` sends a password,
+needed to read a protected tag's blocks:
+
+```
+rfid dump 0
+block 0: 00052010
+```
+
+A tag that is read-only (a plain EM4100 chip, not a T5577), or protected and read without
+`-with`, ignores the command and keeps broadcasting its number; `rfid dump` says so.
 
 ## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
 
@@ -129,7 +187,8 @@ The Flipper's real-time clock keeps UTC on the battery, also while the Flipper i
 the time (`date`) now writes it too, so the time survives a reset and power-off, and every
 program reads the time from it.
 
-Alarm A of the clock is for the timers and the alarm clock (spec F.2, coming with `timed`); the
+Alarm A of the clock is for the timers and the alarm clock (spec F.2, `timed`: see
+[Timers and alerts](timers.md)); the
 `rtc` command is the tool underneath, for root and the group `timers`:
 
 ```
@@ -165,6 +224,18 @@ ir rx -r -d /dev/subghzraw
 
 Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
 fills up with noise at once; FSK remotes (many car keys) do not show at all.
+
+## Random numbers (`/dev/random`)
+
+Everybody may read it: the STM32WB's true random number generator, with its seed and clock error
+checks (spec R3.1). `passwd` takes its salts from it, `pkg` its scratch names. A read may come
+back short while the radio core holds the generator; read again for the rest. Writing is accepted
+and dropped.
+
+**In QEMU it is not random**: the emulated board has no generator, so the numbers come from a
+generator seeded with the uptime in milliseconds (the same sequence for the same boot timing).
+Good enough to test with, never for keys. For the same reason (QEMU is slow at SHA-256) `passwd`
+in QEMU builds hashes with the fewest rounds, 1000 (`$5$rounds=1000$`); the Flipper uses 5000.
 
 ## The status LED (`/dev/led`)
 

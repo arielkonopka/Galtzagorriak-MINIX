@@ -58,5 +58,13 @@ EXTERN struct mproc {
 				 * until exec or exit (R2c.1) */
 #define VFORKING	02000	/* waits in vfork for that child; signals to
 				 * it wait too (its stack is in use) */
+#define SWAPPED		04000	/* image on the swap device (R12.4) */
+#define NOSWAP	       010000	/* set-uid/set-gid or Secret: yes image: never
+				 * swapped in plain mode (R12.28) */
+#define FGEXEC	       020000	/* its next child's exec is the foreground app
+				 * (launcher, R12.22); passed on by fork */
+#define FGAPP	       040000	/* the foreground app or a child of it: placed
+				 * low, never swapped (R12.22, AC12.R3) */
+#define SWAPBAD	      0100000	/* swap-in failed: to be killed (R12.25) */
 
 #define NIL_MPROC ((struct mproc *) 0)

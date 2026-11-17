@@ -24,6 +24,12 @@
  *
  *		Customizable login banner.
  *		11/13/95	Kees J. Bot
+ *
+ *		Galtzagorriak (spec R3.4): while root has no password, the
+ *		first terminal to get a person sets one (passwd root) before
+ *		it shows "login:".  /etc/rc never waits for it, so the
+ *		launcher starts on a Flipper with no USB host.
+ *		2026-11-17
  */
 
 #include <sys/types.h>
@@ -35,6 +41,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
+#include <pwd.h>
 
 char LOGIN[] =		"/bin/login";
 char ULOGIN[] =		"/usr/bin/login";
@@ -94,6 +102,50 @@ int areadch(void)
   }
 
   return(ch1 & 0xFF);
+}
+
+
+/* Does root have a password?  The question login asks: does the empty
+ * password match root's hash ("##root" asks /etc/shadow through pwdauth,
+ * which answers us, uid 0, without the 2 s delay).
+ */
+int root_has_password(void)
+{
+  struct passwd *pw;
+
+  if ((pw = getpwnam("root")) == NULL) return 1;	/* nothing to set */
+  return strcmp(crypt("", pw->pw_passwd), pw->pw_passwd) != 0;
+}
+
+
+/* First boot (R3.4): ask for root's password on this terminal before any
+ * login.  Waits for Enter, so that it does not run on a line with nobody
+ * at it; init restarts us if passwd is interrupted.
+ */
+void first_password(void)
+{
+  int ch, status;
+  pid_t pid;
+
+  while (!root_has_password()) {
+	std_out("\nFirst boot: root has no password yet.  "
+					"Press Enter to set one.\n");
+	do {
+		ch = areadch();
+	} while (ch != '\n');
+	if ((pid = fork()) == 0) {
+		execl("/bin/passwd", "passwd", "root", (char *) NULL);
+		std_out("getty: cannot run /bin/passwd\n");
+		_exit(1);
+	}
+	if (pid < 0) {
+		std_out("getty: cannot fork\n");
+		sleep(2);
+		continue;
+	}
+	while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+	sync();
+  }
 }
 
 
@@ -227,6 +279,8 @@ int main(int argc, char **argv)
   sa.sa_handler = sigcatch;
   sigaction(SIGUSR1, &sa, NULL);
   sigaction(SIGUSR2, &sa, NULL);
+
+  first_password();		/* root has none yet: set it (R3.4) */
 
   do_getty(name, sizeof(name), argv+1);	/* handle getty() */
   name[29] = '\0';		/* make sure the name fits! */

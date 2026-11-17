@@ -56,7 +56,7 @@ PUBLIC int do_vfork()
 
   if (mp->mp_flags & VFORKED) return(EAGAIN);	/* as do_fork */
   for (q = &mproc[0]; q < &mproc[NR_PROCS]; q++)
-	if (q != mp && (q->mp_flags & IN_USE)
+	if (q != mp && (q->mp_flags & IN_USE) && !(q->mp_flags & SWAPPED)
 			&& q->mp_seg[D].mem_phys == mp->mp_seg[D].mem_phys)
 		return(fork_proc(FALSE));
   return(fork_proc(TRUE));
@@ -121,8 +121,16 @@ int vfork;			/* vfork: no copy, the parent waits */
 #if (SHADOWING == 0)
   prog_bytes = (phys_bytes) prog_clicks << CLICK_SHIFT;
 #endif
-  if (!vfork && (child_base = alloc_mem(prog_clicks)) == NO_MEM)
-	return(ENOMEM);
+  if (!vfork) {
+	child_base = alloc_mem(prog_clicks);
+#if (CHIP == ARM_CM)
+	if (child_base == NO_MEM) {
+		sw_room(prog_clicks);	/* R12.5: swap idle ones out, once */
+		child_base = alloc_mem(prog_clicks);
+	}
+#endif
+	if (child_base == NO_MEM) return(ENOMEM);
+  }
 
 #if (SHADOWING == 0)
   /* Create a copy of the parent's core image for the child. */
@@ -140,6 +148,9 @@ int vfork;			/* vfork: no copy, the parent waits */
   child_nr = (int)(rmc - mproc);	/* slot number of the child */
   procs_in_use++;
   *rmc = *rmp;			/* copy parent's process slot to child's */
+#if (CHIP == ARM_CM)
+  rmp->mp_flags &= ~FGEXEC;	/* the child execs the foreground app */
+#endif
 
   rmc->mp_parent = who;		/* record child's parent */
   rmc->mp_flags &= ~TRACED;	/* child does not inherit trace status */
@@ -224,6 +235,9 @@ int exit_status;		/* the process' exit status (for parent) */
   phys_clicks base, size, s;		/* base and size used on 68000 only */
 
   proc_nr = (int) (rmp - mproc);	/* get process slot number */
+#if (CHIP == ARM_CM)
+  sw_touch(proc_nr);		/* no reserve swap-out of it (swap.c) */
+#endif
 
   /* Remember a session leader's process group. */
   procgrp = (rmp->mp_pid == mp->mp_procgrp) ? mp->mp_procgrp : 0;
@@ -237,6 +251,11 @@ int exit_status;		/* the process' exit status (for parent) */
 #if (SHADOWING == 1)
   /* a vfork child's memory is its parent's: kept, the parent goes on */
   if (rmp->mp_flags & VFORKED) vfork_done(rmp);
+#if (CHIP == ARM_CM)
+  /* swapped: its RAM was freed at swap-out, its slot is free now; killed
+   * without a swap-in (R12.6) */
+  else if (rmp->mp_flags & SWAPPED) rmp->mp_flags &= ~(SWAPPED | SWAPBAD);
+#endif
   else free_mem(base, size);
 #endif
 
@@ -259,6 +278,12 @@ int exit_status;		/* the process' exit status (for parent) */
 	right_child = TRUE;		/* child meets one of the 3 tests */
   else
 	right_child = FALSE;		/* child fails all 3 tests */
+#if (CHIP == ARM_CM)
+  /* A swapped parent comes back first; if it cannot yet, the child waits
+   * as a zombie and swap.c retries (R12.6). */
+  if (parent_waiting && right_child && sw_in(&mproc[rmp->mp_parent]) != OK)
+	right_child = FALSE;
+#endif
   if (parent_waiting && right_child)
 	cleanup(rmp);			/* tell parent and release child slot */
   else
@@ -346,6 +371,30 @@ PUBLIC int do_waitpid()
 	return(ECHILD);			     /* no - parent has no children */
   }
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				wait_retry				     *
+ *===========================================================================*/
+PUBLIC void wait_retry(rmp)
+struct mproc *rmp;		/* waits, back from swap: did a child exit? */
+{
+  struct mproc *c;
+  pid_t w = rmp->mp_wpid;
+
+  if (!(rmp->mp_flags & WAITING)) return;
+  for (c = &mproc[0]; c < &mproc[NR_PROCS]; c++) {
+	if ((c->mp_flags & (IN_USE | HANGING)) != (IN_USE | HANGING)
+				|| c->mp_parent != (int) (rmp - mproc))
+		continue;
+	if (w == -1 || w == c->mp_pid || -w == c->mp_procgrp) {
+		cleanup(c);
+		return;
+	}
+  }
+}
+#endif
 
 
 /*===========================================================================*

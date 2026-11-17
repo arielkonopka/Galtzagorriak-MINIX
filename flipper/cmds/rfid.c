@@ -25,6 +25,25 @@
  *		  -lock			the T5577 lock bit instead: the
  *					blocks can then never be written
  *					again, by anyone, you included
+ *		rfid clear [-with HEX] [-n N]
+ *					remove a T5577 password and make the
+ *					tag programmable again: write block 0 =
+ *					CONFIG_OPEN (clears the password bit),
+ *					verified by reading it back.  Tries no
+ *					password, -with HEX, then the proxmark3
+ *					dictionary (known copier passwords); it
+ *					stops at the first that opens the tag
+ *		rfid dump [-with HEX] [BLOCK]
+ *					read one T5577 block (0 by default) and
+ *					print its 32-bit word (block 0 is the
+ *					configuration); -with sends a password
+ *
+ * A block read holds the 125 kHz field up (ioctl RFIDIOCFIELD) across the
+ * read command (field gaps, a write) and the tag's reply (comparator edges,
+ * a read); the reply is the block's 32-bit word repeated, decoded here as
+ * the EM4100 front-end decodes Manchester.  A read-only EM4100, or a
+ * password-protected T5577 read without -with, ignores the command and keeps
+ * broadcasting its number instead.
  *
  * Writing a T5577 is done by gaps in the 125 kHz field, with the stock
  * firmware's timings (lib/lfrfid/tools/t5577.c, in carrier periods of
@@ -38,6 +57,8 @@
  * bits, a 0.  Other kinds (HID, Indala: FSK, PSK) are shown as a summary.
  */
 #include <sys/types.h>
+#include <sys/ioctl.h>
+#include <minix/rfid.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +70,7 @@
 
 static unsigned long d[MAXD];
 static unsigned char h[MAXH];		/* half bits */
+static unsigned char decbits[MAXH / 2];	/* decoded bits (em_decode, t5_word) */
 
 static int em_frame(const unsigned char *b, int n, unsigned char id[5])
 {
@@ -84,45 +106,51 @@ static int em_frame(const unsigned char *b, int n, unsigned char id[5])
  * boundary, which decides a period of 3 by where it starts in the bit
  * grid (2 and 4 are clear).  Both edge kinds, both grids and both
  * polarities are tried; the frame's parities pick the right one. */
+/* Decode one phase (off) and grid of the capture durations d[0..nd-1] into
+ * decbits[] (0/1), the RF/64 Manchester bits; returns the bit count.  Used
+ * by em_decode (EM4100 frame) and the T5577 block decoders. */
+static int t5_manchester(int nd, int off, int grid)
+{
+	int i, nh = 0, pos = grid, nb = 0;
+
+	for (i = off; i + 1 < nd && nh < MAXH - 4; i += 2) {
+		unsigned long t = d[i] + d[i + 1];
+		int p = (int) ((t + 128) / 256), a, b;
+
+		if (p < 2 || p > 4 || t < 400 || t > 1150) {
+			nh = 0;			/* not Manchester: start again */
+			pos = grid;
+			continue;
+		}
+		if (p == 2) a = b = 1;
+		else if (p == 4) {
+			if ((pos & 1) == 0) { nh = 0; pos = grid; continue; }
+			a = b = 2;
+		} else if (pos & 1) { a = 2; b = 1; }
+		else { a = 1; b = 2; }
+		while (a-- > 0) h[nh++] = 1;
+		while (b-- > 0) h[nh++] = 0;
+		pos += p;
+	}
+	for (i = grid ? 1 : 0; i + 1 < nh; i += 2) {
+		if (h[i] == h[i + 1]) { nb = 0; continue; }
+		decbits[nb++] = h[i + 1];
+	}
+	return nb;
+}
+
 static int em_decode(int nd, unsigned char id[5])
 {
-	static unsigned char bits[MAXH / 2];
-	int off, grid, i, nh, pos, nb, inv, s, j;
+	int off, grid, inv, s, j, nb;
 
 	for (off = 0; off < 2; off++)
 	for (grid = 0; grid < 2; grid++) {
-		nh = 0;
-		pos = grid;			/* the half bit's place in a bit */
-		for (i = off; i + 1 < nd && nh < MAXH - 4; i += 2) {
-			unsigned long t = d[i] + d[i + 1];
-			int p = (int) ((t + 128) / 256), a, b;
-
-			if (p < 2 || p > 4 || t < 400 || t > 1150) {
-				nh = 0;		/* not EM: start again */
-				pos = grid;
-				continue;
-			}
-			if (p == 2) a = b = 1;
-			else if (p == 4) {
-				if ((pos & 1) == 0) { nh = 0; pos = grid; continue; }
-				a = b = 2;
-			} else if (pos & 1) { a = 2; b = 1; }
-			else { a = 1; b = 2; }
-			while (a-- > 0) h[nh++] = 1;
-			while (b-- > 0) h[nh++] = 0;
-			pos += p;
-		}
-		/* pairs from the grid: h[0] is at place grid */
-		nb = 0;
-		for (i = grid ? 1 : 0; i + 1 < nh; i += 2) {
-			if (h[i] == h[i + 1]) { nb = 0; continue; }
-			bits[nb++] = h[i + 1];
-		}
+		nb = t5_manchester(nd, off, grid);
 		for (inv = 0; inv < 2; inv++)
 			for (s = 0; s + 64 <= nb; s++) {
 				unsigned char b64[64];
 
-				for (j = 0; j < 64; j++) b64[j] = bits[s + j] ^ inv;
+				for (j = 0; j < 64; j++) b64[j] = decbits[s + j] ^ inv;
 				if (em_frame(b64, 64, id)) return 1;
 			}
 	}
@@ -258,13 +286,13 @@ static int verify(int fd, unsigned char id[5], unsigned char got[5])
 	return -1;
 }
 
-static int write_em(unsigned char id[5], int tries)
+/* The 64 EM4100 bits of a number into b[64]: nine 1s, ten rows of 4 data
+ * bits and their even parity, four column parities, a 0. */
+static void em_bits(unsigned char id[5], unsigned char b[64])
 {
-	unsigned char b[64], got[5];
-	unsigned long blk[2], rev[2];
-	int r, c, p, i, fd, v;
+	int r, c, p;
 
-	for (i = 0; i < 9; i++) b[i] = 1;
+	for (r = 0; r < 9; r++) b[r] = 1;
 	for (r = 0; r < 10; r++) {
 		int nib = id[r / 2] >> (r % 2 ? 0 : 4) & 15;
 
@@ -281,6 +309,15 @@ static int write_em(unsigned char id[5], int tries)
 		b[59 + c] = p;
 	}
 	b[63] = 0;
+}
+
+static int write_em(unsigned char id[5], int tries)
+{
+	unsigned char b[64], got[5];
+	unsigned long blk[2], rev[2];
+	int r, c, p, i, fd, v;
+
+	em_bits(id, b);
 	blk[0] = blk[1] = rev[0] = rev[1] = 0;
 	for (i = 0; i < 64; i++) blk[i / 32] = blk[i / 32] << 1 | b[i];
 	for (i = 63; i >= 0; i--) rev[i / 32] = rev[i / 32] << 1 | b[i];
@@ -358,10 +395,351 @@ static int copy_em(int tries)
 	return write_em(id, tries);
 }
 
+/* ---- reading a T5577 block (R6.5 part 3) ----
+ *
+ * The field is held up (RFIDIOCFIELD) across a read command and the tag's
+ * reply: a write plays the command's field gaps, a read captures the
+ * reply's comparator edges.  The command is built as stock t5577.c's
+ * fixed-bit-length downlink: opcode (not-test, page), lock, block, each
+ * bit a field-on run (24 or 56 carrier periods) then a gap (18).  A read
+ * is the opcode alone; a regular read (opcode, no address) puts the tag
+ * back to broadcasting its data blocks. */
+#define T_PAGE0		0
+
+static void t5_bits(unsigned long v, int n)	/* n bits, MSB first */
+{
+	int i;
+	for (i = n - 1; i >= 0; i--) wbit((int) (v >> i) & 1);
+}
+
+/* Build a read command for one block into d[] (nt).  with_pass sends the
+ * tag's password first, as a protected tag requires. */
+static void t5_read_cmd(int block, int with_pass, unsigned long pass)
+{
+	nt = 0;
+	put(1, T_WAIT);			/* let the tag charge */
+	put(0, 30);			/* start gap: stock's 30 Tc exactly (a
+					 * longer one can read as a reset) */
+	wbit(1); wbit(T_PAGE0);		/* opcode: not test mode, page 0 */
+	if (with_pass) t5_bits(pass, 32);
+	wbit(0);			/* lock bit */
+	t5_bits((unsigned long) block, 3);
+}
+
+/* Decode the capture durations d[0..nd-1] as ASK/Manchester (RF/64, as the
+ * EM4100 front-end) and find the 32-bit word that repeats every 32 bits: a
+ * block read's answer repeats its word forever, where the EM4100 broadcast
+ * is 64 bits and does not.  Returns the repeat count (>=2 means a block
+ * answered), the word (one arbitrary rotation) in *word.  Tries both edge
+ * phases and grids; the word's polarity may be inverted (try ~word too). */
+static int t5_word(int nd, unsigned long *word)
+{
+	int off, grid, i, nb, s, bestc = 0;
+	unsigned long best = 0;
+
+	for (off = 0; off < 2; off++)
+	for (grid = 0; grid < 2; grid++) {
+		nb = t5_manchester(nd, off, grid);
+		for (s = 0; s + 64 <= nb; s++) {	/* a 32-bit window */
+			unsigned long w = 0;
+			int c, t2;
+
+			for (i = 0; i < 32; i++)
+				if (decbits[s + i] != decbits[s + 32 + i]) break;
+			if (i < 32) continue;		/* not period 32 here */
+			for (i = 0; i < 32; i++) w = (w << 1) | decbits[s + i];
+			c = 1;
+			for (t2 = s + 32; t2 + 32 <= nb; t2 += 32) {
+				for (i = 0; i < 32; i++)
+					if (decbits[t2 + i] != decbits[s + i]) break;
+				if (i < 32) break;
+				c++;
+			}
+			if (c > bestc) { bestc = c; best = w; }
+		}
+	}
+	*word = best;
+	return bestc;
+}
+
+/* 1 if the 32-bit word `expected` is what a block answered, at any bit
+ * alignment or polarity: the answer repeats every 32 bits, so sliding one
+ * bit covers every rotation, and the detector's polarity is unknowable, so
+ * both readings count (stock t5577_block_holds).  `expected` must not be
+ * 0 or ~0, which cannot be told from their own inverse. */
+static int t5_holds(int nd, unsigned long expected)
+{
+	int off, grid, i, nb, s;
+
+	for (off = 0; off < 2; off++)
+	for (grid = 0; grid < 2; grid++) {
+		nb = t5_manchester(nd, off, grid);
+		for (s = 0; s + 32 <= nb; s++) {
+			unsigned long w = 0;
+
+			for (i = 0; i < 32; i++) w = (w << 1) | decbits[s + i];
+			if (w == expected
+			    || ((~w) & 0xFFFFFFFFUL) == expected) return 1;
+		}
+	}
+	return 0;
+}
+
+/* Put the tag back to broadcasting its blocks (opcode alone). */
+static void t5_regular_read(void)
+{
+	nt = 0;
+	put(1, T_WAIT);
+	put(0, T_START_GAP);
+	wbit(1); wbit(T_PAGE0);
+}
+
+/* One held exchange: send the command, then capture the reply.  The command
+ * in d[] is already on the wire before the reply is read, so the reply
+ * reuses d[].  The field is already held.  Returns reply durations, or -1. */
+static int t5_exchange(int fd, int with_pass, unsigned long pass, int block)
+{
+	int n;
+
+	t5_read_cmd(block, with_pass, pass);
+	if (send(fd) < 0) return -1;		/* the command's field gaps */
+	if ((n = read(fd, d, sizeof(d))) < 0) {	/* the reply (settled) */
+		perror("rfid: read");
+		return -1;
+	}
+	return n / 4;
+}
+
+/* T5577 configuration words (block 0), from stock lib/lfrfid/tools/t5577.h
+ * (proxmark3 bit definitions). */
+#define T5_CFG_OPEN	0x00148040UL	/* RF/64 Manchester, 2 blocks, PWD clear:
+				 * clearing the password bit is the whole of
+				 * removing a password (proxmark3 does the same),
+				 * and an EM4100 asks for this word anyway */
+#define T5_CFG_BLANK	0x000880E0UL	/* RF/32 Manchester, 7 data blocks: the
+					 * blank `lf t55xx wipe` leaves */
+#define T5_PWD_BIT	0x00000010UL
+
+/* Read block `blk` through the held field (open, command, capture, leave the
+ * tag broadcasting, drop the field).  Returns reply edge count in d[], or -1. */
+static int t5_read_block(int blk, int with_pass, unsigned long pass)
+{
+	int fd, n, on = 1, off = 0;
+
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) { perror("rfid"); return -1; }
+	if (ioctl(fd, RFIDIOCFIELD, &on) < 0) {
+		perror("rfid: field"); close(fd); return -1;
+	}
+	n = t5_exchange(fd, with_pass, pass, blk);
+	t5_regular_read();			/* leave it broadcasting */
+	(void) send(fd);
+	ioctl(fd, RFIDIOCFIELD, &off);
+	close(fd);
+	return n;
+}
+
+/* Write block 0 = `data`, sending `sendpass` first if the tag wants one
+ * (0 for none), through the ordinary (field-dropped) write path. */
+static int t5_write_block0(unsigned long data, unsigned long sendpass)
+{
+	int fd, r;
+
+	if ((fd = open("/dev/rfid", O_WRONLY)) < 0) { perror("rfid"); return -1; }
+	wsend = sendpass;
+	wlock = 0;
+	nt = 0;
+	wblock(0, data);
+	wreset();
+	r = send(fd);
+	close(fd);
+	return r;
+}
+
+#include "t5577_dict.h"
+
+/* Try one candidate password: write block 0 = CONFIG_OPEN sending `cand`
+ * (0 = no password), then read block 0 back with no password.  The write
+ * clears the password bit only if `cand` is the tag's password (or it had
+ * none), and only then does a no-password read return CONFIG_OPEN.  1 if
+ * the tag opened, 0 if not, -1 on an IO error. */
+static int clear_try(unsigned long cand)
+{
+	int n;
+
+	if (t5_write_block0(T5_CFG_OPEN, cand) < 0) return -1;
+	n = t5_read_block(0, 0, 0);
+	if (n < 0) return -1;
+	return t5_holds(n, T5_CFG_OPEN) ? 1 : 0;
+}
+
+/* rfid clear [-with HEX] [-n N]: remove a T5577 password and return the tag
+ * to a standard, programmable EM4100 configuration, by writing block 0 =
+ * CONFIG_OPEN (which clears the password bit) and reading it back.  Tries no
+ * password, the one given with -with, then the proxmark3 dictionary (known
+ * copier and default passwords), and stops at the first that opens the tag -
+ * a password frame sent to an already-open tag is read off the wrong bit
+ * positions and can hit the lock bit (stock scene_clear). */
+static int clear_t5(unsigned long withpass, int haswith, int tries)
+{
+	int n, t, r;
+	unsigned long w;
+	unsigned i;
+
+	n = t5_read_block(0, 0, 0);		/* see the tag first */
+	if (n >= 0 && t5_word(n, &w) >= 2 && t5_holds(n, T5_CFG_OPEN)) {
+		printf("already open: block 0 is CONFIG_OPEN (%08lX), "
+			"no password\n", T5_CFG_OPEN);
+		return 0;
+	}
+
+	/* No password, then the one typed, each tried a few times (a T5577
+	 * write only lands when a gap falls where the tag listens). */
+	for (t = 0; t < tries; t++) {
+		if ((r = clear_try(0)) < 0) return 1;
+		if (r) { printf("cleared: the tag had no password; it is "
+				"programmable again\n"); return 0; }
+	}
+	if (haswith) for (t = 0; t < tries; t++) {
+		if ((r = clear_try(withpass)) < 0) return 1;
+		if (r) { printf("cleared with %08lX: programmable again\n",
+				withpass); return 0; }
+	}
+
+	/* The dictionary: one try each (the field is re-raised per write, so a
+	 * flaky write just misses that word; the common passwords are few). */
+	printf("sweeping %u known passwords...\n", (unsigned) T5_DICT_N);
+	for (i = 0; i < T5_DICT_N; i++) {
+		if ((i & 15) == 0 && i) printf("  %u/%u\n", i, (unsigned) T5_DICT_N);
+		if ((r = clear_try(t5_dict[i])) < 0) return 1;
+		if (r) {
+			printf("cleared with %08lX (a known password): "
+				"programmable again\n", t5_dict[i]);
+			return 0;
+		}
+	}
+	printf("not cleared: no password opened the tag.\n"
+		"Either the block 0 lock bit is set (permanent, not clearable "
+		"by any tool), or it carries a password not in the list - "
+		"a hardware copier may have set a random one.\n");
+	return 1;
+}
+
+/* rfid dump [-with HEX] [BLOCK]: read one T5577 block (0 by default) and
+ * print its 32-bit word.  A T5577 answers a block read with its word; a tag
+ * that ignores the command (a read-only EM4100, or a password-protected one
+ * read without its password) is still broadcasting its EM4100 number. */
+static int dump_block(int block, int with_pass, unsigned long pass)
+{
+	int n;
+	unsigned long w;
+	unsigned char id[5];
+
+	n = t5_read_block(block, with_pass, pass);
+	if (n < 0) return 1;
+	if (t5_word(n, &w) >= 2)
+		printf("block %d: %08lX\n", block, w);
+	else if (em_decode(n, id))
+		printf("block %d: no T5577 word; the tag is broadcasting "
+			"EM4100 %02X %02X %02X %02X %02X (read-only, or "
+			"password-protected and read without -with)\n",
+			block, id[0], id[1], id[2], id[3], id[4]);
+	else
+		printf("block %d: no answer (hold the tag to the back)\n", block);
+	return 0;
+}
+
+/* rfid emulate EM B0 B1 B2 B3 B4: be an EM4100 tag of that number for a
+ * reader, until stopped (Ctrl-C).  The reader's field is the clock; the
+ * kernel loads the antenna in step with it (RFIDIOCEMU), so the waveform
+ * cannot drift.  Each EM4100 bit is two Manchester half bits, each a
+ * 32-carrier-period segment the antenna is loaded for or not; the 128
+ * segments (dur = length, pulse = how long loaded) play round and round.
+ * The two arrays live in d[], which emulation does not otherwise use. */
+static int emulate_em(unsigned char id[5])
+{
+	unsigned char b[64];
+	unsigned long *dur = &d[0], *pulse = &d[256];
+	struct rfid_emu e;
+	int k, fd;
+
+	em_bits(id, b);
+	for (k = 0; k < 64; k++) {		/* bit -> loaded, then not */
+		dur[2 * k] = dur[2 * k + 1] = 31;	/* 32 periods each */
+		pulse[2 * k] = b[k] ? 32 : 0;
+		pulse[2 * k + 1] = b[k] ? 0 : 32;
+	}
+	e.dur = dur;
+	e.pulse = pulse;
+	e.n = 128;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMU, &e) < 0) {
+		perror("rfid: emulate");
+		close(fd);
+		return 1;
+	}
+	printf("emulating EM4100 %02X %02X %02X %02X %02X; hold to a reader, "
+		"Ctrl-C to stop\n", id[0], id[1], id[2], id[3], id[4]);
+	for (;;) sleep(60);		/* Ctrl-C ends it; close stops the field */
+	return 0;			/* not reached */
+}
+
 int main(int argc, char **argv)
 {
 	int fd, n, i, tries = 4, raw = 0, t;
 	unsigned char id[5];
+
+	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
+		unsigned char id[5];
+
+		if (argc != 8 || strcmp(argv[2], "EM") != 0) goto use;
+		for (n = 0; n < 5; n++) {
+			char *e;
+			unsigned long v = strtoul(argv[3 + n], &e, 16);
+
+			if (*e != 0 || v > 255) goto use;
+			id[n] = (unsigned char) v;
+		}
+		return emulate_em(id);
+	}
+
+	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
+		int haswith = 0, tries = 20;
+		unsigned long withpass = 0;
+		char *e;
+
+		for (i = 2; i < argc; i++) {
+			if (strcmp(argv[i], "-with") == 0 && i + 1 < argc) {
+				withpass = strtoul(argv[++i], &e, 16);
+				haswith = 1;
+				if (*e != 0) goto use;
+			} else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
+				tries = atoi(argv[++i]);
+			else goto use;
+		}
+		if (tries < 1) goto use;
+		return clear_t5(withpass, haswith, tries);
+	}
+
+	if (argc >= 2 && strcmp(argv[1], "dump") == 0) {
+		int block = 0, with = 0;
+		unsigned long pass = 0;
+		char *e;
+
+		for (i = 2; i < argc; i++) {
+			if (strcmp(argv[i], "-with") == 0 && i + 1 < argc) {
+				pass = strtoul(argv[++i], &e, 16);
+				with = 1;
+				if (*e != 0) goto use;
+			} else {
+				block = (int) strtoul(argv[i], &e, 10);
+				if (*e != 0 || block < 0 || block > 7) goto use;
+			}
+		}
+		return dump_block(block, with, pass);
+	}
 
 	if (argc >= 2 && (strcmp(argv[1], "write") == 0
 				|| strcmp(argv[1], "copy") == 0)) {
@@ -405,7 +783,10 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 				"       rfid write [-n N] [-pass HEX] "
 				"[-with HEX] [-lock] EM B0 B1 B2 B3 B4\n"
 				"       rfid copy [-n N] [-pass HEX] "
-				"[-with HEX] [-lock]\n");
+				"[-with HEX] [-lock]\n"
+				"       rfid clear [-with HEX] [-n N]\n"
+				"       rfid dump [-with HEX] [BLOCK]\n"
+				"       rfid emulate EM B0 B1 B2 B3 B4\n");
 			return 2;
 		}
 	}

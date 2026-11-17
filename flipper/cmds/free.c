@@ -3,7 +3,8 @@
  *	free [-v] [-k] [-t on|off]
  *
  * Total free RAM and the largest contiguous hole; -v lists the holes,
- * also the flash regions and the shared libc (R2b.9);
+ * also the flash regions, the swap state with the swapped processes
+ * (R12.8) and the shared libc (R2b.9);
  * -k the stack use (high-water mark) of the kernel tasks.  -t on makes MM
  * print, for every program that exits, how much of its chmem (gap + stack)
  * was never touched (root only; slows exec down a little).
@@ -106,6 +107,30 @@ int main(int argc, char **argv)
 				"%08lx; CPU2 flash from %08lx\n",
 				fi.inst_entries, fi.inst_used / 1024,
 				fi.inst_size / 1024, fi.inst_base, fi.sfsa);
+		}
+		/* R12.8: the swap mode, slot use and swapped processes */
+		{
+			struct swinfo si;
+			int i;
+
+			m.m1_p1 = (char *) &si;
+			m.m1_i2 = MI_SWAPINFO;
+			if (_syscall(MM, MEMINFO, &m) == 0) {
+				unsigned long kb = 0;
+
+				for (i = 0; i < si.nproc; i++)
+					kb += si.p[i].bytes;
+				printf("swap: %s%s, %d of 16 slots used, %lu KB "
+					"freed, reserve %u KB\n",
+					si.mode & 0x7F ? (si.mode & 0x7F) ==
+					SW_CRYPT ? "crypt" : "plain" : "off",
+					si.mode & 0x80 ? " (card lost)" : "",
+					si.nproc, kb / 1024, si.res_kb);
+				for (i = 0; i < si.nproc; i++)
+					printf("  swapped: pid %5d %-8.8s %5lu "
+						"bytes\n", si.p[i].pid,
+						si.p[i].name, si.p[i].bytes);
+			}
 		}
 		/* R2b.9: one copy for every program, read in place */
 		if (SHLIBC_HDR->sh_magic == SHLIBC_MAGIC)

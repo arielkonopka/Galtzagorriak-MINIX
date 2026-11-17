@@ -206,6 +206,21 @@ void hal_pulse_stop(void);
  * hal_rfid_stop turns it all off.  -1: no reader. */
 int hal_rfid_read(uint32_t dst, unsigned n);
 void hal_rfid_stop(void);
+/* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
+ * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
+ * arms the comparator without raising a field of its own; hal_rfid_field(0)
+ * drops it.  hal_pulse_left and hal_rfid_stop count and end the capture. */
+void hal_rfid_field(int on);
+void hal_rfid_pull(int release);	/* PA2: 1 for a command, 0 to capture */
+int hal_rfid_capture(uint32_t dst, unsigned n);
+void hal_rfid_capture_stop(void);
+/* R6.5 part 4 (R8.4): pretend to be a tag.  The reader's field clocks TIM2
+ * (ETR on the carrier node) and the pull pin is PWM: dur[i] is a segment in
+ * carrier periods - 1 (ARR) and pulse[i] how many of them the pull is on
+ * (CCR3), both physical, n words each, played round and round by DMA with no
+ * CPU work.  The caller pins the memory. */
+int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n);
+void hal_rfid_emulate_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
@@ -239,6 +254,14 @@ void hal_disk_dma_ack(void);
 void hal_disk_wait(void);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
+/* Spec N.6, card pulled out: the card-detect switch (polled; 1 = a card
+ * is in), and an id of the card in the slot (a hash of its CID:
+ * manufacturer, product, serial), read after hal_disk_init(): 0, or -1.
+ * hal_disk_fake() is QEMU's test hook: 0 card in, 1 out, 2 another card
+ * in (-1 on the Flipper). */
+int hal_disk_present(void);
+int hal_disk_id(uint32_t *id);
+int hal_disk_fake(int state);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of
  * whole pages that only the cache uses.  The kernel calls these with

@@ -396,6 +396,19 @@ int signo;			/* signal to send to process (1 to _NSIG) */
 	printf("MM: signal %d sent to HANGING process %d\n", signo, slot);
 	panic("", NO_NUM);
   }
+#if (CHIP == ARM_CM)
+  sw_touch(slot);		/* no reserve swap-out under a signal */
+  /* A swapped process: a signal it catches needs its stack, so it comes
+   * back first; if it cannot yet, the signal waits as pending and swap.c
+   * delivers it later (R12.6).  Ignored, blocked and fatal signals need no
+   * swap-in (a kill frees the slot without reading it). */
+  if ((rmp->mp_flags & SWAPPED) && sigismember(&rmp->mp_catch, signo)
+		&& !sigismember(&rmp->mp_ignore, signo)
+		&& !sigismember(&rmp->mp_sigmask, signo) && sw_in(rmp) != OK) {
+	sigaddset(&rmp->mp_sigpending, signo);
+	return;
+  }
+#endif
   if (rmp->mp_flags & TRACED && signo != SIGKILL) {
 	/* A traced process has special handling. */
 	unpause(slot);
@@ -459,7 +472,11 @@ int signo;			/* signal to send to process (1 to _NSIG) */
 doterminate:
   /* Signal should not or cannot be caught.  Terminate the process. */
   rmp->mp_sigstatus = (char) signo;
-  if (sigismember(&core_sset, signo)) {
+  if (sigismember(&core_sset, signo)
+#if (CHIP == ARM_CM)
+		&& !(rmp->mp_flags & SWAPPED)	/* no image to dump */
+#endif
+		) {
 	/* Switch to the user's FS environment and dump core. */
 	tell_fs(CHDIR, slot, FALSE, 0);
 	dump_core(rmp);

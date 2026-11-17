@@ -11,6 +11,8 @@
  *   release:	  check to see if a suspended process can be released and do it
  *   revive:	  mark a suspended process as able to run again
  *   do_unpause:  a signal has been sent to a process; see if it suspended
+ *
+ * poll() suspends with XPOLL (poll.c); revive() re-runs it like a pipe call.
  */
 
 #include "fs.h"
@@ -238,8 +240,9 @@ int bytes;			/* if hanging on task, how many bytes read */
    * must be restarted so it can try again.
    */
   task = -rfp->fp_task;
-  if (task == XPIPE || task == XLOCK) {
-	/* Revive a process suspended on a pipe or lock. */
+  if (task == XPIPE || task == XLOCK || task == XPOLL) {
+	/* Revive a process suspended on a pipe or lock, or re-run a
+	 * poll() (poll.c). */
 	rfp->fp_revived = REVIVING;
 	reviving++;		/* process was waiting on pipe or lock */
   } else {
@@ -287,6 +290,10 @@ PUBLIC int do_unpause()
 		break;
 
 	case XPOPEN:		/* process trying to open a fifo */
+		break;
+
+	case XPOLL:		/* process waiting in poll() (R4b.6) */
+		poll_cancel(proc_nr);
 		break;
 
 	default:		/* process trying to do device I/O (e.g. tty)*/

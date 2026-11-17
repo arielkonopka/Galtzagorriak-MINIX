@@ -221,6 +221,7 @@ const char *hal_reset_cause(void) { return "power on"; }
 #define QEMU_DISK "disk.img"
 #endif
 static int disk_fd = -1;
+static int disk_fake;		/* N.6 test hook: 0 in, 1 out, 2 another card */
 static uint32_t disk_sectors;
 
 int hal_disk_init(void)
@@ -230,6 +231,7 @@ int hal_disk_init(void)
 				  sizeof name - 1 };
 	uint32_t fd, len;
 
+	if (disk_fake == 1) return -1;		/* N.6 test: no card */
 	if (disk_fd >= 0) return 0;
 	fd = semihost(SYS_OPEN, open_args);
 	if (fd == (uint32_t) -1) return -1;
@@ -243,6 +245,27 @@ int hal_disk_init(void)
 uint32_t hal_disk_sectors(void)
 {
 	return disk_sectors;
+}
+
+/* Spec N.6 in QEMU: the image is "pulled out" or "another card" by the
+ * test hook (kernel: DIOCFAKECARD on /dev/hd0); while it is out every
+ * transfer fails, as on the Flipper. */
+int hal_disk_present(void)
+{
+	return disk_fake != 1;
+}
+
+int hal_disk_id(uint32_t *id)
+{
+	*id = disk_fake == 2 ? 0x0DD5D00Du : 0x5D0C0A2Du;
+	return disk_fake == 1 ? -1 : 0;
+}
+
+int hal_disk_fake(int state)
+{
+	if (state < 0 || state > 2) return -1;
+	disk_fake = state;
+	return 0;
 }
 
 static int disk_seek(uint32_t sector, unsigned count)
@@ -282,7 +305,7 @@ int hal_disk_read(uint32_t sector, void *buf, unsigned count)
 {
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
 
-	if (disk_seek(sector, count) < 0) return -1;
+	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
 	return semihost(SYS_READ, args) == 0 ? 0 : -1;	/* 0 = all read */
 }
 
@@ -290,7 +313,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 {
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
 
-	if (disk_seek(sector, count) < 0) return -1;
+	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }
 
@@ -598,4 +621,11 @@ unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }
 int hal_rfid_read(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
 void hal_rfid_stop(void) { }
+void hal_rfid_field(int on) { (void) on; }
+void hal_rfid_pull(int release) { (void) release; }
+int hal_rfid_capture(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
+void hal_rfid_capture_stop(void) { }
+int hal_rfid_emulate(uint32_t d, uint32_t p, unsigned n)
+	{ (void) d; (void) p; (void) n; return -1; }
+void hal_rfid_emulate_stop(void) { }
 uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */

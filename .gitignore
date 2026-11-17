@@ -3,3 +3,4 @@ flipper/build/
 # user brings their own, they are not distributed with the system.
 flipper_assets/
 __pycache__/
+flipper/lib/*/build/

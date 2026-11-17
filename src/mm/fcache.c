@@ -593,6 +593,18 @@ PRIVATE int fc_compact_step()
 
 
 /*===========================================================================*
+ *				fc_busy					     *
+ *===========================================================================*/
+PUBLIC int fc_busy()
+{
+/* Is the cache stepping (its alarm a tick apart)?  The swap reserve shares
+ * MM's one synchronous alarm (swap.c). */
+  return(fc_size != 0 && !J_INSTALLING(job.state)
+			&& (fc_unformatted || job.state != J_IDLE));
+}
+
+
+/*===========================================================================*
  *				fc_alarm				     *
  *===========================================================================*/
 PRIVATE void fc_alarm(ticks)

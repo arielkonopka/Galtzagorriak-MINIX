@@ -48,6 +48,10 @@ PUBLIC void main()
   /* This is the main loop that gets work, processes it, and sends replies. */
   while (TRUE) {
 	get_work();		/* sets who and fs_call */
+	if (who == SYN_ALRM_TASK) {	/* CLOCK_INT: a poll() timeout */
+		poll_timer();
+		continue;
+	}
 
 	fp = &fproc[who];	/* pointer to proc table struct */
 	super_user = (fp->fp_effuid == SU_UID ? TRUE : FALSE);   /* su? */

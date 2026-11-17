@@ -88,6 +88,14 @@ struct driver *dp;	/* Device dependent entry points. */
 	case FS_PROC_NR:
 		/* The only legitimate caller. */
 		break;
+#if (CHIP == ARM_CM)
+	case MM_PROC_NR:
+		/* Swap I/O to the SD card (R12.4, R12.6): MM reads and writes
+		 * a process's image straight, as FS does for its buffers. */
+		if (mess.m_type == DEV_OPEN || mess.m_type == DEV_READ
+				|| mess.m_type == DEV_WRITE) break;
+		continue;
+#endif
 	default:
 		printf("%s: got message from %d\n", (*dp->dr_name)(), caller);
 		continue;

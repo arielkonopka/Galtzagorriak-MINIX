@@ -46,14 +46,20 @@ d--755 0 0
       rc ---755 0 0 rootfs/etc/rc
       ttytab ---644 0 0 rootfs/etc/ttytab
       passwd ---644 0 0 rootfs/etc/passwd
+      shadow ---600 0 0 rootfs/etc/shadow
       group ---644 0 0 rootfs/etc/group
       profile ---644 0 0 rootfs/etc/profile
       setup ---644 0 0 rootfs/etc/setup
       fstab ---644 0 0 rootfs/etc/fstab
       hostname.file ---644 0 0 rootfs/etc/hostname.file
       apps ---644 0 0 rootfs/etc/apps
+      notify.conf ---644 0 0 rootfs/etc/notify.conf
    $
    tmp d--1777 0 0
+   $
+   var d--755 0 0
+      timers d--1770 0 11
+      $
    $
    usr d--755 0 0
    $

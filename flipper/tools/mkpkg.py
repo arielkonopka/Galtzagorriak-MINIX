@@ -3,7 +3,14 @@
 
 Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
-           [--postinst FILE] [--prerm FILE] -o OUTDIR  dest=source ...
+           [--postinst FILE] [--prerm FILE] [--timers]
+           [--notify alarm|reminder|info] [--deskmode] -o OUTDIR
+           dest=source ...
+
+--timers, --notify, --deskmode: the app manifest fields of spec F.2
+(Timers: yes = may add timers, group timers; Notify: the highest
+category it may post; DeskMode: yes = may keep the backlight on while
+charging).
 
 Each dest=source puts the host file `source` at path `dest` on the Flipper,
 e.g. /usr/bin/hello=build/flipper/minix/bin/hello (mode 755 if the path is
@@ -46,6 +53,9 @@ def main():
     ap.add_argument("--prerm")
     ap.add_argument("-o", "--outdir", default=".")
     ap.add_argument("--os", help="Os: line, the release (base package)")
+    ap.add_argument("--timers", action="store_true", help="Timers: yes")
+    ap.add_argument("--notify", choices=("alarm", "reminder", "info"))
+    ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
@@ -53,12 +63,15 @@ def main():
     # "any" for a package without programs (spec J.3).
     # Libc: the build id of the shared libc its programs were linked with
     # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
-    abis, libcs = set(), set()
+    # Secret: yes when a program is marked A_NOSWAP (elf2mnx --secret): in
+    # plain swap mode its RAM never goes to the card (spec R12.28).
+    abis, libcs, secret = set(), set(), False
     for spec in a.files:
         with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
             h = f.read(48)
         if len(h) >= 8 and h[0:2] == b"\x01\x03":
             abis.add(struct.unpack_from("<H", h, 6)[0] or 1)
+            secret = secret or bool(h[2] & 0x80)
             if h[2] & 0x08 and h[4] >= 48 and len(h) == 48:
                 libcs.add(struct.unpack_from("<I", h, 40)[0])
     if len(abis) > 1:
@@ -71,6 +84,10 @@ def main():
                + f"Abi: {abis.pop() if abis else 'any'}\n"
                + (f"Libc: {libcs.pop():08x}\n" if libcs else "")
                + (f"Os: {a.os}\n" if a.os else "")
+               + ("Secret: yes\n" if secret else "")
+               + ("Timers: yes\n" if a.timers else "")
+               + (f"Notify: {a.notify}\n" if a.notify else "")
+               + ("DeskMode: yes\n" if a.deskmode else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)

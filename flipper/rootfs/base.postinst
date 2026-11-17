@@ -39,6 +39,16 @@ grep '^Power:' /etc/apps >/dev/null || {
 	echo 'Power:nobody:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
 }
+# The "RFID emu" entry of part 4 (/bin/rfidemu is gone): drop it whatever
+# else the card has.
+grep '^RFID emu:' /etc/apps >/dev/null && {
+	grep -v '^RFID emu:' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+	echo "base: RFID emu is now part of the RFID app"
+}
+grep '^RFID:' /etc/apps >/dev/null || {
+	echo 'RFID:nobody:/bin/lfrfid' >> /etc/apps
+	echo "base: the launcher now has RFID"
+}
 # Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
 if test ! -r /dev/ibutton
 then
@@ -100,3 +110,24 @@ then
 	chgrp gui /dev/adcs 2>/dev/null
 	chmod 660 /dev/adcs 2>/dev/null
 fi
+# Cards made before Phase 3 (R3.4) keep root's password hash in /etc/passwd,
+# readable by everybody: move it to /etc/shadow (mode 600), ##root in its
+# place.
+if test ! -f /etc/shadow
+then
+	if grep '^root:##' /etc/passwd >/dev/null
+	then :
+	else
+		>/etc/shadow
+		chmod 600 /etc/shadow
+		sed -n 's/^root:\([^:]*\):.*/root:\1:0:0::\/:/p' /etc/passwd >>/etc/shadow
+		sed 's/^root:[^:]*:/root:##root:/' /etc/passwd >/etc/passwd.new &&
+			cp /etc/passwd.new /etc/passwd && rm -f /etc/passwd.new
+		echo "base: root's password is now in /etc/shadow"
+		grep '^root::' /etc/shadow >/dev/null &&
+			echo "base: root has no password: set one with passwd"
+	fi
+fi
+# The sticky bit on /tmp and /usr/tmp (R3.7): chmod dropped it before.
+chmod 1777 /tmp
+test -d /usr/tmp && chmod 1777 /usr/tmp

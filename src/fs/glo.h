@@ -11,6 +11,7 @@ EXTERN int dont_reply;		/* normally 0; set to 1 to inhibit reply */
 EXTERN int susp_count;		/* number of procs suspended on pipe */
 EXTERN int nr_locks;		/* number of locks currently in place */
 EXTERN int reviving;		/* number of pipe processes to be revived */
+EXTERN char poll_npipe;		/* pollers waiting with a pipe (poll.c) */
 EXTERN off_t rdahedpos;		/* position to read ahead */
 EXTERN struct inode *rdahed_inode;	/* pointer to inode to read ahead */
 

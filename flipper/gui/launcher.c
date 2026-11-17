@@ -10,6 +10,8 @@
  * apps marked "root" keep root's rights.  The launcher waits until the app
  * exits (BACK in every app), then redraws.
  */
+#include <lib.h>
+#include <minix/callnr.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -117,6 +119,13 @@ static void run(struct app *ap)
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
 	gr = getgrnam("gui");		/* before: stdio state is ours */
+	{	/* R12.22: the app goes low in RAM, idle images stay high, so a
+		 * swapped one finds its addresses free again; never swapped */
+		message m;
+
+		m.m1_i2 = MI_FGEXEC;
+		(void) _syscall(MM, MEMINFO, &m);
+	}
 	if ((pid = vfork()) == 0) {	/* R2c.2; the child only sets ids,
 					 * changes directory and execs */
 		if (pw->pw_uid != 0) {

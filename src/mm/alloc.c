@@ -287,6 +287,94 @@ phys_clicks clicks;		/* amount of memory requested */
 }
 
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				alloc_mem_at				     *
+ *===========================================================================*/
+PUBLIC int alloc_mem_at(base, clicks)
+phys_clicks base;		/* exactly here */
+phys_clicks clicks;		/* this much */
+{
+/* Allocate [base, base + clicks) if it is all free (a swap-in, R12.6: an
+ * image goes back to its own addresses).  OK or NO_MEM-like ENOMEM. */
+  register struct hole *hp, *prev_ptr, *new_ptr;
+  phys_clicks tail;
+
+  prev_ptr = NIL_HOLE;
+  for (hp = hole_head; hp != NIL_HOLE; prev_ptr = hp, hp = hp->h_next) {
+	if (hp->h_base > base) break;
+	if (hp->h_base + hp->h_len < base + clicks) continue;
+	tail = hp->h_base + hp->h_len - (base + clicks);
+	if (hp->h_base == base) {
+		hp->h_base += clicks;
+		hp->h_len -= clicks;
+		if (hp->h_len == 0) del_slot(prev_ptr, hp);
+		return(OK);
+	}
+	if (tail != 0) {		/* the hole splits in two */
+		if ((new_ptr = free_slots) == NIL_HOLE) return(ENOMEM);
+		free_slots = new_ptr->h_next;
+		new_ptr->h_base = base + clicks;
+		new_ptr->h_len = tail;
+		new_ptr->h_next = hp->h_next;
+		hp->h_next = new_ptr;
+	}
+	hp->h_len = base - hp->h_base;
+	return(OK);
+  }
+  return(ENOMEM);
+}
+
+
+/*===========================================================================*
+ *				hole_end				     *
+ *===========================================================================*/
+PUBLIC phys_clicks hole_end(pos)
+phys_clicks pos;
+{
+/* The end of the hole that holds click pos, or 0. */
+  register struct hole *hp;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+	if (pos >= hp->h_base && pos < hp->h_base + hp->h_len)
+		return(hp->h_base + hp->h_len);
+  return(0);
+}
+
+
+/*===========================================================================*
+ *				hole_with				     *
+ *===========================================================================*/
+PUBLIC phys_clicks hole_with(base, clicks)
+phys_clicks base, clicks;
+{
+/* How big a hole freeing [base, base + clicks) would make, with the holes
+ * on either side (swap victims, R12.5). */
+  register struct hole *hp;
+  phys_clicks n = clicks;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+	if (hp->h_base + hp->h_len == base || hp->h_base == base + clicks)
+		n += hp->h_len;
+  return(n);
+}
+
+
+/*===========================================================================*
+ *				mem_free				     *
+ *===========================================================================*/
+PUBLIC phys_clicks mem_free()
+{
+/* All free memory, in clicks. */
+  register struct hole *hp;
+  phys_clicks n = 0;
+
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next) n += hp->h_len;
+  return(n);
+}
+#endif
+
+
 /*===========================================================================*
  *				do_meminfo				     *
  *===========================================================================*/
@@ -331,8 +419,11 @@ PUBLIC int do_meminfo()
 	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fc, who, D,
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fc)));
   }
+  if (mm_in.m1_i2 == MI_MEMTEST) return(mem_test());	/* R7b.3.1 */
   if (mm_in.m1_i2 == MI_INSTALL) return(do_install());
   if (mm_in.m1_i2 == MI_RESET) return(sys_kstacks(who, (char *) 0, 0));
+  if (mm_in.m1_i2 >= MI_SWAPON && mm_in.m1_i2 <= MI_FGEXEC)
+	return(sw_ctl());			/* swap.c (Phase 12) */
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);
@@ -362,6 +453,70 @@ PUBLIC int do_meminfo()
   result2 = (int) ((phys_bytes) max << CLICK_SHIFT);
   return((int) ((phys_bytes) total << CLICK_SHIFT));
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				mem_test				     *
+ *===========================================================================*/
+PUBLIC int mem_test()
+{
+/* MI_MEMTEST (self test, R7b.3.1): test one 4 KB block of RAM in place if
+ * it lies wholly in a hole, with March C- on 32-bit words (patterns 0 and
+ * ~0): up w0; up r0 w1; up r1 w0; down r0 w1; down r1 w0; up r0.  It
+ * runs inside MM, in one step (about 10 passes over 1 K words): no process
+ * ever sees the memory, nobody can be given it meanwhile, and what an
+ * exited process left there is overwritten.  The block is left zeroed.
+ * MM runs privileged with a flat map, so it touches the block directly.
+ */
+  phys_bytes addr = (phys_bytes) mm_in.m1_i1;
+  phys_clicks base, clicks = MT_BLOCK >> CLICK_SHIFT;
+  register struct hole *hp;
+  register volatile u32_t *w, *lo, *hi;
+  int inpool = FALSE;
+
+  if (mp->mp_effuid != SUPER_USER) return(EPERM);
+  if (addr & (MT_BLOCK - 1)) return(EINVAL);
+  base = addr >> CLICK_SHIFT;
+  for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+	if (hp->h_base <= base && base + clicks <= hp->h_base + hp->h_len)
+		break;
+  if (hp == NIL_HOLE) {
+	/* used by a process, or not ours at all: the memory MM was given
+	 * at boot ends at the top of the highest hole or process */
+	struct mproc *rmp;
+
+	for (rmp = &mproc[INIT_PROC_NR]; rmp < &mproc[NR_PROCS]; rmp++) {
+		if (!(rmp->mp_flags & IN_USE) || (rmp->mp_flags & SWAPPED))
+			continue;
+		if (rmp->mp_seg[D].mem_phys < base + clicks
+		    && base < rmp->mp_seg[S].mem_phys + rmp->mp_seg[S].mem_len)
+			inpool = TRUE;
+		if (rmp->mp_seg[T].mem_len != 0	/* text in RAM, below */
+		    && rmp->mp_seg[T].mem_phys < base + clicks
+		    && base < rmp->mp_seg[T].mem_phys + rmp->mp_seg[T].mem_len)
+			inpool = TRUE;
+	}
+	for (hp = hole_head; hp != NIL_HOLE; hp = hp->h_next)
+		if (hp->h_base < base + clicks
+		    && base < hp->h_base + hp->h_len) inpool = TRUE;
+	return(inpool ? MT_INUSE : MT_OWNED);
+  }
+  lo = (volatile u32_t *) addr;
+  hi = lo + MT_BLOCK / sizeof(u32_t);
+  for (w = lo; w < hi; w++) *w = 0;
+  for (w = lo; w < hi; w++) { if (*w != 0) goto bad; *w = ~(u32_t) 0; }
+  for (w = lo; w < hi; w++) { if (*w != ~(u32_t) 0) goto bad; *w = 0; }
+  for (w = hi; w-- > lo; ) { if (*w != 0) goto bad; *w = ~(u32_t) 0; }
+  for (w = hi; w-- > lo; ) { if (*w != ~(u32_t) 0) goto bad; *w = 0; }
+  for (w = lo; w < hi; w++) if (*w != 0) goto bad;
+  return(MT_PASS);
+bad:
+  result2 = (int) (phys_bytes) w;
+  for (w = lo; w < hi; w++) *w = 0;
+  return(MT_FAIL);
+}
+#endif
 
 
 #if (CHIP == ARM_CM)

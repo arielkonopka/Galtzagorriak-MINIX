@@ -184,6 +184,14 @@ message *m_ptr;			/* pointer to message buffer */
   if (isuserp(caller_ptr) && !issysentn(dest)) return(E_BAD_DEST);
   dest_ptr = proc_addr(dest);	/* pointer to destination's proc entry */
   if (dest_ptr->p_flags & P_SLOT_FREE) return(E_BAD_DEST);	/* dead dest */
+#if (CHIP == ARM_CM)
+  /* R12.7: a swapped process's range may belong to someone else now. MM
+   * swaps it in before any reply; anything else is a bug, never a write. */
+  if (dest_ptr->p_flags & P_SWAPPED) {
+	printf("send to swapped process %d refused\n", dest);
+	return(E_BAD_DEST);
+  }
+#endif
 
 #if ALLOW_GAP_MESSAGES
   /* This check allows a message to be anywhere in data or stack or gap. 

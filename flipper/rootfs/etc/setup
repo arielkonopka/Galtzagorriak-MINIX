@@ -32,7 +32,8 @@ mount /dev/hd2 /usr && {
 	umount /dev/hd2
 }
 mount /dev/hd4 /home && {
-	mkdir /home/root
+	mkdir /home/root /home/flipper /home/flipper/apps_data
+	chmod 1777 /home/flipper/apps_data	# /ext/apps_data (libapp settings)
 	umount /dev/hd4
 }
 >/etc/.setup-done

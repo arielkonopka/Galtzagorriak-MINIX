@@ -1106,6 +1106,7 @@ void hal_led_get(unsigned char rgb[3])
 #define CMD0	0	/* GO_IDLE_STATE */
 #define CMD8	8	/* SEND_IF_COND */
 #define CMD9	9	/* SEND_CSD */
+#define CMD10	10	/* SEND_CID */
 #define CMD16	16	/* SET_BLOCKLEN */
 #define CMD12	12	/* STOP_TRANSMISSION */
 #define CMD17	17	/* READ_SINGLE_BLOCK */
@@ -1347,6 +1348,38 @@ fail:
 uint32_t hal_disk_sectors(void)
 {
 	return sd_ready ? sd_nsectors : 0;
+}
+
+/* Spec N.6: the slot's card-detect switch closes to ground with a card in
+ * (PC10, pulled up in hal_disk_init; stock furi_hal_sd_is_present).  Its
+ * EXTI line belongs to the Up button, so it is read, never interrupts. */
+int hal_disk_present(void)
+{
+	return !(GPIOC->IDR & (1u << 10));
+}
+
+/* The card's CID (CMD10), hashed (FNV-1a): the same card has the same
+ * manufacturer, product name, serial number and date. */
+int hal_disk_id(uint32_t *id)
+{
+	uint8_t cid[16];
+	uint32_t h = 2166136261u;
+	int i, r;
+
+	if (!sd_ready) return -1;
+	spi2_speed(sd_fast);
+	r = sd_cmd(CMD10, 0) == 0 && sd_read_data(cid, sizeof cid) == 0;
+	sd_select(0);
+	if (!r) return -1;
+	for (i = 0; i < 15; i++) h = (h ^ cid[i]) * 16777619u;	/* no CRC7 */
+	*id = h;
+	return 0;
+}
+
+int hal_disk_fake(int state)
+{
+	(void) state;
+	return -1;
 }
 
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
@@ -2171,10 +2204,17 @@ uint32_t hal_rtc_time(void)
 
 int hal_rtc_set(uint32_t t)
 {
-	uint32_t y, m, d, days = t / 86400, s = t % 86400, i;
+	uint32_t y, m, d, days = t / 86400, s = t % 86400, i, fc;
+	int today;
 
 	civil_from_days(days, &y, &m, &d);
 	if (!hal_rtc_ok() || y < 2000 || y > 2099) return -1;
+	/* R2b.11: setting the clock is not a new day for the cache's erase
+	 * budget (a jump there and back gave a fresh budget, #109): what
+	 * today spent moves to the new date.  A word of an older day is left,
+	 * so a day that really began meanwhile still starts afresh. */
+	fc = FC_REG;
+	today = (fc & 0xF0000000u) == FC_MAGIC && (fc & 0xFFF) == fc_day(0);
 	rtc_unlock();
 	RTC->ISR = 0xFFFFFFFF;			/* INIT: stops the calendar */
 	for (i = 0; i < 100000 && !(RTC->ISR & RTC_ISR_INITF); i++) ;
@@ -2184,6 +2224,10 @@ int hal_rtc_set(uint32_t t)
 	RTC->CR &= ~RTC_CR_FMT;			/* 24 hours */
 	RTC->ISR &= ~RTC_ISR_INIT;		/* runs from here */
 	rtc_lock();
+	if (today)	/* fc_day()'s number, from the date just set (the
+			 * shadow registers may still hold the old one) */
+		bkp_set(&FC_REG, (fc & ~0xFFFu)
+			| (((y - 2000) * 372 + m * 31 + d) & 0xFFF));
 	return 0;
 }
 
@@ -2999,6 +3043,191 @@ void hal_rfid_stop(void)
 	gpio_set(GPIOA, 2, 1);				/* as stock's reset */
 	hal_ow_line(0);					/* iButton released */
 	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);
+}
+
+/* R6.5 part 3: a T5577 block read needs the field to stay up between the
+ * read command (gaps, played by the IR transmitter onto the antenna,
+ * hal_ir_target) and the tag's reply (the comparator captured below);
+ * dropping the carrier would reset the tag.  hal_rfid_field holds it up
+ * through the whole exchange and hal_rfid_capture arms the comparator on
+ * top of the running field, where hal_rfid_read raises a field of its
+ * own.  The carrier is the transmitter's (TIM1 CH1N), so a gap is its
+ * outputs off, as when writing; the capture is TIM2 as in hal_rfid_read. */
+void hal_rfid_field(int on)
+{
+	if (on) {
+		hal_ir_freq(125000, 50);
+		hal_ir_target(1);		/* pins: iButton low, PC5/PA15
+						 * analog; the carrier on PB13;
+						 * PA2 high, ready for a command */
+		hal_ir_carrier(1);		/* TIM1 CH1N, 125 kHz, held */
+	} else {
+		hal_rfid_stop();		/* TIM2/COMP1 off, TIM1 down */
+		hal_ir_target(0);		/* the transmitter back to IR */
+	}
+}
+
+/* The antenna pull pin (PA2) between the two phases of a block read: a
+ * command wants it released (high), the capture wants it pulled low so the
+ * envelope swings on PC5, as stock's pin_pull_release / pin_pull_pulldown.
+ * The field stays up throughout. */
+void hal_rfid_pull(int release)
+{
+	gpio_set(GPIOA, 2, release ? 1 : 0);
+}
+
+/* Stop the comparator capture but leave the field (and COMP1) up, so the
+ * next command and reply find the tag still powered.  hal_rfid_field(0)
+ * ends the whole session. */
+void hal_rfid_capture_stop(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR2 = 0;
+	TIM2->OR = 0;
+	TIM2->SR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 0;
+}
+
+/*===========================================================================*
+ *			LF RFID emulation (R6.5 part 4, R8.4)		     *
+ *===========================================================================*/
+/* Pretending to be a 125 kHz tag, as the stock firmware does
+ * (furi_hal_rfid_tim_emulate_dma_start): the *reader* makes the field, so
+ * our own carrier (PB13) stays off and TIM2 counts the reader's carrier
+ * instead of the CPU clock - external clock mode 2 on ETR, which is the
+ * antenna's carrier node PA15 (AF2), inverted as stock.  The tag answers by
+ * loading the antenna, which here is PWM on the pull pin PA2 (AF1, TIM2
+ * channel 3): a segment's length comes from ARR and how long the pull is on
+ * from CCR3.  Two circular DMA channels (DMA1 5 and 6, both on the TIM2
+ * update request) feed those from the caller's pinned buffers, so the whole
+ * pattern repeats for as long as the reader's field lasts with no CPU work
+ * at all - the timing is the reader's own clock, so it cannot drift.
+ *
+ * dur[i] is a segment in carrier periods minus 1 (what ARR counts to) and
+ * pulse[i] how many of them the pull is on (0 none, dur[i] + 1 all).  Both
+ * are physical addresses of n 32-bit words; the caller pins the memory. */
+int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
+{
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	ir_ready = 0;				/* TIM1/TIM2 are ours now */
+	/* pins, as stock furi_hal_rfid_pins_emulate */
+	hal_ow_line(1);				/* iButton low */
+	gpio_set(GPIOB, 13, 0);			/* our own field off */
+	gpio_cfg(GPIOB, 13, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOA, 2, MODE_AF, PULL_NONE, 1);	/* pull: TIM2_CH3 */
+	gpio_cfg(GPIOA, 15, MODE_AF, PULL_NONE, 2);	/* carrier in: TIM2_ETR */
+	/* TIM2 clocked by the reader's carrier */
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->CR2 = 0;
+	TIM2->PSC = 0;
+	TIM2->ARR = 1;
+	TIM2->OR = 0;
+	TIM2->SMCR = TIM_SMCR_ECE | TIM_SMCR_ETP;	/* external clock 2, inverted */
+	TIM2->CCMR1 = 0;
+	TIM2->CCMR2 = 6u << TIM_CCMR2_OC3M_Pos;		/* PWM mode 1 on CH3 */
+	TIM2->CCR3 = 1;
+	TIM2->CCER = TIM_CCER_CC3E;			/* CH3 out, active high */
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	/* the pattern: ARR from dur[], CCR3 from pulse[], round and round */
+	DMA1_Channel5->CCR = 0;
+	DMA1_Channel6->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF5 | DMA_IFCR_CGIF6;
+	DMAMUX1_Channel4->CCR = 32;			/* TIM2_UP -> channel 5 */
+	DMA1_Channel5->CPAR = (uint32_t) &TIM2->ARR;
+	DMA1_Channel5->CMAR = dur;
+	DMA1_Channel5->CNDTR = n;
+	DMAMUX1_Channel5->CCR = 32;			/* TIM2_UP -> channel 6 */
+	DMA1_Channel6->CPAR = (uint32_t) &TIM2->CCR3;
+	DMA1_Channel6->CMAR = pulse;
+	DMA1_Channel6->CNDTR = n;
+	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
+		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
+	DMA1_Channel6->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
+		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
+	TIM2->DIER = TIM_DIER_UDE;		/* every update takes the next pair */
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_CEN;
+	return 0;
+}
+
+void hal_rfid_emulate_stop(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCMR2 = 0;
+	TIM2->SMCR = 0;
+	TIM2->SR = 0;
+	DMA1_Channel5->CCR = 0;
+	DMA1_Channel6->CCR = 0;
+	DMAMUX1_Channel4->CCR = 0;
+	DMAMUX1_Channel5->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF5 | DMA_IFCR_CGIF6;
+	gpio_set(GPIOA, 2, 1);			/* the pull released, as a reset */
+	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);
+	hal_ow_line(0);				/* iButton released */
+}
+
+/* Arm the comparator capture on the already-running field (hal_rfid_field
+ * must be on).  The second half of hal_rfid_read: COMP1 on PC5 into TIM2
+ * channel 4, DMA to dst, n 32-bit timestamps.  hal_pulse_left and
+ * hal_rfid_stop (through hal_rfid_field(0)) belong to it as to a read. */
+int hal_rfid_capture(uint32_t dst, unsigned n)
+{
+	uint32_t t0;
+
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	/* PA2 was pulled low before the settle (hal_rfid_pull(0), the driver),
+	 * so the envelope on PC5 is already swinging by now. */
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	if (!(COMP1->CSR & COMP_CSR_EN)) {
+		COMP1->CSR = COMP_CSR_PWRMODE_0		/* medium speed */
+			| COMP_CSR_INMSEL_0 | COMP_CSR_SCALEN | COMP_CSR_BRGEN
+			| COMP_CSR_HYST_1 | COMP_CSR_HYST_0;	/* PC5, VREFINT/2 */
+		COMP1->CSR |= COMP_CSR_EN;
+		t0 = DWT->CYCCNT;
+		while (DWT->CYCCNT - t0 < hal_cpu_hz() / 5000) ;	/* 200 us */
+	}
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 31;			/* TIM2_CH4 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+							| DMA_CCR_EN;
+	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = 0;
+	TIM2->CCMR2 = 1u << TIM_CCMR2_CC4S_Pos;		/* IC4 on TI4 */
+	TIM2->CCER = TIM_CCER_CC4E | TIM_CCER_CC4P | TIM_CCER_CC4NP;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_CC4DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
 }
 
 /*===========================================================================*

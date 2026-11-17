@@ -34,6 +34,7 @@ _PROTOTYPE( int dev_io, (int rw_flag, int nonblock, Dev_t dev,
 _PROTOTYPE( int do_ioctl, (void)					);
 _PROTOTYPE( void no_dev, (int task_nr, message *m_ptr)			);
 _PROTOTYPE( void call_ctty, (int task_nr, message *mess_ptr)		);
+_PROTOTYPE( int dev_select, (Dev_t dev, int ops, int proc)		);
 _PROTOTYPE( void tty_open, (int task_nr, message *mess_ptr)		);
 _PROTOTYPE( void ctty_close, (int task_nr, message *mess_ptr)		);
 _PROTOTYPE( void ctty_open, (int task_nr, message *mess_ptr)		);
@@ -111,6 +112,14 @@ _PROTOTYPE( int pipe_check, (struct inode *rip, int rw_flag,
 _PROTOTYPE( void release, (struct inode *ip, int call_nr, int count)	);
 _PROTOTYPE( void revive, (int proc_nr, int bytes)			);
 _PROTOTYPE( void suspend, (int task)					);
+
+/* poll.c (R4b.6) */
+_PROTOTYPE( int do_poll, (void)						);
+_PROTOTYPE( int do_selected, (void)					);
+_PROTOTYPE( void poll_cancel, (int proc_nr)				);
+_PROTOTYPE( void poll_pipe, (void)					);
+_PROTOTYPE( void poll_selected, (int task, int minor)			);
+_PROTOTYPE( void poll_timer, (void)					);
 
 /* protect.c */
 _PROTOTYPE( int do_access, (void)					);

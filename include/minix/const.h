@@ -84,6 +84,7 @@
 #define I_NAMED_PIPE	0010000 /* named pipe (FIFO) */
 #define I_SET_UID_BIT   0004000	/* set effective uid_t on exec */
 #define I_SET_GID_BIT   0002000	/* set effective gid_t on exec */
+#define I_SET_STCKY_BIT 0001000	/* sticky directory: only owners unlink */
 #define ALL_MODES       0006777	/* all bits for user, group and others */
 #define RWX_MODES       0000777	/* mode bits for RWX only */
 #define R_BIT           0000004	/* Rwx protection bit */
