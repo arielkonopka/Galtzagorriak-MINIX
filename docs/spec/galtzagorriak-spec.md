@@ -1025,7 +1025,14 @@ which order they are built.
      Settings ← Apps → Home → Notifications → Running, and Left/Right move along it, which keeps
      R5.6a's keys (Left from Apps = Settings). A page move happens on the **release** of a short
      Left/Right press, and a key that was part of a chord (R6.10 backlight gestures, #145) does
-     nothing: the kernel marks chord keys, the launcher only checks that flag. So Left+Up held for
+     nothing. This is a userland rule, 0 B kernel: R6.10 passes the down and up events of chord
+     keys to the app, so `gui.c` gets `gui_click()` next to `gui_key()` (which returns on the
+     press). A click fires on the release of a key pressed **alone** (no other key went down
+     while it was held) and held < ~1 s; a few bytes of stack, no `.bss`. The launcher and small
+     C apps use it for Left/Right/OK actions. `libfuri` apps already behave this way (a 1.5 s
+     chord is past `GUI_INPUT_LONG_COUNTS`, so the release sends no `InputTypeShort`). No kernel
+     flag on key events: it would break `libfuri`'s `gui_buttons_event` (a flagged release would
+     be dropped and the key would repeat forever). So Left+Up held for
      the backlight never jumps to Settings. The status line (minute, battery) wakes the launcher
      only while it is in the foreground **and** the screen is on; with an app running or the
      backlight off the launcher sleeps in `poll()` with no timeout (M3 idle ≤ 1.5 mA). RAM budget
@@ -1046,8 +1053,9 @@ which order they are built.
     by userland. The mapping lives in a config file on the SD card (`/etc/chords.conf`, no
     internal flash), edited from the chords page. Free chords today: Right+Up, Left+Down.
     Back is never part of a chord (R6.10).
-  - Kernel side (chord events, the chord flag on keys) is `lane:local` with #145; the chords page
-    is a follow-up of T23a.
+  - How other chords reach userland (an event on `/dev/buttons` that works while any app is in
+    the foreground) is decided with R6.10 in a later step, `lane:local`; never as a flag on
+    ordinary key events (see the click rule above). The chords page is a follow-up of T23a.
 - **Pipe data never reaches the card (FS, 0 B, local-lane review of #231).** `PIPE_DEV` is
   `ROOT_DEV`, so a pipe's or FIFO's data lives in its inode's zones on the SD card through the
   buffer cache, and `update` would write the dirty blocks and the inode times every 30 s. With
