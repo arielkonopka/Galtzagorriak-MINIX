@@ -56,6 +56,20 @@ back" (and on the console "sd: Different card: put the original back or power of
 the cards apart by their serial number (the CID). If you
 power off instead, the original card is checked at its next boot if it was in the middle of a write.
 
+## Does the card support DISCARD?
+
+At boot the console shows the card's size, followed by `DISCARD` if the card supports it (SD 5.1
+and newer: most cards made since 2016), for example:
+
+    sd: 122000 MB, DISCARD
+
+DISCARD lets the Flipper tell the card which areas hold nothing any more. The card then stops
+copying that dead data around internally, which saves wear and keeps writes fast. Nothing is
+erased by it and no data is written. The swap partition will use it **(planned, spec 12h,
+R12.40)** for memory blocks that apps have given back. For programmers: `ioctl(fd, DIOCDISCARD,
+&range)` on a partition device (root only), `struct part_range` in `<minix/partition.h>`
+(first sector and count, from the partition's start); `ENOTTY` if the card has no DISCARD.
+
 ## Things that cannot save your data
 
 - The **Left + Back** reset, the battery running completely flat without the low-battery power

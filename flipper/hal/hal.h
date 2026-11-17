@@ -212,7 +212,8 @@ void hal_pulse_stop(void);
  * captured on both edges, n 32-bit timestamps (us) by DMA into dst (the
  * caller pins it; hal_pulse_left tells the words not yet written);
  * hal_rfid_stop turns it all off.  -1: no reader. */
-int hal_rfid_read(uint32_t dst, unsigned n);
+int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier);
+/* carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz */
 void hal_rfid_stop(void);
 /* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
  * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
@@ -270,6 +271,12 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 int hal_disk_present(void);
 int hal_disk_id(uint32_t *id);
 int hal_disk_fake(int state);
+/* R12.40: DISCARD sectors first..last (the card marks them unused, no
+ * erase): 0, -1 error, -2 the card has no DISCARD (SD Status, read at
+ * init).  The card is busy meanwhile; the HAL waits by hal_disk_nap() (the
+ * kernel's: the disk task sleeps one clock tick). */
+int hal_disk_discard(uint32_t first, uint32_t last);
+void hal_disk_nap(void);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of
  * whole pages that only the cache uses.  The kernel calls these with
@@ -348,7 +355,9 @@ int hal_rtc_alarm_ack(void);		/* in the handler: 1 if it fired */
  * -511..512; set != 0 writes v.  Returns the value in force. */
 int hal_rtc_cal(int set, int v);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
-void hal_tone(unsigned hz);		/* speaker; 0 = off */
+/* Speaker: a square wave at hz (0 = off) at volume vol 0..100; the duty
+ * is 50 % * (vol/100)^3, as stock furi_hal_speaker_start (100: full). */
+void hal_tone(unsigned hz, unsigned vol);
 void hal_halt(int status) __attribute__((noreturn));
 /* Power off (T14c): the charger's ship mode, as stock furi_hal_power_off;
  * on VBUS it cannot cut the power and waits for the cable to go.  QEMU:

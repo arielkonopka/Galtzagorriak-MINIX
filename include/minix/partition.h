@@ -13,4 +13,11 @@ struct partition {
   unsigned heads;
   unsigned sectors;
 };
+
+/* DIOCDISCARD (R12.40): sectors that hold nothing any more, counted from
+ * the start of the partition the ioctl is made on. */
+struct part_range {
+  u32_t first;		/* first sector */
+  u32_t count;		/* number of sectors */
+};
 #endif /* _MINIX__PARTITION_H */

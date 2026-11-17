@@ -185,7 +185,7 @@ void hal_halt(int status)
 /* No watchdog, speaker or DFU in QEMU: "reboot -d" just stops it. */
 void hal_wdt_start(void) { }
 void hal_wdt_kick(void) { }
-void hal_tone(unsigned hz) { (void) hz; }
+void hal_tone(unsigned hz, unsigned vol) { (void) hz; (void) vol; }
 void hal_vibro(int on) { (void) on; }
 /* GPIO: remembered levels only, so programs can be tried in QEMU. */
 static unsigned char gpio_level[HAL_GPIO_PINS];
@@ -320,6 +320,27 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 
 	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
+}
+
+/* R12.40 in QEMU: the image has no DISCARD, so the range is filled with
+ * zeros, which tests can see (a real card's discarded data is undefined).
+ * One nap first, as a busy card would cost (the kernel's tick sleep). */
+int hal_disk_discard(uint32_t first, uint32_t last)
+{
+	static const uint8_t zero[4096];
+	uint32_t n;
+
+	if (disk_fake == 1) return -1;
+	if (last < first) return 0;		/* only asked */
+	hal_disk_nap();
+	while (first <= last) {
+		n = last - first + 1;
+		if (n > sizeof zero / HAL_SECTOR_SIZE)
+			n = sizeof zero / HAL_SECTOR_SIZE;
+		if (hal_disk_write(first, zero, n) != 0) return -1;
+		first += n;
+	}
+	return 0;
 }
 
 /* No USB in QEMU: the console stays on the UART. */
@@ -624,7 +645,7 @@ int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (vo
 int hal_pulse_ack(void) { return 0; }
 unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }
-int hal_rfid_read(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
+int hal_rfid_read(uint32_t d, unsigned n, unsigned c) { (void) d; (void) n; (void) c; return -1; }
 void hal_rfid_stop(void) { }
 void hal_rfid_field(int on) { (void) on; }
 void hal_rfid_pull(int release) { (void) release; }

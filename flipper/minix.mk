@@ -265,7 +265,10 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 # Flash it with DFU like minix.bin, together with the base package or card
 # of the same build; /etc/rc binds them at the next boot (pkg bind).
 BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
-	      test
+	      test rfid
+# rfid: 46 KB of text with liblfrfid (spec R9.0.1); from here it runs in
+# place, instead of from RAM until the run-time cache has copied it (12
+# pages written at run time).
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
@@ -293,7 +296,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid \
+PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
 	    swapon
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
@@ -394,6 +397,22 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
+# liblfrfid (spec R9.0.1, src/lib/lfrfid): the Unleashed LF RFID protocols,
+# linked into rfid (code in flash; the decoders' state is malloc'd only
+# while a read runs).  Third-party C11 code: built quietly (-w).
+LFRFID_DIR := $(MROOT)/src/lib/lfrfid
+LFRFID_C := $(shell cd $(LFRFID_DIR) && find . -name '*.c' | sort)
+LFRFID_OBJ := $(patsubst ./%.c,$(MB)/lfrfid/%.o,$(LFRFID_C))
+LFRFID_HDR := $(shell find $(LFRFID_DIR) -name '*.h')
+LFRFID_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(LFRFID_DIR) -I$(LFRFID_DIR)/shim
+$(MB)/lfrfid/%.o: $(LFRFID_DIR)/%.c $(LFRFID_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LFRFID_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -464,7 +483,7 @@ OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
 # use it; they ship as the package timed (/usr/lib).
 APP_DIR := lib/app
-APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o
+APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o $(MB)/app/tune.o
 APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
 $(MB)/app/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
@@ -479,8 +498,20 @@ $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
 OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
-CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
-CHMEM_alert := 4096
+CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
+			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
+CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
+# The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
+# libapp timers; packages remind and alarm (/usr/bin, own users).
+NATPROGS := remind alarm
+NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
+$(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
+$(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
+	$(MB)/cmd/nat/native/nat_core.o $(APP_OBJ) $(FURI_OBJ) $(FURI_GUI_OBJ)))
+CHMEM_remind := 12288	# 7b.1: libfuri main stack 3 KB, gui thread 2 KB, Canvas 1.1 KB, the list
+CHMEM_alarm  := 12288	# 7b.2: the same
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -516,8 +547,12 @@ $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 # The hardware self test (spec 7b.3): the app and its modules, package
 # stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
 # of packages are at most 13 characters).
-ST_MODS	:= board memory flash input av gpio
+ST_MODS	:= board memory flash input av pins	# module names must not be base commands (gpio!)
 STPROGS	:= selftest $(ST_MODS)
+# Programs share one build directory: a module named like a base command
+# would replace it (it happened with gpio).
+$(if $(filter $(STPROGS),$(UPROGS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(APPS)),\
+  $(error selftest: $(filter $(STPROGS),$(UPROGS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(APPS)) also names another program))
 $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
@@ -527,18 +562,19 @@ CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
-CHMEM_gpio := 2048
+CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar \
-	   $(PKGDIR)/stest_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
+	   $(PKGDIR)/stest_1.0.tar \
+	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -553,12 +589,25 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.1.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.2.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.1 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.2 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
+# The native apps (spec 7b.1, 7b.2): their own users, the launcher line.
+$(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
+		rootfs/remind.prerm
+	python3 -I tools/mkpkg.py -n remind -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify reminder --flash \
+	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
+	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
+$(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+		rootfs/alarm.prerm
+	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify alarm --deskmode --flash \
+	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
+	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
 # The hardware self test (spec 7b.3).
 $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/selftest.postinst rootfs/selftest.prerm \
@@ -572,7 +621,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.93
+BASE_VER := 4.03
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
