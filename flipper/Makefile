@@ -69,7 +69,7 @@ $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 lfrfidtest:
 	$(MAKE) -C tests/lfrfid test
 
-# libmodem on the PC (spec section O, ACO.1, ACO.2): frames, ARQ, carousel,
+# libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
 # the RFID line code, the Sub-GHz presets, legal check and duty counter.
 modemtest:
 	$(MAKE) -C tests/modem test

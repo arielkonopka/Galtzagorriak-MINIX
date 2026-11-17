@@ -1359,7 +1359,7 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
-	/* libmodem (spec section O) on the target: the RFID line code's
+	/* libmodem (spec section P) on the target: the RFID line code's
 	 * numbers and every Sub-GHz preset's CC1101 values and legal check
 	 * (64-bit integer arithmetic, no FPU). */
 	fflush(stdout);

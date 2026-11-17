@@ -1,4 +1,4 @@
-# make modemtest (spec section O, ACO.1, ACO.2): libmodem (src/lib/modem)
+# make modemtest (spec section P, ACP.1, ACP.2): libmodem (src/lib/modem)
 # on the PC: frames, the ARQ stream through a lossy channel, the carousel,
 # the RFID line code P4, the CC1101 presets, the legal band check, the
 # duty-cycle counter and a fuzz run, under AddressSanitizer and UBSan.

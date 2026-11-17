@@ -2,12 +2,12 @@
 
 `fmodem` moves a file from one Flipper to another that also runs Galtzagorriak MINIX, without a
 PC or a phone. It is one command for four radios: 125 kHz RFID, Sub-GHz, NFC and Bluetooth LE.
-The design is spec section O.
+The design is spec section P.
 
 | Medium | Works today | Speed | Range | Notes |
 |---|---|---|---|---|
 | `rfid` | yes, one way | a few tens of bytes a second (estimate; measured numbers follow) | backs together, 1–3 cm | the sender is a tag, the receiver a reader |
-| `subghz` | **(planned)**, needs the transmit path (spec RO.8) | 0.1–14 KB/s by preset, less where the law limits sending time | metres to hundreds of metres | presets choose bandwidth and speed |
+| `subghz` | **(planned)**, needs the transmit path (spec RP.8) | 0.1–14 KB/s by preset, less where the law limits sending time | metres to hundreds of metres | presets choose bandwidth and speed |
 | `nfc` | **(planned)**, Phase 13 | ≈ 5–10 KB/s | ≤ 4 cm | |
 | `ble` | **(planned)**, Phase 15 | ≈ 10–80 KB/s | 10–30 m | the only encrypted one |
 
@@ -41,7 +41,7 @@ Small things can go through pipes: `echo "Kaixo, lagun!" | fmodem send -m rfid` 
 
 At most 98 KB per transfer over RFID. It is one way only: the receiver cannot tell the sender
 which frames it is missing, so the sender just repeats everything. A way back is planned
-(spec RO.5c) and will make RFID faster.
+(spec RP.5c) and will make RFID faster.
 
 ## Sub-GHz (planned): bandwidth, speed and the law
 

@@ -1,5 +1,5 @@
 /* fmodem - move data between two Flippers (Galtzagorriak MINIX, spec
- * section O; libmodem in src/lib/modem).  Not MINIX's own modem(1), which
+ * section P; libmodem in src/lib/modem).  Not MINIX's own modem(1), which
  * switches a serial line between dial-in and dial-out.
  *
  * Usage:	fmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]
@@ -10,10 +10,10 @@
  * MEDIUM is rfid, nfc, subghz or ble.  Today rfid works (one way, the
  * sender is the tag, the receiver the reader: hold the two Flippers back to
  * back); subghz has its presets and legal limits in `fmodem info` and sends
- * once /dev/subghz can transmit (spec RO.8, T23b); nfc and ble follow their
+ * once /dev/subghz can transmit (spec RP.8, T26b); nfc and ble follow their
  * drivers (Phases 13 and 15).
  *
- * RFID (spec O.5): the sender plays the file as a carousel of frames of 24
+ * RFID (spec P.5): the sender plays the file as a carousel of frames of 24
  * bytes, two frames at a time through RFIDIOCEMU in the line code P4, over
  * and over (-n ROUNDS, default until Ctrl-C); the receiver reads the
  * reader's captures, keeps every frame it has not got yet, writes it at its
@@ -88,7 +88,7 @@ static void pmhz(unsigned long hz)
 	printf("%lu.%03lu MHz", hz / 1000000UL, hz / 1000UL % 1000UL);
 }
 
-/* ---- RFID (spec O.5) ---- */
+/* ---- RFID (spec P.5) ---- */
 
 static int rfid_q(void)
 {
@@ -256,7 +256,7 @@ static int rfid_recv(void)
 	return 0;
 }
 
-/* ---- Sub-GHz (spec O.4) ---- */
+/* ---- Sub-GHz (spec P.4) ---- */
 
 static void region(char *r, int max)
 {
@@ -286,7 +286,7 @@ static void info_subghz(void)
 	f = freq ? freq : strcmp(reg, "US") == 0 ? 915000000UL : 433920000UL;
 	printf("subghz: region %s, ", reg);
 	pmhz(f);
-	printf("; sending needs /dev/subghz transmit (spec RO.8, T23b)\n");
+	printf("; sending needs /dev/subghz transmit (spec RP.8, T26b)\n");
 	printf("  preset   rate      deviation  filter     occupies   frame  "
 		"peak       here\n");
 	for (p = mdm_presets; p->name[0]; p++) {
@@ -383,12 +383,12 @@ int main(int argc, char **argv)
 	if (strcmp(medium, "ble") == 0)
 		return notyet("ble", "the BLE stack on CPU2, Phase 15");
 	if (strcmp(medium, "subghz") == 0)
-		return notyet("subghz", "/dev/subghz transmit, spec RO.8, T23b");
+		return notyet("subghz", "/dev/subghz transmit, spec RP.8, T26b");
 	if (strcmp(medium, "rfid") != 0) usage();
 	if (strcmp(verb, "send") == 0) return rfid_send(file);
 	if (strcmp(verb, "recv") == 0 && file == NULL) return rfid_recv();
 	if (strcmp(verb, "chat") == 0)
-		return notyet("rfid chat", "the reverse channel, spec RO.5c, T23b");
+		return notyet("rfid chat", "the reverse channel, spec RP.5c, T26b");
 	usage();
 	return 2;
 }

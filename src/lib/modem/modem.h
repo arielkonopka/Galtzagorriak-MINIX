@@ -1,23 +1,23 @@
 /* modem.h - libmodem: data links between two Flippers over RFID, NFC,
- * Sub-GHz and BLE (spec section O).
+ * Sub-GHz and BLE (spec section P).
  *
- * One frame format for every medium (O.3); the PHY backends add only their
+ * One frame format for every medium (P.3); the PHY backends add only their
  * own sync.  Three services: an ARQ byte stream (selective repeat, half
  * duplex, window <= 8), a carousel for simplex media (RFID today) and
  * datagrams.  Plus the pieces of the two backends that are pure logic and
- * are tested on the PC (make modemtest): the RFID line code P4 (O.5), the
+ * are tested on the PC (make modemtest): the RFID line code P4 (P.5), the
  * CC1101 register calculator, the presets, the region's band table and the
- * duty-cycle counter (O.4).
+ * duty-cycle counter (P.4).
  *
  * Plain C89 (long long in cc1101.c), no malloc: the caller passes every
  * buffer, so the same code serves the `fmodem` command, the PPP link of
- * Phase 19 and Berry.  Every byte from the air is hostile (O.3): only
+ * Phase 19 and Berry.  Every byte from the air is hostile (P.3): only
  * mdm_unpack() reads a frame, and it checks the length against the buffer and the MTU before the CRC.
  */
 #ifndef _MODEM_H
 #define _MODEM_H
 
-/* ---- frames (O.3) ---- */
+/* ---- frames (P.3) ---- */
 #define MDM_HDR		5		/* type|flags, sid, a, b, len */
 #define MDM_CRC		2
 #define MDM_OVH		(MDM_HDR + MDM_CRC)
@@ -81,7 +81,7 @@ struct mdm_stat {
 
 #define MDM_RETRIES	20
 
-/* The ARQ stream (O.3, RO.4).  window: 1..MDM_WMAX; wbuf: window * (mtu +
+/* The ARQ stream (P.3, RP.4).  window: 1..MDM_WMAX; wbuf: window * (mtu +
  * 2) bytes.  The sender's sid is any random byte (another transfer's
  * frames are ignored).  progress (may be NULL) is called after each ACK
  * and each delivered frame. */
@@ -92,7 +92,7 @@ int mdm_recv(const struct mdm_phy *p, int window, long idle_ms,
 	mdm_put_fn put, void *u, unsigned char *wbuf, struct mdm_stat *st,
 	void (*progress)(void *u, const struct mdm_stat *st));
 
-/* ---- carousel (simplex, RO.4) ---- */
+/* ---- carousel (simplex, RP.4) ---- */
 #define MDM_CAR_MAX	4096		/* frames per transfer */
 struct mdm_car {
 	unsigned char *map;		/* MDM_CAR_MAX / 8 bytes, the caller's */
@@ -111,7 +111,7 @@ int mdm_car_pack(unsigned char sid, int idx, int last,
 int mdm_car_take(struct mdm_car *c, const struct mdm_frame *f, int chunk);
 int mdm_car_done(const struct mdm_car *c);
 
-/* ---- RFID line code P4 (O.5) ----
+/* ---- RFID line code P4 (P.5) ----
  * A cycle: Q carrier periods loaded, then (L-1)*Q not; L = 2..5 carries
  * two bits (most significant pair first), L = 7 is the sync.  Segments for
  * RFIDIOCEMU: dur = L*Q - 1, pulse = Q.  The decoder takes the reader's
@@ -121,7 +121,7 @@ int mdm_car_done(const struct mdm_car *c);
 #define MDM_P4_ROBUST	32		/* 256 us */
 #define MDM_P4_SYNC	7
 #define MDM_P4_PERIOD_US 8		/* 125 kHz */
-#define MDM_RFID_MTU	24		/* a frame of 125 cycles (spec RO.5a) */
+#define MDM_RFID_MTU	24		/* a frame of 125 cycles (spec RP.5a) */
 
 /* segments for n bytes: 1 + 4 n */
 int mdm_p4_encode(const unsigned char *b, int n, int q,
@@ -132,7 +132,7 @@ int mdm_p4_decode(const unsigned long *d, int nd, int q, int mtu,
 /* us the frame of n bytes takes on average (random data) */
 long mdm_p4_us(int n, int q);
 
-/* ---- Sub-GHz: CC1101 (O.4) ---- */
+/* ---- Sub-GHz: CC1101 (P.4) ---- */
 #define MDM_MOD_2FSK	0
 #define MDM_MOD_GFSK	1
 #define MDM_MOD_OOK	3
@@ -168,7 +168,7 @@ int mdm_cc1101_regs(unsigned long freq, const struct mdm_sgphy *in,
 /* Hz the signal occupies: FSK 2 * dev + baud, OOK 2 * baud */
 unsigned long mdm_occupied(const struct mdm_cc1101 *r);
 
-/* A band a region allows data in (spec O.4 table). */
+/* A band a region allows data in (spec P.4 table). */
 struct mdm_band {
 	char region[3];
 	unsigned long lo, hi;		/* Hz */
@@ -190,7 +190,7 @@ int mdm_sg_dbm(const struct mdm_band *b);
 /* ms on the air for n bytes: preamble 4, sync 4, length 1, n, CRC 2 */
 long mdm_sg_airtime(unsigned long baud, int n);
 
-/* ---- duty cycle (RO.7) ----
+/* ---- duty cycle (RP.7) ----
  * Transmit time in 10 ms units in 7 slots of 10 minutes: any 60-minute
  * window lies inside the last 7, so their sum <= the limit holds for all. */
 #define MDM_DUTY_SLOTS	7

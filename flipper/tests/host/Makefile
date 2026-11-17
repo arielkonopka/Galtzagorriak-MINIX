@@ -30,7 +30,7 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
-# libmodem (spec section O, ACO.1, ACO.2): data modems between two
+# libmodem (spec section P, ACP.1, ACP.2): data modems between two
 # Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
 run-modem:
 	$(MAKE) -C $(MROOT)/flipper/tests/modem test

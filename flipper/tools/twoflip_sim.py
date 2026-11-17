@@ -311,7 +311,7 @@ def expected(rid):
 	if rid == "subghz-raw_timings-u2m":
 		return "INFO"
 	if rid.startswith("modem-"):
-		return "N/A"		# needs --peer-minix (spec section O)
+		return "N/A"		# needs --peer-minix (spec section P)
 	return "MISSING"		# subghz tx/chat/decode, nfc
 
 

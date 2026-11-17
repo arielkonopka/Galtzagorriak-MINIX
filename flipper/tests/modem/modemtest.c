@@ -1,5 +1,5 @@
-/* modemtest - libmodem (src/lib/modem, spec section O) on the PC:
- * ACO.1 and ACO.2.
+/* modemtest - libmodem (src/lib/modem, spec section P) on the PC:
+ * ACP.1 and ACP.2.
  *
  *   frames     CRC check value, pack/unpack, every 1- and 2-bit error caught
  *   arq        100 KB through a lossy half-duplex channel (two processes,
@@ -472,7 +472,7 @@ static void test_duty(int duty_pm)
 	CHECK(mdm_duty_wait(&d, WEEK, 1, 400) == -1, "packet over the limit");
 }
 
-/* ---- fuzz (ACO.2) ---- */
+/* ---- fuzz (ACP.2) ---- */
 static void nothing(void *u, const unsigned char *b, int n)
 {
 	struct mdm_frame f;

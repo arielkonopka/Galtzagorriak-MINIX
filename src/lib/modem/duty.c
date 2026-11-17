@@ -1,4 +1,4 @@
-/* duty.c - the duty-cycle counter of the Sub-GHz modem (spec RO.7).
+/* duty.c - the duty-cycle counter of the Sub-GHz modem (spec RP.7).
  *
  * EN 300 220 counts the duty cycle over one hour.  Transmit time is kept in
  * 10 ms units in 7 slots of 10 minutes ([0] the slot `now` is in).  Any

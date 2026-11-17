@@ -1,4 +1,4 @@
-/* frame.c - libmodem frames (spec O.3): CRC-16, pack, unpack, carousel. */
+/* frame.c - libmodem frames (spec P.3): CRC-16, pack, unpack, carousel. */
 #include "modem.h"
 
 unsigned short mdm_crc16(const unsigned char *p, int n, unsigned short crc)

@@ -1,4 +1,4 @@
-/* arq.c - libmodem's ARQ byte stream (spec O.3, RO.4): selective repeat,
+/* arq.c - libmodem's ARQ byte stream (spec P.3, RP.4): selective repeat,
  * half duplex, a window of up to 8 frames.
  *
  * The sender sends every frame of its window that is not acknowledged yet,

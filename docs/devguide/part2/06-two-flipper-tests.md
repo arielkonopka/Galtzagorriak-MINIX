@@ -26,7 +26,7 @@ Unleashed Flipper sends or emulates, MINIX receives or reads. "M→U" (`m2u`): t
 | `subghz` | signal level at 315, 433.92, 868.35 MHz; raw timings; Princeton `tx`; chat × both | Unleashed sends, MINIX measures; MINIX sends, Unleashed decodes |
 | `subghz-decode` | 37 remote protocols × both | Unleashed's own test recordings (`.sub` key files) sent by one, decoded by the other |
 | `nfc` | 7 tag types (ISO14443-3A, NTAG215, Ultralight 11/21/C, FeliCa, SLIX) × both | one emulates a tag file, the other scans it |
-| `fmodem` | the data modems of spec section O: RFID `fast`/`robust`, Sub-GHz `narrow`/`std`/`wide`/`max`, NFC, BLE × both | **two MINIX Flippers** (`--peer-minix`, 6.12): one sends 1 KB with `fmodem send`, the other receives it; checksums must match. N/A against Unleashed |
+| `fmodem` | the data modems of spec section P: RFID `fast`/`robust`, Sub-GHz `narrow`/`std`/`wide`/`max`, NFC, BLE × both | **two MINIX Flippers** (`--peer-minix`, 6.12): one sends 1 KB with `fmodem send`, the other receives it; checksums must match. N/A against Unleashed |
 
 Each row ends with one status:
 
@@ -475,7 +475,7 @@ MISSING; anything else that does not match is FAIL.
 
 ## 6.12 Two MINIX Flippers: the data modems (`--peer-minix`)
 
-The `fmodem` command (spec section O, manual chapter [Data modems](../../manual/modem.md)) moves
+The `fmodem` command (spec section P, manual chapter [Data modems](../../manual/modem.md)) moves
 files between two Flippers that **both run MINIX**. The Unleashed firmware has nothing like it,
 so the reference Flipper of the rest of this chapter cannot be the partner: against Unleashed
 the 16 `fmodem` rows are **N/A**. To run them you need a second Flipper with MINIX for the
@@ -497,7 +497,7 @@ session.
 - **RFID rows:** back to back exactly as in 6.4 ("Back to back"), same spacer. The sending
   Flipper is the tag (it only loads the other's field), the receiving one is the reader. Keep
   the spacer thin (1–3 mm): the modem's tag side reaches no further than `rfid emulate`.
-- **Sub-GHz rows (when `/dev/subghz` can transmit, T23b):** the two Flippers 1–2 m apart on the
+- **Sub-GHz rows (when `/dev/subghz` can transmit, T26b):** the two Flippers 1–2 m apart on the
   table, antennas (the top left corner) not touching anything metal. Set the region first, on
   both: `echo EU > /etc/flipper/region` (or `US`); `fmodem info -m subghz` must say `ok` for the
   preset before the row can pass.
@@ -527,7 +527,7 @@ report, they are the measured rates the manual quotes.
 | PASS | note the time |
 | FAIL "did not finish in 180 s" | move the stack: the coils must lie on top of each other; try `-p robust` by hand (6.8) |
 | FAIL "checksums differ" | a bug (a frame with a good CRC but wrong data must not happen): report it with the `--log` file |
-| MISSING "not implemented yet" | the medium's driver is not there; expected for Sub-GHz until T23b, NFC, BLE |
+| MISSING "not implemented yet" | the medium's driver is not there; expected for Sub-GHz until T26b, NFC, BLE |
 
 ### By hand
 

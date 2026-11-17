@@ -1,4 +1,4 @@
-/* p4.c - the RFID line code P4 (spec O.5): the tag->reader direction of
+/* p4.c - the RFID line code P4 (spec P.5): the tag->reader direction of
  * the 125 kHz modem.
  *
  * A cycle is Q carrier periods with the antenna loaded, then (L-1)*Q not;

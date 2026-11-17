@@ -418,7 +418,7 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
-# libmodem (spec section O, src/lib/modem): the link layer, the RFID line
+# libmodem (spec section P, src/lib/modem): the link layer, the RFID line
 # code and the Sub-GHz presets and legal tables, linked into fmodem (not
 # MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
 MODEM_DIR := $(MROOT)/src/lib/modem

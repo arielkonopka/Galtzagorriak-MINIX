@@ -1,6 +1,6 @@
-/* cc1101.c - the Sub-GHz modem's pure logic (spec O.4): presets, the
+/* cc1101.c - the Sub-GHz modem's pure logic (spec P.4): presets, the
  * CC1101 register values for a data rate, deviation and filter, and the
- * region's bands.  The kernel's transmit check (R8.2, RO.8) compiles this
+ * region's bands.  The kernel's transmit check (R8.2, RP.8) compiles this
  * same file, so what the library computes and what the kernel allows can
  * never disagree.  Integer arithmetic only (no FPU context, R5.7).
  */
@@ -8,7 +8,7 @@
 
 #define MHZ(a, b)	((a) * 1000000UL + (b) * 1000UL)
 
-/* Values from the CC1101's 26 MHz crystal (O.4 table); `modem info`
+/* Values from the CC1101's 26 MHz crystal (P.4 table); `modem info`
  * prints what the chip really gets. */
 const struct mdm_preset mdm_presets[] = {
 	{ "narrow", {   1200,   5200,  58000, MDM_MOD_GFSK }, "longest range, slow" },
@@ -19,9 +19,9 @@ const struct mdm_preset mdm_presets[] = {
 	{ "",       {      0,      0,      0, 0 }, "" }
 };
 
-/* Data bands (O.4).  First version: to be checked against the current
+/* Data bands (P.4).  First version: to be checked against the current
  * ERC/REC 70-03 Annex 1, EN 300 220, FCC 15.249 and the stock firmware's
- * region data before transmit is enabled (T23b).  dbm: the highest output
+ * region data before transmit is enabled (T26b).  dbm: the highest output
  * allowed, counting the antenna as 0 dBi and e.r.p. as conducted power
  * (the Flipper's antenna is worse, so this errs low). */
 const struct mdm_band mdm_bands[] = {

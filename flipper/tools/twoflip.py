@@ -46,7 +46,7 @@ PATTERN selects rows by id (shell-style, or a prefix): "rfid", "ir-*-m2u",
   --freq HZ       Sub-GHz frequency of the raw and Princeton rows
   --log FILE      everything both consoles said, with times
   --peer-minix    the second Flipper (-u) runs MINIX too: only the "modem"
-                  rows run (spec section O: data modems between two MINIX
+                  rows run (spec section P: data modems between two MINIX
                   Flippers, which the Unleashed firmware does not have);
                   without it those rows are N/A
 
@@ -913,7 +913,7 @@ def nfc_m2u(ul, mx, opt, f):
 		last(out, 2))
 
 
-# --- data modems between two MINIX Flippers (spec section O) -----------
+# --- data modems between two MINIX Flippers (spec section P) -----------
 
 # A test text of 1 KB, the same every run, a little Basque in it.
 MODEM_TEXT = "".join("%04d Kaixo, galtzagorriak! Datuak irratiz doaz, "
