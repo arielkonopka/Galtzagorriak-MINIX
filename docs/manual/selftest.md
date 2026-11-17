@@ -38,9 +38,9 @@ Every result is appended to `/home/flipper/apps_data/selftest/log`, one line eac
 | **Sound, vibration and light** | interactive | A scale rising and falling on the speaker, three vibration pulses, the LED red, green, blue and white, the display all on, all off, a checkerboard and its inverse, and the backlight from dark to bright. Then OK if all of it looked and sounded right, Back if not. |
 | **GPIO loopback** | interactive | Put jumpers on the header pins 2–3, 4–5, 6–7 and 15–16 first. Each pin of a pair drives high and low while the other reads, once against a pull-down and once against a pull-up, so a missing or bad jumper fails. Then the 5 V output on pin 1 is switched on and the charger must report it, and off again (not tested while USB powers the Flipper). All pins end "off". |
 
-**(planned, spec R7b.3.1, R7b.3.5)** A checksum of the system image itself and the flash ECC
-counts in the flash test, and tests for the radios as their drivers arrive. Starting the self test with Up +
-Back held at power-on is planned as well.
+**(planned, spec 7b.3)** A checksum of the system image itself and the flash ECC counts in the
+flash test, tests for the radios as their drivers arrive, and starting the self test with Up +
+Back held at power-on.
 
 ## Adding a test
 
