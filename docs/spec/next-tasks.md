@@ -340,20 +340,20 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
-## T26. Bigger `/home` as MINIX V3 (spec section P; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
+## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
-### T26a (`lane:cloud`, QEMU): driver positions, FS V3, tools
-- P.3: needs R12.39 (amended: `dv_size` in sectors, `HIGHPOS`, `DIOCPRW`, `DIOCGETPS`), done once in `disk.c`/`drvlib.c` by the local lane (#110). T26a only sets `HIGHPOS` in FS `rw_block`/`rw_scattered` (64-bit position) and adds libc `bread`/`bwrite`.
-- P.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, ≤ 65 535 inodes, message otherwise); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; V3 → flex translation on directory `read()` (filler entry, "." extent 0); triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in P.4.
-- P.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
-- P.6: `fsck` V3 (`-3` implied by the magic), high-water mark windows, `fsck -L`; `mkfs -3` (room for the largest zone map); `tools/mkfsimg.py -3`.
-- P.7: `/etc/setup` layout, `setup -H` conversion with resume.
-- Tests: ACP.1–ACP.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +20 B static, stack within budget; flashcheck unchanged.
+### T27a (`lane:cloud`, QEMU): driver positions, FS V3, tools
+- O.3: needs R12.39 (amended: `dv_size` in sectors, `HIGHPOS`, `DIOCPRW`, `DIOCGETPS`), done once in `disk.c`/`drvlib.c` by the local lane (#110). T27a only sets `HIGHPOS` in FS `rw_block`/`rw_scattered` (64-bit position) and adds libc `bread`/`bwrite`.
+- O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, ≤ 65 535 inodes, message otherwise); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; V3 → flex translation on directory `read()` (filler entry, "." extent 0); triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
+- O.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
+- O.6: `fsck` V3 (`-3` implied by the magic), high-water mark windows, `fsck -L`; `mkfs -3` (room for the largest zone map); `tools/mkfsimg.py -3`.
+- O.7: `/etc/setup` layout, `setup -H` conversion with resume.
+- Tests: ACO.1–ACO.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +20 B static, stack within budget; flashcheck unchanged.
 - Docs: manual `sdcard.md` (V3 `/home`, Linux access, `setup -H`, `df` estimate), `man` pages for `mkfs -3`, `fsck -L`, `statfs`; devguide note on `NAME_MAX` 60 and `pathconf`; CHANGELOG (ABI: `NAME_MAX`, new FS call, bump per spec J).
 
-### T26b (`lane:local`, Flipper)
-- ACP.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
+### T27b (`lane:local`, Flipper)
+- ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
