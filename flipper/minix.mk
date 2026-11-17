@@ -505,7 +505,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -519,9 +519,9 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.0.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.1.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.0 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.1 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
