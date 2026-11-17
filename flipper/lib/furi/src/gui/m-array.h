@@ -69,12 +69,12 @@ void farray_remove(FArray* a, size_t i, size_t es);
         a->size--;                                                                     \
         if(x) *x = ((type*)a->ptr)[a->size];                                           \
     }                                                                                  \
-    static inline void name##_it(name##_it_t it, name##_t a) {                         \
-        it->a = a;                                                                     \
+    static inline void name##_it(name##_it_t it, const name##_t a) {                   \
+        it->a = (FArray*)a;                                                            \
         it->i = 0;                                                                     \
     }                                                                                  \
-    static inline void name##_it_last(name##_it_t it, name##_t a) {                    \
-        it->a = a;                                                                     \
+    static inline void name##_it_last(name##_it_t it, const name##_t a) {              \
+        it->a = (FArray*)a;                                                            \
         it->i = (size_t)a->size - 1;                                                   \
     }                                                                                  \
     static inline bool name##_end_p(const name##_it_t it) {                            \

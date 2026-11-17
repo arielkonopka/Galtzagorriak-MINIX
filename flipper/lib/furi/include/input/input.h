@@ -9,7 +9,18 @@
 
 #pragma once
 
-#include <furi_hal_resources.h>
+#include <furi.h>
+
+/* Input Keys (stock furi_hal_resources.h) */
+typedef enum {
+    InputKeyUp,
+    InputKeyDown,
+    InputKeyRight,
+    InputKeyLeft,
+    InputKeyOk,
+    InputKeyBack,
+    InputKeyMAX, /**< Special value */
+} InputKey;
 
 #ifdef __cplusplus
 extern "C" {
