@@ -354,7 +354,9 @@ PUBLIC void flipdev_task()
 	hal_backlight(HAL_BL_LEVEL(st));
   }
   if ((r = hal_rfid_stream_irq()) >= 0) {	/* R9.0.5 */
-	put_irq_handler(r, rs_int);
+	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
+					 * new slot (all NR_IRQ_HANDLERS used);
+					 * it passes this vector to rs_int */
 	enable_irq(r);
   }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
@@ -2689,8 +2691,11 @@ PRIVATE int ir_tx_int(irq)
 int irq;
 {
 /* TIM2: a mark or space is over, the next one (already loaded) starts
- * now; or, receiving, the pulse engine's capture (R4b.7). */
+ * now; or, receiving, the pulse engine's capture (R4b.7).  Also the RFID
+ * stream's DMA vector (R9.0.5): one handler, one slot. */
   int update;
+
+  if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
 
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();
