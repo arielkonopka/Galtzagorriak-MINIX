@@ -10,7 +10,7 @@ done today, or use the desk clock.
 ```
 pkg install /lib/pkg/timed_1.2.tar     # needed by both
 pkg install /lib/pkg/remind_1.0.tar
-pkg install /lib/pkg/alarm_1.0.tar
+pkg install /lib/pkg/alarm_1.1.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
@@ -21,8 +21,10 @@ the internal flash at install time (`Flash: yes`), so their code is not copied i
 `pkg remove` takes the app off the launcher; your timers, your data and the user stay, and
 installing the package again brings everything back.
 
-The launcher starts the apps as root; as soon as an app has the screen and buttons it becomes its
-own user, so it can only touch its own timers and files.
+The launcher starts Kanpaia as root; as soon as it has the screen and buttons it becomes its own
+user. Ordua is a **window app** ([the launcher](launcher.md), spec K.8): the launcher starts it
+directly as the user `alarm` and draws its screens itself. Either way an app can only touch its
+own timers and files.
 
 ## Remind
 
@@ -55,45 +57,64 @@ remind -s        # today 3
                  # week 0 2 5 4 0 1 3   (6 days ago … today)
 ```
 
-## Alarm
+## Alarm (Ordua)
 
-**List:** the first line opens the **Desk clock**, the second, **+ New alarm**, adds one; then
-your alarms with time, days (or `once`) and label. OK edits, Back closes the app.
+Ordua is a window app: it only describes its screens, and the launcher draws them in the same
+style as its own lists, moves the cursor and changes the values. Up/Down move, Left/Right change
+the value of the row under the cursor, OK on a time or days row edits it field by field, OK on
+a label row opens the keyboard. The hint line at the bottom says what the keys do on that row.
+Back goes back one screen; on the list it closes Ordua, which then takes no RAM at all.
 
-**Form** (the same keys as in Remind):
+**List:** **Desk clock**, **+ New alarm** (not shown once there are 14 alarms), then your alarms
+with their time, label and days (`MTWTF--`), `once` or `off`. OK edits one.
 
-| field | values |
+**Edit form:**
+
+| row | values |
 |---|---|
-| Hour, Minute | the time, local |
+| Time | the time, local; OK, then Up/Down change the hour or the minute, Left/Right move between them, OK ends |
 | Repeat | `on days` (with Days) or `once` (the next time it comes) |
-| Days | as in Remind |
-| Label | Alarm, Wake up, Work, School, Medicine, Nap is over |
+| Days | OK, then Left/Right move along `MTWTFSS`, Up/Down switch the day on or off, OK ends |
+| Label | the keyboard, up to 12 characters (new alarms: `Alarm`) |
+| On | off keeps the alarm but switches it off |
+| Ring settings | opens the next screen |
+| Save, Delete | OK on them; both go back to the list |
+
+Back on the form leaves it without saving. Save with `on days` and no day checked says so and
+keeps the form.
+
+**Ring settings** (Back returns to the form; Save there keeps them):
+
+| row | values |
+|---|---|
 | Mode | `escalating` (new alarms): it gets stronger the longer you do not answer. The rings come closer (5, 5, 4, 4, 3, 3, 2, 2 s apart, then every second), a single beep becomes the full sound, then vibro, LED and screen flash join in, and the volume rises from a fifth of **Volume** to all of it. `steady`: everything at once, at **Volume**, a ring every second |
-| Stage | `escalating`: 10 (default), 20, 30, 60, 90, 120 s per stage; with 10 s the sound and volume reach full together with the rhythm, about 30 s in |
+| Stage | `escalating`: 10 (default) … 120 s per stage, in steps of 10; with 10 s the sound and volume reach full together with the rhythm, about 30 s in |
 | Volume | 10–100 % in steps of 10 (a cubic curve, as on the stock firmware: 50 % is much quieter than 100 %) |
-| Sound | `yes`/`no`: the speaker |
-| Sound type | `melody` (the tone's tune) or `single` (beeps of one note) |
-| Tone | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, then your own files |
-| Vibro, LED blink, Screen flash | `yes`/`no` each; the screen flash blinks the backlight and leaves it as it was afterwards |
-| Snooze | 0, 5, 10, 15, 20, 30 minutes |
+| Beep | on/off: the speaker |
+| Sound | `melody` (the tune) or `single` (beeps of one note) |
+| Melody | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, then your own tone file (below) |
+| Vibro, LED blink, Screen flash | on/off each; the screen flash blinks the backlight and leaves it as it was afterwards |
+| Snooze | off, 5, 10, 15, 20, 30 minutes |
 | Ring for | 1, 5, 10, 15, 30, 60 minutes before it gives up |
-| On | `no` keeps the alarm but switches it off |
-| Save, Delete | OK on them |
 
 An alarm **always rings** as set — its outputs and its own volume — also in do-not-disturb and
-when the volume of reminders (`/etc/notify.conf`, `Volume`) is 0.
+when the volume of reminders (`/etc/notify.conf`, `Volume`) is 0. It does not need Ordua or the
+launcher: `timed` and `alert` ring it, over whatever app is open.
 
-**Your own tones:** put RTTTL (`.rtttl` or `.txt`) or Flipper music (`.fmf`) files into
-`/home/flipper/apps_data/alarm/` (as root or the user `alarm`, mode readable by `alarm`); the
-Tone field offers them after the built-in ones.
+**Your own tone:** put an RTTTL file `tone.rtttl` (or `tone.txt`) or a Flipper music file
+`tone.fmf` into `/home/flipper/apps_data/alarm/` (as root or the user `alarm`, readable by
+`alarm`); the Melody row offers it after the built-in ones (at most two files: the one the
+alarm has, and the first of these names that is there). An alarm made by the older Ordua with
+another file name keeps it, and the Melody row shows it.
 
 An alarm that is **off** is kept as `/home/flipper/apps_data/alarm/alarm-N.off`, so `timed`
-never looks at it; switching it on moves it back to `/var/timers/alarm-N`.
+never looks at it; switching it on moves it back to `/var/timers/alarm-N`. Ordua uses the ids
+`alarm-1` to `alarm-14`.
 
-**Desk clock:** a large clock, the date and the next alarm. It redraws once a minute (the app
-sleeps until the next minute; no polling). Left/Right sets the backlight: `auto` (as
-everywhere), `dim` or `on`; the choice is remembered. Back returns to the list and gives the
-backlight back as it was.
+**Desk clock:** the launcher draws a large clock and keeps it to the minute; Ordua gives the two
+lines under it: the next alarm (`Next 07:00`, or `Next Tue 07:00` when it is more than a day
+away; `No alarm on`) and its label. Ordua sleeps meanwhile (no wake-ups). Back returns to the
+list. The backlight follows the system setting (Settings → Display).
 
 From the shell:
 
@@ -103,15 +124,18 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 
 ## Limitations
 
-- An app uses about **15–16 KB of RAM while it is open** (`remind` 15.6 KB, `alarm` 16.1 KB:
-  its thread stacks, screen buffer and the data of the GUI library; the library's code is in
-  flash once for all apps, `free -v` shows it as `shared libfuri`); nothing while it is closed.
-- The desk clock wakes once a minute from a timed wait; the RTC wake-up timer (planned, R7b.1)
-  will replace it.
+- **RAM while open:** Ordua about **4.4 KB** (its stack, the alarm in the form and the libc
+  data; ACK8.3: at most 4.5 KB). Kanpaia about 15.6 KB (its thread stacks, screen buffer and
+  the data of the GUI library; the library's code is in flash once for all apps, `free -v`
+  shows it as `shared libfuri`). Nothing while they are closed.
+- The desk clock's "next alarm" line is the one from when it opened: an alarm that rings or is
+  snoozed meanwhile does not change it until you open the desk clock again.
+- The desk clock no longer sets the backlight itself (the old Left/Right `auto`/`dim`/`on`);
+  a `Light:` line left in `apps_data/alarm/settings` is ignored.
 
 ## Where they write
 
 Everything is on the SD card: the timer files in `/var/timers`, the reminder log (one ~20-byte line
-per OK), off alarms and the desk clock's backlight setting in `/home/flipper/apps_data/<app>/`.
+per OK) and off alarms in `/home/flipper/apps_data/<app>/`.
 Nothing is written to the internal flash at run time; the programs are written there once, by
 `pkg install`.

@@ -27,8 +27,9 @@
  *	launcher [-a apps] [-c conf] [-f]
  *
  * -a, -c: other files; -f: take the screen and the buttons from the
- * launcher of /etc/rc (it waits, as for an app) until SIGTERM.  For the
- * QEMU tests (tools/nattest.py), which start a launcher from a shell.
+ * launcher of /etc/rc until SIGTERM.  For the QEMU tests
+ * (tools/nattest.py), which start a launcher from a shell; the first key
+ * after it starts still ends the other one's read (a key it ignores).
  */
 #include <lib.h>
 #include <minix/callnr.h>
@@ -478,6 +479,8 @@ int main(int argc, char **argv)
 		win_reap(0);
 		i = win_pending();
 		if (note != NULL && (i < 0 || i > NOTE_MS)) i = NOTE_MS;
+		if (i < 0 && fg_fd >= 0) i = 60000;	/* -f: poll(), as the
+			 * launcher of /etc/rc may hold the one blocking read */
 		k = gui_input(&in, KEY_LEFT | KEY_RIGHT, i);
 		if (k == 0 && note != NULL && win_pending() >= 0) {
 			win_reap(0);	/* only the window app's time */

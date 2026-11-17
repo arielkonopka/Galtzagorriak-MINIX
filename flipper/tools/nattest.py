@@ -108,6 +108,10 @@ def ordua(r):
 	     "echo 'Battery: off' >> /tmp/lc; echo 'GuiLog: on' >> /tmp/lc", 20)
 	r.sh("launcher -f -a /tmp/la -c /tmp/lc & echo $! > /tmp/lpid; sleep 2",
 	     30)
+	# The launcher of /etc/rc still waits in a read of the buttons: the
+	# first key ends it there (Left: its settings page) and its next read
+	# waits for good, as ours has them now.
+	tap(r, "left")
 	base = freebytes(r)
 	mark = len(r.out)
 	r.sh("free -t on", 20)

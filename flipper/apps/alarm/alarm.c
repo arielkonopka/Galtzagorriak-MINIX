@@ -412,7 +412,7 @@ static void w_ring(void)
 		} else r.extra[i][0] = 0;
 	gm_win("ring", "list", "Ring", 0, 0);
 	gm_enum("mode", "Mode", t->ramp ? 0 : 1, "escalating|steady");
-	gm_int("step", "Stage", 10, 120, 10, t->step ? t->step : 30, "s");
+	gm_int("step", "Stage", 10, 120, 10, t->step ? t->step : 10, "s");
 	gm_int("vol", "Volume", 10, 100, 10, t->volume ? t->volume : 100, "%");
 	gm_bool("beep", "Beep", t->flags & NF_SOUND);
 	gm_enum("stype", "Sound", t->single ? 1 : 0, "melody|single");
