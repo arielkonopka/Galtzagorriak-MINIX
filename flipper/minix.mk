@@ -186,7 +186,7 @@ MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
 	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
-	   protect.c time.c lock.c misc.c utility.c table.c putk.c
+	   protect.c time.c lock.c misc.c utility.c table.c putk.c poll.c
 next_sym = $$($(NM) $(1) | awk '$$3 == "$(2)" { print "0x" $$1 }')
 
 $(MB)/mm/%.o: $(MROOT)/src/mm/%
@@ -466,7 +466,7 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.79
+BASE_VER := 3.81
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

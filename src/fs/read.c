@@ -179,6 +179,7 @@ int rw_flag;			/* READING or WRITING */
 	}
   }
   f->filp_pos = position;
+  if (rip->i_pipe == I_PIPE && poll_npipe) poll_pipe();	/* R4b.6 */
 
   /* Check to see if read-ahead is called for, and if so, set it up. */
   if (rw_flag == READING && rip->i_seek == NO_SEEK && position % BLOCK_SIZE== 0

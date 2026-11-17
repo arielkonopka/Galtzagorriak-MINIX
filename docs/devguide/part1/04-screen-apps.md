@@ -179,8 +179,9 @@ static void tick(int sig)
 ```
 
 Notes:
-- `alarm()` has one-second resolution (ticks of 1/60 s underneath). Sub-second timers for
-  programs (`setitimer`) and `poll()` with a timeout are **(planned)** (R4b.2, R4b.6).
+- `alarm()` has one-second resolution (ticks of 1/60 s underneath). For a sub-second wait use
+  `poll()` with a timeout (ms, rounded up to the tick; R4b.6); `setitimer` is **(planned)**
+  (R4b.2). `poll()` on `/dev/buttons` returns at once until flipdev answers `DEV_SELECT`.
 - Refresh slower when nobody looks: the Power app reads every 10 s while the backlight is off
   (it reads `/dev/backlight` to know). Each wake-up costs battery.
 - Never spin on `gui_key_nowait()` in a loop. It keeps the CPU out of its sleep states and steals

@@ -78,7 +78,21 @@ When the data arrives, usually in `do_hardint()`, the task copies it and sends
 - A revived process goes to the head of the user queue (R4b.3); budget L5 (REVIVE to running)
   is 100 µs.
 
-## 3.5 Time without busy waiting
+### poll(): DEV_SELECT and DEV_SELECTED (R4b.6)
+
+FS's `poll()` asks a character device with `DEV_SELECT`: `DEVICE` the minor, `PROC_NR` the
+poller (for checks and logs only), `COUNT` the ops (`SEL_RD`, `SEL_WR`, `SEL_ERR`, plus
+`SEL_NOTIFY`; `<minix/com.h>`). Reply `TASK_REPLY` with `REP_STATUS` = the ops ready now (>= 0).
+- With `SEL_NOTIFY`, remember the requested ops that are not ready, **as bits per minor, not
+  the poller** (FS keeps the pollers; ORs with an earlier registration). When one becomes
+  ready, send one `DEV_SELECTED` to FS (`DEVICE` the minor, `REP_STATUS` the ready ops) and
+  forget the bits; FS registers again if somebody still waits.
+- `COUNT` 0: forget the bits (FS sends it when the last poller of that minor is done).
+- A task that answers `DEV_SELECT` with an error (the `EINVAL` of an unknown request) counts
+  as always ready, so adding a minor without it never hangs a poller.
+- Send `DEV_SELECTED` with `send()` from the task's main loop, like `REVIVE`; FS accepts it
+  in its main loop and while it waits for a reply from the same task.
+
 
 - **The ms timer** (R4b.2, `mt_arm()` in `arm/klib.c`): a kernel client asks for a call of its
   function in 1–999 ms. It runs on LPTIM1, which keeps counting in Stop2, so it also ends things

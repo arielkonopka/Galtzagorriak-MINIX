@@ -53,6 +53,7 @@ OBJECTS	= \
 	$(LIBRARY)(_pathconf.o) \
 	$(LIBRARY)(_pause.o) \
 	$(LIBRARY)(_pipe.o) \
+	$(LIBRARY)(_poll.o) \
 	$(LIBRARY)(_ptrace.o) \
 	$(LIBRARY)(_read.o) \
 	$(LIBRARY)(_readdir.o) \
@@ -231,6 +232,9 @@ $(LIBRARY)(_pause.o):	_pause.c
 
 $(LIBRARY)(_pipe.o):	_pipe.c
 	$(CC1) _pipe.c
+
+$(LIBRARY)(_poll.o):	_poll.c
+	$(CC1) _poll.c
 
 $(LIBRARY)(_ptrace.o):	_ptrace.c
 	$(CC1) _ptrace.c
