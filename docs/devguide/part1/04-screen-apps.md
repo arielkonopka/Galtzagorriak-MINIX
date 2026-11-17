@@ -114,12 +114,24 @@ The launcher (`flipper/gui/launcher.c`) is started as root by `/etc/rc` and show
 `/etc/apps`, one per line:
 
 ```
-# Label:user:/program arg ...
-Console:nobody:/bin/console
-Tally:nobody:/usr/bin/tally
+# Label:user:icon:/program arg ...
+Console:nobody:@console:/bin/console
+Tally:nobody:#3C42A5A5423C:/usr/bin/tally
+Old:nobody:/usr/bin/old          (no icon field: still valid)
 ```
 
 - Up to 16 entries, 8 arguments each. Lines starting with `#` are comments.
+- The icon (spec R5.6a.1) is `@name` (a built-in one: the list is in the manual's launcher
+  chapter), `#` and 12 hex digits (8×6 pixels, a byte per row from the top, MSB left), one or two
+  characters, or empty. The program must start with `/`: that is how the launcher tells the
+  two forms apart. A bad icon is just not drawn. `flipper/gui/appline.c` parses the line; its
+  host test is `flipper/tests/host/icontest.c`.
+- Packages: `mkpkg.py -i @bell` puts `Icon: @bell` in the manifest; until the launcher reads
+  manifests, the `postinst` writes the same value into its line, e.g.
+  `echo 'Tally:nobody:@game:/usr/bin/tally' >> /etc/apps`.
+- Keys that switch pages or toggle things on a release (Left/Right in the launcher) use
+  `gui_input()` with those keys as clicks: a click is a key pressed alone and released within
+  ~1 s, so a two-button gesture never clicks. Up/Down/OK keep acting on the press (latency L1).
 - The app runs as the named user, in group `gui` (screen, buttons, LED, vibro, speaker, GPIO,
   infrared, iButton), with the user's home directory as the working directory. Only an entry
   naming `root` keeps root's rights. If the user does not exist or the ids cannot be set, the

@@ -7,8 +7,9 @@ grep '^alarm:' /etc/passwd >/dev/null || {
 	echo 'alarm:*:22:11:Alarm clock:/home/flipper:' >> /etc/passwd
 	echo "alarm: added the user alarm (uid 22, group timers)"
 }
+sed -e 's|^Alarm:root:/usr/bin/alarm$|Alarm:root:@alarm:/usr/bin/alarm|' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
 grep '^Alarm:' /etc/apps >/dev/null || {
-	echo 'Alarm:root:/usr/bin/alarm' >> /etc/apps
+	echo 'Alarm:root:@alarm:/usr/bin/alarm' >> /etc/apps
 	echo "alarm: the launcher now has Alarm"
 }
 test -d /home/flipper/apps_data/alarm || mkdir /home/flipper/apps_data/alarm

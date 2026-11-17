@@ -7,8 +7,9 @@ grep '^remind:' /etc/passwd >/dev/null || {
 	echo 'remind:*:21:11:Reminders:/home/flipper:' >> /etc/passwd
 	echo "remind: added the user remind (uid 21, group timers)"
 }
+sed -e 's|^Remind:root:/usr/bin/remind$|Remind:root:@bell:/usr/bin/remind|' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
 grep '^Remind:' /etc/apps >/dev/null || {
-	echo 'Remind:root:/usr/bin/remind' >> /etc/apps
+	echo 'Remind:root:@bell:/usr/bin/remind' >> /etc/apps
 	echo "remind: the launcher now has Remind"
 }
 test -d /home/flipper/apps_data/remind || mkdir /home/flipper/apps_data/remind

@@ -1,6 +1,8 @@
 /* gui - see gui.h */
 #include <sys/types.h>
+#include <sys/times.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -63,6 +65,24 @@ void gui_frame(int x0, int y0, int x1, int y1)
 	gui_hline(x0, x1, y1, 1);
 	gui_vline(x0, y0, y1, 1);
 	gui_vline(x1, y0, y1, 1);
+}
+
+void gui_bits8(int x, int y, const unsigned char *rows, int n, int inverse)
+{
+	int gx, gy, bits;
+
+	for (gy = 0; gy < n; gy++) {
+		bits = rows[gy];
+		if (inverse) bits = ~bits;
+		for (gx = 0; gx < 8; gx++)
+			gui_pixel(x + gx, y + gy, bits & (0x80 >> gx));
+	}
+}
+
+int gui_glyph_row(int c, int row)
+{
+	if (c < 32 || c > 126) c = '?';
+	return font_4x6[c - 32][row];
 }
 
 int gui_text(int x, int y, const char *s, int inverse)
@@ -141,6 +161,59 @@ int gui_key(void)
 int gui_key_nowait(void)
 {
 	return btn_nb_fd < 0 ? 0 : event(btn_nb_fd);
+}
+
+static long ticks(void)
+{
+	struct tms t;
+
+	return (long) times(&t);
+}
+
+int gui_input(struct gui_in *in, int clicks, int ms)
+{
+	unsigned char ev[2];
+	struct pollfd p;
+	long end = ms < 0 ? 0 : ticks() + ((long) ms * CLK_TCK + 999) / 1000;
+	long left;
+	int k, b;
+
+	if (btn_fd < 0) return 0;
+	for (;;) {
+		if (ms >= 0) {		/* a timed wait: poll first */
+			left = end - ticks();
+			if (left <= 0) return 0;
+			p.fd = btn_fd; p.events = POLLIN; p.revents = 0;
+			if (poll(&p, 1, (int) (left * 1000 / CLK_TCK)) <= 0)
+				continue;	/* the time is checked above */
+		}
+		if (read(btn_fd, ev, 2) != 2) return 0;
+		for (b = 0; b < 6 && !(ev[0] & (1 << b)); b++) ;
+		if (b == 6) continue;
+		k = 1 << b;
+		if (ev[1]) {				/* down */
+			if (in->down & ~k) in->spoilt |= in->down | k;
+			in->down |= k;
+			in->t[b] = ticks();
+			if (!(clicks & k)) return k;
+		} else {				/* up */
+			int alone = !(in->spoilt & k);
+
+			in->down &= ~k;
+			in->spoilt &= ~k;
+			if ((clicks & k) && alone && (in->down & k) == 0
+			    && ticks() - in->t[b] < CLK_TCK)
+				return k;
+		}
+	}
+}
+
+int gui_click(void)
+{
+	struct gui_in in;
+
+	memset(&in, 0, sizeof in);
+	return gui_input(&in, 0x3F, -1);
 }
 
 void gui_led(int r, int g, int b)
