@@ -71,6 +71,9 @@ struct rfid_emu {
 struct rfid_stream {
 	void *ring;		/* 32-bit timestamps, us */
 	unsigned words;		/* even, 64..65534; 0 stops */
+	int level;		/* out: the comparator's level before the
+				 * first edge (1 high: that edge falls);
+				 * the edges alternate from there */
 };
 #define RFIDIOCSTREAM	_IOW('r', 4, struct rfid_stream)
 

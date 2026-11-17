@@ -205,7 +205,8 @@ void hal_pulse_stop(void);
  * caller pins it; hal_pulse_left tells the words not yet written);
  * hal_rfid_stop turns it all off.  -1: no reader. */
 int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier);
-/* carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz;
+/* Returns the comparator's level just before the capture started (0/1),
+ * or -1.  carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz;
  * | HAL_RFID_STREAM (R9.0.5): the n words are a ring the DMA fills round
  * and round, with an interrupt (hal_rfid_stream_irq) at each half;
  * hal_rfid_stream_ack() in it: bit 0 the first half full, bit 1 the

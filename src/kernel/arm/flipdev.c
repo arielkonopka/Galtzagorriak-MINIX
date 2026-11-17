@@ -2415,6 +2415,7 @@ message *m_ptr;
  * them).  No CPU work per edge.  words 0 stops it. */
   struct rfid_stream st;
   phys_bytes user, ring;
+  int lvl;
 
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(st));
@@ -2431,10 +2432,12 @@ message *m_ptr;
   if (ring == 0) return(EFAULT);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA writes it */
   rs_done = rs_got = rs_wait = 0;
-  if (hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM) < 0) {
+  if ((lvl = hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
 	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
 	return(ENXIO);
   }
+  st.level = lvl;			/* (the RAW files need the polarity) */
+  phys_copy(vir2phys(&st), user, (phys_bytes) sizeof(st));
   rs_on = m_ptr->PROC_NR + 1;
   lock();
   pm_busy |= PM_PULSE;			/* the timers and the DMA need clocks */
