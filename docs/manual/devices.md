@@ -289,6 +289,25 @@ ir rx -r -d /dev/subghzraw
 Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
 fills up with noise at once; FSK remotes (many car keys) do not show at all.
 
+## The speaker and its volume (`/dev/speaker`, `beep`)
+
+Writing plays notes, 4 bytes each: the frequency in Hz and the duration in ms, both 16-bit little
+endian; 0 Hz is a rest. Up to 64 notes per write; the write returns when they have played.
+
+**Volume.** A note with the frequency `0xFFFF` sets the volume, 0–100, to its duration field and
+plays nothing (a value above 100 counts as 100). It holds for the notes after it, in the same or
+later writes, until the next such note or until the device is closed. Closing sets 100 again, so
+programs that never set a volume sound as before. 100 is the full sound; the loudness follows a
+cubic curve, as on the stock firmware (50 is about an eighth of the power, 20 is quiet but
+audible, 0 is silent).
+
+```
+beep -v 20 1000 300     # a quiet 1 kHz beep
+beep -v 100 -c          # the attention call at full volume
+```
+
+`alert` (reminders, alarms) uses it for the `Volume:` field and for the escalating ring.
+
 ## Random numbers (`/dev/random`)
 
 Everybody may read it: the STM32WB's true random number generator, with its seed and clock error

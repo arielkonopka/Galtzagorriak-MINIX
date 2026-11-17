@@ -1,0 +1,17 @@
+# postinst of the remind package (spec 7b, F.4).  The app's own user
+# (remind, group timers: it may add timers to /var/timers; spec A.3) and
+# its line on the launcher.  The launcher starts it as root; once it has
+# the screen and buttons it becomes the user remind (one gid per process,
+# so it cannot get both gui and timers from the launcher yet).
+grep '^remind:' /etc/passwd >/dev/null || {
+	echo 'remind:*:21:11:Reminders:/home/flipper:' >> /etc/passwd
+	echo "remind: added the user remind (uid 21, group timers)"
+}
+grep '^Remind:' /etc/apps >/dev/null || {
+	echo 'Remind:root:/usr/bin/remind' >> /etc/apps
+	echo "remind: the launcher now has Remind"
+}
+test -d /home/flipper/apps_data/remind || mkdir /home/flipper/apps_data/remind
+chown remind /home/flipper/apps_data/remind
+chgrp timers /home/flipper/apps_data/remind
+chmod 700 /home/flipper/apps_data/remind
