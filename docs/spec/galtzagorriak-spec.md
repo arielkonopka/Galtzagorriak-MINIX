@@ -438,6 +438,26 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (owner, 2026-11-15). Details in next-tasks T14c.
+- **Wake, do the job, off again (owner, 2026-11-17).** A timer file may say `After: off` (and
+  `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
+  log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
+  and the Flipper goes back to ship mode. The rules:
+  - **Never off if the Flipper was on before the job.** `timed` powers off only when **this** boot
+    was caused by the RTC alarm (wake reason read at boot, F.3 above, kept in an RTC backup
+    register bit, 0 B RAM). If the Flipper was already running when the timer fired, the job runs
+    and the Flipper stays on, exactly as for a timer without `After: off`;
+  - not if a button was pressed since the boot, or a user session (USB console, launcher app in
+    front) is active: the user took it in hand, so it stays on;
+  - several jobs due close together: off only after the last; if the next timer of any kind is
+    due in less than ≈ 4 min, sleep (Stop2) instead of off (a boot costs more than that much sleep;
+    `reports/hibernation-analysis.md`);
+  - a job that hangs is ended after its `Timeout:` (default 60 s; SIGTERM, then SIGKILL after
+    3 s) and the Flipper still goes off, so a stuck beacon cannot drain the battery;
+  - with USB attached ship mode cannot cut power: sleep instead;
+  - the boot after an RTC wake with an `After: off` job due is **quiet**: no splash, backlight
+    off, no CPU2/Bluetooth, no launcher; a button press during it turns it into a normal boot
+    (and cancels the power-off, rule above);
+  - power-off is the normal orderly halt (sync, N.2 clean flags, then ship mode).
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
