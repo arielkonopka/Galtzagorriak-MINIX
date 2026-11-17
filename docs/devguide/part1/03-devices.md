@@ -143,14 +143,33 @@ The eight free header pins, numbered 0–7 in the device:
 - **Write** pairs of bytes, pin index and operation: `0` output low, `1` output high, `2` input,
   `3` input with pull-up, `4` input with pull-down, `5` off (analog, high impedance, the
   default).
-- **Read** returns one byte per pin, `'0'` or `'1'`, starting with pin 0.
+- **Read** returns one byte per pin, `'0'` or `'1'`, starting with pin 0. A read of 16 bytes
+  also returns, in bytes 8–15, `'1'` for each watched pin that changed since the last such read,
+  and clears them.
+- **Edges (R6.4):** operation `6` watches a pin (set it as an input first), `7` stops.
+  `poll()` with `POLLIN` then waits until a watched pin changes, no busy loop:
+
+  ```c
+  unsigned char w[2] = { 0, 4 }, v[16];   /* pin 0 (header 2): input, pull-down */
+  write(g, w, 2);
+  w[1] = 6; write(g, w, 2);               /* watch it */
+  struct pollfd p = { g, POLLIN, 0 };
+  while (poll(&p, 1, -1) == 1) {
+          read(g, v, 16);                 /* v[0]: the level, v[8]: changed */
+          /* ... */
+  }
+  ```
+  The watch belongs to the process that set it and ends when it closes `/dev/gpio` or exits; one
+  process at a time may watch (`EBUSY` otherwise). The pins are sampled on the clock tick (1/60 s),
+  so a pulse shorter than about 17 ms can be missed, and while a pin is watched the Flipper stays
+  out of deep sleep (Stop2). Without any watched pin `/dev/gpio` is always readable.
 
 The shell command `gpio` takes header pin numbers or port names: `gpio 2 1`, `gpio pa7 up`,
 `gpio` (all levels). Pins 13 and 14 (PB6/PB7) are the debug UART and are not offered. Logic is
 3.3 V; never feed a pin more than that.
 
-Edge interrupts, pulse capture and the 5 V supply on pin 1 are **(planned)** (spec R4b.7, R6.4,
-H.2).
+Edge interrupts (PA4 and PA7 have a free EXTI line: no sampling, deep sleep allowed), pulse
+capture and the 5 V supply on pin 1 are **(planned)** (spec R4b.7, R6.4, H.2).
 
 ## 3.8 Voltages: `/dev/adc`
 
