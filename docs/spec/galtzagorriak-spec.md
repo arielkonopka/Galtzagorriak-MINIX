@@ -1023,7 +1023,12 @@ which order they are built.
      home page of module tiles, the notification list, the Running list (R12.20) and settings
      pages. Each page is the same Pine-style list screen. The pages sit in a row,
      Settings ← Apps → Home → Notifications → Running, and Left/Right move along it, which keeps
-     R5.6a's keys (Left from Apps = Settings). RAM budget
+     R5.6a's keys (Left from Apps = Settings). A page move happens on the **release** of a short
+     Left/Right press, and a key that was part of a chord (R6.10 backlight gestures, #145) does
+     nothing: the kernel marks chord keys, the launcher only checks that flag. So Left+Up held for
+     the backlight never jumps to Settings. The status line (minute, battery) wakes the launcher
+     only while it is in the foreground **and** the screen is on; with an app running or the
+     backlight off the launcher sleeps in `poll()` with no timeout (M3 idle ≤ 1.5 mA). RAM budget
      for the whole desktop: ≤ 3 KB data + heap above today's launcher, 0 B kernel.
   4. **Modules** (K.2–K.3): separate processes that write TSV records to `/var/run/gui` and
      read events from their reply FIFO. A C helper in `libapp` (`gm_open`, `gm_tile`, `gm_menu`,
@@ -1032,6 +1037,20 @@ which order they are built.
   5. **Full-screen apps:** `libfuri` apps, ported stock apps (`fam2pkg`, R5.5) and Berry apps
      take the whole screen as today, in the same style. The desktop is not involved while they
      run.
+- **Pipe data never reaches the card (FS, 0 B, local-lane review of #231).** `PIPE_DEV` is
+  `ROOT_DEV`, so a pipe's or FIFO's data lives in its inode's zones on the SD card through the
+  buffer cache, and `update` would write the dirty blocks and the inode times every 30 s. With
+  four modules on `/var/run/gui` that means steady card writes, battery, and a root file system
+  that is almost never clean (spec N: `fsck` at nearly every boot after a power loss). So:
+  - a block written through a pipe or FIFO is marked `b_dirt = PIPE_DIRTY` (a third value of the
+    existing `char`, 0 B). `sync`, `update` and unmount skip it; it is written only if the cache
+    must evict it while it still holds unread data (rare: a pipe is at most 7 blocks);
+  - when the readers catch up (the pipe's position goes back to 0) its blocks become `CLEAN` and
+    are dropped from the cache without a write;
+  - pipe and FIFO data I/O does not mark the inode dirty (size, `mtime`, `ctime` stay in core).
+    Deviation from POSIX: FIFO times on disk are not updated. The contents of a pipe never
+    survive a reboot anyway.
+  The alternative, a RAM-only `/var/run`, costs RAM and is not taken.
 - **Rules kept from K.2–K.4:**
   - the desktop does navigation locally, so a key press never waits for a module;
   - alarms ring through `timed` + `alert`, never through the desktop;
@@ -1053,6 +1072,10 @@ which order they are built.
     within L1.
   - ACK.4 Desktop RAM within the budget above (`free` in QEMU with 4 tiles and 8
     notifications).
+  - ACK.5 QEMU (sector counter in WINCHESTER, as AC12.14): four modules writing to
+    `/var/run/gui` for 60 s, then `sync` → 0 sectors written, and the spec N clean mark stays set.
+  - ACK.6 QEMU with fake buttons: Left+Up held 1.5 s on the Apps page → the page stays Apps; a
+    short Left press moves to Settings on release, not on press.
 
 For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
 C, Berry or shell, and the `mined` key table.
