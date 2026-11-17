@@ -153,9 +153,19 @@ What that means for an app:
   current foreground process.
 - A background program (a daemon, a script) that writes to `/dev/lcd` while an app is in front
   draws nothing. That is intended; notifications that may interrupt an app go through `alert`
-  with `FG_PREEMPT` **(planned)**, spec F.2.
+  with `FGIOCPREEMPT` (R7b.2, below).
+- **An alert over your app** (R7b.2): `ioctl(fd, FGIOCPREEMPT, 0)` on `/dev/lcd` or
+  `/dev/buttons` takes the screen and the buttons from whoever has them, until
+  `FGIOCRELEASE` or the alert's exit; a second alert meanwhile gets `EBUSY` and waits its turn.
+  Your app keeps running: its frames are dropped and its button reads wait. A read that is
+  waiting when the alert comes, or that you start meanwhile, **ends with 0 bytes** at the
+  preemption and again at the release: treat a 0-byte read as "redraw and read again" (the
+  `gui` library's `gui_key()` returns 0, and the launcher just redraws). MINIX 2 has no free
+  signal number for `SIGWINCH`. The alert puts the picture it covered back itself.
 
-When the app exits, the launcher clears the foreground and redraws its menu.
+When the app exits, the launcher clears the foreground and redraws its menu. If an app that
+was given the screen exits without handing it back, the kernel clears it at the next clock
+tick.
 
 ## 4.6 Doing something while waiting for a key
 
