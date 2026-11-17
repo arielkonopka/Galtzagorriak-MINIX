@@ -48,5 +48,9 @@ kernel    160    14652  14812
 mm        32     10140  10172
 # Phase 2d (UTC, 64-bit time_t): FS -72 B, its two static clock messages
 # moved to the stack (+1 B: the once-only "past 2106" note); kernel, MM 0.
-fs        20     27104  27124
+# R4b.6 poll() (#169): FS +268 B: one poll record per process (16 B x 16:
+# due tick, 4 registered devices, flags), the alarm asked for (4 B), the
+# DEV_SELECTED count and the pipe-poller count (1 B each), padding 6 B.
+# Spec budget for 4b: FS +400 B.
+fs        20     27372  27392
 init      100    664    764

@@ -16,5 +16,9 @@
 # nothing changed in how often the cache writes.
 # 2026-11-16 (R2b.9, shared libc): 4 - the programs' text no longer carries
 # libc, so the cached copy needs fewer pages.
-m2      cache   4
+# 2026-11-17 (R4b.6 poll() + Phase 3 tests together): 5.  m2test now holds
+# both the poll() checks (#169) and the sticky/snprintf checks (#168); with
+# both its text passes the next 4 KB page.  Each alone stayed at 4.  Nothing
+# changed in how often the cache writes.
+m2      cache   5
 m2      inst    0

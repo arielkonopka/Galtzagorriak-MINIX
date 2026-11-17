@@ -42,6 +42,7 @@
 #define XOPEN  (-NR_TASKS-2)	/* used in fp_task when susp'd on open */
 #define XLOCK  (-NR_TASKS-3)	/* used in fp_task when susp'd on lock */
 #define XPOPEN (-NR_TASKS-4)	/* used in fp_task when susp'd on pipe open */
+#define XPOLL  (-NR_TASKS-5)	/* used in fp_task when susp'd in poll() */
 
 #define NO_BIT   ((bit_t) 0)	/* returned by alloc_bit() to signal failure */
 

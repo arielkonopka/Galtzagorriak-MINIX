@@ -8,6 +8,7 @@
 #include <minix/callnr.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -235,6 +236,107 @@ static void wrap_test(void)
 	signal(SIGALRM, SIG_DFL);
 }
 #endif
+
+/* poll() (spec R4b.6, AC4b.3 without /dev/buttons until flipdev answers
+ * DEV_SELECT): a pipe and a 250 ms timeout, a pipe a child writes to,
+ * EINTR from alarm(), hangup, bad descriptors, a device without
+ * DEV_SELECT (always ready). */
+static void poll_tests(void)
+{
+	struct pollfd p[3];
+	struct tms tm;
+	clock_t t0, t1;
+	int fd[2], r, e, st;
+	pid_t pid;
+	char c;
+
+	if (pipe(fd) != 0) {
+		check(0, "poll: pipe");
+		return;
+	}
+	p[0].fd = fd[0]; p[0].events = POLLIN; p[0].revents = 0x7FFF;
+	t0 = times(&tm);
+	r = poll(p, 1, 250);
+	t1 = times(&tm);
+	printf("  poll 250 ms: %ld ticks\n", (long) (t1 - t0));
+	check(r == 0 && p[0].revents == 0 && t1 - t0 >= 15 && t1 - t0 < 60,
+				"poll: empty pipe, 250 ms timeout");
+
+	p[1].fd = fd[1]; p[1].events = POLLOUT; p[1].revents = 0;
+	r = poll(p, 2, 0);
+	check(r == 1 && p[0].revents == 0 && p[1].revents == POLLOUT,
+				"poll: timeout 0, write end writable");
+
+	pid = fork();
+	if (pid == 0) {
+		sleep(1);
+		write(fd[1], "x", 1);
+		_exit(0);
+	}
+	p[0].revents = 0;
+	t0 = times(&tm);
+	r = poll(p, 1, 5000);
+	t1 = times(&tm);
+	check(r == 1 && p[0].revents == POLLIN && t1 - t0 < 3 * 60
+		&& read(fd[0], &c, 1) == 1 && c == 'x',
+				"poll: pipe becomes readable from a child");
+	check(wait(&st) == pid, "poll: child done");
+
+	signal(SIGALRM, alarm_handler);
+	got_sig = 0;
+	alarm(1);
+	r = poll(p, 1, -1);
+	e = errno;
+	alarm(0);
+	check(r == -1 && e == EINTR && got_sig == SIGALRM,
+				"poll: EINTR on alarm");
+
+	/* After EINTR the registration is gone: a later poll still works. */
+	write(fd[1], "y", 1);
+	r = poll(p, 1, 1000);
+	check(r == 1 && p[0].revents == POLLIN && read(fd[0], &c, 1) == 1,
+				"poll: works again after EINTR");
+
+	close(fd[1]);
+	r = poll(p, 1, 1000);
+	check(r == 1 && (p[0].revents & POLLHUP) && !(p[0].revents & POLLIN),
+				"poll: writer gone -> POLLHUP");
+	p[2].fd = open("/dev/null", O_RDWR); p[2].events = POLLIN | POLLOUT;
+	close(fd[0]);
+
+	p[0].fd = fd[0]; p[0].events = POLLIN;	/* closed now */
+	p[1].fd = -1; p[1].events = POLLIN; p[1].revents = 0x55;
+	r = poll(p, 3, -1);
+	check(r == 2 && p[0].revents == POLLNVAL && p[1].revents == 0
+		&& p[2].revents == (POLLIN | POLLOUT),
+		"poll: bad fd -> POLLNVAL, fd -1 ignored, /dev/null ready");
+	if (p[2].fd >= 0) close(p[2].fd);
+
+	t0 = times(&tm);
+	r = poll((struct pollfd *) NULL, 0, 100);
+	t1 = times(&tm);
+	check(r == 0 && t1 - t0 >= 6 && t1 - t0 < 40, "poll: no fds, 100 ms");
+
+	/* Two pollers at once with different timeouts: FS's one alarm goes
+	 * to the earlier, then on to the later. */
+	pid = fork();
+	if (pid == 0) {
+		t0 = times(&tm);
+		r = poll((struct pollfd *) NULL, 0, 600);
+		t1 = times(&tm);
+		_exit(r == 0 && t1 - t0 >= 36 && t1 - t0 < 80 ? 0 : 1);
+	}
+	t0 = times(&tm);
+	r = poll((struct pollfd *) NULL, 0, 200);
+	t1 = times(&tm);
+	check(r == 0 && t1 - t0 >= 12 && t1 - t0 < 30 && wait(&st) == pid
+		&& WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		"poll: two pollers, 200 and 600 ms");
+	r = poll(p, 1000, 0);
+	check(r == -1 && errno == EINVAL, "poll: too many fds -> EINVAL");
+	r = poll((struct pollfd *) 0x20000100, 1, 0);
+	check(r == -1 && errno == EFAULT, "poll: fds in kernel RAM -> EFAULT");
+}
 
 /* Phase 3: the sticky bit (R3.7, AC3.5) and snprintf (R3.6). */
 static void phase3_tests(void)
@@ -571,6 +673,7 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 #endif
+	poll_tests();
 	time_tests();
 	finish();
 	return 0;
