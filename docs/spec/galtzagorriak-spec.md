@@ -1967,7 +1967,8 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     share; text icons are rendered into the 6 bytes when `/etc/apps` is read, so drawing never
     looks at the font for icons.
   - **R5.6a.4 The setting.** `/etc/launcher.conf`, stock `Key: value` style, read with `cfopen()`
-    (spec L.3): `Icons: on|off`, default `on` in `/rom/etc/launcher.conf`. In the launcher,
+    (spec L.3): `Icons: on|off`, `Hints: on|off`, `Battery: on|off` (owner 2026-11-17), each
+    default `on` in `/rom/etc/launcher.conf`. In the launcher,
     **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
     OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
     written once, on Back, and only if the value changed; nothing is ever written to internal
@@ -1996,7 +1997,11 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
     128×64 with the 4×6 font:
     - **Title bar** (black, as now): the screen name centred; on the right, the position
-      `3/12` of the selected entry (the list only).
+      `3/12` of the selected entry (the list only); on the left, with `Battery: on` (owner
+      2026-11-17, #110), a small battery (about 11×5 plus its tip) solid when full and emptying
+      from the left, the charge in percent and a bolt while charging. It is read from
+      `/dev/power` only at a redraw that happens anyway, at most once a minute (and after an app
+      ends): the battery never wakes the launcher or causes a redraw of its own.
     - **List**: 8 rows (y = 7 + 6·i), the selected row a full-width inverted bar with `>`;
       when there are more than 8 entries, a 1-pixel scroll mark at x = 127 whose length and
       place show the visible part (no arrows, no animation).
@@ -2007,9 +2012,11 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
       crashed`, the park hint of R12.20) replace the hint line for 2 s instead, so the list stays
       visible; the hint line comes back at the next key or after the 2 s.
     - **Settings page**: one line per setting, value in brackets (`Icons   [on]`,
-      `Hints   [on]`); Up/Down choose, OK or Left/Right toggles.
+      `Hints   [on]`, `Battery [on]`); Up/Down choose, OK or Left/Right toggles. (K.7: the
+      launcher's Left page grows into the system SETTINGS list; these three stay in the
+      launcher as its `Launcher` group.)
     - `Hints: on|off` in `/etc/launcher.conf` (default `on`): off gives the list its 9th row back
-      and drops the title counter. Hints off and icons off = today's screen exactly.
+      and drops the title counter. Icons, hints and battery all off = today's screen exactly.
     - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
       stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
       through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
@@ -2029,7 +2036,7 @@ Acceptance:
   `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
   frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
   for the empty, unknown and malformed ones; every app still starts.
-- AC5.5 (R5.6a) With `Icons: off` and `Hints: off` the launcher's frames are byte-identical to the frames of the
+- AC5.5 (R5.6a) With `Icons: off`, `Hints: off` and `Battery: off` the launcher's frames are byte-identical to the frames of the
   launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
 - AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
   holds the new value, the list redraws without icons; Left, Back without a change writes
