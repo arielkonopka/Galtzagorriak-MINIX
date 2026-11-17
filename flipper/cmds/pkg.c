@@ -21,7 +21,11 @@
  * flipper/tools/mkpkg.py) holding its files relative to / and a CONTROL
  * directory:
  *	CONTROL/control		Package:, Version:, Depends:, Description:,
- *				Flash: yes (as with install --flash)
+ *				Flash: yes (as with install --flash); the
+ *				app manifest (spec F.2): Timers: yes|no,
+ *				Notify: alarm|reminder|info, DeskMode:
+ *				yes|no, checked here, granted with the
+ *				app's own uid (A.3)
  *	CONTROL/postinst	optional, run with sh after installing
  *	CONTROL/prerm		optional, run with sh before removing
  * The database is /usr/var/pkg/info: NAME.control, NAME.list (the files),
@@ -283,8 +287,17 @@ static int read_control(const char *path)
 			if (!field(ctl_abi, sizeof ctl_abi, v)) why = "Abi: too long";
 		} else if (strcmp(line, "Libc") == 0) {
 			if (!field(ctl_libc, sizeof ctl_libc, v)) why = "Libc: too long";
-		} else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0)
+		} else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0) {
 			ctl_flash = 1;	/* spec R2b.5 */
+		} else if (strcmp(line, "Timers") == 0
+			   || strcmp(line, "DeskMode") == 0) {
+			if (strcmp(v, "yes") != 0 && strcmp(v, "no") != 0)
+				why = "Timers:/DeskMode: is not yes or no";
+		} else if (strcmp(line, "Notify") == 0) {
+			if (strcmp(v, "alarm") != 0 && strcmp(v, "reminder") != 0
+			    && strcmp(v, "info") != 0)
+				why = "Notify: is not alarm, reminder or info";
+		}
 	}
 	fclose(f);
 	if (why == NULL && !good_pkg(ctl_name)) why = "Package: is not a name";

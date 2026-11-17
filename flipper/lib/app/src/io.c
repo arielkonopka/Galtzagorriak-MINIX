@@ -50,7 +50,7 @@ int ff_load(const char *path, char *buf, int size)
 
 /* Write buf as dir/name: a new file next to it, then rename() (the old
  * version or the new one, never half of it). */
-static int save(const char *dir, const char *name, const char *buf, int mode)
+int app_save(const char *dir, const char *name, const char *buf, int mode)
 {
 	char tmp[64], path[64], tn[12];
 	unsigned p = (unsigned) getpid() % 100000;
@@ -125,7 +125,7 @@ int timer_add(struct app_timer *t)
 		errno = EINVAL;
 		return -1;
 	}
-	if (save(APP_TIMERS, t->id, buf, 0600) < 0) return -1;
+	if (app_save(APP_TIMERS, t->id, buf, 0600) < 0) return -1;
 	(void) app_arm(timer_next(t, time((time_t *) 0)), 0);
 	return 0;
 }
@@ -301,7 +301,7 @@ int settings_set(const char *app, const char *key, const char *val)
 		if (k == key) break;
 	}
 	if (mkdir(dir, 0700) < 0 && errno != EEXIST) return -1;
-	return save(dir, "settings", new, 0600);
+	return app_save(dir, "settings", new, 0600);
 }
 
 /* The screen came back (an alert closed): R7b.2 sends SIGWINCH.  Until

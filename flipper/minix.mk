@@ -435,6 +435,28 @@ $(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
+# libapp (spec F.2, R7b.4, flipper/lib/app): timers, notifications,
+# settings for native apps.  Linked into each user until it moves into the
+# shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
+# use it; they ship as the package timed (/usr/lib).
+APP_DIR := lib/app
+APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o
+APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
+$(MB)/app/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/libapp.a: $(APP_OBJ)
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+.PHONY: libapp
+libapp: $(MB)/libapp.a
+TIMEDPROGS := timed alert
+$(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
+OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
+OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
+CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
+CHMEM_alert := 4096
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall
@@ -446,14 +468,14 @@ OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -466,6 +488,13 @@ $(PKGDIR)/tests_1.0.tar: $(TESTS:%=$(MB)/bin/%) $(BADPKGS) tools/mkpkg.py
 $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
+# Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
+$(PKGDIR)/timed_1.0.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+		rootfs/timed.postinst
+	python3 -I tools/mkpkg.py -n timed -v 1.0 -o $(PKGDIR) \
+	   --postinst rootfs/timed.postinst \
+	   -D "Timers and alerts for apps (timed, alert)" \
+	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
@@ -535,7 +564,7 @@ versioncheck:
 TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
 	   $(MROOT)/src/commands/sh $(MROOT)/src/commands/mined \
 	   $(MROOT)/src/commands/reboot/halt.c $(MROOT)/src/commands/reboot/log.c \
-	   cmds gui apps tests m2 $(MROOT)/src/tools/init.c \
+	   cmds gui apps lib/app tests m2 $(MROOT)/src/tools/init.c \
 	   $(LIBDIRS:%=$(MROOT)/src/lib/%) $(MROOT)/include
 .PHONY: timecheck check
 timecheck:

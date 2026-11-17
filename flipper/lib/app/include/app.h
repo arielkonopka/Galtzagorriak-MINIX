@@ -138,5 +138,6 @@ int on_redraw(void (*fn)(int));
 char *ff_next(char **pos, char **val);	/* the next "Key: value" line */
 int ff_hm(const char *s);		/* "HH:MM" -> minutes, -1 */
 int ff_load(const char *path, char *buf, int size);	/* bytes, -1 */
+int app_save(const char *dir, const char *name, const char *buf, int mode);
 
 #endif /* LIBAPP_APP_H */
