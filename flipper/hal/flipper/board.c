@@ -73,6 +73,51 @@ void hal_ow_delay(unsigned us)
 	while (DWT->CYCCNT - s < n) ;
 }
 
+/* A microsecond clock, mod 2^16, for the 1-Wire slave's slot times (the
+ * longest it measures is a reset, ~0.5-1 ms).  The cycle counter shifted:
+ * the core runs at 64 MHz whenever it does (2^6 cycles a microsecond),
+ * and 2^32 / 2^6 is a multiple of 2^16, so differences stay right across
+ * the counter's wrap. */
+uint16_t hal_ow_now(void)
+{
+	return (uint16_t) (DWT->CYCCNT >> 6);
+}
+
+/* R6.7 part 3, a Dallas key emulated: PB14 released (open drain, high by
+ * the pull-up) and EXTI line 14 on both edges.  Line 14 shares the
+ * EXTI15_10 vector with the Left/Right/Up/Back buttons (10-13); its
+ * handler asks hal_ib_edge() first.  Off: the line masked, the pin left
+ * released. */
+void hal_ib_emu(int on)
+{
+	if (on) {
+		hal_ow_line(0);
+		SYSCFG->EXTICR[3] = (SYSCFG->EXTICR[3] & ~SYSCFG_EXTICR4_EXTI14)
+					| 1u << SYSCFG_EXTICR4_EXTI14_Pos;  /* B */
+		EXTI->RTSR1 |= EXTI_RTSR1_RT14;
+		EXTI->FTSR1 |= EXTI_FTSR1_FT14;
+		EXTI->PR1 = EXTI_PR1_PIF14;
+		EXTI->IMR1 |= EXTI_IMR1_IM14;
+	} else {
+		EXTI->IMR1 &= ~EXTI_IMR1_IM14;
+		EXTI->PR1 = EXTI_PR1_PIF14;
+	}
+}
+
+/* 1 if line 14 had an edge (the flag cleared), else 0. */
+int hal_ib_edge(void)
+{
+	if (!(EXTI->PR1 & EXTI_PR1_PIF14)) return 0;
+	EXTI->PR1 = EXTI_PR1_PIF14;
+	return 1;
+}
+
+/* Forget an edge of our own (the presence pulse we drove). */
+void hal_ib_clear(void)
+{
+	EXTI->PR1 = EXTI_PR1_PIF14;
+}
+
 /*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/
@@ -1602,6 +1647,13 @@ int hal_btn_irq(int i)
 		{ EXTI3_IRQn, EXTI9_5_IRQn, EXTI15_10_IRQn, -1 };
 
 	return irq[(unsigned) i < 3 ? i : 3];
+}
+
+/* 1 if a button line has an edge waiting (its vector may be another's:
+ * the iButton's line 14 shares EXTI15_10). */
+int hal_btn_pending(void)
+{
+	return (EXTI->PR1 & EXTI->IMR1 & BTN_LINES) != 0;
 }
 
 void hal_btn_arm(int on)

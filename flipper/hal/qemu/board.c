@@ -138,6 +138,11 @@ int hal_charger_set(int what, int on) { (void) what; (void) on; return -1; }
 void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
+uint16_t hal_ow_now(void) { return 0; }
+void hal_ib_emu(int on) { (void) on; }		/* no reader in QEMU */
+int hal_ib_edge(void) { return 0; }
+void hal_ib_clear(void) { }
+int hal_btn_pending(void) { return 1; }
 
 long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
 int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
