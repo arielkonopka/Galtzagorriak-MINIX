@@ -1366,8 +1366,8 @@ The owner has a 128 GB card and asked for more partitions or bigger ones, assumi
 would break the file system. They do not: the limits are in our code, not in the V2 format. The
 owner then preferred **one other partition type with a Unix lineage** that Linux mounts, and named
 **MINIX V3** (2026-11-17). This section turns `/home` into a MINIX V3 file system that fills the
-card between `/usr` and swap. **Status: proposal. The on-disk change needs the owner's yes before
-T26 starts.**
+card between `/usr` and swap. **Owner approved the on-disk change (2026-11-17, MINIX V3 for
+`/home`).**
 
 ### P.1 What limits a partition today
 

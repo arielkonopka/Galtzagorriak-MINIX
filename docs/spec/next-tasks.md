@@ -340,7 +340,7 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
-## T26. Bigger `/home` as MINIX V3 (spec section P; owner request 2026-11-17): **waits for the owner's yes to the on-disk change**
+## T26. Bigger `/home` as MINIX V3 (spec section P; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
 ### T26a (`lane:cloud`, QEMU): driver positions, FS V3, tools
