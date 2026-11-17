@@ -447,6 +447,9 @@ static void finish(void)
 		__asm volatile ("bkpt 0xAB" : : "r" (r0), "r" (r1) : "memory");
 	}
 #endif
+	/* As INIT it may never exit; started from a shell (on the Flipper,
+	 * #109) it must, or the shell waits for it forever. */
+	if (getpid() != 1) exit(fails > 125 ? 125 : fails);
 	for (;;) pause();
 }
 
