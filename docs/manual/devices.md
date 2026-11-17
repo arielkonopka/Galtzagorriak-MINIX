@@ -156,8 +156,9 @@ a quick check that nothing is lost. Long frames are emulated the same way in rev
 (segments of equal length and load) and the kernel refills a small ring from it while the reader's
 own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
 
-Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
-firmware does):
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, then the Hitag micro
+"magic" chips ID8265, ID8210 and H5.5 with their three passwords, as the Unleashed firmware does;
+`-hitag` goes straight to those):
 
 ```
 rfid write EM 00 DE AD BE EF
