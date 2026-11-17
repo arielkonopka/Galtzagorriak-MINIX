@@ -789,6 +789,8 @@ static int charger_rmw(uint8_t reg, uint8_t mask, uint8_t val)
  * never set: the charger stays as the stock firmware left it. */
 #define CHG_REG		(RTC->BKP14R)
 #define CHG_MAGIC	0xC0000000u
+#define VOL_SET		0x00010000u	/* bits 8-16: the default volume */
+#define VOL_BITS	0x0001FF00u
 #define VREG_FULL	((4208 - 3840) / 16)
 #define VREG_CARE	((4000 - 3840) / 16)
 #define ICHG_STOCK	(2048 / 64)
@@ -828,9 +830,29 @@ int hal_charger_set(int what, int on)
 		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
 	default:		return -1;
 	}
-	bkp_set(&CHG_REG, CHG_MAGIC | s);
+	bkp_set(&CHG_REG, CHG_MAGIC | (CHG_REG & VOL_BITS) | s);
 	charger_apply(s);
 	return 0;
+}
+
+/* The system's default speaker volume (K.7 Sound), 0-100, in bits 8-15 of
+ * the same register with bit 16 saying it was set (the charging bits and
+ * their magic untouched): survives a reset, 0 B of RAM.  Never set: 100,
+ * as before. */
+int hal_vol_default(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	return (CHG_REG & VOL_SET) ? (int) (CHG_REG >> 8 & 0xFF) : 100;
+}
+
+void hal_vol_default_set(int v)
+{
+	if (v < 0) v = 0;
+	if (v > 100) v = 100;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	bkp_set(&CHG_REG, (CHG_REG & ~VOL_BITS) | VOL_SET | (uint32_t) v << 8);
 }
 
 static void charger_init(void)

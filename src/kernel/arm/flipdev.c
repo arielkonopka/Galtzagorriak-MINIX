@@ -182,6 +182,9 @@ PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define SPK_VOL		0xFFFF		/* the volume note's "frequency" */
+#define SPK_VOLDEF	0xFFFE		/* the same, and the system default
+					 * (K.7 Sound; kept in a backup
+					 * register by the HAL) */
 
 /* Infrared (/dev/ir).  Durations in the rings are 16 bits: microseconds
  * below 32768, else bit 15 and units of 64 us (up to 2 s). */
@@ -351,6 +354,7 @@ PUBLIC void flipdev_task()
 	mt_arm(MT_BUTTONS, BTN_MS);
 	unlock();
   }
+  sp_quiet = 100 - hal_vol_default();	/* K.7: the system's volume */
   {	/* the backlight as it was set before the reset, and on */
 	u32_t st = hal_bl_state() & ~(HAL_BL_OFF | HAL_BL_STEPS | HAL_BL_MODES);
 
@@ -378,7 +382,8 @@ PUBLIC void flipdev_task()
 	case DEV_CLOSE:
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SPK_MINOR
 							&& !sp_waiting)
-			sp_quiet = 0;		/* full volume again */
+			sp_quiet = 100 - hal_vol_default();	/* the default
+							 * again (K.7) */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
@@ -1097,6 +1102,10 @@ message *m_ptr;
 	for (i = 0; i < n; i++) {
 		unsigned ms = nb[4*i+2] | nb[4*i+3] << 8;
 		note_hz[i] = nb[4*i] | nb[4*i+1] << 8;
+		if (note_hz[i] == SPK_VOLDEF) {	/* also the default */
+			hal_vol_default_set(ms > 100 ? 100 : (int) ms);
+			note_hz[i] = SPK_VOL;
+		}
 		if (note_hz[i] == SPK_VOL) {	/* the volume, kept as is */
 			note_ticks[i] = ms > 100 ? 100 : ms;
 			continue;

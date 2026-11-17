@@ -122,6 +122,10 @@ int hal_charger_read(unsigned reg);
 #define HAL_CHG_OTG		3
 #define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
 int hal_charger_set(int what, int on);
+/* The default speaker volume (0-100; 100 if never set), kept over resets
+ * in a backup register (K.7 Sound). */
+int hal_vol_default(void);
+void hal_vol_default_set(int v);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */

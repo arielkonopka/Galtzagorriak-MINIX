@@ -17,12 +17,37 @@ come back to when an app ends.
 - Short notices, such as `unknown user` or `app crashed`, appear on the bottom line for 2
   seconds instead of covering the screen. The list stays visible.
 
-**Left** opens the launcher's settings. Left counts only as a short press on its own: holding
-Left+Up to turn off the backlight (see [Buttons and gestures](buttons.md)) does not open them.
+**Left** opens **SETTINGS**, the system settings. Left counts only as a short press on its
+own: holding Left+Up to turn off the backlight (see [Buttons and gestures](buttons.md)) does
+not open them.
 
-## Settings
+## SETTINGS
+
+The page lists the groups of settings: Display, Sound, LED, Time, Power, Storage, Gestures,
+Launcher and About. OK opens one, Back returns to the app list. The ones marked `(later)` are
+not there yet; Power and About open today's Power and About apps.
+
+**Display** and **Sound** are small screens of their own (the `settings` program): Up/Down choose
+a line, Left/Right change its value, which takes effect at once, Back leaves.
+
+| Group | Line | Values |
+|---|---|---|
+| Display | Brightness | 10-100 % |
+| | Timeout | the light goes off after 5 s ... 5 min without a key, or never |
+| | Light | auto (the timeout), off or on: the forced modes of the button gestures; not kept over a restart |
+| Sound | Volume | 0-100 %, the volume of every program that does not set its own (alarms set theirs) |
+| | Test beep | OK plays three notes |
+
+The values are kept in `/etc/flipper/display.conf` and `sound.conf` on the SD card, written once
+when you leave the screen and only if something changed, and applied at every start
+(`settings apply` in `/etc/rc`). Deleting a file brings the defaults back (100 %, 15 s, 100 %).
+From the shell: `settings display`, `settings sound`.
+
+## The launcher's own settings
 
 ![The settings page](img/launcher-settings.png)
+
+Launcher, on the SETTINGS page:
 
 | Setting | What it does |
 |---|---|
@@ -30,9 +55,9 @@ Left+Up to turn off the backlight (see [Buttons and gestures](buttons.md)) does 
 | Hints | the button line at the bottom and the position in the title bar |
 | Battery | the battery on the title bar |
 
-Up/Down choose a setting, OK (or Left/Right) switches it, Back returns to the list. The
-settings are kept in `/etc/launcher.conf` on the SD card, which is written only when Back leaves
-the page with something changed:
+Up/Down choose a setting, OK (or Left/Right) switches it, Back returns to SETTINGS. The
+settings are kept in `/etc/launcher.conf` on the SD card, which is written only when you go back
+to the app list with something changed:
 
 ```
 Icons: on
