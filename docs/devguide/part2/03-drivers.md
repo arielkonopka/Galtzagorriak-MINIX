@@ -92,6 +92,14 @@ poller (for checks and logs only), `COUNT` the ops (`SEL_RD`, `SEL_WR`, `SEL_ERR
   as always ready, so adding a minor without it never hangs a poller.
 - Send `DEV_SELECTED` with `send()` from the task's main loop, like `REVIVE`; FS accepts it
   in its main loop and while it waits for a reply from the same task.
+- Trigger `DEV_SELECTED` on a *change*, not on a state that may stay: flipdev wakes button
+  pollers on a new event since the registration, not on "queue not empty", because with another
+  app owning the buttons (R4b.8) the queue stays full for the poller and FS and the task would
+  wake each other forever.
+- Examples: the TTY (`do_select`, `sel_retry` at the end of `handle_events`: input arrived or
+  output done; the state is 2 bytes in `tty_t`'s padding) and flipdev (`do_select`,
+  `sel_check`: buttons and speaker; IR, RFID and Sub-GHz raw capture only while a read waits,
+  so they answer "ready").
 
 
 - **The ms timer** (R4b.2, `mt_arm()` in `arm/klib.c`): a kernel client asks for a call of its

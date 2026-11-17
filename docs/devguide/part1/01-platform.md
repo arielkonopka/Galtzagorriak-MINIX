@@ -74,10 +74,11 @@ threads inside one process** with the stock API (`furi_thread_*`, `furi_message_
   one or two ticks. libfuri does not use `SIGALRM`.
 - A plain `read()` that blocks still stops every thread of the process. Inside libfuri (and for
   R5.2/R5.4) the internal `ffd_read()`/`ffd_wait()` (`src/furi_i.h`) block only the calling
-  thread: the idle `poll()` also watches the fds threads wait for. Until the drivers answer
-  `DEV_SELECT` (#131), a terminal or `/dev/buttons` counts as always ready, so `ffd_read()` reads
-  with `O_NONBLOCK` and, when "ready" gave nothing, tries the device again once a tick or two
-  instead of spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
+  thread: the idle `poll()` also watches the fds threads wait for. Terminals and
+  `/dev/buttons` answer `DEV_SELECT`, so a waiting thread costs nothing until a key comes;
+  `ffd_read()` still reads with `O_NONBLOCK` and, when "ready" gave nothing (two threads on one
+  fd, or a device that counts as always ready), tries again once a tick or two instead of
+  spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
 - Costs on the device: about 13 KB of code (until it moves into the shared library), 84 B per
   thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
 - Not from signal handlers. The GUI (R5.2) is in section 4.9; storage and HAL come with R5.3–R5.4
@@ -142,8 +143,8 @@ What eats the reserve, from experience in this tree:
   - POSIX.1 (1990) calls: files, directories, `fork`/`vfork`/`exec`, signals with
     `sigaction`, `termios`, `pipe`, `mkfifo`, `alarm`, `pause`, `sigsuspend`;
   - `poll()` (`<poll.h>`, R4b.6): pipes and FIFOs, character devices whose driver answers
-    `DEV_SELECT` (others count as always ready: terminals and `/dev/buttons` until their
-    drivers do), a timeout in ms rounded up to the 1/60 s tick, `EINTR` on a signal;
+    `DEV_SELECT` (terminals, `/dev/buttons`, `/dev/speaker`; other devices count as always
+    ready), a timeout in ms rounded up to the 1/60 s tick, `EINTR` on a signal;
   - **not present**: `select`, `usleep`,
     `nanosleep`, `setitimer`, `mmap`, sockets, threads, `setgroups` (R4b.4, **(planned)**);
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
