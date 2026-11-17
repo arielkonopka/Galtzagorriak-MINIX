@@ -475,6 +475,17 @@ OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
 CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
 CHMEM_alert := 4096
+# The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
+# libapp timers; packages remind and alarm (/usr/bin, own users).
+NATPROGS := remind alarm
+NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
+$(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
+$(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
+	$(MB)/cmd/nat/native/nat_core.o $(APP_OBJ) $(FURI_OBJ) $(FURI_GUI_OBJ)))
+CHMEM_remind := 4096	# 7b.1: gui stack 2 KB + Canvas + the list
+CHMEM_alarm  := 4096	# 7b.2
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -493,7 +504,7 @@ OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(NATPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
