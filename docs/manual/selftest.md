@@ -36,10 +36,10 @@ Every result is appended to `/home/flipper/apps_data/selftest/log`, one line eac
 | **Memory: flash** | automatic | The 1 MB of internal flash as a 16 × 16 grid of 4 KB pages. Every program installed in flash is hashed again (SHA-256) and compared with the hash taken when it was installed; its pages show as passed or failed, and a damaged one is named. The system image, the run-time cache and the radio core's area are shown, not tested. |
 | **Input** | interactive | A picture of the d-pad, OK and Back; each lights while you hold it. Press and release every button. Fails after 30 seconds without a press and names the buttons missing. |
 | **Sound, vibration and light** | interactive | A scale rising and falling on the speaker, three vibration pulses, the LED red, green, blue and white, the display all on, all off, a checkerboard and its inverse, and the backlight from dark to bright. Then OK if all of it looked and sounded right, Back if not. |
+| **GPIO loopback** | interactive | Put jumpers on the header pins 2–3, 4–5, 6–7 and 15–16 first. Each pin of a pair drives high and low while the other reads, once against a pull-down and once against a pull-up, so a missing or bad jumper fails. Then the 5 V output on pin 1 is switched on and the charger must report it, and off again (not tested while USB powers the Flipper). All pins end "off". |
 
 **(planned, spec R7b.3.1, R7b.3.5)** A checksum of the system image itself and the flash ECC
-counts in the flash test, the GPIO loopback test
-with jumpers, and tests for the radios as their drivers arrive. Starting the self test with Up +
+counts in the flash test, and tests for the radios as their drivers arrive. Starting the self test with Up +
 Back held at power-on is planned as well.
 
 ## Adding a test
