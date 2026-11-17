@@ -513,6 +513,44 @@ static void devpoll_tests(void)
 #endif
 
 #ifdef BOARD_QEMU
+/* Spec N.6 (the card pulled out), kernel part: while the card is out
+ * every transfer fails and the console says so; another card is refused;
+ * the same card back carries on.  QEMU's hook DIOCFAKECARD; raw reads at
+ * offsets the FS cache does not hold. */
+static void card_tests(void)
+{
+	static char b[512];
+	int fd, st, r1, r2, r3;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDONLY)) < 0) {
+		check(0, "card: open /dev/hd0");
+		return;
+	}
+	fflush(stdout);
+	st = 1;
+	if (ioctl(fd, DIOCFAKECARD, &st) != 0) {
+		check(0, "card: DIOCFAKECARD");
+		close(fd);
+		return;
+	}
+	lseek(fd, 1L << 20, SEEK_SET);
+	r1 = read(fd, b, sizeof b);
+	st = 2;				/* another card */
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	lseek(fd, 2L << 20, SEEK_SET);
+	r2 = read(fd, b, sizeof b);
+	st = 0;				/* the original back */
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	lseek(fd, 3L << 20, SEEK_SET);
+	r3 = read(fd, b, sizeof b);
+	close(fd);
+	check(r1 < 0, "card out: a read fails");
+	check(r2 < 0, "card: another card is refused");
+	check(r3 == (int) sizeof b, "card: the same card back carries on");
+}
+
+
 /* R7b.2: an alert preempts the screen and the buttons (FGIOCPREEMPT), a
  * reader waiting meanwhile is parked and ends empty at the release, a
  * second alert waits its turn (EBUSY), an alert that exits releases. */
@@ -955,6 +993,7 @@ int main(int argc, char **argv)
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	card_tests();
 	preempt_tests();
 #endif
 	time_tests();
