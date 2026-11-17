@@ -983,6 +983,37 @@ tiles, notification list, app menu), extended by modules.
   `gui` binding and desktop `window` records draw the same bar, so the look stays one across C,
   Berry and shell. Exceptions: the text console, full-screen content where a bar would hide
   data (e.g. a picture viewer), and `alert` screens, which may invert the whole screen to stand out.
+- **Screen style: "Pine meets modern UX" (owner decision, 2026-11-17).** Every GUI screen of the
+  system (launcher, apps, desktop windows, C, `libfuri`, Berry or shell) follows the launcher's
+  look of R5.6a.7, so a user who knows one screen knows them all: text first, every screen says
+  what its buttons do, nothing hidden, modern spacing. The parts:
+  - **Title bar** (above), optionally with a short state on the right: position `3/12` in a
+    list, `REC`, `12%`, at most 6 characters.
+  - **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58 in Pine's
+    `key action` style (`<Back  OK Run  >More`, `OK Toggle  Back Done`). It names every button
+    that does something on that screen, and only those. Long Back is not listed (it always ends
+    or parks the app, R4b.8, R12.20).
+  - **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+  - **Values** of settings in brackets, right-aligned or after the name: `Icons   [on]`.
+  - **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+  - **Message line**: a short notice replaces the hint line for 2 s, then the hints come back; the
+    screen behind stays drawn. Whole-screen notices are only for errors that end the app and for
+    `alert`.
+  - **Icons** (R5.6a): at most 8×6 pixels, two characters of the 4×6 font, before a list entry.
+  - Exceptions, as for the title bar: the text console, full-screen content (pictures, graphs,
+    the map), `alert`, and games or ported stock apps whose own screens would be cut. A ported
+    stock app keeps its layout; its stock `elements_button_left/center/right` hints are already
+    the same idea and stay as they are.
+  - **Free for app authors, no RAM:** the parts come from the shared code, as `const` strings and
+    stack, so an app writes its hints, not the drawing: `gui.c` for plain `/dev/lcd` programs
+    (`gui_title2(title, right)`, `gui_hints(text)`, `gui_note(text)` with a timed key read through
+    `poll`, `gui_scroll(top, shown, total)`, `gui_bits8()`), the `libfuri` standard modules
+    (Submenu, VariableItemList, Popup, DialogEx, TextInput: hints from their button labels; part
+    of the shared library, #201), the Berry `gui` binding (R7c) and the desktop `window` records
+    (K.3, a `hints` field). No periodic redraw is added for any of it.
+  - Existing apps are aligned in task T22: `info`, `lights`, `power`, `lfrfid` and the menu of
+    `console` (`flipper/gui/`), `selftest`, `furihello`, `remind` and `alarm` (7b.1/7b.2), `camfind`
+    and `sbctl` when they get their screens. New apps follow it from the start; reviews check it.
 
 **K.3 Desktop protocol (TSV lines).**
 - Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
@@ -1950,7 +1981,8 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     the launcher itself.
   - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
     at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
-  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17). The launcher's look follows the
+  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17; the system-wide screen style of K.2
+    starts here). The launcher's look follows the
     Pine mail program: text first, every screen says what each button does, nothing hidden; with
     modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
     128×64 with the 4×6 font:

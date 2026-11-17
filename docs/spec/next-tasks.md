@@ -325,6 +325,20 @@ Owner request outside the milestone order: the launcher may show an icon of at m
 - RAM (R5.6a.5): give the launcher's `.bss` and the heap of 16 entries with icons before/after in the PR (≤ +8 B `.bss`, ≤ 104 B heap). 0 run-time flash writes (`flashcheck`), BASE_VER bump (new `/etc` file).
 - Docs: CHANGELOG line; new `docs/manual/launcher.md` (the list, the hint line, icons and hints on/off, the `/etc/apps` line with the icon forms and the built-in names, a picture of the icons); devguide 4.4 (`/etc/apps` format, `Icon:` for packages, postinst example with an icon); `mkpkg.py` help.
 
+## T22. Every app in the launcher's style (spec K.2 "Screen style", owner 2026-11-17)
+The owner wants every app reached from the launcher to look like it: title bar with an optional state on the right, hint line, selection bar, `[value]` settings, scroll mark, notices on the message line. Starts after T21a, which brings the `gui.c` helpers.
+
+### T22a (`lane:cloud`, QEMU): plain `/dev/lcd` apps
+- `gui.c` helpers of K.2 if T21a did not add them all: `gui_title2()`, `gui_hints()`, `gui_note()` (timed key read via `poll`), `gui_scroll()`.
+- Align `info`, `lights`, `power`, `lfrfid`, the `console` menu (the text console itself stays an exception) and `selftest` (its test screens may stay full-screen; its menus follow). Each screen names exactly the buttons that act.
+- QEMU frame dumps (enlarged PNG) of every changed screen in the PR, before and after. RAM: no app's `.bss`/heap grows by more than its new hint strings' pointers (strings `const`); give the numbers.
+- Docs: CHANGELOG line; manual chapters of those apps updated with the new screens; devguide 4.x "Screen style" section with a small example (Basque strings welcome, e.g. hints `OK Hasi  Back Itzuli`).
+
+### T22b (`lane:cloud`, QEMU): `libfuri` modules, after #201 merges
+- Hint line drawn by Submenu, VariableItemList (`[value]`), Popup, DialogEx, TextInput from their own button labels; title bar state on the right; scroll mark in Submenu and VariableItemList. `GuiLayerWindow` height unchanged for custom views (stock `elements_button_*` stay).
+- Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
+- Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
