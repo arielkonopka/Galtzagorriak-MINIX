@@ -128,3 +128,6 @@ A red check means the PR is not ready for review. `powercut` can rarely time out
   board then returns to DFU.
 - **Writing flash during development** wears the device: test with plain installs, and use
   `pkg install --flash` only for what you keep.
+- **Radios and readers against a partner**: a second Flipper with Unleashed firmware and
+  `tools/twoflip.py` test RFID, IR, iButton and Sub-GHz in both directions; see
+  [chapter 6](06-two-flipper-tests.md).

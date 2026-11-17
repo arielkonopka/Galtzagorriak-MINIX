@@ -112,7 +112,11 @@ poller (for checks and logs only), `COUNT` the ops (`SEL_RD`, `SEL_WR`, `SEL_ERR
 - **Busy waits** are only acceptable for microsecond protocol timing that no peripheral can do,
   bounded and measured (the 1-Wire slots). A wait of milliseconds in a task blocks every other
   kernel task and every user process: use the ms timer, or yield (`hal_disk_yield()` in the SD
-  driver shows how a long poll gives the CPU back).
+  driver shows how a long poll gives the CPU back). A wait of many milliseconds should sleep
+  instead: `hal_disk_nap()` (DISCARD, which keeps the card busy for long) sets a one-tick
+  watchdog with `clock_mess()` and waits in `receive(HARDWARE)`; the watchdog's
+  `interrupt(WINCHESTER)` wakes it. User processes run and the CPU may enter Stop2 meanwhile,
+  and the cycle counter stops then, so such a limit counts naps, not cycles.
 
 ## 3.6 Power: sleep blockers and on-demand hardware
 
