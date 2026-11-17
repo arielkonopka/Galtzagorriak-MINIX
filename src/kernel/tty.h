@@ -55,6 +55,8 @@ typedef struct tty {
   int tty_outcum;		/* # chars output so far */
   char tty_iocaller;		/* process that made the call (usually FS) */
   char tty_ioproc;		/* process that wants to do an ioctl */
+  char tty_selops;		/* poll(): SEL_RD|SEL_WR FS waits for (R4b.6) */
+  char tty_selminor;		/* ... on this minor (LOG_MINOR shares tty 0) */
   int tty_ioreq;		/* ioctl request code */
   vir_bytes tty_iovir;		/* virtual address of ioctl buffer */
 
