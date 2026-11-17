@@ -628,21 +628,83 @@ static int clear_t5(unsigned long withpass, int haswith, int tries)
 	return 1;
 }
 
+/* 1 if `w` can be a T5577 basic-mode block 0 (datasheet layout): master
+ * key 0, 6 or 9, bits 27..21, 17, 8 and 2..1 clear, a known modulation and
+ * at least one block in the broadcast (otherwise the tag sends nothing). */
+static int t5_cfg_ok(unsigned long w)
+{
+	unsigned key = (unsigned) (w >> 28) & 15, mod = (unsigned) (w >> 12) & 0x1F;
+
+	if (key != 0 && key != 6 && key != 9) return 0;
+	if (w & 0x0FE20106UL) return 0;
+	if (((w >> 5) & 7) == 0) return 0;
+	return mod <= 8 || mod == 0x10 || mod == 0x18;
+}
+
+/* Block 0 from a word read at an unknown rotation and polarity: the one
+ * known configuration (with or without the password bit) among the 64
+ * readings, else the only plausible one.  0 if none or several fit. */
+static int t5_cfg_pick(unsigned long w, unsigned long *cfg)
+{
+	unsigned long x, y, got = 0;
+	int inv, r, k = 0;
+
+	for (inv = 0; inv < 2; inv++)
+	for (r = 0; r < 32; r++) {
+		x = inv ? (~w & 0xFFFFFFFFUL) : w;
+		y = r ? (((x << r) | (x >> (32 - r))) & 0xFFFFFFFFUL) : x;
+		if ((y & ~T5_PWD_BIT) == T5_CFG_OPEN
+		    || (y & ~T5_PWD_BIT) == T5_CFG_BLANK) {
+			*cfg = y;
+			return 1;
+		}
+		if (t5_cfg_ok(y) && y != got) { got = y; k++; }
+	}
+	if (k != 1) return 0;
+	*cfg = got;
+	return 1;
+}
+
+/* Print what a block 0 word says, in the datasheet's terms. */
+static void t5_cfg_print(unsigned long c)
+{
+	static char *mods[] = { "direct", "PSK1", "PSK2", "PSK3", "FSK1",
+		"FSK2", "FSK1a", "FSK2a", "Manchester" };
+	static int rates[] = { 8, 16, 32, 40, 50, 64, 100, 128 };
+	unsigned mod = (unsigned) (c >> 12) & 0x1F;
+
+	printf("  RF/%d, %s, %d data block%s, password %s%s\n",
+		rates[(c >> 18) & 7],
+		mod <= 8 ? mods[mod] : mod == 0x10 ? "biphase" : "biphase57",
+		(int) ((c >> 5) & 7), ((c >> 5) & 7) == 1 ? "" : "s",
+		(c & T5_PWD_BIT) ? "on" : "off",
+		(c & ~T5_PWD_BIT) == T5_CFG_OPEN ? " (EM4100 layout)" : "");
+}
+
 /* rfid dump [-with HEX] [BLOCK]: read one T5577 block (0 by default) and
  * print its 32-bit word.  A T5577 answers a block read with its word; a tag
  * that ignores the command (a read-only EM4100, or a password-protected one
- * read without its password) is still broadcasting its EM4100 number. */
+ * read without its password) is still broadcasting its EM4100 number.
+ * The capture starts after the reader settles, partway into the repeating
+ * answer, and the detector's polarity is unknowable, so the word comes out
+ * at an unknown rotation, maybe inverted.  Block 0 has a fixed layout and is
+ * put right by trying every reading; other blocks are printed as read. */
 static int dump_block(int block, int with_pass, unsigned long pass)
 {
 	int n;
-	unsigned long w;
+	unsigned long w, c;
 	unsigned char id[5];
 
 	n = t5_read_block(block, with_pass, pass);
 	if (n < 0) return 1;
-	if (t5_word(n, &w) >= 2)
-		printf("block %d: %08lX\n", block, w);
-	else if (em_decode(n, id))
+	if (t5_word(n, &w) >= 2) {
+		if (block == 0 && t5_cfg_pick(w, &c)) {
+			printf("block 0: %08lX\n", c);
+			t5_cfg_print(c);
+		} else
+			printf("block %d: %08lX (read at an unknown start: may be "
+				"rotated or inverted)\n", block, w);
+	} else if (em_decode(n, id))
 		printf("block %d: no T5577 word; the tag is broadcasting "
 			"EM4100 %02X %02X %02X %02X %02X (read-only, or "
 			"password-protected and read without -with)\n",
