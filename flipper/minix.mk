@@ -473,7 +473,8 @@ $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
 OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
-CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
+CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
+			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 4096
 # The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
 # libapp timers; packages remind and alarm (/usr/bin, own users).
