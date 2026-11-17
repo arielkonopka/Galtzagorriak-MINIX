@@ -239,8 +239,17 @@ needed to read a protected tag's blocks:
 
 ```
 rfid dump 0
-block 0: 00052010
+block 0: 00148040
+  RF/64, Manchester, 2 data blocks, password off (EM4100 layout)
 ```
+
+The tag repeats the block's word for as long as the field is on, and the Flipper starts
+listening a little after the command, partway into a repetition; the reader also cannot tell
+the two polarities of the signal apart. So the word comes in at an unknown starting bit,
+maybe inverted. Block 0 has a fixed layout, and `rfid dump` puts it right: of the 64
+readings it prints a known configuration, or the only one the T5577 datasheet allows, with
+what it means. Other blocks hold any data, so they are printed as read, with a note that
+they may be rotated or inverted.
 
 A tag that is read-only (a plain EM4100 chip, not a T5577), or protected and read without
 `-with`, ignores the command and keeps broadcasting its number; `rfid dump` says so.

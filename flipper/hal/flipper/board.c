@@ -1115,6 +1115,10 @@ void hal_led_get(unsigned char rgb[3])
 #define CMD25	25	/* WRITE_MULTIPLE_BLOCK */
 #define TOKEN_MULTI	0xFC	/* data token for CMD25 */
 #define TOKEN_STOP	0xFD	/* ends a CMD25 transfer */
+#define CMD13	13	/* SEND_STATUS; after CMD55: SD_STATUS (ACMD13) */
+#define CMD32	32	/* ERASE_WR_BLK_START_ADDR */
+#define CMD33	33	/* ERASE_WR_BLK_END_ADDR */
+#define CMD38	38	/* ERASE; argument 1: DISCARD (SD 5.1) */
 #define CMD55	55	/* APP_CMD */
 #define CMD58	58	/* READ_OCR */
 #define ACMD41	41	/* SD_SEND_OP_COND */
@@ -1153,6 +1157,7 @@ static uint8_t crc7(const uint8_t *p, unsigned n)
  * test vector (SD_HWCRC in sd_ready); only the disk task calls it, and
  * tasks do not preempt each other, so nobody shares the unit. */
 #define SD_HWCRC	2		/* in sd_ready: the CRC unit is in use */
+#define SD_DISCARD	4		/* in sd_ready: the card takes DISCARD */
 static uint16_t crc16(const uint8_t *p, unsigned n);
 
 static uint16_t crc16_hw(uint16_t crc, const uint8_t *p, unsigned n)
@@ -1282,6 +1287,31 @@ static int sd_read_data(uint8_t *buf, unsigned len)
 	return crc == crc16(buf, len) ? 0 : -2;
 }
 
+/* R12.40: does the card take DISCARD?  ACMD13 returns the 512-bit SD
+ * Status (R2, then a 64-byte data block); DISCARD_SUPPORT is bit 313, in
+ * byte 24.  Read 16 bytes at a time through `buf` (the disk task's stack is
+ * small), the CRC kept on the way.  1 yes, 0 no or no answer. */
+static int sd_discard_probe(uint8_t *buf)
+{
+	uint32_t start = DWT->CYCCNT;
+	uint16_t crc = 0;
+	int i, j, yes = 0;
+	uint8_t t;
+
+	if (sd_cmd(CMD55, 0) > R1_IDLE || sd_cmd(CMD13, 0) != 0
+	    || spi2_xfer(0xFF) != 0) return 0;	/* R2's second byte */
+	while ((t = spi2_xfer(0xFF)) == 0xFF)
+		if (ms_since(start) > SD_READ_MS) return 0;
+	if (t != TOKEN_START) return 0;
+	for (i = 0; i < 64; i += 16) {
+		for (j = 0; j < 16; j++) buf[j] = spi2_xfer(0xFF);
+		crc = crc16_more(crc, buf, 16);
+		if (i == 16) yes = (buf[24 - 16] & 0x02) != 0;
+	}
+	t = spi2_xfer(0xFF);
+	return crc == (uint16_t) (t << 8 | spi2_xfer(0xFF)) ? yes : 0;
+}
+
 int hal_disk_init(void)
 {
 	uint8_t ocr[4], csd[16];
@@ -1336,9 +1366,10 @@ int hal_disk_init(void)
 			| ((uint32_t) csd[7] << 2) | (csd[8] >> 6);
 		sd_nsectors = (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9);
 	}
+	sd_ready = crc16_hw_init() ? 1 | SD_HWCRC : 1;
+	if (sd_discard_probe(csd)) sd_ready |= SD_DISCARD;
 	sd_select(0);
 	spi2_speed(sd_fast);
-	sd_ready = crc16_hw_init() ? 1 | SD_HWCRC : 1;
 	return 0;
 fail:
 	sd_select(0);
@@ -1380,6 +1411,39 @@ int hal_disk_fake(int state)
 {
 	(void) state;
 	return -1;
+}
+
+/* R12.40: tell the card sectors first..last hold nothing (DISCARD: CMD32,
+ * CMD33, CMD38 with argument 1).  The card only marks them unused; it is
+ * busy meanwhile (R1b), and that wait is not polled in a loop (spec 0.8):
+ * the card is deselected and the disk task naps a clock tick at a time
+ * (hal_disk_nap), so everyone else runs and the CPU may sleep - which also
+ * stops the cycle counter, so the time limit counts naps.  0 done, -1 an
+ * error or still busy after SD_DISCARD_NAPS, -2 the card has no DISCARD.
+ * last < first only asks (0 or -2). */
+#define SD_DISCARD_NAPS	120		/* 2 s of 1/60 s ticks */
+
+int hal_disk_discard(uint32_t first, uint32_t last)
+{
+	int naps = 0, r = -1;
+
+	if (!(sd_ready & SD_DISCARD)) return -2;
+	if (last < first) return 0;		/* only asked: it has DISCARD */
+	spi2_speed(sd_fast);
+	if (sd_cmd(CMD32, sd_block_addr ? first : first * 512) != 0
+	    || sd_cmd(CMD33, sd_block_addr ? last : last * 512) != 0
+	    || sd_cmd(CMD38, 1) != 0) goto out;
+	while (spi2_xfer(0xFF) != 0xFF) {	/* busy: DO held low */
+		if (++naps > SD_DISCARD_NAPS) goto out;
+		sd_select(0);
+		hal_disk_nap();
+		spi2_speed(sd_fast);
+		sd_select(1);
+	}
+	r = 0;
+out:
+	sd_select(0);
+	return r;
 }
 
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so

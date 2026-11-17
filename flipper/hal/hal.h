@@ -263,6 +263,12 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
 int hal_disk_present(void);
 int hal_disk_id(uint32_t *id);
 int hal_disk_fake(int state);
+/* R12.40: DISCARD sectors first..last (the card marks them unused, no
+ * erase): 0, -1 error, -2 the card has no DISCARD (SD Status, read at
+ * init).  The card is busy meanwhile; the HAL waits by hal_disk_nap() (the
+ * kernel's: the disk task sleeps one clock tick). */
+int hal_disk_discard(uint32_t first, uint32_t last);
+void hal_disk_nap(void);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of
  * whole pages that only the cache uses.  The kernel calls these with
