@@ -132,13 +132,22 @@ rfid emulate EM 04 00 98 3D C5
 emulating EM4100 04 00 98 3D C5; hold to a reader, Ctrl-C to stop
 ```
 
-The **RFID emu** app on the launcher does the same from the screen: Left/Right pick a byte,
-Up/Down change it, OK starts, OK or Back stops. It starts on `04 00 98 3D C5`.
-
 The reader's own field is the clock: the kernel counts the reader's carrier and loads the
 antenna in step with it (`ioctl` `RFIDIOCEMU` on `/dev/rfid`), so the waveform cannot drift and
 the CPU does nothing while it runs. With no reader near, nothing is sent (a tag is passive).
 Only EM4100 is emulated for now; the other protocols (HID, Indala) are **(planned)**.
+
+### The RFID app
+
+The **RFID** app on the launcher ties reading, saving, writing and emulating together:
+
+- **Read** — hold a tag to the back; the number is shown, OK saves it to the SD card as
+  `/home/lfrfid/<number>.rfid` (the stock `.rfid` format).
+- **Saved** — the saved numbers; pick one to **Emulate** (hold the Flipper to a reader),
+  **Write to tag** (onto a blank fob) or **Delete**.
+- **Add manually** — type a number (Left/Right pick a byte, Up/Down change it) and save it.
+
+Reading and writing use the `rfid` command underneath; emulating is `RFIDIOCEMU`.
 
 ### Clearing a password and reading blocks
 

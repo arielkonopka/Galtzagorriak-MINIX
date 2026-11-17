@@ -95,7 +95,6 @@ buffer.
 
 ## 4.7 Where things are planned to go
 
-- `DEV_SELECT` in the TTY and flipdev tasks (R4b.6; FS's `poll()` is in, `src/fs/poll.c`).
 - Supplementary groups in FS and MM (R4b.4).
 - Swap-out and swap-in of blocked processes in MM, to the SD card only (Phase 12).
 - `setitimer` subset on the ms timer (R4b.2, with R4b.6).

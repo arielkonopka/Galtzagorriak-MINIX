@@ -72,10 +72,19 @@ asked.
 A process can wait on at most 4 different character devices at a time without
 cost; with more, it looks again at every clock tick.
 .PP
-Until the drivers answer DEV_SELECT (planned for the TTY and the Flipper
-devices), terminals and
+Terminals are readable when a read would not wait (a whole line, or in raw
+mode a character) and writable when no other write is in progress.
 .B /dev/buttons
-count as always ready.
+is readable when an event is queued for the caller (not while another app
+owns the buttons),
+.B /dev/speaker
+writable when no tune plays.
+The other Flipper devices count as always ready:
+.BR /dev/ir ,
+.B /dev/rfid
+and
+.B /dev/subghzraw
+capture only while a read waits, so they have nothing to read before it.
 .SH "SEE ALSO"
 .BR read (2),
 .BR write (2),

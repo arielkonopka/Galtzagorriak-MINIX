@@ -237,8 +237,7 @@ static void wrap_test(void)
 }
 #endif
 
-/* poll() (spec R4b.6, AC4b.3 without /dev/buttons until flipdev answers
- * DEV_SELECT): a pipe and a 250 ms timeout, a pipe a child writes to,
+/* poll() (spec R4b.6; devices with DEV_SELECT: devpoll_tests): a pipe and a 250 ms timeout, a pipe a child writes to,
  * EINTR from alarm(), hangup, bad descriptors, a device without
  * DEV_SELECT (always ready). */
 static void poll_tests(void)
@@ -426,6 +425,92 @@ static void furi_tap(int b, int key)
 	(void) write(b, (char *) &m, 1);
 	(void) poll((struct pollfd *) NULL, 0, 250);
 }
+
+#ifdef BOARD_QEMU
+/* DEV_SELECT in the device tasks (R4b.6, protocol #131): the console's
+ * TTY line, /dev/buttons with fake presses (AC4b.3), /dev/speaker while a
+ * tune plays.  Before, these were "always ready". */
+static void devpoll_tests(void)
+{
+	struct pollfd p[2];
+	struct tms tm;
+	clock_t t0, t1;
+	unsigned char m[4];
+	int b, s, r, st;
+	pid_t pid;
+
+	if (isatty(0) && isatty(1)) {
+		p[0].fd = 0; p[0].events = POLLIN; p[0].revents = 0;
+		p[1].fd = 1; p[1].events = POLLOUT; p[1].revents = 0;
+		r = poll(p, 2, 100);
+		check(r == 1 && p[0].revents == 0 && p[1].revents == POLLOUT,
+				"poll: console writable, no input");
+		t0 = times(&tm);
+		r = poll(p, 1, 100);
+		t1 = times(&tm);
+		check(r == 0 && t1 - t0 >= 6 && t1 - t0 < 40,
+				"poll: console without input waits 100 ms");
+	}
+
+	b = open("/dev/buttons", O_RDWR | O_NONBLOCK);
+	if (b < 0) {
+		check(0, "poll: open /dev/buttons");
+		return;
+	}
+	furi_tap(b, 0x04);		/* the backlight on: not swallowed */
+	while (read(b, (char *) m, 2) == 2) ;
+	p[0].fd = b; p[0].events = POLLIN; p[0].revents = 0;
+	r = poll(p, 1, 0);
+	check(r == 0 && p[0].revents == 0, "poll: /dev/buttons, none queued");
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		(void) poll((struct pollfd *) NULL, 0, 300);
+		m[0] = 0x10;
+		(void) write(b, (char *) m, 1);
+		(void) poll((struct pollfd *) NULL, 0, 60);
+		m[0] = 0;
+		(void) write(b, (char *) m, 1);
+		_exit(0);
+	}
+	t0 = times(&tm);
+	r = poll(p, 1, 3000);
+	t1 = times(&tm);
+	printf("  poll /dev/buttons: %ld ticks\n", (long) (t1 - t0));
+	check(r == 1 && p[0].revents == POLLIN && t1 - t0 >= 12
+		&& t1 - t0 < 60 && read(b, (char *) m, 2) == 2
+		&& m[0] == 0x10 && m[1] == 1,
+				"poll: /dev/buttons wakes on a press");
+	check(pid > 0 && wait(&st) == pid, "poll: button child done");
+	while (read(b, (char *) m, 2) == 2) ;
+	close(b);
+
+	/* /dev/speaker: a 300 ms note from a child; writable again after */
+	s = open("/dev/speaker", O_WRONLY);
+	if (s < 0) {
+		check(0, "poll: open /dev/speaker");
+		return;
+	}
+	pid = fork();
+	if (pid == 0) {
+		m[0] = 440 & 0xFF; m[1] = 440 >> 8;
+		m[2] = 300 & 0xFF; m[3] = 300 >> 8;
+		_exit(write(s, (char *) m, 4) == 4 ? 0 : 1);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	p[0].fd = s; p[0].events = POLLOUT; p[0].revents = 0;
+	r = poll(p, 1, 0);
+	check(r == 0 && p[0].revents == 0, "poll: /dev/speaker busy");
+	t0 = times(&tm);
+	r = poll(p, 1, 3000);
+	t1 = times(&tm);
+	check(r == 1 && p[0].revents == POLLOUT && t1 - t0 >= 6
+		&& t1 - t0 < 40, "poll: /dev/speaker writable after the tune");
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "poll: speaker child done");
+	close(s);
+}
+#endif
 
 static void furihello_test(void)
 {
@@ -750,6 +835,9 @@ int main(int argc, char **argv)
 	furihello_test();
 #endif
 	poll_tests();
+#ifdef BOARD_QEMU
+	devpoll_tests();
+#endif
 	time_tests();
 	finish();
 	return 0;

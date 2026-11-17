@@ -43,6 +43,15 @@
  * the reader's buffer, one interrupt at the start and one at the end).
  * Nobody busy-waits.
  *
+ * poll() (R4b.6, protocol #131): DEV_SELECT says which ops are ready.
+ * /dev/buttons is readable with an event queued for the caller (not while
+ * another app owns the buttons, R4b.8), /dev/speaker writable when no tune
+ * plays; every other minor is always ready (IR, RFID and Sub-GHz capture
+ * only while a read waits: nothing is "readable" before the read).  With
+ * SEL_NOTIFY the two remember what FS waits for and send one DEV_SELECTED:
+ * the buttons on a new event (not on a queue the owner has not read yet:
+ * that would wake FS again and again), the speaker when the tune ends.
+ *
  * Access is controlled with the permissions of the device files.  The
  * buttons are sampled, and notes timed, on every clock tick (flipdev_tick,
  * from clock.c).
@@ -88,7 +97,9 @@ PRIVATE message fm;
 
 /* Button events, filled by flipdev_tick() at interrupt level. */
 PRIVATE u8_t ev_key[NEVENTS], ev_down[NEVENTS];
-PRIVATE volatile unsigned ev_head, ev_tail;
+PRIVATE volatile u16_t ev_head, ev_tail;	/* wrap: NEVENTS divides 2^16 */
+PRIVATE u8_t sel_wait;		/* poll(): SEL_RD buttons, SEL_WR speaker */
+PRIVATE u8_t sel_head;		/* ev_head when the buttons registered */
 #define BL_DIMS		5	/* seconds of dimming, 10 % each */
 #define BL_GONE		7	/* bl_want: off */
 #define BL_SAVE		8	/* off, and the LCD in power save (T14d) */
@@ -222,6 +233,8 @@ FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
+FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
@@ -345,6 +358,9 @@ PUBLIC void flipdev_task()
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
 		  : fg_ioctl(&fm);
 		break;
+	case DEV_SELECT:
+		r = do_select(&fm);
+		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
@@ -369,6 +385,65 @@ PUBLIC void flipdev_task()
 		r = EINVAL;
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
+	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
+  }
+}
+
+
+/*===========================================================================*
+ *				do_select				     *
+ *===========================================================================*/
+PRIVATE int do_select(m_ptr)
+message *m_ptr;
+{
+/* DEV_SELECT (R4b.6): the ops of COUNT ready now; with SEL_NOTIFY remember
+ * the buttons' and the speaker's that are not; ops 0: forget them.  One
+ * registration per minor for all pollers (FS keeps who they are).
+ */
+  int ops = m_ptr->COUNT, want = ops & (SEL_RD | SEL_WR), r = want;
+
+  if (ops == 0) {
+	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
+	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
+	return(0);
+  }
+  switch (m_ptr->DEVICE) {
+  case BTN_MINOR:		/* a write is the QEMU tests' fake: ready */
+	if (ev_head == ev_tail || fg_other(m_ptr->PROC_NR)) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) {
+		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
+		sel_wait |= SEL_RD;
+	}
+	break;
+  case SPK_MINOR:		/* a read fails at once: ready */
+	if (sp_waiting) r &= ~SEL_WR;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_WR)) sel_wait |= SEL_WR;
+	break;
+  default:
+#if LATTRACE
+	if (m_ptr->DEVICE == LAT_MINOR) break;
+#endif
+	if ((unsigned) m_ptr->DEVICE > LAST_MINOR) return(ENXIO);
+  }
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				sel_check				     *
+ *===========================================================================*/
+PRIVATE void sel_check()
+{
+/* In the task: what FS waits for has happened, tell it once (DEV_SELECTED,
+ * DEVICE where a reply has REP_PROC_NR).  The pollers that still wait
+ * register again. */
+  if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
+	sel_wait &= ~SEL_RD;
+	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_WR) && !sp_waiting) {
+	sel_wait &= ~SEL_WR;
+	reply(DEV_SELECTED, FS_PROC_NR, SPK_MINOR, SEL_WR);
   }
 }
 
@@ -1371,11 +1446,13 @@ PRIVATE void do_hardint()
 	} else
 		ir_fill();
   }
-  if (!rd_waiting || ev_head == ev_tail) return;
-  rd_waiting = FALSE;
-  LAT_EVENT(LE_BREPLY, rd_proc);
-  r = deliver(rd_proc, rd_vir, rd_count);
-  reply(REVIVE, rd_caller, rd_proc, r);
+  if (rd_waiting && ev_head != ev_tail) {
+	rd_waiting = FALSE;
+	LAT_EVENT(LE_BREPLY, rd_proc);
+	r = deliver(rd_proc, rd_vir, rd_count);
+	reply(REVIVE, rd_caller, rd_proc, r);
+  }
+  if (sel_wait) sel_check();		/* poll(), R4b.6 */
 }
 
 
@@ -1698,7 +1775,7 @@ PRIVATE unsigned btn_sample()
   }
   for (b = 1; b <= BTN_BACK; b <<= 1) {
 	if (!(changed & b)) continue;
-	if (ev_head - ev_tail < NEVENTS) {
+	if ((u16_t) (ev_head - ev_tail) < NEVENTS) {
 		ev_key[ev_head % NEVENTS] = b;
 		ev_down[ev_head % NEVENTS] = (now & b) != 0;
 		if (now & b) LAT_EVENT(LE_BTN, b);
@@ -1706,7 +1783,7 @@ PRIVATE unsigned btn_sample()
 	}
   }
   last_buttons = now | flags;
-  if (rd_waiting) interrupt(PRINTER);
+  if (rd_waiting || (sel_wait & SEL_RD)) interrupt(PRINTER);
   return(now);
 }
 
