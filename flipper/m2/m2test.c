@@ -19,6 +19,7 @@
 #include <sys/times.h>
 #include <minix/fg.h>
 #include <minix/ibutton.h>
+#include <minix/partition.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -593,6 +594,51 @@ static void card_tests(void)
 	check(r1 < 0, "card out: a read fails");
 	check(r2 < 0, "card: another card is refused");
 	check(r3 == (int) sizeof b, "card: the same card back carries on");
+}
+
+/* R12.40: DIOCDISCARD on the whole disk's last sector, which no partition
+ * or swap test uses.  QEMU's card zero-fills a discarded range, so the
+ * pattern written first reads back as zeros; empty and too-long ranges
+ * are refused.  /dev/hd0 goes through FS's cache: closing it (not
+ * mounted) writes the pattern out and drops its blocks. */
+static void discard_tests(void)
+{
+	static char b[512];
+	struct partition pt;
+	struct part_range rg;
+	off_t at;
+	int fd, i, zero, r0, r1;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDWR)) < 0
+	    || ioctl(fd, DIOCGETP, &pt) != 0) {
+		check(0, "discard: open /dev/hd0");
+		if (fd >= 0) close(fd);
+		return;
+	}
+	rg.first = pt.size / 512 - 1;
+	at = (off_t) rg.first * 512;
+	memset(b, 0xA5, sizeof b);
+	lseek(fd, at, SEEK_SET);
+	(void) write(fd, b, sizeof b);
+	close(fd);
+	if ((fd = open("/dev/hd0", O_RDWR)) < 0) {
+		check(0, "discard: open /dev/hd0 again");
+		return;
+	}
+	rg.count = 1;
+	r1 = ioctl(fd, DIOCDISCARD, &rg);
+	lseek(fd, at, SEEK_SET);
+	zero = read(fd, b, sizeof b) == (int) sizeof b;
+	for (i = 0; zero && i < (int) sizeof b; i++) if (b[i] != 0) zero = 0;
+	rg.count = 2;			/* one past the end */
+	r0 = ioctl(fd, DIOCDISCARD, &rg);
+	rg.count = 0;
+	i = ioctl(fd, DIOCDISCARD, &rg);
+	close(fd);
+	check(r1 == 0, "discard: DIOCDISCARD of the last sector");
+	check(zero, "discard: the range reads back as zeros (QEMU)");
+	check(r0 < 0 && i < 0, "discard: empty and too-long ranges refused");
 }
 
 
@@ -1187,6 +1233,7 @@ int main(int argc, char **argv)
 	ibutton_tests();
 	gpio_tests();
 	card_tests();
+	discard_tests();
 	preempt_tests();
 #endif
 	time_tests();

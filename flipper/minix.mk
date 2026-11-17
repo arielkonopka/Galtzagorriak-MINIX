@@ -483,7 +483,7 @@ OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # shared library with libfuri (R2b.9).  timed and alert (flipper/apps/timed)
 # use it; they ship as the package timed (/usr/lib).
 APP_DIR := lib/app
-APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o
+APP_OBJ := $(MB)/app/tspec.o $(MB)/app/io.o $(MB)/app/tune.o
 APP_CFLAGS = $(UCFLAGS) -I$(APP_DIR)/include
 $(MB)/app/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
@@ -498,8 +498,20 @@ $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
 OBJS_timed = $(MB)/cmd/timed/timed.o $(APP_OBJ)
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(APP_OBJ)
-CHMEM_timed := 4096	# R7b.4: about 3 KB while it runs
-CHMEM_alert := 4096
+CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
+			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
+CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
+# The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
+# libapp timers; packages remind and alarm (/usr/bin, own users).
+NATPROGS := remind alarm
+NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
+$(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(NAT_CFLAGS) -MMD -MP -c $< -o $@
+$(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
+	$(MB)/cmd/nat/native/nat_core.o $(APP_OBJ) $(FURI_OBJ) $(FURI_GUI_OBJ)))
+CHMEM_remind := 12288	# 7b.1: libfuri main stack 3 KB, gui thread 2 KB, Canvas 1.1 KB, the list
+CHMEM_alarm  := 12288	# 7b.2: the same
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -553,15 +565,16 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar \
-	   $(PKGDIR)/stest_1.0.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
+	   $(PKGDIR)/stest_1.0.tar \
+	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -576,12 +589,25 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.1.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.2.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.1 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.2 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
+# The native apps (spec 7b.1, 7b.2): their own users, the launcher line.
+$(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
+		rootfs/remind.prerm
+	python3 -I tools/mkpkg.py -n remind -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify reminder --flash \
+	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
+	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
+$(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+		rootfs/alarm.prerm
+	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \
+	   --timers --notify alarm --deskmode --flash \
+	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
+	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
 # The hardware self test (spec 7b.3).
 $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/selftest.postinst rootfs/selftest.prerm \
@@ -595,7 +621,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.02
+BASE_VER := 4.10
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

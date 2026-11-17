@@ -19,7 +19,14 @@
  *	minor 5  /dev/speaker	write: notes, 4 bytes each: frequency in Hz and
  *				duration in ms, both 16-bit little endian;
  *				0 Hz is a rest.  Up to 64 notes per write;
- *				the write returns when they have played
+ *				the write returns when they have played.
+ *				Volume: a note of 0xFFFF Hz sets the volume
+ *				of the notes after it to its duration field,
+ *				0..100 (above 100: 100), and plays nothing.
+ *				It lasts until the next such note or until
+ *				the device is closed, which sets 100 again
+ *				(the full sound of programs that never set
+ *				it).  The duty is 50 % * (vol/100)^3 (hal.h).
  *	minor 6  /dev/gpio	the eight free header pins (hal.h), 0..7
  *				write: pairs of bytes, pin and operation:
  *				  0 low, 1 high (output), 2 input, 3 input
@@ -158,6 +165,8 @@ PRIVATE const u8_t ge_tab[] = {
 #define GE_HOLD		(3 * HZ / 2)	/* 1.5 s, in ticks */
 #define GE_RED		64		/* the blink: red at ~25 % */
 PRIVATE u8_t ge_led[3];		/* the LED before the blink (3 B) */
+PRIVATE u8_t sp_quiet;		/* /dev/speaker: 100 - the volume (0: full);
+				 * here it fills ge_led's padding */
 
 /* Notes being played (/dev/speaker), timed by flipdev_tick(); the same
  * memory holds the infrared transmit ring while a frame goes out (one or
@@ -174,6 +183,7 @@ PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 					 * done */
 PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
+#define SPK_VOL		0xFFFF		/* the volume note's "frequency" */
 
 /* Infrared (/dev/ir).  Durations in the rings are 16 bits: microseconds
  * below 32768, else bit 15 and units of 64 us (up to 2 s). */
@@ -265,6 +275,7 @@ FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
 FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
 FORWARD _PROTOTYPE( void sel_check, (void)				);
+FORWARD _PROTOTYPE( void sp_play, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
@@ -370,6 +381,9 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SPK_MINOR
+							&& !sp_waiting)
+			sp_quiet = 0;		/* full volume again */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
@@ -415,7 +429,7 @@ PUBLIC void flipdev_task()
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
 			note_i = note_n;
-			hal_tone(0);
+			hal_tone(0, 0);
 		}
 		r = EINTR;
 		break;
@@ -1178,15 +1192,19 @@ message *m_ptr;
 	for (i = 0; i < n; i++) {
 		unsigned ms = nb[4*i+2] | nb[4*i+3] << 8;
 		note_hz[i] = nb[4*i] | nb[4*i+1] << 8;
+		if (note_hz[i] == SPK_VOL) {	/* the volume, kept as is */
+			note_ticks[i] = ms > 100 ? 100 : ms;
+			continue;
+		}
 		note_ticks[i] = (ms * HZ + 999) / 1000;
 		if (note_ticks[i] == 0) note_ticks[i] = 1;
 	}
 	lock();
 	note_n = n;
 	note_i = 0;
-	note_left = note_ticks[0];
-	hal_tone(note_hz[0]);
+	sp_play();
 	unlock();
+	if (note_i >= note_n) return(count);	/* only volume notes */
 	sp_waiting = TRUE;
 	sp_caller = m_ptr->m_source;
 	sp_proc = m_ptr->PROC_NR;
@@ -1719,6 +1737,24 @@ PRIVATE void do_hardint()
 
 
 /*===========================================================================*
+ *				sp_play					     *
+ *===========================================================================*/
+PRIVATE void sp_play()
+{
+/* Start note note_i, after the volume notes before it (they take no time);
+ * quiet at the end.  Called with interrupts off, or from the clock tick.
+ */
+  while (note_i < note_n && note_hz[note_i] == SPK_VOL)
+	sp_quiet = 100 - note_ticks[note_i++];
+  if (note_i < note_n) {
+	note_left = note_ticks[note_i];
+	hal_tone(note_hz[note_i], 100 - sp_quiet);
+  } else
+	hal_tone(0, 0);
+}
+
+
+/*===========================================================================*
  *				flipdev_tick				     *
  *===========================================================================*/
 PUBLIC void flipdev_tick()
@@ -1734,13 +1770,9 @@ PUBLIC void flipdev_tick()
 	interrupt(PRINTER);
   }
   if (note_i < note_n && --note_left == 0) {	/* next note, or quiet */
-	if (++note_i < note_n) {
-		note_left = note_ticks[note_i];
-		hal_tone(note_hz[note_i]);
-	} else {
-		hal_tone(0);
-		interrupt(PRINTER);
-	}
+	note_i++;
+	sp_play();
+	if (note_i >= note_n) interrupt(PRINTER);
   }
   if (gp_watch) {		/* R6.4: the watched header pins' edges */
 	unsigned i, now = 0;

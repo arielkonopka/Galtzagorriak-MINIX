@@ -250,8 +250,17 @@ needed to read a protected tag's blocks:
 
 ```
 rfid dump 0
-block 0: 00052010
+block 0: 00148040
+  RF/64, Manchester, 2 data blocks, password off (EM4100 layout)
 ```
+
+The tag repeats the block's word for as long as the field is on, and the Flipper starts
+listening a little after the command, partway into a repetition; the reader also cannot tell
+the two polarities of the signal apart. So the word comes in at an unknown starting bit,
+maybe inverted. Block 0 has a fixed layout, and `rfid dump` puts it right: of the 64
+readings it prints a known configuration, or the only one the T5577 datasheet allows, with
+what it means. Other blocks hold any data, so they are printed as read, with a note that
+they may be rotated or inverted.
 
 A tag that is read-only (a plain EM4100 chip, not a T5577), or protected and read without
 `-with`, ignores the command and keeps broadcasting its number; `rfid dump` says so.
@@ -299,6 +308,25 @@ ir rx -r -d /dev/subghzraw
 
 Without a signal strength threshold (planned) the receiver's noise toggles it too, so a read
 fills up with noise at once; FSK remotes (many car keys) do not show at all.
+
+## The speaker and its volume (`/dev/speaker`, `beep`)
+
+Writing plays notes, 4 bytes each: the frequency in Hz and the duration in ms, both 16-bit little
+endian; 0 Hz is a rest. Up to 64 notes per write; the write returns when they have played.
+
+**Volume.** A note with the frequency `0xFFFF` sets the volume, 0–100, to its duration field and
+plays nothing (a value above 100 counts as 100). It holds for the notes after it, in the same or
+later writes, until the next such note or until the device is closed. Closing sets 100 again, so
+programs that never set a volume sound as before. 100 is the full sound; the loudness follows a
+cubic curve, as on the stock firmware (50 is about an eighth of the power, 20 is quiet but
+audible, 0 is silent).
+
+```
+beep -v 20 1000 300     # a quiet 1 kHz beep
+beep -v 100 -c          # the attention call at full volume
+```
+
+`alert` (reminders, alarms) uses it for the `Volume:` field and for the escalating ring.
 
 ## Random numbers (`/dev/random`)
 
