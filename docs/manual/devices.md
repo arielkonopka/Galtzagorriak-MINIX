@@ -117,11 +117,42 @@ wants a password only answers now and then.
 `-pass HEX` gives a T5577 that password as well, so that nothing can rewrite it without the
 word (some door entry systems try to overwrite a copy they find). Write the password down:
 changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password
-unless `-pass` gives a new one). A tag written by another cloner may have a password you do
-not know; then it cannot be rewritten. `-lock` instead sets the chip's lock bit, which can
+unless `-pass` gives a new one). `-lock` instead sets the chip's lock bit, which can
 never be undone by anyone, you included. A write to `/dev/rfid` is
 a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
 spaces. Emulating a tag is **(planned)**.
+
+### Clearing a password and reading blocks
+
+A tag written by a hardware cloner is often locked with a password, so `rfid write` says
+"not written". `rfid clear` takes the password off and makes the tag programmable again:
+
+```
+rfid clear
+sweeping 126 known passwords...
+cleared with 51243648 (a known password): programmable again
+```
+
+It writes block 0 with the password bit clear (which is the whole of removing a password) and
+reads it back to check, trying no password first, then one given with `-with HEX`, then a
+built-in list of the passwords hardware cloners and tools commonly set (from the proxmark3
+project). It stops at the first that opens the tag. Many cloners use one of these known
+passwords, so a tag they locked is usually recoverable; a truly random password (2^32 of them)
+is not, and `rfid clear` says so. The tag's EM4100 number is untouched — only the password is
+removed — so after `rfid clear` you can `rfid write` a new number. `-n N` sets how many times
+each password is tried (default 20).
+
+`rfid dump [BLOCK]` reads one of a T5577's eight blocks (0 by default) and prints its 32-bit
+word; block 0 is the configuration, block 7 holds the password. `-with HEX` sends a password,
+needed to read a protected tag's blocks:
+
+```
+rfid dump 0
+block 0: 00052010
+```
+
+A tag that is read-only (a plain EM4100 chip, not a T5577), or protected and read without
+`-with`, ignores the command and keeps broadcasting its number; `rfid dump` says so.
 
 ## The clock, its alarm and calibration (`/dev/rtc`, `rtc`)
 
