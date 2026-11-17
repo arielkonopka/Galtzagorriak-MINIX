@@ -785,8 +785,9 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[128], d[6];
+  char line[176], d[10];
   const char *k = pw_key;
+  unsigned long u;
   int i, j, n = 0, v, r6, r4, r3;
 
   for (i = 0; i < 7; i++) {
@@ -822,8 +823,22 @@ int count;
 	do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
 	while (j > 0) line[n++] = d[--j];
   }
-  for (k = " otg=0\n"; *k != 0; k++) line[n++] = *k;
-  if (r3 & 0x20) line[n - 2] = '1';
+  for (k = " otg=0"; *k != 0; k++) line[n++] = *k;
+  if (r3 & 0x20) line[n - 1] = '1';
+  /* R6.8: seconds up and in Stop2 since boot, and the wake-ups from it
+   * (a button; anything else): energy runs need no trace build */
+  for (i = 0; i < 4; i++) {
+	for (k = i == 0 ? " up=" : i == 1 ? " stop2=" : i == 2 ? " wbtn="
+						: " wother="; *k != 0; k++)
+		line[n++] = *k;
+	u = i == 0 ? (unsigned long) get_uptime() / HZ
+	  : i == 1 ? (unsigned long) pm_stat.min * 60 + pm_stat.stop / 32768
+	  : i == 2 ? pm_stat.btn : pm_stat.other;
+	j = 0;
+	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);
+	while (j > 0) line[n++] = d[--j];
+  }
+  line[n++] = '\n';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
