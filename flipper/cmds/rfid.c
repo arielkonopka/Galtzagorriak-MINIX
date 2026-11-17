@@ -33,6 +33,10 @@
  *					password, -with HEX, then the proxmark3
  *					dictionary (known copier passwords); it
  *					stops at the first that opens the tag
+ *		rfid -c 125|psk|134	read with that field: 125 kHz (the
+ *					default), PSK tags' 62.5 kHz at 25 %,
+ *					FDX-B's 134.2 kHz (R9.0.4); -r shows
+ *					the timings (decoders: T19)
  *		rfid dump [-with HEX] [BLOCK]
  *					read one T5577 block (0 by default) and
  *					print its 32-bit word (block 0 is the
@@ -688,6 +692,7 @@ static int emulate_em(unsigned char id[5])
 
 int main(int argc, char **argv)
 {
+	int carrier = RFID_CARRIER_125;
 	int fd, n, i, tries = 4, raw = 0, t;
 	unsigned char id[5];
 
@@ -778,8 +783,17 @@ int main(int argc, char **argv)
 		if (strcmp(argv[i], "-r") == 0) raw = 1;
 		else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 			tries = atoi(argv[++i]);
-		else {
-use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
+		else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+			i++;		/* R9.0.4: the read carrier */
+			if (strcmp(argv[i], "125") == 0)
+				carrier = RFID_CARRIER_125;
+			else if (strcmp(argv[i], "psk") == 0)
+				carrier = RFID_CARRIER_PSK;
+			else if (strcmp(argv[i], "134") == 0)
+				carrier = RFID_CARRIER_134;
+			else goto use;
+		} else {
+use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-c 125|psk|134]\n"
 				"       rfid write [-n N] [-pass HEX] "
 				"[-with HEX] [-lock] EM B0 B1 B2 B3 B4\n"
 				"       rfid copy [-n N] [-pass HEX] "
@@ -792,6 +806,11 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 	}
 	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
 		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
 		return 1;
 	}
 	for (t = 0; t < tries; t++) {

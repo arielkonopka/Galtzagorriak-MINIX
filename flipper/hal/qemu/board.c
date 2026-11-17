@@ -619,7 +619,7 @@ int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (vo
 int hal_pulse_ack(void) { return 0; }
 unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }
-int hal_rfid_read(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
+int hal_rfid_read(uint32_t d, unsigned n, unsigned c) { (void) d; (void) n; (void) c; return -1; }
 void hal_rfid_stop(void) { }
 void hal_rfid_field(int on) { (void) on; }
 void hal_rfid_pull(int release) { (void) release; }

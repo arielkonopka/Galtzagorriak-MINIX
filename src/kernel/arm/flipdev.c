@@ -206,6 +206,7 @@ PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
 PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
 PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
+PRIVATE u8_t rf_carrier;		/* R9.0.4: the read field, RFID_CARRIER_* */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -378,6 +379,8 @@ PUBLIC void flipdev_task()
 			sp_quiet = 0;		/* full volume again */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
+			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
@@ -2288,7 +2291,8 @@ int count;
 					 * settle, so the envelope settles low */
   proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
   ir_rd = TRUE;
-  if (!rf_held && hal_rfid_read(ir_buf, (unsigned) ir_count / 4) < 0) {
+  if (!rf_held && hal_rfid_read(ir_buf, (unsigned) ir_count / 4,
+						rf_carrier) < 0) {
 	ir_rd = FALSE;
 	proc_addr(ir_proc)->p_physio = FALSE;
 	return(ENXIO);
@@ -2356,6 +2360,15 @@ message *m_ptr;
   int on;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
+	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(on));
+	if (user == 0) return(EFAULT);
+	phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
+	if (on < RFID_CARRIER_125 || on > RFID_CARRIER_134) return(EINVAL);
+	rf_carrier = on;		/* for the next read */
+	return(OK);
+  }
   if (m_ptr->TTY_REQUEST != RFIDIOCFIELD) return(ENOTTY);
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) sizeof(on));
   if (user == 0) return(EFAULT);

@@ -88,9 +88,12 @@ EM4100 04 00 98 3D C5
 The number is the one the stock app shows and saves (`Data:` in its `.rfid` files). `rfid -r`
 also prints the timings, `-n N` makes up to N attempts of half a second (default 4). Without a
 tag it says "no tag"; a tag of another kind (HID Prox, Indala) is not decoded yet and is shown
-as a summary. Members of `gui` and root may read `/dev/rfid`: each read turns the 125 kHz field on
-for half a second and returns the times between the changes of the tag's signal, in µs, as
-32-bit numbers.
+as a summary. `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
+62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders follow
+(spec 9.0), so for now use them with `-r` to see the timings. Members of `gui` and root may read
+`/dev/rfid`: each read turns the field on for half a second and returns the times between the
+changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)` chooses the field
+(`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
