@@ -3284,13 +3284,13 @@ noticeable CPU on the foreground path.
   - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). With
     the 64 MB partition: 867 blocks, ≈ 3.4 MB per process;
   - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB or more**, first-boot setup
-    puts swap **at the end** of the usable window and gives it **50 %** of the space after `/usr`;
-    `/home` gets the other half, right after `/usr`. The MBR entry stays `/dev/hd3` (MBR order
-    need not be disk order): `/usr`, `/home`, a 4 MiB-aligned gap if any, swap. Smaller cards keep
-    today's 64 MB swap between `/usr` and `/home`. The usable window is below **4 GiB**, because
-    MINIX 2.0 addresses a partition with 32-bit byte offsets (`mkpart`), so the space past 4 GiB of
-    a big card stays unused until the disk path uses sector numbers. With a root of about 64 MB and
-    `/usr` of 2 GB that is ≈ 1 GB of swap (≈ 60 MB of blocks per process) and ≈ 1 GB of `/home`;
+    puts swap **at the end of the card** and gives it **50 %** of the space after `/usr`, at most
+    4 GiB − 1 MiB (R12.39: one partition stays below 4 GiB); `/home` comes right after `/usr`
+    (also at most 4 GiB − 1 MiB); whatever lies between them stays free for later. The MBR entry
+    stays `/dev/hd3` (MBR order need not be disk order): `/usr`, `/home`, free space, swap.
+    Smaller cards keep today's 64 MB swap between `/usr` and `/home`. Examples (root ≈ 64 MB,
+    `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 150 MB of blocks per process), `/home` ≈ 2.7 GiB;
+    16 GB and larger → swap 4 GiB (≈ 225 MB of blocks per process), `/home` 4 GiB, the rest free;
   - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
     be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
     swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and block areas are
@@ -3384,6 +3384,28 @@ noticeable CPU on the foreground path.
   foreground app (+4 B in MM); a Merkle root against rollback in `crypt` (32 B per process). Each
   needs the owner's yes.
 
+- **R12.39 Partitions past 4 GiB (owner, 2026-11-17).** The stock Flipper takes microSD cards up to
+  256 GB (SDHC/SDXC), and the HAL already uses block addresses (CCS, `sd_block_addr`). The 4 GiB
+  limit is only in the WINCHESTER bookkeeping: `struct device` keeps `dv_base` and `dv_size` as
+  32-bit **byte** counts, so `drvlib.c` (`lowsec << SECTOR_SHIFT`) overflows for a partition that
+  starts past 4 GiB, and `mkpart` therefore keeps everything below 4 GiB.
+  - On ARM, `dv_base` holds the partition's **first sector** (32-bit: up to 2 TiB) instead of a byte
+    offset; `dv_size` stays a byte count, so one partition is at most 4 GiB − 512 B (FS and swap
+    positions are 32-bit byte offsets inside a partition, `io_position` taken as unsigned, as
+    `disk.c` already does). Changes: `drvlib.c` (partition and subpartition setup and limits),
+    `disk.c` (sector = `dv_base` + offset sector), the partition ioctls (`DIOCGETP`/`DIOCSETP`
+    report and take the base in bytes as before while it fits, `EOVERFLOW` past 4 GiB). Kernel RAM
+    +0 B (same fields, another unit).
+  - `/dev/hd0` (the whole card) stays clipped to 4 GiB as today: only partitions reach past it.
+  - `mkpart`: drops the 4 GiB ceiling for partition **placement** (start and end anywhere up to
+    the card's size, 2 TiB at most); each partition at most 4 GiB − 1 MiB; `-l` prints starts
+    past 4 GiB correctly. `/etc/setup` uses it for the layout in R12.34.
+  - More than four file systems later (space between `/home` and swap on very large cards): MINIX
+    subpartitions of `hd4` (`hd4a`…), each below 4 GiB. Not in this step.
+  - Tests: host `parttest` with partitions starting at 4 GiB, 8 GiB and 255 GiB; QEMU with a sparse
+    64 GB disk image: `/home` and swap past 4 GiB, mkfs, mount, swap-out and swap-in, a block PUT/GET
+    at the last block. Device: a 64 GB or larger card in the Flipper (AC12.25).
+
 Acceptance criteria:
 - AC12.18 QEMU `tests/blk`: a fresh process reads block 0 and the last block as zeros; `ERANGE`
   one past the end; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
@@ -3402,6 +3424,9 @@ Acceptance criteria:
   `ENOSYS`.
 - AC12.23 Device: L1 and L2 within budget while a background app reads blocks in a loop and while
   the foreground app scrolls a 1 MB block-backed map; measured GET/PUT times in PORTING.md.
+- AC12.25 Device (R12.39): on a card of 64 GB or more, first-boot setup places `/home` and swap past
+  4 GiB as R12.34; `fsck`, swap-in of 64 KB and a block GET at the last block work; a card pulled and
+  put back (N.6) carries on.
 - AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
   frames; VM heap growth ≤ 3 KB.
 

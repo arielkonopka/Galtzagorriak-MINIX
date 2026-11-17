@@ -300,11 +300,13 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 - R12.36: `MEMINFO` request `MI_BLK` with the descriptor in the caller's memory; GET / PUT / partial PUT / `BLK_IFCHANGED` / INFO; buffer bounds checked against the caller's segments.
 - R12.37: `BLKWAIT` deferral of background callers into `sw_step()` (order: user-awaited swap-in, then blocks, then reserve), shared write budget `sw.wkb`; `NOSWAP` → `EPERM` in `plain`; `ENXIO` without a kill on card loss.
 - R12.38: `blk=` in `/etc/rc.conf` (default `off`) and `/etc/rc`; `<blk.h>` in libc; `libblk`; Berry module `blk` with `vbytes` (when the Berry VM is on main; otherwise a follow-up in the same task).
-- `mkpart` + `/etc/setup` (R12.34): on cards ≥ 8 GB swap = 50 % of the space after `/usr`, placed at the end of the 4 GiB window (`82:50%@end`, MBR entry still hd3), `/home` before it; smaller cards unchanged; new installs only. QEMU test with an 8 GB disk image (sparse file). `growfs` is a later task, not this one.
+- R12.39 first (the layout needs it): `dv_base` in sectors in `drvlib.c`/`disk.c`, partition ioctls, `mkpart` placement past 4 GiB (each partition < 4 GiB), host `parttest` cases at 4/8/255 GiB, QEMU sparse 64 GB image. Kernel RAM +0 B (`make ramcheck`).
+- `mkpart` + `/etc/setup` (R12.34): on cards ≥ 8 GB swap = 50 % of the space after `/usr`, placed at the end of the card, at most 4 GiB − 1 MiB each for swap and `/home` (`82:50%@end`, MBR entry still hd3), `/home` before it; smaller cards unchanged; new installs only. QEMU tests with sparse 8 GB and 64 GB images. `growfs` is a later task, not this one.
 - Tests AC12.18–AC12.22 and AC12.24 in `tests/blk` and the M2 self-test; a test hook to force a pid wrap.
 - Docs: CHANGELOG line, `man 3 blk`, `man 3 libblk`, manual chapter for app authors (12f), devguide note.
 
 ### T20b (`lane:local`, Flipper): measurements only
+- AC12.25: a 64 GB or larger card, setup and use past 4 GiB.
 - AC12.23: GET/PUT times (512 B, 1 KB, 4 KB) and L1/L2 with a background block reader and a foreground 1 MB map scroll; numbers in PORTING.md.
 
 ## Still open from reviews
