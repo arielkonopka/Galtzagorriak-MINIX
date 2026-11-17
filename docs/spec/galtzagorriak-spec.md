@@ -2011,7 +2011,9 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
       and drops the title counter. Hints off and icons off = today's screen exactly.
     - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
       stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
-      through `poll`, not a periodic tick).
+      through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
+      later status line) runs only while the launcher is in the foreground and the screen is on;
+      otherwise it waits for a key with no timeout.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
