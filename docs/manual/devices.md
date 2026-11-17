@@ -316,8 +316,10 @@ endian; 0 Hz is a rest. Up to 64 notes per write; the write returns when they ha
 
 **Volume.** A note with the frequency `0xFFFF` sets the volume, 0–100, to its duration field and
 plays nothing (a value above 100 counts as 100). It holds for the notes after it, in the same or
-later writes, until the next such note or until the device is closed. Closing sets 100 again, so
-programs that never set a volume sound as before. 100 is the full sound; the loudness follows a
+later writes, until the next such note or until the device is closed; closing goes back to the
+system's default volume, so programs that never set a volume sound at that level. A note of
+`0xFFFE` sets the volume the same way and also makes it the system's default, kept over a restart
+(Sound in SETTINGS uses it). The default is 100 until something sets it. 100 is the full sound; the loudness follows a
 cubic curve, as on the stock firmware (50 is about an eighth of the power, 20 is quiet but
 audible, 0 is silent).
 
