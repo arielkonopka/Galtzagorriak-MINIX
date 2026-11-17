@@ -315,7 +315,7 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 ## T21. Launcher icons and Pine-style look (spec R5.6a, AC5.4–AC5.7; owner request 2026-11-17)
 Owner request outside the milestone order: the launcher may show an icon of at most two characters (8×6 px) before each app. The rest of R5.6 (manifests, categories) stays in M4.
 
-### T21a (`lane:cloud`, host + QEMU)
+### T21a (`lane:local`, owner 2026-11-17: today, before other local work; host + QEMU + device), issue #229
 - `/etc/apps` third field (R5.6a.1): empty, `@name`, `#` + 12 hex digits, or 1–2 characters; the old two-field form keeps working. Parsing in one pure function with a host test (`make icontest` or inside an existing host test target, in the `build` CI job): every form, malformed hex, 3 characters, `:` and `/` cases, label/user/command truncation unchanged.
 - Built-in icon table (R5.6a.2), original 8×6 drawings, a host tool that renders them 8× enlarged into a PNG attached to the PR; base `/etc/apps` and base `postinst` lines with icons; `mkpkg.py -i ICON` writes `Icon:`.
 - Drawing (R5.6a.3) with `gui_bits8()`; with icons off byte-identical frames (AC5.5).
@@ -328,7 +328,7 @@ Owner request outside the milestone order: the launcher may show an icon of at m
 ## T22. Every app in the launcher's style (spec K.2 "Screen style", owner 2026-11-17)
 The owner wants every app reached from the launcher to look like it: title bar with an optional state on the right, hint line, selection bar, `[value]` settings, scroll mark, notices on the message line. Starts after T21a, which brings the `gui.c` helpers.
 
-### T22a (`lane:cloud`, QEMU): plain `/dev/lcd` apps
+### T22a (`lane:local`, after T21a), issue #230: plain `/dev/lcd` apps
 - `gui.c` helpers of K.2 if T21a did not add them all: `gui_title2()`, `gui_hints()`, `gui_note()` (timed key read via `poll`), `gui_scroll()`.
 - Align `info`, `lights`, `power`, `lfrfid`, the `console` menu (the text console itself stays an exception) and `selftest` (its test screens may stay full-screen; its menus follow). Each screen names exactly the buttons that act.
 - QEMU frame dumps (enlarged PNG) of every changed screen in the PR, before and after. RAM: no app's `.bss`/heap grows by more than its new hint strings' pointers (strings `const`); give the numbers.
