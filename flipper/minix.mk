@@ -301,6 +301,10 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
+# libfuri's test (spec R5.1) only on the QEMU image, where m2test runs it.
+ifeq ($(BOARD),qemu)
+UPROGS	+= furitest
+endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su
@@ -337,6 +341,7 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_m2test := 16384
+CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
 			# files to ~7 KB (~3.5 KB copying all of it); out of memory -> <file>.save
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
@@ -400,6 +405,28 @@ $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
 endef
 endif
 $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
+# libfuri core (spec R5.1, flipper/lib/furi): the stock furi API for apps
+# rebuilt from source.  Linked into each app until it moves into the shared
+# library (R2b.9, AC5.3).  C99 (the stock headers need it).
+FURI_DIR := lib/furi
+FURI_OBJ := $(addprefix $(MB)/furi/,thread.o sync.o timer.o record.o \
+	    string.o check.o port_minix.o ctx_arm.o)
+FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
+$(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(wildcard $(FURI_DIR)/include/*.h \
+		$(FURI_DIR)/include/core/*.h) $(FURI_DIR)/src/furi_i.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/furi/%.o: $(FURI_DIR)/src/%.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(MCFLAGS) -c $< -o $@
+$(MB)/libfuri.a: $(FURI_OBJ)
+	$(AR) rcs $@.new $^ && mv -f $@.new $@
+.PHONY: libfuri
+libfuri: $(MB)/libfuri.a
+$(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
+	@mkdir -p $(dir $@)
+	@$(CC) $(FURI_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck

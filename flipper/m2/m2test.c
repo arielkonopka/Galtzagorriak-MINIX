@@ -559,6 +559,18 @@ int main(int argc, char **argv)
 	}
 
 	phase3_tests();
+#ifdef BOARD_QEMU
+	/* libfuri core (spec R5.1): cooperative threads, queues, flags,
+	 * mutexes, semaphores, timers, records, furi_string, furi_check. */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/furitest", "furitest", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
+#endif
 	time_tests();
 	finish();
 	return 0;
