@@ -32,11 +32,12 @@ Every result is appended to `/home/flipper/apps_data/selftest/log`, one line eac
 | Test | Kind | What it checks |
 |---|---|---|
 | **Board** | automatic | The RTC runs (the clock advances, its calibration value). The SD card: its size, 1 MB read and the speed, and one scratch sector written, read back and compared. The sector is the one just before the first partition, which no file system uses, and its old content is put back. The battery gauge (charge, voltage and temperature in range) and the charger's state. The LED chip answers. USB connected or not (never a failure). |
+| **Memory** | automatic | All 256 KB of RAM as an 8 × 8 grid of 4 KB blocks. Every block no program uses is tested by the memory manager itself (March C−, a pattern written and read back in both directions) and left zeroed; no program ever sees it. Blocks in use are shown dotted, the system's own memory (kernel, servers, the FS cache and the radio core's share) hatched. Filled: passed; a cross: failed (the result names the address). |
 | **Input** | interactive | A picture of the d-pad, OK and Back; each lights while you hold it. Press and release every button. Fails after 30 seconds without a press and names the buttons missing. |
 | **Sound, vibration and light** | interactive | A scale rising and falling on the speaker, three vibration pulses, the LED red, green, blue and white, the display all on, all off, a checkerboard and its inverse, and the backlight from dark to bright. Then OK if all of it looked and sounded right, Back if not. |
 
-**(planned, spec R7b.3.1, R7b.3.5)** The memory test (RAM tested inside MM a block at a time;
-flash regions against their checksums, with a picture of the memory), the GPIO loopback test
+**(planned, spec R7b.3.1, R7b.3.5)** The flash part of the memory test (each region against its
+checksum, with a picture of the flash pages, and the ECC counts), the GPIO loopback test
 with jumpers, and tests for the radios as their drivers arrive. Starting the self test with Up +
 Back held at power-on is planned as well.
 

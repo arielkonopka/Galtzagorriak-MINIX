@@ -501,7 +501,7 @@ $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 # The hardware self test (spec 7b.3): the app and its modules, package
 # stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
 # of packages are at most 13 characters).
-ST_MODS	:= board input av
+ST_MODS	:= board memory input av
 STPROGS	:= selftest $(ST_MODS)
 $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
@@ -511,6 +511,7 @@ CHMEM_selftest := 3072	# R7b.3: the menu, ~0.6 KB of module list
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
+CHMEM_memory := 2048
 $(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
