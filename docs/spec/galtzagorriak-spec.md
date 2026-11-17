@@ -3283,7 +3283,7 @@ noticeable CPU on the foreground path.
     block number give the position on the card;
   - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). With
     the 64 MB partition: 867 blocks, ≈ 3.4 MB per process;
-  - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB or more**, first-boot setup
+  - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB up to below 32 GB**, first-boot setup
     puts swap **at the end of the card** and gives it **50 %** of the space after `/usr`, at most
     4 GiB − 1 MiB (R12.39: one partition stays below 4 GiB); `/home` comes right after `/usr`
     (also at most 4 GiB − 1 MiB); whatever lies between them stays free for later. The MBR entry
@@ -3291,6 +3291,16 @@ noticeable CPU on the foreground path.
     Smaller cards keep today's 64 MB swap between `/usr` and `/home`. Examples (root ≈ 64 MB,
     `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 150 MB of blocks per process), `/home` ≈ 2.7 GiB;
     16 GB and larger → swap 4 GiB (≈ 225 MB of blocks per process), `/home` 4 GiB, the rest free;
+  - **maximum swap on cards of 32 GB or more (owner, 2026-11-17):** swap is the primary partition
+    `hd3` at the end of the card, split into **four MINIX subpartitions** `hd3a`…`hd3d` of 4 GiB −
+    1 MiB each (≈ 16 GiB). `/etc/rc` gives MM `hd3a`; MM finds the other three itself (their minors
+    follow `hd3a`'s, and each must have the swap type 0x82), and keeps their number (1 B, so MM
+    +5 B for 12h in total). The 16 swap slots stay in `hd3a`; the 16 block areas are spread four per
+    subpartition (area *i* in `hd3`(*i* / 4)), so each process gets ≈ 1 GiB on the card (≈ 900 MB
+    of blocks). A missing or short subpartition only shrinks the areas that would live in it
+    (`ENOSYS` for those slots' processes); swap itself needs only `hd3a`. With root, `/usr` 2 GB and
+    `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
+    partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
   - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
     be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
     swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and block areas are
@@ -3431,7 +3441,7 @@ Acceptance criteria:
   frames; VM heap growth ≤ 3 KB.
 
 RAM budget (12h):
-- kernel +0 B; MM +4 B (boot stamp; within R12.26's 96 B) and one `mp_flags` bit; FS and INIT +0 B;
+- kernel +0 B; MM +5 B (boot stamp 4 B, number of swap subpartitions 1 B; within R12.26's 96 B) and one `mp_flags` bit; FS and INIT +0 B;
 - a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
   frame + the 16 B descriptor;
 - flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
