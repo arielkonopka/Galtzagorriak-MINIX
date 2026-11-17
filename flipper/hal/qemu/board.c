@@ -141,6 +141,11 @@ void hal_vol_default_set(int v) { vol_def = v < 0 ? 0 : v > 100 ? 100 : v; }
 void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
+uint16_t hal_ow_now(void) { return 0; }
+void hal_ib_emu(int on) { (void) on; }		/* no reader in QEMU */
+int hal_ib_edge(void) { return 0; }
+void hal_ib_clear(void) { }
+int hal_btn_pending(void) { return 1; }
 
 long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
 int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
@@ -373,16 +378,17 @@ unsigned hal_disk_mhz;
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
 	l[HAL_FL_SFSA] = 0x00090000;
-	l[HAL_FL_INST] = 0x00040000;		/* after 192 KB of system and
-						 * 64 KB of shared libc */
+	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
+						 * 96 KB of shared libc and
+						 * libfuri (<minix/shlibc.h>) */
 	l[HAL_FL_INST_SIZE] = 0x00020000;
-	l[HAL_FL_CACHE] = 0x00060000;
+	l[HAL_FL_CACHE] = 0x00068000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
-	l[HAL_FL_ROM] = 0x00040000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM] = 0x00048000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
 
-uint32_t hal_rom_base(void) { return 0x00040000 + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void) { return 0x00048000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

@@ -26,7 +26,9 @@ list and the app menu. Other programs extend it as **modules**:
 - Complex apps still take the whole screen, as today.
 - Every window the desktop draws for a module starts with the same black title bar as the
   launcher and today's apps ([chapter 4.3](04-screen-apps.md#43-the-look-the-title-bar)); a
-  module only sends the title text.
+  module only sends the title text and, in the `window` record's `hints` field, the button hints for
+  the bottom line ("Pine meets modern UX", spec K.2 "Screen style"; chapter 4). The desktop
+  draws both, so the module spends no RAM on the look.
 
 ## 7.2 The protocol (spec K.3)
 

@@ -75,6 +75,7 @@ static int to_flash;			/* install --flash */
 static int ctl_flash;			/* this package says Flash: yes */
 static char ctl_abi[8];			/* Abi: N or any; none = 1 (J.3) */
 static char ctl_libc[12];		/* Libc: shared libc id (R2b.9) */
+static char ctl_furi[12];		/* Furi: shared libfuri id (R2b.9) */
 static char ctl_name[64], ctl_version[32], ctl_depends[LINE];
 
 static void cleanup(void);
@@ -247,6 +248,12 @@ static unsigned long libc_id(void)
 	return SHLIBC_HDR->sh_magic == SHLIBC_MAGIC ? SHLIBC_HDR->sh_id : 0;
 }
 
+/* The same for the shared libfuri + libapp after it. */
+static unsigned long furi_id(void)
+{
+	return SHFURI_HDR->sh_magic == SHFURI_MAGIC ? SHFURI_HDR->sh_id : 0;
+}
+
 /* Copy a control field into a buffer of size bytes; 0: it does not fit. */
 static int field(char *to, size_t size, const char *v)
 {
@@ -266,7 +273,7 @@ static int read_control(const char *path)
 
 	ctl_name[0] = ctl_version[0] = ctl_depends[0] = 0;
 	ctl_flash = 0;
-	ctl_abi[0] = ctl_libc[0] = 0;
+	ctl_abi[0] = ctl_libc[0] = ctl_furi[0] = 0;
 	if ((f = fopen(path, "r")) == NULL) return -1;
 	while (why == NULL && fgets(line, sizeof line, f) != NULL) {
 		if ((n = strlen(line)) > 0 && line[n - 1] == '\n')
@@ -287,6 +294,8 @@ static int read_control(const char *path)
 			if (!field(ctl_abi, sizeof ctl_abi, v)) why = "Abi: too long";
 		} else if (strcmp(line, "Libc") == 0) {
 			if (!field(ctl_libc, sizeof ctl_libc, v)) why = "Libc: too long";
+		} else if (strcmp(line, "Furi") == 0) {
+			if (!field(ctl_furi, sizeof ctl_furi, v)) why = "Furi: too long";
 		} else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0) {
 			ctl_flash = 1;	/* spec R2b.5 */
 		} else if (strcmp(line, "Timers") == 0
@@ -602,6 +611,13 @@ static int install(const char *file)
 		fprintf(stderr, "pkg: %s needs shared libc %s, this system has "
 			"%08lx: flash minix-base.bin of the same build\n",
 			ctl_name, ctl_libc, libc_id());
+		cleanup();
+		return 1;
+	}
+	if (ctl_furi[0] != 0 && strtoul(ctl_furi, NULL, 16) != furi_id()) {
+		fprintf(stderr, "pkg: %s needs shared libfuri %s, this system has "
+			"%08lx: flash minix-base.bin of the same build\n",
+			ctl_name, ctl_furi, furi_id());
 		cleanup();
 		return 1;
 	}

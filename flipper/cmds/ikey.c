@@ -8,7 +8,10 @@
  *					with its CRC) to an RW1990 blank
  *					held on the contacts, then read it
  *					back
- *		ikey emulate TYPE KEY	not yet (R6.7: slave emulation)
+ *		ikey emulate [-t SECS] Dallas KEY
+ *					be the key for a reader on the
+ *					contacts until Ctrl-C (or SECS),
+ *					saying each time a reader got it
  *
  * Reading is /dev/ibutton (the kernel does the 1-Wire READ ROM and the
  * CRC).  Writing an RW1990 is Unleashed's lib/ibutton/protocols/blanks/
@@ -19,6 +22,9 @@
  * a longer one, then READ ROM to compare.  The kernel does the 1-Wire
  * slots (IBIOCRUN); the pauses are ours (poll(), whole clock ticks: longer
  * than stock's 5 and 30 ms, which the EEPROM does not mind).
+ * Emulating is the kernel's too (IBIOCEMU: the 1-Wire slave answers READ
+ * ROM and SEARCH ROM); ikey only asks now and then how many readers got
+ * the key.  Cyfral and Metakom keys are not emulated yet (R6.7 part 3b).
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -40,7 +46,7 @@ static void usage(void)
 {
 	fprintf(stderr, "usage: ikey read [-n TRIES]\n"
 			"       ikey write Dallas KEY\n"
-			"       ikey emulate Dallas|Cyfral|Metakom KEY\n");
+			"       ikey emulate [-t SECS] Dallas KEY\n");
 	exit(2);
 }
 
@@ -156,11 +162,12 @@ static int rw1990(int fd, const unsigned char *key, int v)
 	return read_back(fd, key);
 }
 
-static int write_key(const char *hex)
+/* KEY: 16 hex digits, the ROM with its CRC, as `ikey read` prints it
+ * without the spaces. */
+static void parse_key(const char *hex, unsigned char *key, const char *how)
 {
-	unsigned char key[8];
 	char two[3];
-	int fd, i, r, v;
+	int i;
 
 	if (strlen(hex) != 16) usage();
 	for (i = 0; i < 8; i++) {
@@ -172,7 +179,15 @@ static int write_key(const char *hex)
 	}
 	if (!crc_ok(key))
 		fprintf(stderr, "ikey: note: the last byte is not the CRC of the "
-			"first seven (written as given)\n");
+			"first seven (%s as given)\n", how);
+}
+
+static int write_key(const char *hex)
+{
+	unsigned char key[8];
+	int fd, r, v;
+
+	parse_key(hex, key, "written");
 	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
 		perror("ikey: /dev/ibutton");
 		return 1;
@@ -193,6 +208,48 @@ static int write_key(const char *hex)
 	return 1;
 }
 
+/* Be the key until killed, or for secs (> 0).  The kernel answers the
+ * reader; every half second we ask how many readers got the whole key. */
+static int emulate_key(const char *hex, int secs)
+{
+	struct ib_emu q;
+	unsigned char last = 0;
+	int fd, i, n = 0;
+
+	parse_key(hex, q.rom, "sent");
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		perror("ikey: /dev/ibutton");
+		return 1;
+	}
+	q.on = 1;
+	if (ioctl(fd, IBIOCEMU, &q) < 0) {
+		perror(errno == EBUSY ? "ikey: another program emulates a key"
+					: "ikey: emulate");
+		close(fd);
+		return 1;
+	}
+	printf("Emulating Dallas");
+	for (i = 0; i < 8; i++) printf(" %02X", q.rom[i]);
+	printf("\nHold the contacts to the reader; Ctrl-C stops.\n");
+	fflush(stdout);
+	while (secs <= 0 || n < 2 * secs) {
+		pause_ms(500);
+		n++;
+		q.on = 1;
+		if (ioctl(fd, IBIOCEMU, &q) < 0) break;
+		if (q.served != last) {
+			printf("Read by a reader (%u)\n",
+				(unsigned) (unsigned char) (q.served - last));
+			fflush(stdout);
+			last = q.served;
+		}
+	}
+	q.on = 0;
+	(void) ioctl(fd, IBIOCEMU, &q);
+	close(fd);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc >= 2 && strcmp(argv[1], "read") == 0) {
@@ -211,8 +268,19 @@ int main(int argc, char **argv)
 		return write_key(argv[3]);
 	}
 	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
-		fprintf(stderr, "ikey emulate: not supported yet (spec R6.7)\n");
-		return 2;
+		int a = 2, secs = 0;
+
+		if (argc >= 4 && strcmp(argv[2], "-t") == 0) {
+			secs = atoi(argv[3]);
+			a = 4;
+		}
+		if (argc != a + 2) usage();
+		if (strcmp(argv[a], "Dallas") != 0) {
+			fprintf(stderr, "ikey: emulate: only Dallas keys so far "
+				"(Cyfral and Metakom: spec R6.7 part 3b)\n");
+			return 2;
+		}
+		return emulate_key(argv[a + 1], secs);
 	}
 	usage();
 	return 2;

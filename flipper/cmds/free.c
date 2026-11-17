@@ -141,6 +141,15 @@ int main(int argc, char **argv)
 				SHLIBC_HDR->sh_nslot, SHLIBC_HDR->sh_area);
 		else
 			printf("shared libc: none in flash\n");
+		/* AC5.3: libfuri + libapp, once for every GUI app */
+		if (SHFURI_HDR->sh_magic == SHFURI_MAGIC)
+			printf("shared libfuri: %lu KB at %08lx, id %08lx, %d "
+				"functions, %lu bytes of data per process\n",
+				(SHFURI_HDR->sh_size + 1023) / 1024,
+				(unsigned long) SHFURI_BASE, SHFURI_HDR->sh_id,
+				SHFURI_HDR->sh_nslot, SHFURI_HDR->sh_area);
+		else
+			printf("shared libfuri: none in flash\n");
 	}
 	if (k) kstacks();
 	return 0;

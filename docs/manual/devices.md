@@ -26,13 +26,24 @@ The `ikey` command works like the stock firmware's:
 ```
 ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8"
 ikey write Dallas 01A2B3C4D5E6F7A8
+ikey emulate Dallas 01A2B3C4D5E6F7A8
 ```
 
 `ikey write` copies a key onto an RW1990 blank held on the contacts (both kinds, RW1990.1 and .2,
 are tried) and reads it back; keep the blank on the contacts until it says "Write success" (a few
 seconds). The 16 hex digits are the whole ROM, the CRC byte last, as `ikey read` prints it.
-Emulating a key and the Cyfral/Metakom keys are **(planned)** (spec R6.7, later parts), as is
-an iButton app in the launcher.
+
+`ikey emulate` makes the Flipper the key: hold its iButton contacts to a reader (a door, an
+intercom, another Flipper) and the reader gets the ROM, as if from the key itself. It says
+"Read by a reader" each time a reader got the whole number, and runs until Ctrl-C (or `-t SECS`).
+Readers that ask for the number directly (READ ROM) and those that search the line for keys
+(SEARCH ROM) both work. While a key is emulated, reading `/dev/ibutton` and `ikey read`/`write`
+say "Resource busy", and the Flipper stays out of its deep sleep: emulation uses more battery.
+Programs do it with `ioctl(IBIOCEMU)` (`<minix/ibutton.h>`), which ends when they close the
+device or exit.
+
+Cyfral and Metakom keys are **(planned)** (spec R6.7 part 3b), as is an iButton app in the
+launcher.
 
 ## Voltages on the header pins (`/dev/adc`)
 

@@ -74,7 +74,8 @@ Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build
 programs on the card use the C library in the flashed image (one copy for all of them), and they
 run only with the library of their own build: with another one every program, the shell
 included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg: base needs
-shared libc ..., this system has ..."), and `free -v` shows the library and its id.
+shared libc ..., this system has ..."; the same for the GUI apps' library, "needs shared
+libfuri ..."), and `free -v` shows both libraries (`shared libc:`, `shared libfuri:`) and their ids.
 
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
@@ -226,6 +227,11 @@ you need from `/home` first. `ver` and the *About* app show the ABI.)
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
 same build. Builds that do not touch the library keep its id, and the steps below work.)
+
+(Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
+32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
+`minix.bin`) and install the app packages (`remind`, `alarm`, `timed`) again: what was installed
+before is not found at the new place.)
 
 
 1. Build the new version (section 2).

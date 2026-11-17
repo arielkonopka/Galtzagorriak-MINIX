@@ -98,6 +98,15 @@ void hal_subghz_off(void);
 void hal_ow_line(int low);
 int hal_ow_read(void);
 void hal_ow_delay(unsigned us);
+uint16_t hal_ow_now(void);		/* a us clock, mod 2^16 */
+/* R6.7 part 3: Dallas key emulation (1-Wire slave).  hal_ib_emu(1) arms
+ * an interrupt on both edges of the contact, in the buttons' vector (its
+ * handler asks hal_ib_edge() first, then hal_btn_pending()).  hal_ib_clear
+ * forgets the edges of a pulse we drove ourselves. */
+void hal_ib_emu(int on);
+int hal_ib_edge(void);
+void hal_ib_clear(void);
+int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
  * little endian), read only; -1 on a bus error, -2 if there is none. */
