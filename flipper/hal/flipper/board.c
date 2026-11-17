@@ -1854,7 +1854,7 @@ void hal_init(void)
 void hal_halt(int status)
 {
 	__disable_irq();
-	hal_tone(0);
+	hal_tone(0, 0);
 	/* Keep the USB console alive so a panic message still reaches the
 	 * host (polled: interrupts are off).  After a panic the watchdog is
 	 * left to run out: the reset takes the board to DFU (hal_early_boot)
@@ -1970,7 +1970,7 @@ void hal_power_off(void)
 	uint8_t b[2];
 
 	__disable_irq();
-	hal_tone(0);
+	hal_tone(0, 0);
 	hal_backlight(0);		/* it looks off at once, also on USB */
 	{
 		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
@@ -3189,14 +3189,17 @@ int hal_rfid_capture(uint32_t dst, unsigned n)
 /*===========================================================================*
  *				Speaker					     *
  *===========================================================================*/
-/* Piezo on PB8, TIM16 channel 1 (AF14), as on the stock firmware.  The
- * timer counts at 1 MHz; a square wave at hz, 0 stops it. */
-void hal_tone(unsigned hz)
+/* Piezo on PB8, TIM16 channel 1 (AF14), as on the stock firmware.  A
+ * square wave at hz, 0 stops it.  The timer counts at the core clock (or
+ * a fraction of it for low notes, so ARR fits 16 bits); the fine count
+ * keeps quiet volumes audible.  The duty is 50 % * (vol/100)^3, the cubic
+ * curve of stock furi_hal_speaker_start: vol 100 is the old full sound. */
+void hal_tone(unsigned hz, unsigned vol)
 {
 	static int ready;
-	uint32_t arr;
+	uint32_t arr, psc, ccr;
 
-	if (hz == 0) {
+	if (hz == 0 || vol == 0) {
 		if (ready) {
 			TIM16->CR1 &= ~TIM_CR1_CEN;
 			gpio_cfg(GPIOB, 8, MODE_ANALOG, PULL_NONE, 0);
@@ -3206,16 +3209,20 @@ void hal_tone(unsigned hz)
 	if (!ready) {
 		RCC->APB2ENR |= RCC_APB2ENR_TIM16EN;
 		(void) RCC->APB2ENR;
-		TIM16->PSC = SystemCoreClock / 1000000u - 1;
 		TIM16->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 		TIM16->CCER = TIM_CCER_CC1E;
 		TIM16->BDTR = TIM_BDTR_MOE;
 		ready = 1;
 	}
 	if (hz < 20) hz = 20;
-	arr = 1000000u / hz - 1;
+	if (vol > 100) vol = 100;
+	psc = SystemCoreClock / (hz * 65536u);	/* 0 above ~980 Hz at 64 MHz */
+	arr = SystemCoreClock / ((psc + 1) * hz) - 1;
+	/* (vol^3 / 100) is 0..10000; arr / 2 * 10000 fits 32 bits */
+	ccr = (arr / 2) * (vol * vol * vol / 100) / 10000u;
+	TIM16->PSC = psc;
 	TIM16->ARR = arr;
-	TIM16->CCR1 = arr / 2;
+	TIM16->CCR1 = ccr != 0 ? ccr : 1;
 	TIM16->EGR = TIM_EGR_UG;
 	gpio_cfg(GPIOB, 8, MODE_AF, PULL_NONE, 14);
 	TIM16->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;

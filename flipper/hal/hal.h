@@ -332,7 +332,9 @@ int hal_rtc_alarm_ack(void);		/* in the handler: 1 if it fired */
  * -511..512; set != 0 writes v.  Returns the value in force. */
 int hal_rtc_cal(int set, int v);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
-void hal_tone(unsigned hz);		/* speaker; 0 = off */
+/* Speaker: a square wave at hz (0 = off) at volume vol 0..100; the duty
+ * is 50 % * (vol/100)^3, as stock furi_hal_speaker_start (100: full). */
+void hal_tone(unsigned hz, unsigned vol);
 void hal_halt(int status) __attribute__((noreturn));
 /* Power off (T14c): the charger's ship mode, as stock furi_hal_power_off;
  * on VBUS it cannot cut the power and waits for the cable to go.  QEMU:
