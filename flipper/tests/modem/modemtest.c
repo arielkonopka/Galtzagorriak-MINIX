@@ -15,6 +15,8 @@
  *              exactly when the occupied band lies inside a region's band
  *   duty       a week of random traffic: no 60-minute window over the limit
  *   fuzz       10^6 random and mutated frames and edge streams (ASan/UBSan)
+ *   z          compression (-z): text, random and empty data round trip,
+ *              through the ARQ stream too; random input to the decoder
  *
  * Run by `make test` here, by `make -C tests/host` (CI) and `make modemtest`.
  */
@@ -28,7 +30,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "modem.h"
+#include "mdmz.h"
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { fails++; \
@@ -194,7 +196,7 @@ static void test_arq(int mtu, int window)
 	close(sv[1]);
 	c.fd = sv[0];
 	spos = 0;
-	r = mdm_send(&p, 0xA5, window, get_src, NULL, wbuf, &s, NULL);
+	r = mdm_send(&p, 0xA5, window, 0, get_src, NULL, wbuf, &s, NULL);
 	CHECK(r == MDM_OK, "send mtu %d window %d: %d", mtu, window, r);
 	CHECK(s.bytes == ARQ_BYTES, "acked %ld bytes", s.bytes);
 	waitpid(pid, &st, 0);
@@ -222,7 +224,7 @@ static void test_arq_lost(void)
 	CHECK(mdm_recv(&p, 4, 50, put_dst, NULL, wbuf, &s, NULL) == MDM_EIDLE,
 		"idle receiver");
 	spos = 0;
-	CHECK(mdm_send(&p, 1, 4, get_src, NULL, wbuf, &s, NULL) == MDM_ELOST,
+	CHECK(mdm_send(&p, 1, 4, 0, get_src, NULL, wbuf, &s, NULL) == MDM_ELOST,
 		"sender without a receiver");
 	close(sv[0]);
 	close(sv[1]);
@@ -244,7 +246,7 @@ static void test_carousel(void)
 		for (i = 0; i < nf; i++) {
 			len = i == nf - 1 ? (int) sizeof(data) - i * MDM_RFID_MTU
 				: MDM_RFID_MTU;
-			n = mdm_car_pack(0x33, i, i == nf - 1,
+			n = mdm_car_pack(0x33, i, i == nf - 1 ? MDM_F_LAST : 0,
 				data + i * MDM_RFID_MTU, len, fr, sizeof(fr));
 			if (chance(30)) continue;
 			if (chance(2)) fr[rnd() % n] ^= 0x10;
@@ -274,7 +276,7 @@ static void test_carousel(void)
 	mdm_unpack(fr, n, MDM_RFID_MTU, &f); mdm_car_take(&car, &f, MDM_RFID_MTU);
 	n = mdm_car_pack(0x33, 9, 0, data, MDM_RFID_MTU, fr, sizeof(fr));
 	mdm_unpack(fr, n, MDM_RFID_MTU, &f); mdm_car_take(&car, &f, MDM_RFID_MTU);
-	n = mdm_car_pack(0x33, 2, 1, data, 5, fr, sizeof(fr));
+	n = mdm_car_pack(0x33, 2, MDM_F_LAST, data, 5, fr, sizeof(fr));
 	mdm_unpack(fr, n, MDM_RFID_MTU, &f); mdm_car_take(&car, &f, MDM_RFID_MTU);
 	CHECK(!mdm_car_done(&car), "frame 1 missing but done");
 }
@@ -524,6 +526,137 @@ static void test_fuzz(void)
 		"mutation)\n", ok);
 }
 
+/* ---- compression (spec P.3a) ---- */
+struct mem { const unsigned char *p; long n, pos; unsigned char *o; long on, omax; };
+static int mem_get(void *u, unsigned char *b, int max)
+{
+	struct mem *m = u;
+	int n = (int) (rnd() % max) + 1;
+
+	if (n > m->n - m->pos) n = (int) (m->n - m->pos);
+	memcpy(b, m->p + m->pos, n);
+	m->pos += n;
+	return n;
+}
+static int mem_put(void *u, const unsigned char *b, int n)
+{
+	struct mem *m = u;
+
+	if (m->on + n > m->omax) return -1;
+	memcpy(m->o + m->on, b, n);
+	m->on += n;
+	return 0;
+}
+
+static long zround(const unsigned char *in, long n, unsigned char *out, long omax,
+	long *zlen)
+{
+	static struct mdm_zsrc zs;
+	static struct mdm_zsink zk;
+	static unsigned char z[200000];
+	struct mem a = { in, n, 0, 0, 0, 0 }, b = { 0, 0, 0, out, 0, 0 };
+	int r, k;
+
+	b.omax = omax;
+	mdm_zsrc_init(&zs, mem_get, &a);
+	*zlen = 0;
+	while ((r = mdm_zget(&zs, z + *zlen, (int) (rnd() % 60) + 1)) > 0)
+		*zlen += r;
+	if (r < 0) return -1;
+	mdm_zsink_init(&zk, mem_put, &b);
+	for (k = 0; k < *zlen; k += r) {	/* in frame-sized pieces */
+		r = (int) (rnd() % 24) + 1;
+		if (r > *zlen - k) r = (int) (*zlen - k);
+		if (mdm_zput(&zk, z + k, r) < 0) return -1;
+	}
+	if (mdm_zend(&zk) < 0) return -1;
+	return b.on;
+}
+
+static void test_z(void)
+{
+	static unsigned char in[60000], out[70000];
+	long n, zl, got, i;
+	int w;
+	static struct mdm_zsink zk;
+	struct mem b = { 0, 0, 0, out, 0, sizeof(out) };
+
+	/* text: the manual's words, repeated with numbers */
+	for (n = 0; n + 80 < (long) sizeof(in); )
+		n += sprintf((char *) in + n, "%05ld Kaixo, galtzagorriak! Datuak "
+			"irratiz doaz, bit bat, bi bit.\n", n);
+	got = zround(in, n, out, sizeof(out), &zl);
+	CHECK(got == n && memcmp(in, out, n) == 0, "text round trip");
+	printf("z: text %ld -> %ld bytes (%ld %%)\n", n, zl, zl * 100 / n);
+	CHECK(zl < n / 2, "text compressed only to %ld of %ld", zl, n);
+	for (i = 0; i < 20000; i++) in[i] = (unsigned char) rnd();
+	got = zround(in, 20000, out, sizeof(out), &zl);
+	CHECK(got == 20000 && memcmp(in, out, 20000) == 0, "random round trip");
+	printf("z: random 20000 -> %ld bytes\n", zl);
+	CHECK(zl <= 20000 + 20000 / 8 + 16, "random grew to %ld", zl);
+	got = zround(in, 0, out, sizeof(out), &zl);
+	CHECK(got == 0, "empty round trip %ld", got);
+	for (w = 1; w < 300; w++) {		/* small sizes */
+		got = zround(in, w, out, sizeof(out), &zl);
+		CHECK(got == w && memcmp(in, out, w) == 0, "size %d", w);
+	}
+	/* hostile input: random bytes never fault and stay bounded */
+	for (i = 0; i < 2000; i++) {
+		unsigned char junk[300];
+		int k, len = (int) (rnd() % sizeof(junk));
+
+		for (k = 0; k < len; k++) junk[k] = (unsigned char) rnd();
+		b.on = 0;
+		mdm_zsink_init(&zk, mem_put, &b);
+		(void) mdm_zput(&zk, junk, len);
+		(void) mdm_zend(&zk);
+		CHECK(b.on <= 10L * len + 16, "%d junk bytes gave %ld", len, b.on);
+	}
+}
+
+/* The ARQ stream with -z: sender compresses, receiver decompresses. */
+static struct mdm_zsrc azs;
+static struct mdm_zsink azk;
+static void test_arq_z(void)
+{
+	int sv[2], st, r;
+	pid_t pid;
+	struct chan c;
+	struct mdm_phy p;
+	struct mdm_stat s;
+	unsigned char wbuf[4 * (54 + 2)];
+	long i;
+
+	for (i = 0; i < ARQ_BYTES; i++)	/* compressible: a few symbols */
+		src[i] = (unsigned char) ("abcabd  \n"[rnd() % 9]);
+	socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+	memset(&c, 0, sizeof(c));
+	c.loss = 10;
+	p.ctx = &c; p.mtu = 54; p.turn_ms = 3;
+	p.send = ch_send; p.recv = ch_recv; p.airtime = ch_air;
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		close(sv[0]);
+		c.fd = sv[1];
+		dpos = 0;
+		mdm_zsink_init(&azk, put_dst, NULL);
+		r = mdm_recv(&p, 4, 5000, mdm_zput, &azk, wbuf, &s, NULL);
+		if (r != MDM_OK || s.flags != MDM_F_Z || mdm_zend(&azk) < 0) _exit(2);
+		_exit(dpos == ARQ_BYTES && memcmp(dst, src, ARQ_BYTES) == 0 ? 0 : 3);
+	}
+	close(sv[1]);
+	c.fd = sv[0];
+	spos = 0;
+	mdm_zsrc_init(&azs, get_src, NULL);
+	r = mdm_send(&p, 0x5A, 4, MDM_F_Z, mdm_zget, &azs, wbuf, &s, NULL);
+	CHECK(r == MDM_OK, "send -z: %d", r);
+	waitpid(pid, &st, 0);
+	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "receiver -z status %d", st);
+	printf("arq -z: %d KB in %ld frames (%ld B on the air)\n",
+		ARQ_BYTES / 1024, s.frames, s.bytes);
+	close(sv[0]);
+}
+
 int main(int argc, char **argv)
 {
 	(void) argc; (void) argv;
@@ -542,6 +675,8 @@ int main(int argc, char **argv)
 	test_duty(10);
 	test_duty(1);
 	test_fuzz();
+	test_z();
+	test_arq_z();
 	if (fails) {
 		printf("modemtest: %d FAILED\n", fails);
 		return 1;

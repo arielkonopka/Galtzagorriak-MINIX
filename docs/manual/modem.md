@@ -39,7 +39,14 @@ of 30 for a new frame before giving up.
 Small things can go through pipes: `echo "Kaixo, lagun!" | gmodem send -m rfid` and
 `gmodem recv -m rfid | cat` (up to 1 KB; for more use files).
 
-At most 98 KB per transfer over RFID. It is one way only: the receiver cannot tell the sender
+**Compression.** Add `-z` on the sender: `gmodem send -m rfid -z notes.txt`. The file is
+packed first (heatshrink, a small LZSS) and the receiver unpacks it by itself, with no option.
+Text usually shrinks to a fifth or a third, so it arrives three to five times sooner; "Egun on,
+galtzagorriak!" repeated in a log shrinks even more. Photos, archives and random data do not
+shrink and grow by up to 12 %, which is why `-z` is off by default. With `-z` a pipe may carry
+more than 1 KB, since it passes through `/tmp`.
+
+At most 98 KB per transfer over RFID (with `-z`: 98 KB after packing). It is one way only: the receiver cannot tell the sender
 which frames it is missing, so the sender just repeats everything. A way back is planned
 (spec RP.5c) and will make RFID faster.
 

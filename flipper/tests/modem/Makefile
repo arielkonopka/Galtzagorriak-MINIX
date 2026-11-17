@@ -12,13 +12,13 @@ L	:= $(MROOT)/src/lib/modem
 CC	?= cc
 SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -std=gnu11 -O2 -g -Wall -Wextra $(SAN)
-SRC	:= $(wildcard $(L)/*.c)
+SRC	:= $(wildcard $(L)/*.c $(L)/heatshrink/*.c)
 B	:= build
 
 test: $(B)/modemtest
 	./$(B)/modemtest
 
-$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h
+$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h $(L)/mdmz.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -I$(L) -o $@ modemtest.c $(SRC)
 

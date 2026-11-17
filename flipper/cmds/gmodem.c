@@ -2,7 +2,7 @@
  * section P; libmodem in src/lib/modem).  Not MINIX's own modem(1), which
  * switches a serial line between dial-in and dial-out.
  *
- * Usage:	gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]
+ * Usage:	gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [-z] [FILE]
  *		gmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]
  *		gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]
  *		gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]
@@ -23,6 +23,10 @@
  * send; the output must be a file (-o, or stdout redirected to one) unless
  * it is at most 1 KB.
  *
+ * -z compresses what is sent (heatshrink LZSS, spec P.3a; often half the
+ * frames for text); the receiver sees it in the frames and unpacks by
+ * itself.  A pipe of any size can then be sent (through a scratch file).
+ *
  * Exit status: 0 everything arrived with a good CRC, 1 the transfer failed
  * or timed out, 2 not possible here (medium not there yet, usage).
  */
@@ -38,22 +42,56 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "modem.h"
+#include "mdmz.h"
 
 #define SMALL	1024		/* a pipe in or out is buffered up to this */
 
 static unsigned long pat[512];	/* the tag's segments, or the reader's edges */
 static unsigned char map[MDM_CAR_MAX / 8];
-static unsigned char small[SMALL];	/* a pipe's data, in or out */
 
 static char *medium, *preset, *outname;
 static unsigned long freq;	/* Hz, 0: the region's default */
-static int rounds, idle = 30;
+static int rounds, idle = 30, zflag;
+
+/* A pipe's data (in or out) and the -z state (spec P.3a: the encoder or
+ * the decoder) are never needed at once: one union keeps .bss under 4 KB. */
+static union {
+	unsigned char small[SMALL];
+	struct mdm_zsrc src;
+	struct mdm_zsink sink;
+} z;
+
+/* A scratch file in /tmp, gone from the directory at once: it lives only
+ * while it is open (also after Ctrl-C). */
+static int scratch(void)
+{
+	char name[24];
+	int fd;
+
+	strcpy(name, "/tmp/gmzXXXXXX");
+	if (mktemp(name) == NULL
+	    || (fd = open(name, O_RDWR | O_CREAT | O_EXCL, 0600)) < 0) {
+		perror("gmodem: /tmp");
+		return -1;
+	}
+	unlink(name);
+	return fd;
+}
+
+static int fd_get(void *u, unsigned char *b, int max)
+{
+	return read(*(int *) u, b, (size_t) max);
+}
+
+static int fd_put(void *u, const unsigned char *b, int n)
+{
+	return write(*(int *) u, b, (size_t) n) == n ? 0 : -1;
+}
 
 static void usage(void)
 {
 	fprintf(stderr,
-"usage: gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [FILE]\n"
+"usage: gmodem send -m MEDIUM [-p PRESET] [-n ROUNDS] [-z] [FILE]\n"
 "       gmodem recv -m MEDIUM [-p PRESET] [-o FILE] [-t SEC]\n"
 "       gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]\n"
 "       gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]\n"
@@ -114,10 +152,24 @@ static int rfid_send(char *name)
 		fprintf(stderr, "gmodem: give a FILE, or send through a pipe\n");
 		return 2;
 	}
+	if (zflag) {		/* compress it into a scratch file first */
+		int t, src = in;
+
+		if ((t = scratch()) < 0) return 1;
+		mdm_zsrc_init(&z.src, fd_get, &src);
+		while ((n = mdm_zget(&z.src, chunk, (int) sizeof(chunk))) > 0)
+			if (write(t, chunk, (size_t) n) != n) n = -1;
+		if (n < 0) {
+			perror("gmodem: compress");
+			return 1;
+		}
+		if (in != 0) close(in);
+		in = t;
+	}
 	size = (long) lseek(in, 0L, SEEK_END);	/* off_t is unsigned here */
 	seek = lseek(in, 0L, SEEK_SET) != (off_t) -1;
 	if (!seek) {			/* a pipe: up to 1 KB in memory */
-		for (size = 0; size < SMALL && (n = read(in, small + size,
+		for (size = 0; size < SMALL && (n = read(in, z.small + size,
 				(size_t) (SMALL - size))) > 0; size += n) ;
 		if (size == SMALL && read(in, chunk, 1) > 0) {
 			fprintf(stderr, "gmodem: more than %d bytes from a pipe: "
@@ -150,8 +202,9 @@ static int rfid_send(char *name)
 						perror("gmodem: read");
 						return 1;
 					}
-				} else memcpy(chunk, small + j * MDM_RFID_MTU, (size_t) len);
-				n = mdm_car_pack(sid, (int) j, j == nf - 1, chunk, len,
+				} else memcpy(chunk, z.small + j * MDM_RFID_MTU, (size_t) len);
+				n = mdm_car_pack(sid, (int) j, (j == nf - 1 ? MDM_F_LAST : 0)
+					| (zflag ? MDM_F_Z : 0), chunk, len,
 					fr, (int) sizeof(fr));
 				ns += mdm_p4_encode(fr, n, q, pat + ns, pat + 256 + ns,
 					256 - ns);
@@ -175,7 +228,7 @@ static int rfid_send(char *name)
 }
 
 static struct mdm_car car;
-static int out = 1, out_seek, failed;
+static int out = 1, out_seek, failed, zfd = -1;	/* zfd: -z frames */
 
 static void rfid_frame(void *u, const unsigned char *b, int n)
 {
@@ -186,12 +239,21 @@ static void rfid_frame(void *u, const unsigned char *b, int n)
 	if (mdm_unpack(b, n, MDM_RFID_MTU, &f) < 0
 	    || mdm_car_take(&car, &f, MDM_RFID_MTU) != 1) return;
 	at = (long) (f.a | f.b << 8) * MDM_RFID_MTU;
+	if (car.z) {		/* compressed: into a scratch file, unpacked at the end */
+		if (zfd < 0 && (zfd = scratch()) < 0) { failed = 1; return; }
+		if (lseek(zfd, at, SEEK_SET) == (off_t) -1
+		    || write(zfd, f.pay, f.len) != (int) f.len) {
+			perror("gmodem: /tmp");
+			failed = 1;
+		}
+		return;
+	}
 	if (!out_seek) {
 		if (at + f.len > SMALL) {
 			fprintf(stderr, "\ngmodem: more than %d bytes to a pipe: "
 				"use -o FILE\n", SMALL);
 			failed = 1;
-		} else memcpy(small + at, f.pay, f.len);
+		} else memcpy(z.small + at, f.pay, f.len);
 		return;
 	}
 	if (lseek(out, at, SEEK_SET) == (off_t) -1
@@ -247,7 +309,25 @@ static int rfid_recv(void)
 	}
 	close(fd);
 	if (failed) return 1;
-	if (!out_seek && write(out, small, (size_t) car.size) != car.size) {
+	if (car.z) {
+		long k;
+		int r;
+
+		mdm_zsink_init(&z.sink, fd_put, &out);
+		if (lseek(zfd, 0L, SEEK_SET) == (off_t) -1) failed = 1;
+		/* pat holds no edges any more: the compressed bytes go
+		 * through it (z.small is the decoder's) */
+		for (k = 0; !failed && k < car.size; k += r) {
+			r = read(zfd, (char *) pat, (size_t) (car.size - k
+				< (long) sizeof(pat) ? car.size - k : (long) sizeof(pat)));
+			if (r <= 0 || mdm_zput(&z.sink, (unsigned char *) pat, r) < 0)
+				failed = 1;
+		}
+		if (failed || mdm_zend(&z.sink) < 0) {
+			fprintf(stderr, "\ngmodem: unpacking failed\n");
+			return 1;
+		}
+	} else if (!out_seek && write(out, z.small, (size_t) car.size) != car.size) {
 		perror("gmodem: write");
 		return 1;
 	}
@@ -361,6 +441,10 @@ int main(int argc, char **argv)
 		if (argv[i][0] != '-' || argv[i][1] == 0) {
 			if (file != NULL) usage();
 			file = argv[i];
+			continue;
+		}
+		if (argv[i][1] == 'z' && argv[i][2] == 0) {
+			zflag = 1;
 			continue;
 		}
 		if (argv[i][2] != 0 || i + 1 >= argc) usage();

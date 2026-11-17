@@ -431,11 +431,17 @@ OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
 # code and the Sub-GHz presets and legal tables, linked into gmodem (not
 # MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
 MODEM_DIR := $(MROOT)/src/lib/modem
+# heatshrink (ISC, src/lib/modem/heatshrink) is C99: gnu11 and quiet.
 MODEM_C	:= $(notdir $(wildcard $(MODEM_DIR)/*.c))
-MODEM_OBJ := $(MODEM_C:%.c=$(MB)/modem/%.o)
+MODEM_HS := $(notdir $(wildcard $(MODEM_DIR)/heatshrink/*.c))
+MODEM_OBJ := $(MODEM_C:%.c=$(MB)/modem/%.o) $(MODEM_HS:%.c=$(MB)/modem/hs/%.o)
+MODEM_CFLAGS := $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 -I$(MODEM_DIR)
 $(MB)/modem/%.o: $(MODEM_DIR)/%.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(MODEM_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/modem/hs/%.o: $(MODEM_DIR)/heatshrink/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(MODEM_CFLAGS) -w -MMD -MP -c $< -o $@
 $(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
@@ -700,7 +706,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.08
+BASE_VER := 4.09
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

@@ -71,16 +71,17 @@ void mdm_car_init(struct mdm_car *c, unsigned char *map)
 	c->total = -1;
 	c->have = 0;
 	c->size = -1;
+	c->z = 0;
 }
 
-int mdm_car_pack(unsigned char sid, int idx, int last,
+int mdm_car_pack(unsigned char sid, int idx, int flags,
 	const unsigned char *data, int n, unsigned char *out, int max)
 {
 	struct mdm_frame f;
 
 	if (idx < 0 || idx >= MDM_CAR_MAX) return -1;
 	f.type = MDM_T_CAR;
-	f.flags = last ? MDM_F_LAST : 0;
+	f.flags = (unsigned char) (flags & (MDM_F_LAST | MDM_F_Z));
 	f.sid = sid;
 	f.a = (unsigned char) idx;
 	f.b = (unsigned char) (idx >> 8);
@@ -104,7 +105,11 @@ int mdm_car_take(struct mdm_car *c, const struct mdm_frame *f, int chunk)
 		if (f->len != chunk) return -1;
 		if (c->total >= 0 && idx >= c->total) return -1;
 	}
-	if (c->sid < 0) c->sid = f->sid;
+	if (c->sid >= 0 && (f->flags & MDM_F_Z) != c->z) return -1;
+	if (c->sid < 0) {
+		c->sid = f->sid;
+		c->z = f->flags & MDM_F_Z;
+	}
 	if (f->flags & MDM_F_LAST) {
 		c->total = idx + 1;
 		c->size = (long) idx * chunk + f->len;
