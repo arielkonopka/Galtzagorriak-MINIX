@@ -1897,6 +1897,59 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
   groups, chmem, license) and the launcher entry. Assets go under `/usr/share/apps/<appid>`.
 - **R5.6** Launcher: categories, icons, app manifests from installed packages; runs each app as its
   own uid with its declared groups (R4b.4); shows "app crashed" on abnormal exit.
+- **R5.6a Launcher icons** (owner request 2026-11-17, out of milestone order; task T21). The
+  launcher can show a small icon before each label in the app list. An icon is **at most two
+  characters of the list font**: 8×6 pixels, the cell of two 4×6 glyphs, so a row stays 6 pixels
+  high and the list keeps its 9 visible rows. The black title bar stays as it is.
+  - **R5.6a.1 Where an icon comes from.** `/etc/apps` gets an optional third field:
+    `Label:user:icon:/program arg ...`. The old form `Label:user:/program ...` stays valid: the
+    launcher tells them apart by the field after the user, which is the program only if it starts
+    with `/` (programs in `/etc/apps` are absolute paths; the manual says so). The icon field is
+    one of:
+    - empty (`Label:user::/program`): no icon;
+    - `@name`: a built-in icon (R5.6a.2), e.g. `@bell`; an unknown name draws no icon;
+    - `#` and 12 hex digits: an 8×6 bitmap, six rows top to bottom, one byte per row, the most
+      significant bit on the left (the same layout as one row of two font glyphs), e.g. a
+      small bell `#183C3C7E0018`;
+    - otherwise 1 or 2 printable ASCII characters, drawn in the list font, e.g. `>_`, `Zz`, `!`.
+      A text icon cannot contain `:` or start with `/`, `@` or `#` (use the bitmap form).
+    A malformed field (bad hex, too long) is treated as no icon; the entry itself still loads.
+    For packages the same value goes into an `Icon:` line of `CONTROL/control` (mkpkg.py `-i`);
+    until the launcher reads manifests itself (R5.6), the package's `postinst` writes it into
+    its `/etc/apps` line. `fam2pkg` (R5.5) makes the `Icon:` from the stock 10×10 `fap_icon` by
+    a 2×2-box downscale to 8×6 with a threshold, or takes `fap_icon_mini` / an explicit value
+    from the build file.
+  - **R5.6a.2 Built-in icons.** A `const` table in the launcher (in the text segment, i.e. flash,
+    since the launcher runs from the installed region): about 24 icons, each 6 bytes plus a name
+    of at most 8 characters, at most 400 B of text in total and 0 B of RAM. At least: `app`,
+    `console`, `info`, `light`, `power`, `battery`, `rfid`, `nfc`, `subghz`, `ir`, `ibutton`,
+    `gpio`, `usb`, `ble`, `clock`, `alarm`, `bell`, `timer`, `sensor`, `game`, `music`, `tools`,
+    `file`, `settings`. Original drawings (not copies of stock or Unleashed icons), one host tool
+    renders them enlarged into a PNG for review. The base `/etc/apps` uses them for its own apps
+    (`Console` `@console`, `About` `@info`, `Lights` `@light`, `Power` `@power`, `RFID` `@rfid`)
+    and the base `postinst` lines get icons too.
+  - **R5.6a.3 Drawing.** Icons on: `>` at x = 1 as today, the icon at x = 6–13, the label from
+    x = 16 (23 characters still fit). An entry without an icon gets an empty 8×6 cell, so labels
+    stay in one column. The selected row is inverted, icon included. Icons off: the screen is
+    **pixel for pixel** what it is today. `gui` gets one helper,
+    `gui_bits8(x, y, const unsigned char *rows, int n, int inverse)`, which the text drawing can
+    share; text icons are rendered into the 6 bytes when `/etc/apps` is read, so drawing never
+    looks at the font for icons.
+  - **R5.6a.4 The setting.** `/etc/launcher.conf`, stock `Key: value` style, read with `cfopen()`
+    (spec L.3): `Icons: on|off`, default `on` in `/rom/etc/launcher.conf`. In the launcher,
+    **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
+    OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
+    written once, on Back, and only if the value changed; nothing is ever written to internal
+    flash. Right stays free for the Running list (R12.20). The launcher reads the setting at
+    start, after its settings page, and together with `/etc/apps` when an app exits (one more
+    `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
+    /etc/launcher.conf`) shows after the next app.
+  - **R5.6a.5 RAM.** Icons cost 6 B of heap per entry that has one, inside the entry's existing
+    `malloc` block (no new allocation per entry); `.bss` grows by at most 8 B; the settings page
+    uses only stack. Worst case, 16 entries with icons: ≤ 104 B. Nothing is resident besides
+    the launcher itself.
+  - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
+    at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -1907,6 +1960,15 @@ Acceptance:
   launcher unchanged except for the build file.
 - AC5.2 A ported app that calls `furi_crash` is ended alone; the launcher comes back.
 - AC5.3 Two `libfuri` apps installed: the shared library (R2b.9) is in flash once (`free -v`).
+- AC5.4 (R5.6a) In QEMU, with the base `/etc/apps` and an extra entry of each icon form (empty,
+  `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
+  frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
+  for the empty, unknown and malformed ones; every app still starts.
+- AC5.5 (R5.6a) With `Icons: off` the launcher's frames are byte-identical to the frames of the
+  launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
+- AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
+  holds the new value, the list redraws without icons; Left, Back without a change writes
+  nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
 
 Responsiveness: AC5.R A `libfuri` app's view redraw after a key event meets L1; the cooperative threads of one app never block its input thread for more than 10 ms (measured with `lat`).
 
