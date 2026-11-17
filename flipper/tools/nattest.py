@@ -105,8 +105,8 @@ def main():
 				"install the %s package" % p)
 		out = r.output("grep -c '^remind:.:21:11:' /etc/passwd; "
 			"grep -c '^alarm:.:22:11:' /etc/passwd; "
-			"grep -c ':root:/usr/bin/remind$' /etc/apps; "
-			"grep -c ':root:/usr/bin/alarm$' /etc/apps", 20)
+			"grep -c ':root:@bell:/usr/bin/remind$' /etc/apps; "
+			"grep -c ':root:@alarm:/usr/bin/alarm$' /etc/apps", 20)
 		check(out is not None and out.split() == [b"1"] * 4,
 			"F.4: users remind and alarm (group timers), launcher lines")
 		if fails: print(out)
