@@ -583,7 +583,7 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello remind alarm timed alert
+FURIPROGS := furihello remind timed alert
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
@@ -594,9 +594,9 @@ OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
-# The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
-# libapp timers; packages remind and alarm (/usr/bin, own users).
-NATPROGS := remind alarm
+# The native app remind (spec 7b.1, F.4): libfuri GUI, libapp timers;
+# package remind (/usr/bin, own user).  alarm: WINPROGS below.
+NATPROGS := remind
 NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
 $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -608,7 +608,18 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 # nattest (3 runs, 12 KB): never used remind 3.8-4.0 KB, alarm 3.2-3.4 KB;
 # what is left keeps at least 1 KB for the heap to grow (issue #201).
 CHMEM_remind := 11264	# 7b.1
-CHMEM_alarm  := 11776	# 7b.2
+# Ordua (alarm) is a window app (spec K.8, T25b): libgm, libapp and
+# nat_core statically, no libfuri.  No malloc (opendir() is not used),
+# no stdio; chmem: the stack (timer_add() keeps 2 x 512 B on it while it
+# saves) and MM's 1.5 KB gap.
+WINPROGS := alarm
+$(MB)/cmd/win/%.o: apps/%.c $(APP_DIR)/include/app.h apps/native/nat.h \
+		$(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -I$(GM_DIR) -Iapps/native -MMD -MP -c $< -o $@
+OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(MB)/cmd/nat/native/nat_core.o \
+	$(MB)/gm/gm.o $(APP_OBJ)
+CHMEM_alarm  := 2048	# 7b.2, K.8
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -662,7 +673,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -672,7 +683,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
-	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
+	   $(PKGDIR)/remind_1.0.tar $(PKGDIR)/alarm_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -700,12 +711,13 @@ $(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   --timers --notify reminder --flash \
 	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
 	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
-$(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+# Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
+$(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \
-	   --timers --notify alarm --deskmode --flash \
-	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
-	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
+	python3 -I tools/mkpkg.py -n alarm -v 1.1 -d timed -o $(PKGDIR) \
+	   --timers --notify alarm --flash --window --background exit \
+	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
+	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui.
 $(PKGDIR)/gmdemo_1.0.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \

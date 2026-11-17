@@ -62,6 +62,7 @@ static long gone_sig;			/* ticks: the next signal then */
 #define B_CHILD		1		/* a new window over the current one */
 #define B_PARENT	2		/* the kept parent again */
 #define B_POP		3		/* the parent, which was not kept */
+#define B_ROOT		4		/* the first window again: the stack goes */
 
 struct ses {
 	const char *label;		/* the app's name in /etc/apps */
@@ -84,6 +85,7 @@ struct ses {
 	unsigned char kx, ky, shift;	/* the keyboard's cursor */
 	unsigned char keep_sel, keep_top;
 	unsigned short keep_first;
+	char root[16];			/* the id of the first window */
 };
 
 static long ticks(void)
@@ -286,6 +288,11 @@ static void start(struct ses *s, char **f, int n, int len)
 	} else if (s->par >= 0 && strcmp(id, wr_id(&wins[s->par])) == 0) {
 		slot = s->par;
 		s->bmode = B_PARENT;
+	} else if (s->depth > 1 && strcmp(id, s->root) == 0) {
+		slot = 1 - s->cur;	/* e.g. the list after Save in a form
+					 * whose parent was not kept */
+		s->bmode = B_ROOT;
+		s->par = -1;
 	} else {
 		slot = 1 - s->cur;
 		s->bmode = B_CHILD;
@@ -328,12 +335,22 @@ static void shown(struct ses *s)
 		s->popping = 0;
 		fix_sel(w, 0);
 		break;
+	case B_ROOT:
+		s->cur = (signed char) slot;
+		s->par = -1;
+		s->depth = 1;
+		fix_sel(w, 0);
+		break;
 	default:				/* B_CHILD */
 		s->par = s->cur;
 		s->cur = (signed char) slot;
 		s->depth++;
 		fix_sel(w, 0);
 		break;
+	}
+	if (s->depth == 1) {		/* a window with this id ends the stack */
+		strncpy(s->root, wr_id(w), sizeof s->root - 1);
+		s->root[sizeof s->root - 1] = 0;
 	}
 	s->waiting = s->busy = 0;
 	s->pagedir = 0;

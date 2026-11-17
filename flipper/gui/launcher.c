@@ -24,7 +24,11 @@
  * never turns a page.  The look is spec R5.6a.7 ("Pine meets modern UX");
  * with icons and hints off it is the old screen, pixel for pixel.
  *
- *	launcher [-a apps] [-c conf]	other files, for the QEMU tests
+ *	launcher [-a apps] [-c conf] [-f]
+ *
+ * -a, -c: other files; -f: take the screen and the buttons from the
+ * launcher of /etc/rc (it waits, as for an app) until SIGTERM.  For the
+ * QEMU tests (tools/nattest.py), which start a launcher from a shell.
  */
 #include <lib.h>
 #include <minix/callnr.h>
@@ -420,6 +424,17 @@ static char *run(struct app *ap)
 	return NULL;
 }
 
+static int fg_fd = -1;			/* -f: /dev/lcd, the buttons held */
+
+static void fg_end(int sig)
+{
+	int none = 0;
+
+	(void) sig;
+	(void) ioctl(fg_fd, FGIOCSET, &none);
+	_exit(0);
+}
+
 int main(int argc, char **argv)
 {
 	struct gui_in in;
@@ -427,15 +442,24 @@ int main(int argc, char **argv)
 	char *note = NULL;
 	char *apps_file = "/etc/apps", *conf_file = "/etc/launcher.conf";
 
-	for (i = 1; i + 1 < argc; i += 2) {
-		if (strcmp(argv[i], "-a") == 0) apps_file = argv[i + 1];
-		else if (strcmp(argv[i], "-c") == 0) conf_file = argv[i + 1];
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-f") == 0) fg_fd = 0;
+		else if (i + 1 < argc && strcmp(argv[i], "-a") == 0)
+			apps_file = argv[++i];
+		else if (i + 1 < argc && strcmp(argv[i], "-c") == 0)
+			conf_file = argv[++i];
 	}
 	signal(SIGHUP, SIG_IGN);
 	signal(SIGINT, SIG_IGN);
 	if (gui_open() < 0) {
 		fprintf(stderr, "launcher: cannot open /dev/lcd or /dev/buttons\n");
 		return 1;
+	}
+	if (fg_fd == 0 && (fg_fd = open("/dev/lcd", O_RDONLY)) >= 0) {
+		int me = getpid();
+
+		signal(SIGTERM, fg_end);
+		(void) ioctl(fg_fd, FGIOCSET, &me);
 	}
 	load_conf(conf_file);
 	load_apps(apps_file);

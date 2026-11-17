@@ -20,12 +20,17 @@ timed, remind and alarm packages and checks:
            alarm that is off, apps_data/alarm/alarm-N.off, is not); timed
            fires an alarm that has a tone; each alert gives the screen
            back when it ends (the next one shows)
-  GUI      remind and alarm take the foreground, become their users,
-           make a reminder and an alarm through their forms with fake
-           keys (and alarm opens the desk clock) and exit 0; free -t
-           shows what they used; free -v before and with each of remind,
-           alarm and alert open gives the RAM each one takes (printed as
-           "RAM:" lines, issue #201)
+  GUI      remind takes the foreground, becomes its user, makes a
+           reminder through its form with fake keys and exits 0; free -t
+           shows what it used; free -v before and with remind open gives
+           the RAM it takes (printed as a "RAM:" line, issue #201)
+  K.8      Ordua (alarm) is a window app: a launcher started here (-f,
+           GuiLog: on) runs it as the user alarm; with fake keys it opens
+           the desk clock, makes an alarm through the edit form (time,
+           days) and the ring settings (mode, volume, melody, vibro), Save
+           brings the list back, the desk clock then shows the next alarm
+           (ACK8.2), Back closes it; free -v with Ordua open is at most
+           4.5 KB below the launcher alone (ACK8.3)
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -94,19 +99,96 @@ def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
 
+def ordua(r):
+	"""K.8, T25b: Ordua in a launcher of its own, driven by fake keys;
+	its window records and events are on the console (GuiLog: on)."""
+	r.sh("rm -f /var/timers/alarm-* /home/flipper/apps_data/alarm/*.off", 20)
+	r.sh("echo 'Ordua:alarm:@alarm:=/usr/bin/alarm' > /tmp/la; "
+	     "echo 'Icons: on' > /tmp/lc; echo 'Hints: on' >> /tmp/lc; "
+	     "echo 'Battery: off' >> /tmp/lc; echo 'GuiLog: on' >> /tmp/lc", 20)
+	r.sh("launcher -f -a /tmp/la -c /tmp/lc & echo $! > /tmp/lpid; sleep 2",
+	     30)
+	base = freebytes(r)
+	mark = len(r.out)
+	r.sh("free -t on", 20)
+	tap(r, "ok", 2)				# Ordua: its list
+	now = freebytes(r)
+	print("  RAM: Ordua  open: %6d bytes (free %d -> %d; the launcher "
+	      "alone is the base)" % (base - now, base, now), flush=True)
+	check(base - now <= 4608, "ACK8.3: Ordua open takes <= 4.5 KB "
+	      "(%d bytes)" % (base - now))
+	log = lambda: r.out[mark:].replace(b"\r", b"")
+	check(re.search(rb"gui< win\tlist\tlist\tOrdua", log()) is not None
+	      and b"gui< item\tclock\tDesk clock" in log(),
+	      "K.8: the launcher starts Ordua, its list window comes")
+	tap(r, "ok")				# Desk clock
+	check(re.search(rb"gui< win\tclock\tclock\t", log()) is not None
+	      and b"gui< line\tNo alarm on" in log(),
+	      "K.8: the desk clock window (no alarm yet)")
+	tap(r, "back")				# the list, kept by the desktop
+	for k in ("down", "ok",			# + New alarm: the form
+		  "ok", "up", "ok",		# Time: 07 -> 08
+		  "down", "down", "ok",		# Days: edit
+		  "right", "right", "right", "right", "right", "up", "ok",
+						# Saturday on
+		  "down", "down", "down", "ok",	# Ring settings
+		  "right",			# Mode: steady
+		  "down", "down", "left",	# Volume: 90
+		  "down", "down", "down", "right",	# Melody: chime
+		  "down", "left",		# Vibro: off
+		  "back",			# the form again (kept)
+		  "down", "ok"):		# Save: the list
+		tap(r, k)
+	out = log()
+	check(b"gui< win\tedit\tlist\tNew alarm" in out
+	      and b"gui< win\tring\tlist\tRing" in out
+	      and re.search(rb"gui> submit\tedit\t[^\n]*at=08:00", out) is not None
+	      and re.search(rb"gui> submit\tring\t[^\n]*vol=90", out) is not None
+	      and b"gui> ok\tedit\tsave" in out,
+	      "ACK8.2: list -> form -> ring settings -> Save (the desktop "
+	      "changes the values, the app gets them in submit)")
+	if fails: print(out.decode("latin-1")[-3000:])
+	out = r.output("cat /var/timers/alarm-1; ls -l /var/timers/alarm-1; "
+		       "/usr/bin/alarm -n", 20)
+	check(out is not None and b"Kind: daily" in out
+	      and b"Time: 08:00" in out and b"Days: Mo Tu We Th Fr Sa" in out
+	      and b"Category: alarm" in out and b"Out: sound,led,screen" in out
+	      and b"Mode: escalating" not in out and b"Volume: 90" in out
+	      and b"Tone: chime" in out
+	      and re.search(rb"-rw------- .*alarm ", out) is not None
+	      and re.search(rb"alarm-1 \d+ 08:00 Alarm\n", out) is not None,
+	      "ACK8.2: Ordua made alarm-1 as the user alarm (08:00 Mo-Sa, "
+	      "steady, no vibro, Volume 90, chime), alarm -n")
+	if fails: print(out)
+	mark2 = len(r.out)
+	tap(r, "ok")				# Desk clock (the list after Save
+						# starts at its first row)
+	out = r.out[mark2:].replace(b"\r", b"")
+	check(re.search(rb"gui< line\tNext (\w\w\w )?08:00", out) is not None
+	      and b"gui< line\tAlarm" in out,
+	      "ACK8.2: the desk clock shows the next alarm")
+	tap(r, "back")
+	tap(r, "back", 2)			# closes Ordua
+	check(b"gui> close" in r.out[mark2:], "K.8: Back on the list closes Ordua")
+	r.output("free -t off", 30)
+	for m in re.finditer(rb"memuse: alarm .*", r.out[mark:]):
+		print("  " + m.group(0).decode().strip())
+	r.sh("kill `cat /tmp/lpid`; sleep 1", 30)
+
+
 def main():
 	r = powercut.Run(0, 0)
 	try:
 		if not r.login():
 			check(False, "login")
 			return 1
-		for p in ("timed_1.2", "remind_1.0", "alarm_1.0"):
+		for p in ("timed_1.2", "remind_1.0", "alarm_1.1"):
 			check(r.sh("pkg install /lib/pkg/%s.tar" % p, 120) == 0,
 				"install the %s package" % p)
 		out = r.output("grep -c '^remind:.:21:11:' /etc/passwd; "
 			"grep -c '^alarm:.:22:11:' /etc/passwd; "
 			"grep -c ':root:@bell:/usr/bin/remind$' /etc/apps; "
-			"grep -c ':root:@alarm:/usr/bin/alarm$' /etc/apps", 20)
+			"grep -c '^Ordua:alarm:@alarm:=/usr/bin/alarm$' /etc/apps", 20)
 		check(out is not None and out.split() == [b"1"] * 4,
 			"F.4: users remind and alarm (group timers), launcher lines")
 		if fails: print(out)
@@ -230,13 +312,8 @@ def main():
 		mark = len(r.out)
 		r.sh("free -t on", 20)
 		# remind: OK (the list), OK (+ New), Up (Save), OK, Back, Back
-		# alarm: OK (desk clock), Back, Down (+ New), OK, Down x7
-		# (Volume), Left (90 %), Up x8 (Save), OK, Back
 		for app, keys in (("remind", ("ok", "ok", "up", "ok", "back",
-					       "back")),
-				  ("alarm", ("ok", "back", "down", "ok")
-					    + ("down",) * 7 + ("left",)
-					    + ("up",) * 8 + ("ok", "back"))):
+					       "back")),):
 			r.sh("rm -f /tmp/st; (/usr/bin/%s; echo $? > /tmp/st) & "
 			     "sleep 4" % app, 30)
 			tap(r, "left")
@@ -258,26 +335,16 @@ def main():
 			"GUI: remind's form made remind-1 (09:00-17:00 every 30, "
 			"the user remind's)")
 		if fails: print(out)
-		out = r.output("cat /var/timers/alarm-1; /usr/bin/alarm -n", 20)
-		check(out is not None and b"Kind: daily" in out
-			and b"Time: 07:00" in out and b"Category: alarm" in out
-			and b"Out: sound,vibro,led,screen" in out
-			and b"Mode: escalating" in out and b"Volume: 90" in out
-			and re.search(rb"alarm-1 \d+ 07:00 Alarm\n", out) is not None,
-			"GUI: alarm's form made alarm-1 (07:00 Mo-Fr, escalating, "
-			"every output, Volume 90), alarm -n")
-		if fails: print(out)
-		for m in re.finditer(rb"memuse: (remind|alarm|alert) .*",
+		for m in re.finditer(rb"memuse: (remind|alert) .*",
 				     r.out[mark:]):
 			print("  " + m.group(0).decode().strip())
-		# The RAM each app takes while open (issue #201): started
-		# straight from this shell, so no subshell is counted, and
-		# killed after the count (the last thing this test does).
-		for app in ("remind", "alarm"):
-			base = freebytes(r)
-			r.sh("/usr/bin/%s & sleep 4" % app, 30)
-			ram(r, app, base)
-			r.sh("kill $!; sleep 2", 30)
+		# The RAM remind takes while open (issue #201): started
+		# straight from this shell, so no subshell is counted.
+		base = freebytes(r)
+		r.sh("/usr/bin/remind & sleep 4", 30)
+		ram(r, "remind", base)
+		r.sh("kill $!; sleep 2", 30)
+		ordua(r)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:
 				f.write(r.out)
