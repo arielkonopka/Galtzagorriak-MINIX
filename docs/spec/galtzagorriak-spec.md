@@ -1975,7 +1975,11 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
     The settings page is a **page**, not a special mode: the launcher keeps a small `const`
     table of pages (name, row source, OK handler, hint text), the app list and settings are its
     first two entries, and both use the same list drawing, scrolling and key loop, so later
-    pages (K.6) are new table entries. The launcher reads the setting at
+    pages (K.6) are new table entries.
+    Page switching (Left to Settings, Right to the next page) acts on the **release of a short
+    press**, never on the press, and a key that was part of a chord is ignored, so the backlight
+    gesture Left+Up (R6.10) never opens a page. The kernel marks chord keys in the button event
+    (#145); the launcher only checks that flag. The launcher reads the setting at
     start, after its settings page, and together with `/etc/apps` when an app exits (one more
     `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
     /etc/launcher.conf`) shows after the next app.
