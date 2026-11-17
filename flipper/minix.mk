@@ -265,7 +265,10 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 # Flash it with DFU like minix.bin, together with the base package or card
 # of the same build; /etc/rc binds them at the next boot (pkg bind).
 BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
-	      test
+	      test rfid
+# rfid: 46 KB of text with liblfrfid (spec R9.0.1); from here it runs in
+# place, instead of from RAM until the run-time cache has copied it (12
+# pages written at run time).
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
@@ -394,6 +397,22 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
+# liblfrfid (spec R9.0.1, src/lib/lfrfid): the Unleashed LF RFID protocols,
+# linked into rfid (code in flash; the decoders' state is malloc'd only
+# while a read runs).  Third-party C11 code: built quietly (-w).
+LFRFID_DIR := $(MROOT)/src/lib/lfrfid
+LFRFID_C := $(shell cd $(LFRFID_DIR) && find . -name '*.c' | sort)
+LFRFID_OBJ := $(patsubst ./%.c,$(MB)/lfrfid/%.o,$(LFRFID_C))
+LFRFID_HDR := $(shell find $(LFRFID_DIR) -name '*.h')
+LFRFID_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(LFRFID_DIR) -I$(LFRFID_DIR)/shim
+$(MB)/lfrfid/%.o: $(LFRFID_DIR)/%.c $(LFRFID_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LFRFID_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -576,7 +595,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.00
+BASE_VER := 4.01
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
