@@ -300,7 +300,7 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power rfidemu
+GUIAPPS	:= launcher info lights console power lfrfid
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
@@ -523,7 +523,7 @@ $(PKGDIR)/timed_1.0.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.83
+BASE_VER := 3.87
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

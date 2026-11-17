@@ -39,9 +39,11 @@ grep '^Power:' /etc/apps >/dev/null || {
 	echo 'Power:nobody:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
 }
-grep '^RFID emu:' /etc/apps >/dev/null || {
-	echo 'RFID emu:nobody:/bin/rfidemu' >> /etc/apps
-	echo "base: the launcher now has RFID emu"
+grep '^RFID:' /etc/apps >/dev/null || {
+	# drop the earlier "RFID emu" entry (part 4) if the card has it
+	grep -v '^RFID emu:' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+	echo 'RFID:nobody:/bin/lfrfid' >> /etc/apps
+	echo "base: the launcher now has RFID"
 }
 # Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
 if test ! -r /dev/ibutton
