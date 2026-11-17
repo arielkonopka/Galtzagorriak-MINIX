@@ -498,14 +498,29 @@ OBJS_swaptime64 = $(MB)/cmd/test/swaptime.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS),$(eval $(call user_prog,$(p))))
+# The hardware self test (spec 7b.3): the app and its modules, package
+# stest (/usr/bin/selftest, /usr/lib/selftest/*; a short name: tar names
+# of packages are at most 13 characters).
+ST_MODS	:= board input av
+STPROGS	:= selftest $(ST_MODS)
+$(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
+$(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
+CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
+			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
+CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
+CHMEM_input := 2048
+CHMEM_av := 2048
+$(foreach p,$(UPROGS) $(APPS) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS),$(eval $(call user_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.1.tar \
+	   $(PKGDIR)/stest_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -525,6 +540,16 @@ $(PKGDIR)/timed_1.1.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
+# The hardware self test (spec 7b.3).
+$(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+		rootfs/selftest.postinst rootfs/selftest.prerm \
+		$(ST_MODS:%=rootfs/selftest/%.d)
+	python3 -I tools/mkpkg.py -n stest -v 1.0 -o $(PKGDIR) \
+	   --postinst rootfs/selftest.postinst --prerm rootfs/selftest.prerm \
+	   -D "Hardware self test (spec 7b.3)" \
+	   /usr/bin/selftest=$(MB)/bin/selftest$(COMMA)755 \
+	   $(foreach m,$(ST_MODS),/usr/lib/selftest/$(m)=$(MB)/bin/$(m)$(COMMA)755) \
+	   $(foreach m,$(ST_MODS),/usr/lib/selftest/$(m).d=rootfs/selftest/$(m).d$(COMMA)644)
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.

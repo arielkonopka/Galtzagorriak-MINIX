@@ -1,0 +1,10 @@
+# postinst of the stest package (spec 7b.3): the launcher entry (root:
+# the board module reads and writes /dev/hd0's scratch sector) and the log.
+grep '^Self test:' /etc/apps >/dev/null || {
+	echo 'Self test:root:/usr/bin/selftest' >> /etc/apps
+	echo "selftest: the launcher now has Self test"
+}
+test -d /home/flipper || mkdir /home/flipper
+test -d /home/flipper/apps_data || { mkdir /home/flipper/apps_data; chmod 1777 /home/flipper/apps_data; }
+test -d /home/flipper/apps_data/selftest || mkdir /home/flipper/apps_data/selftest
+echo "selftest: log in /home/flipper/apps_data/selftest/log; selftest -a from a shell"
