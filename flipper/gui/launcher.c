@@ -63,6 +63,7 @@ struct app {
 	char *cmd;
 } apps[MAXAPPS];
 int napps;
+int fsck_err;		/* /etc/rc found errors on the card (spec N.3) */
 static unsigned short has_icon;
 static unsigned char opt;		/* OPT_* below */
 #define OPT_ICONS	1
@@ -99,6 +100,7 @@ static void load_apps(const char *apps_file)
 	size_t la, lu, lc;
 	int ic;
 
+	fsck_err = access("/etc/.fsck-errors", F_OK) == 0;
 	free_apps();
 	/* the card's copy, else the default in /rom (spec L.3) */
 	if ((f = cfopen(apps_file, "r")) == NULL) return;
@@ -318,7 +320,8 @@ static void draw(int pg, int sel, int top, const char *note)
 	char pos[12], *t;
 
 	gui_clear();
-	gui_title(p->title);
+	gui_title(fsck_err && pg == PG_APPS ? "CARD HAS ERRORS: RUN FSCK"
+						: p->title);
 	if (opt & OPT_BATT) {
 		bat_read();
 		bat_draw();

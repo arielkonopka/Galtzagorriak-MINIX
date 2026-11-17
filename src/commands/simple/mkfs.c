@@ -401,6 +401,7 @@ ino_t inodes;
 	zo = V2_NR_DZONES + (zone_t) V2_INDIRECTS + v2sq;
   }
   sup->s_max_size = zo * BLOCK_SIZE;
+  sup->s_flags = SF_CLEAN;	/* spec N.1: a new file system is clean */
   zone_size = 1 << zone_shift;	/* nr of blocks per zone */
 
   put_block((block_t) 1, buf);

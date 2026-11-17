@@ -369,5 +369,6 @@ dev_t super_dev;			/* place to get superblock from */
   dup_inode(rip);
   sp->s_isup = rip;
   sp->s_rd_only = 0;
+  sf_mounted(sp);		/* N.1: unclean: CHECK = 1 on the disk */
   return;
 }
