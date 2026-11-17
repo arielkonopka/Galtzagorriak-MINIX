@@ -57,6 +57,9 @@ FORWARD _PROTOTYPE( int w_init, (void)					);
 FORWARD _PROTOTYPE( int w_card, (void)					);
 FORWARD _PROTOTYPE( void w_tell, (char *what)				);
 FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
+FORWARD _PROTOTYPE( int w_discard, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void w_nap_end, (void)				);
+#define DISCARD_STEP	0x20000UL	/* sectors per DISCARD: 64 MB */
 
 PRIVATE struct driver w_dtab = {
   w_name,	/* current device's name */
@@ -247,7 +250,8 @@ PRIVATE int w_init()
 	wn->present |= W_NODET;
 	printf("%s: card detect says no card: not used\n", w_name());
   }
-  printf("%s: %lu MB\n", w_name(), hal_disk_sectors() >> 11);
+  printf("%s: %lu MB%s\n", w_name(), hal_disk_sectors() >> 11,
+	hal_disk_discard(1, 0) == 0 ? ", DISCARD" : "");	/* R12.40 */
   return(OK);
 }
 
@@ -314,15 +318,83 @@ PRIVATE int w_ioctl(dp, m_ptr)
 struct driver *dp;
 message *m_ptr;
 {
-/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another. */
+/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another.
+ * DIOCDISCARD (R12.40): tell the card a range of the partition is unused. */
   int state;
   phys_bytes user;
 
+  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr));
   if (m_ptr->REQUEST != DIOCFAKECARD) return(do_diocntl(dp, m_ptr));
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&state), (phys_bytes) sizeof(int));
   return(hal_disk_fake(state) == 0 ? OK : EINVAL);
+}
+
+
+/*===========================================================================*
+ *				w_discard				     *
+ *===========================================================================*/
+PRIVATE int w_discard(m_ptr)
+message *m_ptr;
+{
+/* R12.40: DISCARD (SD 5.1) a sector range of the partition: the card marks
+ * it unused, nothing is erased or written.  ENOTTY if the card has none.
+ * Done in steps of DISCARD_STEP sectors with the other tasks between them;
+ * the HAL waits for the busy card by naps (hal_disk_nap), never a loop.
+ * Only MM (swap, at idle) and root reach it: /dev/hd* are root's. */
+  struct part_range rg;
+  phys_bytes user;
+  unsigned long size, sector, n;
+  int r;
+
+  if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(rg));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&rg), (phys_bytes) sizeof(rg));
+  size = w_dv->dv_size >> SECTOR_SHIFT;
+  if (rg.count == 0 || rg.first >= size || rg.count > size - rg.first)
+	return(EINVAL);
+  if ((r = w_card()) != OK) return(r);			/* N.6 */
+  sector = (w_dv->dv_base >> SECTOR_SHIFT) + rg.first;
+  while (rg.count > 0) {
+	n = rg.count < DISCARD_STEP ? rg.count : DISCARD_STEP;
+	r = hal_disk_discard(sector, sector + n - 1);
+	if (r == -2) return(ENOTTY);
+	if (r != 0) {
+		if (!(wini[0].present & W_NODET) && !hal_disk_present()) {
+			(void) w_card();
+			return(ENXIO);
+		}
+		printf("%s: discard failed at sector %lu\n", w_name(), sector);
+		return(EIO);
+	}
+	sector += n;
+	rg.count -= n;
+	task_yield();
+  }
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				hal_disk_nap				     *
+ *===========================================================================*/
+PUBLIC void hal_disk_nap()
+{
+/* The HAL waits for a card that is busy for long (DISCARD, R12.40): sleep
+ * one clock tick, so user processes run and the CPU may sleep (spec 0.8).
+ * The clock's watchdog wakes us as an interrupt would; a stale wakeup (the
+ * DMA's) only shortens the nap. */
+  message m;
+
+  clock_mess(1, w_nap_end);
+  receive(HARDWARE, &m);
+}
+
+PRIVATE void w_nap_end()
+{
+  interrupt(WINCHESTER);
 }
 
 
