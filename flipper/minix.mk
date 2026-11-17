@@ -293,7 +293,8 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid
+PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid \
+	    swapon
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
@@ -308,6 +309,10 @@ endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su
+# Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
+# never swapped to the card in plain mode (spec R12.28).  login runs as
+# root without set-uid, so the set-uid rule alone would not cover it.
+SECRETPROGS := login passwd su swapsecret
 LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
@@ -345,6 +350,8 @@ CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
 			# files to ~7 KB (~3.5 KB copying all of it); out of memory -> <file>.save
 CHMEM_pkg    := 8192	# exec needs heap for the argument block
+CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
+CHMEM_swapsecret := 32768
 CHMEM_launcher := 4096
 CHMEM_console  := 4096
 
@@ -429,8 +436,10 @@ $(MB)/cmd/furitest.o: $(FURI_DIR)/test_furi.c $(MB)/libfuri.a
 OBJS_furitest = $(MB)/cmd/furitest.o $(FURI_OBJ)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
-	   pkgbad pkgplant sticky pwdcheck
+	   pkgbad pkgplant sticky pwdcheck swapper swapsecret
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+# swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
+OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 $(MB)/cmd/test/%.o: tests/%.c tests/t.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -478,7 +487,7 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 		$(if $(filter 1,$(SHLIBC)),$(SHL)/libc.json)
 	@mkdir -p $(dir $@)
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
-	   $(ELF2MNX_LIBC)
+	   $(if $(filter $*,$(SECRETPROGS)),--secret) $(ELF2MNX_LIBC)
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the

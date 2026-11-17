@@ -53,12 +53,15 @@ def main():
     # "any" for a package without programs (spec J.3).
     # Libc: the build id of the shared libc its programs were linked with
     # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
-    abis, libcs = set(), set()
+    # Secret: yes when a program is marked A_NOSWAP (elf2mnx --secret): in
+    # plain swap mode its RAM never goes to the card (spec R12.28).
+    abis, libcs, secret = set(), set(), False
     for spec in a.files:
         with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
             h = f.read(48)
         if len(h) >= 8 and h[0:2] == b"\x01\x03":
             abis.add(struct.unpack_from("<H", h, 6)[0] or 1)
+            secret = secret or bool(h[2] & 0x80)
             if h[2] & 0x08 and h[4] >= 48 and len(h) == 48:
                 libcs.add(struct.unpack_from("<I", h, 40)[0])
     if len(abis) > 1:
@@ -71,6 +74,7 @@ def main():
                + f"Abi: {abis.pop() if abis else 'any'}\n"
                + (f"Libc: {libcs.pop():08x}\n" if libcs else "")
                + (f"Os: {a.os}\n" if a.os else "")
+               + ("Secret: yes\n" if secret else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)
