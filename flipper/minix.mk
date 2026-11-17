@@ -583,7 +583,7 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello remind alarm timed alert
+FURIPROGS := furihello alarm timed alert
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
@@ -594,9 +594,9 @@ OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
-# The native apps remind and alarm (spec 7b.1, 7b.2, F.4): libfuri GUI,
-# libapp timers; packages remind and alarm (/usr/bin, own users).
-NATPROGS := remind alarm
+# The native app alarm (spec 7b.2, F.4): libfuri GUI, libapp timers;
+# package alarm (/usr/bin, own user).
+NATPROGS := alarm
 NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
 $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -605,10 +605,38 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
 # chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
 # (Canvas 1.1 KB, views, the lists) and MM's 1.5 KB safety gap above it.
-# nattest (3 runs, 12 KB): never used remind 3.8-4.0 KB, alarm 3.2-3.4 KB;
-# what is left keeps at least 1 KB for the heap to grow (issue #201).
-CHMEM_remind := 11264	# 7b.1
+# nattest (3 runs, 12 KB): never used alarm 3.2-3.4 KB; what is left
+# keeps at least 1 KB for the heap to grow (issue #201).
 CHMEM_alarm  := 11776	# 7b.2
+# Window apps with timers (spec K.8, T25a): remind (Kanpaia) describes its
+# windows with libgm and keeps its timers with libapp, both linked
+# statically (--gc-sections), never the shared libfuri: no Canvas, no gui
+# thread, no furi data area.  Package remind (/usr/bin, own user).
+# Their objects without -fdata-sections and with -fno-merge-constants:
+# under -mno-pic-data-is-text-relative every static variable and string
+# literal of its own section costs a GOT word in RAM; in one .data/.bss/
+# .rodata per object they share one (section anchors): remind's GOT 868 ->
+# ~300 B.  Unused rodata then stays in flash, not RAM.
+WINAPPS	:= remind
+WIN_CFLAGS = $(APP_CFLAGS) -fno-data-sections -fno-merge-constants \
+	-I$(GM_DIR) -Iapps/native
+$(MB)/cmd/win/%.o: apps/%.c $(GM_DIR)/gm.h $(APP_DIR)/include/app.h \
+		apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/nat_core.o: apps/native/nat_core.c apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+WIN_LIB	:= $(addprefix $(MB)/cmd/win/lib/,gm.o nat_core.o tspec.o io.o tune.o)
+OBJS_remind = $(MB)/cmd/win/remind/remind.o $(WIN_LIB)
+CHMEM_remind := 3072	# K.8: stack (records 128 B, events 192 B, a timer
+			# file 512 B in libapp), no heap, MM's 1.5 KB gap
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -662,7 +690,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -672,7 +700,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
-	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar)
+	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar) $(PKGDIR)/remind_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -694,12 +722,13 @@ $(PKGDIR)/timed_1.2.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
 # The native apps (spec 7b.1, 7b.2): their own users, the launcher line.
-$(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
+# remind 1.1 (T25a): a window app (Type: window), ended on Back.
+$(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
 		rootfs/remind.prerm
-	python3 -I tools/mkpkg.py -n remind -v 1.0 -d timed -o $(PKGDIR) \
-	   --timers --notify reminder --flash \
-	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
-	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
+	python3 -I tools/mkpkg.py -n remind -v 1.1 -d timed -o $(PKGDIR) \
+	   --timers --notify reminder --flash --window --background exit \
+	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
+	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 $(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
 	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \

@@ -209,3 +209,58 @@ int nat_log_days(int fd, time_t day0, int days, int *counts)
 	}
 	return total;
 }
+
+/* The log's lines newest first: lines skip .. skip + max - 1 (only "TIME
+ * ID" lines count) go to fn, if fn is not NULL.  Reads from the end in
+ * chunks, only as far back as skip + max lines: a long log costs no more
+ * than its last lines (spec K.8: the app's RAM does not grow with the
+ * data).  The lines counted (at most skip + max), or -1. */
+int nat_log_back(int fd, int skip, int max, void (*fn)(time_t t,
+					const char *id, void *arg), void *arg)
+{
+	char buf[LOG_CHUNK + LOG_LINE], id[LOG_LINE];
+	off_t pos;
+	time_t t;
+	int carry = 0, cut = 0, n, i, e, j, k, seen = 0;
+
+	if ((pos = lseek(fd, (off_t) 0, SEEK_END)) < 0) return -1;
+	while (pos > 0 && seen < skip + max) {
+		n = pos > LOG_CHUNK ? LOG_CHUNK : (int) pos;
+		pos -= n;
+		memmove(buf + n, buf, carry);
+		if (lseek(fd, pos, SEEK_SET) < 0 || read(fd, buf, n) != n)
+			return -1;
+		n += carry;
+		for (e = n; seen < skip + max; ) {
+			for (i = e - 1; i >= 0 && buf[i] != '\n'; i--) ;
+			if (i < 0 && pos > 0) break;
+			if (cut)
+				cut = 0;
+			else if (e - i - 1 > 0) {
+				/* "TIME ID": digits, one space, 1-14 chars */
+				t = 0;
+				for (j = i + 1; j < e && buf[j] >= '0'
+						&& buf[j] <= '9'; j++)
+					t = t * 10 + buf[j] - '0';
+				k = e - j - 1;
+				if (j > i + 1 && j < e && buf[j] == ' '
+				    && k > 0 && k < LOG_LINE) {
+					if (fn != NULL && seen >= skip) {
+						memcpy(id, buf + j + 1, k);
+						id[k] = 0;
+						fn(t, id, arg);
+					}
+					seen++;
+				}
+			}
+			if (i < 0) break;
+			e = i;
+		}
+		carry = e;
+		if (carry > LOG_LINE) {
+			carry = 0;
+			cut = 1;
+		}
+	}
+	return seen;
+}
