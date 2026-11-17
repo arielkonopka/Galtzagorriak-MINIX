@@ -254,7 +254,6 @@ FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void gp_exti, (void)				);
-FORWARD _PROTOTYPE( int gp_int, (int irq)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
 FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
@@ -346,7 +345,9 @@ PUBLIC void flipdev_task()
 	hal_backlight(HAL_BL_LEVEL(st));
   }
   if ((r = hal_gpio_edge_irq()) >= 0) {	/* R6.4: PA4's EXTI line */
-	put_irq_handler(r, gp_int);
+	put_irq_handler(r, btn_int);	/* the buttons' handler: no new
+					 * slot (all NR_IRQ_HANDLERS used);
+					 * it acks the GPIO lines first */
 	enable_irq(r);
   }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
@@ -457,12 +458,6 @@ PRIVATE void gp_exti()
   if (sel_wait & SEL_GPIO) interrupt(PRINTER);
 }
 
-PRIVATE int gp_int(irq)
-int irq;
-{
-  gp_exti();
-  return 1;
-}
 
 
 /*===========================================================================*
