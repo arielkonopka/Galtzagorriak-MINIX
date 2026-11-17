@@ -318,7 +318,9 @@ ALIASES	+= $(addsuffix =cp,rm)
 # small: default 6 KB (tools/elf2mnx.py), more only where needed.
 # Values checked with "free -t on" (MM reports the untouched part of the
 # reserve at exit), 2026-11-14: keep at least ~2 KB never used.
-CHMEM_sh     := 12288	# /bin/* (84 names) uses ~8 KB; exec needs no heap
+CHMEM_sh     := 10240	# echo /bin/* (97 names) uses 5.7 KB, three such globs
+			# in one command 9.5 KB (heap in 256 B steps, word lists
+			# not copied, 2026-11-16); exec needs no heap
 			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring

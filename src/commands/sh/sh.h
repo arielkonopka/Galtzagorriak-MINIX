@@ -375,6 +375,9 @@ _PROTOTYPE(void freecell , (char *cp ));
 _PROTOTYPE(void freeshared , (void));
 
 Extern	int	areanum;	/* current allocation area */
+/* Galtzagorriak: set in a vfork child (it runs in our memory): the heap
+ * must not grow there, MM would give the room to the child, not to us. */
+Extern	int	invfork;
 
 #define	NEW(type) (type *)getcell(sizeof(type))
 #define	DELETE(obj)	freecell((char *)obj)

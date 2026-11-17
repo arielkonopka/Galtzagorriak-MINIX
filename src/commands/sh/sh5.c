@@ -29,6 +29,10 @@ static unsigned bufid = AFID_ID;	/* buffer id counter */
 struct ioarg temparg = {0, 0, 0, AFID_NOBUF, 0};
 
 _PROTOTYPE(static void readhere, (char **name, char *s, int ec ));
+/* Galtzagorriak: a here document is read in pieces of this size, not a
+ * whole line on the stack (lines may be any length; an end marker must be
+ * shorter than this). */
+#define HERECHUNK	128
 _PROTOTYPE(void pushio, (struct ioarg *argp, int (*fn)()));
 _PROTOTYPE(static int xxchar, (struct ioarg *ap ));
 _PROTOTYPE(void tempname, (char *tname ));
@@ -589,8 +593,9 @@ int ec;
 	char tname[30];
 	register c;
 	jmp_buf ev;
-	char line [LINELIM+1];
+	char line [HERECHUNK+1];	/* Galtzagorriak: was LINELIM+1 (2 KB of stack) */
 	char *next;
+	int longline;
 
 	tempname(tname);
 	*name = strsave(tname, areanum);
@@ -606,17 +611,21 @@ int ec;
 			if (talking && e.iop <= iostack)
 				prs(cprompt->value);
 			next = line;
+			longline = 0;
 			while ((c = getc(ec)) != '\n' && c) {
 				if (ec == '\'')
 					c &= ~ QUOTE;
-				if (next >= &line[LINELIM]) {
-					c = 0;
-					break;
+				if (next >= &line[HERECHUNK]) {
+					/* a long line goes out in pieces; it
+					 * cannot be the end marker */
+					write(tf, line, (int)(next-line));
+					next = line;
+					longline = 1;
 				}
 				*next++ = c;
 			}
 			*next = 0;
-			if (strcmp(s, line) == 0 || c == 0)
+			if ((!longline && strcmp(s, line) == 0) || c == 0)
 				break;
 			*next++ = '\n';
 			write (tf, line, (int)(next-line));

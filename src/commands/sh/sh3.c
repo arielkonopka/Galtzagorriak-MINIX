@@ -76,6 +76,7 @@ _PROTOTYPE(void varput, (char *s, int out ));
 _PROTOTYPE(static int dotimes, (void));
 _PROTOTYPE(static int callbuiltin, (int n, struct op *t ));
 #define BEXEC	4	/* inbuilt("exec") */
+#define VFROOM	512	/* free heap left for a vfork child's redirections */
 
 int
 execute(t, pin, pout, act)
@@ -256,9 +257,10 @@ int *pforked;
 	char *cp;
 	struct ioword **iopp;
 	int resetsig, vforked;
-	char **owp;
+	char **owp, **envp;
 
 	owp = wp;
+	envp = NULL;
 	resetsig = 0;
 	*pforked = 0;
 	shcom = 0;
@@ -294,9 +296,19 @@ int *pforked;
 		int s_talking = talking, s_intr = intr, s_execflg = execflg;
 		struct brkcon *s_brklist = brklist;
 
+		if (canv) {
+			/* Galtzagorriak: what the child takes from the heap
+			 * (environment, redirection names) is made or made
+			 * room for here: its heap grows in small steps, and
+			 * a vfork child cannot grow it (invfork). */
+			envp = makenv();
+			if (t->ioact != NULL)
+				freecell(space(VFROOM));
+		}
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
+				invfork = 0;
 				talking = s_talking;
 				intr = s_intr;
 				execflg = s_execflg;
@@ -311,6 +323,7 @@ int *pforked;
 			return(pout==NULL? setstatus(waitfor(i,0)): 0);
 		}
 		vforked = canv;
+		invfork = canv;
 		if (talking) {
 			signal(SIGINT, SIG_IGN);
 			signal(SIGQUIT, SIG_IGN);
@@ -367,7 +380,7 @@ int *pforked;
 		exit(execute(t->left, NOPIPE, NOPIPE, FEXEC));
 	if (wp[0] == NULL)
 		exit(0);
-	cp = rexecve(wp[0], wp, makenv());
+	cp = rexecve(wp[0], wp, envp != NULL? envp: makenv());
 	prs(wp[0]); prs(": "); warn(cp);
 	if (vforked)
 		_exit(exstat);		/* not exit(): stdio and traps are ours */
