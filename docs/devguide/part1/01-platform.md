@@ -69,8 +69,9 @@ threads inside one process** with the stock API (`furi_thread_*`, `furi_message_
   A 16-byte canary at the bottom of each stack is checked at every switch.
 - `furi_check`/`furi_crash` write the message to `/dev/log` and stderr and `abort()` the process;
   the rest of the system keeps running.
-- Until `poll()` (R4b.6) a blocking `read()` stops every thread of the process, and an idle
-  process sleeps in whole seconds (`alarm()`; libfuri owns `SIGALRM` while it sleeps).
+- Until libfuri waits with `poll()` (R4b.6, in FS now) a blocking `read()` stops every thread of
+  the process, and an idle process sleeps in whole seconds (`alarm()`; libfuri owns `SIGALRM`
+  while it sleeps).
 - Costs on the device: about 12 KB of code (until it moves into the shared library), 84 B per
   thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
 - Not from signal handlers. The GUI, storage and HAL parts come with R5.2–R5.4 **(planned)**.
@@ -133,7 +134,10 @@ What eats the reserve, from experience in this tree:
   call it in place, and each process keeps only its data (about 0.6 KB). Notable points:
   - POSIX.1 (1990) calls: files, directories, `fork`/`vfork`/`exec`, signals with
     `sigaction`, `termios`, `pipe`, `mkfifo`, `alarm`, `pause`, `sigsuspend`;
-  - **not present**: `select`/`poll` (`poll()` is spec R4b.6, **(planned)**), `usleep`,
+  - `poll()` (`<poll.h>`, R4b.6): pipes and FIFOs, character devices whose driver answers
+    `DEV_SELECT` (others count as always ready: terminals and `/dev/buttons` until their
+    drivers do), a timeout in ms rounded up to the 1/60 s tick, `EINTR` on a signal;
+  - **not present**: `select`, `usleep`,
     `nanosleep`, `setitimer`, `mmap`, sockets, threads, `setgroups` (R4b.4, **(planned)**);
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
   - `cfopen(path, mode)` reads a settings file from the card and falls back to the default in

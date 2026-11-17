@@ -81,7 +81,7 @@ PUBLIC int do_poll()
  * 'nbytes' (get_work); its due time is in the record. */
   struct pollfd pfd[OPEN_MAX];
   struct pollrec *pr = &pollrec[who];
-  int n = nbytes, i, ready, block, r;
+  int n = nbytes, i, ready, block, r, scans = 0;
   unsigned char ev;
   long ms;
   clock_t now = 0;
@@ -126,8 +126,11 @@ PUBLIC int do_poll()
 	if (pr->pr_due != 0 && TDIFF(now = uptime(), pr->pr_due) >= 0)
 		break;				/* timed out */
 
-	/* A DEV_SELECTED during the scan may have been ours: again. */
-	if (sel_events == ev) {
+	/* A DEV_SELECTED during the scan may have been ours: again.  A few
+	 * times; then wait and look again at the next tick (a driver that
+	 * answers every registration with DEV_SELECTED must not spin FS). */
+	if (sel_events == ev || ++scans >= 4) {
+		if (sel_events != ev) pr->pr_full = TRUE;
 		m.m1_i1 = 0;		/* suspend() saves it as 'fd' */
 		suspend(XPOLL);
 		pr->pr_wait = TRUE;
@@ -181,7 +184,8 @@ int notify;			/* nothing ready yet: register devices */
 	}
   } else if ((rip->i_mode & I_TYPE) == I_CHAR_SPECIAL) {
 	dev = (dev_t) rip->i_zone[0];
-	if (dmap[(dev >> MAJOR) & BYTE].dmap_rw == call_ctty) {
+	if (((dev >> MAJOR) & BYTE) < max_major
+			&& dmap[(dev >> MAJOR) & BYTE].dmap_rw == call_ctty) {
 		if (fp->fp_tty == 0) return(POLLERR);	/* read: EIO */
 		dev = fp->fp_tty;	/* /dev/tty: the real one */
 	}
@@ -334,6 +338,7 @@ int minor;
 	for (i = 0; i < POLL_DEVS; i++) {
 		dev = pr->pr_dev[i];
 		if (dev != NO_DEV && ((dev >> MINOR) & BYTE) == (minor & BYTE)
+				&& ((dev >> MAJOR) & BYTE) < max_major
 				&& dmap[(dev >> MAJOR) & BYTE].dmap_task == task) {
 			poll_rerun((int) (pr - pollrec));
 			break;

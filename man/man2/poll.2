@@ -1,0 +1,83 @@
+.TH POLL 2
+.SH NAME
+poll \- wait for one of several file descriptors
+.SH SYNOPSIS
+.nf
+.ft B
+#include <poll.h>
+
+int poll(struct pollfd *\fIfds\fP, nfds_t \fInfds\fP, int \fItimeout\fP)
+.fi
+.ft R
+.SH DESCRIPTION
+.B Poll
+looks at the
+.I nfds
+entries of
+.IR fds ,
+each a descriptor
+.RI ( fd ),
+what to wait for
+.RI ( events )
+and what happened
+.RI ( revents ,
+set by the call).
+It returns as soon as one of them is ready, or after
+.I timeout
+milliseconds (\-1: no timeout; 0: do not wait).
+.PP
+The events are
+.B POLLIN
+(data to read, also
+.BR POLLRDNORM )
+and
+.B POLLOUT
+(writing will not block, also
+.BR POLLWRNORM ).
+.B POLLERR
+(an error; for a pipe: no reader left),
+.B POLLHUP
+(no writer left on a pipe or FIFO) and
+.B POLLNVAL
+(the descriptor is not open) are reported whether asked for or not.
+An entry with a negative
+.I fd
+is ignored and gets
+.I revents
+0.
+.PP
+Pipes and FIFOs are checked by the file system.
+A character device is asked by its driver (DEV_SELECT); a device whose driver
+does not answer that counts as always ready, like regular files, directories
+and block devices.
+.SH "RETURN VALUE
+The number of entries with a nonzero
+.IR revents ,
+0 on a timeout, \-1 on an error.
+.SH ERRORS
+.TP 15
+[EINTR]
+A signal came before anything was ready.
+.TP 15
+[EINVAL]
+.I nfds
+is larger than OPEN_MAX (20).
+.TP 15
+[EFAULT]
+.I fds
+is not in the caller's memory.
+.SH NOTES
+The timeout is rounded up to the clock tick (1/60 s) and is never shorter than
+asked.
+A process can wait on at most 4 different character devices at a time without
+cost; with more, it looks again at every clock tick.
+.PP
+Until the drivers answer DEV_SELECT (planned for the TTY and the Flipper
+devices), terminals and
+.B /dev/buttons
+count as always ready.
+.SH "SEE ALSO"
+.BR read (2),
+.BR write (2),
+.BR pipe (2),
+.BR alarm (2).
