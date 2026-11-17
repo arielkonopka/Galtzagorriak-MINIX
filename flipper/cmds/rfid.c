@@ -286,13 +286,13 @@ static int verify(int fd, unsigned char id[5], unsigned char got[5])
 	return -1;
 }
 
-static int write_em(unsigned char id[5], int tries)
+/* The 64 EM4100 bits of a number into b[64]: nine 1s, ten rows of 4 data
+ * bits and their even parity, four column parities, a 0. */
+static void em_bits(unsigned char id[5], unsigned char b[64])
 {
-	unsigned char b[64], got[5];
-	unsigned long blk[2], rev[2];
-	int r, c, p, i, fd, v;
+	int r, c, p;
 
-	for (i = 0; i < 9; i++) b[i] = 1;
+	for (r = 0; r < 9; r++) b[r] = 1;
 	for (r = 0; r < 10; r++) {
 		int nib = id[r / 2] >> (r % 2 ? 0 : 4) & 15;
 
@@ -309,6 +309,15 @@ static int write_em(unsigned char id[5], int tries)
 		b[59 + c] = p;
 	}
 	b[63] = 0;
+}
+
+static int write_em(unsigned char id[5], int tries)
+{
+	unsigned char b[64], got[5];
+	unsigned long blk[2], rev[2];
+	int r, c, p, i, fd, v;
+
+	em_bits(id, b);
 	blk[0] = blk[1] = rev[0] = rev[1] = 0;
 	for (i = 0; i < 64; i++) blk[i / 32] = blk[i / 32] << 1 | b[i];
 	for (i = 63; i >= 0; i--) rev[i / 32] = rev[i / 32] << 1 | b[i];
@@ -639,10 +648,62 @@ static int dump_block(int block, int with_pass, unsigned long pass)
 	return 0;
 }
 
+/* rfid emulate EM B0 B1 B2 B3 B4: be an EM4100 tag of that number for a
+ * reader, until stopped (Ctrl-C).  The reader's field is the clock; the
+ * kernel loads the antenna in step with it (RFIDIOCEMU), so the waveform
+ * cannot drift.  Each EM4100 bit is two Manchester half bits, each a
+ * 32-carrier-period segment the antenna is loaded for or not; the 128
+ * segments (dur = length, pulse = how long loaded) play round and round.
+ * The two arrays live in d[], which emulation does not otherwise use. */
+static int emulate_em(unsigned char id[5])
+{
+	unsigned char b[64];
+	unsigned long *dur = &d[0], *pulse = &d[256];
+	struct rfid_emu e;
+	int k, fd;
+
+	em_bits(id, b);
+	for (k = 0; k < 64; k++) {		/* bit -> loaded, then not */
+		dur[2 * k] = dur[2 * k + 1] = 31;	/* 32 periods each */
+		pulse[2 * k] = b[k] ? 32 : 0;
+		pulse[2 * k + 1] = b[k] ? 0 : 32;
+	}
+	e.dur = dur;
+	e.pulse = pulse;
+	e.n = 128;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMU, &e) < 0) {
+		perror("rfid: emulate");
+		close(fd);
+		return 1;
+	}
+	printf("emulating EM4100 %02X %02X %02X %02X %02X; hold to a reader, "
+		"Ctrl-C to stop\n", id[0], id[1], id[2], id[3], id[4]);
+	for (;;) sleep(60);		/* Ctrl-C ends it; close stops the field */
+	return 0;			/* not reached */
+}
+
 int main(int argc, char **argv)
 {
 	int fd, n, i, tries = 4, raw = 0, t;
 	unsigned char id[5];
+
+	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
+		unsigned char id[5];
+
+		if (argc != 8 || strcmp(argv[2], "EM") != 0) goto use;
+		for (n = 0; n < 5; n++) {
+			char *e;
+			unsigned long v = strtoul(argv[3 + n], &e, 16);
+
+			if (*e != 0 || v > 255) goto use;
+			id[n] = (unsigned char) v;
+		}
+		return emulate_em(id);
+	}
 
 	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
 		int haswith = 0, tries = 20;
@@ -724,7 +785,8 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES]\n"
 				"       rfid copy [-n N] [-pass HEX] "
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
-				"       rfid dump [-with HEX] [BLOCK]\n");
+				"       rfid dump [-with HEX] [BLOCK]\n"
+				"       rfid emulate EM B0 B1 B2 B3 B4\n");
 			return 2;
 		}
 	}

@@ -214,6 +214,13 @@ void hal_rfid_field(int on);
 void hal_rfid_pull(int release);	/* PA2: 1 for a command, 0 to capture */
 int hal_rfid_capture(uint32_t dst, unsigned n);
 void hal_rfid_capture_stop(void);
+/* R6.5 part 4 (R8.4): pretend to be a tag.  The reader's field clocks TIM2
+ * (ETR on the carrier node) and the pull pin is PWM: dur[i] is a segment in
+ * carrier periods - 1 (ARR) and pulse[i] how many of them the pull is on
+ * (CCR3), both physical, n words each, played round and round by DMA with no
+ * CPU work.  The caller pins the memory. */
+int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n);
+void hal_rfid_emulate_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).

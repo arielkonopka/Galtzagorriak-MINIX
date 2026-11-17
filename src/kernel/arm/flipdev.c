@@ -168,6 +168,7 @@ PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
 PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
+PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -266,6 +267,8 @@ FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
 FORWARD _PROTOTYPE( void rfid_field_off, (void)				);
 FORWARD _PROTOTYPE( int rfid_ioctl, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rfid_emu_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
@@ -324,9 +327,10 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
-		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR
-							&& rf_held)
-			rfid_field_off();	/* the holder let go */
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
+			if (rf_held) rfid_field_off();	/* the holder let go */
+			if (rf_emu != 0) rfid_emu_off();
+		}
 		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
@@ -352,6 +356,7 @@ PUBLIC void flipdev_task()
 				tx_rfid = FALSE;
 			} else if (tx_rfid) rfid_tx_off();
 		}
+		if (rf_emu == fm.PROC_NR + 1) rfid_emu_off();	/* R6.5 p4 */
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
@@ -1963,13 +1968,15 @@ message *m_ptr;
   phys_bytes user;
   int on;
 
+  if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
   if (m_ptr->TTY_REQUEST != RFIDIOCFIELD) return(ENOTTY);
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) sizeof(on));
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
   if (on) {
 	if (rf_held) return(OK);		/* already ours */
-	if (ir_rd || tx_on || as_proc != 0) return(EBUSY);  /* TIM1, TIM2 */
+	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0)
+		return(EBUSY);			/* TIM1, TIM2 */
 	hal_rfid_field(1);
 	rf_held = TRUE;
 	lock();
@@ -1980,6 +1987,64 @@ message *m_ptr;
 	rfid_field_off();
   }
   return(OK);
+}
+
+/*===========================================================================*
+ *				rfid_emu_start				     *
+ *===========================================================================*/
+PRIVATE int rfid_emu_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCEMU (R6.5 part 4): load the antenna in step with a reader's own
+ * carrier, from the caller's pattern, until it asks to stop (n = 0), closes
+ * or is cancelled.  Nothing runs on the CPU meanwhile: the reader's field
+ * clocks the timer and the DMA walks the pattern (hal_rfid_emulate).  The
+ * two buffers stay the caller's, pinned while this runs (R4b.5). */
+  struct rfid_emu e;
+  phys_bytes user, dur, pulse;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(e));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&e), (phys_bytes) sizeof(e));
+  if (e.n == 0) {				/* stop */
+	if (rf_emu == m_ptr->PROC_NR + 1) rfid_emu_off();
+	return(OK);
+  }
+  if (e.n > 512) return(EINVAL);
+  if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held) return(EBUSY);	/* TIM2 */
+  dur = numap(m_ptr->PROC_NR, (vir_bytes) e.dur, (vir_bytes) (e.n * 4));
+  pulse = numap(m_ptr->PROC_NR, (vir_bytes) e.pulse, (vir_bytes) (e.n * 4));
+  if (dur == 0 || pulse == 0) return(EFAULT);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA reads them */
+  if (hal_rfid_emulate(dur, pulse, e.n) < 0) {
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  rf_emu = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timer and DMA need the clocks */
+  unlock();
+  return(OK);
+}
+
+/*===========================================================================*
+ *				rfid_emu_off				     *
+ *===========================================================================*/
+PRIVATE void rfid_emu_off()
+{
+/* Stop emulating and let the pattern's memory go (and Stop2 in again). */
+  int pr;
+
+  if (rf_emu == 0) return;
+  hal_rfid_emulate_stop();
+  pr = rf_emu - 1;
+  rf_emu = 0;
+  proc_addr(pr)->p_physio = FALSE;
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
 }
 
 PRIVATE unsigned rf_durations(n)

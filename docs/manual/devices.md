@@ -120,7 +120,25 @@ changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the
 unless `-pass` gives a new one). `-lock` instead sets the chip's lock bit, which can
 never be undone by anyone, you included. A write to `/dev/rfid` is
 a list of field on/off times in µs (on first, an odd count), as `/dev/ir` takes marks and
-spaces. Emulating a tag is **(planned)**.
+spaces.
+
+### Emulating a tag
+
+`rfid emulate EM B0 B1 B2 B3 B4` makes the Flipper pretend to be that EM4100 tag for a
+reader — hold its back to the reader, Ctrl-C stops:
+
+```
+rfid emulate EM 04 00 98 3D C5
+emulating EM4100 04 00 98 3D C5; hold to a reader, Ctrl-C to stop
+```
+
+The **RFID emu** app on the launcher does the same from the screen: Left/Right pick a byte,
+Up/Down change it, OK starts, OK or Back stops. It starts on `04 00 98 3D C5`.
+
+The reader's own field is the clock: the kernel counts the reader's carrier and loads the
+antenna in step with it (`ioctl` `RFIDIOCEMU` on `/dev/rfid`), so the waveform cannot drift and
+the CPU does nothing while it runs. With no reader near, nothing is sent (a tag is passive).
+Only EM4100 is emulated for now; the other protocols (HID, Indala) are **(planned)**.
 
 ### Clearing a password and reading blocks
 
