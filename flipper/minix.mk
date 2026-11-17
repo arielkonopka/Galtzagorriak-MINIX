@@ -507,7 +507,8 @@ $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
 $(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
-CHMEM_selftest := 3072	# R7b.3: the menu, ~0.6 KB of module list
+CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
+			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
 CHMEM_input := 2048
 CHMEM_av := 2048
