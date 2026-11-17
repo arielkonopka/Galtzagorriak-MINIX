@@ -1038,14 +1038,14 @@ which order they are built.
   - tile refreshes run from `timed` and exit;
   - nothing is written to internal flash.
 - **Order** (tasks T21–T23 in `next-tasks.md`):
-  1. #201: shared `libfuri` + `libapp`;
-  2. T21a: launcher icons and the Pine look;
-  3. T22a/T22b: the other apps restyled;
-  4. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
+  1. #201 (shared `libfuri` + `libapp`) and T21a (launcher icons, Pine look, the page table of
+     R5.6a.4) run in parallel: T21a uses plain `gui.c` and does not need #201;
+  2. T22a/T22b: the other apps restyled (T22b after #201);
+  3. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
      records, `guimod`);
-  5. T23b: `window` records (menu, text, form) and events, the `libapp` helper;
-  6. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
-  7. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
+  4. T23b: `window` records (menu, text, form) and events, the `libapp` helper;
+  5. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
+  6. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
 - **Acceptance:**
   - ACK.1 A shell module of three lines puts a tile on the home page and changes it.
   - ACK.2 Killing a module removes its tile, and the desktop keeps working.
