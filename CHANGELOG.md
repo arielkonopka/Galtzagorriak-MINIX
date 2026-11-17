@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- Fix: since the self test's part 2 the base command `gpio` was built as the self test's GPIO loopback module (same name, one build directory). The module is now `pins`, and the build stops if a self-test module is named like another program. Base 3.93.
 - (N.6, T17b part 2, #163) The SD card pulled out is shown on the screen: a box "SD card removed / Put it back" ("Different card / Put the original back", "SD card is back / Carrying on") drawn by the kernel over whatever app is in front, with the backlight on as for a key; the app's next frame replaces it. Needed because the launcher's own files are on the card. Kernel RAM unchanged.
 - Fix (R2b.11, found in #109): setting the clock no longer gives the run-time cache a fresh daily flash-erase budget: a jump to another date and back (m2test does it) used to start a new "day" and allowed up to 32 more page erases; what today has spent now moves to the new date. A day that really begins still starts afresh. No RAM, Flipper HAL only.
 - Tests: `/usr/tests/regtest` (tests package, #160) checks on the device that exec clears the old program's registers (security review U1, #159): it fills r3-r8, r10-r12 and lr with a marker right at the exec trap, and the child `regchild` saves every register from its own entry point, before crtso runs. Flipper: ok as root and as a user; QEMU with the clearing taken out: FAIL r3..r12, so it catches the leak. No kernel or base change.
