@@ -904,6 +904,7 @@ off for 30 s or more; the gauge counts in whole mA, so this is coarse):
 |---|---|---|---|
 | 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
 | 2026-11-16 | + T14d part 1 (#120, LCD power save) | -2 mA | same setup; the LCD blank after 15 s + 2 min |
+| 2026-11-17 | 0.1.1+74.ga4b5c0a (R6.5 part 3, #176) | ~0 (SoC held) | **Overnight test (#104), ~11 h idle on battery, USB out, normal mode.** No watchdog/unexpected reset (`ver` reset cause "software", from the pre-test `reboot`). Clock drift ≤ ~1 s over 11 h vs host UTC (within console latency), well within the LSE tolerance. Battery SoC stayed 100 % (started full, 4138 mV), so the average draw did not move the coarse gauge — consistent with Stop2 but below its resolution. Exact Stop2 % not read: `lat` needs a LATTRACE build (`/dev/lat` absent here); re-run on such a build for the figure. |
 
 Not measured: the build before T14a (#112) and the stock firmware's
 battery screen for comparison (each needs two more flashes; no meter on
