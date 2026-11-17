@@ -602,4 +602,7 @@ void hal_rfid_field(int on) { (void) on; }
 void hal_rfid_pull(int release) { (void) release; }
 int hal_rfid_capture(uint32_t d, unsigned n) { (void) d; (void) n; return -1; }
 void hal_rfid_capture_stop(void) { }
+int hal_rfid_emulate(uint32_t d, uint32_t p, unsigned n)
+	{ (void) d; (void) p; (void) n; return -1; }
+void hal_rfid_emulate_stop(void) { }
 uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */
