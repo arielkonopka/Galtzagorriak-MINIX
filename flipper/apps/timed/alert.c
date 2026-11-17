@@ -200,6 +200,10 @@ int main(int argc, char **argv)
 	end = now + (cat == TC_ALARM ? 600 : 60);
 	while (time((time_t *) 0) < end) {
 		ring(flags, cat);
+		/* Keep the light on while it rings: after the backlight's idle
+		 * timeout the first press only turns it on again, so OK or Back
+		 * seemed to do nothing (seen on the device, #109). */
+		if (shown) gui_backlight(255);
 		if (!shown) {
 			sleep(STEP);	/* no buttons: ring until the end */
 			continue;
