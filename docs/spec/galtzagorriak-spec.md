@@ -2520,6 +2520,131 @@ Acceptance:
 
 Flash: ≈ 85 KB installed (protocols are the bulk).
 
+### 9.0 LF RFID: every protocol of the Unleashed firmware (owner request 2026-11-17)
+
+The owner wants every 125 kHz decoder of the Unleashed firmware (DarkFlippers/unleashed-firmware,
+`lib/lfrfid/protocols/`, checked at commit `53818b1`, 2026-11-16) working on MINIX. GPLv3: the
+protocol files are copied almost verbatim (rule of the whole project), not rewritten.
+
+What MINIX has today (R6.5 parts 1–5, #174–#194): `/dev/rfid` read at 125 kHz with 50 % duty,
+one-shot capture of up to 512 edges; `rfid` decodes **EM4100 at RF/64 only**; T5577/EM4305 write
+of an EM4100 number, T5577 block read, password clear (proxmark3 dictionary); EM4100 emulation
+(`RFIDIOCEMU`, ≤ 512 segments); the `lfrfid` launcher app (read, save `.rfid`, write, emulate).
+
+**Gap table** (Unleashed protocol list order; "seg/frame" is the number of `RFIDIOCEMU` segments
+one frame needs today, where one segment is one PWM period of the pull pin):
+
+| # | Protocol (Unleashed name) | Maker | Modulation, rate | Frame | Read mode | seg/frame | MINIX read | emulate | write |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | EM4100 | EM-Micro | Manchester RF/64 | 64 b | ASK 125 k | ≤ 128 | ✅ | ✅ | ✅ T5577, EM4305 |
+| 2 | EM4100/32 | EM-Micro | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 3 | EM4100/16 | EM-Micro | Manchester RF/16 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 4 | Electra | Electra | Manchester RF/64 (EM4100 + 64-bit epilogue) | 128 b | ASK | ≤ 256 | ❌ | ❌ | ❌ |
+| 5 | H10301 | HID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 6 | Idteck | IDTECK | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 7 | Indala26 | Motorola | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 8 | IoProxXSF | Kantech | FSK2a RF/64 | 64 b | ASK | ≈ 460 | ❌ | ❌ (tight) | ❌ |
+| 9 | AWID | AWID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 10 | FDX-A | FECAVA | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 11 | FDX-B | ISO 11784/5 (animals) | Biphase (diphase) RF/32 | 128 b | ASK; Unleashed also 134.2 kHz | ≤ 256 | ❌ | ❌ | ❌ |
+| 12 | HIDProx (generic) | Generic | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 13 | HIDExt (generic) | Generic | FSK2a RF/50 | 6 blocks, 192 b | ASK | ≈ 1080 | ❌ | ❌ > 512 | ❌ |
+| 14 | Pyramid | Farpointe | FSK2a RF/50 | 128 b | ASK | ≈ 720 | ❌ | ❌ > 512 | ❌ |
+| 15 | Viking | Viking | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 16 | Jablotron | Jablotron | Biphase (diphase) RF/64 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 17 | Paradox | Paradox | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 18 | PAC/Stanley | N/A | Direct (NRZ) RF/32 | 128 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 19 | Keri | Keri | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 20 | Gallagher | Gallagher | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 21 | Nexwatch | Honeywell | PSK1 RF/32 | 96 b | PSK | ≈ 3072 | ❌ | ❌ > 512 | ❌ |
+| 22 | Radio Key (Securakey) | Securakey | Manchester RF/40 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 23 | GProxII | Guardall | Biphase RF/64 | 90 b | ASK | ≤ 180 | ❌ | ❌ | ❌ |
+| 24 | Noralsy | Noralsy | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 25 | Indala224 | Motorola | PSK2 RF/32 | 224 b | PSK | ≈ 7168 | ❌ | ❌ > 512 | ❌ |
+
+**Encoders** (owner, 2026-11-17: "and the encoders too"): every one of the 25 Unleashed protocols
+has an encoder (`encoder_yield`, used for emulation) and a `write_data` that fills T5577 blocks;
+8 of them can also be written to an EM4305 (EM4100 and its /32, /16 variants, Electra, FDX-B,
+Gallagher, GProxII, Jablotron, Radio Key, Viking). MINIX has the encoder and both write paths for
+EM4100 RF/64 only, so 24 encoders and 24 T5577 / 9 EM4305 write paths are missing; R9.0.3 and
+R9.0.6 bring all of them.
+
+Also in Unleashed `lib/lfrfid`, not protocols: write targets **Hitag µ (ID8265, ID8210, H55)** and
+**Hitag S (ID8268)** besides T5577/EM4305 (MINIX: T5577/EM4305 only); **RAW read/emulate**
+(`.ask.raw`/`.psk.raw`, varint pairs; MINIX: none); the **134.2 kHz ASK read mode** (MINIX: none);
+`.rfid` save/load for every protocol (MINIX: EM4100 only).
+
+Result: 1 of 25 protocols done (EM4100 RF/64): 24 decoders and 24 encoders missing. What blocks them is mostly not the
+decoders (pure C, host-testable) but four kernel gaps: the PSK carrier, the 134.2 kHz carrier, a
+capture longer than 512 edges, and emulation of more than 512 segments.
+
+Requirements:
+
+- **R9.0.1 `liblfrfid`** (user space, `src/lib/lfrfid/`): the Unleashed `lib/lfrfid/protocols/*`,
+  `tools/fsk_demod`, `tools/fsk_osc`, `tools/t5577`, `tools/em4305` and the toolbox pieces they use
+  (`protocol_dict`, `manchester_decoder`, `bit_lib`, `level_duration`, `varint_pair`) copied with a
+  thin `furi` shim (`furi_assert`, `malloc`, `FuriString` → fixed `char` buffers). The worker
+  threads, `furi_hal_rfid` and the GUI are not ported: the caller feeds edges and plays segments.
+  One protocol table, so a new Unleashed protocol is one more file and one table line.
+  - RAM: the decoders' state is allocated only while a read runs (`protocol_dict_alloc` of all 25:
+    measure it; budget ≤ 6 KB heap in the `rfid` process, freed at exit). Nothing resident.
+  - Flash: ≈ 25 KB text (XIP), linked into `rfid` (no shared library needed). 0 run-time flash
+    writes.
+- **R9.0.2 Host tests** (`flipper/tests/lfrfid/`, `make lfrfidtest` on the PC and in CI): for each
+  of the 25 protocols, encoder → edge timings (± jitter, random start phase, inverted polarity) →
+  all decoders: exactly that protocol decodes, the same bytes, `render_data` text equal to
+  Unleashed's for a fixed vector per protocol. Also EM4100 vectors captured on the Flipper by
+  `rfid -r` (from #174) still decode. No hardware needed.
+- **R9.0.3 `rfid` uses the library:** `rfid` (read) prints `PROTOCOL HEXDATA` and the rendered
+  text (as the stock app's info screen); `rfid write PROTO HEX…` writes any protocol whose
+  `write_data` fills T5577 (or EM4305) blocks, verified by reading back and decoding (as stock);
+  `rfid emulate PROTO HEX…`; `rfid copy` for every protocol. EM4100 behaviour and options stay as
+  they are (`write EM …` kept as an alias). `.rfid` files in the stock format for every protocol
+  (`Key type:` = the Unleashed protocol name). Read alternates ASK and PSK windows as the stock
+  worker does (ASK 2 s, PSK 2 s; `-a`/`-p` for one only).
+- **R9.0.4 Kernel: read carrier modes** (`/dev/rfid`, `ioctl RFIDIOCCARRIER`): 125 kHz/50 % (ASK
+  and FSK, today's default), **62.5 kHz/25 % (PSK, as stock `furi_hal_rfid_tim_read_start(62500,
+  0.25)`)** and **134.2 kHz/50 %** (FDX-B, Unleashed's ASK134 mode). One byte of state, kernel
+  RAM ≤ +4 B. The mode resets to 125 kHz at close.
+- **R9.0.5 Kernel: continuous capture.** A PSK or FSK frame is far longer than 512 edges
+  (Indala26 ≈ 33 ms; Indala224 ≈ 115 ms; FSK edges every 32–40 µs). `/dev/rfid` gets a streaming
+  read: the comparator capture keeps running into a ring in the caller's pinned buffer (two
+  halves; `read` returns a full half; `poll` readable when one is full), without losing an edge
+  between reads; an overrun is reported (`EOVERFLOW` on the next read), never silent. The decoder
+  runs in the `rfid` process at normal priority: the UI stays responsive (AC9.0.4). Kernel RAM ≤
+  +8 B.
+- **R9.0.6 Kernel: long emulation.** FSK and PSK frames need 460–7200 PWM segments (table), so
+  `RFIDIOCEMU` with ≤ 512 pinned words cannot play them. Add a compact run list, e.g.
+  `struct rfid_emu_run { u16 period_minus_1; u16 pulse; u16 count; }` (count = how many equal
+  segments in a row: an FSK bit is one run, a PSK bit one or two runs), at most 512 runs, played by
+  the kernel: the DMA keeps reading a small ping-pong ring of ARR/CCR pairs in the caller's pinned
+  memory, refilled from the run list in the DMA half/complete interrupt (as stock refills from the
+  encoder in its DMA ISR). The interrupt is O(ring half), ≤ 10 µs, at ≤ 2 kHz (PSK worst case).
+  The agent may pick a different mechanism with the same limits (no CPU work per carrier period,
+  kernel RAM ≤ +16 B, the reader's clock drives it). `RFIDIOCEMU` stays for EM4100.
+- **R9.0.7 Hitag µ / Hitag S write targets** (Unleashed `tools/hitagmicro.c`, `tools/hitags.c`): as
+  extra targets of `rfid write` for EM4100 data, after R9.0.1–R9.0.6. Uses the existing field-gap
+  write and the held-field capture (R6.5 part 3); kernel unchanged if the timings fit.
+- **R9.0.8 RAW read** (`rfid raw FILE`, `.ask.raw`/`.psk.raw` as Unleashed, varint pairs) on the
+  SD card, for tags no decoder knows; RAW emulate optional. Writes go to the SD card only.
+- **R9.0.9 `lfrfid` app:** the read screen shows the protocol name and the rendered data; saved
+  files of every protocol load, write and emulate; "Add manually" lists all 25 protocols (data
+  entered as hex bytes). Black title bar as every GUI app.
+
+Acceptance:
+- AC9.0.1 `make lfrfidtest`: all 25 protocols round-trip encoder → decoder on the PC, with jitter
+  and both polarities, and no protocol decodes another's frame.
+- AC9.0.2 On the Flipper, with real tags or a T5577 written by `rfid write PROTO …`: each protocol
+  is read, written, read back, and emulated to a second reader (the owner's stock/Unleashed Flipper
+  or a reader) — at least EM4100 RF/32, H10301, Indala26, FDX-B, Viking, Paradox, Keri, Nexwatch,
+  PAC/Stanley, Indala224; the others where a T5577 can carry them. Results table in PORTING.md.
+- AC9.0.3 A PSK read of 10 s and an FSK emulation of 60 s lose no edge and no segment (overrun
+  counter 0).
+- AC9.0.4 While `rfid` reads (streaming, all decoders) or emulates PSK, L1 (button → pixel) stays
+  within budget and the launcher scrolls without a visible hitch; `lat` numbers in the PR.
+- AC9.0.5 Kernel RAM growth for R9.0.4–R9.0.6 together ≤ 32 B (`ramcheck`); no internal flash
+  writes at run time (`flashcheck`).
+
 ### 9.1 Hidden camera finder `camfind`, version 1 (gadget, F.5)
 
 **Depends on:** 6 (UART bridge, IR, LED), 8 (Sub-GHz). Wi-Fi needs the optional ESP32 devboard.

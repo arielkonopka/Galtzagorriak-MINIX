@@ -112,6 +112,11 @@ PRIVATE u8_t fg_pre;		/* R7b.2: an alert preempts (PRE_*), 0: no */
 #define PRE_FG		0x40	/* the slot below was the foreground app */
 #define PRE_SLOT	0x3F	/* the preempted foreground's slot + 1 */
 PRIVATE u8_t pre_rd;		/* R7b.2: a reader parked meanwhile, slot + 1 */
+PRIVATE volatile u8_t gp_watch;	/* R6.4: header pins watched for edges */
+PRIVATE volatile u8_t gp_last;	/*   their levels at the last tick */
+PRIVATE volatile u8_t gp_chg;	/*   changed since the last read */
+PRIVATE u8_t gp_proc;		/*   who watches, slot + 1 (its close ends it) */
+#define SEL_GPIO	4	/* sel_wait: a poller waits for an edge */
 PRIVATE u8_t nt_st;		/* N.6: the card notice (NT_*) */
 #define NT_KIND		3	/* the notice over every frame: */
 #define NT_OUT		1	/*   the card is out */
@@ -257,6 +262,7 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
 FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
@@ -370,6 +376,8 @@ PUBLIC void flipdev_task()
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SPK_MINOR
 							&& !sp_waiting)
 			sp_quiet = 0;		/* full volume again */
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
+				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
@@ -422,6 +430,21 @@ PUBLIC void flipdev_task()
 
 
 /*===========================================================================*
+ *				gp_stop					     *
+ *===========================================================================*/
+PRIVATE void gp_stop()
+{
+/* R6.4: no pin is watched any more (the watcher stopped, closed the
+ * device or exited): the tick stops sampling, Stop2 is allowed again. */
+  lock();
+  gp_watch = gp_chg = 0;
+  gp_proc = 0;
+  unlock();
+  pm_busy &= ~PM_GPIO;
+}
+
+
+/*===========================================================================*
  *				do_select				     *
  *===========================================================================*/
 PRIVATE int do_select(m_ptr)
@@ -436,6 +459,7 @@ message *m_ptr;
   if (ops == 0) {
 	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
 	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
+	if (m_ptr->DEVICE == GPIO_MINOR) sel_wait &= ~SEL_GPIO;
 	return(0);
   }
   switch (m_ptr->DEVICE) {
@@ -445,6 +469,10 @@ message *m_ptr;
 		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
 		sel_wait |= SEL_RD;
 	}
+	break;
+  case GPIO_MINOR:		/* R6.4: with pins watched, an edge */
+	if (gp_watch != 0 && gp_chg == 0) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) sel_wait |= SEL_GPIO;
 	break;
   case SPK_MINOR:		/* a read fails at once: ready */
 	if (sp_waiting) r &= ~SEL_WR;
@@ -471,6 +499,10 @@ PRIVATE void sel_check()
   if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
 	sel_wait &= ~SEL_RD;
 	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_GPIO) && gp_chg != 0) {
+	sel_wait &= ~SEL_GPIO;
+	reply(DEV_SELECTED, FS_PROC_NR, GPIO_MINOR, SEL_RD);
   }
   if ((sel_wait & SEL_WR) && !sp_waiting) {
 	sel_wait &= ~SEL_WR;
@@ -799,8 +831,9 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[128], d[6];
+  char line[176], d[10];
   const char *k = pw_key;
+  unsigned long u;
   int i, j, n = 0, v, r6, r4, r3;
 
   for (i = 0; i < 7; i++) {
@@ -836,8 +869,22 @@ int count;
 	do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
 	while (j > 0) line[n++] = d[--j];
   }
-  for (k = " otg=0\n"; *k != 0; k++) line[n++] = *k;
-  if (r3 & 0x20) line[n - 2] = '1';
+  for (k = " otg=0"; *k != 0; k++) line[n++] = *k;
+  if (r3 & 0x20) line[n - 1] = '1';
+  /* R6.8: seconds up and in Stop2 since boot, and the wake-ups from it
+   * (a button; anything else): energy runs need no trace build */
+  for (i = 0; i < 4; i++) {
+	for (k = i == 0 ? " up=" : i == 1 ? " stop2=" : i == 2 ? " wbtn="
+						: " wother="; *k != 0; k++)
+		line[n++] = *k;
+	u = i == 0 ? (unsigned long) get_uptime() / HZ
+	  : i == 1 ? (unsigned long) pm_stat.min * 60 + pm_stat.stop / 32768
+	  : i == 2 ? pm_stat.btn : pm_stat.other;
+	j = 0;
+	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);
+	while (j > 0) line[n++] = d[--j];
+  }
+  line[n++] = '\n';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
@@ -1020,16 +1067,42 @@ message *m_ptr;
 	int i;
 
 	if (m_ptr->m_type == DEV_READ) {
-		if (count > HAL_GPIO_PINS) count = HAL_GPIO_PINS;
-		for (i = 0; i < count; i++) gb[i] = '0' + hal_gpio_read(i);
+		/* the levels; then (R6.4) '1' for each pin that changed
+		 * since the last read, which clears them */
+		if (count > 2 * HAL_GPIO_PINS) count = 2 * HAL_GPIO_PINS;
+		for (i = 0; i < HAL_GPIO_PINS; i++) {
+			gb[i] = '0' + hal_gpio_read(i);
+			gb[HAL_GPIO_PINS + i] = gp_chg & (1 << i) ? '1' : '0';
+		}
+		if (count > HAL_GPIO_PINS) gp_chg = 0;
 		phys_copy(vir2phys(gb), user, (phys_bytes) count);
 		return(count);
 	}
 	if (count % 2 != 0) return(EINVAL);
 	if (count > (int) sizeof(gb)) count = sizeof(gb);
 	phys_copy(user, vir2phys(gb), (phys_bytes) count);
-	for (i = 0; i < count; i += 2)
-		if (hal_gpio(gb[i], gb[i+1]) < 0) return(i > 0 ? i : EINVAL);
+	for (i = 0; i < count; i += 2) {
+		unsigned pin = gb[i], o = gb[i+1];
+
+		if (pin >= HAL_GPIO_PINS) return(i > 0 ? i : EINVAL);
+		if (o == 6 || o == 7) {		/* R6.4: watch edges, stop */
+			if (gp_proc != 0 && gp_proc != m_ptr->PROC_NR + 1
+			    && gp_watch != 0) return(i > 0 ? i : EBUSY);
+			lock();
+			if (o == 6) {
+				gp_watch |= 1 << pin;
+				gp_last = (gp_last & ~(1 << pin))
+					| (hal_gpio_read(pin) == 1) << pin;
+				gp_proc = m_ptr->PROC_NR + 1;
+			} else gp_watch &= ~(1 << pin);
+			gp_chg &= ~(1 << pin);
+			unlock();
+			if (gp_watch) pm_busy |= PM_GPIO;
+			else gp_stop();
+			continue;
+		}
+		if (hal_gpio(pin, o) < 0) return(i > 0 ? i : EINVAL);
+	}
 	return(count);
   }
 
@@ -1439,7 +1512,9 @@ PRIVATE void do_hardint()
 
   if (last_buttons & (GE_FIRE | GE_CHORD | GE_SAVED)) ge_task();
   if (nt_st & NT_NEW) {		/* N.6: a card notice to show */
+	lock();				/* the tick shares the byte */
 	nt_st &= ~NT_NEW;
+	unlock();
 	nt_over();
 	lc_dirty = TRUE;
 	k_input = get_uptime();		/* the light on, as for a key */
@@ -1547,6 +1622,17 @@ PUBLIC void flipdev_tick()
 	note_i++;
 	sp_play();
 	if (note_i >= note_n) interrupt(PRINTER);
+  }
+  if (gp_watch) {		/* R6.4: the watched header pins' edges */
+	unsigned i, now = 0;
+
+	for (i = 0; i < HAL_GPIO_PINS; i++)
+		if ((gp_watch & 1 << i) && hal_gpio_read(i) == 1) now |= 1 << i;
+	if ((now ^ gp_last) & gp_watch) {
+		gp_chg |= (now ^ gp_last) & gp_watch;
+		gp_last = now;
+		if (sel_wait & SEL_GPIO) interrupt(PRINTER);
+	}
   }
   /* N.6: the card-detect switch, one GPIO read (its EXTI line is Up's) */
   if (hal_disk_present()) {
@@ -2015,7 +2101,9 @@ int kind;
 /* From the disk task (N.6): NT_OTHER, another card or one that does not
  * answer: the notice stays until the card goes; 0, the card is back: the
  * notice goes, and "carrying on" shows until the app's next frame. */
+  lock();			/* the tick changes NT_SEEN in the same byte */
   nt_st = (nt_st & ~NT_KIND) | (kind == NT_OTHER ? NT_OTHER | NT_NEW : 0);
+  unlock();
   if (kind != NT_OTHER) {
 	nt_box("SD card is back", "Carrying on");
 	lc_dirty = TRUE;

@@ -53,6 +53,9 @@ For people changing the kernel, the servers, the drivers and the build.
    `MEMINFO` controls, kernel calls, and what each costs.
 5. [Rules and review](part2/05-rules-review.md): the RAM, responsiveness, flash-write and
    security rules every change is reviewed against, and the PR checklist.
+6. [Testing radios against a second Flipper](part2/06-two-flipper-tests.md): a stock
+   (Unleashed) Flipper as the partner for RFID, IR, iButton and Sub-GHz tests, the physical
+   setup without special parts, and `twoflip.py` on Linux, macOS or Windows.
 
 ## Where else to look
 

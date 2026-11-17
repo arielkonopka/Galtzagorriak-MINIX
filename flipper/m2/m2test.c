@@ -447,6 +447,9 @@ static void finish(void)
 		__asm volatile ("bkpt 0xAB" : : "r" (r0), "r" (r1) : "memory");
 	}
 #endif
+	/* As INIT it may never exit; started from a shell (on the Flipper,
+	 * #109) it must, or the shell waits for it forever. */
+	if (getpid() != 1) exit(fails > 125 ? 125 : fails);
 	for (;;) pause();
 }
 
@@ -706,6 +709,63 @@ static void preempt_body(void)
 		"fg: an exited foreground app holds nothing");
 	close(pr[0]); close(pr[1]);
 	close(b); close(nb); close(l);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* R6.4: edges on header pins through poll() (QEMU: output ops set the
+ * level the pin reads, so a child makes the edge). */
+static void gpio_tests(void)
+{
+	unsigned char op[2];
+	char v[16];
+	struct pollfd p;
+	struct tms tm;
+	clock_t t0, t1;
+	int g, g2, r, st;
+	pid_t pid;
+
+	if ((g = open("/dev/gpio", O_RDWR)) < 0) {
+		check(0, "gpio: open");
+		return;
+	}
+	op[0] = 3; op[1] = 0;			/* pin 3 low */
+	(void) write(g, (char *) op, 2);
+	op[1] = 6;				/* watch it */
+	check(write(g, (char *) op, 2) == 2, "gpio: watch a pin (op 6)");
+	p.fd = g; p.events = POLLIN; p.revents = 0;
+	check(poll(&p, 1, 0) == 0, "gpio: no edge, not readable");
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int c = open("/dev/gpio", O_WRONLY);
+
+		(void) poll((struct pollfd *) NULL, 0, 200);
+		op[0] = 3; op[1] = 1;
+		_exit(c >= 0 && write(c, (char *) op, 2) == 2 ? 0 : 1);
+	}
+	t0 = times(&tm);
+	r = poll(&p, 1, 3000);
+	t1 = times(&tm);
+	check(r == 1 && p.revents == POLLIN && t1 - t0 >= 9 && t1 - t0 < 60,
+				"gpio: poll wakes on the edge");
+	r = read(g, v, 16);
+	check(r == 16 && v[3] == '1' && v[8 + 3] == '1',
+				"gpio: read shows the level and the change");
+	check(read(g, v, 16) == 16 && v[8 + 3] == '0' && poll(&p, 1, 0) == 0,
+				"gpio: the read cleared the change");
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "gpio: the child (another opener) "
+						"did not end the watch");
+	close(g);			/* the watcher's close ends the watch */
+	g2 = open("/dev/gpio", O_RDWR);
+	p.fd = g2; p.revents = 0;
+	check(g2 >= 0 && poll(&p, 1, 0) == 1,
+		"gpio: closed by the watcher: no watch, readable at once");
+	op[0] = 3; op[1] = 5;			/* the pin off again */
+	if (g2 >= 0) {
+		(void) write(g2, (char *) op, 2);
+		close(g2);
+	}
 }
 #endif
 
@@ -1035,6 +1095,7 @@ int main(int argc, char **argv)
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
+	gpio_tests();
 	card_tests();
 	preempt_tests();
 #endif

@@ -168,7 +168,7 @@ phys_bytes user;
 int count;
 {
   lat.hz = hal_cpu_hz();
-  lat.stop_lp = pm_stat.stop;
+  lat.stop_lp = (u32_t) pm_stat.min * (32768UL * 60) + pm_stat.stop;
   lat.wake_btn = pm_stat.btn;
   lat.wake_other = pm_stat.other;
   if (count > sizeof(lat)) count = sizeof(lat);
