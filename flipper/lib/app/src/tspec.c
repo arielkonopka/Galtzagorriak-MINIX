@@ -176,6 +176,7 @@ int timer_parse(struct app_timer *t, char *buf)
 		}				/* other keys: ignored */
 		if (n) return -1;
 	}
+	if (t->action == TA_RUN && t->prog[0] != '/') return -1;
 	switch (t->kind) {
 	case TK_ONCE:	return t->at != 0 ? 0 : -1;
 	case TK_DAILY:	return t->start < 1440 ? 0 : -1;

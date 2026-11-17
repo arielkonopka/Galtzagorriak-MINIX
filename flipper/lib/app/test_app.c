@@ -225,6 +225,7 @@ static void format(void)
 		"Kind: once\nAt: 5\nAction: run\nProgram: ../bin/sh\n",
 		"Kind: once\nAt: 5\nCategory: urgent\n", "Kind: once\nAt: 5\nSnooze: 99\n",
 		"Kind: once\nAt: 5\nSound: maybe\n", "Kind: once\n",
+		"Kind: once\nAt: 5\nAction: run\n",
 	};
 	unsigned i;
 

@@ -160,7 +160,8 @@ The Flipper's real-time clock keeps UTC on the battery, also while the Flipper i
 the time (`date`) now writes it too, so the time survives a reset and power-off, and every
 program reads the time from it.
 
-Alarm A of the clock is for the timers and the alarm clock (spec F.2, coming with `timed`); the
+Alarm A of the clock is for the timers and the alarm clock (spec F.2, `timed`: see
+[Timers and alerts](timers.md)); the
 `rtc` command is the tool underneath, for root and the group `timers`:
 
 ```
