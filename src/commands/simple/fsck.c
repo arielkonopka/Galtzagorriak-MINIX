@@ -151,6 +151,7 @@ bitchunk_t *dirmap;		/* directory (inode) bit map */
 char rwbuf[BLOCK_SIZE];		/* one block buffer cache */
 block_nr thisblk;		/* block in buffer cache */
 char nullbuf[BLOCK_SIZE];	/* null buffer */
+bitchunk_t mapbuf[WORDS_PER_BLOCK];	/* one disk map block (spec N.4) */
 nlink_t *count;			/* inode count */
 int changed;			/* has the diskette been written to? */
 struct stack {
@@ -321,7 +322,11 @@ char *question;
 	nfixed++;
 	if (verbose) {	/* one short line per repair (spec N.3) */
 		while (*question == '.' || *question == ' ') question++;
-		sprintf(line, "fix %u: %.20s", (unsigned) cur_ino, question);
+		if (cur_ino != 0)
+			sprintf(line, "fix %u: %.20s", (unsigned) cur_ino,
+								question);
+		else
+			sprintf(line, "fix: %.26s", question);
 		vline(line);
 	}
 	return(1);
@@ -795,13 +800,14 @@ char *type;
  * past the end of the map are what the disk has (mkfs and mkfsimg.py
  * differ there); a wrong block is written from the computed map.
  */
-  static bitchunk_t dmap[WORDS_PER_BLOCK];
+  bitchunk_t *dmap = mapbuf;
   register bitchunk_t *p, *q;
   bitchunk_t mask;
   bit_nr b0;
   int report = 1, nerr = 0, i, w, bad, asked = 0, ok = 0;
 
   printf("Checking %s map\n", type);
+  cur_ino = 0;
   for (i = 0; i < nblk; i++) {
 	devread(btoa(blkno + i), (char *) dmap, BLOCK_SIZE);
 	if (i == 0 && bit == (bit_nr) 0) dmap[0] |= 1;
@@ -855,6 +861,7 @@ void chkilist()
 	if (vdone = ino, !bitset(imap, (bit_nr) ino)) {
 		devread(inoaddr(ino), (char *) &mode, sizeof(mode));
 		if (mode != I_NOT_ALLOC) {
+			cur_ino = ino;
 			printf("mode inode %u not cleared", ino);
 			if (yes(". clear")) devwrite(inoaddr(ino), nullbuf,
 					 INODE_SIZE);
@@ -899,7 +906,7 @@ ino_t ino;
 /* The highest inode in use in the disk's inode map, and how many. */
 void findmaxino()
 {
-  static bitchunk_t m[WORDS_PER_BLOCK];
+  bitchunk_t *m = mapbuf;
   bit_nr b, last = ROOT_INODE;
   int i, w, k;
 
@@ -1655,7 +1662,9 @@ int *dirty;
 	bit = (bit_nr) zlist[i] - FIRST + 1;
 	if (bit >= wlo && bit < whi) {
 		if (bitset(zmap, bit - wlo)) {
-			errzone("duplicate", zlist[i], level, *pos);
+			/* no path here (not the tree walk): the inode */
+			printf("duplicate zone %ld in inode %u, pos = %ld\n",
+				(long) zlist[i], (unsigned) cur_ino, (long) *pos);
 			if (yes("clear the zone pointer")) {
 				zlist[i] = NO_ZONE;
 				*dirty = 1;
@@ -1757,7 +1766,7 @@ int force;
   if (!verbose && vfd < 0) return;
   if (!force && (++vcalls & 7) != 0) return;
   now = times(&tms);
-  if (!force && now - vlast < CLK_TCK / 4) return;
+  if (now - vlast < CLK_TCK / 4) return;	/* a phase change too */
   vlast = now;
   if (vfd >= 0) {
 	while (read(vfd, ev, 2) == 2)

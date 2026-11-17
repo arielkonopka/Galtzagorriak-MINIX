@@ -16,10 +16,11 @@ fsck_mem=64
 test -f /etc/rc.conf && . /etc/rc.conf
 fsck -p -v -w 10 -m $fsck_mem $root
 case $? in
+0|1)	;;
 2)	echo "rc: the root file system was repaired: restarting"
 	reboot
 	exit 0 ;;
-4|8)	echo "rc: errors left on $root: run fsck"
+*)	echo "rc: errors left on $root: run fsck"
 	fsck_err=1 ;;
 esac
 
@@ -43,10 +44,10 @@ test -f /etc/.setup-done && {
 		set $fs
 		fsck -p -v -k -w 5 -m $fsck_mem -L /tmp/fsck.log $1
 		case $? in
-		4|8)	echo "rc: $1 has errors: mounted read-only, run fsck"
+		0|1)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
+		*)	echo "rc: $1 has errors: mounted read-only, run fsck"
 			fsck_err=1
 			mount -r $1 $2 || echo "rc: cannot mount $1 on $2" ;;
-		*)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
 		esac
 	done
 	# keep what was found in /usr/adm/fsck.log (at most ~16 KB)
