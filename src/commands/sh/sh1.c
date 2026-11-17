@@ -224,6 +224,7 @@ onecommand()
 	areanum = 1;
 	freehere(areanum);
 	freearea(areanum);
+	freeshared();
 	garbage();
 	wdlist = 0;
 	iolist = 0;
@@ -793,7 +794,9 @@ register int sub;
 
 /* -------- area.c -------- */
 #define	REGSIZE		sizeof(struct region)
-#define GROWBY		256
+/* Galtzagorriak: the heap grows in 256-byte steps (was 2 KB), so it takes
+ * from the chmem reserve only about what is in use. */
+#define GROWBY		32
 #undef	SHRINKBY	64
 #define FREE 32767
 #define BUSY 0
@@ -857,6 +860,11 @@ unsigned nbytes;
 		p = p->next;
 		if (p == areanxt)
 			break;
+	}
+	if (invfork) {
+		/* never in practice: forkexec() leaves room before vfork */
+		write(2, "sh: no heap in vfork child\n", 27);
+		_exit(1);
 	}
 	i = nregio >= GROWBY ? nregio : GROWBY;
 	p = (struct region *)sbrk(i * REGSIZE);

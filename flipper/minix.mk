@@ -328,7 +328,9 @@ ALIASES	+= $(addsuffix =cp,rm)
 # small: default 6 KB (tools/elf2mnx.py), more only where needed.
 # Values checked with "free -t on" (MM reports the untouched part of the
 # reserve at exit), 2026-11-14: keep at least ~2 KB never used.
-CHMEM_sh     := 12288	# /bin/* (84 names) uses ~8 KB; exec needs no heap
+CHMEM_sh     := 10240	# echo /bin/* (97 names) uses 5.7 KB, three such globs
+			# in one command 9.5 KB (heap in 256 B steps, word lists
+			# not copied, 2026-11-16); exec needs no heap
 			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
@@ -365,9 +367,11 @@ MINED_SRC := mined1.c mined2.c
 $(MB)/cmd/mined/%.o: $(MROOT)/src/commands/mined/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+# The shell without -fdata-sections: its static variables then share GOT
+# entries (section anchors), 48 B less RAM per shell process.
 $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -fno-data-sections -MMD -MP -c $< -o $@
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -568,7 +572,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 3.91
+BASE_VER := 3.92
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
