@@ -26,4 +26,24 @@
 
 #define RFIDIOCFIELD	_IOW('r', 1, int)	/* !=0 hold the field, 0 drop */
 
+/* RFIDIOCEMU: pretend to be a tag (R6.5 part 4, R8.4).  The *reader* makes
+ * the field here: the kernel counts its carrier and loads the antenna in
+ * step with it, so the pattern plays at the reader's own clock and cannot
+ * drift.  `dur` and `pulse` are arrays of `n` 32-bit words in the caller's
+ * memory, which stays pinned and must not be freed while this runs: dur[i]
+ * is a segment in carrier periods minus one, pulse[i] how many of them the
+ * antenna is loaded (0 none, dur[i] + 1 all).  The list repeats for as long
+ * as emulation is on, with no CPU work; `n` = 0 (or a close, or a cancel)
+ * stops it.  Exclusive with reading, writing and a held field (one timer).
+ *
+ * EM4100 at RF/64: a bit is 64 carrier periods, Manchester, so every half
+ * bit is a 32-period segment that is either loaded or not.
+ */
+struct rfid_emu {
+	void *dur;		/* segment lengths, carrier periods - 1 */
+	void *pulse;		/* of each, how long the antenna is loaded */
+	unsigned n;		/* words in each (0 stops; at most 512) */
+};
+#define RFIDIOCEMU	_IOW('r', 2, struct rfid_emu)
+
 #endif /* _MINIX_RFID_H */
