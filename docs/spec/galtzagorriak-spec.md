@@ -983,6 +983,37 @@ tiles, notification list, app menu), extended by modules.
   `gui` binding and desktop `window` records draw the same bar, so the look stays one across C,
   Berry and shell. Exceptions: the text console, full-screen content where a bar would hide
   data (e.g. a picture viewer), and `alert` screens, which may invert the whole screen to stand out.
+- **Screen style: "Pine meets modern UX" (owner decision, 2026-11-17).** Every GUI screen of the
+  system (launcher, apps, desktop windows, C, `libfuri`, Berry or shell) follows the launcher's
+  look of R5.6a.7, so a user who knows one screen knows them all: text first, every screen says
+  what its buttons do, nothing hidden, modern spacing. The parts:
+  - **Title bar** (above), optionally with a short state on the right: position `3/12` in a
+    list, `REC`, `12%`, at most 6 characters.
+  - **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58 in Pine's
+    `key action` style (`<Back  OK Run  >More`, `OK Toggle  Back Done`). It names every button
+    that does something on that screen, and only those. Long Back is not listed (it always ends
+    or parks the app, R4b.8, R12.20).
+  - **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+  - **Values** of settings in brackets, right-aligned or after the name: `Icons   [on]`.
+  - **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+  - **Message line**: a short notice replaces the hint line for 2 s, then the hints come back; the
+    screen behind stays drawn. Whole-screen notices are only for errors that end the app and for
+    `alert`.
+  - **Icons** (R5.6a): at most 8×6 pixels, two characters of the 4×6 font, before a list entry.
+  - Exceptions, as for the title bar: the text console, full-screen content (pictures, graphs,
+    the map), `alert`, and games or ported stock apps whose own screens would be cut. A ported
+    stock app keeps its layout; its stock `elements_button_left/center/right` hints are already
+    the same idea and stay as they are.
+  - **Free for app authors, no RAM:** the parts come from the shared code, as `const` strings and
+    stack, so an app writes its hints, not the drawing: `gui.c` for plain `/dev/lcd` programs
+    (`gui_title2(title, right)`, `gui_hints(text)`, `gui_note(text)` with a timed key read through
+    `poll`, `gui_scroll(top, shown, total)`, `gui_bits8()`), the `libfuri` standard modules
+    (Submenu, VariableItemList, Popup, DialogEx, TextInput: hints from their button labels; part
+    of the shared library, #201), the Berry `gui` binding (R7c) and the desktop `window` records
+    (K.3, a `hints` field). No periodic redraw is added for any of it.
+  - Existing apps are aligned in task T22: `info`, `lights`, `power`, `lfrfid` and the menu of
+    `console` (`flipper/gui/`), `selftest`, `furihello`, `remind` and `alarm` (7b.1/7b.2), `camfind`
+    and `sbctl` when they get their screens. New apps follow it from the start; reviews check it.
 
 **K.3 Desktop protocol (TSV lines).**
 - Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
@@ -1897,6 +1928,93 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
   groups, chmem, license) and the launcher entry. Assets go under `/usr/share/apps/<appid>`.
 - **R5.6** Launcher: categories, icons, app manifests from installed packages; runs each app as its
   own uid with its declared groups (R4b.4); shows "app crashed" on abnormal exit.
+- **R5.6a Launcher icons** (owner request 2026-11-17, out of milestone order; task T21). The
+  launcher can show a small icon before each label in the app list. An icon is **at most two
+  characters of the list font**: 8×6 pixels, the cell of two 4×6 glyphs, so a row stays 6 pixels
+  high and the list keeps its 9 visible rows. The black title bar stays as it is.
+  - **R5.6a.1 Where an icon comes from.** `/etc/apps` gets an optional third field:
+    `Label:user:icon:/program arg ...`. The old form `Label:user:/program ...` stays valid: the
+    launcher tells them apart by the field after the user, which is the program only if it starts
+    with `/` (programs in `/etc/apps` are absolute paths; the manual says so). The icon field is
+    one of:
+    - empty (`Label:user::/program`): no icon;
+    - `@name`: a built-in icon (R5.6a.2), e.g. `@bell`; an unknown name draws no icon;
+    - `#` and 12 hex digits: an 8×6 bitmap, six rows top to bottom, one byte per row, the most
+      significant bit on the left (the same layout as one row of two font glyphs), e.g. a
+      small bell `#183C3C7E0018`;
+    - otherwise 1 or 2 printable ASCII characters, drawn in the list font, e.g. `>_`, `Zz`, `!`.
+      A text icon cannot contain `:` or start with `/`, `@` or `#` (use the bitmap form).
+    A malformed field (bad hex, too long) is treated as no icon; the entry itself still loads.
+    For packages the same value goes into an `Icon:` line of `CONTROL/control` (mkpkg.py `-i`);
+    until the launcher reads manifests itself (R5.6), the package's `postinst` writes it into
+    its `/etc/apps` line. `fam2pkg` (R5.5) makes the `Icon:` from the stock 10×10 `fap_icon` by
+    a 2×2-box downscale to 8×6 with a threshold, or takes `fap_icon_mini` / an explicit value
+    from the build file.
+  - **R5.6a.2 Built-in icons.** A `const` table in the launcher (in the text segment, i.e. flash,
+    since the launcher runs from the installed region): about 24 icons, each 6 bytes plus a name
+    of at most 8 characters, at most 400 B of text in total and 0 B of RAM. At least: `app`,
+    `console`, `info`, `light`, `power`, `battery`, `rfid`, `nfc`, `subghz`, `ir`, `ibutton`,
+    `gpio`, `usb`, `ble`, `clock`, `alarm`, `bell`, `timer`, `sensor`, `game`, `music`, `tools`,
+    `file`, `settings`. Original drawings (not copies of stock or Unleashed icons), one host tool
+    renders them enlarged into a PNG for review. The base `/etc/apps` uses them for its own apps
+    (`Console` `@console`, `About` `@info`, `Lights` `@light`, `Power` `@power`, `RFID` `@rfid`)
+    and the base `postinst` lines get icons too.
+  - **R5.6a.3 Drawing.** Icons on: `>` at x = 1 as today, the icon at x = 6–13, the label from
+    x = 16 (23 characters still fit). An entry without an icon gets an empty 8×6 cell, so labels
+    stay in one column. The selected row is inverted, icon included. Icons off: the screen is
+    **pixel for pixel** what it is today. `gui` gets one helper,
+    `gui_bits8(x, y, const unsigned char *rows, int n, int inverse)`, which the text drawing can
+    share; text icons are rendered into the 6 bytes when `/etc/apps` is read, so drawing never
+    looks at the font for icons.
+  - **R5.6a.4 The setting.** `/etc/launcher.conf`, stock `Key: value` style, read with `cfopen()`
+    (spec L.3): `Icons: on|off`, default `on` in `/rom/etc/launcher.conf`. In the launcher,
+    **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
+    OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
+    written once, on Back, and only if the value changed; nothing is ever written to internal
+    flash. Right stays free for the next page (Running, R12.20; the desktop pages of K.6).
+    The settings page is a **page**, not a special mode: the launcher keeps a small `const`
+    table of pages (name, row source, OK handler, hint text), the app list and settings are its
+    first two entries, and both use the same list drawing, scrolling and key loop, so later
+    pages (K.6) are new table entries.
+    Page switching (Left to Settings, Right to the next page) acts on the **release of a short
+    press**, never on the press, so the backlight gesture Left+Up (R6.10) never opens a page.
+    The rule is userland only (no kernel flag): `gui.c` gets `gui_click()` next to `gui_key()`,
+    which returns a key on its release if it was pressed alone (no other key went down while it
+    was held) and held less than about 1 s; stack only, no `.bss`. The desktop pages (K.6) reuse it. The launcher reads the setting at
+    start, after its settings page, and together with `/etc/apps` when an app exits (one more
+    `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
+    /etc/launcher.conf`) shows after the next app.
+  - **R5.6a.5 RAM.** Icons cost 6 B of heap per entry that has one, inside the entry's existing
+    `malloc` block (no new allocation per entry); `.bss` grows by at most 8 B; the settings page
+    uses only stack. Worst case, 16 entries with icons: ≤ 104 B. Nothing is resident besides
+    the launcher itself.
+  - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
+    at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
+  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17; the system-wide screen style of K.2
+    starts here). The launcher's look follows the
+    Pine mail program: text first, every screen says what each button does, nothing hidden; with
+    modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
+    128×64 with the 4×6 font:
+    - **Title bar** (black, as now): the screen name centred; on the right, the position
+      `3/12` of the selected entry (the list only).
+    - **List**: 8 rows (y = 7 + 6·i), the selected row a full-width inverted bar with `>`;
+      when there are more than 8 entries, a 1-pixel scroll mark at x = 127 whose length and
+      place show the visible part (no arrows, no animation).
+    - **Hint line**: a 1-pixel rule at y = 56 and one line at y = 58 naming the buttons in
+      Pine's `key action` style, e.g. `<Setup  OK Run  >Running` (`>Running` only once R12.20
+      exists). Every launcher screen has one: the settings page says `OK Toggle  Back Done`.
+    - **Message line**: short notices that today take the whole screen (`unknown user`, `app
+      crashed`, the park hint of R12.20) replace the hint line for 2 s instead, so the list stays
+      visible; the hint line comes back at the next key or after the 2 s.
+    - **Settings page**: one line per setting, value in brackets (`Icons   [on]`,
+      `Hints   [on]`); Up/Down choose, OK or Left/Right toggles.
+    - `Hints: on|off` in `/etc/launcher.conf` (default `on`): off gives the list its 9th row back
+      and drops the title counter. Hints off and icons off = today's screen exactly.
+    - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
+      stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
+      through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
+      later status line) runs only while the launcher is in the foreground and the screen is on;
+      otherwise it waits for a key with no timeout.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -1907,6 +2025,19 @@ Acceptance:
   launcher unchanged except for the build file.
 - AC5.2 A ported app that calls `furi_crash` is ended alone; the launcher comes back.
 - AC5.3 Two `libfuri` apps installed: the shared library (R2b.9) is in flash once (`free -v`).
+- AC5.4 (R5.6a) In QEMU, with the base `/etc/apps` and an extra entry of each icon form (empty,
+  `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
+  frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
+  for the empty, unknown and malformed ones; every app still starts.
+- AC5.5 (R5.6a) With `Icons: off` and `Hints: off` the launcher's frames are byte-identical to the frames of the
+  launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
+- AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
+  holds the new value, the list redraws without icons; Left, Back without a change writes
+  nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
+  moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
+  shows the notice on the message line with the list still drawn, and the hint line is back
+  after 2 s with no key pressed.
 
 Responsiveness: AC5.R A `libfuri` app's view redraw after a key event meets L1; the cooperative threads of one app never block its input thread for more than 10 ms (measured with `lat`).
 

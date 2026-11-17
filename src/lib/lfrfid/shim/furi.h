@@ -84,6 +84,12 @@ extern size_t lfrfid_heap_bytes;
 void* lfrfid_malloc(size_t size);
 #define malloc(size) lfrfid_malloc(size)
 
+#ifdef __minix
+/* MINIX 2.0's <math.h> is C89: roundf is the shim's (furi_shim.c).
+ * Declared here, every protocol includes furi.h before math.h. */
+float roundf(float x);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
