@@ -418,7 +418,7 @@ $(foreach c,$(APPS),$(eval OBJS_$(c) = $(MB)/cmd/app/$(c).o))
 # library (R2b.9, AC5.3).  C99 (the stock headers need it).
 FURI_DIR := lib/furi
 FURI_OBJ := $(addprefix $(MB)/furi/,thread.o sync.o timer.o record.o \
-	    string.o check.o port_minix.o ctx_arm.o)
+	    string.o check.o fdwait.o port_minix.o ctx_arm.o)
 FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
 $(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(wildcard $(FURI_DIR)/include/*.h \
 		$(FURI_DIR)/include/core/*.h) $(FURI_DIR)/src/furi_i.h

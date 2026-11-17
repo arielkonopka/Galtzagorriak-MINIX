@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * libfuri port layer for the host tests (spec R5.1): ucontext threads,
- * CLOCK_MONOTONIC, nanosleep. Not built for MINIX. */
+ * CLOCK_MONOTONIC, poll(). Not built for MINIX. */
 #define _GNU_SOURCE
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -16,13 +17,16 @@ uint32_t fport_now(void) {
 
 unsigned long fport_host_idles; /* the tests count the sleeps */
 
-void fport_idle(uint32_t ms) {
-    struct timespec ts;
+int fport_poll(struct pollfd* fds, unsigned n, uint32_t ms) {
+    int r;
 
-    fport_host_idles++;
-    ts.tv_sec = ms / 1000U;
-    ts.tv_nsec = (long)(ms % 1000U) * 1000000L;
-    nanosleep(&ts, NULL);
+    if(ms) fport_host_idles++;
+    r = poll(fds, (nfds_t)n, ms == FuriWaitForever ? -1 : (int)ms);
+    if(r < 0) {
+        if(errno != EINTR) furi_crash("poll() failed");
+        r = 0;
+    }
+    return r;
 }
 
 int fport_vformat(char* buf, size_t size, const char* fmt, va_list ap) {

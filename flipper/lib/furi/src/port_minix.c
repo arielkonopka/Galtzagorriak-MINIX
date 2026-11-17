@@ -11,13 +11,16 @@
  * way), and the heap can never be given that memory later. A canary word
  * at the boundary catches a main stack that runs into the thread stacks.
  *
- * Time: times() (60 Hz) gives the ms clock. Idle waits: alarm() and
- * sigsuspend(), whole seconds, until a millisecond user alarm or poll()
- * (R4b.6) exists; only fport_idle() changes then. libfuri owns SIGALRM
- * while it sleeps (the old handler comes back after). */
+ * Time: times() (60 Hz) gives the ms clock. Idle waits: poll() (R4b.6)
+ * with the fds threads wait for (fdwait.c) and the earliest deadline as
+ * its timeout (ms, rounded up by FS to the tick, never early). The
+ * alarm()+sigsuspend() idle of R5.1 is gone (issue #181): poll() is in
+ * every kernel this libc runs on (ABI 2), and a failing poll() is a bug
+ * that furi_crash() reports instead of a silent 1 s sleep. libfuri no
+ * longer touches SIGALRM. */
 #include <sys/types.h>
 #include <sys/times.h>
-#include <signal.h>
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -53,30 +56,30 @@ uint32_t fport_now(void) {
     return (uint32_t)(ticks * 1000U / CLOCKS_PER_SEC);
 }
 
-static void on_alarm(int sig) {
-    (void)sig;
-}
+int fport_poll(struct pollfd* fds, unsigned n, uint32_t ms) {
+    int r, t;
 
-void fport_idle(uint32_t ms) {
-    struct sigaction sa, old;
-    sigset_t block, prev, wait;
-    unsigned secs = (unsigned)((ms + 999U) / 1000U);
+    if(ms == FuriWaitForever)
+        t = -1;
+    else if(ms > 0x7FFFFFFFU)
+        t = 0x7FFFFFFF;
+    else {
+        /* FS waits 1 + ceil(t * HZ / 1000) clock ticks: never early for
+         * a clock that runs between ticks. fport_now() moves only at a
+         * tick, so ceil(ms * HZ / 1000) ticks are enough: ask for one
+         * tick less (a 100 ms delay: 6 ticks, not 7). Below 2 ticks
+         * there is nothing to take off (t = 0 would not wait). */
+        uint32_t k = (ms * CLOCKS_PER_SEC + 999U) / 1000U;
 
-    sa.sa_handler = on_alarm;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigemptyset(&block);
-    sigaddset(&block, SIGALRM);
-    /* SIGALRM blocked from alarm() until sigsuspend(): no lost wake-up */
-    sigprocmask(SIG_BLOCK, &block, &prev);
-    sigaction(SIGALRM, &sa, &old);
-    alarm(secs);
-    wait = prev;
-    sigdelset(&wait, SIGALRM);
-    sigsuspend(&wait);
-    alarm(0);
-    sigaction(SIGALRM, &old, NULL);
-    sigprocmask(SIG_SETMASK, &prev, NULL);
+        if(ms < 0x00FFFFFFU && k >= 2) ms = (k - 1) * 1000U / CLOCKS_PER_SEC;
+        t = (int)ms;
+    }
+    r = poll(fds, (nfds_t)n, t);
+    if(r < 0) {
+        if(errno != EINTR) furi_crash("poll() failed");
+        r = 0; /* a signal: the scheduler looks again */
+    }
+    return r;
 }
 
 /* ---------------------------------------------------------------- format */
