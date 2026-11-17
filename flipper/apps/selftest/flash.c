@@ -31,7 +31,7 @@
 
 struct inrec {				/* as mm/finst.c */
 	unsigned char sha[32];
-	unsigned long addr, size, id, ctime, seq, flags, dead0, dead1;
+	unsigned long addr, size, id, ctime, seq, flags, dead0, dead1;	/* timecheck: ok (MM's ftime32_t) */
 };
 
 enum { C_NONE, C_PASS, C_FAIL, C_FREE, C_CACHE, C_SYS, C_DIR };
