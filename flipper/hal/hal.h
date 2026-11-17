@@ -254,6 +254,14 @@ void hal_disk_dma_ack(void);
 void hal_disk_wait(void);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
+/* Spec N.6, card pulled out: the card-detect switch (polled; 1 = a card
+ * is in), and an id of the card in the slot (a hash of its CID:
+ * manufacturer, product, serial), read after hal_disk_init(): 0, or -1.
+ * hal_disk_fake() is QEMU's test hook: 0 card in, 1 out, 2 another card
+ * in (-1 on the Flipper). */
+int hal_disk_present(void);
+int hal_disk_id(uint32_t *id);
+int hal_disk_fake(int state);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of
  * whole pages that only the cache uses.  The kernel calls these with

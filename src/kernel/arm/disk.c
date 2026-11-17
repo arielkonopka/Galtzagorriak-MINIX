@@ -9,10 +9,20 @@
  * counts, so the original drivers break past 2 GB.  Here the position is
  * taken as unsigned and the sector is computed as base sector + offset
  * sector, which works for partitions up to 4 GB anywhere on the first 2 TB.
+ *
+ * The card pulled out (spec N.6): before every request the card-detect
+ * line is read.  While the card is out, every request fails with ENXIO
+ * (FS keeps a dirty buffer dirty on it, T17a), and the console says so
+ * with a short buzz.  When a card is back it is initialised and its CID
+ * compared with the one read at the first open: the same card carries on
+ * (nothing lost); another card is never written: ENXIO until it is taken
+ * out again and the original goes in.  A transfer that fails with the line
+ * saying "no card" is ENXIO too, not EIO.
  */
 #include "../kernel.h"
 #include "../driver.h"
 #include "../drvlib.h"
+#include <sys/ioctl.h>
 #include "../proc.h"
 #include "hal.h"
 
@@ -23,14 +33,19 @@
 #define BUF_SECTORS	(BLOCK_SIZE / SECTOR_SIZE)
 
 PRIVATE u32_t w_errors;		/* hal_disk_errors last reported */
+PRIVATE u32_t w_id;		/* N.6: the card's id at the first open */
 PRIVATE struct wini {
-  int present;
+  int present;			/* W_* bits */
   unsigned open_ct;
   struct device part[DEV_PER_DRIVE];	/* hd0 = whole disk, hd1-4 */
   struct device subpart[SUB_PER_DRIVE];	/* hd1a ... hd4d */
 } wini[MAX_DRIVES];
 
 PRIVATE struct device *w_dv;		/* current device */
+#define W_IN		1	/* initialised */
+#define W_OUT		2	/* N.6: pulled out (or a failed return) */
+#define W_OTHER		4	/* N.6: another card is in: never touch it */
+#define W_NODET		8	/* N.6: the detect line is not to be trusted */
 
 FORWARD _PROTOTYPE( struct device *w_prepare, (int device)		);
 FORWARD _PROTOTYPE( char *w_name, (void)				);
@@ -39,12 +54,15 @@ FORWARD _PROTOTYPE( int w_do_open, (struct driver *dp, message *m_ptr)	);
 FORWARD _PROTOTYPE( int w_do_close, (struct driver *dp, message *m_ptr)	);
 FORWARD _PROTOTYPE( void w_geometry, (struct partition *entry)		);
 FORWARD _PROTOTYPE( int w_init, (void)					);
+FORWARD _PROTOTYPE( int w_card, (void)					);
+FORWARD _PROTOTYPE( void w_tell, (char *what)				);
+FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
 
 PRIVATE struct driver w_dtab = {
   w_name,	/* current device's name */
   w_do_open,	/* open or mount request, initialize device */
   w_do_close,	/* release device */
-  do_diocntl,	/* get or set a partition's geometry */
+  w_ioctl,	/* get or set a partition's geometry; QEMU's card hook */
   w_prepare,	/* prepare for I/O on a given minor device */
   w_schedule,	/* do the I/O */
   nop_finish,	/* nothing left to do */
@@ -113,6 +131,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 	? numap_src(proc_nr, (vir_bytes) iop->io_buf, nbytes)
 	: numap(proc_nr, (vir_bytes) iop->io_buf, nbytes);
   if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
+  if ((r = w_card()) != OK) return(iop->io_nbytes = r);	/* N.6 */
 
   if (pos >= w_dv->dv_size) return(OK);			/* at EOF */
   if (nbytes > w_dv->dv_size - pos) nbytes = w_dv->dv_size - pos;
@@ -137,8 +156,13 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 			w_name(), (unsigned long) w_errors, hal_disk_mhz);
 	}
 	if (r != 0) {
-		printf("%s: I/O error at sector %lu\n", w_name(), sector);
 		rp->p_physio = FALSE;
+		if (!(wini[0].present & W_NODET)
+		    && !hal_disk_present()) {	/* N.6: pulled out meanwhile */
+			(void) w_card();
+			return(iop->io_nbytes = ENXIO);
+		}
+		printf("%s: I/O error at sector %lu\n", w_name(), sector);
 		return(iop->io_nbytes = EIO);
 	}
 	sector += count >> SECTOR_SHIFT;
@@ -217,9 +241,84 @@ PRIVATE int w_init()
 	sectors = 0xFFFFFFFFUL >> SECTOR_SHIFT;
   wn->part[0].dv_base = 0;
   wn->part[0].dv_size = sectors << SECTOR_SHIFT;
-  wn->present = TRUE;
+  wn->present = W_IN;
+  if (hal_disk_id(&w_id) != 0) w_id = 0;	/* N.6: 0 matches no card */
+  if (!hal_disk_present()) {	/* a card answers, the switch says none */
+	wn->present |= W_NODET;
+	printf("%s: card detect says no card: not used\n", w_name());
+  }
   printf("%s: %lu MB\n", w_name(), hal_disk_sectors() >> 11);
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_card					     *
+ *===========================================================================*/
+PRIVATE int w_card()
+{
+/* N.6: OK if the card we started with is in and ready, else ENXIO.  One
+ * GPIO read when all is well.  While it is out, every request looks at
+ * the slot again (requests are rare then: FS's update, a failing program),
+ * so a quick swap between two requests is never missed; W_OTHER only
+ * keeps the message from repeating. */
+  struct wini *wn = &wini[0];
+  u32_t id;
+
+  if (wn->present & W_NODET) return(OK);
+  if (!hal_disk_present()) {
+	if (!(wn->present & W_OUT)) {
+		wn->present |= W_OUT;
+		w_tell("SD card removed: put it back");
+	}
+	wn->present &= ~W_OTHER;	/* a next other card: say it again */
+	return(ENXIO);
+  }
+  if (!(wn->present & W_OUT)) return(OK);
+  if (hal_disk_init() != 0 || hal_disk_id(&id) != 0) return(ENXIO);
+  if (id != w_id) {
+	if (!(wn->present & W_OTHER))
+		w_tell("Different card: put the original back or power off");
+	wn->present |= W_OTHER;
+	return(ENXIO);
+  }
+  wn->present &= ~(W_OUT | W_OTHER);
+  printf("%s: the card is back, carrying on\n", w_name());
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_tell					     *
+ *===========================================================================*/
+PRIVATE void w_tell(what)
+char *what;
+{
+/* N.6: on the console (the LCD console too) with a short buzz. */
+  printf("%s: %s\n", w_name(), what);
+  lock();
+  mt_arm(MT_VIBRO, 150);
+  unlock();
+  hal_vibro(1);
+}
+
+
+/*===========================================================================*
+ *				w_ioctl					     *
+ *===========================================================================*/
+PRIVATE int w_ioctl(dp, m_ptr)
+struct driver *dp;
+message *m_ptr;
+{
+/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another. */
+  int state;
+  phys_bytes user;
+
+  if (m_ptr->REQUEST != DIOCFAKECARD) return(do_diocntl(dp, m_ptr));
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&state), (phys_bytes) sizeof(int));
+  return(hal_disk_fake(state) == 0 ? OK : EINVAL);
 }
 
 
@@ -232,7 +331,7 @@ message *m_ptr;
 {
   struct wini *wn = &wini[0];
 
-  if (!wn->present && w_init() != OK) return(ENXIO);
+  if (!(wn->present & W_IN) && w_init() != OK) return(ENXIO);
   if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
   if (wn->open_ct++ == 0) partition(&w_dtab, 0, P_PRIMARY);
   return(OK);
