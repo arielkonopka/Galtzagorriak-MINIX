@@ -4,13 +4,18 @@
 Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
            [--postinst FILE] [--prerm FILE] [--timers]
-           [--notify alarm|reminder|info] [--deskmode] [--flash] -o OUTDIR
+           [--notify alarm|reminder|info] [--deskmode] [--flash] [-i ICON]
+           -o OUTDIR
            dest=source ...
 
 --timers, --notify, --deskmode: the app manifest fields of spec F.2
 (Timers: yes = may add timers, group timers; Notify: the highest
 category it may post; DeskMode: yes = may keep the backlight on while
 charging).
+-i ICON: Icon: line, the app's launcher icon (spec R5.6a.1): @name of a
+built-in icon (e.g. @bell), # and 12 hex digits (8x6 pixels, one byte a
+row, top first, MSB left), or 1-2 characters.  Until the launcher reads
+manifests, the package's postinst writes it into its /etc/apps line.
 --flash: Flash: yes, the programs go into the installed region (internal
 flash) as with pkg install --flash: their text is not copied into RAM.
 
@@ -59,6 +64,7 @@ def main():
     ap.add_argument("--notify", choices=("alarm", "reminder", "info"))
     ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
     ap.add_argument("--flash", action="store_true", help="Flash: yes")
+    ap.add_argument("-i", "--icon", help="Icon: the launcher icon (R5.6a.1)")
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
@@ -99,6 +105,7 @@ def main():
                + (f"Notify: {a.notify}\n" if a.notify else "")
                + ("DeskMode: yes\n" if a.deskmode else "")
                + ("Flash: yes\n" if a.flash else "")
+               + (f"Icon: {a.icon}\n" if a.icon else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)

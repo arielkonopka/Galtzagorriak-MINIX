@@ -401,6 +401,7 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
+OBJS_launcher += $(MB)/cmd/gui/appline.o
 # liblfrfid (spec R9.0.1, src/lib/lfrfid): the Unleashed LF RFID protocols,
 # linked into rfid (code in flash; the decoders' state is malloc'd only
 # while a read runs).  Third-party C11 code: built quietly (-w).
@@ -417,7 +418,7 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
-$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)

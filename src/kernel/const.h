@@ -168,6 +168,7 @@
 #define PM_ADC          0x04	/* an ADC stream runs (TIM2, ADC, DMA) */
 #define PM_PULSE        0x08	/* the pulse engine captures (TIM2, DMA) */
 #define PM_GPIO         0x10	/* header pins watched for edges (R6.4) */
+#define PM_IBUTTON      0x20	/* a Dallas key emulated: 1-Wire slots (R6.7) */
 #define PM_LOWBAT  0x80000000	/* not a blocker: battery low, no new flash
 				 * erases (pm_minute) */
 #define PM_BLOCKERS 0x7FFFFFFF

@@ -36,7 +36,7 @@ grep '/dev/rom' /etc/rc >/dev/null || {
 test -r /dev/power || mknod /dev/power c 6 8 || echo "base: could not make /dev/power"
 chmod 644 /dev/power 2>/dev/null	# R6.1: root writes charger settings
 grep '^Power:' /etc/apps >/dev/null || {
-	echo 'Power:nobody:/bin/power' >> /etc/apps
+	echo 'Power:nobody:@power:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
 }
 # The "RFID emu" entry of part 4 (/bin/rfidemu is gone): drop it whatever
@@ -46,9 +46,22 @@ grep '^RFID emu:' /etc/apps >/dev/null && {
 	echo "base: RFID emu is now part of the RFID app"
 }
 grep '^RFID:' /etc/apps >/dev/null || {
-	echo 'RFID:nobody:/bin/lfrfid' >> /etc/apps
+	echo 'RFID:nobody:@rfid:/bin/lfrfid' >> /etc/apps
 	echo "base: the launcher now has RFID"
 }
+# R5.6a: the base apps' lines as shipped get their icons (lines the owner
+# changed stay as they are).
+test -f /etc/apps &&	# a card without its own copy keeps using /rom's
+sed -e 's|^Console:nobody:/bin/console$|Console:nobody:@console:/bin/console|' \
+    -e 's|^About:nobody:/bin/info$|About:nobody:@info:/bin/info|' \
+    -e 's|^Lights:nobody:/bin/lights$|Lights:nobody:@light:/bin/lights|' \
+    -e 's|^Power:nobody:/bin/power$|Power:nobody:@power:/bin/power|' \
+    -e 's|^RFID:nobody:/bin/lfrfid$|RFID:nobody:@rfid:/bin/lfrfid|' \
+    /etc/apps > /etc/apps.new
+if test ! -f /etc/apps.new || cmp -s /etc/apps /etc/apps.new
+then rm -f /etc/apps.new
+else mv /etc/apps.new /etc/apps; echo "base: the launcher's apps have icons"
+fi
 # Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
 if test ! -r /dev/ibutton
 then
