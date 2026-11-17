@@ -347,7 +347,10 @@ PUBLIC void flipdev_task()
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
-			if (tx_rfid) rfid_tx_off();
+			if (tx_rfid && rf_held) {	/* the whole session */
+				rfid_field_off();
+				tx_rfid = FALSE;
+			} else if (tx_rfid) rfid_tx_off();
 		}
 		if (as_proc == fm.PROC_NR + 1) adcs_end(FALSE);	/* R4b.5 */
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
@@ -1944,6 +1947,9 @@ PRIVATE void rfid_field_off()
   if (ir_rd && pu_input == 2) ir_rx_end(1);	/* cancel the capture */
   hal_rfid_field(0);
   rf_held = FALSE;
+  lock();
+  pm_busy &= ~PM_PULSE;			/* Stop2 again, also after a close */
+  unlock();
 }
 
 /*===========================================================================*
@@ -1972,9 +1978,6 @@ message *m_ptr;
   } else if (rf_held) {
 	if (tx_on || (ir_rd && pu_input == 2)) return(EBUSY);	/* in flight */
 	rfid_field_off();
-	lock();
-	pm_busy &= ~PM_PULSE;
-	unlock();
   }
   return(OK);
 }
