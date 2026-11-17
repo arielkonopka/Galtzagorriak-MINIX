@@ -132,6 +132,7 @@ PUBLIC int do_mount()
   sp->s_imount = rip;
   sp->s_isup = root_ip;
   sp->s_rd_only = rd_only;
+  sf_mounted(sp);		/* N.1: unclean: CHECK = 1 on the disk */
   return(OK);
 }
 
@@ -175,6 +176,8 @@ PUBLIC int do_umount()
 
   /* Sync the disk, and invalidate cache. */
   (void) do_sync();		/* force any cached blocks out of memory */
+  /* N.2: unmounted with everything on the disk: CLEAN. */
+  if (sp != NIL_SUPER) sf_clean(sp, TRUE);
   invalidate(dev);		/* invalidate cache entries for this dev */
   if (sp == NIL_SUPER) return(EINVAL);
 

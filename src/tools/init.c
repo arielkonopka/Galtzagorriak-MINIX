@@ -50,6 +50,8 @@ struct slotent slots[PIDSLOTS];	/* init table of ttys and pids */
 
 volatile char gothup = 0;	/* flag, showing signal 1 was received */
 volatile char gotabrt = 0;	/* flag, showing signal 6 was received */
+volatile char gotpwr = 0;	/* SIGPWR: low battery (spec N.5) */
+volatile char gotalrm = 0;	/* the halt's grace time is over */
 char spawn = 1;			/* flag, spawn processes only when set */
 /* R7b.3: SIGRTC (an RTC alarm, the time set) runs /usr/lib/timed, at most
  * one at a time; one more run if a signal came meanwhile.  Also at boot,
@@ -68,6 +70,9 @@ void onhup(int sig);
 void onterm(int sig);
 void onabrt(int sig);
 void onrtc(int sig);
+void onpwr(int sig);
+void onalrm(int sig);
+void power_off(void);
 void timed(void);
 
 int main(void)
@@ -107,11 +112,18 @@ int main(void)
   sa.sa_handler = onrtc;
   sigaction(SIGRTC, &sa, NULL);
 
+  /* Power: the battery is low (spec R6.1, N.5): an orderly halt. */
+  sa.sa_handler = onpwr;
+  sigaction(SIGPWR, &sa, NULL);
+  sa.sa_handler = onalrm;
+  sigaction(SIGALRM, &sa, NULL);
+
   /* Execute the /etc/rc file. */
   if ((pid = vfork()) != 0) {	/* R2c.2: the child opens and execs */
 	/* Parent just waits. */
 	while (wait(NULL) != pid) {
 		if (gotabrt) reboot(RBT_HALT);
+		if (gotpwr) power_off();
 	}
   } else {
 	static char *rc_command[] = { "sh", "/etc/rc", NULL, NULL };
@@ -172,6 +184,8 @@ int main(void)
 		}
 		check = 1;
 	}
+
+	if (gotpwr) power_off();
 
 	if (gotrtc) {
 		gotrtc = 0;
@@ -238,6 +252,31 @@ void timed(void)
 	_exit(1);
   }
   if (pid > 0) timed_pid = pid;
+}
+
+void onpwr(int sig)
+{
+  gotpwr = 1;
+}
+
+void onalrm(int sig)
+{
+  gotalrm = 1;
+}
+
+void power_off(void)
+{
+/* Spec N.5: like the power menu's power off.  SIGTERM to every process, up
+ * to 2 s for them to end, then reboot(RBT_HALT): MM kills the rest, FS
+ * syncs and marks every file system CLEAN (N.2), then ship mode.
+ */
+  spawn = 0;
+  tell(2, "init: battery low: powering off\n");
+  kill(-1, SIGTERM);
+  alarm(2);
+  while (!gotalrm && (waitpid(-1, NULL, 0) > 0 || errno == EINTR)) {}
+  reboot(RBT_HALT);
+  _exit(1);	/* not reached */
 }
 
 void onabrt(int sig)
