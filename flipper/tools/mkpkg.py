@@ -4,13 +4,15 @@
 Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
            [--postinst FILE] [--prerm FILE] [--timers]
-           [--notify alarm|reminder|info] [--deskmode] -o OUTDIR
+           [--notify alarm|reminder|info] [--deskmode] [--flash] -o OUTDIR
            dest=source ...
 
 --timers, --notify, --deskmode: the app manifest fields of spec F.2
 (Timers: yes = may add timers, group timers; Notify: the highest
 category it may post; DeskMode: yes = may keep the backlight on while
 charging).
+--flash: Flash: yes, the programs go into the installed region (internal
+flash) as with pkg install --flash: their text is not copied into RAM.
 
 Each dest=source puts the host file `source` at path `dest` on the Flipper,
 e.g. /usr/bin/hello=build/flipper/minix/bin/hello (mode 755 if the path is
@@ -56,6 +58,7 @@ def main():
     ap.add_argument("--timers", action="store_true", help="Timers: yes")
     ap.add_argument("--notify", choices=("alarm", "reminder", "info"))
     ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
+    ap.add_argument("--flash", action="store_true", help="Flash: yes")
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
@@ -88,6 +91,7 @@ def main():
                + ("Timers: yes\n" if a.timers else "")
                + (f"Notify: {a.notify}\n" if a.notify else "")
                + ("DeskMode: yes\n" if a.deskmode else "")
+               + ("Flash: yes\n" if a.flash else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)

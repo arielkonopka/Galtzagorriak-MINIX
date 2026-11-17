@@ -623,7 +623,7 @@ PUBLIC unsigned bell_ticks;	/* ticks until the speaker goes quiet */
 PUBLIC void bell()
 {
 /* ^G on the console: a short beep (stopped from the clock tick). */
-  hal_tone(2000);
+  hal_tone(2000, 100);
   bell_ticks = HZ / 6;
 }
 
@@ -638,7 +638,7 @@ unsigned exc;
   irq_handler_t handler;
 
   if (exc == EXC_SYSTICK) {		/* the watchdog: clock task */
-	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
+	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0, 0);
   }
   if (exc == EXC_PENDSV) {	/* raised by the idle task or task_yield() */
 	struct proc *rp = rdy_head[TASK_Q];
