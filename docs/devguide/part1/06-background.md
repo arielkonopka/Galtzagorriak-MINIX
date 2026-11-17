@@ -6,9 +6,9 @@ for as long as it waits. So the system is designed around **not having resident 
 whenever possible: work that happens at a time is started at that time and exits; state that
 must survive is kept in a file or in hardware.
 
-This chapter says what you can do today, what the planned mechanisms are, and how to choose.
-Much of it is **(planned)**: the timer service, alerts and the background tiers arrive with
-spec Phases 7b and 12. Write new code so it can move onto them.
+This chapter says what you can do today, what is still planned, and how to choose. Timers and
+alerts (`timed`, `alert`, `libapp`) work and are the way to do anything at a time; plain swap
+works for idle processes; hibernate, park and the wake-and-off timers are **(planned)**.
 
 ## 6.1 The rule: choose the cheapest tier
 
@@ -40,7 +40,7 @@ nothing else is restarted when it dies.
 
 If you really need a resident daemon now:
 
-- **Write it in C, not shell.** A shell loop costs about 12 KB resident; a small C daemon costs
+- **Write it in C, not shell.** A shell loop costs about 10 KB resident; a small C daemon costs
   2–4 KB.
 - **Block, never poll.** Wait in `read()` on a device or FIFO, in `pause()`/`sigsuspend()` for a
   signal, or in `sleep()`. A sleeping process uses no CPU and lets the CPU enter Stop2.
@@ -64,9 +64,9 @@ the planned design starts them on demand.
 
 ### Periodic jobs
 
-There is no `cron`. Today a periodic job is a small C program that loops on `sleep()`. That
-works but stays resident. Keep it tiny, and plan to turn it into a `timed` timer when Phase 7b
-lands: write the job so that one run does one step and exits, and wrap that in the loop for now.
+There is no `cron`, and none is needed: a periodic job is a **timer file with `Action: run`**
+(section 6.3). `timed` starts the program as the file's owner with `--timer ID` when it is due,
+and nothing waits in RAM in between. Write the job so that one run does one step and exits:
 
 ```c
 /* one step of the job; exits non-zero on error */
@@ -74,14 +74,26 @@ static int step(void) { ... }
 
 int main(int argc, char **argv)
 {
-	if (argc > 1 && strcmp(argv[1], "--once") == 0)	/* the timed form */
+	if (argc > 2 && strcmp(argv[1], "--timer") == 0)	/* started by timed */
 		return step();
-	for (;;) {					/* the interim form */
-		step();
-		sleep(60);
-	}
+	fprintf(stderr, "usage: started by timed (--timer ID)\n");
+	return 1;
 }
 ```
+
+and register it, once, from the app or from `postinst`:
+
+```
+Kind: interval
+Start: 00:00
+End: 23:59
+Every: 15
+Action: run
+Program: /usr/bin/weatherlog
+```
+
+A loop on `sleep()` is still possible for a job that must run more often than once a minute,
+but it stays resident: measure it and say why in the PR.
 
 ### Talking to a daemon
 
@@ -131,6 +143,16 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   in group `timers`.
 - The device can even be **off**: before power-off the RTC alarm is wired to the charger's
   power-on input, so an alarm boots the Flipper and `timed` rings (spec F.3).
+- **Planned timer kinds** (spec F.3, owner 2026-11-17, **(planned)**, task T14c):
+  - `After: off` (and `timed --then-off`): wake from power-off, run the job, power off again, for
+    a weather log or a beacon. Off again only if this boot came from the alarm and nobody touched
+    the Flipper; a job that hangs is ended after `Timeout:` (default 60 s); the boot for such a
+    job is quiet (no splash, no backlight, no launcher).
+  - `Type: emergency`: a rescue signal. Like `After: off`, plus it ignores do-not-disturb, is never
+    skipped, and on low battery thins itself out by halving instead of stopping. Only a package
+    with `Timers: emergency` in its manifest may create one.
+  - `Type: wakeup`: the alarm clock's timers; below about 10 % battery the alarm is skipped with a
+    minimal notice instead of draining the rest.
 
 ## 6.4 Hibernate and park **(planned, spec R12.18–R12.21)**
 
@@ -138,6 +160,9 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   `/var/hib/<uid>/<app>` and exits; `app_resume(buf, max)` gets it back in the next run. The
   blob must contain **no pointers** (the next run lives at other addresses) and **no secrets**
   (it is not encrypted).
+- **Swap today** (R12.28): with `swap=plain` a process blocked in MM (waiting for a child, in
+  `pause()`, ...) may be written to `/dev/hd3` and read back to the same addresses when it runs
+  again. Nothing to do in your code; the [manual](../../manual/swap.md) has the details.
 - **Park** (tier 2): an app marked `Background: park` is parked by the long Back press instead of
   ended. It must first release the screen, buttons and any radio or DMA device; it is woken by
   the launcher's Running list or by its timer. Target image size ≤ 16 KB, so that swapping it
@@ -148,8 +173,7 @@ offsets and ids, not pointers, and save it with `write()` to a file on exit.
 
 ## 6.5 Choosing, in short
 
-1. Can it happen at a time, then stop? A `timed` timer (today: a sleep loop that you will turn
-   into one).
+1. Can it happen at a time, then stop? A `timed` timer with `Action: run`.
 2. Does it need to resume where it was? Save a small state file and exit (hibernate).
 3. Does it watch a device? Block in `read()` in a small C daemon; for continuous radio or USB
    streams, the work belongs in the kernel driver (Part 2).

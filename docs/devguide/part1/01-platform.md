@@ -15,7 +15,7 @@ else runs.
 | Processes | `NR_PROCS` is 16: MM, FS and INIT take three, so at most **13 user processes** exist at once, shells and the launcher included. |
 | Clock | `HZ` is 60: the scheduler, `alarm()` and `sleep()` count in ticks of 16.7 ms. A millisecond timer exists in the kernel (R4b.2) but not yet for programs (`setitimer` subset, **(planned)**). |
 | Screen and buttons | 128x64 monochrome LCD, six buttons (Up, Down, Left, Right, OK, Back). |
-| Storage | The SD card holds the whole file system: `/` (32 MB), `/usr`, swap (reserved), `/home`. |
+| Storage | The SD card holds the whole file system: `/` (32 MB), `/usr`, swap (`/dev/hd3`, off by default; `swap=plain` in `/etc/rc.conf` turns it on, see the [manual](../../manual/swap.md)), `/home`. |
 
 ## 1.2 A process without an MMU
 
@@ -30,6 +30,10 @@ The Cortex-M4 has an MPU, which protects memory but does not translate addresses
 - **The block cannot move or grow in place freely.** The heap grows up and the stack down
   inside a fixed reserve set when the program is built (`chmem`, see 1.4). When that reserve is
   used up, `malloc` returns NULL; when the stack runs into the heap, the program faults.
+- **More data than RAM** will be possible for apps written for it: numbered 4 KB blocks on the
+  swap partition that the app reads into and writes from buffers of its own (`blk_open()`,
+  `Blocks:` in the package manifest; spec 12h, task T20, **(planned)**, milestone M4). There is
+  no transparent paging: a pointer never points at data on the card.
 - **The largest hole decides what can start**, not the total. `free` prints both; `free -v`
   lists the holes. `exec` places programs at the top of RAM and fork shadows at the bottom, so
   long-lived processes pile up at the top and the free space stays in one piece.
@@ -47,7 +51,7 @@ and a copy on each switch.
   variables or stdio state is a bug. The launcher is the model (`flipper/gui/launcher.c`).
 - Use `fork()` when the child must really run the parent's code on its own. Keep the parent's
   data small then, because the shadow is a copy of it.
-- `system()` and `popen()` start `/bin/sh`, which costs about 12 KB of RAM while it runs. In a
+- `system()` and `popen()` start `/bin/sh`, which costs about 10 KB of RAM while it runs. In a
   small tool, `vfork` + `execv` of the program itself is much cheaper.
 
 ### Threads
@@ -110,7 +114,7 @@ The few programs allowed more are listed, with the reason, in `flipper/bss-excep
 
 Each program file carries the size of its stack + heap reserve, like MINIX's `chmem`. The build
 sets it: 6 KB by default (`tools/elf2mnx.py`), and a `CHMEM_<program>` line in
-`flipper/minix.mk` overrides it (4 KB for small tools, 12 KB for `sh` and `ls`).
+`flipper/minix.mk` overrides it (4 KB for small tools, 10 KB for `sh`, 12 KB for `ls`).
 
 Choose it by measuring, not guessing:
 
@@ -162,8 +166,9 @@ What eats the reserve, from experience in this tree:
 Unix permissions are the security model, including for hardware:
 
 - Apps started from the launcher run as `nobody` in group **`gui`**, which may use the screen,
-  buttons, LED, vibro, speaker, GPIO, infrared and iButton (`/dev/*` with mode 660, group
-  `gui`). An entry marked `root` in `/etc/apps` keeps root's rights.
+  buttons, LED, vibro, speaker, GPIO, ADC stream, infrared, iButton, RFID and Sub-GHz receive
+  (`/dev/*` with mode 660, group `gui`). The clock's alarm (`/dev/rtc`) and the timer spool
+  belong to group `timers`. An entry marked `root` in `/etc/apps` keeps root's rights.
 - Some devices are readable by everyone (`/dev/adc`, `/dev/power`).
 - Each package app gets its own uid and supplementary groups from its manifest (spec A.3,
   R4b.4) **(planned)**; until then, choose the user in `/etc/apps`.

@@ -67,7 +67,8 @@ int main(void)
 		gui_title("TALLY");
 		sprintf(line, "%d", n);
 		gui_text_big((GUI_W - 12 * (int) strlen(line)) / 2, 20, line, 3);
-		gui_center(56, "UP/DOWN  OK buzz  BACK", 0);
+		gui_hline(0, GUI_W - 1, 56, 1);		/* the hint line (4.3) */
+		gui_text(1, 58, "Up +  Dn -  OK Buzz  Back Quit", 0);
 		gui_flush();
 
 		k = gui_key();
@@ -108,6 +109,36 @@ width of the top text row with the screen's name in white, centred, in capitals.
 binding and the desktop's windows will draw it too, so apps look alike whatever they are
 written in.
 
+### The rest of the screen: "Pine meets modern UX"
+
+Since 2026-11-17 the whole screen follows one style (owner decision, spec K.2 and R5.6a.7),
+modelled on the Pine mail program: text first, every screen says what its buttons do, nothing
+hidden. New apps follow it from the start, and reviews check it:
+
+- **Title bar** as above. On the right it may carry a short state of at most 6 characters: the
+  position `3/12` in a list, `REC`, `12%`.
+- **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58, in Pine's
+  `key action` style: `<Back  OK Run  >More`, `OK Toggle  Back Done`. Name every button that
+  does something on that screen, and only those. Do not list the long Back press: it always ends
+  (or parks) the app.
+- **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+- **Values** of settings in brackets: `Icons   [on]`.
+- **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+- **Messages**: a short notice replaces the hint line for 2 s, then the hints come back; whole
+  screen notices are only for errors that end the app (and for alerts).
+- **Icons**: at most 8x6 pixels (two characters of the font) before a list entry.
+- Exceptions as for the title bar: the console, full-screen pictures and graphs, alerts, games
+  and ported stock apps that keep their own layout.
+
+Two `gui` helpers are there already: `gui_bits8()` draws an 8-pixel-wide bitmap (an icon), and
+`gui_input()`/`gui_click()` return keys as clicks (section 4.4). The ones that draw the other
+parts for you, at no RAM cost, are **(planned)** in task T22: `gui_title2(title, right)`,
+`gui_hints(text)`, `gui_note(text)` (with a timed key read) and `gui_scroll(top, shown, total)`.
+Until they land, draw the parts with `gui_hline` and `gui_text` at the positions above, as the
+example in 4.2 does; switching to the helpers later is a few lines. The launcher has the full
+look since T21a; the other built-in apps (`info`, `lights`, `power`, `lfrfid`, `console`,
+`selftest`, `remind`, `alarm`) are being aligned in T22.
+
 ## 4.4 The launcher and `/etc/apps`
 
 The launcher (`flipper/gui/launcher.c`) is started as root by `/etc/rc` and shows the entries of
@@ -139,6 +170,10 @@ Old:nobody:/usr/bin/old          (no icon field: still valid)
 - `/etc/apps` is read with `cfopen()`: the card's copy if there is one, else the default in
   `/rom/etc/apps`. A package that adds an app appends its line in its `postinst` script
   (chapter 5); the base package does it for `Power` (see `flipper/rootfs/base.postinst`).
+- **Launcher settings** (R5.6a.4): `/etc/launcher.conf` with `Icons:`, `Hints:` and
+  `Battery:` (the battery on the title bar), each `on` by default; Left opens the launcher's
+  settings page, which writes the card's copy only when a value changed. The user's view is the
+  manual's [launcher chapter](../../manual/launcher.md).
 - Manifests in packages (label, icon, category, uid, groups) that the launcher reads by itself
   are **(planned)** (spec R5.5, R5.6, F.2).
 
@@ -232,7 +267,7 @@ In practice:
 
 ## 4.8 Shell scripts as screen apps
 
-Any program can be in `/etc/apps`, including a shell script, but a shell costs about 12 KB and
+Any program can be in `/etc/apps`, including a shell script, but a shell costs about 10 KB and
 cannot draw text conveniently. Use scripts in the launcher for actions (toggle something, run a
 job, then exit) and C for anything with a screen. Desktop modules written in shell or Berry that
 only send text records to the desktop are **(planned)** (chapter 7).

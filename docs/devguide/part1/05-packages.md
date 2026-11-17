@@ -12,7 +12,7 @@ directory:
 
 | File | Contents |
 |---|---|
-| `CONTROL/control` | `Package:`, `Version:`, `Depends:` (comma or space separated names), `Description:`, `Abi:` (written by `mkpkg.py` from the programs' headers, or `any`), optionally `Os:` and `Flash: yes` |
+| `CONTROL/control` | `Package:`, `Version:`, `Depends:` (comma or space separated names), `Description:`, `Abi:` (written by `mkpkg.py` from the programs' headers, or `any`), optionally `Os:`, `Flash: yes`, `Timers: yes`, `Notify:`, `DeskMode: yes` (chapter 6) and `Icon:` (chapter 4) |
 | `CONTROL/postinst` | optional `sh` script, run after the files are installed |
 | `CONTROL/prerm` | optional `sh` script, run before the files are removed |
 
@@ -33,8 +33,12 @@ python3 -I flipper/tools/mkpkg.py -n tally -v 1.0 -o out \
 
 File modes: 755 for files in a `bin` directory, 644 otherwise; `,MODE` after the source path
 sets one explicitly (`,4755` for a set-uid program, which is then owned by root). Other files are
-owned by `bin`. `Flash: yes` (install the programs into flash, as `--flash` does) is read by
-`pkg` but `mkpkg.py` has no option for it yet; ask for one if you need it.
+owned by `bin`. `--flash` writes `Flash: yes` (install the programs into flash, as `pkg install --flash`
+does); `--timers`, `--notify alarm|reminder|info` and `--deskmode` write the permission fields
+of chapter 6; `-i ICON` writes `Icon:` (the launcher icon, chapter 4.4; the `postinst` still
+puts it into the `/etc/apps` line). Planned fields:
+`Blocks:` (the swappable-memory budget, spec 12h, task T20) and `Background:` (spec 12d)
+**(planned)**: `pkg` does not read them yet.
 
 **ABI.** `elf2mnx.py` stamps each program with the system's ABI number (`GZ_ABI`,
 `include/minix/gzversion.h`), and `mkpkg.py` copies it into `Abi:`. `pkg` refuses a package
