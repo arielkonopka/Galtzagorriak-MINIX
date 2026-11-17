@@ -1376,7 +1376,7 @@ card between `/usr` and swap. **Owner approved the on-disk change (2026-11-17, M
 | Partition ≤ 4 GiB | FS sends byte positions (`off_t`, 32-bit) to the driver; `dv_size` in bytes (R12.39) | 4 GiB | code |
 | Zone numbers | V2 super block `s_zones`, inode zones: 32-bit | 4 Ti zones | format, ample |
 | Zone map size | `s_zmap_blocks`, 16-bit | 256 GiB at 1 KB zones | format, ample |
-| Files per FS | `ino_t` is 16-bit (V2 `s_ninodes` too) | 65 535 | format (V2) and ABI |
+| Files + directories per FS (in total, not per directory) | `ino_t` is 16-bit (V2 `s_ninodes` too) | 65 535 | format (V2) and ABI; V3 on disk is 32-bit |
 | File name | V2 directory entry: 14 characters (`NAME_MAX` 14) | 14 | **format** |
 | File size | V2 code has no triple indirect zone: 7 + 256 + 256² blocks | ≈ 64 MB | code |
 | Mounted file systems | `NR_SUPERS` 4: `/`, `/usr`, `/home`, `/rom`, all used | 4 | code, ≈ 68 B per slot |
@@ -1422,9 +1422,25 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
 - **Mount:** `read_super` recognises `SUPER_V3` (`0x4D5A`) and its layout (`s_ninodes` u32 at 0,
   `s_imap_blocks` 6, `s_zmap_blocks` 8, `s_firstdatazone` 10, `s_log_zone_size` 12, `s_max_size`
   16, `s_zones` 20, `s_magic` 24, `s_blocksize` 28, `s_disk_version` 30). Refused with a message
-  unless `s_blocksize` = 1024, `s_log_zone_size` = 0 and `s_ninodes` ≤ 65 535 (`ino_t`). util-linux
+  unless `s_blocksize` = 1024 and `s_log_zone_size` = 0. util-linux
   `mkfs.minix -3` writes exactly this; MINIX 3's own `mkfs` defaults to 4 KB blocks (`-B 1024`
-  needed). The in-core super block keeps its fields; `s_version` = 3. **0 B.**
+  needed). The in-core super block keeps its fields (`s_ninodes` becomes 32-bit with `ino_t`);
+  `s_version` = 3.
+- **32-bit `ino_t` (owner question 2026-11-17: 65 535 files in all is too few).** The limit was
+  our ABI, not V3 (V3 stores 32-bit inode numbers; ext2 would hit the same 16-bit `ino_t`).
+  `ino_t` becomes `unsigned long`:
+  - FS `struct inode`: `i_num` 4 B, `i_dev` moved next to the `char` fields: **+0 B** (same
+    padding); `super_block.s_ninodes` +2 B × 4. MM `mproc.mp_ino` 4 B, `mp_dev` packed beside
+    the other 16-bit fields: ≤ +32 B (16 slots). Kernel 0 B.
+  - `struct stat.st_ino` and `struct dirent.d_ino` 32-bit: an **ABI change** (spec J: ABI number
+    bump, every program rebuilt, which the base image and packages are anyway). The install-time
+    binding (dev, ino, ctime) records widen; R2b.12 rebinds by SHA.
+  - On-disk V1/V2 structures keep 16-bit fields (`d1_`/`d2_` inode, `struct direct` →
+    explicit `u16_t`); V2 file systems still hold at most 65 535 inodes.
+  - Practical V3 limit: the 16-bit `s_firstdatazone` keeps bit maps + inode table below 64 MB
+    with 1 KB blocks, so a 101 GiB `/home` holds up to ≈ 800 000 files and directories in all
+    (`mkfs -3` default: one inode per 128 KB, capped there). A directory holds any number of
+    entries; at most 65 535 subdirectories per directory (16-bit link count, all formats).
 - **Clean flags (section N):** V3 has no state field that Linux uses, and offset 18 (V2 `s_pad`)
   is inside `s_max_size`. N.1's CLEAN/CHECK bits go into the spare 16-bit `s_pad2` at offset 26
   (check in the PR which pad MINIX 3.3 uses for its `s_flags` and use the same one). Linux
@@ -1433,18 +1449,17 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
   `search_dir`, `new_node`, `do_mkdir`, `do_rename`, `unlink_file`. Path parsing buffers grow to
   60 characters; `NAME_MAX` in `<limits.h>` becomes 60, and `pathconf(_PC_NAME_MAX)` answers per
   file system (14 on V2). A name longer than the FS allows gets `ENAMETOOLONG` (no silent cut).
-- **Reading a directory (0 libc changes):** libc `readdir` already understands MINIX "flex"
-  entries (8-byte slots, `d_name[61]`). On a V3 directory, `read()` turns each 64-byte V3 entry
-  into one 64-byte flex record: the entry (`1 + _EXTENT(len)` slots, 16-bit inode, name with
-  NUL), then a filler entry (inode 0) for the rest of the 8 slots. Offsets stay 1:1, so
-  `telldir`/`seekdir`/`lseek` work, and "." gets extent 0 so `opendir` detects flex. Stack:
-  one 64-byte record.
+- **Reading a directory:** `read()` on a V3 directory returns the raw 64-byte entries (FS does
+  no translation). libc `opendir` asks `fstatfs()` (O.5) for the format once; `readdir` parses V2
+  entries (16 B, `u16_t` inode) or V3 entries (64 B, `u32_t` inode, 60-character name) into
+  `struct dirent { ino_t d_ino; char d_name[61]; }`. The old "flex" format (never on our disks)
+  is dropped; `d_extent` users are fixed. `DIR` stays 1 KB per open directory.
 - **Triple indirect zone** for V3 files over ≈ 64 MB (`read_map`, `write_map`, `truncate`);
   V2 stays as it is.
 - Programs that read raw `struct direct` are checked (`ash/dirent.c`, `sh4.c`, `tar`, `de`,
   `traverse`, `cgrep`, `atrun`, `readfs`, `fsck`, `mkfs`): each uses `readdir` or learns V3.
-- **RAM:** FS static ≤ +20 B (O.5), FS stack ≤ +256 B (longer name buffers on the deepest path,
-  `rename`; the 64-byte record), measured by `ramcheck`. Flash: FS ≈ +3 KB, `fsck`/`mkfs` ≈ +2 KB
+- **RAM:** FS static ≤ +28 B (O.5, `s_ninodes`), MM ≤ +32 B (`mp_ino`), FS stack ≤ +200 B (longer
+  name buffers on the deepest path, `rename`), measured by `ramcheck`. Flash: FS ≈ +3 KB, `fsck`/`mkfs` ≈ +2 KB
   each.
 
 ### O.5 Free space without reading 13 MB
@@ -1480,7 +1495,7 @@ inode owns, found in pass 1).
 
 - `/etc/setup` on a new card: `/home` is MINIX V3 and takes **all space between `/usr` and swap**
   (R12.34's swap rules unchanged). 128 GB card (≈ 119 GiB): root 64 MB, `/usr` 2 GB, swap 16 GiB
-  at the end → `/home` ≈ 101 GiB, ≈ 12.6 MB zone map, 4 MB inode table (65 535 inodes),
+  at the end → `/home` ≈ 101 GiB, ≈ 12.6 MB zone map, ≈ 50 MB inode table (≈ 800 000 inodes),
   first data zone ≈ 17 000 (the V3 field is 16-bit: the format fits up to ≈ 480 GiB with
   1 KB blocks). Root and `/usr` stay V2.
 - `mkfs -3` leaves room for the zone map of the largest `/home` the card allows, so `/home` can
@@ -1494,7 +1509,7 @@ inode owns, found in pass 1).
 ### O.8 Flash writes, RAM, responsiveness
 
 - Internal flash: 0 run-time writes. SD: the hint rides on the CLEAN write.
-- RAM: kernel +0 B, FS ≤ +20 B static and ≤ +256 B stack, libc 0 B, per `opendir` unchanged.
+- RAM: kernel +0 B, FS ≤ +28 B static and ≤ +200 B stack, MM ≤ +32 B, per `opendir` unchanged.
 - Responsiveness: no step reads the whole zone map in the foreground; the recount and `fsck -L`
   run only at idle.
 

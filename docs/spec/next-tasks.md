@@ -345,12 +345,12 @@ One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts 
 
 ### T27a (`lane:cloud`, QEMU): driver positions, FS V3, tools
 - O.3: needs R12.39 (amended: `dv_size` in sectors, `HIGHPOS`, `DIOCPRW`, `DIOCGETPS`), done once in `disk.c`/`drvlib.c` by the local lane (#110). T27a only sets `HIGHPOS` in FS `rw_block`/`rw_scattered` (64-bit position) and adds libc `bread`/`bwrite`.
-- O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, ≤ 65 535 inodes, message otherwise); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; V3 → flex translation on directory `read()` (filler entry, "." extent 0); triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
+- O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, ≤ 65 535 inodes, message otherwise); 32-bit `ino_t` (FS `i_num` repacked +0 B, MM `mp_ino` ≤ +32 B, `st_ino`/`d_ino`, on-disk V1/V2 fields explicit `u16_t`, ABI bump); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; libc `readdir` parses V2 and V3 entries (format from `fstatfs`), flex dropped; triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
 - O.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
 - O.6: `fsck` V3 (`-3` implied by the magic), high-water mark windows, `fsck -L`; `mkfs -3` (room for the largest zone map); `tools/mkfsimg.py -3`.
 - O.7: `/etc/setup` layout, `setup -H` conversion with resume.
-- Tests: ACO.1–ACO.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +20 B static, stack within budget; flashcheck unchanged.
-- Docs: manual `sdcard.md` (V3 `/home`, Linux access, `setup -H`, `df` estimate), `man` pages for `mkfs -3`, `fsck -L`, `statfs`; devguide note on `NAME_MAX` 60 and `pathconf`; CHANGELOG (ABI: `NAME_MAX`, new FS call, bump per spec J).
+- Tests: ACO.1–ACO.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +28 B static, MM ≤ +32 B, stack within budget; flashcheck unchanged.
+- Docs: manual `sdcard.md` (V3 `/home`, Linux access, `setup -H`, `df` estimate), `man` pages for `mkfs -3`, `fsck -L`, `statfs`; devguide note on `NAME_MAX` 60 and `pathconf`; CHANGELOG (ABI: 32-bit `ino_t`, `NAME_MAX`, new FS call, bump per spec J).
 
 ### T27b (`lane:local`, Flipper)
 - ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
