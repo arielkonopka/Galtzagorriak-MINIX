@@ -162,8 +162,10 @@ def main():
 			"(%s %s)" % (s2, s3))
 
 		# While root has no password, login lets nobody in (R3.4).
+		# (/bin/login in a subshell: sh's login builtin would replace
+		# the shell.)
 		out = r.output("cp /etc/shadow /etc/shadow.p3; "
-			"echo 'root::0:0::/:' >/etc/shadow; login root; "
+			"echo 'root::0:0::/:' >/etc/shadow; (/bin/login root); "
 			"echo login=$?; cp /etc/shadow.p3 /etc/shadow; "
 			"rm /etc/shadow.p3", 60)
 		check(out is not None and b"root has no password yet" in out
