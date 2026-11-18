@@ -802,8 +802,8 @@ $(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
 # Bad USB (spec R11.3.3, R11.3.4): badusb, the window app, the example
-# scripts (copied to /ext/badusb by the postinst when not there) and the
-# German layout (libhid has US built in).
+# scripts in /ext/badusb (/home/flipper/badusb: the package's files, an
+# upgrade puts them back) and the German layout (libhid has US built in).
 BU_EX	:= $(wildcard $(BU_DIR)/examples/*.txt)
 $(PKGDIR)/badusb_1.0.tar: $(MB)/bin/badusb $(MB)/bin/badusb-gui tools/mkpkg.py \
 		rootfs/badusb.postinst rootfs/badusb.prerm $(BU_EX) \
@@ -815,7 +815,7 @@ $(PKGDIR)/badusb_1.0.tar: $(MB)/bin/badusb $(MB)/bin/badusb-gui tools/mkpkg.py \
 	   /usr/bin/badusb=$(MB)/bin/badusb \
 	   /usr/bin/badusb-gui=$(MB)/bin/badusb-gui \
 	   /usr/share/hid/layouts/de-DE.kl=$(HID_DIR)/layouts/de-DE.kl$(COMMA)644 \
-	   $(foreach e,$(BU_EX),/usr/share/badusb/$(notdir $(e))=$(e)$(COMMA)644)
+	   $(foreach e,$(BU_EX),/home/flipper/badusb/$(notdir $(e))=$(e)$(COMMA)644)
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).

@@ -2,25 +2,36 @@
 # app's own user badusb (uid 23) in group usb: only that group may open
 # the HID device files (R11.3.1).  The launcher line "Bad USB", a window
 # app ("=": the launcher starts it as badusb with its pipes on fd 3 and 4).
-grep '^badusb:' /etc/passwd >/dev/null || {
+# The example scripts are files of the package in /ext/badusb
+# (/home/flipper/badusb).
+#
+# Only sh built-ins and small programs here, no subshells: pkg is still
+# in memory while this runs, and a larger program (grep, sed, cp) or a
+# fork may not fit beside it ("not found", "try again").
+# The files are read with exec redirections: a redirected loop would run
+# in a forked subshell (its variables lost, and the fork may not fit).
+exec 3<&0 </etc/passwd
+u=no
+while read l
+do
+	case "$l" in badusb:*) u=yes ;; esac
+done
+exec </etc/apps
+a=no
+while read l
+do
+	case "$l" in *:=/usr/bin/badusb-gui) a=yes ;; esac
+done
+exec <&3 3<&-
+test $u = yes || {
 	echo 'badusb:*:23:12:Bad USB:/home/flipper:' >> /etc/passwd
 	echo "badusb: added the user badusb (uid 23, group usb)"
 }
-grep ':=/usr/bin/badusb-gui$' /etc/apps >/dev/null || {
+test $a = yes || {
 	echo 'Bad USB:badusb:@usb:=/usr/bin/badusb-gui' >> /etc/apps
 	echo "badusb: the launcher now has Bad USB"
 }
-# The scripts: /ext/badusb (/home/flipper/badusb).  The examples go there
-# when they are not (a script of the same name is never replaced).
-if test -d /home/flipper
-then
-	test -d /home/flipper/badusb || mkdir /home/flipper/badusb
-	for f in windows macos linux keys
-	do
-		test -f /home/flipper/badusb/$f.txt ||
-			cp /usr/share/badusb/$f.txt /home/flipper/badusb/$f.txt
-	done
-fi
+chmod 755 /home/flipper/badusb
 # The settings (K.7): written by the app only when a value changes; an
 # empty file is the defaults (en-US, no delay).  It belongs to badusb,
 # which may not make files in /etc/flipper.
