@@ -459,6 +459,68 @@ static void finish(void)
 }
 
 #ifdef BOARD_QEMU
+/* mtpd (spec R10.4, T29a) on QEMU's second serial line (/dev/mtpline):
+ * minix-run puts tools/mtphost.py on its other end, which runs the whole
+ * MTP test (list, get, send, delete, rename, move, NAME_MAX + 1, cancel,
+ * broken containers) against this mtpd, leaves galtzagorriak/etxea.sub
+ * and then pulls the cable in the middle of a send.  Here: mtpd ends
+ * with status 0, it ran as the owner of its root (bin), the example file
+ * is there and the half-sent one is not. */
+#define MTP_ROOT	"/tmp/mtpd"
+static const char mtp_example[] = "Filetype: Flipper SubGhz Key File\n"
+	"Version: 1\nFrequency: 433920000\n"
+	"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+	"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n";
+
+static void mtpd_test(void)
+{
+	char buf[256];
+	struct stat st;
+	DIR *d;
+	struct dirent *e;
+	int fd, n, entries = 0, status = -1;
+	pid_t pid;
+
+	printf("mtpd: waiting for tools/mtphost.py on /dev/mtpline\n");
+	fflush(stdout);
+	mkdir(MTP_ROOT, 0755);
+	chown(MTP_ROOT, 2, 2);			/* bin: mtpd becomes it */
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/mtpd", "mtpd", "-r", MTP_ROOT, "-l", "/dev/mtpline",
+			(char *) NULL);
+		_exit(99);
+	}
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(60);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		status = -1;
+	}
+	alarm(0);
+	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0,
+		"mtpd served mtphost and ended on the pulled cable");
+	n = -1;
+	if ((fd = open(MTP_ROOT "/galtzagorriak/etxea.sub", O_RDONLY)) >= 0) {
+		n = read(fd, buf, sizeof(buf));
+		close(fd);
+	}
+	check(n == (int) strlen(mtp_example)
+		&& memcmp(buf, mtp_example, n) == 0
+		&& stat(MTP_ROOT "/galtzagorriak/etxea.sub", &st) == 0
+		&& st.st_uid == 2, "mtpd: etxea.sub sent from the PC, owned by bin");
+	if ((d = opendir(MTP_ROOT "/galtzagorriak")) != NULL) {
+		while ((e = readdir(d)) != NULL)
+			if (e->d_name[0] != '.') entries++;
+		closedir(d);
+	}
+	check(entries == 1 && stat(MTP_ROOT "/galtzagorriak/pulled.bin", &st) < 0,
+		"mtpd: the half-sent file is gone, nothing else left");
+}
+
 /* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
  * and a Popup, driven with fake buttons (QEMU only).  Its frames go to
  * /dev/lcd (dumped to the console).  OK on "Say hello" -> the popup;
@@ -2544,6 +2606,7 @@ int main(int argc, char **argv)
 	discard_tests();
 	preempt_tests();
 	pkg_tests();
+	mtpd_test();
 #endif
 	time_tests();
 	finish();

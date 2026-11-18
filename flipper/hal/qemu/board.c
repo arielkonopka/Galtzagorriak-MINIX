@@ -95,6 +95,48 @@ void hal_uart_rx_irq(int on)
 	}
 }
 
+/* The MTP test line (spec R10.4, T29a): CMSDK UART1 at 0x40005000, RX
+ * interrupt 2 (mps2-an385/386 map), QEMU's second -serial.  QEMU holds
+ * one received byte in the UART and gives the next only after it is
+ * read, so nothing is lost while the kernel's ring is full. */
+#define LINE_BASE	0x40005000u
+#define LINE(o)		(*(volatile uint32_t *) (LINE_BASE + (o)))
+#define LINE_RX_IRQ	2
+
+void hal_line_init(void)
+{
+	LINE(0x10) = CPU_HZ / 115200;
+	LINE(0x08) = 0x3 | CTRL_RXINT;	/* TX, RX, the RX interrupt */
+}
+
+int hal_line_irq(void)
+{
+	return LINE_RX_IRQ;
+}
+
+int hal_line_getc(void)
+{
+	LINE(0x0C) = INT_RX;
+	if (!(LINE(0x04) & STATE_RXFULL)) return -1;
+	return LINE(0x00) & 0xFF;
+}
+
+void hal_line_putc(int c)
+{
+	while (LINE(0x04) & STATE_TXFULL) ;
+	LINE(0x00) = (uint8_t) c;
+}
+
+void hal_line_rx_irq(int on)
+{
+	if (on) {
+		LINE(0x08) |= CTRL_RXINT;
+	} else {
+		LINE(0x08) &= ~CTRL_RXINT;
+		LINE(0x0C) = INT_RX;
+	}
+}
+
 void hal_lcd_init(void)
 {
 }

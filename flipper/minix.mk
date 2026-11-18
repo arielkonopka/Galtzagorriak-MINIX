@@ -1000,9 +1000,23 @@ libc: $(MB)/libc.a
 QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native,userspace=on
 
+# INIT=m2: QEMU's second serial line (/dev/mtpline, spec R10.4) is a
+# socket with tools/mtphost.py on it; m2test's mtpd test serves it, and
+# its log follows QEMU's output.
+MTPSOCK	:= $(MB)/mtpline.sock
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
+ifeq ($(INIT),m2)
+	@rm -f $(MTPSOCK) $(MB)/mtphost.log
+	@python3 -I tools/mtphost.py test --unix $(MTPSOCK) --name-max 14 \
+	   --quick --wait 30 > $(MB)/mtphost.log 2>&1 & \
+	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0 \
+	   -chardev socket,id=mtp,path=$(MTPSOCK),server=on,wait=off \
+	   -serial chardev:mtp; \
+	r=$$?; wait; cat $(MB)/mtphost.log; rm -f $(MTPSOCK); exit $$r
+else
 	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
+endif
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }

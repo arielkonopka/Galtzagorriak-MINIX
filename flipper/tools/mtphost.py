@@ -51,12 +51,13 @@ EV_ADDED, EV_REMOVED = 0x4002, 0x4003
 STORAGE, ROOT = 0x00010001, 0xFFFFFFFF
 FMT_FILE, FMT_DIR = 0x3000, 0x3001
 PR_NAME, PR_SIZE, PR_PARENT, PR_FORMAT = 0xDC07, 0xDC04, 0xDC0B, 0xDC02
-FRAME, F_CANCEL, F_EVENT = 1024, 0xFFFF, 0x8000
+FRAME, F_CANCEL, F_EVENT, F_HANGUP = 1024, 0xFFFF, 0x8000, 0
 
 EXAMPLE = b"Filetype: Flipper SubGhz Key File\nVersion: 1\n" \
 	b"Frequency: 433920000\nPreset: FuriHalSubGhzPresetOok650Async\n" \
 	b"Protocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"
 LONGNAME = "galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub"
+QUICK = False		# --quick: smaller files (QEMU's line is slow)
 
 
 class Gone(Exception):
@@ -140,7 +141,19 @@ def unix(path, wait):
 			if time.time() > end:
 				raise
 			time.sleep(0.5)
-	link = Link(s.recv, s.sendall, lambda: s.shutdown(socket.SHUT_WR))
+	def close():
+		# A serial line has no end of file: the hangup frame.  QEMU
+		# drops what it has not passed on yet when the socket closes,
+		# so it stays open until QEMU ends (or 300 s).
+		s.sendall(struct.pack("<H", F_HANGUP))
+		s.settimeout(300)
+		try:
+			while s.recv(4096):
+				pass
+		except OSError:
+			pass
+		s.close()
+	link = Link(s.recv, s.sendall, close)
 	link.sock = s
 	return link
 
@@ -286,6 +299,8 @@ def check(cond, what):
 
 def test(m, root, name_max):
 	print("mtphost: GetDeviceInfo, sessions, storage")
+	m.ok(OP["GetDeviceInfo"])
+	t0 = time.time()		# (QEMU: mtpd has started now)
 	_, d = m.ok(OP["GetDeviceInfo"])
 	o = 8
 	ext, o = gstr(d, o)
@@ -319,7 +334,7 @@ def test(m, root, name_max):
 	sub = m.mkdir("azpi", top)
 	check(m.info(sub)["parent"] == top, "folder in a folder")
 	blobs = {"zero.bin": b"", "kilo.bin": os.urandom(1024),
-		"big.bin": os.urandom(100 * 1024 + 7)}
+		"big.bin": os.urandom((6 if QUICK else 100) * 1024 + 7)}
 	hs = {}
 	for name, data in blobs.items():
 		hs[name] = m.put(name, data, top)
@@ -334,8 +349,8 @@ def test(m, root, name_max):
 		"GetNumObjects with a format")
 	check(m.handles(top, FMT_DIR) == [sub], "GetObjectHandles with a format")
 	big = blobs["big.bin"]
-	ps, d = m.ok(OP["GetPartialObject"], [hs["big.bin"], 5000, 3000])
-	check(d == big[5000:8000] and ps == [3000], "GetPartialObject")
+	ps, d = m.ok(OP["GetPartialObject"], [hs["big.bin"], 2000, 3000])
+	check(d == big[2000:5000] and ps == [3000], "GetPartialObject")
 	ps, d = m.ok(OP["GetPartialObject"], [hs["big.bin"], len(big) - 10, 3000])
 	check(d == big[-10:] and ps == [10], "GetPartialObject at the end")
 	m.expect("Invalid_ParentObject", OP["SendObjectInfo"], [STORAGE, hs["kilo.bin"]],
@@ -469,6 +484,7 @@ def test(m, root, name_max):
 	m.l.send(struct.pack("<IHHI", 12 + 20000, DATA, OP["SendObject"], m.tid)
 		+ os.urandom(2500))
 	m.l.close()
+	print("mtphost: %.1f s" % (time.time() - t0))
 	return top
 
 
@@ -534,7 +550,11 @@ def main():
 	p.add_argument("--name-max", type=int, default=60)
 	p.add_argument("--wait", type=float, default=5)
 	p.add_argument("--record", help="write the stream sent to mtpd here")
+	p.add_argument("--quick", action="store_true",
+		help="a 6 KB big file instead of 100 KB (QEMU)")
 	a = p.parse_args()
+	global QUICK
+	QUICK = a.quick
 	if a.cmd == "seeds":
 		seeds(a.args[0])
 		return
