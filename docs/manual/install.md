@@ -174,6 +174,14 @@ their own). Do not turn on "add carriage return" in the terminal program, or you
 
 Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
 it. A wrong password is refused after 2 seconds, to make guessing slow.
+
+To see on the Flipper when the computer talks to it (handy when a script drives it, or to tell a
+slow command from a dead cable), let the status LED flash with the USB console's traffic:
+
+    echo console cyan >/dev/led     # any colour; on until "echo off >/dev/led" or a reboot
+
+Each burst of traffic, in either direction, gives a short flash; no traffic, no light. Add the
+line to `/etc/rc.conf` to have it at every boot. Details: [Devices](devices.md), the status LED.
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.

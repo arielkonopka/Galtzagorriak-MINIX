@@ -97,6 +97,10 @@ No 3D printer and no soldering are needed.
    **close that terminal program**, because only one program can hold the port.
 3. Do not run the launcher's RFID, IR or iButton apps while testing: the device files are used
    by one program at a time.
+4. Optional: `echo console cyan >/dev/led` as root makes the MINIX Flipper's LED flash with every
+   burst of console traffic. During a run it then flickers all the time; when it stays dark for
+   more than a few seconds, the script is waiting on something (or the console stopped
+   answering: look at the log). `echo off >/dev/led` before power measurements.
 
 ## 6.4 The physical setup
 
