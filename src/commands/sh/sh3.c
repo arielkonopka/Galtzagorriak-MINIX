@@ -297,7 +297,7 @@ int *pforked;
 		int s_talking = talking, s_intr = intr, s_execflg = execflg;
 		struct brkcon *s_brklist = brklist;
 
-		int tries = 0, st;
+		int st;
 
 		if (canv) {
 			/* Galtzagorriak: what the child takes from the heap
@@ -308,13 +308,16 @@ int *pforked;
 			if (t->ioact != NULL)
 				freecell(space(VFROOM));
 		}
+		vftries = 0;
 	again:
 		/* #271: no memory hole for the program (exec: EAGAIN) is
 		 * not "not found"; it passes once others end: try again.
-		 * Only without pipes: we wait for the child here. */
+		 * Only without pipes: we wait for the child here.  The
+		 * count is a global: the vfork child runs in this frame and
+		 * may reuse the slot of a local it does not need. */
 		vfagain = 0;
 		vfquiet = canv && pin == NULL && pout == NULL
-							&& tries < VFTRIES;
+							&& vftries < VFTRIES;
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
@@ -324,8 +327,8 @@ int *pforked;
 				execflg = s_execflg;
 				brklist = s_brklist;
 				vfquiet = 0;
-				if (i == -1 && errno == EAGAIN
-							&& tries++ < VFTRIES) {
+				if (i == -1 && errno == EAGAIN && !intr
+							&& vftries++ < VFTRIES) {
 					sleep(1);
 					goto again;
 				}
@@ -339,7 +342,8 @@ int *pforked;
 			if (pout != NULL)
 				return(0);
 			st = waitfor(i, 0);
-			if (canv && vfagain && tries++ < VFTRIES) {
+			/* vfagain: only a vfork child sets it */
+			if (vfagain && !intr && vftries++ < VFTRIES) {
 				sleep(1);
 				goto again;
 			}

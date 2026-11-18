@@ -381,9 +381,10 @@ Extern	int	invfork;
 /* Galtzagorriak (#271): an exec that found no memory hole (EAGAIN) is
  * tried again, 1 s apart, VFTRIES times.  vfquiet: set by us before a
  * vfork while more tries are left: the child then says nothing, sets
- * vfagain (our memory) and _exits, and we try again. */
+ * vfagain (our memory) and _exits, and we try again; vftries counts
+ * (globals: the child may reuse our frame's slots). */
 #define	VFTRIES	10
-Extern	int	vfquiet;
+Extern	int	vfquiet, vftries;
 Extern	volatile int	vfagain;
 
 #define	NEW(type) (type *)getcell(sizeof(type))

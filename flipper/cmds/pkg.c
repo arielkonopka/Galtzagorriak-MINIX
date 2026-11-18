@@ -27,7 +27,9 @@
  *				yes|no, checked here, granted with the
  *				app's own uid (A.3); Type: app|window
  *				(window: a window app, spec K.8)
- *	CONTROL/postinst	optional, run with sh after installing
+ *	CONTROL/postinst	optional, run with sh after installing; if
+ *				it cannot start or fails, install says
+ *				why and exits 1 (#271)
  *	CONTROL/prerm		optional, run with sh before removing
  * The database is /usr/var/pkg/info: NAME.control, NAME.list (the files),
  * NAME.postinst, NAME.prerm.
@@ -101,10 +103,14 @@ static void die(const char *msg, const char *arg)
 #define RETRIES	10
 static int run(const char *dir, char *const argv[])
 {
+	static int tries;	/* not a local: the vfork child runs in this
+				 * frame and may reuse a slot it does not
+				 * need */
 	volatile int err;
 	pid_t pid;
-	int st, tries = 0;
+	int st;
 
+	tries = 0;
 	for (;;) {
 		fflush(stdout);
 		err = 0;
