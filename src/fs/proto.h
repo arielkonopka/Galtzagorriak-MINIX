@@ -53,6 +53,7 @@ _PROTOTYPE( struct filp *get_filp, (int fild)				);
 
 /* inode.c */
 _PROTOTYPE( struct inode *alloc_inode, (Dev_t dev, Mode_t bits)		);
+_PROTOTYPE( struct inode *pipe_inode, (void)				);
 _PROTOTYPE( void dup_inode, (struct inode *ip)				);
 _PROTOTYPE( void free_inode, (Dev_t dev, Ino_t numb)			);
 _PROTOTYPE( struct inode *get_inode, (Dev_t dev, int numb)		);

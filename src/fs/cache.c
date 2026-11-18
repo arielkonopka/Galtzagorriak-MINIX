@@ -74,11 +74,15 @@ int only_search;		/* if NO_READ, don't read, else act normal */
   }
 
   /* Desired block is not on available chain.  Take the oldest clean block,
-   * else the oldest ('front'): a dirty one costs a write - and flushall()
-   * writes every dirty block, pipe data not yet read included (T9). */
+   * else the oldest dirty one: it costs a write - and flushall() writes
+   * every dirty block.  Pipe data (PIPE_DIRTY, spec K.6) has no place on
+   * the disk: it is taken last (never while pipes keep at most half of
+   * the cache, write.c), and then lost. */
   if ((bp = front) == NIL_BUF) panic("all buffers in use", NR_BUFS);
-  while (bp != NIL_BUF && bp->b_dirt == DIRTY) bp = bp->b_next;
-  if (bp == NIL_BUF) bp = front;
+  while (bp != NIL_BUF && bp->b_dirt != CLEAN) bp = bp->b_next;
+  if (bp == NIL_BUF)
+	for (bp = front; bp->b_dirt == PIPE_DIRTY && bp->b_next != NIL_BUF; )
+		bp = bp->b_next;
   rm_lru(bp);
 
   /* Remove the block that was just taken from its hash chain. */
@@ -102,7 +106,7 @@ int only_search;		/* if NO_READ, don't read, else act normal */
    */
   if (bp->b_dev != NO_DEV) {
 	if (bp->b_dirt == DIRTY) flushall(bp->b_dev);
-	if (bp->b_dirt == DIRTY) {	/* N.6: card out, every buffer dirty */
+	if (bp->b_dirt != CLEAN) {	/* N.6: card out, every buffer dirty */
 		printf("Lost block %ld of device %d/%d: no room to keep it\n",
 			(long) bp->b_blocknr, (bp->b_dev>>MAJOR)&BYTE,
 			(bp->b_dev>>MINOR)&BYTE);
@@ -262,7 +266,11 @@ zone_t numb;				/* zone to be returned */
 
   /* Locate the appropriate super_block and return bit. */
   sp = get_super(dev);
-  if (numb < sp->s_firstdatazone || numb >= sp->s_zones) return;
+  if (numb < sp->s_firstdatazone) return;
+  if (numb >= sp->s_zones) {	/* a pipe's zone, in core only (K.6) */
+	forget_zone(dev, numb, sp->s_log_zone_size);
+	return;
+  }
   bit = (bit_t) (numb - (sp->s_firstdatazone - 1));
   free_bit(sp, ZMAP, bit);
   if (bit < sp->s_zsearch) sp->s_zsearch = bit;
@@ -533,6 +541,7 @@ dev_t dev;
   for (bp = front; bp != NIL_BUF; bp = bp->b_next)
 	if (bp->b_dirt == CLEAN) return(TRUE);
   for (bp = front; bp != NIL_BUF; bp = bp->b_next) {
+	if (bp->b_dirt != DIRTY) continue;	/* pipe data: never (K.6) */
 	sp = rw_super(bp->b_dev);
 	if (sp != NIL_SUPER && (sp->s_flags & SF_DCLEAN)) continue;
 	rw_block(bp, WRITING);
