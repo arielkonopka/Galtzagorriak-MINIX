@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [jiggle]	(jiggle: only the AC11.3.3 part)
+Usage: nattest.py [badusb|jiggle]  (only the AC11.3.1 or AC11.3.3 part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -34,7 +34,16 @@ timed, remind and alarm packages and checks:
   ACK8.3   free -v with Ordua open: at most 4.5 KB more than the
            launcher alone; free -v with alert open gives the RAM it takes
            (printed as "RAM:" lines, issue #201)
-
+  AC11.3.1 badusb (T28c): the package adds the user badusb (group usb),
+           Bad USB on the launcher, the example scripts in /ext/badusb;
+           badusb on each example script, US and DE, prints exactly the
+           hid< lines the engine makes on the PC (tests/hid ducktest -r);
+           badusb -n reports a bad line with its number; in the Bad USB
+           app (window app, <= 4.5 KB open; badusb <= 3 KB running) the
+           list -> confirm -> run window, Back stops a DELAY 10000
+           script at once with every key up (the last report all zeros)
+           and the rest never typed; Settings writes
+           /etc/flipper/badusb.conf once, only on a change
   AC11.3.3 jiggle -i 2 (R11.3.6, T28e) writes its mouse reports every
            2 s +- 0.2 s (QEMU's "hid< mouse" lines), none while the host
            has unplugged us (tests package hidfake: HIDIOCFAKE), again
@@ -49,6 +58,7 @@ import importlib.util
 import os
 import re
 import struct
+import subprocess
 import sys
 import time
 
@@ -471,15 +481,171 @@ def jiggle(r):
 		"jiggle: a bad interval or pattern is a usage error")
 	r.sh("free -t off", 20)
 
+ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
+HIDRE = re.compile(rb"hid< ((?:kbd|mouse|cons)(?: [0-9a-f]{2})+)")
+BU_EX = ("windows", "macos", "linux", "keys")
+
+
+def ducktest():
+	"""tests/hid's ducktest (the engine on the PC), built if needed."""
+	d = os.path.join(ROOT, "flipper", "tests", "hid")
+	subprocess.check_call(["make", "-s", "-C", d, "build/ducktest"],
+			      stdout=subprocess.DEVNULL)
+	return os.path.join(d, "build", "ducktest")
+
+
+def want_reports(dt, layout, name):
+	kl = "us" if layout == "en-US" else os.path.join(ROOT, "src", "lib",
+		"hid", "layouts", layout + ".kl")
+	ex = os.path.join(ROOT, "flipper", "apps", "badusb", "examples",
+			  name + ".txt")
+	out = subprocess.run([dt, "-r", kl, ex], stdout=subprocess.PIPE,
+			     check=True).stdout
+	return out.splitlines()
+
+
+def badusb(r):
+	"""AC11.3.1: badusb and the Bad USB app (spec R11.3.3, R11.3.4)."""
+	check(r.sh("pkg install /lib/pkg/badusb_1.0.tar", 120) == 0,
+		"install the badusb package")
+	out = r.output("grep -c '^badusb:.:23:12:' /etc/passwd; "
+		"grep -c '^Bad USB:badusb:@usb:=/usr/bin/badusb-gui$' /etc/apps",
+		60)
+	out2 = r.output("ls /home/flipper/badusb; "
+		"ls -l /etc/flipper/badusb.conf /usr/share/hid/layouts/de-DE.kl",
+		60)
+	check(out is not None and out.split()[:2] == [b"1", b"1"]
+	      and out2 is not None
+	      and all(("%s.txt" % e).encode() in out2 for e in BU_EX)
+	      and re.search(rb"-rw-r--r-- .*badusb .* 0 .*badusb.conf", out2)
+	      is not None and b"de-DE.kl" in out2,
+	      "AC11.3.1: user badusb (group usb), Bad USB on the launcher, the "
+	      "examples in /ext/badusb, an empty badusb.conf of badusb's, DE")
+	if fails: print(out, out2)
+	dt = ducktest()
+	for layout in ("en-US", "de-DE"):
+		for e in BU_EX:
+			want = want_reports(dt, layout, e)
+			out = r.output("echo | badusb -l %s /home/flipper/badusb/"
+				"%s.txt; echo st=$?" % (layout, e), 120)
+			got = HIDRE.findall(out or b"")
+			ok = out is not None and b"st=0" in out and got == want
+			check(ok, "AC11.3.1: badusb -l %s %s.txt: the %d hid< "
+			      "reports the engine makes on the PC" % (layout, e,
+			      len(want)))
+			if not ok:
+				print("    got %d, want %d" % (len(got), len(want)))
+				for i, (g, w) in enumerate(zip(got, want)):
+					if g != w:
+						print("    first difference at %d: "
+						      "%s / %s" % (i, g, w))
+						break
+				if out is not None and len(got) == 0:
+					print(out.decode("latin-1")[-600:])
+	r.sh("echo 'STRING ok' > /tmp/bad.txt; echo 'REM' >> /tmp/bad.txt; "
+	     "echo 'FOO bar' >> /tmp/bad.txt", 20)
+	out = r.output("badusb -n /tmp/bad.txt; echo st=$?", 30)
+	check(out is not None and b"st=1" in out and re.search(
+	      rb"/tmp/bad.txt: line 3: unknown command or key: FOO", out)
+	      is not None and HIDRE.search(out) is None,
+	      "AC11.3.1: badusb -n reports the bad line with its number and "
+	      "types nothing")
+	if fails: print(out)
+	out = r.output("badusb -n /home/flipper/badusb/keys.txt; echo st=$?", 30)
+	check(out is not None and out.strip() == b"st=0",
+	      "badusb -n: an example script checks clean")
+
+	# The app: a script that would wait 10 s, last in the list
+	r.sh("echo 'STRING a' > /home/flipper/badusb/zwait.txt; "
+	     "echo 'DELAY 10000' >> /home/flipper/badusb/zwait.txt; "
+	     "echo 'STRING b' >> /home/flipper/badusb/zwait.txt", 20)
+	base = win_only(r, "badusb-gui")
+	mark = len(r.out)
+	win_tap(r, "ok", rb"gui< win\tlist\t.*?gui< show")	# Bad USB
+	now = freebytes(r)
+	print("  RAM: Bad USB open: %d bytes (free %d -> %d)" % (base - now,
+		base, now), flush=True)
+	log = lambda: r.out[mark:].replace(b"\r", b"")
+	check(re.search(rb"gui< win\tlist\tlist\tBad USB", log()) is not None
+	      and b"gui< item\tset\tSettings\ten-US" in log()
+	      and all(("\t%s\n" % e).encode() in log() for e in BU_EX)
+	      and b"gui< item\ts4\tzwait" in log(),
+	      "AC11.3.1: the launcher starts Bad USB as a window app: "
+	      "Settings, then the scripts")
+	if fails:
+		print(b"\n".join(re.findall(rb"gui[<>] [^\n]*",
+		      log())[:20]).decode("latin-1"))
+	check(0 < base - now <= 4608,
+	      "R11.3.4: Bad USB open takes <= 4.5 KB more than the launcher "
+	      "alone (%d B)" % (base - now))
+	# Settings: Layout -> de-DE, Back: one write of badusb.conf
+	keys(r, ("ok@set", "right", "back"))
+	r.sh("sleep 1", 20)
+	out = file_out(r, "cat /etc/flipper/badusb.conf",
+		       lambda o: b"Layout: de-DE" in o)
+	check(out is not None and b"Layout: de-DE\nDelay: 0\n" in out
+	      and re.search(rb"gui> submit\tset\tlay=1", log()) is not None,
+	      "R11.3.4: Settings: the layout changed, badusb.conf written")
+	if fails: print(out)
+	r.sh("ls -l /etc/flipper/badusb.conf > /tmp/conf1; sleep 60", 90)
+	keys(r, ("ok@set", "back"))		# no change: no write
+	r.sh("sleep 1", 20)
+	out = r.output("ls -l /etc/flipper/badusb.conf | cmp -s - /tmp/conf1 "
+		       "&& echo same", 20)
+	check(out is not None and b"same" in out,
+	      "K.7: Settings left without a change writes nothing")
+	# Up (wraps): zwait; OK: the confirm window; OK: run; Back: stop
+	keys(r, ("up", "ok@conf"))
+	check(b"gui< win\tconf\tconfirm\tBad USB" in log()
+	      and b"gui< line\tzwait" in log()
+	      and b"gui< line\tLayout: de-DE" in log()
+	      and b"gui< line\tConnect the USB cable" in log(),
+	      "R11.3.4: the confirm window (script, layout, connect and run?)")
+	m2 = len(r.out)
+	win_tap(r, "ok", rb"hid< kbd 00 00 04")		# 'a' typed
+	busy = freebytes(r)
+	print("  RAM: badusb running: %d bytes (free %d -> %d)" % (now - busy,
+		now, busy), flush=True)
+	check(0 < now - busy <= 3072,
+	      "R11.3.3: badusb running takes <= 3 KB (%d B)" % (now - busy))
+	t0 = time.time()
+	win_tap(r, "back", rb"gui< win\tlist\t.*?gui< show")
+	dt_back = time.time() - t0
+	after = r.out[m2:].replace(b"\r", b"")
+	reps = HIDRE.findall(after)
+	backat = after.find(b"gui> back\trun")
+	check(re.search(rb"gui< win\trun\ttext\tBad USB", after) is not None
+	      and backat >= 0 and len(reps) >= 3
+	      and reps[-1] == b"kbd 00 00 00 00 00 00 00 00"
+	      and b"kbd 00 00 05" not in b" ".join(reps)
+	      and HIDRE.search(after, backat) is not None,
+	      "AC11.3.1: Back stops the DELAY 10000 script: every key up "
+	      "(the last report all zeros), 'b' never typed, the list again "
+	      "(%.1f s in QEMU with the fake key)" % dt_back)
+	if fails: print(after.decode("latin-1")[-2500:])
+	keys(r, ("back!",))
+	end = ram_back(r, base)
+	check(end >= base - 256, "Bad USB: Back closes it, its RAM is free "
+	      "again (%d -> %d)" % (base, end))
+	for m in re.finditer(rb"memuse: badusb.*", r.out[mark:]):
+		print("  " + m.group(0).decode().strip())
+	r.sh("rm -f /home/flipper/badusb/zwait.txt", 20)
+	win_restore(r)
+
 
 def main():
+	only = sys.argv[1:] == ["badusb"]
 	r = powercut.Run(0, 0)
 	try:
 		if not r.login():
 			check(False, "login")
 			return 1
-		if sys.argv[1:] == ["jiggle"]:
-			jiggle(r)
+		if sys.argv[1:] == ["jiggle"] or only:
+			if only:
+				keyfiles(r)
+				badusb(r)
+			else:
+				jiggle(r)
 			if os.environ.get("NATTEST_LOG"):
 				with open(os.environ["NATTEST_LOG"], "wb") as f:
 					f.write(r.out)
@@ -624,6 +790,7 @@ def main():
 
 		ordua(r)
 		jiggle(r)
+		badusb(r)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:
 				f.write(r.out)

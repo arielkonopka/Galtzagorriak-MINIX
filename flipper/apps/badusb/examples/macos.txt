@@ -1,0 +1,12 @@
+REM Bad USB example (Galtzagorriak MINIX): macOS.
+REM Opens TextEdit through Spotlight (Cmd+Space) and types a greeting.
+REM Run it only on a computer you own or may use.
+DELAY 1000
+GUI SPACE
+DELAY 500
+STRING TextEdit
+ENTER
+DELAY 1500
+GUI n
+DELAY 500
+STRINGLN Kaixo! Galtzagorriak MINIX is typing this on a Flipper Zero.

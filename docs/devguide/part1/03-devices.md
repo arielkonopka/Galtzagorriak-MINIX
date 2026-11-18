@@ -363,10 +363,20 @@ Flipper's USB one is T28b (until then the bus reads "not attached").
 the stock Bad USB `.kl` files: exactly 256 bytes, 128 little-endian entries, one per ASCII code,
 each the key code (low byte) and the boot modifier byte (high byte: Shift 0x02, AltGr 0x40). US is
 built in (`hid_us`, const); `hid_kl_load(kl, "de-DE")` reads `/usr/share/hid/layouts/de-DE.kl`
-or `/ext/badusb/assets/layouts/de-DE.kl` into your 256-byte buffer and refuses a file of another
+or `/ext/badusb/assets/layouts/de-DE.kl` (on MINIX `/home/flipper/badusb/assets/layouts/`) into your 256-byte buffer and refuses a file of another
 size. `hid_type(fd, kl, "Kaixo!\n", &skipped)` types UTF-8 text, key then key-up in one write per
 character; characters without a key are counted in `skipped`. `hid_mouse()` clamps to −127..127.
 Host test: `make hidtest` (all printable ASCII in US and DE back through a reverse table).
+
+**The Bad USB engine** (`flipper/apps/badusb/ducky.c`, R11.3.3) runs DuckyScript on top of
+`libhid`: `dk_run(&d, fd)` reads the script a line at a time (a 128-byte buffer and one 256-byte
+line on the stack; `REPEAT` seeks back and reads the line again) and hands each report to the
+caller's `struct dk_io` (keyboard, mouse, consumer, wait, button). With `d.io == NULL` it only
+checks the script (`badusb -n`). The `badusb` command adds the device files, `poll()` sleeps and the
+stop signals (blocked, looked at every 50 ms: no handler, so no MM gap). `make hidtest` also runs
+`ducktest`: golden reports, the `-n` errors and a fuzz test of random scripts under ASan/UBSan;
+`ducktest -r LAYOUT SCRIPT` prints the reports a script makes, which `tools/nattest.py badusb`
+compares with the `hid<` lines of QEMU.
 
 ```c
 #include <fcntl.h>

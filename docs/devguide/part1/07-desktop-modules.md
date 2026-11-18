@@ -213,7 +213,9 @@ int main(void)
 at most 512 bytes per `write()`); rows go with `gm_item`, `gm_int`, `gm_enum`, `gm_bool`,
 `gm_time`, `gm_date`, `gm_days`, `gm_input`, `gm_line`, `gm_action`; `gm_show` ends the window
 and sends it; `gm_busy(1)`/`gm_busy(0)` send `busy`/`idle`. `gm_event` waits for the next event
-in the same buffer each time and splits it into `f` (ended by `NULL`). The full example is
+in the same buffer each time and splits it into `f` (ended by `NULL`). An app that also waits on another file (a
+child's pipe, as Bad USB does) `poll()`s `GM_EVFD` together with it, but asks `gm_pending(buf)`
+first: `gm_event` may already hold the next event in its buffer, and then fd 3 stays quiet. The full example is
 `flipper/apps/gmdemo.c`; the `gmdemo` package installs it with `gm.c` and `gm.h` in
 `/usr/share/examples/gui/`. Build it as `minix.mk` does (`OBJS_gmdemo`, `CHMEM_gmdemo := 2560`).
 
