@@ -48,6 +48,33 @@ STOP2_LIMIT = 99.0		# % of the time asleep (AC6.6)
 MIN_HOURS = 8.0			# AC6.6 asks for 8 h
 
 POWER_RX = re.compile(r"soc=\S+.*")
+# One Stop2 sleep is at most PM_MAX = HZ - 2 = 58 ticks (arm/klib.c), and
+# each one ends in a counted wake-up: so wake-ups >= Stop2 s / this.
+MAX_SLEEP_S = 58 / 60.0
+WRAP = 65536			# wbtn/wother are u16 in older kernels (#284)
+
+
+def unwrap_wakes(wb, wo, stop2):
+	"""Wake-up deltas made right after a u16 wrap (#284).  A negative
+	delta wrapped once; a count below what the Stop2 time needs wrapped
+	(more) times.  Returns (wb, wo, wrapped)."""
+	wrapped = False
+	if wb < 0:
+		wb += WRAP; wrapped = True
+	if wo < 0:
+		wo += WRAP; wrapped = True
+	while wb + wo < stop2 / MAX_SLEEP_S * 0.999:
+		wo += WRAP; wrapped = True
+	return wb, wo, wrapped
+
+
+def usb_since(port):
+	"""When the console port appeared (the Flipper was plugged in), from
+	its device node's ctime (Linux, macOS); None if unknown."""
+	try:
+		return os.stat(port).st_ctime
+	except (OSError, ValueError):
+		return None
 
 
 def parse_power(text):
@@ -222,12 +249,29 @@ def judge(a, b):
 		wb, wo = lb["wbtn"] - la["wbtn"], lb["wother"] - la["wother"]
 		src = "lat"
 	if src:
+		wb, wo, wrapped = unwrap_wakes(wb, wo, st)
+		# On USB the Flipper never sleeps: the time since the cable went
+		# back in is not part of the night.
+		usb = 0
+		t = b.get("usb_since")
+		if t and (pb.get("usb") or pb.get("vbus")) and \
+				a["host_utc"] < t <= b["host_utc"]:
+			usb = int(b["host_utc"] - t)
+			if 0 < usb < up - st:
+				up -= usb
+				L.append("(plugged in at %s UTC, %d s ago, when the "
+					"port appeared: that time is left out)" % (
+					time.strftime("%H:%M:%S", time.gmtime(t)), usb))
 		pct = 100.0 * st / up
 		good = pct > STOP2_LIMIT
 		L.append("%s Stop2: %.2f %% (%d of %d s; from %s); wake-ups: "
 			"%d button, %d other (%.1f per minute)" % ("PASS" if
 			good else "FAIL", pct, st, up, src, wb, wo,
 			wo / (up / 60.0)))
+		if wrapped:
+			L.append("  the kernel's u16 wake-up counter wrapped "
+				"(#284): the count is corrected from the Stop2 time "
+				"(each sleep <= %.2f s)" % MAX_SLEEP_S)
 		if not good:
 			L.append("  the minutes on USB before unplugging and "
 				"after plugging back in count as awake: keep "
@@ -256,7 +300,7 @@ def judge(a, b):
 				"resolution, i.e. well under %.1f mA"
 				% (1.0 / 100 * CAPACITY_MAH / max(hours, 0.1)))
 	if "sby" in pb or "avg" in pb:
-		L.append("Gauge in the morning: avg %s mA, standby estimate %s "
+		L.append("Gauge at the end: avg %s mA, standby estimate %s "
 			"mA (whole mA only)" % (pb.get("avg", "?"),
 			pb.get("sby", "?")))
 	if pb.get("usb") or pb.get("vbus"):
@@ -323,6 +367,7 @@ def cmd_end(args):
 	mx = open_minix(args.port, args.log)
 	b = snapshot(mx)
 	mx.close()
+	b["usb_since"] = usb_since(args.port)
 	if a is None:
 		a = since_boot(b)
 	lines, ok, row = judge(a, b)
@@ -354,7 +399,7 @@ SELF = [
 		reset="software", clock_offset=0.9, lat=None,
 		power=parse_power("noise\r\nsoc=99 mv=4121 ma=-3 avg=-12 sby=-1 "
 		"temp=228 flags=0x0181 usb=1 chg=0 vbus=1 vreg=4208 ichg=2048 "
-		"otg=0 up=36660 stop2=35900 wbtn=1 wother=36010")), True),
+		"otg=0 up=36660 stop2=35900 wbtn=1 wother=37200")), True),
 	# a watchdog reset in the night
 	(dict(host_utc=0.0, version="G 1", reset="software", clock_offset=0.0,
 		power=dict(soc=90, up=100, stop2=0)),
@@ -379,12 +424,26 @@ SELF = [
 	 dict(host_utc=11 * 3600.0, reset="software", clock_offset=1.0,
 		power=dict(soc=100), lat=parse_lat_stop2(
 		"Stop2  39500 of 39650 s up (99%), wake-ups: 2 by a button, "
-		"39000 other")), True),
+		"40900 other")), True),
 	# awake too much (USB left in, say)
 	(dict(host_utc=0.0, reset="software", clock_offset=0.0,
 		power=dict(soc=100, up=0, stop2=0)),
 	 dict(host_utc=8 * 3600.0, reset="software", clock_offset=0.0,
 		power=dict(soc=100, up=8 * 3600, stop2=4 * 3600)), False),
+	# the first real run (2026-11-17/18): no start file, wother wrapped
+	# (u16, #284), and 24 min on USB before `end`.  Without the USB
+	# minutes it is 98.2 %, still under 99 %.
+	(None, dict(host_utc=73428.0, version="Galtzagorriak 0.1.1+124.g0566ba1",
+		reset="software", clock_offset=-1.6, usb_since=73428.0 - 1470,
+		power=parse_power("soc=99 mv=4120 ma=0 avg=0 sby=-2 temp=240 "
+		"flags=0x5028 usb=1 chg=3 vbus=2 vreg=4208 ichg=2048 otg=0 "
+		"up=73428 stop2=70677 wbtn=151 wother=11607")), False),
+	# a clean night across a u16 wrap: 65000 -> 30000 is 30536 wake-ups
+	(dict(host_utc=0.0, reset="software", clock_offset=0.0,
+		power=dict(soc=90, up=1000, stop2=0, wbtn=0, wother=65000)),
+	 dict(host_utc=29200.0, reset="software", clock_offset=0.5,
+		power=dict(soc=89, up=30200, stop2=29000, wbtn=0, wother=30000,
+		usb=1), usb_since=29100.0), True),
 ]
 
 
@@ -395,6 +454,10 @@ def selftest():
 		"version": "Galtzagorriak 0.1.1+3.gx",
 		"reset": "watchdog (dev mode: a watchdog reset goes to DFU)"}
 	assert parse_power("x soc=5 flags=0x0181 up=7")["flags"] == 0x181
+	assert unwrap_wakes(151, 11607, 70677) == (151, 11607 + WRAP, True)
+	assert unwrap_wakes(0, 30000 - 65000, 29000) == (0, 30536, True)
+	assert unwrap_wakes(1, 37200, 35900) == (1, 37200, False)
+	assert unwrap_wakes(0, 200000, 190000) == (0, 200000, False)	# u32
 	for i, (a, b, want) in enumerate(SELF):
 		lines, ok, row = judge(a or since_boot(b), b)
 		if ok != want:
