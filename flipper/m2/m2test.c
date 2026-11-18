@@ -424,6 +424,22 @@ static void phase3_tests(void)
 		"may its own (AC3.5)");
 }
 
+/* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
+ * program, m2/fptest.c, built for the FPU; m2test itself stays soft-float. */
+static void fpu_tests(void)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl("/bin/fptest", "fptest", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "fpu: lazy FP context switch (fptest)");
+}
+
 static void finish(void)
 {
 	flash_report();
@@ -2621,6 +2637,7 @@ int main(int argc, char **argv)
 	pkg_tests();
 #endif
 	time_tests();
+	fpu_tests();
 	finish();
 	return 0;
 }

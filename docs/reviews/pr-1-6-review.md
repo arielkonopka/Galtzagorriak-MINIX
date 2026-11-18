@@ -1,7 +1,7 @@
 # Review of PRs #1–#6 (stacked), 2026-11-14
 
 Reviewed at heads: #1 4e9c835, #2 a7f4d84, #3 0ec7053, #4 1ae4383, #5 780b8fd, #6 4095d0d.
-Criteria: correctness, security, RAM (owner: never increase RAM), responsiveness (spec rule 0.8, L1–L10), spec conformance.
+Criteria: correctness, security, RAM (user: never increase RAM), responsiveness (spec rule 0.8, L1–L10), spec conformance.
 RAM was measured by building main (81506e0) and #6 with `make BOARD=flipper minix`. Kernel data+bss went from 17 556 B to 18 960 B (+1 404 B). Of that, 1 024 B is `ir_buf` (#6) and 256 B is the note table (#5). MM, FS and INIT are unchanged.
 
 | PR | Verdict |
@@ -27,17 +27,17 @@ See also `umap-bounds-finding.md` (S13, critical, found during the #2 re-review)
 - `hal_halt` behaviour (kick on halt, stop on panic) matches R4a.4. OK.
 - The bell shares TIM16 with `/dev/speaker` (#5). A `^G` during a tune cuts the tune's current note after `HZ/6`. This is minor.
 
-## #3: changes requested (owner decision 17:10Z: no RAM increase). #3 was merged into the #2 branch at 18:40Z, so the fix is now due on `dfu-watchdog-beep`
+## #3: changes requested (user decision 17:10Z: no RAM increase). #3 was merged into the #2 branch at 18:40Z, so the fix is now due on `dfu-watchdog-beep`
 - memcpy/memmove/memset look correct: alignment, overlap direction, and LDM/STM register lists. They are interruptible on the M4 (ICI), so there is no L3/L4 impact.
 - The SD retry and CRC logic is sound. Resuming at the failed sector is correct for CMD18. No interrupts are masked in the SD path.
 - **RAM:** `CHMEM_sh` goes from 12 KB to 16 KB, which is **+4 KB per running shell** (login shell, subshells, scripts). It fixes a real E2BIG, but it breaks the "never increase RAM" rule. A better fix is to stop the exec frame needing heap room after a glob. Options: build it on the stack, free the glob vector before `execve`, or let MM read argv directly. Alternatively, keep 12 KB and grow the reserve only on E2BIG.
-- **Owner decision:** keep `CHMEM_sh` at 12 KB and fix this on the exec side. Everything else in #3 passes. Because #4 and #5 are stacked on #3, they merge once #3 is fixed.
+- **User decision:** keep `CHMEM_sh` at 12 KB and fix this on the exec side. Everything else in #3 passes. Because #4 and #5 are stacked on #3, they merge once #3 is fixed.
 
 ## #4: pass, with follow-ups
 - Idle masks interrupts only for a handful of instructions around `wfi`, which is fine for L4. The PendSV kick does not count as a tick. The tick-coalescing behaviour is unchanged.
 - `flipwords` is correct for 16-byte multiples (whole clicks).
 - `/dev/zero` writes to `user_phys`, which `numap` validated, and `count` is clipped to `io_nbytes`. OK. `/dev/random` is 0444.
-- **RNG and CPU2:** the comment says "CPU2 is not started, so no semaphore", but the spec reuses the owner's working CPU2 BLE stack, which shares the RNG. Take HSEM semaphore 0 around RNG use (ST AN5289) before BLE comes up.
+- **RNG and CPU2:** the comment says "CPU2 is not started, so no semaphore", but the spec reuses the user's working CPU2 BLE stack, which shares the RNG. Take HSEM semaphore 0 around RNG use (ST AN5289) before BLE comes up.
 - **Stack:** `u32_t w[16]` (64 B) is added to the MEM task stack (256 B, measured 120). Re-check `kstack_used` on the device.
 
 ## #5: pass

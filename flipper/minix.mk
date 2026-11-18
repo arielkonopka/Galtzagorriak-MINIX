@@ -72,6 +72,14 @@ $(MB)/libc.a: $(LIBC_OBJ)
 PICFLAGS := -fpic -msingle-pic-base -mpic-register=r9 \
 	    -mno-pic-data-is-text-relative
 UCFLAGS	:= $(LIBCFLAGS) $(PICFLAGS)
+# R5.7: code that uses the FPU (float in hardware; double stays in software,
+# the FPU is single precision).  softfp keeps the soft-float calling
+# convention, so it links with the one libc.  The kernel saves such a
+# process's FP registers on its own stack (+136 B of stack, no other RAM).
+# Such a program must not use vfork: the child would run over the
+# parent's saved S16-S31.  Link it with $(UFPLDFLAGS) (vfork becomes fork).
+UFPFLAGS := -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+UFPLDFLAGS := -Wl,--defsym=vfork=fork -Wl,--defsym=_vfork=fork
 LIBCP_OBJ := $(LIBC_OBJ:$(MB)/libc/%=$(MB)/libcp/%)
 $(MB)/libcp/%.o: $(MROOT)/src/lib/%.c
 	@mkdir -p $(dir $@)
@@ -315,7 +323,7 @@ UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello gmdemo
+UPROGS	+= furitest furihello gmdemo fptest
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -366,6 +374,7 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# MM gap: no malloc, no stdio, no signal handler);
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
+CHMEM_fptest := 8192
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
@@ -415,6 +424,17 @@ $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+# fptest (R5.7): the FPU checks; m2fpu.c and fpregs.S use the FPU.
+OBJS_fptest = $(MB)/cmd/fptest.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
+$(MB)/cmd/fptest.o: m2/fptest.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/m2fpu.o: m2/m2fpu.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) $(UFPFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/fpregs.o: m2/fpregs.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
