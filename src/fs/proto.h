@@ -15,6 +15,7 @@ _PROTOTYPE( void invalidate, (Dev_t device)				);
 _PROTOTYPE( void put_block, (struct buf *bp, int block_type)		);
 _PROTOTYPE( void rw_block, (struct buf *bp, int rw_flag)		);
 _PROTOTYPE( void forget_zone, (Dev_t dev, zone_t z, int scale)		);
+_PROTOTYPE( int pipe_bufs, (void)						);
 _PROTOTYPE( void sb_written, (struct buf *bp)				);
 _PROTOTYPE( void rw_scattered, (Dev_t dev,
 			struct buf **bufq, int bufqsize, int rw_flag)	);

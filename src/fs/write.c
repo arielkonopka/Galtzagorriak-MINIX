@@ -259,15 +259,12 @@ off_t position;			/* the new block's position */
  * pipes keep at most half of the cache; beyond that (or with zones of
  * more than a block) a real zone is used, as before (T9).
  */
-  register int i, n;
   struct super_block *sp;
 
   if (rip->i_pipe != I_PIPE) return(NO_ZONE);
   sp = rip->i_sp;
   if (sp->s_log_zone_size != 0 || position >= PIPE_SIZE) return(NO_ZONE);
-  for (i = 0, n = 0; i < NR_BUFS; i++)
-	if (BUF(i)->b_dirt == PIPE_DIRTY) n++;
-  if (n >= NR_BUFS / 2) return(NO_ZONE);
+  if (pipe_bufs() >= NR_BUFS / 2) return(NO_ZONE);
   return(sp->s_zones + (zone_t) (rip - &inode[0]) * V1_NR_DZONES
 					+ (zone_t) (position / BLOCK_SIZE));
 }

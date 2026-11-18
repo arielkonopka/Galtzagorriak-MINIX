@@ -452,7 +452,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
 /* Minimum number of blocks to prefetch. */
 # define BLOCKS_MINIMUM		(NR_BUFS < 50 ? 18 : 32)
 
-  int block_spec, scale, read_q_size;
+  int block_spec, scale, read_q_size, pipe_q;
   unsigned int blocks_ahead, fragment;
   block_t block, blocks_left;
   off_t ind1_pos;
@@ -524,6 +524,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
   if (blocks_ahead > blocks_left) blocks_ahead = blocks_left;
 
   read_q_size = 0;
+  pipe_q = pipe_bufs();		/* pipe data: never taken (K.6) */
 
   /* Acquire block buffers. */
   for (;;) {
@@ -532,7 +533,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
 	if (--blocks_ahead == 0) break;
 
 	/* Don't trash the cache, leave 4 free. */
-	if (bufs_in_use >= NR_BUFS - 4) break;
+	if (bufs_in_use + pipe_q >= NR_BUFS - 4) break;
 
 	block++;
 

@@ -10,6 +10,7 @@
  *   free_zone:	  release a zone (when a file is removed)
  *   rw_block:	  read or write a block from the disk itself
  *   invalidate:  remove all the cache blocks on some device
+ *   pipe_bufs:   count the buffers that hold pipe data (K.6)
  */
 
 #include "fs.h"
@@ -300,6 +301,21 @@ int scale;			/* log2 blocks per zone */
 			bp->b_dirt = CLEAN;
 			break;
 		}
+}
+
+
+/*===========================================================================*
+ *				pipe_bufs				     *
+ *===========================================================================*/
+PUBLIC int pipe_bufs()
+{
+/* How many buffers hold pipe data that has no place on the disk (K.6)?
+ * Write.c keeps it at most half of the cache, rahead() off it. */
+  register int i, n;
+
+  for (i = 0, n = 0; i < NR_BUFS; i++)
+	if (BUF(i)->b_dirt == PIPE_DIRTY) n++;
+  return(n);
 }
 
 

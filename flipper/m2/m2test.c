@@ -1293,7 +1293,8 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 
 	/* ACK.3: four modules as fast as they can, keys on APPS */
 	wtap(b, 0x04);					/* Left: APPS */
-	s0 = sectors_written();				/* ACK.5 */
+	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
+	s0 = sectors_written();
 	fflush(stdout);
 	for (i = 0; i < 4; i++)
 		if ((w[i] = fork()) == 0) {
@@ -1783,6 +1784,37 @@ int main(int argc, char **argv)
 	wait(&st);
 	check(n == 17 && strcmp(buf, "through the pipe") == 0,
 						"fork + pipe");
+
+	/* Spec K.6: pipe data lives in the cache only, at most half of it
+	 * (fs/write.c, pipe_zone); 3 full pipes (21 blocks, the cache has
+	 * 18) take real zones beyond that.  Every byte must come back. */
+	{
+		unsigned char *pb = lfb;	/* no .bss more: fork below */
+		int pp[3][2], k, j, okk = 1, np = 0;
+
+		for (k = 0; k < 3; k++) if (pipe(pp[k]) == 0) np++;
+		for (k = 0; k < np; k++)
+			for (j = 0; j < 14; j++) {
+				memset(pb, (k * 14 + j) & 0xFF, 512);
+				if (write(pp[k][1], (char *) pb, 512) != 512)
+					okk = 0;
+			}
+		n = open("/bin/sh", O_RDONLY);	/* files go on meanwhile */
+		if (n < 0 || read(n, (char *) pb, 512) != 512)
+			okk = 0;
+		if (n >= 0) close(n);
+		for (k = 0; k < np; k++) {
+			for (j = 0; j < 14; j++) {
+				if (read(pp[k][0], (char *) pb, 512) != 512)
+					okk = 0;
+				else if (pb[0] != ((k * 14 + j) & 0xFF)
+				    || pb[511] != pb[0]) okk = 0;
+			}
+			close(pp[k][0]);
+			close(pp[k][1]);
+		}
+		check(np == 3 && okk, "3 full pipes: the data comes back (K.6)");
+	}
 
 	/* Shadowing under load: parent and child (same addresses) take
 	 * turns 200 times; each flip exchanges their images (flipclicks).
