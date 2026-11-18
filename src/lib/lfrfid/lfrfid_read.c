@@ -106,6 +106,20 @@ static void emu_new(EmuRun* r, const ProtocolBase* b, const uint8_t* data, size_
         (void)emu_run(r);
 }
 
+/* The load as the Flipper's pull pin drives it reaches a reader's envelope
+ * detector about 2 carrier periods late on its falling side: measured with
+ * the reference Flipper (Unleashed rfid raw_read), a 4-of-8 load showed as
+ * 6 of 8 and the 4 periods unloaded of an RF/8 FSK cycle vanished, so no
+ * FSK frame read.  Each loaded part is cut by that much (never below 1 and
+ * never a segment loaded for all of it, a deliberate long load): FSK and
+ * PSK now read, ASK keeps working (2 of 32 is noise to it). */
+#define EMU_TRIM 2
+
+static uint32_t emu_trim(uint32_t dur, uint32_t pul) {
+    if(pul == 0 || pul > dur) return pul; /* none, or all of the segment */
+    return pul > EMU_TRIM ? pul - EMU_TRIM : 1;
+}
+
 /* Does the waveform repeat after L runs, for MAXY runs (more than any
  * frame)? */
 static bool emu_period(const ProtocolBase* b, const uint8_t* data, size_t size, long L) {
@@ -162,6 +176,7 @@ int lfrfid_emu_runs(
     for(i = 0; i < L; i += 2) {
         uint32_t lo = emu_run(&r), dur = (w >> 1) + (lo >> 1) - 1, pul = w >> 1;
 
+        pul = emu_trim(dur, pul);
         if(n > 0 && runs[4 * (n - 1)] == dur && runs[4 * (n - 1) + 1] == pul &&
            runs[4 * (n - 1) + 2] < 0xFFFF) {
             runs[4 * (n - 1) + 2]++;
@@ -223,7 +238,8 @@ int lfrfid_emu_segments(
             break;
         }
         dur[nseg] = (w >> 1) + (lo >> 1) - 1;
-        pulse[nseg++] = w >> 1;
+        pulse[nseg] = emu_trim(dur[nseg], w >> 1);
+        nseg++;
         w = emu_run(&r);
     }
     b->free(r.e);

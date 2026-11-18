@@ -785,6 +785,13 @@ static int lf_find(const char *name)
 	return -1;
 }
 
+/* The dictionary's heap back (it is made again when needed). */
+static void lf_free(void)
+{
+	if (dict != NULL) protocol_dict_free(dict);
+	dict = NULL;
+}
+
 static size_t lf_size(int p)
 {
 	return protocol_dict_get_data_size(lf(), p);
@@ -1251,22 +1258,30 @@ static int emulate_lf(int p, uint8_t *data)
 	struct rfid_emu e;
 	uint16_t *runs;
 	int nseg, n, fd;
+	size_t size = lf_size(p);
 
-	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
-	nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
+	/* What is sent, first: the text needs the dictionary (1.5 KB) and the
+	 * renderer's strings, which go back before the 2 KB buffer is taken
+	 * (with them an FSK emulation ran out of its 8 KB on the device).
+	 * "emulating" comes only once it runs (tools/twoflip.py waits for it). */
+	lf_print(p, data);
+	fflush(stdout);
+	lf_free();
+	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) {
+		fprintf(stderr, "rfid: no memory for the frame\n");
+		return 1;
+	}
+	nseg = lfrfid_emu_segments(p, data, size, (uint32_t *) d,
 					(uint32_t *) pulse, MAXD);
 	if (nseg < 0) {			/* a long frame: runs */
 		runs = (uint16_t *) pulse;	/* the same 2 KB */
-		n = lfrfid_emu_runs(p, data, lf_size(p), runs, (int) MAXRUNS);
+		n = lfrfid_emu_runs(p, data, size, runs, (int) MAXRUNS);
 		if (n < 0) {
-			fprintf(stderr, "rfid: a %s frame is more than %d runs "
-				"(%s)\n", protocol_dict_get_name(lf(), p), (int) MAXRUNS,
-				lf_modulation(lf_config(p, data)));
+			fprintf(stderr, "rfid: the frame is more than %d runs\n",
+				(int) MAXRUNS);
 			return 1;
 		}
-		printf("emulating ");
-		lf_print(p, data);
-		return play_runs(runs, n, 128, "");
+		return play_runs(runs, n, 128, "emulating ");
 	}
 	e.dur = d;
 	e.pulse = pulse;
@@ -1280,9 +1295,8 @@ static int emulate_lf(int p, uint8_t *data)
 		close(fd);
 		return 1;
 	}
-	printf("emulating ");
-	lf_print(p, data);
-	printf("(%d segments); hold to a reader, Ctrl-C to stop\n", nseg);
+	printf("emulating (%d segments); hold to a reader, Ctrl-C to stop\n",
+		nseg);
 	for (;;) sleep(60);		/* Ctrl-C ends it; close stops it */
 	return 0;			/* not reached */
 }
