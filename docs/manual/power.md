@@ -45,7 +45,9 @@ At the end: `vreg`, `ichg` and `otg` (the charging settings, below), and how the
 it started: `up` seconds running, `stop2` seconds of them in deep sleep (Stop2), and how often a
 button (`wbtn`) or anything else (`wother`: its timer, the RTC alarm) woke it. `stop2` divided
 by `up` is the share of time asleep; take two readings and their differences for a night. With USB
-connected the Flipper does not go into deep sleep.
+connected the Flipper does not go into deep sleep. For a whole night measured and judged from the
+computer, see the development guide's
+[overnight battery test](../devguide/part2/07-overnight-power-test.md).
 
 ## Screen power save
 
