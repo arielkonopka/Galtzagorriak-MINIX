@@ -3142,6 +3142,19 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
+  **Done** (kernel part, 2026-11-18): `FPCCR.ASPEN|LSPEN`, CP10/CP11 on at boot. The FP
+  registers of the last FP process stay in the FPU (a `CONTROL_FPLIVE` bit in its
+  `p_reg.control`; only `mpu_proc`, the last user process run, can have it, so no variable is
+  needed: kernel RAM +0 B) until `restart` enters another process; only then
+  S16–S31 go to that process's stack (64 B below the CPU's extended frame, which already holds
+  S0–S15 and FPSCR) and the FPU is zeroed. A system call or interrupt that returns to the same
+  process saves nothing (even the lazy S0–S15 save is skipped). Cost: processes without the
+  FPU ~10 cycles per kernel entry; an FP process ~110 cycles per switch away and back (~1.7 µs
+  at 64 MHz) and 136 B of its own stack. Build flags `UFPFLAGS`/`UFPLDFLAGS` in
+  `flipper/minix.mk`; FP programs use `fork` for `vfork` (the vfork child would overwrite the
+  parent's saved S16–S31); `setjmp` does not save S16–S31. QEMU test: `/bin/fptest` (run by `m2test`)
+  (arithmetic, two FP processes by IPC and by time slice, no leak to another process, signal
+  handler, fork, exec). Still open: `fam2pkg` flag (with R5.5); a device run of `fptest`.
 - **R5.8** Provenance per D.3: upstream notices kept, SPDX lines, source file noted.
 
 Acceptance:
