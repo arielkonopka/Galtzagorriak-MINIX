@@ -1,0 +1,17 @@
+# prerm of the badusb package: off the launcher.  sh built-ins and exec
+# redirections only (see the postinst: no subshell, no grep).  The example
+# scripts go with the package; other scripts in /home/flipper/badusb, the
+# settings and the user badusb stay (pkg install badusb brings it back as
+# it was; rm them by hand to forget).
+exec 3<&0 4>&1 </etc/apps >/etc/apps.new
+while read l
+do
+	case "$l" in *:=/usr/bin/badusb-gui) ;; *) echo "$l" ;; esac
+done
+exec </etc/apps.new >/etc/apps
+while read l
+do
+	echo "$l"
+done
+exec <&3 >&4 3<&- 4>&-
+rm -f /etc/apps.new

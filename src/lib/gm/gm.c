@@ -339,6 +339,16 @@ int gm_event(char *buf, int size, char **f, int nf)
 	return GM_NONE;
 }
 
+/* Whether gm_event() holds a whole event line in buf (its buffer)
+ * already, so that the next call returns it without reading fd 3.  An
+ * app that poll()s fd 3 together with other files asks this first. */
+int gm_pending(const char *buf)
+{
+	return ev_len - ev_used > 0
+		&& memchr(buf + ev_used, '\n', (size_t) (ev_len - ev_used))
+		   != NULL;
+}
+
 /* "KEY=VALUE" of a submit: the key, *val the value (in place). */
 char *gm_kv(char *pair, char **val)
 {
