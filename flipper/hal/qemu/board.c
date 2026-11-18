@@ -376,6 +376,56 @@ unsigned hal_usb_room(void) { return 512; }
 int hal_usb_getc(void) { return -1; }
 int hal_usb_peekc(void) { return -1; }
 
+/* USB HID, the QEMU backend (spec R11.3.1): no USB here, so each report
+ * becomes one console line, "hid< kbd 02 00 0b 00 00 00 00 00", which
+ * nattest and M2 check.  Configured from the start; hal_hid_fake() plays
+ * the host (unplug, suspend, LEDs).  RAM: the state and the last line's
+ * hash, 8 B (the spec allows 32). */
+static uint32_t hid_st = HAL_HID_ATTACHED | HAL_HID_CONFIGURED;
+static uint32_t hid_hash;
+
+static void hid_put(int c)
+{
+	hid_hash = (hid_hash ^ (uint8_t) c) * 16777619u;	/* FNV-1a */
+	kputc(c);
+}
+
+uint32_t hal_hid_state(void) { return hid_st; }
+
+int hal_hid_send(unsigned kind, const uint8_t *rep, unsigned n)
+{
+	static const char names[3][6] = { "kbd", "mouse", "cons" };
+	static const char hex[] = "0123456789abcdef";
+	const char *s;
+
+	if (kind > HAL_HID_CONS || (hid_st & (HAL_HID_CONFIGURED |
+			HAL_HID_SUSPENDED)) != HAL_HID_CONFIGURED) return -1;
+	hid_hash = 2166136261u;
+	for (s = "hid< "; *s; s++) hid_put(*s);
+	for (s = names[kind]; *s; s++) hid_put(*s);
+	while (n-- > 0) {
+		hid_put(' ');
+		hid_put(hex[*rep >> 4]);
+		hid_put(hex[*rep++ & 15]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_hid_fake(uint32_t st)
+{
+	hid_st = st & (0xFF0000u | HAL_HID_ATTACHED | HAL_HID_CONFIGURED
+						| HAL_HID_SUSPENDED);
+	if (!(hid_st & HAL_HID_ATTACHED)) hid_st &= 0xFF0000u;	/* unplugged */
+	return 0;
+}
+
+int hal_hid_line(uint32_t *hash)
+{
+	*hash = hid_hash;
+	return 0;
+}
+
 void hal_backlight(unsigned level) { (void) level; }
 int hal_disk_dma_irq(void) { return -1; }	/* QEMU: semihosting, no DMA */
 void hal_disk_dma_ack(void) { }

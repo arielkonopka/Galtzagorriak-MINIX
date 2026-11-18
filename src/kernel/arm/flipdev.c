@@ -32,6 +32,8 @@
  *				  0 low, 1 high (output), 2 input, 3 input
  *				  with pull-up, 4 with pull-down, 5 off
  *				read: one byte per pin, '0' or '1', from pin 0
+ *	minors 17-19		/dev/hidkbd, /dev/hidmouse, /dev/hidcons:
+ *				USB HID reports (hiddev.c, <minix/hid.h>)
  *	minor 7  /dev/ir	infrared, "raw" timings: 32-bit little endian
  *				durations in microseconds, mark first, then
  *				space, mark, ... (an odd count).
@@ -74,6 +76,7 @@
 #include <minix/rtc.h>
 #include <minix/rfid.h>
 #include <minix/ibutton.h>
+#include <minix/hid.h>
 #include <signal.h>
 #include "ibemu.c"		/* the Dallas key's 1-Wire slave (R6.7) */
 
@@ -94,7 +97,7 @@
 #define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
 #define RFID_MINOR	16	/* a 125 kHz tag's signal, timed (R6.5) */
 			/* (15 is /dev/lat, include/minix/lat.h) */
-#define LAST_MINOR	16
+#define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -328,6 +331,8 @@ FORWARD _PROTOTYPE( int rfid_emu_start, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
+#include "hiddev.c"		/* USB HID, /dev/hidkbd... (R11.3.1) */
+
 /* The console on the LCD (launcher: "Console"): what goes out on the
  * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
  * so it costs no buffer: 32 x 10 characters of the 4x6 font, scrolled by
@@ -385,6 +390,10 @@ PUBLIC void flipdev_task()
 	switch (fm.m_type) {
 	case DEV_OPEN:
 	case DEV_CLOSE:
+		if (IS_HID(fm.DEVICE)) {
+			r = hid_open(&fm);
+			break;
+		}
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SPK_MINOR
 							&& !sp_waiting)
 			sp_quiet = 100 - hal_vol_default();	/* the default
@@ -409,7 +418,8 @@ PUBLIC void flipdev_task()
 		r = do_rw(&fm);
 		break;
 	case DEV_IOCTL:
-		r = fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
+		r = IS_HID(fm.DEVICE) ? hid_ioctl(&fm)
+		  : fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
 		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
 		  : fg_ioctl(&fm);
@@ -419,6 +429,7 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
@@ -443,6 +454,7 @@ PUBLIC void flipdev_task()
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
+	hid_check();			/* e.g. a persona let go */
   }
 }
 
@@ -474,6 +486,7 @@ message *m_ptr;
  */
   int ops = m_ptr->COUNT, want = ops & (SEL_RD | SEL_WR), r = want;
 
+  if (IS_HID(m_ptr->DEVICE)) return(hid_select(m_ptr));
   if (ops == 0) {
 	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
 	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
@@ -1094,6 +1107,7 @@ message *m_ptr;
 	? numap_src(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count)
 	: numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count);
   if (user == 0) return(EFAULT);
+  if (IS_HID(m_ptr->DEVICE)) return(hid_rw(m_ptr, user, count));
 
   switch (m_ptr->DEVICE) {
 #if LATTRACE
@@ -1742,6 +1756,7 @@ PRIVATE void do_hardint()
 	reply(REVIVE, rd_caller, rd_proc, r);
   }
   if (sel_wait) sel_check();		/* poll(), R4b.6 */
+  hid_check();
 }
 
 

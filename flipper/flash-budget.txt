@@ -33,5 +33,8 @@
 # 2026-11-18 (T23a desktop_test + T24d settings_test, #258): 9.  m2test's
 # text grew to 30592 B, past 28 KB: one more 4 KB page.  Nothing changed
 # in how often the cache writes.
-m2      cache   9
+# 2026-11-18 (T28a hid_tests + libhid, #264): 10.  m2test's text grew from
+# 31104 to 34492 B, past 32 KB: one more 4 KB page.  Nothing changed in
+# how often the cache writes.
+m2      cache   10
 m2      inst    0
