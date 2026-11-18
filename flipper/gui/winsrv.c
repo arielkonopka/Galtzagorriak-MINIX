@@ -111,12 +111,27 @@ static int ms_until(long t)
 /*===========================================================================*
  *				Events to the app			     *
  *===========================================================================*/
+/* GuiLog: one write per line, so that nothing else on the console (a
+ * memuse line, the shell) lands inside it.  Its buffer is on the stack
+ * only while GuiLog is on. */
+#define LOGMAX	(5 + (WR_LINE > EVMAX ? WR_LINE : EVMAX) + 1)
+
+static void __attribute__((noinline)) logput(const char *dir, const char *l,
+								int n)
+{
+	char b[LOGMAX];
+
+	if (n > LOGMAX - 6) n = LOGMAX - 6;
+	memcpy(b, dir, 5);
+	memcpy(b + 5, l, (size_t) n);
+	n += 5;
+	if (n == 5 || b[n - 1] != '\n') b[n++] = '\n';
+	(void) write(2, b, (unsigned) n);
+}
+
 static void logline(struct ses *s, const char *dir, const char *l, int n)
 {
-	if (!s->log) return;
-	(void) write(2, dir, 5);
-	(void) write(2, l, (unsigned) n);
-	if (n == 0 || l[n - 1] != '\n') (void) write(2, "\n", 1);
+	if (s->log) logput(dir, l, n);
 }
 
 /* One event, written without blocking: a full pipe (the app does not

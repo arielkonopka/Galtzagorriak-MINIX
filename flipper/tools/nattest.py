@@ -67,13 +67,22 @@ def keyfiles(r):
 	for k in list(KEY.values()) + ["000"]:
 		r.sh("echo k | tr k '\\%s' | dd of=/tmp/k%s bs=1 count=1 "
 		     "2>/dev/null" % (k, k), 20)
+	# /tmp/kbl: one /dev/backlight byte, the light on at 255 (the
+	# level QEMU has); the write restarts its idle timeout (tap(lit))
+	r.sh("echo k | tr k '\\377' | dd of=/tmp/kbl bs=1 count=1 "
+	     "2>/dev/null", 20)
 
 
-def tap(r, key, wait=1):
+def tap(r, key, wait=1, lit=False):
 	"""A short press of a fake button (QEMU /dev/buttons): down, held
-	for one cat (more than a clock tick, less than a long press), up."""
-	r.sh("cat /tmp/k%s >/dev/buttons; cat /etc/motd >/dev/null; "
-	     "cat /tmp/k000 >/dev/buttons; sleep %d" % (KEY[key], wait), 20)
+	for one cat (more than a clock tick, less than a long press), up.
+	lit: the backlight on first, so that the press is a key even after
+	a long wait: with the light off (its idle timeout, 15 s in QEMU) a
+	press only turns it on, and every later key would be one off."""
+	r.sh("%scat /tmp/k%s >/dev/buttons; cat /etc/motd >/dev/null; "
+	     "cat /tmp/k000 >/dev/buttons; sleep %d"
+	     % ("cat /tmp/kbl >/dev/backlight; " if lit else "", KEY[key],
+		wait), 20)
 
 
 def timer(r, tid, lines, owner):
@@ -117,14 +126,15 @@ def alert_up(r, mark, secs=30):
 def win_tap(r, key, pat=rb"gui< show", secs=20):
 	"""A tap that makes the app send a window: wait for its records."""
 	mark = len(r.out)
-	tap(r, key)
+	tap(r, key, lit=True)
 	return seen(r, mark, pat, secs)
 
 
 def keys(r, seq):
 	"""Taps in order.  "key@id": the app answers it with the window id,
 	wait for it; "key!": it closes the app, wait for the close event;
-	plain keys the desktop handles by itself."""
+	plain keys the desktop handles by itself.  Each one with the light
+	on (tap(lit)): a wait that runs long must not eat the next key."""
 	for k in seq:
 		if "@" in k:
 			k, w = k.split("@")
@@ -132,7 +142,7 @@ def keys(r, seq):
 		elif k.endswith("!"):
 			win_tap(r, k[:-1], rb"gui> close")
 		else:
-			tap(r, k)
+			tap(r, k, lit=True)
 
 
 def hm(t):
@@ -263,7 +273,7 @@ def ordua(r):
 	check(re.search(rb"gui< win\tclock\tclock\t", log()) is not None
 	      and b"gui< line\tNo alarm on" in log(),
 	      "ACK8.2: the desk clock window (no alarm yet)")
-	tap(r, "back")				# the list, kept by the desktop
+	keys(r, ("back",))			# the list, kept by the desktop
 	keys(r, ("down", "ok@edit",		# + New alarm: the form
 		 "ok", "up", "ok",		# Time: 07 -> 08
 		 "down", "down", "ok",		# Days: edit
@@ -348,7 +358,7 @@ def main():
 		base = freebytes(r)
 		mark = len(r.out)
 		r.sh("/usr/lib/alert -c reminder -f 0 -u 21 -l remind remind-1 "
-		     "Reminder Water 2>/dev/null & sleep 2", 20)
+		     "Reminder Water & sleep 2", 20)
 		alert_up(r, mark)
 		ram(r, "alert", base)
 		tap(r, "left")		# the first press only lights the screen
@@ -361,7 +371,7 @@ def main():
 			is not None, "7b.1: the log is written as the user remind")
 		mark = len(r.out)
 		r.sh("/usr/lib/alert -c reminder -f 0 -u 21 -l remind remind-1 "
-		     "Reminder Water 2>/dev/null & sleep 2", 20)
+		     "Reminder Water & sleep 2", 20)
 		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "back", 2)
@@ -376,7 +386,7 @@ def main():
 		bl0 = r.output("od -An -tx1 /dev/backlight", 20)
 		mark = len(r.out)
 		r.sh("/usr/lib/alert -c alarm -f 16 -t rise -r 15 -R -S 20 -1 "
-		     "-v 40 -z 5 alarm-9 -u 22 Wake Wake 2>/dev/null & sleep 2", 20)
+		     "-v 40 -z 5 alarm-9 -u 22 Wake Wake & sleep 2", 20)
 		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "up", 2)
