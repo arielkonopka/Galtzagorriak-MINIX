@@ -779,7 +779,10 @@ $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
 $(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
-CHMEM_rfid := 8192	# R9.0.5: rfid -s mallocs its 4 KB capture ring
+CHMEM_rfid := 12288	# R9.0.5: rfid -s mallocs its 4 KB capture ring; R9.0.6:
+			# a long (FSK/PSK) emulation holds the dictionary, the
+			# renderer's strings, a 2 KB run buffer, encoder states
+			# and a 1 KB ring: 8 KB aborted on the device (twoflip)
 CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
