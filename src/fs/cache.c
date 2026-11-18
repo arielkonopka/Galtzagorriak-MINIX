@@ -381,7 +381,10 @@ dev_t device;			/* device whose blocks are to be purged */
   int i;
 
   for (i = 0; i < NR_BUFS; i++)
-	if ((bp = BUF(i))->b_dev == device) bp->b_dev = NO_DEV;
+	if ((bp = BUF(i))->b_dev == device) {
+		bp->b_dev = NO_DEV;
+		if (bp->b_dirt == PIPE_DIRTY) bp->b_dirt = CLEAN;  /* K.6 */
+	}
 
 #if ENABLE_CACHE2
   invalidate2(device);

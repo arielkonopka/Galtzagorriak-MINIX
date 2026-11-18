@@ -1789,10 +1789,12 @@ int main(int argc, char **argv)
 	 * (fs/write.c, pipe_zone); 3 full pipes (21 blocks, the cache has
 	 * 18) take real zones beyond that.  Every byte must come back. */
 	{
-		unsigned char *pb = lfb;	/* no .bss more: fork below */
-		int pp[3][2], k, j, okk = 1, np = 0;
+		/* (heap, not .bss: a bigger image fails the forks below) */
+		unsigned char *pb = (unsigned char *) malloc(512);
+		int pp[3][2], k, j, okk = pb != NULL, np = 0;
 
-		for (k = 0; k < 3; k++) if (pipe(pp[k]) == 0) np++;
+		for (k = 0; pb != NULL && k < 3; k++)
+			if (pipe(pp[k]) == 0) np++;
 		for (k = 0; k < np; k++)
 			for (j = 0; j < 14; j++) {
 				memset(pb, (k * 14 + j) & 0xFF, 512);
@@ -1813,6 +1815,7 @@ int main(int argc, char **argv)
 			close(pp[k][0]);
 			close(pp[k][1]);
 		}
+		free(pb);
 		check(np == 3 && okk, "3 full pipes: the data comes back (K.6)");
 	}
 
