@@ -219,6 +219,16 @@ KEEP = "cp /bin/sum /tmp/k; sync; pkg flash /tmp/k"
 STEPS = [A, B]
 
 
+def build_epoch():
+	"""GZ_BUILD_EPOCH of the image (gen/gzbuild.h), or "?"."""
+	try:
+		with open(os.path.join(MB, "gen", "gzbuild.h")) as f:
+			m = re.search(r"GZ_BUILD_EPOCH\s+(\d+)", f.read())
+		return m.group(1) if m else "?"
+	except OSError:
+		return "?"
+
+
 def one(n, mode, expect):
 	"""Returns (n, mode, problem or None, where the cut was)."""
 	r = Run(n, mode)
@@ -264,10 +274,13 @@ def checks(r, n, mode, expect):
 		want = expect["od" if is_od else "cksum"]
 		for step in ("as left", "reinstalled"):
 			if step == "reinstalled" and r.sh("pkg flash /tmp/p") != 0:
-				# "the clock is not set": MM's clock check
-				# (finst.c in_clock_set), so say the time
+				# pkg says "the clock is not set" for MM's
+				# EAGAIN (finst.c in_clock_set): the clock
+				# before the build's commit, or no answer
+				# from CLOCK.  The two times tell which.
 				return (n, mode, "pkg flash /tmp/p fails after "
-					"the cut (date: %r)" % r.output("date"),
+					"the cut (time %r, build epoch %s)" %
+					(r.output("date +%s"), build_epoch()),
 					where)
 			got = r.output("echo hello | /tmp/p")
 			if got != want:
