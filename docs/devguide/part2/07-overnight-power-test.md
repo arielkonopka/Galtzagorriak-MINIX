@@ -96,8 +96,12 @@ The Flipper is `/dev/ttyACM0` (`ls /dev/serial/by-id/` names it). Your user must
 group: `ls -l /dev/ttyACM0` shows it (`dialout` on Debian, Ubuntu and Fedora, `uucp` on Arch), then
 `sudo usermod -aG dialout $USER` and log out and in again. If the port answers with garbage for
 the first seconds, ModemManager is probing it: `sudo systemctl disable --now ModemManager`.
-`dfu-util` needs a udev rule for 0483:df11 (qFlipper installs one); without it run the flash
+`dfu-util` needs a udev rule for 0483:df11 (Debian 13's `dfu-util` package has one, and qFlipper installs one); without it run the flash
 command with `sudo`.
+
+Flashing a build from a new computer onto a card made elsewhere needs a new card first (development
+guide [2.9](02-build-test.md#29-working-on-a-real-flipper), "A new computer or compiler"). Read the
+night's counters **before** you flash: a flash restarts the Flipper and they start again at 0.
 
 Fedora: `sudo dnf install git python3 screen dfu-util`. Arch: `sudo pacman -S git python screen
 dfu-util`.
