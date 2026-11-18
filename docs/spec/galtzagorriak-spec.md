@@ -1240,7 +1240,11 @@ copy. A window app carries none of it.
   - Window apps link `libgm` and the parts of `libapp` they need **statically**, with
     `--gc-sections`, and never the shared `libfuri`, whose 2.4 KB data area each process would
     carry.
-  - A per-program MM gap would save another ≈ 1 KB, but it is not needed for the budget.
+  - **Measured (#251):** Kanpaia open = 4096 B. MM checks its 1.5 KB stack/heap gap only on
+    `brk()` and when it delivers a caught signal, so a window app with no `malloc`, no stdio and
+    no signal handler (SIGPIPE ignored) may leave the gap out of its CHMEM (remind: 2304 B, with
+    592 B never used). An app that adds a handler or `malloc` must add the gap back, and window
+    apps keep large local buffers and deep recursion out.
 - **Desktop cost:** one window buffer for the current window and one for its parent
   (2 × 640 B), a table of 4 clients (4 × 16 B) and a 64 B keyboard buffer: ≈ 1.4 KB, inside the
   K.6 budget of ≤ 3 KB with tiles and notifications. Its code (drawing rows, keyboard, clock
