@@ -971,6 +971,7 @@ off for 30 s or more; the gauge counts in whole mA, so this is coarse):
 |---|---|---|---|
 | 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
 | 2026-11-16 | + T14d part 1 (#120, LCD power save) | -2 mA | same setup; the LCD blank after 15 s + 2 min |
+| 2026-11-17 | Galtzagorriak 0.1.1+124.g0566ba1 (built on the old laptop; the commit is not on GitHub) | < gauge resolution (`sby` -2 mA) | overnight, read with `nightpower.py end` and no start file: booted 22:05 UTC, on USB again 18:04 UTC, 20.0 h on battery. **Stop2 98.22 %** (70677 of 71959 s; the USB minutes before unplugging in the evening are unknown and count as awake), 151 button + ≈ 77143 other wake-ups (64 a minute; `wother` read 11607, wrapped u16, #284). No reset. Clock -1.6 s after 20 h, set by hand to the second (≈ 22 ppm). SoC ? -> 99 %. AC6.6 not passed on the Stop2 share |
 
 Not measured: the build before T14a (#112) and the stock firmware's
 battery screen for comparison (each needs two more flashes; no meter on

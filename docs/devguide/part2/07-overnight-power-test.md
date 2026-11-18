@@ -47,9 +47,12 @@ The details are in `flipper/PORTING.md`, "How the sleep works". The short versio
 
 - When nothing runs and **no USB cable** is plugged in, the idle task puts the CPU into Stop2
   until the next clock work is due. The LPTIM1 timer on the 32 kHz crystal wakes it.
-- **No sleep is longer than 1 s** (58 ticks), so that every wake can kick the watchdog. About
-  **60 wake-ups a minute** from the timer (`wother`) are therefore normal and expected; a button
-  press adds one `wbtn`.
+- **No sleep is longer than 1 s** (58 ticks, 0.967 s), so that every wake can kick the watchdog.
+  At least **62 wake-ups a minute** of Stop2 from the timer (`wother`) are therefore normal and
+  expected (the device showed 64); a button press adds one `wbtn`. Every sleep ends in a counted
+  wake-up, so `wbtn + wother` is never below `stop2 / 0.967`.
+- `wbtn` and `wother` are 16-bit and wrap at 65536, about every 18 h (#284). `nightpower.py`
+  corrects a wrapped count with the rule above; by hand, add 65536 until it holds.
 - Since R6.8 (#207, merged 2026-11-17) the kernel counts this in every build, and the last four
   fields of `/dev/power` show it:
 
@@ -200,6 +203,11 @@ leaves the clock and the charge to you. The time on USB between the boot and unp
 awake there, so the share comes out a little low; subtract it if you know when you unplugged
 (share = stop2 / (up − seconds on USB)).
 
+The time on USB **after** plugging back in is left out by the script itself (Linux and macOS): it
+takes the moment the serial port appeared (its device node's change time) as the plug-in and
+prints it (`plugged in at … UTC`). On Windows, or when the port was not re-created, run `end` at
+once after plugging in.
+
 ## 7.7 Reading the result
 
 A good night looks like this (made-up numbers in the shape of the real output):
@@ -210,9 +218,9 @@ Build: Galtzagorriak 0.1.1+140.g1234567
 PASS no reset (cause software, up 36420 s)
 PASS clock: +0.4 s over the night (+11.1 ppm; offset +0.3 -> +0.7 s; limit +-2 s)
   this computer's clock must be NTP-synchronised for this to mean anything
-PASS Stop2: 99.62 % (35890 of 36028 s; from /dev/power); wake-ups: 0 button, 35950 other (59.9 per minute)
+PASS Stop2: 99.62 % (35890 of 36028 s; from /dev/power); wake-ups: 0 button, 37200 other (62.0 per minute)
 Charge: 82 % -> 80 % (2 %), 3998 -> 3975 mV; about 4.19 mA average from the charge (1 % = 21 mAh; coarse)
-Gauge in the morning: avg -1 mA, standby estimate -1 mA (whole mA only)
+Gauge at the end: avg -1 mA, standby estimate -1 mA (whole mA only)
   (read with USB connected: avg/ma show the charger, not the night)
 
 VERDICT: PASS (AC6.6)
@@ -228,7 +236,7 @@ What to do when a line fails:
 | `FAIL reset` with `watchdog` | a sleep longer than the watchdog allows, or a wake path that skips the kick (PORTING.md, "Watchdog"). Reproduce with a trace build; the kernel's panic text, if any, went to the UART on header pins 13/14 |
 | `FAIL reset` with `power on` or `low power` | the battery ran flat or a brown-out; check the evening `mv` |
 | `FAIL clock` | lost or doubled ticks around Stop2 (PORTING.md, "Time"); also check the computer's NTP state before blaming the Flipper |
-| `FAIL Stop2` | something kept the CPU awake. Wake-ups far above 60 a minute mean a timer firing too often; few wake-ups but a low share mean a sleep blocker (USB seen as present, an SD transfer, a tune, the LCD console). A trace build's "Stop2 not taken" line names the reason |
+| `FAIL Stop2` | something kept the CPU awake. Wake-ups far above 62 a minute mean a timer firing too often; few wake-ups but a low share mean a sleep blocker (USB seen as present, an SD transfer, a tune, the LCD console). A trace build's "Stop2 not taken" line names the reason |
 | `????` | a reading was missing: an old kernel without R6.8 and not a trace build, or `date` did not answer |
 
 ## 7.8 Recording the result
@@ -262,8 +270,8 @@ What to do when a line fails:
 |---|---|---|
 | 2026-11-16 (short runs) | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a; then + T14d part 1 (#120) | idle −3 mA, then −2 mA with the LCD blanked (Power app, whole mA); 66 of ~90 s in Stop2. In the PORTING.md Power table |
 | 2026-11-16/17, ~11 h | R6.5 part 3 build, 0.1.1+74.ga4b5c0a, normal mode | **no reset** (cause "software" from the reboot before the test), **clock within about 1 s** of the computer after 11 h, charge **held 100 %** (started full at 4138 mV). The exact Stop2 share was not read: that image had neither the R6.8 counters nor `lat`. Issue #109, comment of 2026-11-17 11:10 UTC |
-| 2026-11-17/18 | latency-trace image (main + #199 + #203 + #202), flashed about 17:05 UTC 2026-11-17 | started for the exact Stop2 share; **no reading recorded** yet. The image predates #207, so only `lat` has the counters. If the Flipper still runs it and has not been rebooted, `nightpower.py end` without a state file (7.6) reads it; otherwise this night is lost |
+| 2026-11-17/18, 20.0 h | `0.1.1+124.g0566ba1` (built on the old laptop; the commit is not on GitHub). It has the R6.8 counters in `/dev/power`, but not `/dev/lat` (`lat`: ENXIO), so the "not taken" reasons are missing. Booted 22:05 UTC | read 2026-11-18 with `nightpower.py end`, no start file (the first run on hardware). **No reset**; **Stop2 98.22 %**, under 99 %: the awake 21 min include the unknown USB minutes before unplugging and 151 button wakes. 64 wake-ups a minute (`wother` wrapped, #284). Clock **−1.6 s** after 20 h, set by hand to the second (≈ 22 ppm; within ±2 s). Charge not judged (no evening reading). PORTING.md Power table; issue #109 |
 
-Still open: the exact Stop2 share on the device, the idle current against 1.5 mA (needs a weekend
+Still open: a clean night above 99 % in Stop2 (with `start`, no keys pressed), the idle current against 1.5 mA (needs a weekend
 run or a meter on the battery leads), and later ≤ 0.6 mA once the SD card is switched off with
 the screen (T14d part 2; the reason it is not done yet is in PORTING.md under the Power table).
