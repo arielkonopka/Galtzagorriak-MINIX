@@ -909,9 +909,13 @@ int count;			/* number of input characters */
 
 		/* Erase processing (rub out of last character).  Terminals
 		 * send DEL or ^H for Backspace: while erase is one of them,
-		 * both rub out. */
+		 * both rub out - unless the other one is a key of its own
+		 * (intr, quit, kill: "stty erase ^H intr ^?"). */
 		if (ch == tp->tty_termios.c_cc[VERASE]
 		    || ((ch == '\177' || ch == '\b')
+			&& ch != tp->tty_termios.c_cc[VINTR]
+			&& ch != tp->tty_termios.c_cc[VQUIT]
+			&& ch != tp->tty_termios.c_cc[VKILL]
 			&& (tp->tty_termios.c_cc[VERASE] == '\177'
 			    || tp->tty_termios.c_cc[VERASE] == '\b'))) {
 			(void) back_over(tp);
