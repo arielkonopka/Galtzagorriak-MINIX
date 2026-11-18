@@ -8,7 +8,8 @@
  * Records, one per line, fields separated by tabs; \t \n \\ escape a tab,
  * a newline and a backslash inside a field (spec K.1):
  *
- *	win ID KIND TITLE [ROWS=N [FIRST=K]]	KIND list|text|clock|confirm
+ *	win ID KIND TITLE [ROWS=N [FIRST=K]] [LIVE] [REPEAT=MS]
+ *						KIND list|text|clock|confirm|pad
  *	item KEY LABEL [RIGHT]			opens something (OK)
  *	int KEY LABEL MIN MAX STEP VALUE [UNIT]	values changed in the desktop
  *	enum KEY LABEL INDEX OPT|OPT|...
@@ -21,6 +22,10 @@
  *	action KEY LABEL			a button row
  *	show					the window is complete
  *	busy, idle, close
+ *
+ * A pad window has only line rows: its keys go to the app raw ("key KEY
+ * press|release|repeat", winsrv.c), a repeat every REPEAT ms (10-1000)
+ * while one is held.
  *
  * A window holds at most WR_ROWS rows and WR_BYTES bytes of records (win
  * to show); more, or more strings than its pool holds, drops the whole
@@ -44,7 +49,8 @@ static const char verbs[] =
 #define NVERBS	15
 
 static const char kinds[] = "list\0\0\0\0" "text\0\0\0\0" "clock\0\0\0"
-			    "confirm\0";
+			    "confirm\0" "pad\0\0\0\0\0";
+#define NKINDS	5
 
 static int verb(const char *s)
 {
@@ -151,11 +157,12 @@ void wr_start(struct wr_win *w, char **f, int n, int len)
 	w->st = WS_BUILD;
 	w->total = w->first = 0;
 	w->live = 0;
+	w->rep = 0;
 	w->kind = WK_LIST;
-	if (n < 4 || n > 7 || f[1][0] == 0) w->bad = 1;
-	for (i = 0; n >= 3 && i < 4; i++)
+	if (n < 4 || n > 8 || f[1][0] == 0) w->bad = 1;
+	for (i = 0; n >= 3 && i < NKINDS; i++)
 		if (strcmp(f[2], kinds + 8 * i) == 0) break;
-	if (n < 3 || i == 4) w->bad = 1;
+	if (n < 3 || i == NKINDS) w->bad = 1;
 	else w->kind = (unsigned char) i;
 	w->id = put(w, n > 1 ? f[1] : "");
 	w->title = put(w, n > 3 ? f[3] : "");
@@ -168,6 +175,10 @@ void wr_start(struct wr_win *w, char **f, int n, int len)
 			w->first = (unsigned short) v;
 		else if (strcmp(f[i], "LIVE") == 0)
 			w->live = 1;
+		else if (strncmp(f[i], "REPEAT=", 7) == 0
+			 && num(f[i] + 7, &v) == 0 && v >= 10 && v <= 1000
+			 && w->kind == WK_PAD)
+			w->rep = (unsigned char) (v / 10);
 		else
 			w->bad = 1;
 	}
@@ -311,6 +322,8 @@ int wr_record(struct wr_win *w, char **f, int n, int len)
 		w->bad = 1;
 		return WR_BAD;
 	}
+	if (w->kind == WK_PAD && v - V_ROW + 1 != RK_LINE)
+		return WR_BAD;			/* a pad has lines only */
 	return add_row(w, v - V_ROW + 1, f, n) < 0 ? WR_BAD : WR_NONE;
 }
 

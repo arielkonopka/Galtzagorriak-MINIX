@@ -670,9 +670,9 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 # literal of its own section costs a GOT word in RAM; in one .data/.bss/
 # .rodata per object they share one (section anchors): remind's GOT 868 ->
 # ~300 B.  Unused rodata then stays in flash, not RAM.
-WINAPPS	:= remind alarm
+WINAPPS	:= remind alarm usbremote
 WIN_CFLAGS = $(APP_CFLAGS) -fno-data-sections -fno-merge-constants \
-	-I$(GM_DIR) -Iapps/native
+	-I$(GM_DIR) -Iapps/native -I$(HID_DIR)
 $(MB)/cmd/win/%.o: apps/%.c $(GM_DIR)/gm.h $(APP_DIR)/include/app.h \
 		apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -681,6 +681,9 @@ $(MB)/cmd/win/lib/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/win/lib/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/win/lib/nat_core.o: apps/native/nat_core.c apps/native/nat.h
@@ -699,6 +702,15 @@ CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
 OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(WIN_LIB)
 CHMEM_alarm  := 2560	# K.8 (ACK8.3: 4352 B open, <= 4.5 KB): 1008 B
 			# never used (nattest memuse, after a Save)
+# Teklatua (usbremote, T28d, spec R11.3.5): libgm and libhid, no libapp;
+# no malloc, no stdio, no signal handler, so no MM gap (K.8, #251): the
+# stack holds the 256 B layout and the record and event buffers.
+OBJS_usbremote = $(MB)/cmd/win/usbremote/usbremote.o \
+		 $(addprefix $(MB)/cmd/win/lib/,gm.o hid.o)
+$(MB)/cmd/win/usbremote/usbremote.o: $(HID_DIR)/libhid.h
+CHMEM_usbremote := 2048	# K.8 / R11.3.5: 2816 B open (nattest, <= 4.5 KB);
+			# 968 B never used (memuse, after typing, Media, pad)
+
 # Bad USB (spec R11.3.3, R11.3.4, T28c): the badusb command (the script
 # engine ducky.c, libhid) and the Bad USB window app (libgm), both built
 # like the window apps (WIN_CFLAGS: one GOT word per object's sections),
@@ -787,7 +799,8 @@ PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
-	   $(PKGDIR)/badusb_1.0.tar
+	   $(PKGDIR)/badusb_1.0.tar \
+	   $(PKGDIR)/usbrem_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -823,6 +836,17 @@ $(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
+# Teklatua (spec R11.3.5, T28d), package usbrem (a tar name is at most 14
+# characters): a window app as the user usbremote
+# (group usb), ended on Back; jiggle (R11.3.6) is its own command.
+$(PKGDIR)/usbrem_1.0.tar: $(MB)/bin/usbremote tools/mkpkg.py \
+		rootfs/usbremote.postinst rootfs/usbremote.prerm
+	python3 -I tools/mkpkg.py -n usbrem -v 1.0 -o $(PKGDIR) \
+	   --flash --window --background exit -i @usb \
+	   --postinst rootfs/usbremote.postinst --prerm rootfs/usbremote.prerm \
+	   -D "Teklatua: USB keyboard, numpad, media keys, mouse (window app)" \
+	   /usr/bin/usbremote=$<
+
 # Bad USB (spec R11.3.3, R11.3.4): badusb, the window app, the example
 # scripts in /ext/badusb (/home/flipper/badusb: the package's files, an
 # upgrade puts them back) and the German layout (libhid has US built in).
@@ -865,7 +889,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.19
+BASE_VER := 4.20
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

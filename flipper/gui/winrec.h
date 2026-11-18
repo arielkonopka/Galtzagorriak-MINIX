@@ -14,6 +14,7 @@
 #define WK_TEXT		1
 #define WK_CLOCK	2
 #define WK_CONFIRM	3
+#define WK_PAD		4		/* raw keys to the app, lines only */
 
 /* Row kinds */
 #define RK_ITEM		1		/* KEY LABEL [RIGHT] */
@@ -66,7 +67,8 @@ struct wr_win {
 	unsigned char sel, top;		/* the desktop's cursor */
 	unsigned char bad : 1;		/* overflow: dropped at show */
 	unsigned char live : 1;		/* LIVE: submit after every change */
-	unsigned char st;		/* WS_* */
+	unsigned char st : 2;		/* WS_* (with bad, live: one byte) */
+	unsigned char rep;		/* pad: REPEAT=ms / 10, 0: default */
 	struct wr_row row[WR_ROWS];
 	char pool[WR_POOL];
 };

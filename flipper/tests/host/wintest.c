@@ -188,6 +188,24 @@ static void kinds_paging(void)
 		== WR_SHOW && w.live && w.total == 40, "ROWS= FIRST= LIVE");
 	T(feed(&w, "win\tl\tlist\tX\nshow\n") == WR_SHOW && !w.live,
 		"not LIVE unless asked");
+	/* pad (K.8, T28d): raw keys to the app, lines only, REPEAT=ms */
+	T(feed(&w, "win\tm\tpad\tMouse\nline\tOK click\nshow\n") == WR_SHOW
+		&& w.kind == WK_PAD && w.nrows == 1 && w.rep == 0, "pad window");
+	T(feed(&w, "win\tm\tpad\tMouse\tREPEAT=10\nshow\n") == WR_SHOW
+		&& w.rep == 1, "pad REPEAT=10");
+	T(feed(&w, "win\tm\tpad\tMouse\tREPEAT=1000\nshow\n") == WR_SHOW
+		&& w.rep == 100, "pad REPEAT=1000");
+	T(feed(&w, "win\tm\tpad\tMouse\tREPEAT=5\nshow\n") == WR_BAD,
+		"pad REPEAT below 10 ms: dropped");
+	T(feed(&w, "win\tm\tpad\tMouse\tREPEAT=1001\nshow\n") == WR_BAD,
+		"pad REPEAT above 1 s: dropped");
+	T(feed(&w, "win\tl\tlist\tX\tREPEAT=100\nshow\n") == WR_BAD,
+		"REPEAT only on a pad");
+	T(feed(&w, "win\tm\tpad\tMouse\nitem\ta\tA\naction\tb\tB\n"
+		"line\tx\nshow\n") == WR_SHOW && w.nrows == 1
+		&& w.row[0].kind == RK_LINE, "pad: rows other than line dropped");
+	T(feed(&w, "win\tm\tpad\tMouse\tREPEAT=20\tLIVE\nshow\n") == WR_SHOW
+		&& w.rep == 2 && w.live, "pad with every option");
 }
 
 static void malformed(void)
@@ -392,6 +410,31 @@ static void roundtrip(void)
 			close(p2[0]);
 		}
 	}
+	/* a pad window through libgm */
+	{
+		char pb[128];
+		int p3[2];
+
+		dup2(open("/dev/null", O_RDONLY), GM_RECFD);	/* not on 4 */
+		if (pipe(p3) == 0) {
+			dup2(p3[1], GM_RECFD);
+			gm_init(pb, sizeof pb);
+			gm_win_pad("mouse", "Mouse", 10);
+			gm_line("OK click");
+			gm_show();
+			close(GM_RECFD);
+			close(p3[1]);
+			len = 0;
+			while ((n = (int) read(p3[0], got + len,
+					sizeof got - 1 - len)) > 0) len += n;
+			got[len] = 0;
+			T(strcmp(got, "win\tmouse\tpad\tMouse\tREPEAT=10\n"
+				"line\tOK click\nshow\n") == 0
+				&& feed(&w, got) == WR_SHOW && w.kind == WK_PAD
+				&& w.rep == 1, "libgm: gm_win_pad");
+			close(p3[0]);
+		}
+	}
 	/* events */
 	{
 		const char *e = "ok\tmain\tabout\nsubmit\tmain\tvol=45\tname=x\\ty\n"
@@ -417,6 +460,17 @@ static void roundtrip(void)
 			"an overlong event is dropped");
 		T(gm_event(ev, sizeof ev, f, GM_FIELDS) == GM_REDRAW, "redraw");
 		T(gm_event(ev, sizeof ev, f, GM_FIELDS) == GM_NONE, "unknown");
+		T(gm_wait(ev, 0) == 0, "gm_wait: nothing there, time up");
+		T(write(pe[1], "key\tup\tpress\nkey\tup\trepeat\n", 27) == 27,
+			"write");
+		T(gm_wait(ev, 0) == 1, "gm_wait: an event in the pipe");
+		T(gm_event(ev, sizeof ev, f, GM_FIELDS) == GM_KEY
+			&& strcmp(f[1], "up") == 0 && strcmp(f[2], "press") == 0,
+			"event key (pad)");
+		T(gm_wait(ev, 0) == 1, "gm_wait: an event already read");
+		T(gm_event(ev, sizeof ev, f, GM_FIELDS) == GM_KEY
+			&& strcmp(f[2], "repeat") == 0, "event key repeat");
+		T(gm_wait(ev, 0) == 0, "gm_wait: none left");
 		close(pe[1]);
 		T(gm_event(ev, sizeof ev, f, GM_FIELDS) == GM_CLOSE,
 			"the desktop gone: GM_CLOSE");

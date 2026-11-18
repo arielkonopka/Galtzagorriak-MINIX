@@ -203,7 +203,7 @@ int gui_wait(struct gui_in *in, int clicks, int ms, int fd)
 			if (in->down & ~k) in->spoilt |= in->down | k;
 			in->down |= k;
 			in->t[b] = ticks();
-			if (!(clicks & k)) return k;
+			if (!(clicks & k) || in->raw) return k;
 		} else {				/* up */
 			int alone = !(in->spoilt & k);
 
@@ -211,7 +211,8 @@ int gui_wait(struct gui_in *in, int clicks, int ms, int fd)
 			in->spoilt &= ~k;
 			if ((clicks & k) && alone
 			    && ticks() - in->t[b] < CLK_TCK)
-				return k;
+				return in->raw ? k | GUI_UP | GUI_CLICK : k;
+			if (in->raw) return k | GUI_UP;
 		}
 	}
 }
