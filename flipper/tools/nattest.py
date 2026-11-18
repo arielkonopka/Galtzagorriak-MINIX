@@ -227,9 +227,17 @@ def win_only(r, prog):
 	# after kanpaia()); Back ends it and the launcher reads both files
 	# again.  Wait until its RAM is free: a full-screen app can take a
 	# few seconds in QEMU, and a key meanwhile would go to it.
+	# Right after boot (a nattest part alone) the Console may take
+	# longer to start than the 3 s here: then wait for it (its RAM
+	# taken) before the Back, else the Back is lost and a later OK
+	# lands in the Console instead of the app under test.
 	before = freebytes(r)
-	tap(r, "ok", 3)
-	tap(r, "back", 3)
+	tap(r, "ok", 3, lit=True)
+	for _ in range(5):
+		if freebytes(r) < before - 256:
+			break
+		r.sh("sleep 2", 20)
+	tap(r, "back", 3, lit=True)
 	for _ in range(15):
 		if freebytes(r) >= before - 256:
 			break
