@@ -352,6 +352,37 @@ goes into the system image; user flash goes into the installed region.
 - **Never included:** Keeloq manufacturer keys and similar secrets; the stock firmware doesn't
   ship them either. The Sub-GHz app loads a user-supplied keystore.
 
+### D.4 Unleashed as a second source (owner question 2026-11-18)
+
+The owner asked whether [Unleashed](https://github.com/DarkFlippers/unleashed-firmware) can be
+the model for porting the stock apps. Answer: **yes, as a source of code, while the stock
+firmware stays the reference for behaviour.**
+
+- **Why it fits:**
+  - Unleashed is the stock firmware plus patches. It has the same Furi API, so one `libfuri`
+    (D.2) builds apps from both.
+  - It is GPL-3.0 like stock, so D.3 applies unchanged.
+  - The project already uses it: every LF RFID protocol (9.0, T19), and it is the reference
+    peer of the two-Flipper tests (`twoflip.py`).
+- **The rule:**
+  - **Stock is the reference.** "Feature parity" (the project goal) means the stock apps, their
+    screens and their file formats. The ACs compare against stock.
+  - **Unleashed is the source where it is a superset.** Take its version when it adds, without
+    changing what stock does:
+    - more protocols: Sub-GHz decoders/encoders, the LF RFID set already chosen, NFC parsers;
+    - more data: IR universal remote files;
+    - its extra bundled apps, as a later catalog wave (each one a package with its own RAM figure).
+  - Every copied file names its Unleashed commit in its header, as T19 does.
+- **What we do not take from it:**
+  - **Sub-GHz transmit limits.** Unleashed lifts the regional TX limits. We keep the kernel's
+    band and duty-cycle limits (R8.2) and the region rules, and a ported app goes through them
+    unchanged.
+  - **Manufacturer keys** (KeeLoq and similar). As in D.3, none are shipped. Rolling-code
+    transmission stays behind the user-supplied keystore, and the manual warns that sending a
+    rolling code can desync the real remote.
+  - **Its UI changes** outside the ported apps. The launcher and the native apps keep our look
+    (K.2, R5.6a.7), with the stock-look option of R5.6b.
+
 ---
 
 ## E. Radio chips: what can be "reprogrammed"
@@ -2779,6 +2810,52 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
       through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
       later status line) runs only while the launcher is in the foreground and the screen is on;
       otherwise it waits for a key with no timeout.
+- **R5.6b Launcher style "Stock"** (owner request 2026-11-18; task T31). The launcher can look
+  like the stock main menu instead of the default Pine look (R5.6a.7).
+  - **R5.6b.1 One launcher, two styles.** Add `Style: pine|stock` to `/etc/launcher.conf`
+    (default `pine`) and a `Style [pine]` row on the launcher's settings page. Toggling it
+    redraws at once and needs no restart.
+    The owner offered a separate replacement program. It is **not** done that way, because:
+    - the launcher is the desktop (K.6 layer 3: pages, status line, notifications, Running), so a
+      second program would duplicate all of that and drift;
+    - both programs would have to be in flash;
+    - switching would mean a restart.
+    Instead the stock drawing lives in its own source file (`launcher_stock.c`), like a skin. It
+    only draws and never changes behaviour: the same `/etc/apps`, keys, pages and settings.
+  - **R5.6b.2 The Apps page in stock style.** It follows the stock main menu
+    (`applications/services/gui/modules/menu.c`; GPL-3.0, ported per D.3), pixel for pixel
+    where the content is the same:
+    - no black title bar and no hint line;
+    - the visible entries with a 10×10 icon and the name in the stock fonts, the selected one
+      in a rounded frame in the primary font;
+    - a scroll bar at the right edge.
+    Keys are the same as in Pine style: Up/Down, OK runs, and Left/Right still move between
+    pages (K.6). The other pages (Settings, Home, Notifications, Running) draw as a stock
+    `submenu`: a rounded selection frame, the stock fonts, no hint line. The message line of
+    R5.6a.7 becomes a short stock-style popup that closes after 2 s or at the next key.
+  - **R5.6b.3 Icons.**
+    - A `const` table of 10×10 icons in flash, one for each built-in name of R5.6a.2, about
+      24 × 20 B. The drawings may be the stock icons (GPL-3.0 assets, D.3), so an app's icon
+      looks the same as on stock.
+    - A 10×10 icon of an app's own, `Icon10:` in `CONTROL/control`, which `fam2pkg` copies from
+      the `.fam`'s `fap_icon` without downscaling. The `/etc/apps` third field gets a `##`
+      form (40 hex digits).
+    - An entry without one: its 8×6 icon is drawn centred in the 10×10 cell; if it has no icon
+      at all, the cell is empty.
+  - **R5.6b.4 Fonts.** The two stock fonts (u8g2 `haxrcorp_4089` and `helvB08`, BSD-2), ASCII
+    only, as `const` tables in flash: about 3–4 KB of text, shared with `libfuri` once #201
+    makes it a shared library. `gui.c` gets one helper, `gui_text_font()`. The stock-style
+    code is a separate object, so a launcher built without it has the same text as today.
+  - **R5.6b.5 RAM and speed.**
+    - Pine style: 0 B more RAM, and the frames are byte-identical to before (AC5.5 still holds).
+    - Stock style: 20 B of heap only for each entry that has an `Icon10:`, inside its existing
+      block; built-in icons cost 0 B. `.bss` grows by at most 4 B.
+    - No file reads and no timers on the key path. A key press redraws one frame, as in Pine
+      style.
+    - `/etc/launcher.conf` is written only when the style changes (on the card, never internal
+      flash).
+  - **R5.6b.6 What it is not.** The stock desktop with the dolphin animations is out of scope
+    (stock art and RAM for its frames). The Home page of K.6 stays ours in both styles.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -2798,6 +2875,14 @@ Acceptance:
 - AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
   holds the new value, the list redraws without icons; Left, Back without a change writes
   nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6b) With `Style: stock`:
+  - the Apps page's frame matches the stock `menu.c` drawing of the same entries (a host test
+    renders both from the same entry list);
+  - every app starts with OK, and Left/Right still change pages;
+  - toggling the style on the settings page redraws at once, and writes `/etc/launcher.conf`
+    once;
+  - with `Style: pine` the frames are byte-identical to the frames before R5.6b;
+  - RAM as in R5.6b.5 (ramcheck), with no internal-flash erase (`flashcheck` unchanged).
 - AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
   moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
   shows the notice on the message line with the list still drawn, and the hint line is back

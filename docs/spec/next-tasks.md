@@ -418,6 +418,14 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 ### T28e (`lane:cloud`): `jiggle` command
 - R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
 
+## T31. Launcher style "Stock" (spec R5.6b, AC5.7; owner request 2026-11-18): milestone M3, after T23 (desktop pages) and T24
+`lane:cloud` (QEMU + host). One launcher, a `Style: pine|stock` setting, the stock drawing in `launcher_stock.c`.
+- R5.6b.1 setting row and redraw; R5.6b.2 Apps page as stock `menu.c`, other pages as stock `submenu`, popup for messages.
+- R5.6b.3 10×10 built-in icon table (stock icons allowed, D.3), `Icon10:` in `fam2pkg` and the `##` field form.
+- R5.6b.4 the two stock fonts as `const`, `gui_text_font()`; a host test renders the launcher's stock frame and the ported `menu.c` frame and compares them.
+- AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
+- Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
+
 ## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
 
