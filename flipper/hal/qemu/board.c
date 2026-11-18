@@ -230,6 +230,7 @@ const char *hal_reset_cause(void) { return "power on"; }
 #endif
 static int disk_fd = -1;
 static int disk_fake;		/* N.6 test hook: 0 in, 1 out, 2 another card */
+static uint32_t disk_wsect;	/* sectors written (hook 3: ACK7.2, AC12.14) */
 static uint32_t disk_sectors;
 
 int hal_disk_init(void)
@@ -271,6 +272,7 @@ int hal_disk_id(uint32_t *id)
 
 int hal_disk_fake(int state)
 {
+	if (state == 3) return (int) (disk_wsect & 0x7FFFFFFFu);	/* K.7 */
 	if (state < 0 || state > 2) return -1;
 	disk_fake = state;
 	return 0;
@@ -322,6 +324,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
 
 	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
+	disk_wsect += count;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }
 

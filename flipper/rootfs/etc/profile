@@ -1,5 +1,8 @@
-# Time zone: the Flipper keeps UTC.
-TZ=GMT0	export TZ
+# Time zone: the Flipper keeps UTC; local time follows /etc/TZ (its first
+# line that is not a comment; Settings > Time writes it), else UTC.
+TZ=UTC0
+test -f /etc/TZ && TZ=`sed -n -e '/^#/d' -e p -e q /etc/TZ`
+export TZ
 
 # The editor (T8): mined, memory-safe, VT100 keys; ed is still there.
 EDITOR=mined	export EDITOR

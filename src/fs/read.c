@@ -197,8 +197,11 @@ int rw_flag;			/* READING or WRITING */
 	/* Spec N.2: a read does not dirty the inode for its access time (no
 	 * SD write per exec or cat; the file system stays CLEAN); the time
 	 * goes to the card when the inode is written for another reason.
-	 * A pipe's read changes its size: dirty as before. */
-	if (rw_flag == WRITING || rip->i_pipe == I_PIPE)
+	 * A pipe's read changes its size: dirty as before.  Spec K.7
+	 * (ACK7.2): nor does a write to a character device (/dev/lcd, a
+	 * tty): only its times change, and every frame drawn would
+	 * otherwise cost an inode write at the next sync. */
+	if ((rw_flag == WRITING && !char_spec) || rip->i_pipe == I_PIPE)
 		rip->i_dirt = DIRTY;	/* inode is thus now dirty */
 	if (partial_pipe) {
 		partial_pipe = 0;
