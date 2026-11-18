@@ -132,3 +132,5 @@ A red check means the PR is not ready for review. `powercut` can rarely time out
 - **Radios and readers against a partner**: a second Flipper with Unleashed firmware and
   `tools/twoflip.py` test RFID, IR, iButton and Sub-GHz in both directions; see
   [chapter 6](06-two-flipper-tests.md).
+- **A night on battery** (no reset, the clock, the Stop2 share, the current): `tools/nightpower.py`
+  and [chapter 7](07-overnight-power-test.md).
