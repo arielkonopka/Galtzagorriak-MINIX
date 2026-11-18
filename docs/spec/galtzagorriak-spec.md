@@ -2182,7 +2182,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 16 | App ports V: BLE remote, BLE serial, mobile app; native: Bluetooth adapter (BLE mouse/keyboard → USB, 16.1); Bluetooth dongle mode for the PC (16.2); camera finder v2 with BLE scan (16.3) | |
 | 17 | Trust: U2F, signed packages [9], updater, option bytes (deferred item) | |
 | 18 | App ports VI: U2F, catalog, porting guide, CI | parity |
-| 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
+| 18b | First-boot wizard: hostname, region, date/time and zone, location, launcher look (Pine/Stock), today's sunrise and sunset (section I) | out-of-box setup |
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 | 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
@@ -2832,6 +2832,7 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
   - **R5.6b.1 One launcher, two styles.** Add `Style: pine|stock` to `/etc/launcher.conf`
     (default `pine`) and a `Style [pine]` row on the launcher's settings page. Toggling it
     redraws at once and needs no restart.
+    The first-boot wizard asks for the style too (R18b.2 step 6).
     The owner offered a separate replacement program. It is **not** done that way, because:
     - the launcher is the desktop (K.6 layer 3: pages, status line, notifications, Running), so a
       second program would duplicate all of that and drift;
@@ -5450,14 +5451,20 @@ table), 15 (BLE name), section I.
      - **from the sun:** today's (or yesterday's) sunrise and/or sunset time as the user observed
        it or read it, giving an approximate position (I.5), with its accuracy shown; near an
        equinox it asks for the latitude as well.
-  6. **Summary:** hostname, region, zone, local time and UTC, position, and for today at that
+  6. **Launcher look** (owner, 2026-11-18; R5.6b): **Pine** (default) or **Stock**. Left/Right
+     switch between the two and show a sample of each launcher list (four built-in entries in that
+     style), drawn by the launcher's own style code so the sample matches what the user will get.
+     Skipping keeps Pine. Changed later on the launcher's settings page or with `setup look`.
+  7. **Summary:** hostname, region, zone, local time and UTC, position, launcher look, and for today at that
      position: **sunrise, sunset**, day length, and the start of civil and nautical twilight,
      computed by `libastro` from the location and the RTC. If the user entered sunrise/sunset in
      step 5, both the entered and the computed times are shown. OK writes everything.
 - **R18b.3 Writing.** All files of I.4 and the RTC are written only at the end, each through a
   temporary file and `rename`, so a power loss mid-wizard leaves the old state and the wizard runs
-  again. Then INIT gets `SIGHUP` (new `TZ`), `bled` gets the new name, and the launcher starts.
-- **R18b.4 Re-run.** `setup` (all steps) or `setup hostname|region|time|tz|location|sun` (one
+  again. `Style:` goes into `/etc/launcher.conf` the same way (on the card), only if it differs
+  from the default. Then INIT gets `SIGHUP` (new `TZ`), `bled` gets the new name, and the launcher
+  starts in the chosen style.
+- **R18b.4 Re-run.** `setup` (all steps) or `setup hostname|region|time|tz|location|look|sun` (one
   step; `sun` only shows the summary), as root; Settings → System → Setup runs the same program.
 - **R18b.5 Manual notes** (I.7) go into the manual chapter "First start".
 
@@ -5474,6 +5481,9 @@ Acceptance:
 - AC18b.5 As `nobody`, `cat /etc/location` fails; an app with `Location: yes` can read it.
 - AC18b.6 `setup tz` alone changes the zone; `date` shows the new local time at once in a new
   shell; armed alarms (7b) ring at the new local time.
+- AC18b.5 Choosing Stock in step 6: the summary says "Stock", `/etc/launcher.conf` has
+  `Style: stock`, and the launcher starts in that style. Skipping step 6 leaves the file without a
+  `Style:` line and the launcher in Pine.
 
 Responsiveness: AC18b.R The first wizard screen appears within L10 of power-on; every step
 meets L1; the summary (with the sun computation) appears ≤ 200 ms after OK.
