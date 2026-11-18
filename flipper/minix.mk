@@ -399,9 +399,17 @@ $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-$(MB)/cmd/m2test.o: m2/m2test.c
+HID_DIR	:= $(MROOT)/src/lib/hid
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -MMD -MP -c $< -o $@
+# libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
+# reports, the stock .kl layouts (US built in), static; m2test types with
+# it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
+$(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
