@@ -394,6 +394,21 @@ Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, s
 - Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
 - ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
 
+## T32. Radio regions: per-country Sub-GHz tables on the card, the chosen one in flash (spec section Q; owner request 2026-11-18): with T26b / Phase 8 R8.2
+Before T26b turns transmit on. T31 is the launcher style (#295).
+
+### T32a (`lane:cloud`, host + QEMU)
+- The `.reg` files of Q.4/Q.5 in `flipper/rootfs/usr/share/region/`: `EU`, the 27 member states (`Base: EU` + their `#?` rows), `US`, `CA`, `AL`, `BA`, `MK`; every row with its `ref`.
+- `src/lib/modem` (or a small `libregion` shared with the kernel): parser (Q.2), compiler to the RQ.2 blob, the row choice of Q.2 (first admitting row, `SG_DATA`/`SG_CTL`, `per` 1 s / 30x / 10 s, `ctl` 5 s), replacing today's `const mdm_bands[]`. Host tests ACQ.1, ACQ.2.
+- `region list|show|set` (RQ.1, RQ.5: build-time SHA-256 list, `-f`, log line); manual page `region(1)` and a manual section (Q.7).
+- RAM: 0 B resident; `region` runs and exits. Flash: the blob, once per `region set`; say so in the PR.
+
+### T32b (`lane:local`, Flipper; together with T26b)
+- MM: `region` record kind in the installed-region directory (RQ.2), read back and compared; kernel finds it at boot (RQ.3), no record = no transmit.
+- Kernel check of R8.2 on the record, `mode` in `struct sg_phy` (RQ.6), timing state (RQ.7): Sub-GHz kernel total ≤ +44 B.
+- Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
+- Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
+
 ## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; owner pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
 Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
 
