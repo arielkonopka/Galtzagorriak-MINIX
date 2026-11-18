@@ -422,7 +422,7 @@ $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 # settings GROUP (spec K.7): the groups' files are src/commands/settings/
-SETGROUPS := display sound
+SETGROUPS := display sound time about zones afmt
 OBJS_settings = $(MB)/cmd/port/settings.o $(SETGROUPS:%=$(MB)/cmd/settings/%.o) \
 		$(MB)/cmd/gui/gui.o
 $(MB)/cmd/settings/%.o: $(MROOT)/src/commands/settings/%.c \
@@ -837,4 +837,5 @@ minix-flash: $(MB)/minix.bin
 -include $(shell find $(MB) -name '*.d' 2>/dev/null)
 
 # Objects that print the build id.
-$(MB)/kernel/tty.c.o $(MB)/cmd/port/ver.o: $(GZBUILD)
+$(MB)/kernel/tty.c.o $(MB)/cmd/port/ver.o $(MB)/mm/alloc.c.o \
+		$(MB)/mm/finst.c.o: $(GZBUILD)

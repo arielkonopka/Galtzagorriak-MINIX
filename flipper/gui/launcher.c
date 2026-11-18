@@ -184,8 +184,8 @@ static const struct page pages[] = {
 };
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
- * like an app; "" = not there yet.  Power and About are today's apps
- * until their groups come (T24b, T24c). */
+ * like an app; "" = not there yet.  Power is today's app until its
+ * group comes (T24c). */
 static const struct {
 	char name[9];
 	char user[7];
@@ -194,12 +194,12 @@ static const struct {
 	{ "Display", "root", "/bin/settings display" },
 	{ "Sound", "root", "/bin/settings sound" },
 	{ "LED", "", "" },
-	{ "Time", "", "" },
+	{ "Time", "root", "/bin/settings time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
-	{ "About", "nobody", "/bin/info" },
+	{ "About", "root", "/bin/settings about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
 #define SYS_LAUNCHER	7

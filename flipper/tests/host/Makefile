@@ -11,7 +11,7 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest wintest
+TESTS	:= parttest usbtest ibemutest icontest wintest settimetest
 
 all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
 
@@ -80,6 +80,14 @@ $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winre
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
 	    $(MROOT)/src/lib/gm/gm.c -o $@
+
+# settings time and about (spec K.7, T24b): the zone table, /etc/TZ, the
+# About rows.
+SETDIR	:= $(MROOT)/src/commands/settings
+$(B)/settimetest: settimetest.c $(SETDIR)/zones.c $(SETDIR)/zones.h \
+		$(SETDIR)/afmt.c $(SETDIR)/afmt.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) settimetest.c $(SETDIR)/zones.c $(SETDIR)/afmt.c -o $@
 
 clean:
 	rm -rf $(B)

@@ -19,6 +19,11 @@
 #include <minix/com.h>
 #include <signal.h>
 #include "mproc.h"
+#if (CHIP == ARM_CM)
+#include <string.h>
+#include <minix/gzversion.h>
+#include "gzbuild.h"		/* MI_BUILD: the image's build id */
+#endif
 
 #if (MACHINE == FLIPPER)
 #define NR_HOLES          32	/* max # entries in hole table */
@@ -418,6 +423,16 @@ PUBLIC int do_meminfo()
 	fc.today = z;
 	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fc, who, D,
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fc)));
+  }
+  if (mm_in.m1_i2 == MI_BUILD) {	/* K.7: copied from the stack (D) */
+	char id[sizeof(GZ_RELEASE GZ_BUILD)];
+	int len = mm_in.m1_i1;
+
+	if (len <= 0) return(EINVAL);
+	strcpy(id, GZ_RELEASE GZ_BUILD);
+	if (len > (int) sizeof(id)) len = (int) sizeof(id);
+	return(sys_copy(MM_PROC_NR, D, (phys_bytes) id, who, D,
+		(phys_bytes) mm_in.m1_p1, (phys_bytes) len));
   }
   if (mm_in.m1_i2 == MI_MEMTEST) return(mem_test());	/* R7b.3.1 */
   if (mm_in.m1_i2 == MI_INSTALL) return(do_install());

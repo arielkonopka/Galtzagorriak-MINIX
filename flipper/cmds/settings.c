@@ -141,7 +141,8 @@ static int walk(const char *dir, int all)
  * if a saved value changed.  settings apply: every group's file applied
  * (the boot script).  The screens move to the desktop's window records
  * (K.8) later; the groups (src/commands/settings) stay as they are. */
-static struct sgroup *groups[] = { &display_group, &sound_group };
+static struct sgroup *groups[] = { &display_group, &sound_group,
+	&time_group, &about_group };
 #define NGROUPS	(sizeof(groups) / sizeof(groups[0]))
 
 static struct sgroup *find(const char *name)
@@ -158,6 +159,11 @@ static void conf_path(char *p, struct sgroup *g)
 	strcpy(p, "/etc/flipper/");
 	strcat(p, g->name);
 	strcat(p, ".conf");
+}
+
+static const char *elabel(struct sgroup *g, struct srow *r, int k)
+{
+	return r->labels != NULL ? r->labels[k] : g->label(k);
 }
 
 /* "Key: value" lines; a value is the number, or the label of an enum. */
@@ -184,7 +190,8 @@ static void conf_load(struct sgroup *g)
 				if (k >= r->min && k <= r->max) r->val = k;
 			} else if (r->type == S_ENUM)
 				for (k = r->min; k <= r->max; k++)
-					if (strcmp(r->labels[k], v) == 0) r->val = k;
+					if (strcmp(elabel(g, r, k), v) == 0)
+						r->val = k;
 		}
 	}
 	fclose(f);
@@ -202,9 +209,10 @@ static int conf_save(struct sgroup *g)
 	if ((f = fopen(path, "w")) == NULL) return -1;
 	for (i = 0; i < g->nrows; i++) {
 		r = &g->rows[i];
-		if (r->type == S_ACT || (r->flags & S_NOSAVE)) continue;
+		if (r->type == S_ACT || r->type == S_TEXT
+					|| (r->flags & S_NOSAVE)) continue;
 		if (r->type == S_INT) fprintf(f, "%s: %d\n", r->name, r->val);
-		else fprintf(f, "%s: %s\n", r->name, r->labels[r->val]);
+		else fprintf(f, "%s: %s\n", r->name, elabel(g, r, r->val));
 	}
 	fclose(f);
 	return 0;
@@ -212,9 +220,9 @@ static int conf_save(struct sgroup *g)
 
 static void draw(struct sgroup *g, int sel)
 {
-	char v[16];
+	char v[40];
 	struct srow *r;
-	int i, y;
+	int i, y, w;
 
 	gui_clear();
 	gui_title(g->title);
@@ -224,14 +232,19 @@ static void draw(struct sgroup *g, int sel)
 		if (i == sel) gui_fill(0, y - 1, GUI_W - 1, y + 5, 1);
 		gui_text(6, y, r->name, i == sel);
 		if (r->type == S_INT) sprintf(v, "[%d%s]", r->val, r->unit);
-		else if (r->type == S_ENUM) sprintf(v, "[%s]", r->labels[r->val]);
+		else if (r->type == S_ENUM)
+			sprintf(v, "[%.36s]", elabel(g, r, r->val));
+		else if (r->type == S_TEXT) sprintf(v, "%.38s", r->unit);
 		else strcpy(v, "");
+		w = (GUI_W - 8 - (int) strlen(r->name) * 4 - 6) / 4;
+		if ((int) strlen(v) > w) v[w > 0 ? w : 0] = 0;	/* fits */
 		gui_text(GUI_W - 2 - (int) strlen(v) * 4, y, v, i == sel);
 		if (i == sel) gui_text(1, y, ">", 1);
 	}
 	gui_hline(0, GUI_W - 1, 56, 1);
-	gui_text(1, 58, g->rows[sel].type == S_ACT ? "OK Run  Back Done"
-					: "<> Change  Back Done", 0);
+	r = &g->rows[sel];
+	gui_text(1, 58, r->type == S_ACT ? "OK Run  Back Done"
+		: r->type == S_TEXT ? "Back Done" : "<> Change  Back Done", 0);
 	gui_flush();
 }
 
@@ -256,7 +269,8 @@ static int screen(struct sgroup *g)
 		else if (k == KEY_DOWN) sel = sel < g->nrows - 1 ? sel + 1 : 0;
 		else if (k == KEY_BACK) break;
 		else if (k == KEY_OK && r->type == S_ACT) g->apply(g, sel);
-		else if ((k == KEY_LEFT || k == KEY_RIGHT) && r->type != S_ACT) {
+		else if ((k == KEY_LEFT || k == KEY_RIGHT) && r->type != S_ACT
+						&& r->type != S_TEXT) {
 			d = k == KEY_LEFT ? -r->step : r->step;
 			if (r->val + d < r->min || r->val + d > r->max) continue;
 			r->val += d;
@@ -265,6 +279,7 @@ static int screen(struct sgroup *g)
 		}
 	}
 	gui_close();
+	if (g->leave != NULL) g->leave(g);
 	if (changed && conf_save(g) < 0) {
 		fprintf(stderr, "settings: cannot write /etc/flipper/%s.conf\n",
 			g->name);
@@ -280,6 +295,7 @@ int main(int argc, char **argv)
 
 	if (argc == 2 && strcmp(argv[1], "apply") == 0) {	/* at boot */
 		for (i = 0; i < (int) NGROUPS; i++) {
+			if (groups[i]->apply == NULL) continue;	/* About */
 			groups[i]->load(groups[i]);
 			conf_load(groups[i]);
 			groups[i]->apply(groups[i], -1);
@@ -303,6 +319,6 @@ int main(int argc, char **argv)
 		return r;
 	}
 	fprintf(stderr, "Usage: settings diff | reset [path ...] | apply"
-		" | display | sound\n");
+		" | display | sound | time | about\n");
 	return 1;
 }
