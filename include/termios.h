@@ -176,8 +176,8 @@ _PROTOTYPE( int tcsetattr, \
 
 #define TEOF_DEF	'\4'	/* ^D */
 #define TEOL_DEF	_POSIX_VDISABLE
-#define TERASE_DEF	'\10'	/* ^H */
-#define TINTR_DEF	'\177'	/* ^? */
+#define TERASE_DEF	'\177'	/* ^? (Backspace on today's terminals; ^H too) */
+#define TINTR_DEF	'\3'	/* ^C (MINIX 2.0: ^?, which Backspace sends) */
 #define TKILL_DEF	'\25'	/* ^U */
 #define TMIN_DEF	1
 #define TQUIT_DEF	'\34'	/* ^\ */
