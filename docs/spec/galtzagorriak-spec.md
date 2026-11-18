@@ -377,9 +377,11 @@ firmware stays the reference for behaviour.**
   - **Sub-GHz transmit limits.** Unleashed lifts the regional TX limits. We keep the kernel's
     band and duty-cycle limits (R8.2) and the region rules, and a ported app goes through them
     unchanged.
-  - **Manufacturer keys** (KeeLoq and similar). As in D.3, none are shipped. Rolling-code
-    transmission stays behind the user-supplied keystore, and the manual warns that sending a
-    rolling code can desync the real remote.
+  - **The manufacturer key file** (`keeloq_mfcodes` and similar). The KeeLoq **code** (decoder,
+    encoder, the cipher) has no keys in it, so it is ported like any other protocol. Only the key
+    file is not shipped (D.3): the user can put their own on the card, and the code reads it from
+    there. Without a key file, KeeLoq remotes are still recognised, but their encrypted part is
+    not decoded. The manual warns that sending a rolling code can desync the real remote.
   - **Its UI changes** outside the ported apps. The launcher and the native apps keep our look
     (K.2, R5.6a.7), with the stock-look option of R5.6b.
 
