@@ -78,6 +78,13 @@ _PROTOTYPE(static int dotimes, (void));
 _PROTOTYPE(static int callbuiltin, (int n, struct op *t ));
 #define BEXEC	4	/* inbuilt("exec") */
 #define VFROOM	512	/* free heap left for a vfork child's redirections */
+/* SIGINT and SIGQUIT are blocked across vfork(): the child runs in our
+ * memory and sets talking = 0 there before exec, and a ^C that reached us
+ * meanwhile ran onintr() as soon as vfork() returned, before talking was
+ * ours again: onintr() took us for a script and left() - the login shell
+ * ended (found with tools/twoflip.py, about 1 in 100 ^C).  Static, not a
+ * local: the child may reuse our frame's slots. */
+static sigset_t vfsave;
 
 int
 execute(t, pin, pout, act)
@@ -318,6 +325,14 @@ int *pforked;
 		vfagain = vfmark = 0;
 		vfquiet = canv && pin == NULL && pout == NULL
 						&& vftries < VFTRIES && vfok;
+		if (canv) {
+			sigset_t b;
+
+			sigemptyset(&b);
+			sigaddset(&b, SIGINT);
+			sigaddset(&b, SIGQUIT);
+			sigprocmask(SIG_BLOCK, &b, &vfsave);
+		}
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
@@ -332,6 +347,8 @@ int *pforked;
 				execflg = s_execflg;
 				brklist = s_brklist;
 				vfquiet = 0;
+				/* our state is ours again: a ^C now is ours */
+				sigprocmask(SIG_SETMASK, &vfsave, NULL);
 				if (i == -1 && errno == EAGAIN && !intr
 							&& vftries++ < VFTRIES) {
 					sleep(1);
@@ -420,6 +437,14 @@ int *pforked;
 		exit(execute(t->left, NOPIPE, NOPIPE, FEXEC));
 	if (wp[0] == NULL)
 		exit(0);
+	if (vforked) {
+		/* A ^C that came during the vfork must reach the program,
+		 * never onintr() in our parent's memory: caught signals go
+		 * to their default first (as exec would), ignored stay so. */
+		if (signal(SIGINT, SIG_DFL) == SIG_IGN) signal(SIGINT, SIG_IGN);
+		if (signal(SIGQUIT, SIG_DFL) == SIG_IGN) signal(SIGQUIT, SIG_IGN);
+		sigprocmask(SIG_SETMASK, &vfsave, NULL);
+	}
 	cp = rexecve(wp[0], wp, envp != NULL? envp: makenv());
 	if (vforked && vfquiet && errno == EAGAIN) {
 		vfagain = 1;		/* our parent tries again (#271) */

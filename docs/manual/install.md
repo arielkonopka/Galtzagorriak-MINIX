@@ -176,6 +176,12 @@ their own). Do not turn on "add carriage return" in the terminal program, or you
 
 Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
 it. A wrong password is refused after 2 seconds, to make guessing slow.
+
+The keys are those of a Linux terminal: **Ctrl-C** stops the running command, **Backspace**
+rubs out a character (whether the terminal sends DEL or Ctrl-H), **Ctrl-U** clears the line,
+**Ctrl-D** at the start of a line ends the input, Ctrl-\\ quits with a core dump. (MINIX 2.0
+used DEL to stop a command, which is what Backspace sends today; `stty erase ^H intr ^?` brings
+that back for the session.)
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
@@ -239,7 +245,10 @@ you need from `/home` first. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
-same build. Builds that do not touch the library keep its id, and the steps below work.)
+same build. Builds that do not touch the library keep its id, and the steps below work, but only
+when they are made with the same compiler: a build from another computer (another GCC version) has
+another id. If you flash first anyway, the Flipper starts without a console (`init: console: Exec
+format error`) until you rewrite the card.)
 
 (Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
 32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
