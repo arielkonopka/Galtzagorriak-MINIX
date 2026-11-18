@@ -3067,6 +3067,13 @@ Infrastructure (section F):
 - **R7b.4 `timed`, `alert`, `libapp`, notification policy** as F.2.
 - **R7b.5 LP5562 engine patterns** for alert LEDs (F.2), loaded by the LED driver from a `const`
   table; apps choose a pattern by name.
+  - **Console-activity mode** (owner, 2026-11-18): `echo console COLOUR >/dev/led` turns the LED
+    into a USB console indicator. It flashes COLOUR for 40 ms when the host sends a character or
+    the console sends one to it, then stays dark for 60 ms at least, so steady traffic blinks
+    instead of glowing. Off by default, switched on and off by hand like any pattern (`off` or
+    another pattern ends it), not kept over a reboot. The TTY task only arms the ms timer; the I2C
+    writes are the LED driver's task work, as for the sequences. Kernel RAM 0 B (free bits of the
+    sequence state word); no wake-ups when there is no traffic. UART traffic does not count.
 - **R7b.6 Power-off with alarms** as F.3.
 
 ### 7b.1 Interval reminder (`remind`)
