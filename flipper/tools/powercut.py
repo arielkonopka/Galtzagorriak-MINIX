@@ -40,6 +40,51 @@ QEMU = ["qemu-system-arm", "-M", "mps2-an386", "-nographic", "-monitor",
 CFG = 0x0008FFF0
 BAD = re.compile(rb"not erased|damaged|panic|does not read back")
 PASSWORD = "Kaixo-test1"	# root's, set at the first boot (R3.4)
+# The QEMU board mirrors every LCD flush on the serial console
+# (hal/qemu/board.c hal_lcd_flush: kprintf, "\n" -> "\r\n"): a frame of
+# 128 x 64 pixels as 32 rows of half blocks between two +---+ lines.  The
+# kernel prints it straight to the UART, so it can land in the middle of a
+# command's output (#278).  Run drops exactly such frames from what it
+# reads; anything that only looks like one stays, so the checks on the
+# commands' output are as strict as before.
+LCD_W = 128
+FRAME_BORDER = b"+" + b"-" * LCD_W + b"+\r\n"
+FRAME_HEAD = b"\r\n" + FRAME_BORDER
+FRAME_ROWS = 32
+FRAME_CELLS = (b" ", "\u2580".encode(), "\u2584".encode(), "\u2588".encode())
+
+
+def frame_end(buf):
+	"""buf starts with FRAME_HEAD.  The end of the whole LCD frame at its
+	start, 0 if buf holds only the start of one so far, -1 if it is not
+	one (then its bytes are output like any other)."""
+	pos = len(FRAME_HEAD)
+
+	def lit(s):	# s at pos: 1 yes, 0 cannot tell yet, -1 no
+		got = buf[pos:pos + len(s)]
+		if not s.startswith(got):
+			return -1
+		return 1 if len(got) == len(s) else 0
+
+	for _ in range(FRAME_ROWS):
+		k = lit(b"|")
+		if k <= 0:
+			return k
+		pos += 1
+		for _ in range(LCD_W):
+			for c in FRAME_CELLS:
+				k = lit(c)
+				if k != -1:
+					break
+			if k <= 0:
+				return k
+			pos += len(c)
+		k = lit(b"|\r\n")
+		if k <= 0:
+			return k
+		pos += 3
+	k = lit(FRAME_BORDER)
+	return k if k <= 0 else pos + len(FRAME_BORDER)
 
 
 class Run:
@@ -57,8 +102,35 @@ class Run:
 							(CFG + 4, mode)]
 		self.p = subprocess.Popen(cmd, cwd=self.dir, stdin=subprocess.PIPE,
 			stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-		self.out = b""
+		self.out = b""		# the console without LCD frames
+		self.pend = b""		# read, maybe the start of a frame
+		self.frames = 0
 		self.seen = 0
+
+	def feed(self, d):
+		"""Add what QEMU printed to self.out, without the LCD frames."""
+		buf = self.pend + d
+		while True:
+			i = buf.find(FRAME_HEAD)
+			if i < 0:	# keep back what may start a frame
+				k = min(len(buf), len(FRAME_HEAD) - 1)
+				while k > 0 and not FRAME_HEAD.startswith(buf[-k:]):
+					k -= 1
+				self.out += buf[:len(buf) - k]
+				self.pend = buf[len(buf) - k:]
+				return
+			self.out += buf[:i]
+			buf = buf[i:]
+			e = frame_end(buf)
+			if e == 0:		# the rest comes later
+				self.pend = buf
+				return
+			if e < 0:		# not a frame: output
+				self.out += buf[:len(FRAME_HEAD)]
+				buf = buf[len(FRAME_HEAD):]
+			else:
+				self.frames += 1
+				buf = buf[e:]
 
 	def wait(self, pat, secs=60):
 		"""Read until pat (bytes regex) appears after the last match."""
@@ -73,7 +145,7 @@ class Run:
 				d = os.read(self.p.stdout.fileno(), 65536)
 				if not d:
 					break
-				self.out += d
+				self.feed(d)
 		return None
 
 	def send(self, line):
@@ -192,8 +264,11 @@ def checks(r, n, mode, expect):
 		want = expect["od" if is_od else "cksum"]
 		for step in ("as left", "reinstalled"):
 			if step == "reinstalled" and r.sh("pkg flash /tmp/p") != 0:
+				# "the clock is not set": MM's clock check
+				# (finst.c in_clock_set), so say the time
 				return (n, mode, "pkg flash /tmp/p fails after "
-					"the cut", where)
+					"the cut (date: %r)" % r.output("date"),
+					where)
 			got = r.output("echo hello | /tmp/p")
 			if got != want:
 				return (n, mode, "/tmp/p (%s, %s) printed %r" %
