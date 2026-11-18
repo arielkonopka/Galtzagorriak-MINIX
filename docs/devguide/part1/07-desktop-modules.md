@@ -135,7 +135,7 @@ desktop. Nothing has a name in the file system, so no other process can talk to 
 
 | Record | Meaning |
 |---|---|
-| `win ID KIND TITLE [ROWS=N FIRST=K] [LIVE]` | a window begins; KIND `list`, `text`, `clock` or `confirm`. `LIVE` (`gm_win_live()`): every value change is sent at once, see `submit` |
+| `win ID KIND TITLE [ROWS=N FIRST=K] [LIVE] [REPEAT=MS]` | a window begins; KIND `list`, `text`, `clock`, `confirm` or `pad`. `LIVE` (`gm_win_live()`): every value change is sent at once, see `submit`. `pad` (`gm_win_pad()`, T28d): the keys go to the app raw, see `key`; `REPEAT=MS` (10–1000, pad only) is how often a held key repeats, default 100 ms |
 | `item KEY LABEL [RIGHT]` | an entry that opens something (OK → `ok`) |
 | `int KEY LABEL MIN MAX STEP VALUE [UNIT]` | a number, changed with Left/Right |
 | `enum KEY LABEL INDEX OPT\|OPT\|…` | a choice, Left/Right |
@@ -144,7 +144,7 @@ desktop. Nothing has a name in the file system, so no other process can talk to 
 | `date KEY LABEL YYYY-MM-DD` | the same; years 2000–2127 |
 | `days KEY LABEL MASK` | week days, bit 0 Monday … bit 6 Sunday |
 | `input KEY LABEL TEXT MAX` | text up to MAX (≤ 63) characters, the desktop's keyboard |
-| `line TEXT` | a static line (the text of `text`, `clock` and `confirm` windows) |
+| `line TEXT` | a static line (the text of `text`, `clock`, `confirm` and `pad` windows; a `pad` has no other rows) |
 | `action KEY LABEL` | a button row (OK → `submit`, then `ok`) |
 | `show` | the window is complete: the desktop draws it |
 | `busy`, `idle` | a long job: the hourglass on / off; `idle` also means "done, nothing to show" |
@@ -159,7 +159,8 @@ malformed row is dropped alone. A record line is at most 127 characters.
 | Event | When |
 |---|---|
 | `ok WIN KEY` | OK on an `item` or `action` row (or on a `text`/`clock`/`confirm` window: its first action, `yes` on a confirm without one) |
-| `submit WIN KEY=VALUE …` | the values that changed, before `ok`, `page`, `back` and `close`, as more lines if they do not fit one; in a `LIVE` window also right after each change (a time, date or days row: when its edit ends), so the app can apply it at once (the settings groups: brightness, volume, the clock); the app need not answer. Values: numbers, the enum's index, `0`/`1`, `HH:MM`, `YYYY-MM-DD`, the days mask, the text |
+| `submit WIN KEY=VALUE …` | the values that changed, before `ok`, `page`, `back` and `close`, as more lines if they do not fit one; in a `LIVE` window also right after each change (a time, date or days row: when its edit ends; an `input` row: after every key on the keyboard, with the whole text so far), so the app can apply it at once (the settings groups: brightness, volume, the clock; Teklatua types what changed); the app need not answer. Values: numbers, the enum's index, `0`/`1`, `HH:MM`, `YYYY-MM-DD`, the days mask, the text |
+| `key KEY press\|release\|repeat` | a `pad` window only: KEY `up`, `down`, `left`, `right`, `ok`, `back`, on its press, its release, and while the last key pressed (not Back) is held a `repeat` every `REPEAT=` ms (the first after 200 ms; the 60 Hz clock rounds it to ticks, so `REPEAT=10` is one per tick, ~17 ms). Back is sent too (Back held with Up/Down can be a wheel); a **lone short Back** (pressed alone, let go within 1 s) is also Back as in every window (`back WIN`, or `close` on the first window), so Back always works. No key means no repeat and 0 wakeups |
 | `back WIN` | Back on a child window (the desktop already shows the parent) |
 | `redraw` | send the current window again (after `back` when the desktop did not keep the parent) |
 | `page WIN FIRST` | a long list (`ROWS=N`) needs the page starting at row FIRST: answer with `win WIN list TITLE ROWS=N FIRST=FIRST` and its rows |
@@ -213,7 +214,10 @@ int main(void)
 at most 512 bytes per `write()`); rows go with `gm_item`, `gm_int`, `gm_enum`, `gm_bool`,
 `gm_time`, `gm_date`, `gm_days`, `gm_input`, `gm_line`, `gm_action`; `gm_show` ends the window
 and sends it; `gm_busy(1)`/`gm_busy(0)` send `busy`/`idle`. `gm_event` waits for the next event
-in the same buffer each time and splits it into `f` (ended by `NULL`). The full example is
+in the same buffer each time and splits it into `f` (ended by `NULL`); a `pad` window's keys come
+as `GM_KEY` (`f[1]` the key, `f[2]` `press`/`release`/`repeat`). `gm_wait(ev, ms)` waits at most
+`ms` for an event (1: `gm_event` has one, 0: time is up), for an app that works on a timer while
+its window is open (Teklatua's clicker). The full example is
 `flipper/apps/gmdemo.c`; the `gmdemo` package installs it with `gm.c` and `gm.h` in
 `/usr/share/examples/gui/`. Build it as `minix.mk` does (`OBJS_gmdemo`, `CHMEM_gmdemo := 2560`).
 

@@ -211,6 +211,11 @@ brackets on the right and a hint line that names the buttons for the row under t
 - **The keyboard**: four rows of letters, digits and signs, then `Aa` (capitals), `Del`, `Spc`
   and `Done`. The arrows move, OK types the key under the cursor, `Done` keeps the text, Back
   leaves it as it was.
+  In an app that types into a computer ([Teklatua](usb-gadgets.md)) every key goes out at once,
+  so Back only closes the keyboard.
+- **A pad** (Teklatua's mouse): a screen with a few lines of text where every button goes to
+  the app, held or not; the hint line says `Keys go to the app  Back`. Back pressed alone and
+  let go at once still leaves it.
 - **Back** goes to the previous screen of the app at once, and on its first screen it closes the
   app. Back always works, even when the app does not answer.
 - Values change on the screen at once. The app gets the changed values when you leave the screen
