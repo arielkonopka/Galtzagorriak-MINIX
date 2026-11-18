@@ -418,6 +418,32 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 ### T28e (`lane:cloud`): `jiggle` command
 - R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
 
+## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
+Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
+
+### T29a (`lane:cloud`, host + QEMU): `mtpd` core
+- Container parser and the operation set of R10.4 behind a small transport interface (`read container`, `write container`, `send event`). Transports: USB (T29b) and, for tests, a pipe/serial transport: on QEMU over the second console line, on the host over a pipe.
+- Object handles = inode numbers; parent ring ≤ 256 × 8 B with path rebuild by directory scan (no FS change); `GetStorageInfo` from O.5's free counters; partial `SendObject` removed on cancel; `StorageInfoChanged` rate-limited; PIN-lock behaviour behind a stub until the PIN lock exists.
+- Tests: a Python host driver (`tools/mtphost.py`) that speaks the same containers: list, get, send, delete, rename, move, 60-char names, `NAME_MAX`+1, cancel mid-send; fuzz the parser on the host (libFuzzer or AFL, sanitizers, ≥ 1 h in the PR, a short run in CI) = AC10.4.6. M2 runs `mtphost.py` against `mtpd` on QEMU.
+- `ramcheck`: `mtpd` ≤ 8 KB peak; gone after the transport closes. Flash: `mtpd` size in the PR.
+- Docs: manual `usb-files.md` (how it looks on Windows and Linux, what is visible, PIN lock, the K.7 switch; example file `etxea.sub`), `man 8 mtpd`, CHANGELOG.
+
+### T29b (`lane:local`, Flipper): the USB side
+- MTP interface (bulk IN/OUT + interrupt IN) in `flipper/hal/flipper/usb.c`, PMA buffers, Microsoft OS descriptors (`0xEE` string, extended compat ID `MTP`), in the default and HID configurations, left out for canary/reader/mass-storage personas; `devd` starts `mtpd` on configure, stops it on detach or 30 s suspend.
+- AC10.4.1–AC10.4.4, AC10.4.7 (AC10.4.5 once the PIN lock exists) and AC10.4.R on the device, Windows 11 (+ Windows 10 if at hand) and Linux; throughput into PORTING.md. Kernel ≤ +96 B (`ramcheck`).
+
+## T30. Radio stacks on the SD card (spec R16.0, R2b.1a; owner request and decision 2026-11-18): milestone M7, with R16.1.0 at the start of Phase 16
+Several ST CPU2 images on the card, switched with `radio use` in maintenance mode; the radio slot holds only the run-time cache. Order: T30a any time → T30b after Phase 15 (R15.1) works. Every PR updates `docs/manual/radio.md` (new page, linked from the manual index).
+
+### T30a (`lane:cloud`, host + QEMU): tool and layout, no FUS
+- `radio` manifest parser, `list`/`add`/`rm` checks, `/etc/radio.slot`; R2b.1a in the flash layout code (installed end = `min(guard, SLOT)`, `pkg` refuses the slot, dead records/cache entries above the guard at boot); QEMU fakes `SFSA` and the R2b.10 info so the layout can be tested at several slot sizes.
+- Host tests: manifests with bad hash / too-new `fus` / slot over the base system refused; `pkg install --flash` stops at the slot. `ramcheck`: 0 B resident.
+- `tools/radio-fetch.py` (R16.0.1a): pinned STM32CubeWB tag, checked table vs. release notes, `list`/`get`/`from-fuf`, `--fus`; CI test against the pinned tag (network allowed) plus an offline test with a fake release tree. Manual page explains fetching the images with Basque-named examples.
+
+### T30b (`lane:local`, Flipper): FUS client and maintenance mode
+- SHCI FUS commands, maintenance mode (R16.0.3) with LCD progress, `radio use`/`repair`; the first use is the R16.1.0 light → full install, with before/after `SFSA`, SRAM2 reservation and FS cache blocks in PORTING.md.
+- AC16.0.1, AC16.0.2, AC16.0.3, AC16.0.R. Never `radio fus` without the owner present.
+
 ## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
