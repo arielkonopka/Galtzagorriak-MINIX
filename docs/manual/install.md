@@ -219,7 +219,7 @@ package installed.
 
 A package is installed only when its setup script (`postinst`) ran and ended without an error.
 Otherwise `pkg` says why and exits 1: `pkg: NAME: postinst cannot start: REASON` (for example when
-there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N`. Then
+there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N` (128 + the signal number if it was killed). Then
 `pkg: NAME VERSION is not set up: pkg install FILE again`: the files are in place, and the same
 command runs the script again. When RAM is short for a moment, `pkg` and the shell wait and try
 again (1 s apart, up to 10 s) before they give up.

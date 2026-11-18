@@ -91,7 +91,8 @@ static void die(const char *msg, const char *arg)
 }
 
 /* Run a program in a directory and wait for it.  Returns its exit status;
- * -1 when it could not start (errno: why) or was killed (errno 0).
+ * -1 when it could not start (errno: why); 128+N when signal N killed it
+ * (as sh says it).
  *
  * vfork: the child runs in this frame and we wait until its exec or
  * _exit, so what it stores in err we see here (as timed does, #253).  An
@@ -145,10 +146,12 @@ static int run(const char *dir, char *const argv[])
 		}
 		sleep(1);
 	}
-	if (WIFEXITED(st)) return WEXITSTATUS(st);
-	errno = 0;
-	return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
 }
+
+/* One message for every program that could not start: 4 B of GOT each
+ * saved keeps pkg in its old number of memory clicks. */
+static const char START[] = "pkg: %s: %s cannot start: %s\n";
 
 /* Run a postinst or prerm with sh.  Returns 0 if it ran and ended with
  * status 0; else says why on stderr and returns -1 (start failed) or 1. */
@@ -159,13 +162,11 @@ static int script(const char *name, const char *what, char *path)
 
 	argv[0] = "/bin/sh"; argv[1] = path; argv[2] = NULL;
 	if ((r = run(NULL, argv)) == 0) return 0;
-	if (r < 0 && errno != 0) {
-		fprintf(stderr, "pkg: %s: %s cannot start: %s\n", name, what,
-							strerror(errno));
+	if (r < 0) {
+		fprintf(stderr, START, name, what, strerror(errno));
 		return -1;
 	}
-	if (r < 0) fprintf(stderr, "pkg: %s: %s was killed\n", name, what);
-	else fprintf(stderr, "pkg: %s: %s failed: exit %d\n", name, what, r);
+	fprintf(stderr, "pkg: %s: %s failed: exit %d\n", name, what, r);
 	return 1;
 }
 
@@ -655,11 +656,9 @@ static int install(const char *file)
 	}
 	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
 	if ((r = run(tmp, argv)) != 0) {
-		if (r < 0 && errno != 0)	/* tar did not start (#271) */
-			fmt(buf, sizeof buf, "%s: tar cannot start: %s", file,
-							strerror(errno));
-		else fmt(buf, sizeof buf, "%s", file);
-		die("cannot unpack", buf);
+		if (r < 0)			/* tar did not start (#271) */
+			fprintf(stderr, START, file, argv[0], strerror(errno));
+		die("cannot unpack", file);
 	}
 	fmt(path, sizeof path, "%s/CONTROL/control", tmp);
 	if (read_control(path) < 0) {
