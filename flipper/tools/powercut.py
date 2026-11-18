@@ -168,6 +168,17 @@ class Run:
 		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
 		return m.group(1).replace(b"\r", b"") if m else None
 
+	def late(self, secs=60):
+		"""After output() gave None: does it come later?  For the
+		failure message only (the run has failed already): slow or
+		hung."""
+		t = time.time()
+		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
+		if m is None:
+			return "nothing %d s later either" % secs
+		return "%r %d s later" % (m.group(1).replace(b"\r", b""),
+					  time.time() - t)
+
 	def set_root_password(self, pw=PASSWORD):
 		"""The first boot's question: getty runs passwd root before its
 		first login prompt while root has none (spec R3.4)."""
@@ -284,14 +295,18 @@ def checks(r, n, mode, expect):
 					where)
 			got = r.output("echo hello | /tmp/p")
 			if got != want:
-				return (n, mode, "/tmp/p (%s, %s) printed %r" %
-					("od" if is_od else "cksum", step, got),
-					where)
+				return (n, mode, "/tmp/p (%s, %s) printed %r%s" %
+					("od" if is_od else "cksum", step, got,
+					 "" if got is not None else
+					 " (" + r.late() + ")"), where)
 		if r.sh("cp /bin/sum /tmp/q; sync; pkg flash /tmp/q") != 0:
 			return (n, mode, "a new install fails after the cut",
 				where)
-		if r.output("echo hello | /tmp/q") != expect["sum"]:
-			return (n, mode, "/tmp/q (sum) printed wrong", where)
+		got = r.output("echo hello | /tmp/q")
+		if got != expect["sum"]:
+			return (n, mode, "/tmp/q (sum) printed %r%s" % (got,
+				"" if got is not None else " (" + r.late() + ")"),
+				where)
 		if BAD.search(r.out):
 			return (n, mode, "console: %r" %
 				BAD.search(r.out).group(0), where)
