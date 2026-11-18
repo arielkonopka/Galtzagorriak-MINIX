@@ -352,8 +352,56 @@ goes into the system image; user flash goes into the installed region.
 - **Third-party parts inside the stock tree keep their own licenses:** u8g2 (BSD-2), nanopb (zlib),
   mbedTLS (Apache-2.0), ST CMSIS/HAL (BSD-3/Apache-2.0). All are GPL-3.0-compatible. Any ST
   middleware is under ST's own terms; check it before reuse.
-- **Never included:** Keeloq manufacturer keys and similar secrets; the stock firmware doesn't
-  ship them either. The Sub-GHz app loads a user-supplied keystore.
+- **Code yes, secret data files no** (owner, 2026-11-18: "the KeeLoq code has no keys in it").
+  A feature is never dropped because it can use keys or secret data:
+  - **The code is ported in full:** protocol decoders and encoders, ciphers (KeeLoq included),
+    key-recovery tools (`mfkey`), dictionary attacks and the "add manually" paths that need a
+    key.
+  - **Only secret data files are not shipped.** These are the manufacturer keys (KeeLoq
+    `mfcodes` and the like) and any leaked or vendor-private key lists.
+  - **The user's own file on the card works like stock.** The app reads it from the same path and
+    format as stock (`/ext/...` = `/home/flipper/...`). Without it, the feature works as far as
+    it can (a remote is recognised, the encrypted part is not decoded) and says which file is
+    missing.
+  - **Stock's encrypted key file.** The stock firmware ships its KeeLoq key file encrypted with a
+    key held in each Flipper's CPU2 secure enclave. Once the enclave is reachable (R17.1, after
+    BLE), MINIX reads that file the same way, on the same device. Nothing secret is in our tree.
+    This is to be checked against the stock `subghz_keystore` source when Phase 9 starts.
+  - **Public data that stock itself ships stays in,** e.g. the system MIFARE Classic dictionary
+    (`mf_classic_dict.nfc`) and the IR universal remote files.
+
+### D.4 Unleashed as a second source (owner question 2026-11-18)
+
+The owner asked whether [Unleashed](https://github.com/DarkFlippers/unleashed-firmware) can be
+the model for porting the stock apps. Answer: **yes, as a source of code, while the stock
+firmware stays the reference for behaviour.**
+
+- **Why it fits:**
+  - Unleashed is the stock firmware plus patches. It has the same Furi API, so one `libfuri`
+    (D.2) builds apps from both.
+  - It is GPL-3.0 like stock, so D.3 applies unchanged.
+  - The project already uses it: every LF RFID protocol (9.0, T19), and it is the reference
+    peer of the two-Flipper tests (`twoflip.py`).
+- **The rule:**
+  - **Stock is the reference.** "Feature parity" (the project goal) means the stock apps, their
+    screens and their file formats. The ACs compare against stock.
+  - **Unleashed is the source where it is a superset.** Take its version when it adds, without
+    changing what stock does:
+    - more protocols: Sub-GHz decoders/encoders, the LF RFID set already chosen, NFC parsers;
+    - more data: IR universal remote files;
+    - its extra bundled apps, as a later catalog wave (each one a package with its own RAM figure).
+  - Every copied file names its Unleashed commit in its header, as T19 does.
+- **What we do not take from it:**
+  - **Sub-GHz transmit limits.** Unleashed lifts the regional TX limits. We keep the kernel's
+    band and duty-cycle limits (R8.2) and the region rules, and a ported app goes through them
+    unchanged.
+  - **The manufacturer key file** (`keeloq_mfcodes` and similar). The KeeLoq **code** (decoder,
+    encoder, the cipher) has no keys in it, so it is ported like any other protocol. Only the key
+    file is not shipped (D.3): the user can put their own on the card, and the code reads it from
+    there. Without a key file, KeeLoq remotes are still recognised, but their encrypted part is
+    not decoded. The manual warns that sending a rolling code can desync the real remote.
+  - **Its UI changes** outside the ported apps. The launcher and the native apps keep our look
+    (K.2, R5.6a.7), with the stock-look option of R5.6b.
 
 ---
 
@@ -2399,7 +2447,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 16 | App ports V: BLE remote, BLE serial, mobile app; native: Bluetooth adapter (BLE mouse/keyboard → USB, 16.1); Bluetooth dongle mode for the PC (16.2); camera finder v2 with BLE scan (16.3) | |
 | 17 | Trust: U2F, signed packages [9], updater, option bytes (deferred item) | |
 | 18 | App ports VI: U2F, catalog, porting guide, CI | parity |
-| 18b | First-boot wizard: hostname, region, date/time and zone, location, today's sunrise and sunset (section I) | out-of-box setup |
+| 18b | First-boot wizard: hostname, region, date/time and zone, location, launcher look (Pine/Stock), today's sunrise and sunset (section I) | out-of-box setup |
 | 19 | Networking: lwIP over USB, a Wi-Fi module, BLE and CC1101 (19a can start right after 10) | gadget web UI, time sync |
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 | 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
@@ -3044,6 +3092,53 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
       through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
       later status line) runs only while the launcher is in the foreground and the screen is on;
       otherwise it waits for a key with no timeout.
+- **R5.6b Launcher style "Stock"** (owner request 2026-11-18; task T31). The launcher can look
+  like the stock main menu instead of the default Pine look (R5.6a.7).
+  - **R5.6b.1 One launcher, two styles.** Add `Style: pine|stock` to `/etc/launcher.conf`
+    (default `pine`) and a `Style [pine]` row on the launcher's settings page. Toggling it
+    redraws at once and needs no restart.
+    The first-boot wizard asks for the style too (R18b.2 step 6).
+    The owner offered a separate replacement program. It is **not** done that way, because:
+    - the launcher is the desktop (K.6 layer 3: pages, status line, notifications, Running), so a
+      second program would duplicate all of that and drift;
+    - both programs would have to be in flash;
+    - switching would mean a restart.
+    Instead the stock drawing lives in its own source file (`launcher_stock.c`), like a skin. It
+    only draws and never changes behaviour: the same `/etc/apps`, keys, pages and settings.
+  - **R5.6b.2 The Apps page in stock style.** It follows the stock main menu
+    (`applications/services/gui/modules/menu.c`; GPL-3.0, ported per D.3), pixel for pixel
+    where the content is the same:
+    - no black title bar and no hint line;
+    - the visible entries with a 10×10 icon and the name in the stock fonts, the selected one
+      in a rounded frame in the primary font;
+    - a scroll bar at the right edge.
+    Keys are the same as in Pine style: Up/Down, OK runs, and Left/Right still move between
+    pages (K.6). The other pages (Settings, Home, Notifications, Running) draw as a stock
+    `submenu`: a rounded selection frame, the stock fonts, no hint line. The message line of
+    R5.6a.7 becomes a short stock-style popup that closes after 2 s or at the next key.
+  - **R5.6b.3 Icons.**
+    - A `const` table of 10×10 icons in flash, one for each built-in name of R5.6a.2, about
+      24 × 20 B. The drawings may be the stock icons (GPL-3.0 assets, D.3), so an app's icon
+      looks the same as on stock.
+    - A 10×10 icon of an app's own, `Icon10:` in `CONTROL/control`, which `fam2pkg` copies from
+      the `.fam`'s `fap_icon` without downscaling. The `/etc/apps` third field gets a `##`
+      form (40 hex digits).
+    - An entry without one: its 8×6 icon is drawn centred in the 10×10 cell; if it has no icon
+      at all, the cell is empty.
+  - **R5.6b.4 Fonts.** The two stock fonts (u8g2 `haxrcorp_4089` and `helvB08`, BSD-2), ASCII
+    only, as `const` tables in flash: about 3–4 KB of text, shared with `libfuri` once #201
+    makes it a shared library. `gui.c` gets one helper, `gui_text_font()`. The stock-style
+    code is a separate object, so a launcher built without it has the same text as today.
+  - **R5.6b.5 RAM and speed.**
+    - Pine style: 0 B more RAM, and the frames are byte-identical to before (AC5.5 still holds).
+    - Stock style: 20 B of heap only for each entry that has an `Icon10:`, inside its existing
+      block; built-in icons cost 0 B. `.bss` grows by at most 4 B.
+    - No file reads and no timers on the key path. A key press redraws one frame, as in Pine
+      style.
+    - `/etc/launcher.conf` is written only when the style changes (on the card, never internal
+      flash).
+  - **R5.6b.6 What it is not.** The stock desktop with the dolphin animations is out of scope
+    (stock art and RAM for its frames). The Home page of K.6 stays ours in both styles.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
@@ -3063,6 +3158,14 @@ Acceptance:
 - AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
   holds the new value, the list redraws without icons; Left, Back without a change writes
   nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6b) With `Style: stock`:
+  - the Apps page's frame matches the stock `menu.c` drawing of the same entries (a host test
+    renders both from the same entry list);
+  - every app starts with OK, and Left/Right still change pages;
+  - toggling the style on the settings page redraws at once, and writes `/etc/launcher.conf`
+    once;
+  - with `Style: pine` the frames are byte-identical to the frames before R5.6b;
+  - RAM as in R5.6b.5 (ramcheck), with no internal-flash erase (`flashcheck` unchanged).
 - AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
   moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
   shows the notice on the message line with the list still drawn, and the hint line is back
@@ -3670,7 +3773,7 @@ RAM: kernel ≤ +200 B (state only; streams use user buffers, R4b.5). Flash: ≈
 
 | Stock app | MINIX mapping | Notes |
 |---|---|---|
-| Sub-GHz: Read, Read RAW, Saved, Add manually, Frequency analyzer, Region info | `subghz` app, group `subghz`; stock `lib/subghz` protocols, `.sub` files (including RAW); keystore from `/home/flipper/subghz/assets` | Decoders run on capture blocks from `read()`; history kept in a bounded file-backed list to cap RAM |
+| Sub-GHz: Read, Read RAW, Saved, Add manually, Frequency analyzer, Region info | `subghz` app, group `subghz`; stock `lib/subghz` protocols plus the Unleashed extras (D.4), KeeLoq and the other rolling codes included, `.sub` files (including RAW); keystore from `/home/flipper/subghz/assets` (the user's own file, or stock's encrypted one once the enclave works: D.3) | Decoders run on capture blocks from `read()`; history kept in a bounded file-backed list to cap RAM |
 | Sub-GHz CLI | `subghz` command (`rx`, `tx`, `chat`) | Unix pipes allow `subghz rx \| grep` |
 | 125 kHz RFID: Read, Saved, Add manually, Extra actions (T5577) | `lfrfid` app, group `rfid`; stock `lib/lfrfid` | — |
 
@@ -4989,7 +5092,7 @@ RAM: kernel ≤ +200 B. Flash: ≈ +10 KB kernel.
 
 | Stock app | MINIX mapping |
 |---|---|
-| NFC: Read, Detect reader, Saved, Extra actions (MIFARE Classic keys, Unlock with reader…), Add manually | `nfc` app, group `nfc`; stock `lib/nfc` (protocols, pollers, listeners), dictionaries streamed from `/home/flipper/nfc/assets` instead of loaded whole |
+| NFC: Read, Detect reader, Saved, Extra actions (MIFARE Classic keys, Unlock with reader…), Add manually | `nfc` app, group `nfc`; stock `lib/nfc` (protocols, pollers, listeners) plus Unleashed's extra parsers (D.4); dictionaries streamed from `/home/flipper/nfc/assets` instead of loaded whole: the system dictionary stock ships is included, the user dictionary works as in stock (D.3) |
 | `mfkey` (key recovery on device) | separate `mfkey` command, runs as a normal process (swappable when idle) |
 
 Acceptance:
@@ -5620,14 +5723,20 @@ table), 15 (BLE name), section I.
      - **from the sun:** today's (or yesterday's) sunrise and/or sunset time as the user observed
        it or read it, giving an approximate position (I.5), with its accuracy shown; near an
        equinox it asks for the latitude as well.
-  6. **Summary:** hostname, region, zone, local time and UTC, position, and for today at that
+  6. **Launcher look** (owner, 2026-11-18; R5.6b): **Pine** (default) or **Stock**. Left/Right
+     switch between the two and show a sample of each launcher list (four built-in entries in that
+     style), drawn by the launcher's own style code so the sample matches what the user will get.
+     Skipping keeps Pine. Changed later on the launcher's settings page or with `setup look`.
+  7. **Summary:** hostname, region, zone, local time and UTC, position, launcher look, and for today at that
      position: **sunrise, sunset**, day length, and the start of civil and nautical twilight,
      computed by `libastro` from the location and the RTC. If the user entered sunrise/sunset in
      step 5, both the entered and the computed times are shown. OK writes everything.
 - **R18b.3 Writing.** All files of I.4 and the RTC are written only at the end, each through a
   temporary file and `rename`, so a power loss mid-wizard leaves the old state and the wizard runs
-  again. Then INIT gets `SIGHUP` (new `TZ`), `bled` gets the new name, and the launcher starts.
-- **R18b.4 Re-run.** `setup` (all steps) or `setup hostname|region|time|tz|location|sun` (one
+  again. `Style:` goes into `/etc/launcher.conf` the same way (on the card), only if it differs
+  from the default. Then INIT gets `SIGHUP` (new `TZ`), `bled` gets the new name, and the launcher
+  starts in the chosen style.
+- **R18b.4 Re-run.** `setup` (all steps) or `setup hostname|region|time|tz|location|look|sun` (one
   step; `sun` only shows the summary), as root; Settings → System → Setup runs the same program.
 - **R18b.5 Manual notes** (I.7) go into the manual chapter "First start".
 
@@ -5644,6 +5753,9 @@ Acceptance:
 - AC18b.5 As `nobody`, `cat /etc/location` fails; an app with `Location: yes` can read it.
 - AC18b.6 `setup tz` alone changes the zone; `date` shows the new local time at once in a new
   shell; armed alarms (7b) ring at the new local time.
+- AC18b.5 Choosing Stock in step 6: the summary says "Stock", `/etc/launcher.conf` has
+  `Style: stock`, and the launcher starts in that style. Skipping step 6 leaves the file without a
+  `Style:` line and the launcher in Pine.
 
 Responsiveness: AC18b.R The first wizard screen appears within L10 of power-on; every step
 meets L1; the summary (with the sun computation) appears ≤ 200 ms after OK.
