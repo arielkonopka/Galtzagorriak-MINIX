@@ -157,11 +157,14 @@ int hal_btn_pending(void) { return 1; }
  * ends ("tx 433920000 12 381 -296 ..."), which m2test checks; a test
  * arms sg_fake so that the next frame or packet is a received one
  * instead (the pattern of hid< and HIDIOCFAKE).  RAM: 4 + 4 + 1 B, and
- * the fake packet (QEMU only, not in the Flipper's budget). */
+ * the fake packet of at most 8 bytes (QEMU only, not in the Flipper's
+ * budget). */
 static uint32_t sg_hz;
 static uint32_t sg_hash;
 static uint8_t sg_fake;
-static uint8_t sg_pkt[HAL_SUBGHZ_PKT], sg_pkt_n;
+#define SG_FAKE_PKT_MAX	8		/* a test's packet: user RAM is
+					 * short in QEMU's M2 run as well */
+static uint8_t sg_pkt[SG_FAKE_PKT_MAX], sg_pkt_n;
 
 long hal_subghz_rx(uint32_t hz)
 {
@@ -273,7 +276,7 @@ int hal_subghz_fake_take(int what)
 
 int hal_subghz_pkt_fake(const uint8_t *p, unsigned n)
 {
-	if (n > HAL_SUBGHZ_PKT) return -1;
+	if (n > SG_FAKE_PKT_MAX) return -1;
 	for (sg_pkt_n = 0; sg_pkt_n < n; sg_pkt_n++) sg_pkt[sg_pkt_n] = p[sg_pkt_n];
 	return 0;
 }

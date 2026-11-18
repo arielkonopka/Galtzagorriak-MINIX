@@ -21,6 +21,7 @@
 #include <minix/fg.h>
 #include <minix/ibutton.h>
 #include <minix/hid.h>
+#include <minix/subghz.h>
 #include "libhid.h"
 #include <minix/partition.h>
 #include <time.h>
@@ -704,6 +705,120 @@ static void hid_tests(void)
 	close(k);
 	close(m);
 	close(c);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* Issue #302 (spec R8.2): Sub-GHz transmit with QEMU's backend, which
+ * prints each frame or packet as console lines ("sg> tx ..."); SGIOCLINE
+ * gives the hash of that text, SGIOCFAKE makes the next write a received
+ * frame or packet (the hid< / HIDIOCFAKE pattern).  The region is set
+ * once; every transmit is checked against its bands and duty cycle. */
+static int sg_tune(unsigned long hz)
+{
+	char t[12];
+	int fd = open("/dev/subghz", O_WRONLY), n, ok;
+
+	if (fd < 0) return 0;
+	n = sprintf(t, "%lu", hz);
+	ok = write(fd, t, n) == n;
+	close(fd);
+	return ok;
+}
+
+static int sg_line(int fd, const char *want)
+{
+	long h = 0;
+
+	return ioctl(fd, SGIOCLINE, &h) == 0
+			&& ((unsigned long) h & 0xFFFFFFFFUL) == fnv(want);
+}
+
+static void subghz_tests(void)
+{
+	unsigned long f[4];
+	struct sg_air air;
+	struct stat sb;
+	int s, r, k, v, e, st, n;
+	pid_t pid;
+	char b[8];
+
+	s = open("/dev/subghz", O_RDWR);
+	r = open("/dev/subghzraw", O_RDWR);
+	k = open("/dev/subghzpkt", O_RDWR);
+	check(s >= 0 && r >= 0 && k >= 0 && stat("/dev/subghzpkt", &sb) == 0
+		&& (sb.st_rdev & 0xFF) == 20, "subghz: open the 3 files (pkt: minor 20)");
+	if (s < 0 || r < 0 || k < 0) return;
+	f[0] = 350; f[1] = 700; f[2] = 350;
+	e = write(r, (char *) f, 12) < 0 && errno == EIO && sg_tune(433920000UL);
+	v = -1;
+	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
+		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
+	check(e, "subghz: untuned EIO; tuned, no region: EPERM");
+	v = SG_REGION('X', 'X');
+	e = ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	v = SG_REGION('E', 'U');
+	e = e && ioctl(s, SGIOCREGION, &v) == 0;
+	v = SG_REGION('U', 'S');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
+	v = 0;
+	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('E', 'U'),
+		"subghz: region XX EINVAL, EU set once (US: EPERM)");
+	check(write(r, (char *) f, 12) == 12
+		&& sg_line(r, "tx 433920000 3 350 -700 350"),
+		"subghz: a frame goes out, its console line (sg> tx)");
+	f[1] = 0;
+	e = write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 2000000;
+	e = e && write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 700;
+	e = e && write(r, (char *) f, 10) < 0 && errno == EINVAL;
+	/* 315 MHz is not EU's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
+	e = e && sg_tune(315000000UL) && write(r, (char *) f, 12) < 0
+		&& errno == EPERM && write(k, "yo", 2) < 0 && errno == EPERM;
+	f[0] = f[1] = f[2] = f[3] = 1000000;
+	e = e && sg_tune(868800000UL) && ioctl(r, SGIOCAIR, &air) == 0
+		&& air.limit_ms == 3600;
+	check(e && write(r, (char *) f, 16) < 0 && errno == EAGAIN,
+		"subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)");
+
+	/* a received frame for a waiting reader: another program (a reader
+	 * is pinned while it waits, R4b.5, so a forked copy sharing our
+	 * memory could not run beside it) */
+	(void) sg_tune(433920000UL);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl("/bin/m2test", "m2test", "sg-read", (char *) NULL);
+		_exit(99);
+	}
+	f[0] = 500; f[1] = 1000; f[2] = 500; f[3] = 2000;
+	for (n = 0, e = -1; n < 25 && e < 0; n++) {	/* until it reads */
+		(void) poll((struct pollfd *) NULL, 0, 200);
+		v = SG_FAKE_RAW;
+		if (ioctl(r, SGIOCFAKE, &v) < 0) break;
+		e = write(r, (char *) f, 16);
+		if (e < 0 && errno != EAGAIN) break;
+	}
+	check(e == 16 && pid > 0 && waitpid(pid, &st, 0) == pid
+		&& WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		"subghz: SGIOCFAKE: the reader gets the frame");
+
+	/* packets */
+	v = SG_FAKE_PKT;
+	e = ioctl(r, SGIOCFAKE, &v) < 0 && errno == EINVAL
+		&& write(k, "yo", 2) == 2 && sg_line(k, "pkt 433920000 79 6f")
+		&& read(k, b, sizeof(b)) < 0 && errno == EAGAIN;
+	check(e && ioctl(k, SGIOCFAKE, &v) == 0 && write(k, "yo", 2) == 2
+		&& read(k, b, sizeof(b)) == 2 && b[0] == 'y' && b[1] == 'o'
+		&& ioctl(r, SGIOCAIR, &air) == 0 && air.limit_ms == 360000
+		&& air.used_ms > 0 && air.used_ms < 100,
+		"subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit");
+	(void) sg_tune(0UL);
+	close(s);
+	close(r);
+	close(k);
 }
 #endif
 
@@ -2220,6 +2335,16 @@ int main(int argc, char **argv)
 	if (argc == 2 && strcmp(argv[1], "warm") == 0) {	/* see init.c */
 		for (;;) pause();
 	}
+#ifdef BOARD_QEMU
+	if (argc == 2 && strcmp(argv[1], "sg-read") == 0) {	/* #302 */
+		unsigned long got[8];
+		int c = open("/dev/subghzraw", O_RDONLY);
+
+		n = read(c, (char *) got, sizeof(got));
+		return n == 16 && got[0] == 500 && got[1] == 1000
+			&& got[2] == 500 && got[3] == 2000 ? 0 : 1;
+	}
+#endif
 	if (argc == 2 && strcmp(argv[1], "child-exec") == 0) {
 		printf("  [exec'd child pid %d running]\n", getpid());
 		return 7;
@@ -2538,6 +2663,7 @@ int main(int argc, char **argv)
 	devpoll_tests();
 	ibutton_tests();
 	hid_tests();
+	subghz_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();

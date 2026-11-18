@@ -315,6 +315,9 @@ PRIVATE u8_t sg_state;
 PRIVATE u8_t as_proc;		/* the reader + 1, 0: none */
 PRIVATE u8_t as_caller, as_done;
 PRIVATE u16_t as_count;
+PRIVATE u16_t sg_region;		/* R8.2: SG_REGION('E','U'); 0 none */
+PRIVATE u16_t sg_rev;			/* QEMU: a fake frame's reader to
+					 * revive, bytes + 1 (issue #302) */
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -463,6 +466,10 @@ PUBLIC void flipdev_task()
 		r = EINVAL;
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
+	if (sg_rev != 0) {		/* QEMU: a fake frame was read */
+		reply(REVIVE, ir_caller, ir_proc, (int) sg_rev - 1);
+		sg_rev = 0;
+	}
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
 	hid_check();			/* e.g. a persona let go */
   }
@@ -683,7 +690,6 @@ PRIVATE const struct sg_band {
   { "JP", 500,  920500000, 923500000 },
 };
 #define SG_NBANDS	(sizeof(sg_bands) / sizeof(sg_bands[0]))
-PRIVATE u16_t sg_region;		/* SG_REGION('E','U'); 0: none set */
 PRIVATE u32_t sg_air_ms, sg_hour;	/* air time since sg_hour (s) */
 
 PRIVATE int sg_tx_check(ms, hzp, limit)
@@ -726,15 +732,15 @@ int count;
   if (hal_subghz_fake_take(HAL_SG_FAKE_RAW)) {
 	/* QEMU test hook: a received frame for the waiting reader */
 	if (!ir_rd || pu_input != 1) return(EAGAIN);
-	if (count > (int) ir_count) count = ir_count;
-	phys_copy(user, ir_buf, (phys_bytes) count);
+	n = count > (int) ir_count ? ir_count : count;
+	phys_copy(user, ir_buf, (phys_bytes) n);
 	hal_pulse_stop();
 	lock();
 	pm_busy &= ~PM_PULSE;
 	unlock();
 	proc_addr(ir_proc)->p_physio = FALSE;
 	ir_rd = FALSE;
-	reply(REVIVE, ir_caller, ir_proc, count);
+	sg_rev = (u16_t) n + 1;		/* revived after this call's reply */
 	return(count);
   }
   for (i = 0; i < n; i += k) {
