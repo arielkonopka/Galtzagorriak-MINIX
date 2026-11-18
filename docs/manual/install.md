@@ -222,7 +222,9 @@ Otherwise `pkg` says why and exits 1: `pkg: NAME: postinst cannot start: REASON`
 there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N` (128 + the signal number if it was killed). Then
 `pkg: NAME VERSION is not set up: pkg install FILE again`: the files are in place, and the same
 command runs the script again. When RAM is short for a moment, `pkg` and the shell wait and try
-again (1 s apart, up to 10 s) before they give up.
+again (1 s apart, up to 10 s) before they give up. While a subshell of yours runs in the
+background (for example `( ... ) &`), the shell cannot wait this way: it says
+`NAME: no memory to start it` at once; run the command again a moment later.
 
 ### Updating to a newer build without erasing the card
 
