@@ -217,7 +217,8 @@ def acn4(r):
 	return ok
 
 
-CUTS = 10
+CUTS = int(os.environ.get("SDCUT_CUTS", "10"))	# cuts in the prerm
+PAD = 80		# comment lines in /etc/apps: the rewrite spans blocks
 TEK = b"Teklatua:usbremote:@usb:=/usr/bin/usbremote\n"
 SLASH = b"Back\\slash:nobody:@app:/bin/echo\n"
 PRERM = "/usr/var/pkg/info/usbrem.prerm"
@@ -250,16 +251,28 @@ def apps_cut(r, n):
 		time.sleep(n[1])
 		where = "%.2f s into pkg remove usbrem" % n[1]
 	else:				# the prerm, cut at its n[1]th command
-		r.send("while sync; do :; done & echo @@G''O@@; sh -x %s; "
-			"echo @@DO''NE@@" % PRERM)
+		# The sync loop goes on when a sync finds no memory (#271);
+		# its messages go nowhere, so a "no memory" seen below is
+		# sh -x's own.
+		r.send("while :; do sync; done >/dev/null 2>&1 & "
+			"echo @@G''O@@; sh -x %s; echo @@DO''NE@@" % PRERM)
 		if r.wait(rb"@@GO@@", 30) is None:
 			print("  APPS: the prerm did not start")
 			return None
+		done = False
 		for _ in range(n[1]):
-			if r.wait(rb"\n\+", 60) is None:
+			m = r.wait(rb"\n\+|@@DONE@@", 60)
+			if m is None:
+				break
+			if m.group(0) == b"@@DONE@@":
+				done = True
 				break
 		where = "at the prerm's command %d" % n[1]
 		if NOMEM in r.out[mark:]:	# #271: once more
+			if not done:
+				r.wait(rb"@@DONE@@", 60)
+			# stop the loop first: it would take the memory again
+			r.sh("kill $!", 30)
 			return "again"
 	r.restart()			# the power cut
 	if not r.login():
@@ -275,6 +288,12 @@ def apps(r):
 		60) != 0:
 		print("  APPS: could not add the label with a backslash")
 		return False
+	for k in range(0, PAD, 20):	# short lines: the UART is slow
+		if r.sh("for i in %s; do echo \"# pad $i\"; done >>/etc/apps"
+			% " ".join(str(i) for i in range(k, min(k + 20, PAD))),
+			60) != 0:
+			print("  APPS: could not pad /etc/apps")
+			return False
 	if not install(r):
 		return False
 	old = r.output("cat /etc/apps")
