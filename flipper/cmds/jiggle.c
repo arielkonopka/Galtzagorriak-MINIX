@@ -207,7 +207,7 @@ int main(int argc, char **argv)
 			say("poll failed", (const char *) 0);
 			break;
 		}
-		if (p[1].revents & POLLIN) {
+		if (p[1].revents != 0) {	/* jiggle -k (or the FIFO failed) */
 			(void) read(p[1].fd, &c, 1);
 			r = 0;
 			break;
