@@ -61,7 +61,12 @@
 # and its holder, the LED reader's slot and buffer: 9 B, padded).  The
 # spec allows <= 32 B for the QEMU backend; the QEMU board's own 8 B (its
 # state and the last line's hash) are not in the Flipper image.
-kernel    160    14692  14852
+# Issue #302 (Sub-GHz transmit, R8.2): kernel +8 B: the region (2 B) and
+# the hour's air time and its start (8 B) for the duty-cycle limit, less
+# padding they fill; the band table is const.  The issue allows <= 32 B;
+# the QEMU backend's state (frequency, hash, fake flag, a 60 B packet) is
+# not in the Flipper image.
+kernel    160    14700  14860
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows

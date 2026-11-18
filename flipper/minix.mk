@@ -381,6 +381,9 @@ CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 			# ~0.5 KB per directory level, stdio).  Runs at boot
 			# from /etc/rc, when the RAM is free; later it may need
 			# apps closed first.
+CHMEM_subghz := 16384	# every decoder's state (malloc'd once, ~5 KB),
+			# key files (<= 4 KB), stdio; the 2 KB frame buffer
+			# is bss
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
@@ -495,6 +498,25 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
+# libsubghz (Phase 9, issue #302, src/lib/subghz): the Unleashed Sub-GHz
+# protocols, linked into subghz (code in flash; the decoders' state is
+# malloc'd while it runs).  Third-party C11 code: built quietly (-w).
+SUBGHZ_DIR := $(MROOT)/src/lib/subghz
+SUBGHZ_C := $(shell cd $(SUBGHZ_DIR) && find . -name '*.c' | sort)
+SUBGHZ_OBJ := $(patsubst ./%.c,$(MB)/subghz/%.o,$(SUBGHZ_C))
+SUBGHZ_HDR := $(shell find $(SUBGHZ_DIR) -name '*.h')
+SUBGHZ_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(SUBGHZ_DIR) -I$(SUBGHZ_DIR)/shim -I$(SUBGHZ_DIR)/subghz
+$(MB)/subghz/%.o: $(SUBGHZ_DIR)/%.c $(SUBGHZ_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(SUBGHZ_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/port/subghz.o: cmds/subghz.c $(SUBGHZ_HDR) $(MROOT)/include/minix/subghz.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(SUBGHZ_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_subghz = $(MB)/cmd/port/subghz.o $(SUBGHZ_OBJ)
+# Its own package (subghz_1.0.tar, Flash: yes): 130 KB of text runs in
+# place from the installed region, never from RAM or the run-time cache.
+SGPROGS	:= subghz
 # libmodem (spec section P, src/lib/modem): the link layer, the RFID line
 # code and the Sub-GHz presets and legal tables, linked into gmodem (not
 # MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
@@ -787,7 +809,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
@@ -800,7 +822,7 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar 
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
-	   $(PKGDIR)/usbrem_1.0.tar
+	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -862,6 +884,13 @@ $(PKGDIR)/badusb_1.0.tar: $(MB)/bin/badusb $(MB)/bin/badusb-gui tools/mkpkg.py \
 	   /usr/bin/badusb-gui=$(MB)/bin/badusb-gui \
 	   /usr/share/hid/layouts/de-DE.kl=$(HID_DIR)/layouts/de-DE.kl$(COMMA)644 \
 	   $(foreach e,$(BU_EX),/home/flipper/badusb/$(notdir $(e))=$(e)$(COMMA)644)
+# Sub-GHz (spec Phase 9, issue #302): the subghz command with every
+# Unleashed protocol (libsubghz), in place in flash; the user's keystore
+# goes to /home/flipper/subghz/assets (D.3: none shipped).
+$(PKGDIR)/subghz_1.0.tar: $(MB)/bin/subghz tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n subghz -v 1.0 -o $(PKGDIR) --flash \
+	   -D "Sub-GHz remotes: rx, decode, tx, tx_from_file, chat (Unleashed protocols)" \
+	   /usr/bin/subghz=$(MB)/bin/subghz
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).

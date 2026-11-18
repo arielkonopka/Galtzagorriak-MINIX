@@ -147,9 +147,142 @@ int hal_ib_edge(void) { return 0; }
 void hal_ib_clear(void) { }
 int hal_btn_pending(void) { return 1; }
 
-long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
-int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
-void hal_subghz_off(void) { }
+/* Sub-GHz, the QEMU backend (issue #302): a radio that tunes the stock
+ * bands, hears nothing by itself (RSSI -110 dBm), and prints what it
+ * sends: a frame as console lines
+ *	sg> tx 433920000 12
+ *	sg> 381 -296 671 -350 ...		(16 values a line, RAW_Data's form)
+ * and a packet as "sg> pkt 433920000 68 69".  sg_hash is the FNV-1a hash
+ * of the frame's text as one line without the "sg> " prefixes and line
+ * ends ("tx 433920000 12 381 -296 ..."), which m2test checks; a test
+ * arms sg_fake so that the next frame or packet is a received one
+ * instead (the pattern of hid< and HIDIOCFAKE).  RAM: 4 + 4 + 1 B, and
+ * the fake packet (QEMU only, not in the Flipper's budget). */
+static uint32_t sg_hz;
+static uint32_t sg_hash;
+static uint8_t sg_fake;
+static uint8_t sg_pkt[HAL_SUBGHZ_PKT], sg_pkt_n;
+
+long hal_subghz_rx(uint32_t hz)
+{
+	if (!((hz >= 299999755u && hz <= 348000335u)
+	    || (hz >= 386999938u && hz <= 464000000u)
+	    || (hz >= 778999847u && hz <= 928000000u))) return -1;
+	sg_hz = hz;
+	return (long) hz;
+}
+
+int hal_subghz_rssi(uint32_t *hz)
+{
+	*hz = sg_hz;
+	return sg_hz != 0 ? -110 : HAL_SUBGHZ_OFF;
+}
+
+void hal_subghz_off(void) { sg_hz = 0; }
+
+static void sg_kputs(const char *s)	/* not hashed */
+{
+	while (*s) kputc(*s++);
+}
+
+static void sg_put(int c)
+{
+	sg_hash = (sg_hash ^ (uint8_t) c) * 16777619u;	/* FNV-1a */
+	kputc(c);
+}
+
+static void sg_puts(const char *s)
+{
+	while (*s) sg_put(*s++);
+}
+
+static void sg_num(long v)
+{
+	char b[12];
+	int i = 0;
+	unsigned long u;
+
+	if (v < 0) sg_put('-');
+	u = v < 0 ? (unsigned long) -v : (unsigned long) v;
+	do b[i++] = (char) ('0' + u % 10); while ((u /= 10) != 0);
+	while (i > 0) sg_put(b[--i]);
+}
+
+static void sg_head(const char *what, uint32_t hz)
+{
+	sg_kputs("sg> ");
+	sg_hash = 2166136261u;
+	sg_puts(what);
+	sg_put(' ');
+	sg_num((long) hz);
+}
+
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
+{
+	const uint32_t *d = (const uint32_t *) src;
+	unsigned i;
+
+	sg_head("tx", hz);
+	sg_put(' ');
+	sg_num((long) n);
+	for (i = 0; i < n; i++) {
+		if (i % 16 == 0) sg_kputs("\nsg>");
+		sg_put(' ');
+		sg_num(i & 1 ? -(long) d[i] : (long) d[i]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n)
+{
+	static const char hex[] = "0123456789abcdef";
+
+	sg_head("pkt", hz);
+	while (n-- > 0) {
+		sg_put(' ');
+		sg_put(hex[*p >> 4]);
+		sg_put(hex[*p++ & 15]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max)
+{
+	unsigned n = sg_pkt_n;
+
+	if (n > max) n = max;
+	for (sg_pkt_n = 0; sg_pkt_n < n; sg_pkt_n++) p[sg_pkt_n] = sg_pkt[sg_pkt_n];
+	sg_pkt_n = 0;
+	return (int) n;
+}
+
+int hal_subghz_fake(int what)
+{
+	sg_fake = (uint8_t) what;
+	return 0;
+}
+
+int hal_subghz_fake_take(int what)
+{
+	if (sg_fake != what) return 0;
+	sg_fake = 0;
+	return 1;
+}
+
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n)
+{
+	if (n > HAL_SUBGHZ_PKT) return -1;
+	for (sg_pkt_n = 0; sg_pkt_n < n; sg_pkt_n++) sg_pkt[sg_pkt_n] = p[sg_pkt_n];
+	return 0;
+}
+
+int hal_subghz_line(uint32_t *hash)
+{
+	*hash = sg_hash;
+	return 0;
+}
 
 /* With no button interrupt the kernel samples the buttons once a clock
  * tick (flipdev_tick, 1/HZ s).  A fake press (/dev/buttons write) and its
@@ -446,12 +579,14 @@ unsigned hal_disk_mhz;
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
-	l[HAL_FL_SFSA] = 0x00090000;
+	l[HAL_FL_SFSA] = 0x000D0000;
 	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
 						 * 96 KB of shared libc and
 						 * libfuri (<minix/shlibc.h>) */
-	l[HAL_FL_INST_SIZE] = 0x00020000;
-	l[HAL_FL_CACHE] = 0x00068000;
+	/* 416 KB, near the Flipper's (its SFSA is higher still): a
+	 * --flash package as big as subghz (130 KB of text) fits */
+	l[HAL_FL_INST_SIZE] = 0x00068000;
+	l[HAL_FL_CACHE] = 0x000B0000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
 	l[HAL_FL_ROM] = 0x00048000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
@@ -480,7 +615,7 @@ void hal_flash_region(uint32_t *base, uint32_t *size)
  * then the machine resets.  CUT_CFG[2] = CUT_DONE afterwards, so the cut
  * happens once.  N = 0xFFFFFFFF: print every erase and directory write
  * with its number instead (to choose N). */
-#define CUT_CFG		((volatile uint32_t *) 0x0008FFF0)	/* unused */
+#define CUT_CFG		((volatile uint32_t *) 0x000CFFF0)	/* unused */
 #define CUT_DONE	0x43555421u	/* "!TUC" */
 static uint32_t cut_ops;
 
@@ -591,7 +726,7 @@ void hal_fc_budget(unsigned pages, unsigned upday) { fc_budget = pages & 0xFF; }
  * up to the made-up SFSA. */
 #define RAM_RANGES	{ 0x20000000u, 0x20030000u }
 #define ROM_SPANS \
-	sfsa = 0x00090000; /* hal_flash_layout's made-up SFSA */ \
+	sfsa = 0x000D0000; /* hal_flash_layout's made-up SFSA */ \
 	if ((n = span_in(addr, len, 0, sfsa)) != 0) return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
@@ -714,7 +849,8 @@ void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }
 int hal_ir_tx_ack(void) { return 0; }
 void hal_ir_tx_next(uint32_t us) { (void) us; }
 void hal_ir_tx_stop(void) { }
-int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (void) d; (void) n; (void) g; return -1; }
+/* /dev/subghzraw's reader waits for a fake frame (hal_subghz_fake) */
+int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) d; (void) n; (void) g; return i == 1 && sg_hz != 0 ? 0 : -1; }
 int hal_pulse_ack(void) { return 0; }
 unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }

@@ -73,6 +73,8 @@ extern int errno;		  /* place where the error numbers go */
 #define ENOLCK        (_SIGN 37)  /* no locks available */
 #define ENOSYS        (_SIGN 38)  /* function not implemented */
 #define ENOTEMPTY     (_SIGN 39)  /* directory not empty */
+#define ENOTSUP       ENOSYS      /* not supported (yet): the same number,
+				   * no new errlist entry (issue #302) */
 
 /* The following errors relate to networking. */
 #define EPACKSIZE     (_SIGN 50)  /* invalid packet size for some protocol */

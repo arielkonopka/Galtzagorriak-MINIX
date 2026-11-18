@@ -38,7 +38,7 @@ MB = os.path.join(HERE, "..", "build", "qemu", "minix")
 QEMU = ["qemu-system-arm", "-M", "mps2-an386", "-nographic", "-monitor",
 	"none", "-serial", "stdio", "-semihosting-config",
 	"enable=on,target=native,userspace=on"]
-CFG = 0x0008FFF0
+CFG = 0x000CFFF0
 BAD = re.compile(rb"not erased|damaged|panic|does not read back")
 PASSWORD = "Kaixo-test1"	# root's, set at the first boot (R3.4)
 # The QEMU board mirrors every LCD flush on the serial console

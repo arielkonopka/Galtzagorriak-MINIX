@@ -352,6 +352,18 @@ void hal_subghz_off(void)
 	gpio_set(GPIOC, 4, 0);
 }
 
+/* Transmit and packets (R8.2): not written yet on the Flipper.  The
+ * kernel refuses with ENOTSUP until the local agent adds the CC1101 TX
+ * path (off by default, the Autonomy rule); the band and duty-cycle
+ * check runs before this either way. */
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max) { (void) p; (void) max; return -1; }
+int hal_subghz_fake(int what) { (void) what; return -1; }
+int hal_subghz_fake_take(int what) { (void) what; return 0; }
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n) { (void) p; (void) n; return -1; }
+int hal_subghz_line(uint32_t *hash) { (void) hash; return -1; }
+
 /*===========================================================================*
  *				Clocks					     *
  *===========================================================================*/
