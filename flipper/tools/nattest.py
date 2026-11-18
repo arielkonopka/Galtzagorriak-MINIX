@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py
+Usage: nattest.py [badusb|jiggle]  (only the AC11.3.1 or AC11.3.3 part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -44,8 +44,12 @@ timed, remind and alarm packages and checks:
            script at once with every key up (the last report all zeros)
            and the rest never typed; Settings writes
            /etc/flipper/badusb.conf once, only on a change
-
-Usage: nattest.py [badusb]  (badusb: only the AC11.3.1 part)
+  AC11.3.3 jiggle -i 2 (R11.3.6, T28e) writes its mouse reports every
+           2 s +- 0.2 s (QEMU's "hid< mouse" lines), none while the host
+           has unplugged us (tests package hidfake: HIDIOCFAKE), again
+           once plugged in; the desktop's status line shows J while it
+           runs and not after jiggle -k, which ends it; a second jiggle
+           is refused; its RAM (free -v, memuse) is at most 1 KB
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -53,6 +57,7 @@ Exit status: the number of failures.
 import importlib.util
 import os
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -366,6 +371,116 @@ def ordua(r):
 	win_restore(r)
 
 
+def clean(out):
+	"""Output without the console's other lines: memuse (free -t on) and
+	QEMU's pictures of the LCD."""
+	return b"\n".join(l for l in (out or b"").split(b"\n")
+			  if l and not l.startswith((b"memuse:", b"|", b"+-")))
+
+
+def lcd_status(r):
+	"""The desktop's status line (the first 8 pixel rows of /dev/lcd) as
+	a checksum, and the minute it was read in (its clock changes it)."""
+	out = clean(r.output("date +%M; dd if=/dev/lcd bs=128 count=1 "
+			     "2>/dev/null | cksum", 20))
+	m = re.search(rb"(?m)^(\d\d)\n(\d+) 128$", out)
+	return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def report_times(r, pat, n, secs):
+	"""Host times of the next n console lines matching pat (bytes regex),
+	waiting at most secs in all."""
+	t, end = [], time.time() + secs
+	while len(t) < n and time.time() < end:
+		if r.wait(pat, max(0.1, end - time.time())) is None:
+			break
+		t.append(time.time())
+	return t
+
+
+def jiggle(r):
+	"""AC11.3.3 (R11.3.6, T28e): jiggle in QEMU, run as root from the
+	console while the launcher of /etc/rc has the screen."""
+	check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 300) == 0,
+		"install the tests package (hidfake)")
+	r.sh("/usr/tests/hidfake 3; free -t on", 20)	# plugged in, memuse on
+	base = freebytes(r)
+	for _ in range(3):	# the clock on the status line: one minute
+		before = lcd_status(r)
+		mark = len(r.out)
+		r.sh("jiggle -i 2 & sleep 1", 20)
+		r.seen = mark
+		first = r.wait(rb"hid< mouse 00 01 00 00", 10)
+		on = lcd_status(r)
+		if before[:1] == on[:1]:
+			break
+		r.output("jiggle -k; sleep 1", 20)
+	check(first is not None and on[1] is not None and before[1] != on[1],
+		"AC11.3.3: the desktop's status line changes when jiggle starts "
+		"(J)")
+	now = freebytes(r)
+	# QEMU runs its text from RAM (the Flipper: from flash, base-flash)
+	with open(os.path.join(powercut.MB, "bin", "jiggle"), "rb") as f:
+		text = (struct.unpack_from("<I", f.read(12), 8)[0] + 255) & ~255
+	print("  RAM: jiggle running: %d bytes, %d without its text (free "
+	      "%d -> %d)" % (base - now, base - now - text, base, now),
+	      flush=True)
+	check(0 < base - now - text <= 1024,
+		"R11.3.6: jiggle takes at most 1 KB of RAM besides its text "
+		"(%d B)" % (base - now - text))
+	out = clean(r.output("jiggle -i 5; echo st=$?", 20))
+	check(out is not None and b"already running" in out
+		and b"st=1" in out, "jiggle: a second one is refused")
+	# the square: right, down, left, up, then nothing for 2 s
+	r.seen = len(r.out)
+	t = report_times(r, rb"hid< mouse 00 01 00 00\r?\n.*?"
+		rb"hid< mouse 00 00 01 00\r?\n.*?hid< mouse 00 ff 00 00\r?\n"
+		rb".*?hid< mouse 00 00 ff 00", 4, 12)
+	d = [b - a for a, b in zip(t, t[1:])]
+	print("  jiggle -i 2: report intervals %s s" % " ".join("%.2f" % x
+		for x in d), flush=True)
+	check(len(d) == 3 and all(abs(x - 2) <= 0.2 for x in d),
+		"AC11.3.3: jiggle -i 2: a mouse report (the 1-px square) every "
+		"2 s +- 0.2 s")
+	# unplugged: no report for 6 s; plugged in again: they come back
+	r.sh("/usr/tests/hidfake 0", 20)
+	mark = len(r.out)
+	r.sh("sleep 6", 20)
+	quiet = b"hid< mouse" not in r.out[mark:]
+	r.sh("/usr/tests/hidfake 3", 20)
+	r.seen = len(r.out)
+	back = r.wait(rb"hid< mouse 00 01 00 00", 6)
+	check(quiet and back is not None, "AC11.3.3: no report while "
+		"unplugged (hidfake 0), reports again once plugged in")
+	r.sh("/usr/tests/hidfake 7", 20)		# suspended
+	mark = len(r.out)
+	r.sh("sleep 5", 20)
+	quiet = b"hid< mouse" not in r.out[mark:]
+	r.sh("/usr/tests/hidfake 3", 20)
+	check(quiet, "jiggle: no report while the host has suspended the bus")
+	out = clean(r.output("jiggle -k; echo st=$?; sleep 2; jiggle -k; "
+			     "echo st=$?; ls /tmp/jiggle", 20))
+	off = lcd_status(r)
+	check(out.startswith(b"st=0\n") and b"not running" in out
+		and b"st=1" in out and b"No such file" in out,
+		"AC11.3.3: jiggle -k ends it (then: not running, its FIFO gone)")
+	if fails: print(out)
+	check(off[1] is not None and (off[1] == before[1]
+				      or off[0] != before[0]),
+		"AC11.3.3: J is gone from the status line after jiggle -k")
+	for m in re.finditer(rb"memuse: jiggle .*", r.out):
+		print("  " + m.group(0).decode().strip())
+	mark = len(r.out)
+	r.output("jiggle -i 1 -p zero & sleep 3; jiggle -k", 20)
+	check(re.search(rb"hid< mouse 00 00 00 00", r.out[mark:]) is not None
+		and b"hid< mouse 00 01" not in r.out[mark:],
+		"jiggle -p zero: reports that do not move the pointer")
+	out = clean(r.output("jiggle -i 0; echo st=$?; jiggle -p big; "
+			     "echo st=$?", 20))
+	check(out.count(b"st=2") == 2,
+		"jiggle: a bad interval or pattern is a usage error")
+	r.sh("free -t off", 20)
+
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 HIDRE = re.compile(rb"hid< ((?:kbd|mouse|cons)(?: [0-9a-f]{2})+)")
 BU_EX = ("windows", "macos", "linux", "keys")
@@ -525,9 +640,15 @@ def main():
 		if not r.login():
 			check(False, "login")
 			return 1
-		if only:
-			keyfiles(r)
-			badusb(r)
+		if sys.argv[1:] == ["jiggle"] or only:
+			if only:
+				keyfiles(r)
+				badusb(r)
+			else:
+				jiggle(r)
+			if os.environ.get("NATTEST_LOG"):
+				with open(os.environ["NATTEST_LOG"], "wb") as f:
+					f.write(r.out)
 			print("%d failed" % fails)
 			return fails
 		for p in ("timed_1.2", "remind_1.1", "alarm_1.1"):
@@ -668,6 +789,7 @@ def main():
 		kanpaia(r)
 
 		ordua(r)
+		jiggle(r)
 		badusb(r)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:

@@ -10,7 +10,7 @@ grows with each part:
 | The device files | `/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`, `libhid` | **in QEMU** (T28a); on the Flipper the files exist but say "not attached" until the USB part lands **(planned, T28b)** |
 | `badusb` and the **Bad USB** app | run DuckyScript files from `/ext/badusb/` | **in QEMU** (T28c); on the Flipper with the USB part **(planned, T28b)** |
 | **Teklatua** | keyboard, numpad, media keys, mouse, clicker, jiggler pages | **(planned, T28d)** |
-| `jiggle` | keeps a computer awake, runs without a window | **(planned, T28e)** |
+| `jiggle` | keeps a computer awake, runs without a window | **in QEMU** (T28e); on the Flipper with T28b |
 
 The apps never touch the USB hardware; they write reports to the device files below. That also
 means you can use the files yourself, from C or a script.
@@ -53,6 +53,28 @@ hid< cons e9 00
 ```
 
 The tests (`M2`, and `nattest` for the apps to come) check these lines.
+
+## `jiggle`: keep the computer awake
+
+`jiggle` moves the mouse a little every so often, so that the computer on the cable does not
+lock its screen or go to sleep. It has no window and takes about 1 KB of RAM, so it can run
+all day next to your other apps:
+
+```
+jiggle &              every 30 s a 1-pixel square: right, down, left, up
+jiggle -i 60 &        every 60 s (1 to 3600)
+jiggle -p zero &      a report that does not move the pointer at all
+jiggle -k             stop it
+```
+
+While it runs the status line shows **`J`**. It sleeps between reports and does not wake at
+all while the cable is out, the computer has not set up the Flipper yet or has suspended the
+USB bus, or another USB persona (the canary) holds the port: it carries on by itself once the
+computer listens again. Only one `jiggle` runs at a time; a second one says
+`already running`. `jiggle -k` works for the user who started it and for root.
+The Jiggler page of Teklatua starts and stops the same command **(planned, T28d)**.
+
+You need to be root or in the group `usb` (see above). `man jiggle` has the details.
 
 ## Keyboard layouts
 
