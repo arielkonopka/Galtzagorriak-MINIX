@@ -294,6 +294,7 @@ FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
 FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void sp_play, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
+FORWARD _PROTOTYPE( void lc_frame, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void bl_apply, (void) );
@@ -350,8 +351,13 @@ FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
  * shifting the pixel columns.  A one-byte write of 'C' to /dev/lcd turns
  * it on, any other write (an app drawing) off.  The task pushes the
  * screen out at most every LC_TICKS clock ticks. */
-#define LC_COLS		(LCD_W / 4)
-#define LC_ROWS		(LCD_H / 6)
+/* The console view has a 1-pixel frame with a 1-pixel gap inside (owner
+ * 2026-11-18: not an empty screen): text from (LC_X0, LC_Y0), 31 x 10. */
+#define LC_X0		2
+#define LC_Y0		2
+#define LC_COLS		((LCD_W - 2 * LC_X0) / 4)
+#define LC_ROWS		((LCD_H - 2 * LC_Y0) / 6)
+#define LC_TEXT		(((1ULL << (LC_ROWS * 6)) - 1) << LC_Y0)	/* rows */
 #define LC_TICKS	(HZ / 15)
 extern const unsigned char font_4x6[95][6];	/* hal/common/font4x6.c */
 PRIVATE u8_t lc_on, lc_x, lc_y, lc_esc, lc_wait;
@@ -1142,6 +1148,7 @@ message *m_ptr;
 		memset(fbuf, 0, sizeof(fbuf));	/* the console from now on */
 		lc_x = lc_y = lc_esc = 0;
 		lc_on = TRUE;
+		lc_frame();
 		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	} else {
 		if (lc_on) {	/* a short frame must not leave console text
@@ -2401,9 +2408,9 @@ int c;
 	}
 	g = font_4x6[c - ' '];
 	for (row = 0; row < 6; row++) {
-		py = lc_y * 6 + row;
+		py = LC_Y0 + lc_y * 6 + row;
 		for (col = 0; col < 4; col++) {
-			px = lc_x * 4 + col;
+			px = LC_X0 + lc_x * 4 + col;
 			if (g[row] & (0x80 >> col))
 				fbuf[(py >> 3) * LCD_W + px] |= 1 << (py & 7);
 			else
@@ -2416,9 +2423,32 @@ int c;
 }
 
 
+PRIVATE void lc_frame()
+{
+/* The console view's frame, and a line saying what it is, on the LCD only
+ * (the USB host does not see it). */
+  static const char hint[] = "USB console: waiting for text";
+  const char *s;
+  int i;
+
+  for (i = 0; i < LCD_W; i++) {
+	fbuf[i] |= 1;				/* top: y 0 */
+	fbuf[(LCD_H / 8 - 1) * LCD_W + i] |= 0x80;	/* bottom: y 63 */
+  }
+  for (i = 0; i < LCD_H / 8; i++) {
+	fbuf[i * LCD_W] = 0xFF;			/* left: x 0 */
+	fbuf[i * LCD_W + LCD_W - 1] = 0xFF;	/* right */
+  }
+  for (s = hint; *s != 0; s++) lcd_cons_putc(*s);
+  lcd_cons_putc('\r');
+  lcd_cons_putc('\n');
+}
+
+
 PRIVATE void lc_newline()
 {
-/* Next line; at the bottom, move every pixel column up by one text row. */
+/* Next line; at the bottom, move the text up by one row inside the frame
+ * (the frame's pixels stay where they are). */
   unsigned long long colbits;
   int x, p;
 
@@ -2427,11 +2457,11 @@ PRIVATE void lc_newline()
 	lc_y++;
 	return;
   }
-  for (x = 0; x < LCD_W; x++) {
+  for (x = LC_X0; x < LC_X0 + LC_COLS * 4; x++) {
 	colbits = 0;
 	for (p = LCD_H / 8 - 1; p >= 0; p--)
 		colbits = colbits << 8 | fbuf[p * LCD_W + x];
-	colbits >>= 6;
+	colbits = (colbits & ~LC_TEXT) | ((colbits & LC_TEXT) >> 6 & LC_TEXT);
 	for (p = 0; p < LCD_H / 8; p++) {
 		fbuf[p * LCD_W + x] = colbits;
 		colbits >>= 8;

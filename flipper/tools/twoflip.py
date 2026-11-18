@@ -170,7 +170,11 @@ class Port:
 
 	def wait(self, pat, secs):
 		"""The first match of pat after pos (pos moves past it), or None
-		after secs."""
+		after secs.  USB delivers a line in pieces: a pattern that ends
+		in a number must also require the character after it ((?=\\D),
+		(?=[^0-9A-F]), (?=\\r?\\n)), or "0x08" can match as "0x0" and
+		"@@R=127" as "@@R=12" (seen on the device; the simulator splits
+		lines to catch it)."""
 		end = time.time() + secs
 		rx = re.compile(pat)
 		while True:
@@ -265,7 +269,7 @@ class Minix(Port):
 			for ln in body.split("\n"):
 				self.write(ln + "\r")
 			self.write("TFEOF\r")
-		m = self.wait(rb"@@R=(\d+)", secs)
+		m = self.wait(rb"@@R=(\d+)(?=\D)", secs)
 		if not m:
 			self.sync()
 			return None, self.text(start)
@@ -486,8 +490,8 @@ def rfid_write_m2u(ul, mx, opt, proto, data):
 
 # --- infrared ------------------------------------------------------------
 
-MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)"
-UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)"
+MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)(?=[^0-9a-fA-F])"
+UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)(?=[^0-9A-Fa-f])"
 
 
 def ir_u2m(ul, mx, opt, p, a, c):
@@ -543,7 +547,7 @@ def close_to(want, got):
 def ir_raw_u2m(ul, mx, opt):
 	mx.start("ir rx -r -n 1")
 	ul.run("ir tx RAW F:38000 DC:33 " + " ".join(map(str, IR_RAW)), 5)
-	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)", 3)
+	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)(?=\r?\n)", 3)
 	out = mx.stop()
 	if missing(None, out):
 		return "MISSING", "ir rx -r: " + last(out)
@@ -562,7 +566,7 @@ def ir_raw_m2u(ul, mx, opt):
 	if missing(rc, out):
 		ul.stop()
 		return "MISSING", "ir tx raw: " + last(out)
-	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)", 3)
+	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)(?=\r?\n)", 3)
 	ul.stop()
 	if not m:
 		return "FAIL", "Unleashed received nothing"
@@ -574,7 +578,7 @@ def ir_raw_m2u(ul, mx, opt):
 
 # --- iButton -------------------------------------------------------------
 
-UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)"
+UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)(?=[^0-9A-F])"
 
 
 def od_bytes(text):
@@ -699,6 +703,16 @@ MX_SG = r"rssi=(-?\d+)(?: peak=(-?\d+))?"
 UL_TX_REFUSED = rb"restricted|only be used for RX|must be in|[Ee]rror|failed"
 
 
+def ul_refused(out):
+	"""Why Unleashed did not transmit, with the usual cause named."""
+	why = last(out)
+	if "failed to start" in why:
+		why += " (Unleashed unlshd-095 CLI bug: the internal CC1101 has " \
+			"no begin(), so every subghz tx/rx on device 0 fails; use " \
+			"another Unleashed release)"
+	return why
+
+
 def sg_level(mx):
 	rc, out = mx.run("cat /dev/subghz", 5)
 	m = re.search(MX_SG, out)
@@ -724,7 +738,7 @@ def subghz_rssi_u2m(ul, mx, opt, freq):
 		out = ul.stop()
 		mx.run("echo 0 > /dev/subghz")
 		return "BLOCKED", "Unleashed does not transmit at %d Hz here: %s" \
-			% (freq, last(out))
+			% (freq, ul_refused(out))
 	loud = [x for x in (sg_level(mx) for _ in range(6)) if x is not None]
 	if ul.wait(UL_PROMPT, 15) is None:
 		ul.stop()
@@ -789,7 +803,7 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
 	if re.search(UL_TX_REFUSED.decode(), uo):
 		mx.stop()
-		return "BLOCKED", "Unleashed: " + last(uo)
+		return "BLOCKED", "Unleashed: " + ul_refused(uo)
 	mx.wait(re.escape(f["proto"]).encode(), 3)
 	time.sleep(0.5)
 	out = mx.stop()
@@ -944,7 +958,7 @@ def modem_row(ul, mx, opt, medium, preset, dirn):
 		% (medium, p, MODEM_OUT))
 	time.sleep(1)
 	tx.start("gmodem send -m %s%s %s" % (medium, p, MODEM_IN))
-	m = rx.wait(rb"@@M=(\d+)", 180)
+	m = rx.wait(rb"@@M=(\d+)(?=\D)", 180)
 	txt = tx.stop()
 	got = rx.stop()
 	if missing(None, txt) or missing(None, got):

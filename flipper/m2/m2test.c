@@ -1778,6 +1778,80 @@ static long fc_budget(int pages)
 	return (long) fc.budget;
 }
 
+/* #118: test(1)'s file tests -e -b -c -p -L -h -u -g -k, through sh as
+ * a postinst runs them.  Before, an unknown operator was a non-empty
+ * string: "test -c /nofile" was true.  The script exits with the number
+ * of the first case that is wrong.  Strings in one const struct (flash),
+ * for the GOT reason above. */
+#define TO_STRINGS(S) \
+	S(sh, "/bin/sh") \
+	S(scr, "/tmp/testop.sh") \
+	S(p, "/tmp/testop.p") \
+	S(u, "/tmp/testop.u") \
+	S(g, "/tmp/testop.g") \
+	S(k, "/tmp/testop.k") \
+	S(body, "T=/tmp/testop\n" \
+		"test -c /tmp/nofile && exit 1\n" \
+		"test -e /tmp/nofile && exit 2\n" \
+		"test -c /dev/null || exit 3\n" \
+		"test -b /dev/null && exit 4\n" \
+		"test -b /dev/hd0 || exit 5\n" \
+		"test -c /dev/hd0 && exit 6\n" \
+		"test -e / || exit 7\n" \
+		"test -p $T.p || exit 8\n" \
+		"test -p $T.u && exit 9\n" \
+		"test -L / -o -h $T.p && exit 10\n" \
+		"test -u $T.u || exit 11\n" \
+		"test -u $T.g && exit 12\n" \
+		"test -g $T.g || exit 13\n" \
+		"test -k $T.k || exit 14\n" \
+		"test -k / && exit 15\n" \
+		"[ -c /dev/null -a ! -b /dev/null ] || exit 16\n" \
+		"exit 0\n") \
+	S(ran, "  test(1) ops: sh exit %d\n") \
+	S(what, "#118: test -e -b -c -p -L -h -u -g -k on files")
+#define TO_DECL(n, s)	char n[sizeof s];
+#define TO_INIT(n, s)	s,
+static const struct { TO_STRINGS(TO_DECL) } to = { TO_STRINGS(TO_INIT) };
+
+static void __attribute__((noinline)) testop_tests(void)
+{
+	int fd, st = -1;
+	pid_t pid;
+
+	unlink(to.p);
+	unlink(to.u);
+	unlink(to.g);
+	rmdir(to.k);
+	(void) mkfifo(to.p, 0644);
+	if ((fd = creat(to.u, 0755)) >= 0) close(fd);
+	if ((fd = creat(to.g, 0755)) >= 0) close(fd);
+	(void) chmod(to.u, 04755);
+	(void) chmod(to.g, 02755);
+	(void) mkdir(to.k, 0777);
+	(void) chmod(to.k, 01777);
+	if ((fd = creat(to.scr, 0644)) >= 0) {
+		(void) write(fd, to.body, sizeof to.body - 1);
+		close(fd);
+	}
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(to.sh, to.sh + 5, to.scr, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st))
+		st = WEXITSTATUS(st);
+	else
+		st = -1;
+	if (st != 0) printf(to.ran, st);
+	check(st == 0, to.what);
+	unlink(to.scr);
+	unlink(to.p);
+	unlink(to.u);
+	unlink(to.g);
+	rmdir(to.k);
+}
+
 static void __attribute__((noinline)) pkg_tests(void)
 {
 	int fd, st, i, ok, before, started = 0, bad = 0, s0, s1;
@@ -2543,6 +2617,7 @@ int main(int argc, char **argv)
 	sflag_tests();
 	discard_tests();
 	preempt_tests();
+	testop_tests();
 	pkg_tests();
 #endif
 	time_tests();
