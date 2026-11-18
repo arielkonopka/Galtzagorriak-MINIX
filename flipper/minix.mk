@@ -687,8 +687,8 @@ CHMEM_alarm  := 2560	# K.8 (ACK8.3: 4352 B open, <= 4.5 KB): 1008 B
 OBJS_usbremote = $(MB)/cmd/win/usbremote/usbremote.o \
 		 $(addprefix $(MB)/cmd/win/lib/,gm.o hid.o)
 $(MB)/cmd/win/usbremote/usbremote.o: $(HID_DIR)/libhid.h
-CHMEM_usbremote := 2048	# K.8 / R11.3.5 (<= 4.5 KB open): see nattest's
-			# memuse line for the stack it used
+CHMEM_usbremote := 2048	# K.8 / R11.3.5: 2816 B open (nattest, <= 4.5 KB);
+			# 968 B never used (memuse, after typing, Media, pad)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@

@@ -11,10 +11,12 @@
  * touches USB itself.  One LIVE window, "main", whose first row is the
  * page (Left/Right):
  *
- *	Keyboard  the desktop's keyboard on an input row: every key goes
- *		  to the app at once (LIVE), one key report and its key-up;
- *		  holding OK sends Enter.  Layout (en-US built in, others
- *		  from the .kl files), Enter, Backspace, Tab, Esc rows.
+ *	Keyboard  the desktop's keyboard on an input row: in a LIVE
+ *		  window its text comes after every key, and the app types
+ *		  what changed (a key report and its key-up per character,
+ *		  Backspace for one deleted); after KMAX characters the row
+ *		  starts empty again.  Layout (en-US built in, others from
+ *		  the .kl files), Enter, Backspace, Tab, Esc rows.
  *	Numpad	  the same keyboard; digits and + - * / . are keypad keys
  *	Media	  volume up/down, mute, play/pause, next, previous
  *	Mouse	  "Mouse pad" opens a pad window (K.8): the arrows move
@@ -75,6 +77,7 @@ static const char devs[3][14] = { "/dev/hidkbd", "/dev/hidmouse",
 #define U_TAB		0x2B
 
 #define LONG_OK		500		/* ms: OK held in the pad, right click */
+#define KMAX		48		/* the input row's text, then empty */
 
 static const char layouts[] = "en-US|de-DE";	/* the layout row */
 
@@ -97,6 +100,7 @@ static struct {
 } s;
 
 static const char *note;		/* the last line, when not the state */
+static char last[KMAX + 1];		/* the input row's text, as typed */
 
 static long ticks(void)
 {
@@ -172,22 +176,15 @@ static void media(unsigned usage)
 	(void) put(F_CONS, r, sizeof r);
 }
 
-/* One key of the desktop's keyboard (a LIVE submit): "\b" Del, "\n"
- * Enter, else a character through the layout; on the Numpad page the
- * digits and + - * / . Enter are keypad keys. */
-static void typed(const unsigned char *kl, const char *v)
+/* One character: through the layout; on the Numpad page the digits and
+ * + - * / . are keypad keys. */
+static void type1(const unsigned char *kl, int c)
 {
 	static const char kp[] = "/*-+\n1234567890.";	/* 0x54 ... 0x63 */
 	const char *p;
 	unsigned k;
-	int c = (unsigned char) v[0];
 
-	if (c == 0 || v[1] != 0) return;	/* one key at a time */
-	if (c == '\b') {
-		key(0, U_BKSP);
-		return;
-	}
-	if (s.page == P_NUM && (p = strchr(kp, c)) != NULL) {
+	if (s.page == P_NUM && c != 0 && (p = strchr(kp, c)) != NULL) {
 		key(0, 0x54 + (unsigned) (p - kp));
 		return;
 	}
@@ -196,6 +193,22 @@ static void typed(const unsigned char *kl, const char *v)
 		return;
 	}
 	key(k >> 8, k & 0xFF);
+}
+
+/* The input row's new text (a LIVE submit): Backspace for each character
+ * gone since the last one, then the new ones.  1: full, show it empty. */
+static int typed(const unsigned char *kl, const char *v)
+{
+	int p, n;
+
+	for (p = 0; last[p] != 0 && last[p] == v[p]; p++) ;
+	for (n = (int) strlen(last); n > p; n--) key(0, U_BKSP);
+	for (n = p; v[n] != 0 && n < KMAX; n++) {
+		type1(kl, (unsigned char) v[n]);
+		last[n] = v[n];
+	}
+	last[n] = 0;
+	return n >= KMAX;
 }
 
 /*===========================================================================*
@@ -243,7 +256,8 @@ static void w_main(void)
 		gm_enum("layout", "Layout", s.layout, layouts);
 		/* FALLTHROUGH */
 	case P_NUM:
-		gm_input("kbd", "Type", "", 1);
+		gm_input("kbd", "Type", "", KMAX);
+		last[0] = 0;
 		gm_action("enter", "Enter");
 		gm_action("bksp", "Backspace");
 		if (s.page == P_KBD) {
@@ -423,10 +437,11 @@ static void values(char **f, unsigned char *kl)
 
 	for (i = 2; f[i] != NULL; i++) {
 		k = gm_kv(f[i], &v);
-		if (strcmp(k, "kbd") == 0)	/* not shown again: that
-						 * would close the keyboard */
-			typed(kl, v);
-		else if (strcmp(k, "page") == 0) {
+		if (strcmp(k, "kbd") == 0) {	/* not shown again (that
+						 * closes the keyboard)
+						 * unless full */
+			if (typed(kl, v)) show = 1;
+		} else if (strcmp(k, "page") == 0) {
 			s.page = (char) (*v - '0');
 			if (s.page < 0 || s.page > P_JIG) s.page = 0;
 		} else if (strcmp(k, "layout") == 0) {
