@@ -237,7 +237,10 @@ you need from `/home` first. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
-same build. Builds that do not touch the library keep its id, and the steps below work.)
+same build. Builds that do not touch the library keep its id, and the steps below work, but only
+when they are made with the same compiler: a build from another computer (another GCC version) has
+another id. If you flash first anyway, the Flipper starts without a console (`init: console: Exec
+format error`) until you rewrite the card.)
 
 (Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
 32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
