@@ -4930,8 +4930,26 @@ the exact versions; record measured values in PORTING.md.
   (`stm32wb5x_*_fw.bin`) and a `manifest` (TSV, one key per line): `name`, `type` (as R2b.10
   reports it), `version`, `fus` (minimum FUS version), `addr` (ST install address for 1 MB
   parts), `size`, `sha256`, and optional `note`. Example `name zigbee-baserria`
-  (*baserria*: the farmhouse network). No ST image is shipped in the MINIX image; the owner
-  copies them (or the stock `update.fuf` radio file) to the card.
+  (*baserria*: the farmhouse network). No ST image is shipped in the MINIX image.
+- **R16.0.1a** Getting the images (owner 2026-11-18): host tool `tools/radio-fetch.py`, run on a
+  PC (the Flipper has no internet until Phase 22):
+  - source: ST's public `STM32CubeWB` repository, `Projects/STM32WB_Copro_Wireless_Binaries/
+    STM32WB5x/`, at a **pinned release tag** kept in the script (one place to bump); the images
+    are ST's encrypted, signed binaries, used unchanged, under ST's licence (shipped in the same
+    way by the stock firmware);
+  - `radio-fetch.py list` shows the stacks of that release with size, install address and the
+    FUS version they need, taken from the release notes of the same tag (the script also carries
+    a checked table for the pinned tag and stops if the two disagree);
+  - `radio-fetch.py get ble-full zigbee-ble ... --to /media/<card>/radio/` downloads over HTTPS,
+    writes `/ext/radio/<name>/` with the image and the R16.0.1 manifest (SHA-256 computed after
+    download and compared with the checked table), and never overwrites an existing directory
+    without `--force`;
+  - `--fus 1.2.0` (the version `radio` prints on the device) makes it refuse stacks that need a
+    newer FUS, with a note that `radio fus` is needed first;
+  - alternative source, no network: `radio-fetch.py from-fuf <stock update dir>` extracts the radio
+    image the stock/Unleashed updater package carries, with its address from the package manifest;
+  - the card can also be filled over MTP (R10.4) once that exists; `radio add` on the device does
+    the same checks again, so a hand-copied image is fine too.
 - **R16.0.2** `radio` tool (root for changes, anyone for reading):
   - `radio`: current stack (R2b.10 line), `SFSA`, secure SRAM2 reservation, slot (R2b.1a), FS
     cache blocks;

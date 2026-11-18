@@ -438,6 +438,7 @@ Several ST CPU2 images on the card, switched with `radio use` in maintenance mod
 ### T30a (`lane:cloud`, host + QEMU): tool and layout, no FUS
 - `radio` manifest parser, `list`/`add`/`rm` checks, `/etc/radio.slot`; R2b.1a in the flash layout code (installed end = `min(guard, SLOT)`, `pkg` refuses the slot, dead records/cache entries above the guard at boot); QEMU fakes `SFSA` and the R2b.10 info so the layout can be tested at several slot sizes.
 - Host tests: manifests with bad hash / too-new `fus` / slot over the base system refused; `pkg install --flash` stops at the slot. `ramcheck`: 0 B resident.
+- `tools/radio-fetch.py` (R16.0.1a): pinned STM32CubeWB tag, checked table vs. release notes, `list`/`get`/`from-fuf`, `--fus`; CI test against the pinned tag (network allowed) plus an offline test with a fake release tree. Manual page explains fetching the images with Basque-named examples.
 
 ### T30b (`lane:local`, Flipper): FUS client and maintenance mode
 - SHCI FUS commands, maintenance mode (R16.0.3) with LCD progress, `radio use`/`repair`; the first use is the R16.1.0 light → full install, with before/after `SFSA`, SRAM2 reservation and FS cache blocks in PORTING.md.
