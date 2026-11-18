@@ -1,28 +1,28 @@
-# Next tasks (owner approval 2026-11-14 20:29Z)
+# Next tasks (user approval 2026-11-14 20:29Z)
 
 Do these before new features: 1–3 in order, 4–5 after them or alongside.
 Each task goes on its own branch, branched from **main** (not stacked), and gets a PR naming the task number.
 The usual gates apply: `ramcheck` (0 B unless stated), QEMU `M2 USER PASS`, and `lat` numbers before/after in PORTING.md.
 
-## Standing rule (owner, 2026-11-14 20:41Z): few flash writes at run time
+## Standing rule (user, 2026-11-14 20:41Z): few flash writes at run time
 When optimizing RAM or flash, keep **run-time** writes to internal flash to a minimum. Writes at build or install time (`make base-flash`, `pkg install --flash`, Phase 2b installed region) are allowed, but should **also be as rare as possible**: only write pages whose contents changed (compare before erase), append instead of rewriting, and don't compact or reformat unless space runs out. Every PR that writes flash at run time must say how often it writes in normal use and why that write can't happen at build or install time. Reviews check this.
 
-## Standing rule (owner, 2026-11-15 22:01Z): docs follow behaviour
+## Standing rule (user, 2026-11-15 22:01Z): docs follow behaviour
 The user manual lives in `docs/manual/` (start: `install.md`). A PR that changes something a user sees or does (a command, its options or output, a file or setting in `/etc`, the SD card layout, a build target or image name, the flashing, update or recovery steps, the launcher or an app, a hardware feature that starts or stops working) updates the matching manual chapter **in the same PR**, or says in its description why no change is needed. A feature still only in the spec stays marked **(planned)** in the manual until its PR lands; that PR removes the mark. If no chapter covers the feature yet, a short note in the PR description is enough; the review side turns those notes into chapters. Reviews check this together with the `CHANGELOG.md` `Unreleased` line.
 
-## CI gates (owner, 2026-11-15): what GitHub checks on every PR
+## CI gates (user, 2026-11-15): what GitHub checks on every PR
 GitHub Actions runs these on every PR; a red check means the PR is not ready for review. Run them locally before pushing when you can.
 - `build`: Flipper images; `make BOARD=flipper ramcheck` (hard gate, `flipper/ram-budget.txt`); QEMU `M2 USER PASS`; **flashcheck**: the flash pages erased during the M2 run must not exceed `flipper/flash-budget.txt` (`python3 tools/flashcheck.py flash-budget.txt m2 m2.log`). The budget is a ratchet: lower it in the PR that saves erases, raise it only with the reason in the same commit (the flash-writes rule above). `make BOARD=flipper latcheck` must compile.
 - `powercut`: `tools/powercut.py` (AC2b.5) in QEMU, all cut points.
 - `pr-rules`: code changes add a `CHANGELOG.md` `Unreleased` line (skip: label `no-changelog`); user-visible changes touch `docs/manual/` or the PR description has a line `Manual: <why no change is needed>` (skip: label `no-manual`).
 - L1–L10 are **not** measured in CI: QEMU's timing is not the Flipper's. `lat` numbers on the device stay in PORTING.md as before.
 
-## Two workers (owner, 2026-11-15): the local agent and the GitHub Actions worker
-Two agents implement tasks in parallel: the owner's **local agent** (has the Flipper) and the **cloud worker** (`.github/workflows/claude-worker.yml`, instructions `.github/claude-worker.md`; no hardware). To never work on the same task:
-- The cloud worker only takes **GitHub issues labelled `claude-task`** by the owner, never tasks straight from this file. It labels the issue `claimed:cloud` when it starts.
+## Two workers (user, 2026-11-15): the local agent and the GitHub Actions worker
+Two agents implement tasks in parallel: the user's **local agent** (has the Flipper) and the **cloud worker** (`.github/workflows/claude-worker.yml`, instructions `.github/claude-worker.md`; no hardware). To never work on the same task:
+- The cloud worker only takes **GitHub issues labelled `claude-task`** by the user, never tasks straight from this file. It labels the issue `claimed:cloud` when it starts.
 - The local agent, before starting a task, checks the open issues: a task whose issue is labelled `claude-task` or `claimed:cloud` is not its task. When it starts a task that has an issue, it labels that issue `claimed:local` (the cloud worker then ignores the issue and `@claude` comments on it).
 - Good cloud tasks: host-testable code (QEMU, `make`, unit tests), tools, docs, spec-to-code work without timing needs. Device work (radio, USB, SD timing, `lat` numbers) stays local; the cloud worker lists such checks under "Needs on-device test" in its PR, and the local agent runs them.
-- The cloud worker pushes a `claude/issue-N-…` branch; the owner or the review side opens the PR from it (one click on the link in the worker's comment), so CI runs. Reviews and squash-merges as for every PR. A fix on a PR: comment `@claude <what to fix>` (owner only).
+- The cloud worker pushes a `claude/issue-N-…` branch; the user or the review side opens the PR from it (one click on the link in the worker's comment), so CI runs. Reviews and squash-merges as for every PR. A fix on a PR: comment `@claude <what to fix>` (user only).
 
 ## T1. S13: `umap()` bounds (critical security): DONE, #14 merged (1c5dd2d)
 Spec: `docs/reviews/umap-bounds-finding.md` (add as R4a.9).
@@ -59,15 +59,15 @@ Likely the same cause as T3 (a long kernel path) or the shadow swap (flipclicks 
 ## T5. sh: "out of string space" then SIGSEGV
 With `CHMEM_sh` 12 KB, `cat /bin/* /bin/*` should fail cleanly (an error message, exit status ≠ 0) instead of crashing. Fix it in sh. RAM: 0 B.
 
-## T6. `sbctl` protocol core (owner wants the app, 2026-11-14 23:14 Warsaw): after T1–T5
+## T6. `sbctl` protocol core (user wants the app, 2026-11-14 23:14 Warsaw): after T1–T5
 Spec: 16.4. The BLE parts wait for Phases 15–16 (R16.1.0 decided: full stack), but the protocol core does not need the radio, so it can be written now and tested on the host.
 - `flipper/apps/sbctl/sbproto.c/.h`: pure C, no I/O, no malloc. Model tables in `const` (flash): Volcano, qvap (Venty/Veazy), Crafty. Functions: detect model from advertised name; encode a request (set target, heater, pump, boost mode, brightness, auto-off with the Crafty security-code write first, find-my) into a list of (characteristic UUID, bytes, with/without response); decode a notification or read into one `struct sb_state` (≤ 64 B). Temperature limits per model enforced in the encoder (R16.4.7).
 - Host unit tests (`make -C flipper/apps/sbctl test` with the host compiler): golden byte vectors per model for every request and for sample status packets, including the Venty "0x8000 = not reported" case and the Crafty "ready" bit 0x0100.
 - Protocol source: the MIT library `storzandbickel-ble` 0.1.25 (`protocol.py`), not the vendor's JS. Credit it in the file header; GPLv3 project, MIT is compatible.
-- Priority (owner, 2026-11-15): the owner has a **Venty**. Write and test the qvap model (Venty/Veazy) first: connect sequence (0x02, 0x1D, 0x30/0x06), 0x01 status decode and write masks, 0x06 settings, 0x0D find-my. Volcano and Crafty tables go in too but are marked `/* unverified */` in the table and in the test names.
+- Priority (user, 2026-11-15): the user has a **Venty**. Write and test the qvap model (Venty/Veazy) first: connect sequence (0x02, 0x1D, 0x30/0x06), 0x01 status decode and write masks, 0x06 settings, 0x0D find-my. Volcano and Crafty tables go in too but are marked `/* unverified */` in the table and in the test names.
 - No UI and no `bled` code yet. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
 
-## T7. Own version: Galtzagorriak 0.1.0 (owner decision 2026-11-14): small, after T1–T5, may go alongside T6
+## T7. Own version: Galtzagorriak 0.1.0 (user decision 2026-11-14): small, after T1–T5, may go alongside T6
 Spec: section J. Version 0.1.0 is already tagged (`v0.1.0`); this task puts it into the code.
 - `include/minix/gzversion.h` with `GZ_NAME`, `GZ_MAJOR/MINOR/PATCH`, `GZ_RELEASE "0.1.0"`, `GZ_ABI 1`, `GZ_BASE "MINIX 2.0.0"`. Keep `OS_RELEASE`/`OS_VERSION`.
 - Build writes `gzbuild.h` with `GZ_BUILD` from `git describe` (empty at a tag, else `+N.gHASH[-dirty]`), rewritten only when it changes.
@@ -80,7 +80,7 @@ Spec: section J. Version 0.1.0 is already tagged (`v0.1.0`); this task puts it i
 - RAM: 0 B (strings in flash). Flash: ≤ 1.5 KB including `ver`. No run-time flash writes.
 - Add the `## Unreleased` line for each later feature PR from now on (J.4).
 
-## T8. `mined`: default editor, memory-safe and VT100-complete (owner decision 2026-11-14): after T1–T5
+## T8. `mined`: default editor, memory-safe and VT100-complete (user decision 2026-11-14): after T1–T5
 Spec: K.5. `src/commands/mined` (MINIX 2.0 original) is not built for the Flipper today; only `ed` is. Review of main @ `63d008c`. Note: user code is built with `-fsigned-char` and has no stack canaries, so a stack overflow can reach a return address.
 Bugs and vulnerabilities to fix (all 0 B RAM):
 - **B1 (critical)** `get_line()` (`mined1.c:1369`) copies up to `\n` with no limit: into `text_buffer[1024]` (.bss) on load, and into `line_buffer[1024]` **on the stack** in `file_insert()` (`mined2.c:727`, `:735`; used by insert-file and paste). Fix: `get_line(fd, buf, size)`; longer lines are split at `MAX_CHARS - 1` and the status line says "N long lines split".
@@ -124,7 +124,7 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - The desktop and module protocol (K.2–K.4) is implemented with Phase 5 (`libfuri`, launcher) and 7c (Berry `gui`, `pipe`, `tsv` modules); alarms stay on `timed` + `alert` (F.2).
 - No separate PR now; PRs in those phases name K.
 
-## T11. Fewer run-time flash writes (spec R2b.11, R2b.12; owner request 2026-11-15): after T1–T5
+## T11. Fewer run-time flash writes (spec R2b.11, R2b.12; user request 2026-11-15): after T1–T5
 - R2b.11: run-time cache erase budget per 24 h (`FC_BUDGET`, default 32 pages), counter in a free RTC backup register (0 B RAM; add it to the register map in PORTING.md), total erase counters, `free -v` line, `svrctl` + `fcache_budget=` in `rc.conf`.
 - R2b.12: `pkg bind` rebinds a stale record by SHA-256 instead of letting exec re-copy the text.
 - Acceptance AC2b.9, AC2b.10. RAM: 0 B (4 B in MM only if no backup register is free; say so in the PR).
@@ -136,7 +136,7 @@ Pipes are inodes on `PIPE_DEV` with data in the block cache (`src/fs/pipe.c:57`)
 - Acceptance ACL.1–ACL.3. RAM: 0 B static. Flash writes: only at `base-flash`/DFU.
 - BLE bonds on the SD card (R15.4) are done in Phase 15, not here.
 
-## T13. `camfind` core (owner request 2026-11-15 20:23 Warsaw): core DONE, #75 merged (dcfd0db); the ESP32 firmware moved to "Deferred to the end" (#78)
+## T13. `camfind` core (user request 2026-11-15 20:23 Warsaw): core DONE, #75 merged (dcfd0db); the ESP32 firmware moved to "Deferred to the end" (#78)
 Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/dev/adc`), 8 (CC1101) and 7b (GUI), which are not done, so this task does the parts that need none of them, the same way T6 does for `sbctl`.
 - `flipper/apps/camfind/cfcore.c/.h`: pure C, no I/O, no malloc, caller owns all state.
   - Line parser for the devboard protocol (`AP`, `STA`, `RATE`, R9.1.1), robust to garbage and cut lines.
@@ -146,12 +146,12 @@ Spec: F.5, 9.1 (R9.1.1–R9.1.9), 16.3. The app needs Phases 6 (UART bridge, `/d
   - Goertzel on ADC blocks (R9.1.7): steady vs 50/60/100/120 Hz vs kHz PWM.
   - Sub-GHz tables (R9.1.3): band steps and the cellular mode (LTE B20 832–862, B8/GSM 880–915 MHz), peak hold and burst counter on an RSSI stream.
 - Host unit tests (`make -C flipper/apps/camfind test`, host compiler): parser fuzz cases, OUI lookups, a recorded or synthetic camera rate trace that passes the motion test and a phone trace that fails it, Goertzel on synthetic signals, burst counter on a synthetic RSSI trace.
-- `esp32/camscan/`: moved to "Deferred to the end" below (owner decision 2026-11-15, #78).
+- `esp32/camscan/`: moved to "Deferred to the end" below (user decision 2026-11-15, #78).
 - No UI, no drivers yet. RAM on target: 0 B (code in flash, state owned by the caller; budgets in R9.1.x apply when the app is built). Flash ≈ 6 KB for the core + ≈ 1.5 KB OUI table.
 - Hardware facts for later (from the 2026-11-15 schematic check): IR TX LEDs are not readable by the MCU; header ADC pins 3, 4, 7, 15, 16 (pin 2 = external IR TX).
 
-## T14. Power management, part 1 (owner request 2026-11-15 22:33 Warsaw): T14a any time, T14b–T14d in order
-Source: the power budget analysis of 2026-11-15. **Analysis, code places and the PR plan with on-device tests: `docs/spec/power-plan.md`** (owner: the agent tests each PR on the Flipper). The facts each step needs are copied here. Spec: R6.1, R6.8, R4b.2, F.3, R20a.4; these steps pull them forward and correct F.3. Responsiveness first: no step may make L1–L10 worse (`lat` before/after in PORTING.md). No run-time flash writes and no option-byte writes in any step.
+## T14. Power management, part 1 (user request 2026-11-15 22:33 Warsaw): T14a any time, T14b–T14d in order
+Source: the power budget analysis of 2026-11-15. **Analysis, code places and the PR plan with on-device tests: `docs/spec/power-plan.md`** (user: the agent tests each PR on the Flipper). The facts each step needs are copied here. Spec: R6.1, R6.8, R4b.2, F.3, R20a.4; these steps pull them forward and correct F.3. Responsiveness first: no step may make L1–L10 worse (`lat` before/after in PORTING.md). No run-time flash writes and no option-byte writes in any step.
 
 Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_hal_rtc.c`, `furi_hal_os.c`, `scripts/ob.data`):
 - Power tree: BAT → BQ25896 BATFET → SYS. SYS → LM3281 (always on) → 3.3V (MCU, LCD, CC1101, ST25R3916 logic, buttons). SYS → second LM3281 with EN = **PA3 (PERIPH_POWER**, 10k pull-up, so on by default) → ext3.3V: **microSD and header pin 9 only**. SYS → FAN48610 5 V boost (always on) for the NFC/RFID board. TSOP75338 IR receiver on SYS through 10 Ω (0.35 mA, always on, no control). BAT → RS3221 LDO → **MCU VBAT** (RTC and backup registers survive power-off).
@@ -180,16 +180,16 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 ### T14c. `/dev/power` and real power-off with alarm wake (R6.1, F.3, AC6.1, AC6.2)
 - BQ27220 and BQ25896 drivers on I2C1 (stock `lib/drivers/bq27220.c`, `bq25896.c`). `/dev/power` read: SoC %, voltage, current, temperature, charging state, VBUS, plus the T14b statistics. Charger ADC **one-shot on demand**, not continuous (stock leaves it continuous).
 - Polling (no interrupt lines): every 1 s while the screen is lit, every few minutes in Stop2 (SYSDWN → `SIGPWR` to INIT; USB plugged → start the USB stack). No flash writes below a low-voltage threshold.
-- **Battery profiles (R6.1, owner 2026-11-15):** `full` / `care` (end-of-charge voltage 4.208 V / ~4.0 V via `VREG`, as stock `bq25896_set_vreg_voltage`), kept in an RTC backup register. **`ICHG`, the input current limit and ICO stay at the stock values and are never raised** (owner: within the manufacturer's limits). One exception, owner 2026-11-15: **gentle charging** (battery care, off by default) lowers `ICHG` to ≈ 1 A; the driver clamps any request to ≤ the stock value. Otherwise only pause charging while Sub-GHz transmits and outside 0–45 °C (gauge temperature). Test: `ICHG` read back = stock with gentle off, ≈ 1 A with it on, charging current from the gauge matches.
+- **Battery profiles (R6.1, user 2026-11-15):** `full` / `care` (end-of-charge voltage 4.208 V / ~4.0 V via `VREG`, as stock `bq25896_set_vreg_voltage`), kept in an RTC backup register. **`ICHG`, the input current limit and ICO stay at the stock values and are never raised** (user: within the manufacturer's limits). One exception, user 2026-11-15: **gentle charging** (battery care, off by default) lowers `ICHG` to ≈ 1 A; the driver clamps any request to ≤ the stock value. Otherwise only pause charging while Sub-GHz transmits and outside 0–45 °C (gauge temperature). Test: `ICHG` read back = stock with gentle off, ≈ 1 A with it on, charging current from the gauge matches.
 - **Power-off = BQ25896 ship mode**, as stock `furi_hal_power_off`: enable the RTC alarm output (Alarm A, open-drain, active low) **on PC13**, **switch ext3.3V on** (stock: "shutting down with ext 3V3 off is causing LSE to stop"), short vibro, then the ship-mode command. With USB attached ship mode cannot cut SYS: sleep instead.
 - **Alarm while off:** the RTC (on VBAT) pulls PC13 = Back = charger QON, the charger turns the BATFET on and the Flipper boots. This replaces F.3's "Standby or Shutdown". At boot, read the wake reason (RTC ALRAF, backup register) **before** reading boot key combos (Back looks pressed until the flag is cleared), then turn the alarm output off and send `SIGRTC` as F.2 says.
-- **Boot lead for alarms (owner, 2026-11-15):** a start from off takes QON (~1 s) + L10, so at power-off `timed` arms Alarm A **early** by the boot lead and keeps the real due time in an RTC backup register (0 B RAM). After the boot `timed` waits for the real time, so the alarm rings on the second, not seconds late. The boot lead is measured at each start from off (RTC time at the first frame minus the alarm time, plus a 2 s margin) and kept in the same backup register; first default 10 s. `Missed` (F.2) applies only if the boot ends after the real time.
-- **`After: off` (F.3, owner 2026-11-17):** a timer with `After: off` (or `timed --then-off`) powers the Flipper off again after its job, **only if this boot came from the RTC alarm** (wake-reason bit in a backup register), no button was pressed since and no user session is active; a Flipper that was already on stays on. Last of several close jobs; next timer < ≈ 4 min → Stop2 instead; `Timeout:` (default 60 s) ends a hung job and still powers off; USB attached → sleep; quiet boot (no splash, backlight, CPU2, launcher) when an `After: off` job is due, a button press makes it a normal boot. `Type: emergency` (owner's name for the rescue-signal case) = `After: off` + ignores do-not-disturb, never skipped (`Missed: fire-once`), at low battery `timed` halves its rate per halving of the charge (below 20 % every 2nd skipped, below 10 % every 2nd of the rest, ... max 1/64; level + counter in RTC backup bits, level passed in `TIMED_LOWBAT`), only for packages with `Timers: emergency`. `Type: wakeup` (alarm clock): below 10 % (configurable) the alarm is not run; instead one minimal notice that it was skipped (LED blink by default, or a short beep, `lowbat_notice=`), logged, shown by the alarm app later. The `timed` part is `lane:cloud` (QEMU: fake wake reason), the wake-reason bit and quiet boot are local.
+- **Boot lead for alarms (user, 2026-11-15):** a start from off takes QON (~1 s) + L10, so at power-off `timed` arms Alarm A **early** by the boot lead and keeps the real due time in an RTC backup register (0 B RAM). After the boot `timed` waits for the real time, so the alarm rings on the second, not seconds late. The boot lead is measured at each start from off (RTC time at the first frame minus the alarm time, plus a 2 s margin) and kept in the same backup register; first default 10 s. `Missed` (F.2) applies only if the boot ends after the real time.
+- **`After: off` (F.3, user 2026-11-17):** a timer with `After: off` (or `timed --then-off`) powers the Flipper off again after its job, **only if this boot came from the RTC alarm** (wake-reason bit in a backup register), no button was pressed since and no user session is active; a Flipper that was already on stays on. Last of several close jobs; next timer < ≈ 4 min → Stop2 instead; `Timeout:` (default 60 s) ends a hung job and still powers off; USB attached → sleep; quiet boot (no splash, backlight, CPU2, launcher) when an `After: off` job is due, a button press makes it a normal boot. `Type: emergency` (user's name for the rescue-signal case) = `After: off` + ignores do-not-disturb, never skipped (`Missed: fire-once`), at low battery `timed` halves its rate per halving of the charge (below 20 % every 2nd skipped, below 10 % every 2nd of the rest, ... max 1/64; level + counter in RTC backup bits, level passed in `TIMED_LOWBAT`), only for packages with `Timers: emergency`. `Type: wakeup` (alarm clock): below 10 % (configurable) the alarm is not run; instead one minimal notice that it was skipped (LED blink by default, or a short beep, `lowbat_notice=`), logged, shown by the alarm app later. The `timed` part is `lane:cloud` (QEMU: fake wake reason), the wake-reason bit and quiet boot are local.
 - Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on. With `After: off`: off → RTC wake → job → off again; the same timer while the Flipper is on → job runs, Flipper stays on; a button press during the quiet boot → stays on.
 - RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### T14d. Screen-off state and peripheral power (after T14b)
-- Backlight: **default idle timeout 15 s** (owner 2026-11-15: 5 min is too long). The code default is still 300 (`hal_bl_state()` fallback in `flipper/hal/flipper/board.c`, comments in `flipdev.c` and `cmds/backlight.c`): change it to 15. Optional dim stage before off (off by default) with the LP5562 engine ramp from #81 (0 B RAM). Separate timeouts on battery and on USB.
+- Backlight: **default idle timeout 15 s** (user 2026-11-15: 5 min is too long). The code default is still 300 (`hal_bl_state()` fallback in `flipper/hal/flipper/board.c`, comments in `flipdev.c` and `cmds/backlight.c`): change it to 15. Optional dim stage before off (off by default) with the LP5562 engine ramp from #81 (0 B RAM). Separate timeouts on battery and on USB.
 - LCD power save (display off + all points on: the ST7567 keeps its RAM) a few minutes after the backlight goes off, on battery only; any button leaves power save with no redraw. Desk mode (R7b.2) keeps the LCD on.
 - SD card power: with the screen off and the card idle for N minutes (no open writes, cache flushed, card not busy), switch ext3.3V off (PA3). Start re-initialising the card at the first button press, in parallel with the backlight ramp, so the ~300 ms card start is hidden. Header pin 9 also loses 3V3 then: never cut it while `/dev/gpio` has a user or 3V3 output is enabled.
 - Acceptance: the first frame after a key in screen-off meets L1; opening an app from the SD card after a power-cut meets its L6 budget, or the PR says by how much it misses; idle current with screen off recorded.
@@ -197,8 +197,8 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 
 Out of scope here (later phases): CPU2/BLE low-power coordination (Phase 16, HSEM protocol as stock), new wake sources (IR remote, NFC field detect, CC1101 wake-on-radio, iButton touch).
 
-## T15a. Battery current on the Flipper's screen, early (spec R7.1 battery screen; owner request 2026-11-16): any time, needs only the I2C1 bus
-The owner wants to check the idle current **without opening the Flipper**. A USB meter cannot do it: USB keeps the device awake and charging, and its resolution is ~10 mA. This is the first slice of T15 (its battery screen) and of T14c (the read side of the BQ27220 driver), done now so that T14a (#112, ~1.7 mA expected saving), T14b and T14d can be checked on the device.
+## T15a. Battery current on the Flipper's screen, early (spec R7.1 battery screen; user request 2026-11-16): any time, needs only the I2C1 bus
+The user wants to check the idle current **without opening the Flipper**. A USB meter cannot do it: USB keeps the device awake and charging, and its resolution is ~10 mA. This is the first slice of T15 (its battery screen) and of T14c (the read side of the BQ27220 driver), done now so that T14a (#112, ~1.7 mA expected saving), T14b and T14d can be checked on the device.
 - **Kernel, `flipdev`:** new minor 8 **`/dev/power`**, read only for now. A read talks to the BQ27220 (I2C1, 7-bit address 0x55, the bus `flipdev` already drives for the LP5562) and returns **one text line**, then EOF:
   `soc=87 mv=3912 ma=-6 avg=-5 sby=-5 temp=243 flags=0x0181`
   from the gauge's standard commands (check the codes against stock `lib/drivers/bq27220_reg.h`): StateOfCharge (%), Voltage (mV), Current (signed mA, negative = discharging), AverageCurrent (the gauge's own filter), StandbyCurrent, Temperature (0.1 K in the gauge, printed in 0.1 °C), BatteryStatus (raw). An I2C error gives `EIO`, so the app can say "no gauge" (QEMU: the device returns `ENXIO`, the QEMU board has no gauge).
@@ -207,7 +207,7 @@ The owner wants to check the idle current **without opening the Flipper**. A USB
   - Device node `/dev/power` (character, major 6 minor 8, mode 0444, group `operator` can read later; for now world-readable is fine: it is only battery data).
 - **App `power` in `flipper/gui/`** (like `lights.c`), entry "Power" in `/etc/apps`, added to `GUIAPPS`. One screen for now, title "POWER":
   - **Now:** Current in mA with sign (large), refreshed every 1 s while the backlight is on. Below it: average mA, battery %, voltage, temperature, and "charging" / "on battery" from BatteryStatus (DSG bit).
-  - **Idle:** the AverageCurrent read while the backlight had been **off for at least 30 s**, with its age ("Idle -5 mA, 2 min ago"). This is the number the owner wants: the screen's own backlight and the app's refresh are not in it. While the backlight is off the app reads only every 10 s (a wake every 10 s costs microamps) and keeps the last such reading. A key press only turns the backlight on (existing rule), and the screen already shows the idle value. Before the first such reading the line says "Idle: leave it 1 min".
+  - **Idle:** the AverageCurrent read while the backlight had been **off for at least 30 s**, with its age ("Idle -5 mA, 2 min ago"). This is the number the user wants: the screen's own backlight and the app's refresh are not in it. While the backlight is off the app reads only every 10 s (a wake every 10 s costs microamps) and keeps the last such reading. A key press only turns the backlight on (existing rule), and the screen already shows the idle value. Before the first such reading the line says "Idle: leave it 1 min".
   - If USB is connected (gauge current ≥ 0 or DSG clear) show "USB: unplug to measure" instead of the idle value: with USB the reading is not the idle draw.
   - Keys answer within L1: wait for a key **blocking**, with `alarm()` for the refresh (the read returns `EINTR`), never a `sleep()` + poll loop. Back quits. No other keys yet (the rest of T15 adds the menu).
   - Uses `read()` on `/dev/backlight` (`HAL_BL_OFF`) to know whether the backlight is off. No flash writes; the app keeps its values in its own RAM only (well under 1 KB).
@@ -217,8 +217,8 @@ The owner wants to check the idle current **without opening the Flipper**. A USB
 - Limits to say in the manual: the gauge measures in whole mA, so below ~2 mA the value is coarse (use the average, or the SoC drop over 24 h, or an external meter on the battery leads; `power-plan.md` section 3).
 - RAM: kernel 0 B static. App < 1 KB while open. Flash ≈ +1.5 KB (driver ≈ 0.5 KB, app ≈ 1 KB).
 
-## T15. Power management app `power` and `pm` (spec R7.1; owner request 2026-11-15): after T14c and T14d
-The owner wants the user to control **how deeply and how soon the device powers down**, and every other power knob that makes sense. Read R7.1 for the full list.
+## T15. Power management app `power` and `pm` (spec R7.1; user request 2026-11-15): after T14c and T14d
+The user wants the user to control **how deeply and how soon the device powers down**, and every other power knob that makes sense. Read R7.1 for the full list.
 - Kernel side first (small PR): a `struct pm_policy` packed into 2–3 free RTC backup registers (add them to the map in PORTING.md): sleep depth, idle-ladder delays (dim, backlight off, screen off, SD off, auto power-off), low-battery thresholds, wake-source mask (buttons, IR, NFC field, wake-on-radio), BLE mode, 5 V / 3V3 header mode, LED, battery profile, gentle charging, active profile per power source. `ioctl` get/set on `/dev/power`; the idle ladder and wake sources from T14b/T14d read it. List of sleep-blocker bits with the holding process for "who keeps it awake".
 - `pm` command (shell): `pm`, `pm profile saver`, `pm set screen-off 120`, `pm who`, `-t` output.
 - `power` GUI app in `flipper/gui/` (like `lights.c`), launcher entry "Power": battery screen, profile choice, each knob, "who keeps it awake", power off (with armed-alarm count), reboot.
@@ -226,12 +226,12 @@ The owner wants the user to control **how deeply and how soon the device powers 
 - Tests on the Flipper (agent): AC7.0; each wake-source switch really stops/starts that wake (e.g. pocket mode: Up does not wake, Back does); automatic power-off after a short test delay, then an alarm armed before it rings; `saver` vs `balanced` idle current recorded; L1 for every key in the app and from every sleep state; L6 for opening the app.
 - RAM: kernel ≤ +16 B (if the registers are not enough); app ≈ 2 KB while open. Flash ≈ 6 KB.
 
-## T16. Backlight gestures (spec R6.10; owner request 2026-11-16): small, any time after T14b; milestone M3, owner request so it may fill a gap earlier
+## T16. Backlight gestures (spec R6.10; user request 2026-11-16): small, any time after T14b; milestone M3, user request so it may fill a gap earlier
 Hold Left+Up 1.5 s: backlight forced off until held again; hold Right+Down 1.5 s: forced on until held again; the red LED blinks faster towards the threshold. Spec R6.10 has the details; the points that reviews check:
 - Kernel only (`src/kernel/arm/flipdev.c`, `hal.h`, both boards): chord match at each button change in `btn_sample()`, the elapsed check at the 8 ms samples in `flipdev_btn()` (and the tick sampling on QEMU); the fire and the LED/vibro I2C in the task (`do_hardint`), never in the interrupt. Hold time counts from `k_input`.
 - Flags in the free bits of `last_buttons` (bits 6-7, 26-28); the mode in BKP15R bits 14-15 (timeout field shrinks to 14 bits, clamp the `/dev/backlight` write; update the BKP15R line in PORTING.md); mode cleared at boot.
 - `bl_want()`: forced on → 0; forced off → `BL_GONE`, `BL_SAVE` after `LCD_SAVE_S` on battery. `btn_sample()`: `SWALLOW` only for idle-off (and for the press that wakes a blank LCD), not for forced-off. `flipdev_idle()` agrees with `bl_want()` (no extra wakes in either mode).
-- RAM table: 4 x 1 B entries + 1 B hold (50 ms units) + 3 B LED save = **≤ 8 B** (owner accepts ~10 B; raise `flipper/ram-budget.txt` by that, with the reason). `const` defaults copied at boot. `ioctl(BTNIOCGTAB)` (root; `EINVAL` for Back in a mask or < 2 buttons) and `ioctl(BTNIOCGEST, 0/1)` (foreground app only, cleared at `FGIOCSET`) in `<minix/fg.h>` or a new `<minix/btn.h>`. Action 3 (user gesture) is accepted in the table but does nothing yet (R7.2).
+- RAM table: 4 x 1 B entries + 1 B hold (50 ms units) + 3 B LED save = **≤ 8 B** (user accepts ~10 B; raise `flipper/ram-budget.txt` by that, with the reason). `const` defaults copied at boot. `ioctl(BTNIOCGTAB)` (root; `EINVAL` for Back in a mask or < 2 buttons) and `ioctl(BTNIOCGEST, 0/1)` (foreground app only, cleared at `FGIOCSET`) in `<minix/fg.h>` or a new `<minix/btn.h>`. Action 3 (user gesture) is accepted in the table but does nothing yet (R7.2).
 - `backlight force on|off|auto` and the mode in `backlight` with no arguments; the launcher passes `Gestures: no` from a `.desktop` entry. `/etc/rc`: if `/etc/flipper/gestures.conf` exists, a tiny helper (or `backlight gestures FILE`) loads it with `BTNIOCGTAB`; missing file: defaults, no message.
 - No flash writes at run time (state in BKP15R and RAM only).
 - QEMU test (in `m2test` or a kernel self-test under `BOARD=qemu`): set `qemu_fake_buttons` to Left+Up for 1.6 s → mode forced off in `/dev/backlight`; again → auto; Left+Up released at 1.0 s → unchanged; Left+Up+Back → unchanged; with `BTNIOCGEST 0` → unchanged. `M2 USER PASS` stays.
@@ -239,8 +239,8 @@ Hold Left+Up 1.5 s: backlight forced off until held again; hold Right+Down 1.5 s
 - Docs: CHANGELOG line, `docs/manual/buttons.md` (drop the "(planned)" marks), PORTING.md BKP15R.
 - Later: the `gestures` app (R7.2, M4) edits the table from the SD file; no kernel change needed for it except action 3.
 
-## T17. SD card safety: clean flag, `fsck` at boot on the screen, card pulled out (spec section N; owner request 2026-11-16): milestone M2
-No journaling (owner decision). Spec section N has the details; the points that reviews check:
+## T17. SD card safety: clean flag, `fsck` at boot on the screen, card pulled out (spec section N; user request 2026-11-16): milestone M2
+No journaling (user decision). Spec section N has the details; the points that reviews check:
 
 ### T17a (`lane:cloud`, QEMU): FS flags, `fsck`, `/etc/rc`
 - N.1: `s_pad` → `s_flags` (bit 0 CLEAN, bit 1 CHECK, the Linux `minix` / MINIX 3 values); in-core bits 14–15 of `s_pad`, masked out of disk writes; FS RAM **+0 B**. CHECK set at an unclean read-write mount; CLEAN = 0 written synchronously before the first other block of that device (hook in `cache.c` `rw_block`/`rw_scattered`). Read-modify-write of block 1 through the cache, never a stale in-core copy.
@@ -257,8 +257,8 @@ No journaling (owner decision). Spec section N has the details; the points that 
 - N.6: poll PC10 (EXTI 10 is the Up button) before every SD command and per tick while the card is selected or a buffer is dirty; `ENXIO` while out; CID + super block CRCs at boot (kernel ≤ +32 B); same card → resume, other card → never write; "SD card removed" / "Different card" on the screen with a short buzz; R12.25 swap waits for the same card.
 - Device checks: ACN.5 (pull and reinsert during `cp`, then a different card), ACN.6 (unclean boot on the 3.8 GB card: LCD output readable, progress, ≤ 30 s, Back skips `/home`), ACN.7 (low-battery halt, no check at the next boot). Numbers into PORTING.md.
 
-## T18. Less SD card wear from swap (spec 12g, R12.29–R12.33, R12.10a; owner request 2026-11-17): milestone M3
-Owner rule: only measures with **0 B RAM** and no noticeable CPU on the foreground path (responsiveness first). Analysis: `reports/sd-swap-wear-analysis.md` (project files). Swap is off by default (`swap=plain`), so all of this changes nothing until swap is turned on, except R12.32/R12.33 at first-boot setup.
+## T18. Less SD card wear from swap (spec 12g, R12.29–R12.33, R12.10a; user request 2026-11-17): milestone M3
+User rule: only measures with **0 B RAM** and no noticeable CPU on the foreground path (responsiveness first). Analysis: `reports/sd-swap-wear-analysis.md` (project files). Swap is off by default (`swap=plain`), so all of this changes nothing until swap is turned on, except R12.32/R12.33 at first-boot setup.
 
 ### T18a (`lane:cloud`, QEMU): MM, `mkpart`, setup
 - R12.29 in `src/mm/swap.c`: chunk CRCs (48 × 4 B) in the slot header; swap-out reads the header, writes only changed 4 KB chunks, writes nothing if nothing changed; swap-in checks per chunk; the reserve job re-reads the header each step and writes it last. MM RAM **+0 B** (`ramcheck`), header stays in `mbuf`.
@@ -274,8 +274,8 @@ Owner rule: only measures with **0 B RAM** and no noticeable CPU on the foregrou
 - R12.33: `hal_disk_erase(first, last)` (CMD32/CMD33/CMD38, busy wait with the card's erase timeout, card-detect checks as N.6) and the root-only `DIOCERASE` ioctl on a partition device. AC12.17 on a card filled with data first.
 - Kernel RAM +0 B. Numbers into PORTING.md.
 
-## T19. Every Unleashed LF RFID protocol, decoders and encoders (spec 9.0, R9.0.1–R9.0.9; owner request 2026-11-17)
-Owner request outside the milestone order (H-lane priority 4, "owner requests"). Today 1 of 25 protocols works (EM4100 RF/64); spec 9.0 has the gap table. Reuse the Unleashed code verbatim (GPLv3).
+## T19. Every Unleashed LF RFID protocol, decoders and encoders (spec 9.0, R9.0.1–R9.0.9; user request 2026-11-17)
+User request outside the milestone order (H-lane priority 4, "user requests"). Today 1 of 25 protocols works (EM4100 RF/64); spec 9.0 has the gap table. Reuse the Unleashed code verbatim (GPLv3).
 
 ### T19a (`lane:cloud`, host + QEMU): the library and its tests
 - R9.0.1 `src/lib/lfrfid/` with the 25 protocols, `fsk_demod`/`fsk_osc`, `t5577`/`em4305` block builders and the toolbox pieces; thin `furi` shim. Note the Unleashed commit in the file header.
@@ -292,8 +292,8 @@ Owner request outside the milestone order (H-lane priority 4, "owner requests").
 - R9.0.7 Hitag µ / Hitag S write targets, R9.0.8 RAW read, R9.0.9 `lfrfid` app (protocol name, rendered data, "Add manually" for all 25), in that order, after the above.
 - Device checks AC9.0.2–AC9.0.4 (results table in PORTING.md, `lat` numbers in the PR); kernel RAM ≤ +32 B in total.
 
-## T20. Swappable memory blocks for apps (spec 12h, R12.34–R12.38; owner request 2026-11-17): milestone M4
-Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rules: kernel 0 B, MM ≤ +39 B, no noticeable CPU on the foreground path, writes only for changed data, nothing at process exit. Needs plain swap (12a, `sw_on`, `sw_io`, `sw_step`) on main, which it is.
+## T20. Swappable memory blocks for apps (spec 12h, R12.34–R12.38; user request 2026-11-17): milestone M4
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files). User rules: kernel 0 B, MM ≤ +39 B, no noticeable CPU on the foreground path, writes only for changed data, nothing at process exit. Needs plain swap (12a, `sw_on`, `sw_io`, `sw_step`) on main, which it is.
 
 ### T20a (`lane:cloud`, QEMU): MM, libraries, Berry
 - R12.34/R12.35 in `src/mm/swap.c` (or a new `src/mm/blk.c` sharing `sw_io`): 256 extents after the 16 slots, reservation table (2 B per slot) with `blk_open`/`blk_close`, first fit, grow in place, shrink, half-of-space limit for non-root, header through the last `mbuf` sector, validity check, boot stamp (+4 B, bumped on pid wrap in `forkexit.c`). `make ramcheck`: MM ≤ +39 B, kernel +0 B.
@@ -312,10 +312,10 @@ Analysis: `reports/swappable-blocks-api-analysis.md` (project files). Owner rule
 - R12.40 HAL: read `DISCARD_SUPPORT` (ACMD13) at init, `hal_disk_discard()` (CMD32/33/38 arg 1, timeout, card-detect), `DIOCDISCARD`; AC12.26 on an SD 5.1 card.
 - AC12.23: GET/PUT times (512 B, 1 KB, 4 KB) and L1/L2 with a background block reader and a foreground 1 MB map scroll; numbers in PORTING.md.
 
-## T21. Launcher icons and Pine-style look (spec R5.6a, AC5.4–AC5.7; owner request 2026-11-17)
-Owner request outside the milestone order: the launcher may show an icon of at most two characters (8×6 px) before each app. The rest of R5.6 (manifests, categories) stays in M4.
+## T21. Launcher icons and Pine-style look (spec R5.6a, AC5.4–AC5.7; user request 2026-11-17)
+User request outside the milestone order: the launcher may show an icon of at most two characters (8×6 px) before each app. The rest of R5.6 (manifests, categories) stays in M4.
 
-### T21a (`lane:local`, owner 2026-11-17: today, before other local work; host + QEMU + device), issue #229
+### T21a (`lane:local`, user 2026-11-17: today, before other local work; host + QEMU + device), issue #229
 - `/etc/apps` third field (R5.6a.1): empty, `@name`, `#` + 12 hex digits, or 1–2 characters; the old two-field form keeps working. Parsing in one pure function with a host test (`make icontest` or inside an existing host test target, in the `build` CI job): every form, malformed hex, 3 characters, `:` and `/` cases, label/user/command truncation unchanged.
 - Built-in icon table (R5.6a.2), original 8×6 drawings, a host tool that renders them 8× enlarged into a PNG attached to the PR; base `/etc/apps` and base `postinst` lines with icons; `mkpkg.py -i ICON` writes `Icon:`.
 - Drawing (R5.6a.3) with `gui_bits8()`; with icons off byte-identical frames (AC5.5).
@@ -326,8 +326,8 @@ Owner request outside the milestone order: the launcher may show an icon of at m
 - RAM (R5.6a.5): give the launcher's `.bss` and the heap of 16 entries with icons before/after in the PR (≤ +8 B `.bss`, ≤ 104 B heap). 0 run-time flash writes (`flashcheck`), BASE_VER bump (new `/etc` file).
 - Docs: CHANGELOG line; new `docs/manual/launcher.md` (the list, the hint line, icons and hints on/off, the `/etc/apps` line with the icon forms and the built-in names, a picture of the icons); devguide 4.4 (`/etc/apps` format, `Icon:` for packages, postinst example with an icon); `mkpkg.py` help.
 
-## T22. Every app in the launcher's style (spec K.2 "Screen style", owner 2026-11-17)
-The owner wants every app reached from the launcher to look like it: title bar with an optional state on the right, hint line, selection bar, `[value]` settings, scroll mark, notices on the message line. Starts after T21a, which brings the `gui.c` helpers.
+## T22. Every app in the launcher's style (spec K.2 "Screen style", user 2026-11-17)
+The user wants every app reached from the launcher to look like it: title bar with an optional state on the right, hint line, selection bar, `[value]` settings, scroll mark, notices on the message line. Starts after T21a, which brings the `gui.c` helpers.
 
 ### T22a (`lane:local`, after T21a), issue #230: plain `/dev/lcd` apps
 - `gui.c` helpers of K.2 if T21a did not add them all: `gui_title2()`, `gui_hints()`, `gui_note()` (timed key read via `poll`), `gui_scroll()`.
@@ -340,7 +340,7 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
-## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, owner request 2026-11-17): milestone M3
+## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, user request 2026-11-17): milestone M3
 Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
 
 ### T23a: desktop core
@@ -368,7 +368,7 @@ Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and 
 - The Running page when R12.20 (park) is on main: otherwise a follow-up in the same task.
 - Docs: manual chapter "Desktop and modules" (writing a module in C and shell), devguide section, CHANGELOG.
 
-## T24. System settings (spec K.7, owner decision 2026-11-17 on #110): milestone M3, next after T21a
+## T24. System settings (spec K.7, user decision 2026-11-17 on #110): milestone M3, next after T21a
 One plain C program `settings GROUP`, a window app (K.8, `libgm`; its screens need T23b), one source file per group under `src/commands/settings/`, started from the launcher's SETTINGS page. Writes `/etc/flipper/<group>.conf` with `cfopen()` only on a real change; 0 internal-flash writes; ≤ 3 KB RAM while open.
 
 ### T24a (`lane:local`, the local agent offered it): SETTINGS page and the device groups
@@ -383,7 +383,7 @@ One plain C program `settings GROUP`, a window app (K.8, `libgm`; its screens ne
 
 ### T24c (later): LED, Power (R7.1 `power` app or a group that starts it), Storage, System; Gestures = R7.2.
 
-## T25. Kanpaia and Ordua as window apps (spec K.8, owner 2026-11-17): milestone M3, after T23b
+## T25. Kanpaia and Ordua as window apps (spec K.8, user 2026-11-17): milestone M3, after T23b
 Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, snooze, history) stays; the `libfuri` GUI code goes. Package `Type: window`, `Background: exit`, `Flash: yes`; link `libgm` and the needed `libapp` parts statically, not the shared `libfuri`. Remove CHMEM overrides that no longer apply and measure. Manual `remind-alarm.md` updated (screens, RAM).
 
 ### T25a: Kanpaia (`remind`)
@@ -394,7 +394,7 @@ Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, s
 - Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
 - ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
 
-## T32. Radio regions: per-country Sub-GHz tables on the card, the chosen one in flash (spec section Q; owner request 2026-11-18): with T26b / Phase 8 R8.2
+## T32. Radio regions: per-country Sub-GHz tables on the card, the chosen one in flash (spec section Q; user request 2026-11-18): with T26b / Phase 8 R8.2
 Before T26b turns transmit on. T31 is the launcher style (#295).
 
 ### T32a (`lane:cloud`, host + QEMU)
@@ -409,7 +409,7 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 - Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
 - Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
 
-## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; owner pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
+## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; user pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
 Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
 
 ### T28a (`lane:cloud`, QEMU + host): device-file interface, QEMU backend, `libhid`
@@ -433,7 +433,7 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 ### T28e (`lane:cloud`): `jiggle` command
 - R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
 
-## T31. Launcher style "Stock" (spec R5.6b, AC5.7; owner request 2026-11-18): milestone M3, after T23 (desktop pages) and T24
+## T31. Launcher style "Stock" (spec R5.6b, AC5.7; user request 2026-11-18): milestone M3, after T23 (desktop pages) and T24
 `lane:cloud` (QEMU + host). One launcher, a `Style: pine|stock` setting, the stock drawing in `launcher_stock.c`.
 - R5.6b.1 setting row and redraw; R5.6b.2 Apps page as stock `menu.c`, other pages as stock `submenu`, popup for messages.
 - R5.6b.3 10×10 built-in icon table (stock icons allowed, D.3), `Icon10:` in `fam2pkg` and the `##` field form.
@@ -441,7 +441,7 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 
-## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
+## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; user decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
 
 ### T29a (`lane:cloud`, host + QEMU): `mtpd` core
@@ -455,7 +455,7 @@ Windows and Linux copy files with their own drivers, nothing installed on the PC
 - MTP interface (bulk IN/OUT + interrupt IN) in `flipper/hal/flipper/usb.c`, PMA buffers, Microsoft OS descriptors (`0xEE` string, extended compat ID `MTP`), in the default and HID configurations, left out for canary/reader/mass-storage personas; `devd` starts `mtpd` on configure, stops it on detach or 30 s suspend.
 - AC10.4.1–AC10.4.4, AC10.4.7 (AC10.4.5 once the PIN lock exists) and AC10.4.R on the device, Windows 11 (+ Windows 10 if at hand) and Linux; throughput into PORTING.md. Kernel ≤ +96 B (`ramcheck`).
 
-## T30. Radio stacks on the SD card (spec R16.0, R2b.1a; owner request and decision 2026-11-18): milestone M7, with R16.1.0 at the start of Phase 16
+## T30. Radio stacks on the SD card (spec R16.0, R2b.1a; user request and decision 2026-11-18): milestone M7, with R16.1.0 at the start of Phase 16
 Several ST CPU2 images on the card, switched with `radio use` in maintenance mode; the radio slot holds only the run-time cache. Order: T30a any time → T30b after Phase 15 (R15.1) works. Every PR updates `docs/manual/radio.md` (new page, linked from the manual index).
 
 ### T30a (`lane:cloud`, host + QEMU): tool and layout, no FUS
@@ -465,9 +465,9 @@ Several ST CPU2 images on the card, switched with `radio use` in maintenance mod
 
 ### T30b (`lane:local`, Flipper): FUS client and maintenance mode
 - SHCI FUS commands, maintenance mode (R16.0.3) with LCD progress, `radio use`/`repair`; the first use is the R16.1.0 light → full install, with before/after `SFSA`, SRAM2 reservation and FS cache blocks in PORTING.md.
-- AC16.0.1, AC16.0.2, AC16.0.3, AC16.0.R. Never `radio fus` without the owner present.
+- AC16.0.1, AC16.0.2, AC16.0.3, AC16.0.R. Never `radio fus` without the user present.
 
-## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
+## T27. Bigger `/home` as MINIX V3 (spec section O; user request 2026-11-17): user approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
 ### T27a (`lane:cloud`, QEMU): driver positions, FS V3, tools
@@ -482,8 +482,8 @@ One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts 
 ### T27b (`lane:local`, Flipper)
 - ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
 
-## T26. Data modems between two Flippers: RFID, Sub-GHz, NFC, BLE (spec section P; owner request 2026-11-17)
-Owner request outside the milestone order (like T19). Analysis and design: spec section P. The second Flipper of the two-device tests runs Unleashed, which has no such modem: MINIX-to-MINIX rows need a second MINIX Flipper for the session (`twoflip.py --peer-minix`, devguide part 2, 6.12).
+## T26. Data modems between two Flippers: RFID, Sub-GHz, NFC, BLE (spec section P; user request 2026-11-17)
+User request outside the milestone order (like T19). Analysis and design: spec section P. The second Flipper of the two-device tests runs Unleashed, which has no such modem: MINIX-to-MINIX rows need a second MINIX Flipper for the session (`twoflip.py --peer-minix`, devguide part 2, 6.12).
 
 ### T26a (`lane:cloud`, host + QEMU): DONE in the PR that added section P
 - `src/lib/modem` (frames, CRC, ARQ, carousel, RFID line code P4, CC1101 presets, band table, duty counter), `make modemtest` (ACP.1, ACP.2) in `tests/host`; `gmodem` with the RFID backend on today's `/dev/rfid` and `gmodem info`; `gmodem info` in the M2 self-test; `twoflip.py` `modem` rows and `--peer-minix`; manual chapter "Data modems", `gmodem(1)`.
@@ -502,31 +502,31 @@ Owner request outside the milestone order (like T19). Analysis and design: spec 
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
 - R2b.12 (#72): measure L9 during a forced installed-region compaction on the Flipper (it now asks FS `INOCHK` per record) and write the number in PORTING.md. Optional: `in_lookup`'s head-CRC check uses 2 `lseek` + 4 x 64 B `read` per exec; one 256 B read into a buffer free during exec would halve the FS round trips if L6 shows it.
 - I.1 (#70): the stock firmware keeps the RTC in local time; spec I.1 wants UTC. Fix with the time-zone setting (18b wizard / `setup tz`); until then `date` is off by the zone offset (bindings are not affected).
-- Backlight (#81), polish: fade **on** as well as off (owner wish: no snapping). Off fades in 0.5 s by LP5562 engine 1; add a short up-ramp (about 150 ms) on wake with the same engine program.
+- Backlight (#81), polish: fade **on** as well as off (user wish: no snapping). Off fades in 0.5 s by LP5562 engine 1; add a short up-ramp (about 150 ms) on wake with the same engine program.
 - base postinst (#79), nit: `chmod 755 /rom` runs on every install and may print EROFS when /rom is mounted; make it quiet or run it only after `mkdir`.
 - Build (found while writing `docs/manual/install.md`): in a fresh clone `art/galtzagorri.png` can be newer than the committed `hal/common/splash.c`, so `make` regenerates it and then needs Pillow and `/usr/share/fonts/X11/misc/6x10-ISO8859-1.pcf.gz` (xfonts-base); without them the build fails. Make the splash rule opt-in (e.g. `make splash`) so a normal build needs neither; then drop them from the manual's prerequisites.
 - Flipper `NR_SUPERS` is 4 and full since T12 (root, /rom, /usr, /home): any further mount needs a fifth slot (RAM) or an on-demand /rom.
 
-## Deferred to the end (owner decision 2026-11-15, #78): Wi-Fi / ESP32 devboard work
-The owner cannot find the Wi-Fi devboard for now. Everything that needs it or ESP-IDF waits until the rest of the plan is done (roadmap Phase 22):
+## Deferred to the end (user decision 2026-11-15, #78): Wi-Fi / ESP32 devboard work
+The user cannot find the Wi-Fi devboard for now. Everything that needs it or ESP-IDF waits until the rest of the plan is done (roadmap Phase 22):
 - `esp32/camscan/`: the devboard firmware of R9.1.1 + R9.1.8 (ESP-IDF, GPL, passive only: no association, no deauth, no injection). Channel hopping, `AP`/`STA` lines, `CH`, `TRACK`, `RATE`. Build with `idf.py build`; the PR says how it was tested (ESP32 board, real camera if available). The Flipper-side parser and motion test are already in `cfcore` (#75).
 - R9.2.4 `wifi` canary (extends the same firmware).
 - R19.7 ESP32 offload mode (Wi-Fi module networking). Phase 19 parts that do not need the devboard (USB, BLE, CC1101, a Linux module on the UART) keep their place.
 - `camfind` v1 ships without Wi-Fi meanwhile (AC9.1.3: "Wi-Fi unavailable", the other scans run).
 
-## Lanes and milestones (owner, 2026-11-15 23:51 Warsaw): the strategy in practice
+## Lanes and milestones (user, 2026-11-15 23:51 Warsaw): the strategy in practice
 The order of work is `docs/spec/strategy.md`. **Requirements are closed** as of 2026-11-15: the spec's phases 0–22 are the scope. New ideas still go into the spec, but with a milestone tag (M1–M9), and only the current milestone's items become tasks.
 - Every task of the current milestone has a GitHub issue with a lane label: `lane:cloud` (GitHub Actions worker, QEMU-testable) or `lane:local` (the local agent, needs the Flipper), plus the milestone label (`M1`, …). The tracking issue of the milestone lists them in order.
 - **Current milestone: M1 Foundation** (Phases 2a, 2b, 2c, 2d; ABI 2; ≈ 0.5.0), tracking issue #105. Cloud: #99 2d (first), #100 R2a.5 (parallel), #101 2c and #102 R2b.9 (after #99). Local: #103 T14a, #104 T14b (R4b.2 ms timer), then the "Needs on-device test" checks of the cloud PRs.
-- Local agent priority inside a milestone: (1) what the other lane waits for (device checks, timer API), (2) the milestone's `lane:local` issues, (3) responsiveness regressions, (4) owner requests, (5) polish. T-tasks not in the milestone wait for a gap.
-- **Swap in two steps (owner, 2026-11-16):** plain swap (spec 12a, 12e, R12.28; `swap=plain`, off by default, CRC-32, `Secret: yes` never swapped) is a `lane:cloud` item of M3 and may start in M2 when a cloud slot is free, since it needs only M1. Park/hibernate and the Running list go with the launcher in M4. Encryption (12b) stays in M6: AES1 driver `lane:local`, GCM glue and QEMU software GCM `lane:cloud`.
+- Local agent priority inside a milestone: (1) what the other lane waits for (device checks, timer API), (2) the milestone's `lane:local` issues, (3) responsiveness regressions, (4) user requests, (5) polish. T-tasks not in the milestone wait for a gap.
+- **Swap in two steps (user, 2026-11-16):** plain swap (spec 12a, 12e, R12.28; `swap=plain`, off by default, CRC-32, `Secret: yes` never swapped) is a `lane:cloud` item of M3 and may start in M2 when a cloud slot is free, since it needs only M1. Park/hibernate and the Running list go with the launcher in M4. Encryption (12b) stays in M6: AES1 driver `lane:local`, GCM glue and QEMU software GCM `lane:cloud`.
 - Directory ownership (to avoid conflicts): local owns `src/kernel/arm/`, `flipper/hal/`, the kernel device tasks, `flipper/m0/`, radio code; cloud owns `src/lib/`, `src/commands/`, `src/mm/`, `src/fs/`, `flipper/tools/`, `flipper/tests/`, pure-logic app cores, `docs/manual/`. A PR that crosses the line says so in its first line.
 
-## Autonomy (owner, 2026-11-15 23:55 Warsaw): never wait for the local agent
-The owner wants maximum autonomy. The cloud lane and the review side keep working when the local agent is away (no connection, owner asleep).
+## Autonomy (user, 2026-11-15 23:55 Warsaw): never wait for the local agent
+The user wants maximum autonomy. The cloud lane and the review side keep working when the local agent is away (no connection, user asleep).
 - **The local agent counts as away** when it has pushed or opened no PR for 2 h, or has not answered a review question for 2 h. Nobody needs to announce it.
-- **While it is away the review side:** keeps up to **2** `lane:cloud` issues of the current milestone running (adds `claude-task` from the owner's account, in the issue order of the tracking issue); when the milestone has no cloud issue left, opens the next milestone's cloud issues early (strategy.md section 4: Phase 3, `poll()` core, `libfuri` R5.1–R5.2, `fam2pkg`, Berry VM, stock protocol decoders, manual chapters); reviews and squash-merges cloud PRs as usual.
+- **While it is away the review side:** keeps up to **2** `lane:cloud` issues of the current milestone running (adds `claude-task` from the user's account, in the issue order of the tracking issue); when the milestone has no cloud issue left, opens the next milestone's cloud issues early (strategy.md section 4: Phase 3, `poll()` core, `libfuri` R5.1–R5.2, `fam2pkg`, Berry VM, stock protocol decoders, manual chapters); reviews and squash-merges cloud PRs as usual.
 - **Code part of `lane:local` work** may also go to the cloud worker when it can be written and checked in QEMU or on the host (e.g. a driver's protocol logic, a timer API with a QEMU backend). It merges only **off by default** or with no change on the Flipper path, and its PR lists the device steps under "Needs on-device test".
 - **Never without the local agent:** enabling a new hardware path by default, option bytes, CPU2/FUS, anything whose acceptance is a `lat` number, a current reading or RF.
 - **Device-check backlog:** every "Needs on-device test" of a merged PR is a checkbox in the issue labelled `device-checks`. When the local agent is back it does that list first (priority 1 above), then its `lane:local` issues.
-- Cost guard: at most 2 cloud worker runs at a time; a cloud issue that fails twice goes back to the owner with what blocked it.
+- Cost guard: at most 2 cloud worker runs at a time; a cloud issue that fails twice goes back to the user with what blocked it.

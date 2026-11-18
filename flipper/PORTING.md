@@ -398,7 +398,7 @@ the cache is written (was 40 ms); L6 6-35 ms over 8 launches of "info",
 21.95 ms, programming 256 B per step 2.75 ms, at most one erase per
 ~270 ms; a 220-character line pasted during the copy arrived complete.
 
-Flash writes at run time (owner rule, 2026-11-14): a program is copied
+Flash writes at run time (user rule, 2026-11-14): a program is copied
 to the text cache only after its third run from RAM (MM counts runs of up
 to 8 uncached programs, nothing written for that), from its file, which
 exec leaves open for the copy; the directory is written only for a new
@@ -479,7 +479,7 @@ AC2b.R1/R2 (2026-11-15, Flipper, latcheck kernel):
   copy in progress is dropped and redone on a later run.  An install
   whose `pkg` died is dropped by the next install or cache copy.
 - Flash writes: unchanged (the same pages and record per program).
-- L1 during an install still needs the owner's hands (buttons).
+- L1 during an install still needs the user's hands (buttons).
 
 AC2b.5, power cuts during installs (2026-11-15, QEMU only, no Flipper
 flash written): `tools/powercut.py`.  The QEMU board's flash now behaves
@@ -513,7 +513,7 @@ and nothing printed "not erased", "damaged" or a panic.
   (their programs fell back to RAM).  Now the header is written last,
   so until then the old directory is the valid one.
 - The run-time cache's records were already safe: one is found only
-  when its last double word (the owner) matches.
+  when its last double word (the user) matches.
 - Also: the installed region is capped at 256 pages (the job's page
   index is a byte; the WB55 has about 160).
 - RAM 0 B.  Flash writes: unchanged (the header is one double word
@@ -799,7 +799,7 @@ T4b step 2, SD data by DMA (2026-11-15, Flipper):
   2.2 s and 48 ms.
 - RAM 0 B.
 
-Backlight idle timeout (owner request 2026-11-15): without a key or
+Backlight idle timeout (user request 2026-11-15): without a key or
 button (USB console keys count too) the LCD backlight dims by 10 % a
 second in the last 5 s of the idle timeout, then fades out; it comes
 back at the next key.  Default 15 s, so dimming from 10 s on.
@@ -814,9 +814,9 @@ back at the next key.  Default 15 s, so dimming from 10 s on.
   current level to 0 in about 0.5 s on its own (no CPU, no I2C while it
   runs; the program and register sequence of the stock firmware's
   `lp5562_execute_ramp`).  On at once: `hal_backlight` gives the channel
-  back to direct control, stops the engine and sets the level.  Owner,
+  back to direct control, stops the engine and sets the level.  User,
   on the Flipper: "naprawdę super".
-- With the light off, a press only turns it on (owner): neither that
+- With the light off, a press only turns it on (user): neither that
   press nor anything else reaches the apps until every button is up.
   The flag is the top bit of flipdev's `last_buttons`, so no RAM.
 - Flipper: `backlight 255 10; sleep 15; backlight` → "now off (idle)";
@@ -910,7 +910,7 @@ reply" and "reply -> run", and says who used the time in between):
 | Load | L5 before | L5 after |
 |---|---|---|
 | cksum of a 1.2 MB file in a loop, typing on the console | avg 37 us, max 37 us (27) | same |
-| launcher by hand (126 presses), cksum loop | avg 87 us, max 3.1 ms (248); the 3 ms all "reply -> run" | (needs the owner's hands again) |
+| launcher by hand (126 presses), cksum loop | avg 87 us, max 3.1 ms (248); the 3 ms all "reply -> run" | (needs the user's hands again) |
 | copies of 8 programs run 3 times each (the cache copies them in the background), typing | max 22 ms; all 4 slow ones with a flash operation in between | flash: 0 of the slow ones; max 47 ms, of which 43 ms in kernel tasks, longest slice 12.5 ms in the SD task (WINCHESTER) |
 
 - The flash stalls: during an erase (22 ms) or a double word (85 us)

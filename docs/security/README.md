@@ -1,7 +1,7 @@
 # Security reviews
 
 Recurring reviews of Galtzagorriak MINIX against what the Flipper Zero can
-*receive*. Started 2026-11-16 at the owner's request; first the kernel and
+*receive*. Started 2026-11-16 at the user's request; first the kernel and
 its drivers, then the servers (FS, MM) and the userland.
 
 ## Threat model
@@ -67,7 +67,7 @@ device must still not hang, reset-loop or corrupt the system.
 
 ## How a review runs
 
-- **Cadence: weekly**, Mondays, by a scheduled Claude session (owner's
+- **Cadence: weekly**, Mondays, by a scheduled Claude session (user's
   request 2026-11-16). Each run reviews what changed since the previous
   report: every new or changed driver, interrupt handler, kernel task and
   spec chapter about an input, against the checklist above. New drivers
@@ -80,7 +80,7 @@ device must still not hang, reset-loop or corrupt the system.
 - **Output**: one report per run, `docs/security/YYYY-MM-DD-<scope>.md`,
   findings numbered (K = kernel, F = FS, U = userland, ...) with severity,
   the input, the failure, the fix or recommendation, and its status. Clear
-  bugs are fixed in a PR with a test; design questions go to the owner.
+  bugs are fixed in a PR with a test; design questions go to the user.
 - **Severity**: Critical (remote/plug-in RCE, privilege, or a brick), High
   (any outside input can reset or freeze the device), Medium (needs a
   damaged medium, a long exposure, or a local condition), Low (battery,
