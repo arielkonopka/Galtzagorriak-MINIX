@@ -1514,7 +1514,14 @@ PUBLIC void flipdev_cons_act()
  * a flash is due unless one is on or resting: the ms timer wakes this
  * task for the I2C writes (never the TTY task's own work).  Otherwise
  * one test, nothing more. */
+  unsigned bp;
+
   if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) != RB_CONS) return;
+  /* lock() does not nest: unlock() would open a locked section of a
+   * caller that prints (usb_out from a kernel printf).  There, no flash:
+   * one missed flash does not matter (review of #297). */
+  __asm volatile ("mrs %0, basepri" : "=r" (bp));
+  if (bp != 0) return;
   lock();
   if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) == RB_CONS)
 	mt_arm(MT_LED, 1);
