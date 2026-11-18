@@ -248,6 +248,16 @@ FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 #define RB_COLOUR(r)	((r) >> 8 & 7)
 #define RB_STEPOF(r)	((r) & 0x7F)
 #define RB_MS		40
+/* The console-activity mode ("echo console COLOUR >/dev/led", owner
+ * 2026-11-18): a short flash in rb_user[0] for USB console traffic.  It
+ * uses rb's free bits, not RB_ON, so the sequences' code never sees it:
+ * RB_CONS the mode, RB_LIT the flash is on, RB_REST the pause after it
+ * (so steady traffic blinks instead of glowing).  0 B RAM. */
+#define RB_CONS		0x0800
+#define RB_LIT		0x0080
+#define RB_REST		0x0040
+#define CA_ON_MS	40
+#define CA_OFF_MS	60
 PRIVATE const struct {
 	char name[9];
 	u8_t ncol, glide;		/* colours; steps of RB_MS to the next */
@@ -266,6 +276,7 @@ PRIVATE const u8_t rb_col[6][3] = {	/* PWM, white = 200:128:96 */
  * there it fills their padding, 0 B) */
 PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
+FORWARD _PROTOTYPE( void ca_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
@@ -1494,10 +1505,62 @@ int irq;
 PUBLIC void flipdev_led_tick()
 {
 /* The ms timer: the rainbow's next step is due (R7b.5). */
-  if (rb & RB_ON) {
+  if (rb & (RB_ON | RB_CONS)) {
 	rb |= RB_DUE;
 	interrupt(PRINTER);
   }
+}
+
+
+/*===========================================================================*
+ *				flipdev_cons_act			     *
+ *===========================================================================*/
+PUBLIC void flipdev_cons_act()
+{
+/* The TTY task saw USB console traffic.  In the console-activity mode,
+ * a flash is due unless one is on or resting: the ms timer wakes this
+ * task for the I2C writes (never the TTY task's own work).  Otherwise
+ * one test, nothing more. */
+  unsigned bp;
+
+  if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) != RB_CONS) return;
+  /* lock() does not nest: unlock() would open a locked section of a
+   * caller that prints (usb_out from a kernel printf).  There, no flash:
+   * one missed flash does not matter (review of #297). */
+  __asm volatile ("mrs %0, basepri" : "=r" (bp));
+  if (bp != 0) return;
+  lock();
+  if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) == RB_CONS)
+	mt_arm(MT_LED, 1);
+  unlock();
+}
+
+
+/*===========================================================================*
+ *				ca_step					     *
+ *===========================================================================*/
+PRIVATE void ca_step()
+{
+/* Console activity, task work: dark -> flash for CA_ON_MS -> dark for
+ * CA_OFF_MS -> ready for the next traffic. */
+  unsigned v;
+
+  lock();
+  v = rb;
+  rb &= ~(RB_DUE | RB_LIT | RB_REST);
+  if (!(v & RB_CONS)) { unlock(); return; }
+  if (!(v & (RB_LIT | RB_REST))) {		/* traffic: on */
+	rb |= RB_LIT;
+	mt_arm(MT_LED, CA_ON_MS);
+  } else if (v & RB_LIT) {			/* the flash ends */
+	rb |= RB_REST;
+	mt_arm(MT_LED, CA_OFF_MS);
+  }					/* rest over: dark, ready */
+  unlock();
+  if ((v & (RB_LIT | RB_REST)) == 0)
+	hal_led_pwm(rb_user[0][0], rb_user[0][1], rb_user[0][2]);
+  else if (v & RB_LIT)
+	hal_led_pwm(0, 0, 0);
 }
 
 
@@ -1563,6 +1626,21 @@ int count;
 	if (led_colour(wd[i], &rgb[i-1]) < 0) return(EINVAL);
   if (nw == 1 && led_streq(wd[0], "off")) {
 	hal_led(0, 0, 0);
+	return(count);
+  }
+  if (led_streq(wd[0], "console")) {	/* flash on USB console traffic */
+	if (nw != 2) return(EINVAL);
+	for (i = 0; i < 3; i++) {
+		unsigned long v = rgb[0] >> (16 - 8 * i) & 0xFF;
+
+		rb_user[0][i] = (u8_t) ((v * v * white[i] + 32512) / 65025);
+	}
+	if ((rb_user[0][0] | rb_user[0][1] | rb_user[0][2]) == 0)
+		return(EINVAL);
+	hal_led(0, 0, 0);			/* engines off, direct */
+	lock();
+	rb = RB_CONS;
+	unlock();
 	return(count);
   }
   for (m = 0; m < 4 && !led_streq(wd[0], rb_mode[m].name); m++) ;
@@ -1733,7 +1811,7 @@ PRIVATE void do_hardint()
 	rtc_fired = FALSE;
 	cause_sig(INIT_PROC_NR, SIGRTC);
   }
-  if (rb & RB_DUE) rb_step();
+  if (rb & RB_DUE) { if (rb & RB_CONS) ca_step(); else rb_step(); }
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
