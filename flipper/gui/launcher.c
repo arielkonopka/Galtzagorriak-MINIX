@@ -576,6 +576,8 @@ static int alive(int pid)
 }
 
 /* Read the records waiting in the FIFO: what changed (DC_* bits).  A
+ * tile or status of a module that has exited is dropped (a notification
+ * is not: it owns nothing, and its sender may be gone already).  A
  * record is written whole (one write() of at most 128 B), so a read that
  * ends inside one finds its rest in the FIFO at once: the line buffer is
  * on the stack, nothing is kept between calls but the "overlong" mark.
@@ -595,7 +597,8 @@ static int desk_read(void)
 			*nl = 0;
 			if (dk_skip)
 				dk_skip = 0;
-			else if (dk_parse(p, &r) > 0 && alive(r.pid))
+			else if (dk_parse(p, &r) > 0 && (r.verb == DV_NOTIFY
+				 || r.verb == DV_CLOSE || alive(r.pid)))
 				c |= dk_apply(&desk, &r);	/* else dropped */
 			p = nl + 1;
 		}

@@ -1181,6 +1181,171 @@ static void __attribute__((noinline)) window_test(int b, int l)
 	(void) poll((struct pollfd *) NULL, 0, 200);	/* the launcher reaps it */
 }
 
+/* T23a / spec K.6: the desktop in the launcher.  ACK.6: a Left+Up chord
+ * held 1.5 s keeps APPS, a short Left turns the page on its release.
+ * ACK.1: a shell module of three lines (guimod) puts a tile on HOME and
+ * changes it; ACK.2: killed, its tile goes and the desktop keeps working;
+ * ACK.3: four modules writing as fast as they can, key -> frame on the
+ * desktop (QEMU: < 500 ms, as ACK8.5; L1 itself on the device).  The
+ * launcher of launcher_test, on its APPS page. */
+static unsigned long lsum(int y0, int y1)
+{
+	unsigned long sum = 0;
+	int x, y;
+
+	for (y = y0; y <= y1; y++)
+		for (x = 0; x < 128; x++) sum = sum * 31 + (unsigned long) lpix(x, y);
+	return sum;
+}
+
+static unsigned long tsum(void)		/* the page's name on the title */
+{
+	unsigned long sum = 0;
+	int x, y;
+
+	for (y = 1; y <= 5; y++)
+		for (x = 40; x < 88; x++) sum = sum * 31 + (unsigned long) lpix(x, y);
+	return sum;
+}
+
+static int row_text(int i)		/* row i of a page has text */
+{
+	int x, y;
+
+	for (y = 7 + 6 * i; y < 12 + 6 * i; y++)
+		for (x = 6; x < 60; x++)
+			if (lpix(x, y) != lpix(0, y)) return 1;
+	return 0;
+}
+
+static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
+{
+	FILE *f;
+	unsigned char m;
+	unsigned long apps, s1;
+	int p[2], i, st, ok;
+	long ms, worst = 0;
+	pid_t mod, w[4];
+	struct stat sb;
+
+	ok = stat("/var/run/gui", &sb) == 0 && S_ISFIFO(sb.st_mode)
+		&& (sb.st_mode & 07777) == 0620 && sb.st_uid == 0 && sb.st_gid == 10;
+	check(ok, "desktop: /var/run/gui is a FIFO, root's, 0620, group gui");
+	lgrab(l, "desk-apps");
+	apps = tsum();
+	/* ACK.6 (Up still moves the selection: it is not a page key) */
+	m = 0x05;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 1500);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	lgrab(l, "ack6-chord");
+	check(tsum() == apps, "ACK.6: Left+Up held 1.5 s: the page stays APPS");
+	m = 0x04;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "ack6-press");
+	ok = tsum() == apps;
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "ack6-release");
+	check(ok && tsum() != apps,
+		"ACK.6: a short Left turns to SETTINGS on its release, not its press");
+	wtap(b, 0x20);					/* Back: APPS */
+
+	/* ACK.1, ACK.2 */
+	f = fopen("/tmp/ack1.sh", "w");
+	fprintf(f, "guimod tile ack Kaixo mundua\nread x\n"
+		"guimod tile ack Agur; read x\n");
+	fclose(f);
+	if (pipe(p) < 0) { check(0, "desktop: pipe"); return; }
+	fflush(stdout);
+	if ((mod = fork()) == 0) {
+		dup2(p[0], 0);
+		close(p[0]);
+		close(p[1]);
+		execl("/bin/sh", "sh", "/tmp/ack1.sh", (char *) NULL);
+		_exit(99);
+	}
+	close(p[0]);
+	wtap(b, 0x08);					/* Right: HOME */
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "ack1-tile");
+	s1 = lsum(7, 12);
+	ok = lpix(0, 7) && row_text(0) && !row_text(1);
+	(void) write(p[1], "\n", 1);			/* the module goes on */
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "ack1-changed");
+	check(ok && lpix(0, 7) && lsum(7, 12) != s1 && !row_text(1),
+		"ACK.1: a 3-line shell module puts a tile on HOME and changes it");
+	kill(mod, SIGKILL);
+	(void) waitpid(mod, &st, 0);
+	close(p[1]);
+	ms = key_frame(b, l, 0x02);			/* any key: it is seen */
+	lgrab(l, "ack2-gone");
+	check(ms >= 0 && !lpix(0, 7) && kill(lpid, 0) == 0,
+		"ACK.2: the killed module's tile goes, the desktop keeps working");
+
+	/* ACK.3: four modules as fast as they can, keys on APPS */
+	wtap(b, 0x04);					/* Left: APPS */
+	fflush(stdout);
+	for (i = 0; i < 4; i++)
+		if ((w[i] = fork()) == 0) {
+			char rec[64];
+			int fd = open("/var/run/gui", O_WRONLY | O_NONBLOCK), n;
+			long k;
+
+			for (k = 0; fd >= 0; k++) {
+				n = sprintf(rec, "tile\tw%d\t0\t%d\tflood %ld\n", i,
+					    (int) getpid(), k);
+				(void) write(fd, rec, (size_t) n);
+			}
+			_exit(0);
+		}
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	for (i = 0; i < 4; i++) {
+		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);
+		if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	}
+	printf("  ACK.3 key -> frame on APPS, 4 modules flooding: max %ld ms (4 keys)\n",
+		worst);
+	check(worst >= 0 && worst < 500, "ACK.3: keys redrawn while 4 modules flood (QEMU)");
+	wtap(b, 0x08);					/* Right: HOME */
+	ms = key_frame(b, l, 0x02);
+	printf("  ACK.3 key -> frame on HOME, 4 modules flooding: %ld ms\n", ms);
+	lgrab(l, "ack3-home");
+	check(ms >= 0 && ms < 500 && row_text(0) && row_text(3) && !row_text(4),
+		"ACK.3: HOME has the 4 modules' tiles, keys still move");
+	for (i = 0; i < 4; i++) kill(w[i], SIGKILL);
+	for (i = 0; i < 4; i++) (void) waitpid(w[i], &st, 0);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	wtap(b, 0x02);
+	lgrab(l, "ack3-gone");
+	check(!row_text(0), "ACK.2: four killed modules: their tiles go");
+
+	/* a notification: the unread count on the status line, the text on
+	 * the message line */
+	wtap(b, 0x04);					/* APPS */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "desk-before-note");
+	s1 = lsum(0, 6);
+	apps = lsum(57, 63);
+	{	/* as guimod writes it (guimod runs only twice here: a third
+		 * run would make the run-time cache copy it to flash) */
+		static const char rec[] = "notify\tmail\t0\t1\tKaixo\n";
+		int fd = open("/var/run/gui", O_WRONLY | O_NONBLOCK);
+
+		(void) write(fd, rec, sizeof rec - 1);
+		close(fd);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, "desk-note");
+	check(lsum(0, 6) != s1 && lsum(57, 63) != apps,
+		"desktop: a notification: the count on the status line, the text noted");
+}
+
 static void launcher_test(void)
 {
 	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
@@ -1313,6 +1478,7 @@ static void launcher_test(void)
 		unlink("/etc/flipper/display.conf");
 	}
 	window_test(b, l);			/* T23b, spec K.8 */
+	desktop_test(b, l, pid);		/* T23a, spec K.6 */
 	kill(pid, SIGKILL);
 	(void) waitpid(pid, &st, 0);
 	/* m2test is process 1: whatever the launcher left is ours now */

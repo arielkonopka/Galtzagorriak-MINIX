@@ -112,7 +112,7 @@ are.
 Some apps do not draw on their own: they only describe their screens, and the launcher draws
 them (spec K.8). Such an app needs no graphics code, so it takes about 4 KB of RAM while open
 instead of about 15 KB. Its package says `Type: window`, and its line in `/etc/apps` has `=`
-before the program. The example `gmdemo` package (`pkg install /lib/pkg/gmdemo_1.0.tar`) puts
+before the program. The example `gmdemo` package (`pkg install /lib/pkg/gmdemo_1.1.tar`) puts
 **Demo** on the list.
 
 A window app's screens look like the launcher's: the title bar, a selection bar, values in

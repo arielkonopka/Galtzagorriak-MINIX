@@ -713,7 +713,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
-	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
+	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar) $(PKGDIR)/remind_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
@@ -750,16 +750,19 @@ $(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
 # The example window app (spec K.8): the program, its launcher line, and
-# its source with libgm in /usr/share/examples/gui.
-$(PKGDIR)/gmdemo_1.0.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \
-		rootfs/gmdemo.prerm apps/gmdemo.c $(GM_DIR)/gm.c $(GM_DIR)/gm.h
-	python3 -I tools/mkpkg.py -n gmdemo -v 1.0 -o $(PKGDIR) --window --flash \
+# its source with libgm in /usr/share/examples/gui; with them the example
+# desktop module of spec K.6 (battile.sh, a battery tile in three lines).
+$(PKGDIR)/gmdemo_1.1.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \
+		rootfs/gmdemo.prerm apps/gmdemo.c $(GM_DIR)/gm.c $(GM_DIR)/gm.h \
+		apps/battile.sh
+	python3 -I tools/mkpkg.py -n gmdemo -v 1.1 -o $(PKGDIR) --window --flash \
 	   -i @app --postinst rootfs/gmdemo.postinst --prerm rootfs/gmdemo.prerm \
 	   -D "Example window app (spec K.8): the launcher draws it" \
 	   /usr/bin/gmdemo=$< \
 	   /usr/share/examples/gui/gmdemo.c=apps/gmdemo.c \
 	   /usr/share/examples/gui/gm.c=$(GM_DIR)/gm.c \
-	   /usr/share/examples/gui/gm.h=$(GM_DIR)/gm.h
+	   /usr/share/examples/gui/gm.h=$(GM_DIR)/gm.h \
+	   /usr/share/examples/gui/battile.sh=apps/battile.sh$(COMMA)644
 # The hardware self test (spec 7b.3).
 $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/selftest.postinst rootfs/selftest.prerm \
