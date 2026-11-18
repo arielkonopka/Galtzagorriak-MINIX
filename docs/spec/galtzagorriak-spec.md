@@ -249,6 +249,7 @@ goes into the system image; user flash goes into the installed region.
 | NFC (A/B/F/V, MIFARE Classic, NTAG, DESFire, EMV read; emulation) | — | ST25R3916 on SPI1 + IRQ: field, poll, transceive straight between the 512 B chip FIFO and the user buffer; listener mode using the chip's automatic anticollision; RT wake (A.4) | Protocol stack, MIFARE Classic crypto1 and key recovery, dictionaries streamed from SD, `.nfc` files | ~96 B | 15–35 KB | 8 / 100 KB |
 | BadUSB | CDC only | Composite USB CDC + HID keyboard/mouse; endpoint buffers in the USB PMA | DuckyScript interpreter, keyboard layouts | ~64 B | 4 KB | 4 / 10 KB |
 | USB mass storage (SD as a drive) | — | Mass-storage class (BOT/SCSI), sector by sector from the SD driver; requires `/home` unmounted | Mode switch app | 0 extra (shares the disk buffer) | — | 4 KB / — |
+| Files to a PC over MTP (R10.4; Windows and Linux without drivers) | — | MTP interface in the composite device (bulk + interrupt, PMA buffers, MS OS descriptor) | `mtpd`, started on USB configure, exits on detach; `/home` stays mounted | ≤ 96 B | ≤ 8 KB while plugged in, 0 otherwise | 1.5 / 14 KB |
 | U2F / FIDO | — | HID FIDO interface; PKA ECDSA P-256 sign; counter in a flash page; key wrapping in the CPU2 secure enclave (as the stock firmware does) | CTAP1 logic | ~64 B | 3 KB | 6 / 8 KB |
 | Bluetooth LE (mobile app, serial, HID, remote) | — | CPU2 start (FUS + BLE light stack, as stock), IPCC mailbox + HSEM, transport task; mailbox and event buffers in SRAM2 | `bled` (GATT: serial, battery, device info, HID), pairing UI | ~1 KB SRAM1 (task stack) + 6–8 KB **SRAM2** | `bled` 6 KB | 8 / 20 KB |
 | qFlipper / mobile app RPC | — | — | `rpcd`: protobuf (nanopb) RPC over the USB CDC data interface and BLE serial: storage, app start, screen mirror, input, system info | 0 | 6–10 KB | — / 25 KB |
@@ -1166,7 +1167,7 @@ about, system.
      id), free RAM, the shared-library lines of `free -v`, serial number, licence.
   4. The rest: **LED** (notification colours, brightness), **Power** (the `power` app of R7.1
      with its profiles, or a group that starts it), **Storage** (`df` of the SD card, card info,
-     "format SD" disabled while it is mounted), **System** (hostname, swap, `GuiLog`).
+     "format SD" disabled while it is mounted; `USB files [on]` for MTP, R10.4), **System** (hostname, swap, `GuiLog`).
 - **Acceptance:**
   - ACK7.1 QEMU with fake buttons: Left from Apps → SETTINGS → Display → change brightness → Back.
     The backlight value changes at once, and `/etc/flipper/display.conf` is written once.
@@ -3675,15 +3676,85 @@ Acceptance:
 - **R10.3** Mass storage: exposes `/dev/hd4` (`/home`) as a USB drive.
   - Only when `/home` is unmounted (`EBUSY` otherwise).
   - SCSI READ/WRITE stream sector by sector through the shared sector buffer.
+  - For Windows and macOS, which do not read MINIX file systems, use MTP (R10.4) instead.
+- **R10.4 Files over MTP (owner decision, 2026-11-18): the way to copy files to and from a PC.**
+  Windows and macOS do not read MINIX file systems (section O), and the owner wants nothing
+  installed on the PC. MTP (Media Transfer Protocol, the protocol phones use) has a built-in driver
+  on Windows 10/11 and on Linux (gvfs/KIO through libmtp): the Flipper shows up under "This PC"
+  as a portable device and files are dragged in and out. MTP works **file by file**, not sector
+  by sector, so our FS server does every read and write: `/home` **stays mounted**, apps and the
+  alarm keep running, and the on-disk format (V2, V3, a later ext2) does not matter. Analysis:
+  `reports/windows-file-transfer-analysis.md` in the project files.
+  - **USB interface:** one MTP interface (class 06/01/01, still image/PTP with MTP extensions):
+    bulk IN, bulk OUT, interrupt IN (events). Microsoft OS descriptor (string `0xEE` + extended
+    compat ID `MTP`) so Windows binds its own WPD/MTP driver; no `.inf`. Descriptors `const`,
+    endpoint buffers in the PMA (A.6). It is part of the **default configuration** (CDC console +
+    MTP) and of the HID configuration of 11.3 (MTP is file-level, so it does not conflict with HID).
+    It is **left out** while a persona that owns the bus or the disk is active: the 11.2 canary
+    (never sends anything), an 11.1 reader mode, R10.3 mass storage.
+  - **Daemon `mtpd`:** started by `devd` when the host configures the device, exits on detach
+    or after 30 s of USB suspend, like `rpcd`/`bled`. **0 B RAM while no cable is plugged in.**
+    Runs as user `flipper`; the one storage it offers is `/home/flipper` (= `/ext`, the same
+    tree as `rpcd`, R15.5), shown with the volume label of the SD card. File modes and owners
+    are the normal ones for user `flipper`; new files get `flipper`'s `umask`.
+  - **Object handles = inode numbers** (32-bit `ino_t`, spec O), so a handle stays valid while a
+    file is renamed on the Flipper. No FS change: `mtpd` keeps a **parent ring** (inode → parent
+    inode, ≤ 256 entries × 8 B, LRU) filled while it lists directories, and rebuilds a path by
+    walking the ring up to the storage root and finding each name with one scan of the parent
+    directory (from the buffer cache, directories ≤ ~1000 entries, O.7). A ring miss answers
+    `Invalid_ObjectHandle`; Windows lists the folder again. An "open by inode" FS call is
+    **only** added if the PR measures the rebuild as too slow, and then only for inodes the
+    caller owns.
+  - **Operations:** `GetDeviceInfo`, `OpenSession`/`CloseSession`, `GetStorageIDs`,
+    `GetStorageInfo` (free space from O.5's counters, never a zone map scan),
+    `GetObjectHandles`, `GetObjectInfo`, `GetObject`, `GetPartialObject`, `SendObjectInfo` +
+    `SendObject`, `DeleteObject`, `MoveObject`, and the object properties Windows Explorer asks
+    for (`GetObjectPropsSupported`, `GetObjectPropDesc`, `GetObjectPropValue`,
+    `GetObjectPropList` for file name, size, format, parent, date modified, persistent UID;
+    `SetObjectPropValue` on the file name = rename). Anything else: `Operation_Not_Supported`,
+    never a stall or disconnect (as R15.7). Events `ObjectAdded`/`ObjectRemoved` for changes made
+    through MTP; for changes made on the Flipper while connected, one `StorageInfoChanged` when a
+    file under `/home/flipper` is closed after writing (rate-limited to 1 per 2 s), so Explorer
+    refreshes. Files ≤ 4 GiB − 1 (O.3).
+  - **Data path:** one 1 KB buffer (one FS block) in `mtpd`; each USB transfer step moves one
+    block, so no request holds the FS longer than one block operation. An incomplete
+    `SendObject` (cable pulled, host cancel) removes the partial file.
+  - **Lock:** while the optional desktop PIN lock is on (stock mapping table; not specified yet, so this applies once it exists), `GetStorageIDs` returns no storage and the
+    device answers `Device_Busy` to object operations, as phones do; unlocking sends
+    `StoreAdded`.
+  - **Security (received-signal threat model):** the container parser is the attack surface from
+    the USB host. Lengths are checked against the 1 KB buffer and the container header before
+    any copy; names are checked (no `/`, no `..`, ≤ `NAME_MAX`, UTF-16 → UTF-8 bounded); the
+    parser builds on the host for fuzzing. Setting `USB files [on]` in K.7 (default on) turns the
+    interface off for people who never want it.
+  - **Flash writes:** internal flash 0. SD writes only for the files the user copies; reading
+    does not dirty atime (N).
 
 Acceptance:
 - AC10.1 The console keeps working while HID types 10,000 characters into a PC editor without loss.
 - AC10.2 The SD `/home` partition mounts on Linux as a drive (`mount -t minix`; Windows and macOS do not
   read MINIX file systems, section O); after eject and remount on the Flipper, `fsck` is clean.
+- AC10.4.1 Windows 11 and Windows 10 22H2, fresh user, no driver installed: the Flipper appears under
+  "This PC"; copy a 10 MB file both ways (SHA-256 equal), make a folder, rename, delete.
+- AC10.4.2 Linux (GNOME Files over gvfs, and `mtp-detect`): the same steps pass.
+- AC10.4.3 A 60-character V3 name (e.g. `galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub`)
+  shows in Explorer and round-trips unchanged; a name > `NAME_MAX` sent from the PC gets an
+  error, not a cut name.
+- AC10.4.4 Cable pulled during a 50 MB send: the partial file is gone, `mtpd` has exited,
+  `ramcheck` shows the RAM back, `fsck` is clean.
+- AC10.4.5 (once the PIN lock exists) PIN lock on: no storage visible; after unlocking it appears without replugging.
+- AC10.4.6 Host fuzzing of the container parser (≥ 1 h, sanitizers on): no crash, hang or
+  out-of-bounds access; malformed lengths give a response code.
+- AC10.4.7 A file written on the Flipper while connected appears in Explorer within 3 s.
 
 Responsiveness: AC10.R HID report latency ≤ 2 ms from the app's write (USB frame-bound); L1 holds while HID typing runs.
+AC10.4.R While a 50 MB file is copied over MTP in either direction, L1 holds, the console answers,
+and an alarm due during the copy rings ≤ 1 s late. Throughput is measured and recorded in
+PORTING.md (target ≥ 300 KB/s from the Flipper).
 
-RAM: kernel ≤ +150 B. Flash: ≈ +8 KB kernel.
+RAM: kernel ≤ +150 B (HID, mass storage) + ≤ 96 B (MTP). `mtpd` ≤ 8 KB while running (parent ring
+2 KB included), 0 B when unplugged. Flash: ≈ +8 KB kernel, ≈ +1.5 KB for MTP; `mtpd` ≈ 10–14 KB
+installed (XIP).
 
 ## Phase 11: App ports III: BadUSB and the USB modes
 
