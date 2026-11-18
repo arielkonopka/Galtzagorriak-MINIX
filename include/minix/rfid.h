@@ -56,4 +56,25 @@ struct rfid_emu {
 #define RFID_CARRIER_134	2	/* 134.2 kHz, 50 %: FDX-B */
 #define RFIDIOCCARRIER	_IOW('r', 3, int)
 
+/* RFIDIOCSTREAM (spec R9.0.5): capture without end.  The field comes on
+ * (RFIDIOCCARRIER's) and the DMA writes the tag signal's edges as 32-bit
+ * timestamps (us, a free-running counter) round and round into `ring`,
+ * `words` long (even, 64..65534), in the caller's memory, pinned and not
+ * to be freed while it runs.  read() then blocks until a half of the ring
+ * is full and returns 4 bytes: 0 (words 0..words/2-1 are new) or 1 (the
+ * second half).  Use the half before the next one is full (a ring of
+ * 4096 words gives at least 32 ms at FSK's fastest).  A reader that fell
+ * more than a half behind gets -1 with EOVERFLOW once, and the next whole
+ * half after it: an edge is never lost silently.  poll() is readable when
+ * a half is waiting.  words 0, close or the caller's exit stop it.  The
+ * durations are the differences of the timestamps (mod 2^32). */
+struct rfid_stream {
+	void *ring;		/* 32-bit timestamps, us */
+	unsigned words;		/* even, 64..65534; 0 stops */
+	int level;		/* out: the comparator's level before the
+				 * first edge (1 high: that edge falls);
+				 * the edges alternate from there */
+};
+#define RFIDIOCSTREAM	_IOW('r', 4, struct rfid_stream)
+
 #endif /* _MINIX_RFID_H */

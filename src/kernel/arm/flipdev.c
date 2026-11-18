@@ -216,6 +216,11 @@ PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
 PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
 PRIVATE u8_t rf_carrier;		/* R9.0.4: the read field, RFID_CARRIER_* */
+PRIVATE u8_t rs_on;			/* R9.0.5: the streaming process + 1 */
+PRIVATE volatile u8_t rs_done;		/*   halves of its ring filled (mod 256) */
+PRIVATE u8_t rs_got;			/*   halves handed to its reads */
+PRIVATE u8_t rs_wait;			/*   a read waits (ir_caller/proc/buf) */
+#define SEL_RFID	8		/* sel_wait: a poller waits for a half */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -283,6 +288,10 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rs_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void rs_stop, (void)				);
+FORWARD _PROTOTYPE( int rs_take, (phys_bytes user)			);
+FORWARD _PROTOTYPE( int rs_int, (int irq)				);
 FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ib_stop, (void)				);
@@ -388,6 +397,12 @@ PUBLIC void flipdev_task()
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
   }
+  if ((r = hal_rfid_stream_irq()) >= 0) {	/* R9.0.5 */
+	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
+					 * new slot (all NR_IRQ_HANDLERS used);
+					 * it passes this vector to rs_int */
+	enable_irq(r);
+  }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
 	put_irq_handler(r, rtc_int);
 	enable_irq(r);
@@ -419,8 +434,10 @@ PUBLIC void flipdev_task()
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
 				&& ie.proc == fm.PROC_NR + 1) ib_stop();
-		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
+			if (rs_on == fm.PROC_NR + 1) rs_stop();	/* R9.0.5 */
+		}
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
@@ -448,6 +465,7 @@ PUBLIC void flipdev_task()
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
 		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
+		if (rs_wait && ir_proc == fm.PROC_NR) rs_wait = 0;	/* R9.0.5 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
@@ -473,6 +491,29 @@ PUBLIC void flipdev_task()
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
 	hid_check();			/* e.g. a persona let go */
   }
+}
+
+
+/*===========================================================================*
+ *				flipdev_xit				     *
+ *===========================================================================*/
+PUBLIC void flipdev_xit(proc_nr)
+int proc_nr;			/* the process that has exited */
+{
+/* Called by the SYSTEM task (do_xit) before MM gives the memory away.
+ * What the process owned stops now, not at the device's last close: a
+ * child from fork() may still hold the file, and a stream or emulation
+ * would go on reading or writing by DMA into memory that is no longer
+ * the process's (review of #214).  No replies: FS cancels the exiting
+ * process's own waits itself. */
+  if (rs_on == proc_nr + 1) {		/* R9.0.5: the stream */
+	rs_wait = 0;
+	rs_stop();
+  }
+  if (rf_emu == proc_nr + 1) rfid_emu_off();	/* R6.5 part 4 */
+  if (ie.proc == proc_nr + 1) ib_stop();	/* R6.7: a key emulated */
+  if (as_proc == proc_nr + 1) adcs_end(FALSE);	/* R4b.5: an ADC stream */
+  if (gp_proc == proc_nr + 1) gp_stop();	/* R6.4: a watched pin */
 }
 
 
@@ -508,6 +549,7 @@ message *m_ptr;
 	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
 	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
 	if (m_ptr->DEVICE == GPIO_MINOR) sel_wait &= ~SEL_GPIO;
+	if (m_ptr->DEVICE == RFID_MINOR) sel_wait &= ~SEL_RFID;
 	return(0);
   }
   switch (m_ptr->DEVICE) {
@@ -517,6 +559,10 @@ message *m_ptr;
 		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
 		sel_wait |= SEL_RD;
 	}
+	break;
+  case RFID_MINOR:		/* R9.0.5: streaming, a half to read */
+	if (rs_on != 0 && rs_done == rs_got) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) sel_wait |= SEL_RFID;
 	break;
   case GPIO_MINOR:		/* R6.4: with pins watched, an edge */
 	if (gp_watch != 0 && gp_chg == 0) r &= ~SEL_RD;
@@ -547,6 +593,10 @@ PRIVATE void sel_check()
   if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
 	sel_wait &= ~SEL_RD;
 	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_RFID) && rs_on != 0 && rs_done != rs_got) {
+	sel_wait &= ~SEL_RFID;
+	reply(DEV_SELECTED, FS_PROC_NR, RFID_MINOR, SEL_RD);
   }
   if ((sel_wait & SEL_GPIO) && gp_chg != 0) {
 	sel_wait &= ~SEL_GPIO;
@@ -699,7 +749,7 @@ int count;
   unsigned ms;
 
   if (as_cfg == 0 || count < 2 || count > 8192 || (count & 1)) return(EINVAL);
-  if (as_proc != 0 || tx_on || ir_rd) return(EBUSY);	/* TIM2 */
+  if (as_proc != 0 || tx_on || ir_rd || rs_on) return(EBUSY);	/* TIM2 */
   if (hal_adc_stream(as_cfg & 15, as_cfg >> 4, user, (unsigned) count / 2)
 							< 0) return(EIO);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* no shadow swap now */
@@ -1327,7 +1377,7 @@ message *m_ptr;
 
   case RFID_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) {	/* field on/off times (T5577) */
-		if (ir_rd || tx_on) return(EBUSY);
+		if (ir_rd || tx_on || rs_on) return(EBUSY);
 		int rr;
 
 		if (rf_held) hal_rfid_pull(1);	/* a command: PA2 high (the
@@ -1839,6 +1889,11 @@ PRIVATE void do_hardint()
 	LAT_EVENT(LE_BREPLY, rd_proc);
 	r = deliver(rd_proc, rd_vir, rd_count);
 	reply(REVIVE, rd_caller, rd_proc, r);
+  }
+  if (rs_wait && rs_done != rs_got) {	/* R9.0.5: a half for the read */
+	rs_wait = 0;
+	r = rs_take(ir_buf);
+	reply(REVIVE, ir_caller, ir_proc, r);
   }
   if (sel_wait) sel_check();		/* poll(), R4b.6 */
   hid_check();
@@ -2483,7 +2538,7 @@ int count, input;
  * it ends after a silence, or when the buffer is full. */
   if (count < 4) return(EINVAL);
   if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
-  if (ir_rd) return(EBUSY);		/* one reader at a time (TIM2) */
+  if (ir_rd || rs_on) return(EBUSY);	/* one reader at a time (TIM2) */
   if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
   if (input != 0 && tx_on) return(EBUSY);
   ir_caller = m_ptr->m_source;
@@ -2561,6 +2616,20 @@ message *m_ptr;
 phys_bytes user;
 int count;
 {
+  if (rs_on) {				/* R9.0.5: a stream's half */
+	int r;
+
+	if (rs_on != m_ptr->PROC_NR + 1) return(EBUSY);
+	if (count < 4) return(EINVAL);
+	if ((r = rs_take(user)) != EAGAIN) return(r);
+	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+	if (rs_wait) return(EIO);
+	rs_wait = 1;
+	ir_caller = m_ptr->m_source;
+	ir_proc = m_ptr->PROC_NR;
+	ir_buf = user;
+	return(SUSPEND);
+  }
   if (count < 8) return(EINVAL);
   if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
   ir_caller = m_ptr->m_source;
@@ -2644,6 +2713,7 @@ message *m_ptr;
   int on;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
 	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(on));
@@ -2659,7 +2729,7 @@ message *m_ptr;
   phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
   if (on) {
 	if (rf_held) return(OK);		/* already ours */
-	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0)
+	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0 || rs_on)
 		return(EBUSY);			/* TIM1, TIM2 */
 	hal_rfid_field(1);
 	rf_held = TRUE;
@@ -2672,6 +2742,107 @@ message *m_ptr;
   }
   return(OK);
 }
+
+/*===========================================================================*
+ *				rs_start				     *
+ *===========================================================================*/
+PRIVATE int rs_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCSTREAM (R9.0.5): the field on, the comparator's edges into the
+ * caller's ring by circular DMA, an interrupt at each half (rs_int counts
+ * them).  No CPU work per edge.  words 0 stops it. */
+  struct rfid_stream st;
+  phys_bytes user, ring;
+  int lvl;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(st));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&st), (phys_bytes) sizeof(st));
+  if (st.words == 0) {				/* stop */
+	if (rs_on == m_ptr->PROC_NR + 1) rs_stop();
+	return(OK);
+  }
+  if (st.words < 64 || st.words > 65534 || (st.words & 1)) return(EINVAL);
+  if (rs_on != 0 || ir_rd || tx_on || as_proc != 0 || rf_held || rf_emu != 0)
+	return(EBUSY);				/* TIM1, TIM2, the DMA */
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) st.ring, (vir_bytes) st.words * 4);
+  if (ring == 0) return(EFAULT);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA writes it */
+  rs_done = rs_got = rs_wait = 0;
+  if ((lvl = hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  st.level = lvl;			/* (the RAW files need the polarity) */
+  phys_copy(vir2phys(&st), user, (phys_bytes) sizeof(st));
+  rs_on = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timers and the DMA need clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				rs_stop					     *
+ *===========================================================================*/
+PRIVATE void rs_stop()
+{
+/* The stream ends (words 0, close, exit): the DMA first, then the memory
+ * is the process's own again. */
+  hal_rfid_stop();
+  proc_addr(rs_on - 1)->p_physio = FALSE;
+  if (rs_wait) {			/* (its own read; not reachable now) */
+	rs_wait = 0;
+	reply(REVIVE, ir_caller, ir_proc, EINTR);
+  }
+  rs_on = 0;
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
+}
+
+
+/*===========================================================================*
+ *				rs_take					     *
+ *===========================================================================*/
+PRIVATE int rs_take(user)
+phys_bytes user;
+{
+/* The next full half for a read: 4 bytes, its number, or EAGAIN (none
+ * yet), or EOVERFLOW once if the reader is more than a half behind. */
+  u8_t d = (u8_t) (rs_done - rs_got);
+  u32_t h;
+
+  if (d == 0) return(EAGAIN);
+  if (d > 1) {
+	rs_got = rs_done;		/* skip what was overwritten */
+	return(EOVERFLOW);
+  }
+  h = rs_got & 1;
+  rs_got++;
+  phys_copy(vir2phys(&h), user, (phys_bytes) 4);
+  return(4);
+}
+
+
+/*===========================================================================*
+ *				rs_int					     *
+ *===========================================================================*/
+PRIVATE int rs_int(irq)
+int irq;
+{
+/* The stream's DMA: a half (or both, if late) of the ring is full. */
+  unsigned k = hal_rfid_stream_ack();
+
+  if (rs_on == 0) return(1);
+  rs_done += (k & 1) + (k >> 1 & 1);
+  if (rs_wait || (sel_wait & SEL_RFID)) interrupt(PRINTER);
+  return(1);
+}
+
 
 /*===========================================================================*
  *				rfid_emu_start				     *
@@ -2697,7 +2868,8 @@ message *m_ptr;
   }
   if (e.n > 512) return(EINVAL);
   if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
-  if (ir_rd || tx_on || as_proc != 0 || rf_held) return(EBUSY);	/* TIM2 */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on)
+	return(EBUSY);				/* TIM2 */
   dur = numap(m_ptr->PROC_NR, (vir_bytes) e.dur, (vir_bytes) (e.n * 4));
   pulse = numap(m_ptr->PROC_NR, (vir_bytes) e.pulse, (vir_bytes) (e.n * 4));
   if (dur == 0 || pulse == 0) return(EFAULT);
@@ -2773,7 +2945,7 @@ int count;
   if (tx_on) return(EIO);			/* one frame at a time */
   if (ir_rd && (ir_started || pu_input != 0))
 	return(EBUSY);				/* TIM2 takes a frame in */
-  if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
+  if (as_proc != 0 || rs_on) return(EBUSY);	/* TIM2: a stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
   if (n > IR_TX_MAX + 1) return(EINVAL);
@@ -2861,8 +3033,11 @@ PRIVATE int ir_tx_int(irq)
 int irq;
 {
 /* TIM2: a mark or space is over, the next one (already loaded) starts
- * now; or, receiving, the pulse engine's capture (R4b.7). */
+ * now; or, receiving, the pulse engine's capture (R4b.7).  Also the RFID
+ * stream's DMA vector (R9.0.5): one handler, one slot. */
   int update;
+
+  if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
 
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();

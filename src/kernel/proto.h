@@ -310,6 +310,7 @@ _PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);
 _PROTOTYPE( void flipdev_led_tick, (void)				);
+_PROTOTYPE( void flipdev_xit, (int proc_nr)				);
 _PROTOTYPE( void flipdev_cons_act, (void)				);
 _PROTOTYPE( void flipdev_pulse_poll, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);

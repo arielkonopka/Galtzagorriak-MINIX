@@ -3103,8 +3103,8 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 {
 	/* R9.0.4: the field: 125 kHz/50 %, PSK 62.5 kHz/25 % (stock
 	 * furi_hal_rfid_tim_read_start(62500, 0.25)), 134.2 kHz/50 % */
-	uint32_t t0, hz = carrier == 1 ? 62500u : carrier == 2 ? 134200u
-								: 125000u;
+	uint32_t t0, hz = (carrier & 3) == 1 ? 62500u
+				: (carrier & 3) == 2 ? 134200u : 125000u;
 	uint32_t period = (SystemCoreClock + hz / 2) / hz;
 
 	if (n == 0) return -1;
@@ -3123,7 +3123,7 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;
 	TIM1->ARR = period - 1;
-	TIM1->CCR1 = carrier == 1 ? period / 4 : period / 2;
+	TIM1->CCR1 = (carrier & 3) == 1 ? period / 4 : period / 2;
 	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 	TIM1->CCMR2 = 0;
 	TIM1->CCER = TIM_CCER_CC1NE;
@@ -3148,8 +3148,11 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
 	DMA1_Channel4->CMAR = dst;
 	DMA1_Channel4->CNDTR = n;
+	DMA1->IFCR = DMA_IFCR_CGIF4;
 	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
-							| DMA_CCR_EN;
+		| (carrier & HAL_RFID_STREAM ? DMA_CCR_CIRC | DMA_CCR_HTIE
+				| DMA_CCR_TCIE : 0)		/* R9.0.5 */
+		| DMA_CCR_EN;
 	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
 	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
 	TIM2->ARR = 0xFFFFFFFF;
@@ -3161,8 +3164,27 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM2->EGR = TIM_EGR_UG;
 	TIM2->SR = 0;
 	TIM2->DIER = TIM_DIER_CC4DE;
+	t0 = (COMP1->CSR & COMP_CSR_VALUE) != 0;	/* the level the first
+						 * captured edge leaves */
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
-	return 0;
+	return (int) t0;
+}
+
+/* R9.0.5: the stream's DMA interrupts (the half and the end of the ring):
+ * which halves have been filled since the last call (bit 0 the first, bit 1
+ * the second), acked. */
+int hal_rfid_stream_irq(void)
+{
+	return DMA1_Channel4_IRQn;
+}
+
+unsigned hal_rfid_stream_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF4 ? 1u : 0) | (isr & DMA_ISR_TCIF4 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF4 | DMA_IFCR_CTCIF4 | DMA_IFCR_CGIF4;
+	return r;
 }
 
 void hal_rfid_stop(void)

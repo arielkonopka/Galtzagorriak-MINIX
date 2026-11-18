@@ -530,6 +530,9 @@ message *m_ptr;			/* pointer to request message */
   rp->child_stime += rc->sys_time + rc->child_stime;
   unlock();
   rc->p_alarm = 0;		/* turn off alarm timer */
+#if (CHIP == ARM_CM)
+  flipdev_xit(proc_nr);		/* DMA and patterns it owned stop (#214) */
+#endif
   if (rc->p_flags == 0) lock_unready(rc);
 
 #if (SHADOWING == 1)

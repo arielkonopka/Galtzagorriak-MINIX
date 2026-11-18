@@ -144,6 +144,12 @@ Reading and emulating the FSK and PSK ones waits for
 more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
 already there), and emulation longer than 512 segments (their frames are 540 to 3534).
 
+For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
+edges go round and round into a ring in the program's memory, `read` says which half is new, and
+falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
+tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
+a quick check that nothing is lost.
+
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
 
