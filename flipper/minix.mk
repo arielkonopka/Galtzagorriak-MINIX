@@ -706,7 +706,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest
+	   swaptime swaptime64 regtest hidfake
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above

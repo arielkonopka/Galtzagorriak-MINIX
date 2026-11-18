@@ -94,12 +94,15 @@ static int stop(void)
 	return 0;
 }
 
-/* The FIFO -k writes into, opened for reading and writing (so poll()
- * sees no hang-up while no -k has it open).  It must be ours. */
+/* The FIFO -k writes into: its read end, and a write end kept open so
+ * that poll() sees no hang-up while no -k has it open (two descriptors:
+ * one opened O_RDWR would share its file position with the writers, as
+ * MINIX FIFOs share the filp of the same direction, and never be
+ * readable).  It must be ours. */
 static int own_fifo(void)
 {
 	struct stat sb;
-	int fd;
+	int fd, w;
 
 	fd = open(FIFO, O_WRONLY | O_NONBLOCK);
 	if (fd >= 0) {			/* somebody reads it */
@@ -111,7 +114,7 @@ static int own_fifo(void)
 		say("cannot make ", FIFO);
 		return -1;
 	}
-	fd = open(FIFO, O_RDWR | O_NONBLOCK);
+	fd = open(FIFO, O_RDONLY | O_NONBLOCK);
 	if (fd < 0 || fstat(fd, &sb) < 0 || !S_ISFIFO(sb.st_mode)
 	    || sb.st_uid != getuid() || (sb.st_mode & 077) != 0) {
 		say(FIFO " is not jiggle's FIFO (another user's?)",
@@ -119,21 +122,32 @@ static int own_fifo(void)
 		return -1;
 	}
 	(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
+	if ((w = open(FIFO, O_WRONLY | O_NONBLOCK)) < 0) {
+		say("cannot open ", FIFO);
+		return -1;
+	}
+	(void) fcntl(w, F_SETFD, FD_CLOEXEC);
 	return fd;
 }
 
 /* "guimod status jiggle J" (on) or "guimod close jiggle", jiggle's child:
  * the record names jiggle.  Its complaints (no desktop) go nowhere:
- * jiggle works without a desktop. */
+ * jiggle works without a desktop.  execv, not execl: libc's execl keeps
+ * a 1 KB argument array on the stack. */
 static void desk(int on)
 {
+	char *av[5];
 	pid_t pid;
 	int st, fd;
 
 	if ((pid = fork()) == 0) {
 		if ((fd = open("/dev/null", O_WRONLY)) >= 0) (void) dup2(fd, 2);
-		(void) execl(GUIMOD, "guimod", on ? "status" : "close",
-			     "jiggle", on ? "J" : (char *) 0, (char *) 0);
+		av[0] = "guimod";
+		av[1] = on ? "status" : "close";
+		av[2] = "jiggle";
+		av[3] = on ? "J" : (char *) 0;
+		av[4] = (char *) 0;
+		(void) execv(GUIMOD, av);
 		_exit(1);
 	}
 	if (pid > 0) (void) waitpid(pid, &st, 0);
