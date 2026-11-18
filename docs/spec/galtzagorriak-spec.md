@@ -3851,8 +3851,8 @@ The apps never touch USB registers; they write reports to device files.
     line, `hid< kbd 02 00 0b 00 00 00 00 00`, and `HIDIOCSTATE` says "configured". nattest and
     M2 check typed text through these lines. Kernel RAM for it ≤ 32 B.
 - **R11.3.2 `libhid`** (static, host-testable): ASCII/UTF-8 → usage + modifiers through a layout,
-  report builders, key-up after each key. Layouts are the stock `.kl` files (256 × 2 B), read
-  from `/usr/share/hid/layouts/` or `/ext/badusb/assets/layouts/` into a 512 B stack buffer
+  report builders, key-up after each key. Layouts are the stock `.kl` files (128 ASCII entries × 2 B = 256 B: usage + modifier << 8), read
+  from `/usr/share/hid/layouts/` or `/ext/badusb/assets/layouts/` into a 256 B stack buffer
   when a script or the keyboard page starts. US is `const` in flash.
 - **R11.3.3 `badusb` command:** the stock Bad USB script engine (DuckyScript 1.0 and the stock
   extensions: `STRING`, `STRINGLN`, `DELAY`, `DEFAULT_DELAY`, `REPEAT`, `HOLD`/`RELEASE`, `ALTCHAR`,
@@ -3899,7 +3899,7 @@ The apps never touch USB registers; they write reports to device files.
 **Security.** These apps type into another computer, which is their purpose. Rules: only group
 `usb` can open the HID files; Bad USB always asks before running; the shell over USB CDC (K4) is
 a separate item; the reports are built by `libhid` from bounded inputs (layout file checked to be
-exactly 512 B, script lines cut at 256 B, `REPEAT` bounded); a fuzz test feeds random scripts to
+exactly 256 B, script lines cut at 256 B, `REPEAT` bounded); a fuzz test feeds random scripts to
 `badusb -n` on the host.
 
 **Acceptance.**
@@ -3919,7 +3919,7 @@ exactly 512 B, script lines cut at 256 B, `REPEAT` bounded); a fuzz test feeds r
 script ≤ 100 ms; L1 holds while a script types 10,000 characters.
 
 **RAM.** Each window app ≤ 4.5 KB open (K.8 rule, ACK8.3 method); `badusb` ≤ 3 KB while running
-(512 B layout on its stack, one 256 B line); `jiggle` ≤ 1 KB; kernel: R10.1 budget (≤ +150 B),
+(256 B layout on its stack, one 256 B line); `jiggle` ≤ 1 KB; kernel: R10.1 budget (≤ +150 B),
 QEMU backend ≤ 32 B. **Flash writes:** 0 at run time (settings on the card, only on change).
 Flash: `libhid` + engine ≈ 8 KB installed, apps ≈ 4 KB each.
 
