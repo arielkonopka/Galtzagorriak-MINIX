@@ -12,7 +12,8 @@ grep '^remind:' /etc/passwd >/dev/null || {
 sed -e 's|^Remind:root:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
     -e 's|^Remind:root:@bell:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
     -e 's|^Kanpaia:root:@bell:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
-    /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+    /etc/apps > /etc/apps.new && sync &&
+	mv /etc/apps.new /etc/apps
 grep ':=/usr/bin/remind$' /etc/apps >/dev/null || {
 	echo 'Kanpaia:remind:@bell:=/usr/bin/remind' >> /etc/apps
 	echo "remind: the launcher now has Kanpaia"

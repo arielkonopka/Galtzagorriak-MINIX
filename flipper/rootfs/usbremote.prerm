@@ -2,15 +2,28 @@
 # redirections only (see the postinst: no subshell, no grep).  The user
 # usbremote stays (pkg install usbrem brings the line back); a jiggle it
 # started goes on until jiggle -k.
+#
+# /etc/apps is never rewritten in place (#282): a power cut while it was
+# truncated left the launcher with no apps.  The new list goes to
+# /etc/apps.new, sync puts it on the card, and mv renames it over
+# /etc/apps (rename(2): one directory entry, so after a cut the card has
+# the old list or the new one).  mv and sync are small programs, started
+# with pkg in memory like echo; sh retries one that finds no room (#271).
+# read keeps a "\" in a label: this sh's read has no escapes (it is
+# always "read -r", and knows no -r option: "read -r l" would set a
+# variable named -r and lose the line); echo prints its argument as is.
+test -f /etc/apps || exit 0	# no own copy: the launcher uses /rom's
 exec 3<&0 4>&1 </etc/apps >/etc/apps.new
+ok=yes
 while read l
 do
-	case "$l" in *:=/usr/bin/usbremote) ;; *) echo "$l" ;; esac
-done
-exec </etc/apps.new >/etc/apps
-while read l
-do
-	echo "$l"
+	case "$l" in *:=/usr/bin/usbremote) ;; *) echo "$l" || ok=no ;; esac
 done
 exec <&3 >&4 3<&- 4>&-
-rm -f /etc/apps.new
+if test $ok = yes && sync && mv /etc/apps.new /etc/apps
+then :
+else
+	rm -f /etc/apps.new
+	echo "usbrem: could not rewrite /etc/apps; its line stays (edit it by hand)" >&2
+	exit 1
+fi

@@ -45,6 +45,14 @@ something is still running. Give long commands `timeout: 600000` (10 min). Split
 anything longer, e.g. `tools/pkgload.py` or powercut in batches, and commit
 between the batches.
 
+**Push after every commit; the token lasts about an hour.** The job's GitHub
+token expires roughly 60 minutes after the run starts. After that, `git push`
+and progress-comment updates fail with "Authentication failed" / "Bad
+credentials", and any unpushed commit is lost when the job ends (#282,
+run 44375225261). So `git push` right after each commit. If the plan needs
+more than about 50 minutes, push what is done, write the open steps in your
+final message, and stop: the dispatcher resumes it with "@claude continue".
+
 ## Check your work (all in this runner; the toolchain is installed)
 ```
 cd flipper
