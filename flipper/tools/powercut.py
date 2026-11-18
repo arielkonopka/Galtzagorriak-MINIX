@@ -55,6 +55,15 @@ FRAME_ROWS = 32
 FRAME_CELLS = (b" ", "\u2580".encode(), "\u2584".encode(), "\u2588".encode())
 
 
+def clean(s):
+	"""What a program printed, without "\r" and empty lines.  feed()
+	may leave the leading "\r\n" of a dropped LCD frame in the output
+	(an empty line, #281 CI: cut 4 mode 0 printed "...0000006\n\n");
+	no checked program prints an empty line, so dropping them is
+	safe."""
+	return re.sub(rb"\n\n+", b"\n", s.replace(b"\r", b"")).lstrip(b"\n")
+
+
 def frame_end(buf):
 	"""buf starts with FRAME_HEAD.  The end of the whole LCD frame at its
 	start, 0 if buf holds only the start of one so far, -1 if it is not
@@ -188,7 +197,7 @@ class Run:
 		("ech# o"), which the old match took for no output."""
 		self.send("echo @@S''TART@@; %s; echo @@E''ND@@" % line)
 		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
-		return m.group(1).replace(b"\r", b"") if m else None
+		return clean(m.group(1)) if m else None
 
 	def late(self, secs=60):
 		"""After output() gave None: does it come later?  For the
@@ -198,7 +207,7 @@ class Run:
 		m = self.wait(rb"@@START@@\r?\n(.*?)@@END@@", secs)
 		if m is None:
 			return "nothing %d s later either" % secs
-		return "%r %d s later" % (m.group(1).replace(b"\r", b""),
+		return "%r %d s later" % (clean(m.group(1)),
 					  time.time() - t)
 
 	def set_root_password(self, pw=PASSWORD):
@@ -357,6 +366,8 @@ def reference():
 
 def selftest():
 	"""Offline test of Run.feed() (no QEMU); raises AssertionError."""
+	assert clean(b"0000006\r\n\r\n") == b"0000006\n"
+	assert clean(b"\r\na\r\n\r\nb\r\n") == b"a\nb\n"
 	def run():
 		r = Run.__new__(Run)
 		r.out, r.pend, r.done, r.frames = b"", b"", 0, 0
