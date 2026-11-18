@@ -610,7 +610,7 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello alarm timed alert
+FURIPROGS := furihello timed alert
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
@@ -621,9 +621,9 @@ OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
-# The native app alarm (spec 7b.2, F.4): libfuri GUI, libapp timers;
-# package alarm (/usr/bin, own user).
-NATPROGS := alarm
+# The native apps (spec 7b.1, 7b.2) are window apps now (WINAPPS below);
+# the nat rules stay for native apps that still use libfuri.
+NATPROGS :=
 NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
 $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -632,9 +632,6 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
 # chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
 # (Canvas 1.1 KB, views, the lists) and MM's 1.5 KB safety gap above it.
-# nattest (3 runs, 12 KB): never used alarm 3.2-3.4 KB; what is left
-# keeps at least 1 KB for the heap to grow (issue #201).
-CHMEM_alarm  := 11776	# 7b.2
 # Window apps with timers (spec K.8, T25a): remind (Kanpaia) describes its
 # windows with libgm and keeps its timers with libapp, both linked
 # statically (--gc-sections), never the shared libfuri: no Canvas, no gui
@@ -644,7 +641,7 @@ CHMEM_alarm  := 11776	# 7b.2
 # literal of its own section costs a GOT word in RAM; in one .data/.bss/
 # .rodata per object they share one (section anchors): remind's GOT 868 ->
 # ~300 B.  Unused rodata then stays in flash, not RAM.
-WINAPPS	:= remind
+WINAPPS	:= remind alarm
 WIN_CFLAGS = $(APP_CFLAGS) -fno-data-sections -fno-merge-constants \
 	-I$(GM_DIR) -Iapps/native
 $(MB)/cmd/win/%.o: apps/%.c $(GM_DIR)/gm.h $(APP_DIR)/include/app.h \
@@ -666,6 +663,13 @@ CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
 			# all stack, ~1.7 KB used (nattest memuse).  No heap:
 			# MM's 1.5 KB gap is checked only by brk() and a caught
 			# signal, and remind never calls brk and catches none.
+# Ordua (alarm, T25b): the same libraries; no malloc (alarms are read by
+# name, no opendir()), no stdio, no signal handler (libgm ignores SIGPIPE),
+# so no MM gap either: the stack, where timer_add() keeps 2 x 512 B while
+# it saves (nattest memuse).
+OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(WIN_LIB)
+CHMEM_alarm  := 2560	# K.8 (ACK8.3: 4352 B open, <= 4.5 KB): 1008 B
+			# never used (nattest memuse, after a Save)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -729,7 +733,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar) $(PKGDIR)/remind_1.1.tar
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -758,12 +762,13 @@ $(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   --timers --notify reminder --flash --window --background exit \
 	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
 	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
-$(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+# Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
+$(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.0 -d timed -o $(PKGDIR) \
-	   --timers --notify alarm --deskmode --flash \
-	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
-	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
+	python3 -I tools/mkpkg.py -n alarm -v 1.1 -d timed -o $(PKGDIR) \
+	   --timers --notify alarm --flash --window --background exit \
+	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
+	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -791,7 +796,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.15
+BASE_VER := 4.16
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
