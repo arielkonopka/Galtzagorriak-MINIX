@@ -1,6 +1,7 @@
 # postinst of the stest package (spec 7b.3): the launcher entry (root:
 # the board module reads and writes /dev/hd0's scratch sector) and the log.
-sed -e 's|^Self test:root:/usr/bin/selftest$|Self test:root:@tools:/usr/bin/selftest|' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+sed -e 's|^Self test:root:/usr/bin/selftest$|Self test:root:@tools:/usr/bin/selftest|' /etc/apps > /etc/apps.new &&
+	sync && mv /etc/apps.new /etc/apps
 grep '^Self test:' /etc/apps >/dev/null || {
 	echo 'Self test:root:@tools:/usr/bin/selftest' >> /etc/apps
 	echo "selftest: the launcher now has Self test"

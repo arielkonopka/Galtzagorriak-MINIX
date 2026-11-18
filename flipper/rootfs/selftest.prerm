@@ -1,2 +1,3 @@
 # prerm of the stest package: take the launcher entry out (the log stays).
-grep -v '^Self test:' /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+grep -v '^Self test:' /etc/apps > /etc/apps.new && sync &&
+	mv /etc/apps.new /etc/apps
