@@ -1,6 +1,7 @@
-/* settimetest - settings time and about (spec K.7, T24b) on the PC: the
- * zone table and /etc/TZ (src/commands/settings/zones.c), the About rows'
- * text (afmt.c).
+/* settimetest - settings time and about (spec K.7, T24b, T24d) on the PC:
+ * the zone table, /etc/TZ and the local time of a rule without the libc
+ * (src/commands/settings/zones.c), the About rows' text (afmt.c), a
+ * group's file (conf.c, with the Display and Sound rows).
  *
  * Every rule of the table must be one the ACK libc parses (alphabetic
  * names of 3+ letters, hours below 24); the host's libc then checks a few
@@ -13,6 +14,18 @@
 #include <time.h>
 #include "../../../src/commands/settings/zones.h"
 #include "../../../src/commands/settings/afmt.h"
+#include "../../../src/commands/settings/sgroup.h"
+
+/* Time and About for groups.c: only their rows matter here. */
+const struct srow time_rows[] = {
+	{ "Date", S_DATE, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Time", S_TIME, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Zone", S_ITEM, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Clock", S_ENUM, 0, 0, 1, 1, "", "24 h|12 h" },
+};
+const struct srow about_rows[8];
+int time_fn(int op, int row, void *buf) { (void) op; (void) row; (void) buf; return 0; }
+int about_fn(int op, int row, void *buf) { (void) op; (void) row; (void) buf; return 0; }
 
 static int fails, checks;
 
@@ -180,6 +193,81 @@ int main(void)
 		&& tz_mdays(2100, 2) == 28 && tz_mdays(2000, 2) == 29
 		&& tz_mdays(2026, 4) == 30 && tz_mdays(2026, 12) == 31
 		&& tz_mdays(2026, 13) == 0, "days in a month");
+
+	/* local time without the libc: every zone, 2024-2031, against the
+	 * host's libc; the way back (tz_utc) outside the repeated hour */
+	{
+		long t, o, bad = 0, back = 0;
+		int y, m, d;
+
+		for (i = 0; i < n; i++)
+			for (t = 1704067200L; t < 1924992000L; t += 3600L * 5 + 37) {
+				o = offset(tz_rule(i), (time_t) t) * 60;
+				if (tz_off(tz_rule(i), t) != o) {
+					if (bad++ < 5)
+						printf("  %s at %ld: %ld, libc %ld\n",
+							tz_rule(i), t,
+							tz_off(tz_rule(i), t), o);
+				}
+				if (tz_utc(tz_rule(i), t + o) != t	/* the
+					 * repeated hour can be either */
+				    && offset(tz_rule(i), (time_t) t - 3600) * 60 == o
+				    && offset(tz_rule(i), (time_t) t + 3600) * 60 == o)
+					back++;
+			}
+		check(bad == 0, "tz_off: every zone's offset as the libc's");
+		check(back == 0, "tz_utc: local time back to UTC");
+		check(tz_off("CET-1CEST", 1784116800L) == 7200
+			&& tz_off("CET-1CEST", 1768478400L) == 3600,
+			"a DST name without dates: the default rule");
+		check(tz_off("<+03>-3", 0L) == 10800 && tz_off("UTC0", 5L) == 0
+			&& tz_off("", 5L) == 0, "<+03>, UTC, empty");
+		check(tz_off("EST5EDT,J60/2,J300/2", 1784116800L) == -4 * 3600
+			&& tz_off("EST5EDT,59/2,299/2", 1768478400L) == -5 * 3600,
+			"Jn and n change dates");
+		for (ok = 1, t = -800; t < 60000; t++) {
+			tz_date(t, &y, &m, &d);
+			if (tz_days(y, m, d) != t || d < 1 || d > tz_mdays(y, m))
+				ok = 0;
+		}
+		check(ok && tz_days(1970, 1, 1) == 0 && tz_days(2026, 11, 18) == 20775,
+			"tz_days / tz_date both ways");
+	}
+
+	/* a group's file: Display (Light is never saved), Time (Clock) */
+	{
+		char f[200];
+
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		strcpy(f, "Brightness: 60\nTimeout: 1 min\r\nLight: on\n"
+			"junk\nBrightness: 7\nTimeout: 3 min\n");
+		conf_parse(sg_find("display"), f);
+		check(sg_val[0] == 60 && sg_val[1] == 4 && sg_val[2] == -1,
+			"conf: numbers, options, out of range and NOSAVE ignored");
+		sg_val[0] = 100; sg_val[1] = 7; sg_val[2] = 2;
+		check(conf_format(sg_find("display"), f, sizeof f) > 0
+			&& strcmp(f, "Brightness: 100\nTimeout: never\n") == 0,
+			"conf: format, without the forced light");
+		check(conf_format(sg_find("display"), f, 10) < 0,
+			"conf: format, too small a buffer");
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		strcpy(f, "Clock: 12 h\nDate: 2026-01-01\n");
+		conf_parse(sg_find("time"), f);
+		check(sg_val[3] == 1 && sg_val[0] == -1, "conf: Clock, Date not kept");
+		strcpy(f, "Volume: 30x\nVolume: -10\nVolume:\n");
+		sg_val[0] = -1;
+		conf_parse(sg_find("sound"), f);
+		check(sg_val[0] == -1, "conf: malformed numbers ignored");
+		check(sg_find("about") == 3 && sg_find("led") < 0, "groups by name");
+		{
+			int len;
+			const char *o = sg_opt("a|bb|c", 1, &len);
+
+			check(o != NULL && len == 2 && strncmp(o, "bb", 2) == 0
+				&& sg_opt("a|bb|c", 3, &len) == NULL,
+				"sg_opt: option k, none past the end");
+		}
+	}
 
 	/* About */
 	check(af_field("Version: 4.07\n", "Version", v, sizeof v)

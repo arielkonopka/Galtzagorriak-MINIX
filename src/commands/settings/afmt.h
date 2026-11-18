@@ -15,6 +15,9 @@ void af_ram(char *buf, long total, long hole);
  * in every process). */
 void af_lib(char *buf, unsigned long size, unsigned long area);
 
+/* v in decimal at p, '\0'-ended: the end. */
+char *af_dec(char *p, unsigned long v);
+
 /* n bytes as upper-case hex. */
 void af_hex(char *buf, const unsigned char *b, int n);
 

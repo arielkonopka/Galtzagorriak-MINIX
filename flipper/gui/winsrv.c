@@ -167,6 +167,14 @@ static void submit(struct ses *s, struct wr_win *w)
 	wr_commit(w);
 }
 
+/* A LIVE window (settings, K.7): every change goes to the app at once,
+ * so it can apply it (the backlight, the volume); a time or date row when
+ * its field edit ends.  The app does not answer, so no busy mark. */
+static void live(struct ses *s)
+{
+	if (s->cur >= 0 && wins[s->cur].live) submit(s, &wins[s->cur]);
+}
+
 /*===========================================================================*
  *				Ending					     *
  *===========================================================================*/
@@ -566,6 +574,7 @@ static char *back(struct ses *s)
 
 	if (s->edit) {
 		s->edit = 0;
+		live(s);
 		return NULL;
 	}
 	if (s->cur < 0 || s->depth <= 1) {
@@ -620,8 +629,10 @@ static char *key(struct ses *s, int k)
 			wr_field(w, w->sel, s->edit - 1, -dir);
 		else if (k == KEY_LEFT || k == KEY_RIGHT)
 			s->edit = (char) ((s->edit - 1 + dir + nf) % nf + 1);
-		else if (k == KEY_OK)
+		else if (k == KEY_OK) {
 			s->edit = 0;
+			live(s);
+		}
 		return NULL;
 	}
 	switch (k) {
@@ -629,7 +640,7 @@ static char *key(struct ses *s, int k)
 		move(s, w, dir);
 		break;
 	case KEY_LEFT: case KEY_RIGHT:
-		wr_change(w, w->sel, dir);
+		if (wr_change(w, w->sel, dir) == 0) live(s);
 		break;
 	case KEY_OK:
 		switch (r->kind) {
@@ -639,7 +650,7 @@ static char *key(struct ses *s, int k)
 			expect(s);
 			break;
 		case RK_INT: case RK_ENUM: case RK_BOOL:
-			wr_change(w, w->sel, 1);
+			if (wr_change(w, w->sel, 1) == 0) live(s);
 			break;
 		case RK_INPUT:
 			kb_open(s, w);

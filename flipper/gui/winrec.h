@@ -66,6 +66,7 @@ struct wr_win {
 	unsigned char sel, top;		/* the desktop's cursor */
 	unsigned char bad;		/* overflow: dropped at show */
 	unsigned char st;		/* WS_* */
+	unsigned char live;		/* LIVE: submit after every change */
 	struct wr_row row[WR_ROWS];
 	char pool[WR_POOL];
 };
