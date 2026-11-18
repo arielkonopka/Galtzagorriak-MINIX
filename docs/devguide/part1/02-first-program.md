@@ -82,6 +82,11 @@ What happens on the way, in case something breaks:
 2. It links against the shared libc in flash (its stubs, `shlibc/stubs.o`, plus the few
    members kept static, `libc-static.a`) with `ld/user-shlibc.ld`, keeping relocations
    (`-Wl,-q`). Only the stubs of the functions you call end up in your text, 12 bytes each.
+   The shared libc costs every process its 608-byte data area; a tiny resident program that
+   must stay near 1 KB of RAM (`jiggle`, spec R11.3.6) goes into `STATICPROGS` instead and
+   links the few libc members it calls statically (`libc-pic.a`, `ld/user-pic.ld`): `jiggle`
+   has 188 B of data and bss that way. With so small a stack, call `execv()` with your own
+   argument array, not `execl()`: libc's `execl()` keeps a 1 KB array on the stack.
 3. `tools/elf2mnx.py` turns the ELF into a MINIX a.out with separate text and data, a
    relocation table, the `chmem` reserve, the ABI number and the id of the libc build. The
    result is `build/flipper/minix/bin/tally`; it runs only with the libc of the same build

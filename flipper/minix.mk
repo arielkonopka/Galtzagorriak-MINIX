@@ -302,7 +302,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod
+	    swapon gmodem guimod jiggle
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -385,6 +385,8 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
+			# stack: argv, environment and calls (nattest memuse)
 
 SH_SRC	:= sh1.c sh2.c sh3.c sh4.c sh5.c sh6.c
 MINED_SRC := mined1.c mined2.c
@@ -430,6 +432,25 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 		 $(MB)/cmd/gui/desktop.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
+# Programs linked statically against libc-pic, never the shared libc:
+# its per-process area (608 B of GOT and data) alone would break their
+# RAM budget.  Only for tiny resident programs that call little of libc.
+STATICPROGS := jiggle
+define static_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso.o $(MB)/libc-pic.a \
+		ld/user-pic.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -Tld/user-pic.ld -Wl,-Map=$$@.map \
+	   $(MB)/user/crtso.o $(call objs_of,$(1)) $(MB)/libc-pic.a -lgcc -o $$@
+endef
+# jiggle (spec R11.3.6, T28e): a <= 1 KB process.  Static (above): data
+# 48 B + bss 140 B (libc's atexit table, errno); one .data/.rodata per
+# object (no -fdata-sections, -fno-merge-constants): its strings share
+# GOT words.  No malloc, no stdio, no signal handler: no MM gap.
+$(MB)/cmd/port/jiggle.o: cmds/jiggle.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
+	   -c $< -o $@
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -689,6 +710,30 @@ OBJS_usbremote = $(MB)/cmd/win/usbremote/usbremote.o \
 $(MB)/cmd/win/usbremote/usbremote.o: $(HID_DIR)/libhid.h
 CHMEM_usbremote := 2048	# K.8 / R11.3.5: 2816 B open (nattest, <= 4.5 KB);
 			# 968 B never used (memuse, after typing, Media, pad)
+
+# Bad USB (spec R11.3.3, R11.3.4, T28c): the badusb command (the script
+# engine ducky.c, libhid) and the Bad USB window app (libgm), both built
+# like the window apps (WIN_CFLAGS: one GOT word per object's sections),
+# with their own copy of libhid in those flags.  Package badusb.
+BU_DIR	:= apps/badusb
+BUPROGS	:= badusb
+WINAPPS	+= badusb-gui
+$(MB)/cmd/bu/%.o: $(BU_DIR)/%.c $(BU_DIR)/ducky.h $(HID_DIR)/libhid.h \
+		$(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -I$(HID_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/bu/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_badusb = $(MB)/cmd/bu/badusb.o $(MB)/cmd/bu/ducky.o $(MB)/cmd/bu/hid.o
+CHMEM_badusb := 2048	# R11.3.3 (<= 3 KB running): the layout (256 B)
+			# and the line (257 B) on the stack, no heap, no
+			# handler (the stop signals are blocked and looked
+			# at), so no MM gap (nattest memuse)
+OBJS_badusb-gui = $(MB)/cmd/bu/badusbgui.o $(MB)/cmd/win/lib/gm.o \
+	$(MB)/cmd/bu/hid.o
+CHMEM_badusb-gui := 2304	# K.8 (<= 4.5 KB open): no heap, no
+			# handler, so no MM gap (nattest memuse)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -696,7 +741,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest
+	   swaptime swaptime64 regtest hidfake
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
@@ -742,8 +787,9 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
+$(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -753,6 +799,7 @@ PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
+	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
@@ -799,6 +846,22 @@ $(PKGDIR)/usbrem_1.0.tar: $(MB)/bin/usbremote tools/mkpkg.py \
 	   --postinst rootfs/usbremote.postinst --prerm rootfs/usbremote.prerm \
 	   -D "Teklatua: USB keyboard, numpad, media keys, mouse (window app)" \
 	   /usr/bin/usbremote=$<
+
+# Bad USB (spec R11.3.3, R11.3.4): badusb, the window app, the example
+# scripts in /ext/badusb (/home/flipper/badusb: the package's files, an
+# upgrade puts them back) and the German layout (libhid has US built in).
+BU_EX	:= $(wildcard $(BU_DIR)/examples/*.txt)
+$(PKGDIR)/badusb_1.0.tar: $(MB)/bin/badusb $(MB)/bin/badusb-gui tools/mkpkg.py \
+		rootfs/badusb.postinst rootfs/badusb.prerm $(BU_EX) \
+		$(HID_DIR)/layouts/de-DE.kl
+	python3 -I tools/mkpkg.py -n badusb -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @usb \
+	   --postinst rootfs/badusb.postinst --prerm rootfs/badusb.prerm \
+	   -D "Bad USB: DuckyScript as a USB keyboard (badusb, window app)" \
+	   /usr/bin/badusb=$(MB)/bin/badusb \
+	   /usr/bin/badusb-gui=$(MB)/bin/badusb-gui \
+	   /usr/share/hid/layouts/de-DE.kl=$(HID_DIR)/layouts/de-DE.kl$(COMMA)644 \
+	   $(foreach e,$(BU_EX),/home/flipper/badusb/$(notdir $(e))=$(e)$(COMMA)644)
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -826,7 +889,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.17
+BASE_VER := 4.20
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -847,7 +910,8 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 		$(if $(filter 1,$(SHLIBC)),$(SHL)/libc.json)
 	@mkdir -p $(dir $@)
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
-	   $(if $(filter $*,$(SECRETPROGS)),--secret) $(ELF2MNX_LIBC) \
+	   $(if $(filter $*,$(SECRETPROGS)),--secret) \
+	   $(if $(filter $*,$(STATICPROGS)),,$(ELF2MNX_LIBC)) \
 	   $(ELF2MNX_FURI)
 $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 

@@ -1,0 +1,13 @@
+REM Bad USB example (Galtzagorriak MINIX): Windows.
+REM Opens Notepad through Run (Win+R) and types a greeting.
+REM Run it only on a computer you own or may use.
+DELAY 1000
+GUI r
+DELAY 500
+STRING notepad
+ENTER
+DELAY 1500
+STRINGLN Kaixo! Galtzagorriak MINIX is typing this on a Flipper Zero.
+STRINGLN Bad USB runs DuckyScript 1.0 with the stock extensions.
+STRING Layouts: en-US is built in, de-DE comes with the package.
+ENTER

@@ -1,6 +1,16 @@
-# prerm of the usbrem package: off the launcher.  The user usbremote
-# stays (pkg install usbrem brings the line back); a jiggle it started
-# goes on until jiggle -k.
-grep -v ':=/usr/bin/usbremote$' /etc/apps > /etc/apps.new &&
-	cp /etc/apps.new /etc/apps
+# prerm of the usbrem package: off the launcher.  sh built-ins and exec
+# redirections only (see the postinst: no subshell, no grep).  The user
+# usbremote stays (pkg install usbrem brings the line back); a jiggle it
+# started goes on until jiggle -k.
+exec 3<&0 4>&1 </etc/apps >/etc/apps.new
+while read l
+do
+	case "$l" in *:=/usr/bin/usbremote) ;; *) echo "$l" ;; esac
+done
+exec </etc/apps.new >/etc/apps
+while read l
+do
+	echo "$l"
+done
+exec <&3 >&4 3<&- 4>&-
 rm -f /etc/apps.new

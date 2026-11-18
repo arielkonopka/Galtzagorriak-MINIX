@@ -217,8 +217,10 @@ and sends it; `gm_busy(1)`/`gm_busy(0)` send `busy`/`idle`. `gm_event` waits for
 in the same buffer each time and splits it into `f` (ended by `NULL`); a `pad` window's keys come
 as `GM_KEY` (`f[1]` the key, `f[2]` `press`/`release`/`repeat`). `gm_wait(ev, ms)` waits at most
 `ms` for an event (1: `gm_event` has one, 0: time is up), for an app that works on a timer while
-its window is open (Teklatua's clicker). The full example is
-`flipper/apps/gmdemo.c`; the `gmdemo` package installs it with `gm.c` and `gm.h` in
+its window is open (Teklatua's clicker). An app that also waits on another file (a child's pipe,
+as Bad USB does) `poll()`s `GM_EVFD` together with it, but asks `gm_pending(buf)` first:
+`gm_event` may already hold the next event in its buffer, and then fd 3 stays quiet. The full
+example is `flipper/apps/gmdemo.c`; the `gmdemo` package installs it with `gm.c` and `gm.h` in
 `/usr/share/examples/gui/`. Build it as `minix.mk` does (`OBJS_gmdemo`, `CHMEM_gmdemo := 2560`).
 
 **A real app: Kanpaia** (`flipper/apps/remind/remind.c`, T25a) adds timers (libapp), paged lists

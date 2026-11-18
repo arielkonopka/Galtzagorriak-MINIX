@@ -20,6 +20,11 @@
  *	case GM_CLOSE: exit(0);
  *	}
  *
+ * An app that also waits for something else (a child's pipe) poll()s
+ * GM_EVFD with it, but first asks gm_pending(buf), buf being gm_event's:
+ * gm_event() may hold the next event there already, and then fd 3 has
+ * nothing more to say.
+ *
  * Records and events: docs/manual (window apps), spec K.8.
  */
 #ifndef GM_H
@@ -63,6 +68,7 @@ void gm_action(const char *key, const char *label);
 int gm_show(void);
 int gm_busy(int busy);
 int gm_event(char *buf, int size, char **f, int nf);
+int gm_pending(const char *buf);
 /* Wait at most ms (< 0: no limit) for an event: 1 when gm_event() has one
  * (or the desktop is gone), 0 when the time is up.  buf as gm_event's. */
 int gm_wait(const char *buf, int ms);

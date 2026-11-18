@@ -1,18 +1,31 @@
 # postinst of the usbrem package (spec R11.3.5, K.8, T28d).  The app's
-# own user (usbremote, group usb: the only group besides root that may
-# open /dev/hidkbd, /dev/hidmouse and /dev/hidcons, R11.3.1) and its line
-# on the launcher.  Teklatua is a window app (Type: window): "=" before
-# the program, and the launcher starts it as the user usbremote with its
-# pipes on fd 3 and 4 and draws its windows itself.
-grep '^usb:' /etc/group >/dev/null || {
-	echo 'usb:*:12:' >> /etc/group
-	echo "usbremote: /etc/group now has usb"
-}
-grep '^usbremote:' /etc/passwd >/dev/null || {
+# own user usbremote (uid 24) in group usb: only that group may open
+# /dev/hidkbd, /dev/hidmouse and /dev/hidcons (R11.3.1; base.postinst
+# makes the group).  Teklatua is a window app: "=" before the program,
+# and the launcher starts it as usbremote with its pipes on fd 3 and 4.
+#
+# Only sh built-ins, no subshells, no grep (#271): pkg is still in memory
+# while this runs, and a larger program or a fork may not fit beside it.
+# The files are read with exec redirections: a redirected loop would run
+# in a forked subshell (its variables lost, and the fork may not fit).
+exec 3<&0 </etc/passwd
+u=no
+while read l
+do
+	case "$l" in usbremote:*) u=yes ;; esac
+done
+exec </etc/apps
+a=no
+while read l
+do
+	case "$l" in *:=/usr/bin/usbremote) a=yes ;; esac
+done
+exec <&3 3<&-
+test $u = yes || {
 	echo 'usbremote:*:24:12:USB remote:/home/flipper:' >> /etc/passwd
 	echo "usbremote: added the user usbremote (uid 24, group usb)"
 }
-grep ':=/usr/bin/usbremote$' /etc/apps >/dev/null || {
+test $a = yes || {
 	echo 'Teklatua:usbremote:@usb:=/usr/bin/usbremote' >> /etc/apps
 	echo "usbremote: the launcher now has Teklatua"
 }

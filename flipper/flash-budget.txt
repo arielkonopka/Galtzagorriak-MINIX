@@ -36,5 +36,10 @@
 # 2026-11-18 (T28a hid_tests + libhid, #264): 10.  m2test's text grew from
 # 31104 to 34492 B, past 32 KB: one more 4 KB page.  Nothing changed in
 # how often the cache writes.
-m2      cache   10
+# 2026-11-18 (#271 pkg_tests: postinst failure and exec EAGAIN under load,
+# on top of T28a): 11.  m2test's text grew from 34492 to 37444 B, past
+# 36 KB: one more 4 KB page.  The test itself sets the cache budget to 0
+# (pkg, tar, sh and sleep run more than twice there): nothing changed in
+# how often the cache writes.
+m2      cache   11
 m2      inst    0

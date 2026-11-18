@@ -356,6 +356,16 @@ int gm_event(char *buf, int size, char **f, int nf)
 	return GM_NONE;
 }
 
+/* Whether gm_event() holds a whole event line in buf (its buffer)
+ * already, so that the next call returns it without reading fd 3.  An
+ * app that poll()s fd 3 together with other files asks this first. */
+int gm_pending(const char *buf)
+{
+	return ev_len - ev_used > 0
+		&& memchr(buf + ev_used, '\n', (size_t) (ev_len - ev_used))
+		   != NULL;
+}
+
 /* An event within ms?  One already read (a whole line after the one
  * returned last), or the pipe readable or closed. */
 int gm_wait(const char *buf, int ms)
@@ -363,9 +373,7 @@ int gm_wait(const char *buf, int ms)
 	struct pollfd p;
 	int r;
 
-	if (ev_len > ev_used
-	    && memchr(buf + ev_used, '\n', (unsigned) (ev_len - ev_used)) != NULL)
-		return 1;
+	if (gm_pending(buf)) return 1;
 	for (;;) {
 		p.fd = GM_EVFD;
 		p.events = POLLIN;
