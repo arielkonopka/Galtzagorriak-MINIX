@@ -297,7 +297,7 @@ int *pforked;
 		int s_talking = talking, s_intr = intr, s_execflg = execflg;
 		struct brkcon *s_brklist = brklist;
 
-		int st;
+		int st, quiet;
 
 		if (canv) {
 			/* Galtzagorriak: what the child takes from the heap
@@ -315,12 +315,17 @@ int *pforked;
 		 * Only without pipes: we wait for the child here.  The
 		 * count is a global: the vfork child runs in this frame and
 		 * may reuse the slot of a local it does not need. */
-		vfagain = 0;
+		vfagain = vfmark = 0;
 		vfquiet = canv && pin == NULL && pout == NULL
-							&& vftries < VFTRIES;
+						&& vftries < VFTRIES && vfok;
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
+				/* set after the child is done: no slot of
+				 * its in the way */
+				quiet = vfquiet;
+				if (i > 0)
+					vfok = vfmark;
 				invfork = 0;
 				talking = s_talking;
 				intr = s_intr;
@@ -347,8 +352,16 @@ int *pforked;
 				sleep(1);
 				goto again;
 			}
+			/* A plain fork after all, and its child was quiet:
+			 * if it could not start, say so for it. */
+			if (quiet && !vfok && st == 126) {
+				prs(wp[0]);
+				warn(": cannot start (no memory?)");
+			}
 			return(setstatus(st));
 		}
+		if (canv)
+			vfmark = 1;	/* our parent's memory: a real vfork */
 		vforked = canv;
 		invfork = canv;
 		if (talking) {
@@ -451,6 +464,7 @@ parent()
 {
 	register int i;
 
+	vfok = 0;		/* a shadow group, maybe (#271, sh.h) */
 	i = fork();
 	if (i != 0) {
 		if (i == -1)

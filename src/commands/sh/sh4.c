@@ -361,6 +361,7 @@ int quoted;
 		}
 	if (openpipe(pf) < 0)
 		return(0);
+	vfok = 0;		/* a shadow group, maybe (#271, sh.h) */
 	if ((i = fork()) == -1) {
 		closepipe(pf);
 		err("try again");

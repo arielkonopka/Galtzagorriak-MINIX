@@ -64,8 +64,9 @@ def boot(i, load):
 				m = re.search(rb"pkg: [^\r\n]*", said)
 				if m is None:
 					fails += 1
-					notes.append("%s: exit %d without a reason"
-						     % (p, st))
+					notes.append("%s: exit %d without a "
+						     "reason (said %r)" % (p, st,
+						     said[-200:]))
 				else:
 					refused += 1
 					notes.append("%s: exit %d: %s" % (p, st,
