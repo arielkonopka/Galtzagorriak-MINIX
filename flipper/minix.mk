@@ -72,6 +72,14 @@ $(MB)/libc.a: $(LIBC_OBJ)
 PICFLAGS := -fpic -msingle-pic-base -mpic-register=r9 \
 	    -mno-pic-data-is-text-relative
 UCFLAGS	:= $(LIBCFLAGS) $(PICFLAGS)
+# R5.7: code that uses the FPU (float in hardware; double stays in software,
+# the FPU is single precision).  softfp keeps the soft-float calling
+# convention, so it links with the one libc.  The kernel saves such a
+# process's FP registers on its own stack (+136 B of stack, no other RAM).
+# Such a program must not use vfork: the child would run over the
+# parent's saved S16-S31.  Link it with $(UFPLDFLAGS) (vfork becomes fork).
+UFPFLAGS := -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+UFPLDFLAGS := -Wl,--defsym=vfork=fork -Wl,--defsym=_vfork=fork
 LIBCP_OBJ := $(LIBC_OBJ:$(MB)/libc/%=$(MB)/libcp/%)
 $(MB)/libcp/%.o: $(MROOT)/src/lib/%.c
 	@mkdir -p $(dir $@)
@@ -315,7 +323,7 @@ UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello gmdemo
+UPROGS	+= furitest furihello gmdemo fptest
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -366,6 +374,7 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# MM gap: no malloc, no stdio, no signal handler);
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
+CHMEM_fptest := 8192
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
@@ -385,6 +394,9 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
+			# pulse buffer and 3 encoder states for the period
+			# search; 6 KB aborted with "out of memory" (twoflip)
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -412,6 +424,17 @@ $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+# fptest (R5.7): the FPU checks; m2fpu.c and fpregs.S use the FPU.
+OBJS_fptest = $(MB)/cmd/fptest.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
+$(MB)/cmd/fptest.o: m2/fptest.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/m2fpu.o: m2/m2fpu.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) $(UFPFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/fpregs.o: m2/fpregs.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
@@ -779,10 +802,6 @@ $(MB)/cmd/selftest/%.o: apps/selftest/%.c apps/selftest/st.h gui/gui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -Igui -MMD -MP -c $< -o $@
 $(foreach p,$(STPROGS),$(eval OBJS_$(p) = $(MB)/cmd/selftest/$(p).o $(MB)/cmd/selftest/st.o $(MB)/cmd/gui/gui.o))
-CHMEM_rfid := 12288	# R9.0.5: rfid -s mallocs its 4 KB capture ring; R9.0.6:
-			# a long (FSK/PSK) emulation holds the dictionary, the
-			# renderer's strings, a 2 KB run buffer, encoder states
-			# and a 1 KB ring: 8 KB aborted on the device (twoflip)
 CHMEM_selftest := 5120	# opendir() mallocs a 1 KB DIR, and MM keeps 1.5 KB
 			# (SAFETY_BYTES) between heap and stack: 3 KB failed on the device
 CHMEM_board := 3072	# 2 x 512 B buffers (static), stdio
@@ -893,7 +912,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.21
+BASE_VER := 4.28
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

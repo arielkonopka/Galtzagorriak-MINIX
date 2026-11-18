@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sdcut - the SD card cut off without a sync (spec N.1-N.3, T17a), in QEMU.
 
-Usage: sdcut.py [ACN.1|ACN.2|ACN.4|PWR ...]
+Usage: sdcut.py [ACN.1|ACN.2|ACN.4|PWR|APPS ...]
 
 Boots a fresh copy of build/qemu/minix/disk.img (the first boot makes
 /usr and /home, spec /etc/setup) and kills QEMU, which for the card is a
@@ -17,6 +17,13 @@ same card again and looks at what /etc/rc's fsck -p -v prints.
          exits 2, rc restarts at once, the second boot is clean.
   PWR    (ACN.7 without a battery) kill -16 1, INIT's SIGPWR: an orderly
          halt (N.5); the next boot checks nothing.
+  APPS   (#282) killed during pkg remove usbrem (3 times spread over
+         it), and during its prerm run with sh -x, at CUTS of its
+         commands (the cut when the command's trace line comes), with a
+         "while sync" loop beside it, so the card holds what the cache
+         had, as after an unlucky update: after the reboot /etc/apps is
+         the old list or the new one, never empty or cut short.  A
+         label with a "\" in it survives the prerm.
 
 Needs BOARD=qemu built (make minix disk).  Exit status 0: pass.
 """
@@ -210,7 +217,140 @@ def acn4(r):
 	return ok
 
 
-TESTS = {"ACN.1": acn1, "ACN.2": acn2, "ACN.4": acn4, "PWR": pwr}
+CUTS = int(os.environ.get("SDCUT_CUTS", "10"))	# cuts in the prerm
+PAD = 80		# comment lines in /etc/apps: the rewrite spans blocks
+TEK = b"Teklatua:usbremote:@usb:=/usr/bin/usbremote\n"
+SLASH = b"Back\\slash:nobody:@app:/bin/echo\n"
+PRERM = "/usr/var/pkg/info/usbrem.prerm"
+NOMEM = b"no memory to start it"
+
+
+def install(r):
+	"""pkg install usbrem; again after a pause if its postinst found no
+	memory (#271: right after a boot, rc's programs may still run)."""
+	for _ in range(3):
+		if r.sh("pkg install /lib/pkg/usbrem_1.0.tar >/dev/null && sync",
+			120) == 0:
+			return True
+		time.sleep(5)
+	print("  APPS: pkg install usbrem fails")
+	return False
+
+
+def apps_cut(r, n):
+	"""Power cut n of APPS; returns the cut's description, or None when
+	the run could not be set up."""
+	if not install(r):
+		return None
+	mark = len(r.out)
+	if n[0] == "time":		# pkg remove itself, cut after n[1] s
+		r.send("echo @@G''O@@; pkg remove usbrem")
+		if r.wait(rb"@@GO@@", 30) is None:
+			print("  APPS: pkg remove usbrem did not start")
+			return None
+		time.sleep(n[1])
+		where = "%.2f s into pkg remove usbrem" % n[1]
+	else:				# the prerm, cut at its n[1]th command
+		# The sync loop goes on when a sync finds no memory (#271);
+		# its messages go nowhere, so a "no memory" seen below is
+		# sh -x's own.
+		r.send("while :; do sync; done >/dev/null 2>&1 & "
+			"echo @@G''O@@; sh -x %s; echo @@DO''NE@@" % PRERM)
+		if r.wait(rb"@@GO@@", 30) is None:
+			print("  APPS: the prerm did not start")
+			return None
+		done = False
+		for _ in range(n[1]):
+			m = r.wait(rb"\n\+|@@DONE@@", 60)
+			if m is None:
+				break
+			if m.group(0) == b"@@DONE@@":
+				done = True
+				break
+		where = "at the prerm's command %d" % n[1]
+		if NOMEM in r.out[mark:]:	# #271: once more
+			if not done:
+				r.wait(rb"@@DONE@@", 60)
+			# stop the loop first: it would take the memory again
+			r.sh("kill $!", 30)
+			return "again"
+	r.restart()			# the power cut
+	if not r.login():
+		print("  APPS: no login after the cut %s" % where)
+		return None
+	return where
+
+
+def apps(r):
+	"""#282: /etc/apps is the old list or the new one after a power cut
+	in pkg remove usbrem."""
+	if r.sh("echo '%s' >>/etc/apps && sync" % SLASH.decode().strip(),
+		60) != 0:
+		print("  APPS: could not add the label with a backslash")
+		return False
+	for k in range(0, PAD, 20):	# short lines: the UART is slow
+		if r.sh("for i in %s; do echo \"# pad $i\"; done >>/etc/apps"
+			% " ".join(str(i) for i in range(k, min(k + 20, PAD))),
+			60) != 0:
+			print("  APPS: could not pad /etc/apps")
+			return False
+	if not install(r):
+		return False
+	old = r.output("cat /etc/apps")
+	new = (old or b"").replace(TEK, b"")
+	if TEK not in old or SLASH not in old:
+		print("  APPS: /etc/apps after the install: %r" % old)
+		return False
+	# No cut: the prerm's commands with sh -x, and pkg remove's time.
+	mark = len(r.out)
+	if r.sh("sh -x %s 2>&1 | grep -c '^[+]'" % PRERM, 120) != 0:
+		print("  APPS: the prerm fails")
+		return False
+	m = re.search(rb"\n(\d+)\r?\n", r.out[mark:])
+	cmds = int(m.group(1)) if m else 0
+	if r.output("cat /etc/apps") != new:
+		print("  APPS: /etc/apps after the prerm: %r" %
+			r.output("cat /etc/apps"))
+		return False
+	if not install(r):
+		return False
+	t0 = time.time()
+	if r.sh("pkg remove usbrem", 120) != 0 or \
+	   r.output("cat /etc/apps") != new:
+		print("  APPS: pkg remove usbrem: /etc/apps %r" %
+			r.output("cat /etc/apps"))
+		return False
+	t = time.time() - t0
+	print("  APPS: the prerm runs %d commands, pkg remove usbrem %.1f s"
+		% (cmds, t))
+	if cmds < 10:
+		return False
+	cuts = [("time", t * k / 4) for k in range(1, 4)]
+	cuts += [("cmd", k) for k in range(2, cmds, max(1, cmds // CUTS))]
+	cuts.append(("cmd", cmds))		# its last: mv done
+	ok = True
+	for n in cuts:
+		for _ in range(3):
+			where = apps_cut(r, n)
+			if where != "again":
+				break
+		if where == "again":
+			print("  APPS: no memory to start the prerm, 3 times")
+		if where in (None, "again"):
+			return False
+		got = r.output("cat /etc/apps")
+		which = "old" if got == old else "new" if got == new else None
+		inside = r.sh("test -f /etc/apps.new", 30) == 0
+		print("  APPS: cut %s: /etc/apps is %s%s" % (where,
+			which or repr(got),
+			" (/etc/apps.new left)" if inside else ""))
+		if which is None:
+			ok = False
+	return ok
+
+
+TESTS = {"ACN.1": acn1, "ACN.2": acn2, "ACN.4": acn4, "PWR": pwr,
+	 "APPS": apps}
 
 
 def main():

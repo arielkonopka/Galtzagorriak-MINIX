@@ -1,4 +1,6 @@
 # prerm of the gmdemo package: off the launcher.
+# A new list, then mv (rename) over /etc/apps, never a rewrite in place
+# (#282): after a power cut the card has the old list or the new one.
 grep -v ':=/usr/bin/gmdemo$' /etc/apps > /etc/apps.new &&
-	cp /etc/apps.new /etc/apps
+	sync && mv /etc/apps.new /etc/apps
 rm -f /etc/apps.new
