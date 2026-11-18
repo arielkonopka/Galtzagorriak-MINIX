@@ -1,0 +1,6 @@
+# prerm of the usbrem package: off the launcher.  The user usbremote
+# stays (pkg install usbrem brings the line back); a jiggle it started
+# goes on until jiggle -k.
+grep -v ':=/usr/bin/usbremote$' /etc/apps > /etc/apps.new &&
+	cp /etc/apps.new /etc/apps
+rm -f /etc/apps.new

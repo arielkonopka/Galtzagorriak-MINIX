@@ -649,9 +649,9 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 # literal of its own section costs a GOT word in RAM; in one .data/.bss/
 # .rodata per object they share one (section anchors): remind's GOT 868 ->
 # ~300 B.  Unused rodata then stays in flash, not RAM.
-WINAPPS	:= remind alarm
+WINAPPS	:= remind alarm usbremote
 WIN_CFLAGS = $(APP_CFLAGS) -fno-data-sections -fno-merge-constants \
-	-I$(GM_DIR) -Iapps/native
+	-I$(GM_DIR) -Iapps/native -I$(HID_DIR)
 $(MB)/cmd/win/%.o: apps/%.c $(GM_DIR)/gm.h $(APP_DIR)/include/app.h \
 		apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -660,6 +660,9 @@ $(MB)/cmd/win/lib/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/win/lib/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
 $(MB)/cmd/win/lib/nat_core.o: apps/native/nat_core.c apps/native/nat.h
@@ -678,6 +681,14 @@ CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
 OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(WIN_LIB)
 CHMEM_alarm  := 2560	# K.8 (ACK8.3: 4352 B open, <= 4.5 KB): 1008 B
 			# never used (nattest memuse, after a Save)
+# Teklatua (usbremote, T28d, spec R11.3.5): libgm and libhid, no libapp;
+# no malloc, no stdio, no signal handler, so no MM gap (K.8, #251): the
+# stack holds the 256 B layout and the record and event buffers.
+OBJS_usbremote = $(MB)/cmd/win/usbremote/usbremote.o \
+		 $(addprefix $(MB)/cmd/win/lib/,gm.o hid.o)
+$(MB)/cmd/win/usbremote/usbremote.o: $(HID_DIR)/libhid.h
+CHMEM_usbremote := 2048	# K.8 / R11.3.5 (<= 4.5 KB open): see nattest's
+			# memuse line for the stack it used
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -741,7 +752,8 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
+	   $(PKGDIR)/usbrem_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -777,6 +789,16 @@ $(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
+# Teklatua (spec R11.3.5, T28d), package usbrem (a tar name is at most 14
+# characters): a window app as the user usbremote
+# (group usb), ended on Back; jiggle (R11.3.6) is its own command.
+$(PKGDIR)/usbrem_1.0.tar: $(MB)/bin/usbremote tools/mkpkg.py \
+		rootfs/usbremote.postinst rootfs/usbremote.prerm
+	python3 -I tools/mkpkg.py -n usbrem -v 1.0 -o $(PKGDIR) \
+	   --flash --window --background exit -i @usb \
+	   --postinst rootfs/usbremote.postinst --prerm rootfs/usbremote.prerm \
+	   -D "Teklatua: USB keyboard, numpad, media keys, mouse (window app)" \
+	   /usr/bin/usbremote=$<
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).

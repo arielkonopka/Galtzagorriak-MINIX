@@ -1,0 +1,18 @@
+# postinst of the usbrem package (spec R11.3.5, K.8, T28d).  The app's
+# own user (usbremote, group usb: the only group besides root that may
+# open /dev/hidkbd, /dev/hidmouse and /dev/hidcons, R11.3.1) and its line
+# on the launcher.  Teklatua is a window app (Type: window): "=" before
+# the program, and the launcher starts it as the user usbremote with its
+# pipes on fd 3 and 4 and draws its windows itself.
+grep '^usb:' /etc/group >/dev/null || {
+	echo 'usb:*:12:' >> /etc/group
+	echo "usbremote: /etc/group now has usb"
+}
+grep '^usbremote:' /etc/passwd >/dev/null || {
+	echo 'usbremote:*:24:12:USB remote:/home/flipper:' >> /etc/passwd
+	echo "usbremote: added the user usbremote (uid 24, group usb)"
+}
+grep ':=/usr/bin/usbremote$' /etc/apps >/dev/null || {
+	echo 'Teklatua:usbremote:@usb:=/usr/bin/usbremote' >> /etc/apps
+	echo "usbremote: the launcher now has Teklatua"
+}
