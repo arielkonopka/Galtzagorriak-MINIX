@@ -647,7 +647,8 @@ CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
 # so no MM gap either: the stack, where timer_add() keeps 2 x 512 B while
 # it saves (nattest memuse).
 OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(WIN_LIB)
-CHMEM_alarm  := 2560	# K.8 (ACK8.3: <= 4.5 KB open)
+CHMEM_alarm  := 2560	# K.8 (ACK8.3: 4352 B open, <= 4.5 KB): 1008 B
+			# never used (nattest memuse, after a Save)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@

@@ -98,6 +98,43 @@ def ram(r, what, base):
 		base - now, base, now), flush=True)
 
 
+def seen(r, mark, pat, secs=30):
+	"""Whether pat (bytes regex) shows on the console after r.out[mark],
+	waiting up to secs for it (QEMU can be slow to start a program)."""
+	old, r.seen = r.seen, mark
+	m = r.wait(pat, secs)
+	r.seen = max(old, r.seen)
+	return m is not None
+
+
+def alert_up(r, mark, secs=30):
+	"""Wait until an alert started after mark has the screen: its console
+	line, then its first frame.  A key sent before that goes to the
+	launcher instead, and the alert would then stay up for its ring time."""
+	return seen(r, mark, rb"alert: [^\n]*\n.*?\+-{40}", secs)
+
+
+def win_tap(r, key, pat=rb"gui< show", secs=20):
+	"""A tap that makes the app send a window: wait for its records."""
+	mark = len(r.out)
+	tap(r, key)
+	return seen(r, mark, pat, secs)
+
+
+def keys(r, seq):
+	"""Taps in order.  "key@id": the app answers it with the window id,
+	wait for it; "key!": it closes the app, wait for the close event;
+	plain keys the desktop handles by itself."""
+	for k in seq:
+		if "@" in k:
+			k, w = k.split("@")
+			win_tap(r, k, rb"gui< win\t" + w.encode() + rb"\t.*?gui< show")
+		elif k.endswith("!"):
+			win_tap(r, k[:-1], rb"gui> close")
+		else:
+			tap(r, k)
+
+
 def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
@@ -111,27 +148,38 @@ def win_only(r, prog):
 	an /etc/apps of that app alone puts it under the cursor.  GuiLog: on
 	puts the window records (gui<) and events (gui>) on the console.
 	Returns the free RAM with the launcher alone (free -t on)."""
-	r.sh("cp /etc/apps /tmp/apps.bak; cp /etc/launcher.conf /tmp/lc.bak; "
+	r.sh("cp /etc/apps /tmp/apps.bak; rm -f /tmp/lc.bak; "
+	     "test -f /etc/launcher.conf && cp /etc/launcher.conf /tmp/lc.bak; "
 	     "grep ':=/usr/bin/%s$' /tmp/apps.bak > /etc/apps; "
 	     "echo 'GuiLog: on' >> /etc/launcher.conf" % prog, 20)
 	tap(r, "back")		# lights the screen; Back on a page: the list
 	tap(r, "back")
-	tap(r, "ok", 3)		# whichever app the cursor is on
-	tap(r, "back", 3)	# it ends: the launcher reads both files again
+	# whichever app the cursor is on (the Console after boot, Kanpaia
+	# after kanpaia()); Back ends it and the launcher reads both files
+	# again.  Wait until its RAM is free: a full-screen app can take a
+	# few seconds in QEMU, and a key meanwhile would go to it.
+	before = freebytes(r)
+	tap(r, "ok", 3)
+	tap(r, "back", 3)
+	for _ in range(15):
+		if freebytes(r) >= before - 256:
+			break
+		r.sh("sleep 2", 20)
 	r.sh("free -t on", 20)
 	return freebytes(r)
 
 
 def win_restore(r):
 	r.output("free -t off; cp /tmp/apps.bak /etc/apps; "
-		 "cp /tmp/lc.bak /etc/launcher.conf", 20)
+		 "if test -f /tmp/lc.bak; then cp /tmp/lc.bak /etc/launcher.conf; "
+		 "else rm -f /etc/launcher.conf; fi", 20)
 
 
 def kanpaia(r):
 	"""ACK8.1, ACK8.3: Kanpaia through the launcher of /etc/rc."""
 	base = win_only(r, "remind")
 	mark = len(r.out)
-	tap(r, "ok", 3)		# Kanpaia: its main window
+	win_tap(r, "ok", rb"gui< win\tmain\t.*?gui< show")	# Kanpaia
 	now = freebytes(r)
 	print("  RAM: Kanpaia open: %d bytes (free %d -> %d)" % (base - now,
 		base, now), flush=True)
@@ -143,9 +191,8 @@ def kanpaia(r):
 	# main: Up wraps to + New reminder; OK: the form, the cursor on Text;
 	# OK: the keyboard, OK types the key under its cursor ('a'), Up: the
 	# command row, Right x3: Done, OK; Up wraps to Save; OK.
-	for k in ("up", "ok", "ok", "ok", "up", "right", "right", "right",
-		  "ok", "up", "ok"):
-		tap(r, k)
+	keys(r, ("up", "ok@edit", "ok", "ok", "up", "right", "right", "right",
+		 "ok", "up", "ok@main"))
 	r.sh("sleep 2", 20)
 	out = r.output("cat /var/timers/remind-1; ls -l /var/timers/remind-1",
 		20)
@@ -164,8 +211,7 @@ def kanpaia(r):
 	# Save shows main again: Down to Upcoming, OK: the list with
 	# remind-1; OK on it: its form (Delete too); Back, Back, Back: closed
 	mark = len(r.out)
-	for k in ("down", "ok", "ok"):
-		tap(r, k)
+	keys(r, ("down", "ok@next", "ok@edit"))
 	check(re.search(rb"gui< win\tnext\tlist\tUpcoming", r.out[mark:])
 		is not None and re.search(rb"gui< item\tremind-1\tDrink a glass "
 		rb"of watera\t", r.out[mark:]) is not None,
@@ -181,15 +227,13 @@ def kanpaia(r):
 	r.sh("echo '%d remind-1' >> %s; chown remind %s"
 	     % (int(time.time()), LOGF, LOGF), 20)
 	mark = len(r.out)
-	for k in ("back", "back", "down", "down", "ok"):
-		tap(r, k)
+	keys(r, ("back", "back@main", "down", "down", "ok@hist"))
 	check(re.search(rb"gui< win\thist\tlist\tHistory", r.out[mark:])
 		is not None and re.search(rb"gui< item\tremind-1\tDrink a glass "
 		rb"of watera\t", r.out[mark:]) is not None,
 		"Kanpaia: History lists the reminders marked done")
 	if fails: print(r.out[mark:].decode(errors="replace"))
-	for k in ("back", "back"):
-		tap(r, k)
+	keys(r, ("back", "back!"))
 	r.sh("sleep 3", 20)
 	after = freebytes(r)
 	check(after >= base - 256,	# (others may have ended meanwhile)
@@ -204,7 +248,7 @@ def ordua(r):
 	"""ACK8.2, ACK8.3: Ordua through the launcher of /etc/rc."""
 	base = win_only(r, "alarm")
 	mark = len(r.out)
-	tap(r, "ok", 3)				# Ordua: its list
+	win_tap(r, "ok", rb"gui< win\tlist\t.*?gui< show")	# Ordua
 	now = freebytes(r)
 	print("  RAM: Ordua open: %d bytes (free %d -> %d)" % (base - now,
 		base, now), flush=True)
@@ -215,24 +259,23 @@ def ordua(r):
 	check(re.search(rb"gui< win\tlist\tlist\tOrdua", log()) is not None
 	      and b"gui< item\tclock\tDesk clock" in log(),
 	      "ACK8.2: the launcher starts Ordua, its list window")
-	tap(r, "ok")				# Desk clock
+	win_tap(r, "ok", rb"gui< win\tclock\t.*?gui< show")	# Desk clock
 	check(re.search(rb"gui< win\tclock\tclock\t", log()) is not None
 	      and b"gui< line\tNo alarm on" in log(),
 	      "ACK8.2: the desk clock window (no alarm yet)")
 	tap(r, "back")				# the list, kept by the desktop
-	for k in ("down", "ok",			# + New alarm: the form
-		  "ok", "up", "ok",		# Time: 07 -> 08
-		  "down", "down", "ok",		# Days: edit
-		  "right", "right", "right", "right", "right", "up", "ok",
+	keys(r, ("down", "ok@edit",		# + New alarm: the form
+		 "ok", "up", "ok",		# Time: 07 -> 08
+		 "down", "down", "ok",		# Days: edit
+		 "right", "right", "right", "right", "right", "up", "ok",
 						# Saturday on
-		  "down", "down", "down", "ok",	# Ring settings
-		  "right",			# Mode: steady
-		  "down", "down", "left",	# Volume: 90
-		  "down", "down", "down", "right",	# Melody: chime
-		  "down", "left",		# Vibro: off
-		  "back",			# the form again (kept)
-		  "down", "ok"):		# Save: the list
-		tap(r, k)
+		 "down", "down", "down", "ok@ring",	# Ring settings
+		 "right",			# Mode: steady
+		 "down", "down", "left",	# Volume: 90
+		 "down", "down", "down", "right",	# Melody: chime
+		 "down", "left",		# Vibro: off
+		 "back",			# the form again (kept)
+		 "down", "ok@list"))		# Save: the list
 	r.sh("sleep 2", 20)
 	out = log()
 	check(b"gui< win\tedit\tlist\tNew alarm" in out
@@ -256,16 +299,17 @@ def ordua(r):
 	      "steady, no vibro, Volume 90, chime), alarm -n")
 	if fails: print(out)
 	mark2 = len(r.out)
-	tap(r, "ok")				# Desk clock (the list after Save
-						# starts at its first row)
+	win_tap(r, "ok", rb"gui< win\tclock\t.*?gui< show")	# Desk clock
+						# (the list after Save starts
+						# at its first row)
 	out = r.out[mark2:].replace(b"\r", b"")
 	check(re.search(rb"gui< line\tNext (\w\w\w )?08:00", out) is not None
 	      and b"gui< line\tAlarm" in out,
 	      "ACK8.2: the desk clock shows the next alarm")
-	tap(r, "back")
-	tap(r, "back", 3)			# closes Ordua
+	keys(r, ("back", "back!"))		# closes Ordua
 	check(b"gui> close" in r.out[mark2:],
 	      "ACK8.2: Back on the list closes Ordua")
+	r.sh("sleep 3", 20)
 	after = freebytes(r)
 	check(after >= base - 256,
 		"Ordua: Back closes it, its RAM is free again (%d -> %d)"
@@ -302,8 +346,10 @@ def main():
 
 		# 7b.1: OK on the alert -> one log line, written as remind.
 		base = freebytes(r)
+		mark = len(r.out)
 		r.sh("/usr/lib/alert -c reminder -f 0 -u 21 -l remind remind-1 "
 		     "Reminder Water 2>/dev/null & sleep 2", 20)
+		alert_up(r, mark)
 		ram(r, "alert", base)
 		tap(r, "left")		# the first press only lights the screen
 		tap(r, "ok", 2)
@@ -313,8 +359,10 @@ def main():
 		out = r.output("ls -l /home/flipper/apps_data/remind/log", 20)
 		check(out is not None and re.search(rb"-rw------- .*remind ", out)
 			is not None, "7b.1: the log is written as the user remind")
+		mark = len(r.out)
 		r.sh("/usr/lib/alert -c reminder -f 0 -u 21 -l remind remind-1 "
 		     "Reminder Water 2>/dev/null & sleep 2", 20)
+		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "back", 2)
 		out = r.output("/usr/bin/remind -s", 20)
@@ -326,8 +374,10 @@ def main():
 		# the screen flash; the backlight is as before afterwards.
 		r.sh("rm -f /var/timers/_alarm-9", 20)
 		bl0 = r.output("od -An -tx1 /dev/backlight", 20)
+		mark = len(r.out)
 		r.sh("/usr/lib/alert -c alarm -f 16 -t rise -r 15 -R -S 20 -1 "
 		     "-v 40 -z 5 alarm-9 -u 22 Wake Wake 2>/dev/null & sleep 2", 20)
+		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "up", 2)
 		out = r.output("cat /var/timers/_alarm-9; ls -l /var/timers/_alarm-9",
@@ -382,8 +432,9 @@ def main():
 		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
 		mark = len(r.out)
 		r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
-		check(re.search(rb"alert: \d\d:\d\d alarm: Now: now", r.out[mark:])
-			is not None, "7b.2: timed fires the alarm (Tone: pips)")
+		check(seen(r, mark, rb"alert: \d\d:\d\d alarm: Now: now"),
+			"7b.2: timed fires the alarm (Tone: pips)")
+		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "back", 2)	# dismiss it
 
@@ -395,8 +446,10 @@ def main():
 		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
 		mark = len(r.out)
 		r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
-		check(re.search(rb"alert: \d\d:\d\d reminder: Reminder: Stretch",
-			r.out[mark:]) is not None, "7b.1: timed fires the reminder")
+		check(seen(r, mark,
+			rb"alert: \d\d:\d\d reminder: Reminder: Stretch"),
+			"7b.1: timed fires the reminder")
+		alert_up(r, mark)
 		tap(r, "left")
 		tap(r, "ok", 2)
 		out = r.output("grep remind-2 /home/flipper/apps_data/remind/log",

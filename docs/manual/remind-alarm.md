@@ -146,7 +146,7 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 ## Limitations
 
 - **RAM while open** (`free -v` before and after): Kanpaia **4.0 KB** (it was 15.6 KB as a
-  full-screen app), Ordua about **4.4 KB** (it was 16.1 KB; ACK8.3: at most 4.5 KB): no GUI
+  full-screen app), Ordua **4.3 KB** (it was 16.1 KB; ACK8.3: at most 4.5 KB): no GUI
   library, screen buffer or thread, only the form, the time-zone data of `localtime` and the
   stack. Both take nothing while closed.
 - The desk clock's "next alarm" line is the one from when it opened: an alarm that rings or is
