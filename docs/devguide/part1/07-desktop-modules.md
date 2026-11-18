@@ -179,6 +179,20 @@ in the same buffer each time and splits it into `f` (ended by `NULL`). The full 
 `flipper/apps/gmdemo.c`; the `gmdemo` package installs it with `gm.c` and `gm.h` in
 `/usr/share/examples/gui/`. Build it as `minix.mk` does (`OBJS_gmdemo`, `CHMEM_gmdemo := 2560`).
 
+**A real app: Kanpaia** (`flipper/apps/remind/remind.c`, T25a) adds timers (libapp), paged lists
+and a form. Two things keep it at 4.0 KB open:
+
+- **GOT words.** User programs are PIC with `-mno-pic-data-is-text-relative`, so every static
+  variable and string literal that sits in its own section costs a 4-byte GOT entry in RAM.
+  `minix.mk` builds a window app and its own copies of `gm.c`, `nat_core.c` and libapp with
+  `-fno-data-sections -fno-merge-constants` (`WIN_CFLAGS`). Each object then has one `.data`,
+  `.bss` and `.rodata` that share one entry through section anchors, which cut remind's GOT from
+  868 B to 124 B.
+- **No heap, so no gap.** MM's 1.5 KB stack/heap gap is checked only by `brk()` and when a caught
+  signal is delivered. An app with no `malloc`, no `opendir` (it mallocs 1 KB; read the
+  directory in 16 B `struct _v7_direct` entries instead) and no signal handlers can use its whole
+  `CHMEM` as stack. Measure it with `free -t on` (the `memuse:` line at exit).
+
 **Debugging.** `GuiLog: on` in `/etc/launcher.conf` copies every record (`gui< `) and event
 (`gui> `) to the console; dropped records show as `gui! dropped`. The parser is
 `flipper/gui/winrec.c` (pure functions, host test `flipper/tests/host/wintest.c`), the server

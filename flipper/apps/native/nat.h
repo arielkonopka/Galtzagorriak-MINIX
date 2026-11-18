@@ -52,4 +52,10 @@ void nat_form_move(struct nat_form *f, int d);	/* cursor +-1, scroll */
  * The lines counted, or -1. */
 int nat_log_days(int fd, time_t day0, int days, int *counts);
 
+/* The same log newest first (spec K.8 History): lines skip .. skip+max-1
+ * go to fn (if not NULL) as their time and id; reads back only that far.
+ * The lines counted (at most skip + max), or -1. */
+int nat_log_back(int fd, int skip, int max, void (*fn)(time_t t,
+					const char *id, void *arg), void *arg);
+
 #endif /* NAT_H */
