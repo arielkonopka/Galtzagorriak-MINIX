@@ -67,6 +67,10 @@ list and the app menu. Other programs extend it as **modules**:
   is on the screen (tiles only on HOME). Writers never block: `guimod` opens and writes with
   `O_NONBLOCK`, so with no desktop (`ENXIO`) or a full FIFO (`EAGAIN`, while a full-screen app
   is open) the record is dropped and `guimod` exits 1.
+- **No card writes.** Records live only in memory (spec K.6): FS keeps pipe and FIFO data in
+  the buffer cache as `PIPE_DIRTY` blocks that `sync`/`update` never write, and pipe I/O does
+  not dirty the FIFO's inode. A module may write as often as it likes without wearing the SD
+  card or leaving the file system unclean (ACK.5: 0 sectors in M2).
 - Planned: the `window` record and per-module reply FIFOs with event records (`select`,
   `back`, `input`, `redraw`), the Notifications page with the last 8 (T23c).
 

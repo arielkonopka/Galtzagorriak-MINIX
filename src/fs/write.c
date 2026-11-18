@@ -19,6 +19,7 @@ FORWARD _PROTOTYPE( int write_map, (struct inode *rip, off_t position,
 			zone_t new_zone)				);
 
 FORWARD _PROTOTYPE( void wr_indir, (struct buf *bp, int index, zone_t zone) );
+FORWARD _PROTOTYPE( zone_t pipe_zone, (struct inode *rip, off_t position) );
 
 /*===========================================================================*
  *				do_write				     *
@@ -205,7 +206,13 @@ off_t position;			/* file pointer */
   struct super_block *sp;
 
   /* Is another block available in the current zone? */
-  if ( (b = read_map(rip, position)) == NO_BLOCK) {
+  if ( (b = read_map(rip, position)) == NO_BLOCK
+			&& (z = pipe_zone(rip, position)) != NO_ZONE) {
+	/* Spec K.6: pipe data in the cache only.  No bit map, the inode is
+	 * not dirtied; the zone is past the end of the file system. */
+	rip->i_zone[(int) (position / BLOCK_SIZE)] = z;
+	b = (block_t) z;
+  } else if (b == NO_BLOCK) {
 	/* Choose first zone if possible. */
 	/* Lose if the file is nonempty but the first zone number is NO_ZONE
 	 * corresponding to a zone full of zeros.  It would be better to
@@ -235,6 +242,31 @@ off_t position;			/* file pointer */
   bp = get_block(rip->i_dev, b, NO_READ);
   zero_block(bp);
   return(bp);
+}
+
+
+/*===========================================================================*
+ *				pipe_zone				     *
+ *===========================================================================*/
+PRIVATE zone_t pipe_zone(rip, position)
+register struct inode *rip;	/* a pipe or FIFO, or another file */
+off_t position;			/* the new block's position */
+{
+/* Spec K.6: a pipe's (or FIFO's) new block needs no zone on the disk: its
+ * data never goes there.  It gets a number past the device's last zone,
+ * one per inode slot and direct zone, so no other file has it.  A block
+ * of it in the cache is PIPE_DIRTY: never written, never evicted while
+ * pipes keep at most half of the cache; beyond that (or with zones of
+ * more than a block) a real zone is used, as before (T9).
+ */
+  struct super_block *sp;
+
+  if (rip->i_pipe != I_PIPE) return(NO_ZONE);
+  sp = rip->i_sp;
+  if (sp->s_log_zone_size != 0 || position >= PIPE_SIZE) return(NO_ZONE);
+  if (pipe_bufs() >= NR_BUFS / 2) return(NO_ZONE);
+  return(sp->s_zones + (zone_t) (rip - &inode[0]) * V1_NR_DZONES
+					+ (zone_t) (position / BLOCK_SIZE));
 }
 
 

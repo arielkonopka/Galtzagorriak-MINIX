@@ -47,7 +47,9 @@ on a card with a few thousand files. `fsck_mem=64` in `/etc/rc.conf` sets how mu
 it may use (at most about 64); less memory means more passes and a slower check. `fsck` needs
 about 90 KB of RAM: at boot that is free; to run it later yourself (`man fsck`), close the apps
 first. Reading files does not change the card (no access-time writes), so `cat` or starting a
-program never makes a file system unclean.
+program never makes a file system unclean. Pipes and FIFOs (`ls | more`, the desktop's
+`/var/run/gui`, the window apps) do not write to the card either: their data stays in memory.
+A FIFO's times (`ls -l`) on the card are not updated by reading or writing it.
 
 ## Pulling the card out
 
