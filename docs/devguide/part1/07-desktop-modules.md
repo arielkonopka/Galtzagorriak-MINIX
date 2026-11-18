@@ -131,7 +131,7 @@ desktop. Nothing has a name in the file system, so no other process can talk to 
 
 | Record | Meaning |
 |---|---|
-| `win ID KIND TITLE [ROWS=N FIRST=K]` | a window begins; KIND `list`, `text`, `clock` or `confirm` |
+| `win ID KIND TITLE [ROWS=N FIRST=K] [LIVE]` | a window begins; KIND `list`, `text`, `clock` or `confirm`. `LIVE` (`gm_win_live()`): every value change is sent at once, see `submit` |
 | `item KEY LABEL [RIGHT]` | an entry that opens something (OK → `ok`) |
 | `int KEY LABEL MIN MAX STEP VALUE [UNIT]` | a number, changed with Left/Right |
 | `enum KEY LABEL INDEX OPT\|OPT\|…` | a choice, Left/Right |
@@ -155,7 +155,7 @@ malformed row is dropped alone. A record line is at most 127 characters.
 | Event | When |
 |---|---|
 | `ok WIN KEY` | OK on an `item` or `action` row (or on a `text`/`clock`/`confirm` window: its first action, `yes` on a confirm without one) |
-| `submit WIN KEY=VALUE …` | the values that changed, before `ok`, `page`, `back` and `close`, as more lines if they do not fit one. Values: numbers, the enum's index, `0`/`1`, `HH:MM`, `YYYY-MM-DD`, the days mask, the text |
+| `submit WIN KEY=VALUE …` | the values that changed, before `ok`, `page`, `back` and `close`, as more lines if they do not fit one; in a `LIVE` window also right after each change (a time, date or days row: when its edit ends), so the app can apply it at once (the settings groups: brightness, volume, the clock); the app need not answer. Values: numbers, the enum's index, `0`/`1`, `HH:MM`, `YYYY-MM-DD`, the days mask, the text |
 | `back WIN` | Back on a child window (the desktop already shows the parent) |
 | `redraw` | send the current window again (after `back` when the desktop did not keep the parent) |
 | `page WIN FIRST` | a long list (`ROWS=N`) needs the page starting at row FIRST: answer with `win WIN list TITLE ROWS=N FIRST=FIRST` and its rows |

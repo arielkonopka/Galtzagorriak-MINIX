@@ -11,6 +11,12 @@
  * Signal 15 (SIGTERM) makes init stop spawning new processes, this is
  * used by shutdown and friends when they are about to close the system
  * down.
+ *
+ * Galtzagorriak (spec I.1): what init starts gets TZ from /etc/TZ (its
+ * first line that is not a '#' comment), read again at every start, so a
+ * new zone (settings time, setup) holds from the next start on; the
+ * SIGHUP that follows a change restarts nothing by itself.  The file is
+ * read on the stack of the starting child: 0 B of init's own RAM.
  */
 
 #include <sys/types.h>
@@ -414,15 +420,34 @@ void startup(int linenr, struct ttyent *ttyp)
 int execute(char **cmd)
 {
   /* Execute a command with a path search along /sbin:/bin:/usr/sbin:/usr/bin.
+   * The environment: TZ from /etc/TZ, or nothing.
    */
-  static char *nullenv[] = { NULL };
   char command[128];
   char *path[] = { "/sbin", "/bin", "/usr/sbin", "/usr/bin" };
-  int i;
+  char tz[3 + 93], *env[2], *p, *e;
+  int i, n;
+
+  env[0] = env[1] = NULL;
+  if ((i = open("/etc/TZ", O_RDONLY)) >= 0) {
+	n = read(i, tz + 3, sizeof(tz) - 4);
+	close(i);
+	if (n > 0) {
+		tz[3 + n] = 0;
+		for (p = tz + 3; *p != 0; p = e) {
+			for (e = p; *e != 0 && *e != '\n'; e++) {}
+			if (*e == '\n') *e++ = 0;
+			if (*p == '#' || *p == 0) continue;
+			memmove(tz + 3, p, strlen(p) + 1);
+			memcpy(tz, "TZ=", 3);
+			env[0] = tz;
+			break;
+		}
+	}
+  }
 
   if (cmd[0][0] == '/') {
 	/* A full path. */
-	return execve(cmd[0], cmd, nullenv);
+	return execve(cmd[0], cmd, env);
   }
 
   /* Path search. */
@@ -434,7 +459,7 @@ int execute(char **cmd)
 	strcpy(command, path[i]);
 	strcat(command, "/");
 	strcat(command, cmd[0]);
-	execve(command, cmd, nullenv);
+	execve(command, cmd, env);
 	if (errno != ENOENT) break;
   }
   return -1;

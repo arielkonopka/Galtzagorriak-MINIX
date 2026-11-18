@@ -73,10 +73,12 @@ in `/var/run/gui` (up to 7 KB) and are shown when you come back; `guimod` never 
 
 The page lists the groups of settings: Display, Sound, LED, Time, Power, Storage, Gestures,
 Launcher and About. OK opens one, Back returns to the app list. The ones marked `(later)` are
-not there yet; Power and About open today's Power and About apps.
+not there yet; Power opens today's Power app.
 
-**Display** and **Sound** are small screens of their own (the `settings` program): Up/Down choose
-a line, Left/Right change its value, which takes effect at once, Back leaves.
+**Display**, **Sound**, **Time** and **About** are window apps (the `setgroup` program): the
+launcher draws their screens in its own style, so they look like every other list. Up/Down
+choose a line, Left/Right change its value, which takes effect at once, OK on a date or time
+starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Back leaves.
 
 | Group | Line | Values |
 |---|---|---|
@@ -85,11 +87,43 @@ a line, Left/Right change its value, which takes effect at once, Back leaves.
 | | Light | auto (the timeout), off or on: the forced modes of the button gestures; not kept over a restart |
 | Sound | Volume | 0-100 %, the volume of every program that does not set its own (alarms set theirs) |
 | | Test beep | OK plays three notes |
+| Time | Date | the local date; when the edit ends (OK) the clock moves to it at once and keeps the time of day (years up to 2099, as the clock chip counts) |
+| | Time | the local time of day (hours, minutes); when the edit ends the clock is set at once, with the seconds at 0 |
+| | Zone | the time zone: OK opens a list of about 80 places (`UTC`, `Europe/Warsaw`, `America/New_York`, ...), starting at the current one (`*`); OK chooses one. `other` is a zone you wrote into `/etc/TZ` yourself, kept as it is |
+| | Clock | 24 h or 12 h, for the clock apps |
+| About | Base | the version of the base package |
+| | ABI | the version of the program format (spec J.3) |
+| | Kernel | the system image's version and build id, as `ver` prints it |
+| | Free RAM | free memory and the largest free block, as `free` |
+| | libc, libfuri | the shared libraries in flash: their size and the RAM each program needs for them (`free -v`) |
+| | Serial | the chip's 64-bit unique id |
+| | Licence | GPLv3; the MINIX base is BSD-3 |
 
-The values are kept in `/etc/flipper/display.conf` and `sound.conf` on the SD card, written once
-when you leave the screen and only if something changed, and applied at every start
-(`settings apply` in `/etc/rc`). Deleting a file brings the defaults back (100 %, 15 s, 100 %).
-From the shell: `settings display`, `settings sound`.
+The values are kept in `/etc/flipper/display.conf`, `sound.conf` and `time.conf` on the SD card,
+written once when you leave the screen and only if something changed, and applied at every start
+(`settings apply` in `/etc/rc`). Deleting a file brings the defaults back (100 %, 15 s, 100 %,
+24 h). Opening a screen and leaving it without a change writes no settings to the card. (The
+two pipes between the launcher and a window app still cost one inode on the card's root file
+system for now, about 3 KB of writes at the next sync; a coming file-system change takes that
+away.) The screens open only from the SETTINGS page: `setgroup` talks to the launcher, not to a
+terminal. From the shell, edit the files and run `settings apply`.
+
+The clock itself keeps UTC; the date and time on the Time screen are local time in the chosen
+zone. A new zone is written to `/etc/TZ` when you leave the screen:
+
+```
+# Europe/Warsaw
+CET-1CEST,M3.5.0,M10.5.0/3
+```
+
+Every program started after that (by INIT, the launcher or a new login) shows the new local time,
+and the timers of `timed` are computed again; a shell that is already open keeps its old `TZ`
+until you log in again. Zones whose rules the C library cannot express (Israel, Egypt, Chile,
+Morocco) are not in the list: write their rule into `/etc/TZ` by hand if you need them.
+
+While a settings screen is open it takes about 2.5 KB of RAM once its code runs from flash (the
+system copies it there after it has been opened a few times): no screen buffer, no heap, 1.5 KB
+of stack.
 
 ## The launcher's own settings
 

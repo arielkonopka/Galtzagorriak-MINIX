@@ -204,22 +204,23 @@ static const struct page pages[] = {
 };
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
- * like an app; "" = not there yet.  Power and About are today's apps
- * until their groups come (T24b, T24c). */
+ * like an app, the groups of setgroup as window apps ("=", K.8: the
+ * launcher draws them); "" = not there yet.  Power is today's app until
+ * its group comes (T24c). */
 static const struct {
 	char name[9];
 	char user[7];
-	char cmd[22];
+	char cmd[24];
 } sys_tab[] = {
-	{ "Display", "root", "/bin/settings display" },
-	{ "Sound", "root", "/bin/settings sound" },
+	{ "Display", "root", "=/bin/setgroup display" },
+	{ "Sound", "root", "=/bin/setgroup sound" },
 	{ "LED", "", "" },
-	{ "Time", "", "" },
+	{ "Time", "root", "=/bin/setgroup time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
-	{ "About", "nobody", "/bin/info" },
+	{ "About", "root", "=/bin/setgroup about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
 #define SYS_LAUNCHER	7
@@ -751,11 +752,12 @@ int main(int argc, char **argv)
 				sel = top = 0;
 			} else if (k == KEY_OK && sys_tab[sel].cmd[0] != 0) {
 				struct app a;
-				char cmd[sizeof sys_tab[0].cmd], user[8];
+				char cmd[sizeof sys_tab[0].cmd], user[8], name[9];
 
 				strcpy(cmd, sys_tab[sel].cmd);
 				strcpy(user, sys_tab[sel].user);
-				a.label = cmd;
+				strcpy(name, sys_tab[sel].name);
+				a.label = name;
 				a.user = user;
 				a.cmd = cmd;
 				note = run(&a);

@@ -303,13 +303,15 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
 	    swapon gmodem guimod
+# setgroup: the settings groups' window app (spec K.7, K.8), below.
+SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
 EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(EDITCMDS) $(GUIAPPS)
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
@@ -359,7 +361,10 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
-CHMEM_settings := 3072	# K.7: a group screen; stdio for its one file
+CHMEM_settings := 4096	# diff/reset (stdio, opendir's 1 KB DIR), apply at boot
+CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
+			# MM gap: no malloc, no stdio, no signal handler);
+			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
@@ -427,14 +432,24 @@ $(MB)/gm/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
-# settings GROUP (spec K.7): the groups' files are src/commands/settings/
-SETGROUPS := display sound
-OBJS_settings = $(MB)/cmd/port/settings.o $(SETGROUPS:%=$(MB)/cmd/settings/%.o) \
-		$(MB)/cmd/gui/gui.o
+# The system settings (spec K.7): the groups' files are
+# src/commands/settings/.  settings (flipper/cmds) keeps diff/reset (L.4)
+# and applies the files at boot; setgroup GROUP (win.c) is the window app
+# of the launcher's SETTINGS page (K.8).  Their objects as the window
+# apps' (WIN_CFLAGS below): one GOT word per section, unused rodata in
+# flash.
+SETGROUPS := groups conf display sound time about zones afmt
+SET_OBJ	:= $(SETGROUPS:%=$(MB)/cmd/settings/%.o) $(MB)/cmd/settings/gm.o
+OBJS_settings = $(MB)/cmd/port/settings.o $(SET_OBJ)
+OBJS_setgroup = $(MB)/cmd/settings/win.o $(SET_OBJ)
+SET_CFLAGS = $(UCFLAGS) -fno-data-sections -fno-merge-constants -I$(GM_DIR)
 $(MB)/cmd/settings/%.o: $(MROOT)/src/commands/settings/%.c \
-		$(MROOT)/src/commands/settings/sgroup.h
+		$(MROOT)/src/commands/settings/sgroup.h $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(SET_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/settings/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(SET_CFLAGS) -MMD -MP -c $< -o $@
 # liblfrfid (spec R9.0.1, src/lib/lfrfid): the Unleashed LF RFID protocols,
 # linked into rfid (code in flash; the decoders' state is malloc'd only
 # while a read runs).  Third-party C11 code: built quietly (-w).
@@ -776,7 +791,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.13
+BASE_VER := 4.15
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -845,6 +860,7 @@ TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
 	   $(MROOT)/src/commands/sh $(MROOT)/src/commands/mined \
 	   $(MROOT)/src/commands/reboot/halt.c $(MROOT)/src/commands/reboot/log.c \
 	   cmds gui apps lib/app tests m2 $(MROOT)/src/tools/init.c \
+	   $(MROOT)/src/commands/settings \
 	   $(LIBDIRS:%=$(MROOT)/src/lib/%) $(MROOT)/include
 .PHONY: timecheck check
 timecheck:
@@ -877,4 +893,5 @@ minix-flash: $(MB)/minix.bin
 -include $(shell find $(MB) -name '*.d' 2>/dev/null)
 
 # Objects that print the build id.
-$(MB)/kernel/tty.c.o $(MB)/cmd/port/ver.o: $(GZBUILD)
+$(MB)/kernel/tty.c.o $(MB)/cmd/port/ver.o $(MB)/mm/alloc.c.o \
+		$(MB)/mm/finst.c.o: $(GZBUILD)

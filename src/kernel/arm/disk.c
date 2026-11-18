@@ -318,9 +318,10 @@ PRIVATE int w_ioctl(dp, m_ptr)
 struct driver *dp;
 message *m_ptr;
 {
-/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another.
+/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another;
+ * 3 puts the number of sectors written since boot in its int (K.7 ACK7.2).
  * DIOCDISCARD (R12.40): tell the card a range of the partition is unused. */
-  int state;
+  int state, r;
   phys_bytes user;
 
   if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr));
@@ -328,7 +329,10 @@ message *m_ptr;
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&state), (phys_bytes) sizeof(int));
-  return(hal_disk_fake(state) == 0 ? OK : EINVAL);
+  r = hal_disk_fake(state);
+  if (r < 0 || (state != 3 && r != 0)) return(EINVAL);
+  if (state == 3) phys_copy(vir2phys(&r), user, (phys_bytes) sizeof(int));
+  return(OK);
 }
 
 

@@ -2209,8 +2209,9 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 
 /* /dev/mem ranges: SRAM1 and the SRAM2 parts MINIX uses (the rest may be
  * CPU2's secure SRAM); flash up to CPU2's (SFSA), also at its alias at 0;
- * the ROM loader and the OTP area.  Anything else (holes, peripherals,
- * CPU2's areas) is refused instead of a bus fault in the MEMORY task. */
+ * the ROM loader and the OTP area; the 64-bit unique id (settings about,
+ * spec K.7).  Anything else (holes, peripherals, CPU2's areas) is refused
+ * instead of a bus fault in the MEMORY task. */
 #define RAM_RANGES	{ 0x20000000u, 0x20030000u }, \
 			{ 0x20030000u, 0x20032800u }, \
 			{ 0x20038000u, 0x2003A800u }
@@ -2221,6 +2222,8 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 	if ((n = span_in(addr, len, 0, sfsa - FLASH_BASE)) != 0) \
 		return n; \
 	if ((n = span_in(addr, len, 0x1FFF0000u, 0x1FFF7400u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x1FFF7580u, 0x1FFF7588u)) != 0) \
 		return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)

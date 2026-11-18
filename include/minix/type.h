@@ -170,6 +170,9 @@ struct kstack {
 #define MI_MEMTEST	12	/* root (selftest, R7b.3.1): m1_i1 the address of
 			 * a 4 KB block of RAM; reply MT_* (MT_FAIL:
 			 * reply_i1 the failing word's address) */
+#define MI_BUILD	13	/* the system image's version and build id
+			 * ("0.1.1+12.g1a2b3c4", '\0'-ended) to m1_p1, at
+			 * most m1_i1 bytes (settings about, spec K.7) */
 #define MT_PASS		0	/* free: March C- passed (left zeroed) */
 #define MT_FAIL		1	/* free: a word did not hold its pattern */
 #define MT_INUSE	2	/* a process (or part of one) is there */
