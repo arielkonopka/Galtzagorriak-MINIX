@@ -375,6 +375,7 @@ echo off >/dev/led
 | `dual A B` | switches between colours A and B every 0.5 s |
 | `dualsoft A B` | A and B, 1 s each, gliding into the other in 0.2 s |
 | `morph A B` | glides from A to B and back, 10 s for the round |
+| `console C` | a short flash of colour C whenever data goes over the USB console, in either direction: you see that the computer is talking to the Flipper |
 
 Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
 as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as
@@ -382,3 +383,9 @@ as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark 
 colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
 stops the pattern; the screen's backlight does not (the chip has three
 program engines: one fades the backlight, two run the LED). The pattern stops with a reset.
+
+`echo console cyan >/dev/led` is useful when the Flipper is driven from a computer (scripts,
+`tools/twoflip.py`): every burst of USB console traffic flashes the LED for 40 ms, with at least
+60 ms dark in between. It is off until you switch it on, ends with `echo off >/dev/led` or any
+other pattern, and is not kept over a reboot (to have it always, add the line to `/etc/rc.conf`, which `/etc/rc`
+reads at every boot).

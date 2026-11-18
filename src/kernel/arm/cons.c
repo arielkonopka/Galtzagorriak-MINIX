@@ -117,6 +117,9 @@ unsigned n;
 
   if (usb_irq < 0) return;
   if (usb_stuck && hal_usb_room() >= USB_CHUNK) usb_stuck = FALSE;
+  /* The LED's console mode, if on; only from a task: it locks, and a
+   * kernel printf() from an interrupt handler must not unlock. */
+  if (n > 0 && k_reenter == (unsigned char) -1) flipdev_cons_act();
   while (n > 0) {
 	k = hal_usb_write(buf, n);
 	buf += k;
@@ -197,6 +200,7 @@ tty_t *tp;
 	if (in_process(tp, &c, 1) == 0) break;
 	(void) hal_usb_getc();
 	k_input = get_uptime();		/* no background flash work now */
+	flipdev_cons_act();		/* the LED's console mode, if on */
   }
   if (uart_held && ihead - itail < CONS_IN_BYTES) {
 	/* Take what waits in the UART ourselves: switching the interrupt

@@ -394,6 +394,21 @@ Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, s
 - Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
 - ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
 
+## T32. Radio regions: per-country Sub-GHz tables on the card, the chosen one in flash (spec section Q; owner request 2026-11-18): with T26b / Phase 8 R8.2
+Before T26b turns transmit on. T31 is the launcher style (#295).
+
+### T32a (`lane:cloud`, host + QEMU)
+- The `.reg` files of Q.4/Q.5 in `flipper/rootfs/usr/share/region/`: `EU`, the 27 member states (`Base: EU` + their `#?` rows), `US`, `CA`, `AL`, `BA`, `MK`; every row with its `ref`.
+- `src/lib/modem` (or a small `libregion` shared with the kernel): parser (Q.2), compiler to the RQ.2 blob, the row choice of Q.2 (first admitting row, `SG_DATA`/`SG_CTL`, `per` 1 s / 30x / 10 s, `ctl` 5 s), replacing today's `const mdm_bands[]`. Host tests ACQ.1, ACQ.2.
+- `region list|show|set` (RQ.1, RQ.5: build-time SHA-256 list, `-f`, log line); manual page `region(1)` and a manual section (Q.7).
+- RAM: 0 B resident; `region` runs and exits. Flash: the blob, once per `region set`; say so in the PR.
+
+### T32b (`lane:local`, Flipper; together with T26b)
+- MM: `region` record kind in the installed-region directory (RQ.2), read back and compared; kernel finds it at boot (RQ.3), no record = no transmit.
+- Kernel check of R8.2 on the record, `mode` in `struct sg_phy` (RQ.6), timing state (RQ.7): Sub-GHz kernel total ≤ +44 B.
+- Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
+- Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
+
 ## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; owner pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
 Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
 
@@ -417,6 +432,14 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 
 ### T28e (`lane:cloud`): `jiggle` command
 - R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
+
+## T31. Launcher style "Stock" (spec R5.6b, AC5.7; owner request 2026-11-18): milestone M3, after T23 (desktop pages) and T24
+`lane:cloud` (QEMU + host). One launcher, a `Style: pine|stock` setting, the stock drawing in `launcher_stock.c`.
+- R5.6b.1 setting row and redraw; R5.6b.2 Apps page as stock `menu.c`, other pages as stock `submenu`, popup for messages.
+- R5.6b.3 10×10 built-in icon table (stock icons allowed, D.3), `Icon10:` in `fam2pkg` and the `##` field form.
+- R5.6b.4 the two stock fonts as `const`, `gui_text_font()`; a host test renders the launcher's stock frame and the ported `menu.c` frame and compares them.
+- AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
+- Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 
 ## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
