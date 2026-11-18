@@ -187,7 +187,7 @@ int fs_space(mu32 *cap_hi, mu32 *cap_lo, mu32 *free_hi, mu32 *free_lo);
 const char *fs_label(void);
 int fs_locked(void);		/* the desktop PIN lock (stub until it exists) */
 long fs_now(void);
-void fs_date(long t, char *buf);	/* "YYYYMMDDThhmmss" */
+void fs_date(long t, char *buf);	/* "YYYYMMDDThhmmssZ", 17 B */
 
 /*===========================================================================*
  * The core (mtpcore.c)							     *

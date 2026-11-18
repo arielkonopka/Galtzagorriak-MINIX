@@ -438,7 +438,7 @@ static mu16 prop_type(mu32 p)
 /* One property's value into buf. */
 static void wprop(const struct mtp_obj *o, mu32 p)
 {
-	char date[16];
+	char date[20];
 
 	switch (p) {
 	case PR_StorageID:	w32(MTP_STORAGE); break;
@@ -570,7 +570,7 @@ static int op_handles(int count_only)
 static int op_object_info(void)
 {
 	struct mtp_obj o;
-	char date[16];
+	char date[20];
 	int e;
 
 	if ((e = obj(par[0], &o)) != FS_OK) return respond(fs_rc(e), 0, 0, 0, 0);

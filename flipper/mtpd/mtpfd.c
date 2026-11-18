@@ -14,6 +14,7 @@
  * Anything else from the host is a broken stream: mtpd ends, like an
  * unplugged cable.  The containers inside are exactly USB's.
  */
+#include <sys/types.h>
 #include <errno.h>
 #include <unistd.h>
 #include "mtp.h"

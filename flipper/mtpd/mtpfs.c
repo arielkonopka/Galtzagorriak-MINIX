@@ -15,8 +15,8 @@
  * not shown, nor anything on another device (a mount point below the
  * storage root): handles are unique per device only.
  *
- * RAM: the ring 2 KB, three path buffers of 256 B; opendir's DIR (1 KB,
- * malloc) while a folder is scanned, one at a time.
+ * RAM: the ring 2 KB, two path buffers of 256 B, one DIR (1 KB; on
+ * MINIX in .bss, not malloc'd: one folder is scanned at a time).
  */
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -41,6 +41,41 @@
 #ifdef _MINIX
 #define LSTAT		stat		/* no symbolic links in MINIX 2 */
 #define O_NOFOLLOW	0
+/* opendir() mallocs its 1 KB DIR, and a heap costs MM's 1.5 KB gap on
+ * top: mtpd keeps one DIR in .bss instead (one folder is read at a
+ * time), set up as libc's opendir() does, read by libc's readdir().
+ * closedir() would free() it: the descriptor is closed here. */
+static DIR dirbuf;
+static int dirbusy;
+
+static DIR *d_open(const char *name)
+{
+	struct stat st;
+	int fd;
+
+	if (dirbusy) { errno = EBUSY; return NULL; }
+	if ((fd = open(name, O_RDONLY | O_NONBLOCK)) < 0) return NULL;
+	if (fstat(fd, &st) < 0 || !S_ISDIR(st.st_mode)
+	    || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+		close(fd);
+		errno = ENOTDIR;
+		return NULL;
+	}
+	dirbuf._fd = fd;
+	dirbuf._v7 = -1;
+	dirbuf._count = 0;
+	dirbuf._pos = 0;
+	dirbusy = 1;
+	return &dirbuf;
+}
+
+static void d_close(DIR *d)
+{
+	close(d->_fd);
+	dirbusy = 0;
+}
+#define opendir		d_open
+#define closedir	d_close
 #else
 #define LSTAT		lstat
 #endif
@@ -55,7 +90,7 @@ static dev_t root_dev;
 static mu32 cdir;		/* the folder last used, 0 none */
 static char cpath[MTP_PATH_MAX + 1];	/*   its path */
 static char path[MTP_PATH_MAX + 1];	/* the path rebuilt last */
-static char npath[MTP_PATH_MAX + 1];	/* the file being received */
+static mu32 nnew;		/* the file being received, 0 none */
 static int fd = -1;		/* the file being read or written */
 static DIR *ld;			/* the folder being listed */
 static mu32 ldir;		/*   its inode */
@@ -241,7 +276,7 @@ int fs_init(const char *r)
 	rhead = 0;
 	cdir = 0;
 	if (fd >= 0) { close(fd); fd = -1; }
-	npath[0] = 0;
+	nnew = 0;
 	if (strlen(r) > MTP_PATH_MAX - 2 || stat(r, &st) < 0 || !S_ISDIR(st.st_mode))
 		return -1;
 	root = r;
@@ -351,16 +386,20 @@ int fs_create(mu32 dir, const char *name, int folder, mu32 *h)
 
 	fs_close();
 	if ((e = resolve_dir(dir)) != FS_OK) return e;
-	if (join(npath, cpath, name) < 0) { npath[0] = 0; return FS_DENIED; }
+	if (join(path, cpath, name) < 0) return FS_DENIED;
 	if (folder) {
-		e = mkdir(npath, 0777) < 0 ? errno_fs() : FS_OK;
-		if (e == FS_OK && LSTAT(npath, &st) < 0) e = FS_IO;
-		npath[0] = 0;
-		if (e != FS_OK) return e;
+		if (mkdir(path, 0777) < 0) return errno_fs();
+		if (LSTAT(path, &st) < 0) return FS_IO;
 	} else {
-		fd = open(npath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
-		if (fd < 0) { npath[0] = 0; return errno_fs(); }
-		if (fstat(fd, &st) < 0) { fs_abandon(); return FS_IO; }
+		fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+		if (fd < 0) return errno_fs();
+		if (fstat(fd, &st) < 0) {
+			close(fd);
+			fd = -1;
+			unlink(path);
+			return FS_IO;
+		}
+		nnew = st.st_ino;
 	}
 	*h = st.st_ino;
 	ring_put(*h, dir);
@@ -386,15 +425,19 @@ void fs_close(void)
 {
 	if (fd >= 0) close(fd);
 	fd = -1;
-	npath[0] = 0;
+	nnew = 0;
 }
 
+/* The new file is found again by its handle (the ring has it), checked
+ * to be the same inode, and removed. */
 void fs_abandon(void)
 {
-	if (fd >= 0) close(fd);
-	fd = -1;
-	if (npath[0] != 0) unlink(npath);
-	npath[0] = 0;
+	struct stat st;
+	mu32 h = nnew;
+
+	fs_close();
+	if (h != 0 && resolve(h, &st) == FS_OK && S_ISREG(st.st_mode))
+		unlink(path);
 }
 
 /* Remove the folder at path[] with everything in it.  One DIR open at a
@@ -541,14 +584,16 @@ static char *put2(char *p, int v)
 	return p;
 }
 
+/* UTC with MTP's "Z" (the Flipper keeps UTC, spec 2d; localtime() would
+ * need TZ, which devd does not pass, and 400 B of RAM). */
 void fs_date(long t, char *buf)
 {
 	time_t tt = t;
-	struct tm *tm = localtime(&tt);
+	struct tm *tm = gmtime(&tt);
 	char *p = buf;
 	int y;
 
-	if (tm == NULL) { strcpy(buf, "19700101T000000"); return; }
+	if (tm == NULL) { strcpy(buf, "19700101T000000Z"); return; }
 	y = tm->tm_year + 1900;
 	p = put2(p, y / 100);
 	p = put2(p, y % 100);
@@ -558,5 +603,6 @@ void fs_date(long t, char *buf)
 	p = put2(p, tm->tm_hour);
 	p = put2(p, tm->tm_min);
 	p = put2(p, tm->tm_sec);
+	*p++ = 'Z';
 	*p = 0;
 }

@@ -8,8 +8,9 @@
  * test line /dev/mtpline) or, without -l, on standard input and output
  * (a pipe: tools/mtphost.py on the PC), in the framed stream of mtpfd.c.
  * It exits when the host goes (end of file, a broken frame); a file the
- * host was sending then is removed.  Started as root it runs as the user
- * flipper (spec R10.4): never with more rights than that user.
+ * host was sending then is removed.  Started as root it runs as the owner
+ * of ROOT (/home/flipper: the user flipper, spec R10.4), never as root:
+ * no more rights than that user, and no password file read for it.
  *
  * T29b adds the USB transport; devd starts mtpd when the host configures
  * the device and stops it on detach.
@@ -19,15 +20,14 @@
  * Exit status: 0 the host went, 1 an error, 2 usage.
  */
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
-#include <pwd.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
 #include "mtp.h"
 
 #define ROOT	"/home/flipper"
-#define USER	"flipper"
 
 void tr_fd(int in, int out);
 
@@ -41,7 +41,7 @@ static void say(const char *s)
 int main(int argc, char **argv)
 {
 	const char *root = ROOT, *line = NULL;
-	struct passwd *pw;
+	struct stat st;
 	int fd, i;
 
 	for (i = 1; i < argc; i++) {
@@ -62,10 +62,10 @@ int main(int argc, char **argv)
 		tr_fd(0, 1);
 	}
 	if (geteuid() == 0) {
-		if ((pw = getpwnam(USER)) == NULL
-		    || setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0
+		if (stat(root, &st) < 0 || st.st_uid == 0
+		    || setgid(st.st_gid) < 0 || setuid(st.st_uid) < 0
 		    || geteuid() == 0) {
-			say("cannot become " USER);
+			say("will not run as root; the root's owner is root");
 			return 1;
 		}
 	}

@@ -311,7 +311,10 @@ EDITCMDS := mined
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
+# mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
+DAEMONS	:= mtpd
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
@@ -385,6 +388,10 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
+			# all stack (no heap: its DIR is .bss, no stdio, no
+			# handler, so no MM gap); deepest a folder delete
+			# (rm_tree's 256 B path) or a move (two paths)
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -451,6 +458,18 @@ $(MB)/cmd/port/jiggle.o: cmds/jiggle.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
+# mtpd (spec R10.4, T29a): the MTP container parser and operations
+# (mtpcore.c), the files (mtpfs.c: handles = inode numbers, the parent
+# ring), the stream transport for tests (mtpfd.c); the same sources build
+# on the PC (make -C mtpd test, fuzz).  No stdio, no malloc but
+# opendir's DIR, no signal handler.  One .data/.bss/.rodata per object
+# (as the window apps, WIN_CFLAGS): its statics share GOT words.
+MTPD_SRC := mtpd mtpcore mtpfs mtpfd
+$(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
+	   -c $< -o $@
+OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -889,7 +908,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.20
+BASE_VER := 4.21
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
