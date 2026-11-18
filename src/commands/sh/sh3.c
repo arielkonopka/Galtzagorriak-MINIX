@@ -8,6 +8,7 @@
 #include <sys/times.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #undef NULL
 #include "sh.h"
 
@@ -296,6 +297,8 @@ int *pforked;
 		int s_talking = talking, s_intr = intr, s_execflg = execflg;
 		struct brkcon *s_brklist = brklist;
 
+		int tries = 0, st;
+
 		if (canv) {
 			/* Galtzagorriak: what the child takes from the heap
 			 * (environment, redirection names) is made or made
@@ -305,6 +308,13 @@ int *pforked;
 			if (t->ioact != NULL)
 				freecell(space(VFROOM));
 		}
+	again:
+		/* #271: no memory hole for the program (exec: EAGAIN) is
+		 * not "not found"; it passes once others end: try again.
+		 * Only without pipes: we wait for the child here. */
+		vfagain = 0;
+		vfquiet = canv && pin == NULL && pout == NULL
+							&& tries < VFTRIES;
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
@@ -313,6 +323,12 @@ int *pforked;
 				intr = s_intr;
 				execflg = s_execflg;
 				brklist = s_brklist;
+				vfquiet = 0;
+				if (i == -1 && errno == EAGAIN
+							&& tries++ < VFTRIES) {
+					sleep(1);
+					goto again;
+				}
 				if (i == -1)
 					warn("try again");
 			}
@@ -320,7 +336,14 @@ int *pforked;
 				return(rv);
 			if (pin != NULL)
 				closepipe(pin);
-			return(pout==NULL? setstatus(waitfor(i,0)): 0);
+			if (pout != NULL)
+				return(0);
+			st = waitfor(i, 0);
+			if (canv && vfagain && tries++ < VFTRIES) {
+				sleep(1);
+				goto again;
+			}
+			return(setstatus(st));
 		}
 		vforked = canv;
 		invfork = canv;
@@ -381,6 +404,10 @@ int *pforked;
 	if (wp[0] == NULL)
 		exit(0);
 	cp = rexecve(wp[0], wp, envp != NULL? envp: makenv());
+	if (vforked && vfquiet && errno == EAGAIN) {
+		vfagain = 1;		/* our parent tries again (#271) */
+		_exit(126);
+	}
 	prs(wp[0]); prs(": "); warn(cp);
 	if (vforked)
 		_exit(exstat);		/* not exit(): stdio and traps are ours */
@@ -644,7 +671,7 @@ char *c, **v, **envp;
 {
 	register int i;
 	register char *sp, *tp;
-	int eacces = 0, asis = 0;
+	int eacces = 0, asis = 0, tries;
 
 	sp = any('/', c)? "": path->value;
 	asis = *sp == '\0';
@@ -661,7 +688,18 @@ char *c, **v, **envp;
 		for (i = 0; (*tp++ = c[i++]) != '\0';)
 			;
 		execve(e.linep, v, envp);
+		/* #271: no memory hole now (EAGAIN).  A forked child waits
+		 * and tries again itself; a vfork child must not (it runs
+		 * in its parent's memory): forkexec() does that for it. */
+		for (tries = 0; errno == EAGAIN && !invfork && tries < VFTRIES;
+								tries++) {
+			sleep(1);
+			execve(e.linep, v, envp);
+		}
 		switch (errno) {
+		case EAGAIN:
+			return("no memory to start it");
+
 		case ENOEXEC:
 			*v = e.linep;
 			tp = *--v;

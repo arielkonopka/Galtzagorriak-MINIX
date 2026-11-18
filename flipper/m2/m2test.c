@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <minix/callnr.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -1387,6 +1388,300 @@ static long free_ram(void)
 	return (long) _syscall(MM, MEMINFO, &m);
 }
 
+/* #271: pkg install must not exit 0 unless its postinst ran (and ended
+ * with 0); else it exits 1 and says why.  Under load the exec of the
+ * postinst's sh failed with EAGAIN (no memory hole) in pkg's vfork child,
+ * silently: pkg said "installed".  The package is made here (ustar, as
+ * tools/mkpkg.py makes them); its postinst appends a line to PP_RAN, or
+ * exits 3 while PP_FAIL exists.  Then installs while a filler holds all
+ * the memory there is for a while: each must either have run its postinst
+ * or exit 1 with a "pkg: " reason; pkg tries an exec that found no hole
+ * again (1 s apart), so they should all get through. */
+#define PP_TAR	"/tmp/pkgpost.tar"
+#define PP_RAN	"/tmp/pkgpost.ran"
+#define PP_FAIL	"/tmp/pkgpost.fail"
+#define PP_ERR	"/tmp/pkgpost.err"
+#define PP_LOAD	2		/* installs under load (M2 has 90 s) */
+
+/* A member: data, or (data NULL) n bytes of 'x'. */
+static void tar_member(int fd, const char *name, const char *data, int n,
+								int mode)
+{
+	char h[512];
+	unsigned sum = 0;
+	int i;
+
+	if (data != NULL) n = (int) strlen(data);
+	memset(h, 0, sizeof h);
+	strcpy(h, name);
+	sprintf(h + 100, "%07o", mode);
+	sprintf(h + 108, "%07o", 2);		/* bin */
+	sprintf(h + 116, "%07o", 0);		/* operator */
+	sprintf(h + 124, "%011o", n);
+	sprintf(h + 136, "%011o", 0);
+	h[156] = '0';
+	memcpy(h + 257, "ustar", 6);
+	memcpy(h + 263, "00", 2);
+	strcpy(h + 265, "bin");
+	strcpy(h + 297, "operator");
+	memset(h + 148, ' ', 8);
+	for (i = 0; i < 512; i++) sum += (unsigned char) h[i];
+	sprintf(h + 148, "%06o", sum);		/* then NUL, ' ' */
+	write(fd, h, sizeof h);
+	memset(h, 0, sizeof h);
+	for (i = 0; i < n; i += 512) {
+		if (data != NULL)
+			memcpy(h, data + i, n - i < 512 ? n - i : 512);
+		else memset(h, 'x', n - i < 512 ? n - i : 512);
+		write(fd, h, sizeof h);
+		memset(h, 0, sizeof h);
+	}
+}
+
+/* pkg op arg in a child; its stderr (and stdout if out < 0) to PP_ERR. */
+static pid_t pkg_start(const char *op, const char *arg, int out)
+{
+	pid_t pid;
+	int fd;
+
+	fflush(stdout);
+	if ((pid = fork()) != 0) return pid;	/* < 0: no memory */
+	if ((fd = creat(PP_ERR, 0644)) >= 0) {
+		dup2(out >= 0 ? out : fd, 1);
+		dup2(fd, 2);
+		close(fd);
+	}
+	if (out >= 0) close(out);
+	execl("/bin/pkg", "pkg", op, arg, (char *) NULL);
+	_exit(errno == EAGAIN ? 126 : 127);
+}
+
+static int pkg_wait(pid_t pid)
+{
+	int st;
+
+	if (pid < 0) return -2;			/* not started */
+	if (waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int pkg_run(const char *op, const char *arg)
+{
+	return pkg_wait(pkg_start(op, arg, -1));
+}
+
+static int file_lines(const char *path)
+{
+	char buf[64];
+	int fd, n, i, lines = 0;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	while ((n = read(fd, buf, sizeof buf)) > 0)
+		for (i = 0; i < n; i++) lines += buf[i] == '\n';
+	close(fd);
+	return lines;
+}
+
+static int err_has(const char *want)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(PP_ERR, O_RDONLY)) < 0) return 0;
+	n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	buf[n > 0 ? n : 0] = 0;
+	return strstr(buf, want) != NULL;
+}
+
+static void err_show(void)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(PP_ERR, O_RDONLY)) < 0) return;
+	n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	buf[n > 0 ? n : 0] = 0;
+	printf("  pkg said: %s%s", buf,
+			n > 0 && buf[n - 1] == '\n' ? "" : "\n");
+}
+
+/* Entries left in pkg's scratch directory (cleanup: rm -r). */
+static int scratch_left(void)
+{
+	DIR *d;
+	struct dirent *e;
+	int n = 0;
+
+	if ((d = opendir("/usr/var/pkg/tmp")) == NULL) return 0;
+	while ((e = readdir(d)) != NULL) n += e->d_name[0] != '.';
+	closedir(d);
+	return n;
+}
+
+/* Fills the memory there is, writes a byte to ready, holds the memory ms
+ * milliseconds, gives it back.  Copies of m2test take the big holes, then
+ * /bin/sleep (~7 KB) the rest and, every 10 ms, what other programs give
+ * back.  Runs in its own child (pid returned). */
+static pid_t filler(int ms, int ready)
+{
+	pid_t pid, kids[48];
+	volatile int err;
+	struct tms tm;
+	clock_t t0;
+	int n = 0, said = 0;
+
+	fflush(stdout);
+	if ((pid = fork()) != 0) return pid;
+	while (n < 48 && (kids[n] = fork()) >= 0) {
+		if (kids[n] == 0) { for (;;) pause(); }
+		n++;
+	}
+	t0 = times(&tm);
+	do {				/* and what others give back */
+		while (n < 48) {
+			err = 0;
+			if ((pid = vfork()) < 0) break;
+			if (pid == 0) {
+				execl("/bin/sleep", "sleep", "60",
+							(char *) NULL);
+				err = errno != 0 ? errno : ENOEXEC;
+				_exit(127);
+			}
+			if (err != 0) { waitpid(pid, NULL, 0); break; }
+			kids[n++] = pid;
+		}
+		if (!said) {
+			said = 1;
+			write(ready, "f", 1);
+		}
+		poll(NULL, 0, 10);
+	} while ((long) (times(&tm) - t0) < (long) ms * HZ / 1000);
+	while (n > 0) { kill(kids[--n], SIGKILL); wait(NULL); }
+	_exit(0);
+}
+
+/* The run-time cache's erase budget (R2b.11): set it (>= 0; 0: no
+ * caching), return the one before.  The pkg test runs pkg, tar, sh and
+ * sleep more than twice: cached, they would erase flash pages the M2
+ * budget does not have. */
+static long fc_budget(int pages)
+{
+	message m;
+	struct fccount fc;
+
+	m.m1_p1 = (char *) &fc;
+	m.m1_i1 = pages;
+	m.m1_i2 = MI_FCBUDGET;
+	if (_syscall(MM, MEMINFO, &m) < 0) return -1;
+	return (long) fc.budget;
+}
+
+static void __attribute__((noinline)) pkg_tests(void)
+{
+	static const char control[] = "Package: pkgpost\nVersion: 1.0\n"
+		"Abi: any\nDescription: M2 test of postinst (#271)\n";
+	static const char postinst[] = "echo ran >> " PP_RAN "\n"
+		"test -f " PP_FAIL " && exit 3\nexit 0\n";
+	int fd, st, i, ok, before, started = 0, bad = 0, s0, s1;
+	pid_t f, f2;
+
+	fc_budget(0);
+	mkdir("/usr/var", 0755);
+	mkdir("/usr/var/pkg", 0755);
+	mkdir("/usr/var/pkg/info", 0755);
+	unlink(PP_RAN);
+	unlink(PP_FAIL);
+	if ((fd = creat(PP_TAR, 0644)) < 0) {
+		check(0, "pkg #271: make the test package");
+		return;
+	}
+	tar_member(fd, "CONTROL/control", control, 0, 0644);
+	tar_member(fd, "CONTROL/postinst", postinst, 0, 0755);
+	tar_member(fd, "tmp/pkgpost.f", NULL, 600, 0644);
+	{	char z[1024];
+		memset(z, 0, sizeof z);
+		write(fd, z, sizeof z);
+	}
+	close(fd);
+
+	s0 = sectors_written();
+	st = pkg_run("install", PP_TAR);
+	s1 = sectors_written();
+	ok = st == 0 && file_lines(PP_RAN) == 1 && err_has("installed");
+	check(ok, "pkg #271: install runs the postinst, exit 0");
+	if (!ok) err_show();
+	if (s0 >= 0 && s1 >= 0)
+		printf("  pkg install: %d card sectors written\n", s1 - s0);
+
+	close(creat(PP_FAIL, 0644));
+	st = pkg_run("install", PP_TAR);
+	ok = st == 1 && file_lines(PP_RAN) == 2
+		&& err_has("pkg: pkgpost: postinst failed: exit 3")
+		&& err_has("is not set up");
+	check(ok, "pkg #271: a postinst that fails: exit 1, says why");
+	if (!ok) err_show();
+	unlink(PP_FAIL);
+
+	/* Under load, the moment of #271: pkg has unpacked the package and
+	 * is about to start rm (its cleanup) and sh (the postinst), with no
+	 * memory hole for them.  pkg's stdout is a full pipe: it stops in
+	 * the fflush() before those, after tar.  Then the filler takes all
+	 * the memory there is and the pipe is read: rm and sh find no hole
+	 * (exec: EAGAIN) until the filler gives the memory back 1.5 s later.
+	 * Before #271 pkg said "installed", exit 0, no postinst run. */
+	for (i = 0; i < PP_LOAD; i++) {
+		int p[2], q[2];
+		char c[64];
+
+		before = file_lines(PP_RAN);
+		if (pipe(p) < 0) break;
+		if (pipe(q) < 0) { close(p[0]); close(p[1]); break; }
+		fcntl(p[1], F_SETFL, O_NONBLOCK);
+		while (write(p[1], c, sizeof c) == (int) sizeof c) ;
+		while (write(p[1], c, 1) == 1) ;	/* full */
+		fcntl(p[1], F_SETFL, 0);
+		f = pkg_start("install", PP_TAR, p[1]);
+		close(p[1]);
+		poll(NULL, 0, 300);		/* pkg: tar, then stops */
+		f2 = filler(1500, q[1]);
+		close(q[1]);
+		read(q[0], c, 1);		/* memory full */
+		close(q[0]);
+		while (read(p[0], c, sizeof c) > 0) ;	/* pkg goes on */
+		close(p[0]);
+		st = pkg_wait(f);
+		if (f2 > 0) waitpid(f2, NULL, 0);
+		if (st == -2 || st == 126) continue;	/* pkg did not start */
+		started++;
+		if ((st == 0 ? file_lines(PP_RAN) != before + 1
+			     : !err_has("pkg: ")) || scratch_left() != 0) {
+			bad++;
+			printf("  pkg install under load: exit %d, postinst "
+				"lines %d -> %d, %d left in the scratch "
+				"directory\n", st, before, file_lines(PP_RAN),
+				scratch_left());
+			err_show();
+		}
+	}
+	printf("  pkg install under load: %d of %d started\n", started,
+								PP_LOAD);
+	check(started > 0 && bad == 0, "pkg #271: under load, exit 0 only "
+				"with the postinst run, else a reason");
+
+	st = pkg_run("remove", "pkgpost");
+	check(st == 0 && access("/tmp/pkgpost.f", F_OK) < 0,
+						"pkg #271: remove");
+	if (st != 0) err_show();
+	unlink(PP_TAR);
+	unlink(PP_RAN);
+	unlink(PP_ERR);
+	/* The budget stays 0: MM copies a program to the cache in the
+	 * background, after its 3rd run - it would still do so for pkg,
+	 * tar, sh and sleep if the budget came back now. */
+}
+
 /* What the window's two pipes cost on the card (s0: the counter now):
  * nothing since K.6 "pipe data never reaches the card" (T23a's FS part):
  * a pipe's inode and zones are in core only, no bitmap is written.  It
@@ -2054,6 +2349,7 @@ int main(int argc, char **argv)
 	sflag_tests();
 	discard_tests();
 	preempt_tests();
+	pkg_tests();
 #endif
 	time_tests();
 	finish();

@@ -378,6 +378,13 @@ Extern	int	areanum;	/* current allocation area */
 /* Galtzagorriak: set in a vfork child (it runs in our memory): the heap
  * must not grow there, MM would give the room to the child, not to us. */
 Extern	int	invfork;
+/* Galtzagorriak (#271): an exec that found no memory hole (EAGAIN) is
+ * tried again, 1 s apart, VFTRIES times.  vfquiet: set by us before a
+ * vfork while more tries are left: the child then says nothing, sets
+ * vfagain (our memory) and _exits, and we try again. */
+#define	VFTRIES	10
+Extern	int	vfquiet;
+Extern	volatile int	vfagain;
 
 #define	NEW(type) (type *)getcell(sizeof(type))
 #define	DELETE(obj)	freecell((char *)obj)

@@ -33,5 +33,10 @@
 # 2026-11-18 (T23a desktop_test + T24d settings_test, #258): 9.  m2test's
 # text grew to 30592 B, past 28 KB: one more 4 KB page.  Nothing changed
 # in how often the cache writes.
-m2      cache   9
+# 2026-11-18 (#271 pkg_tests: postinst failure and exec EAGAIN under load):
+# 10.  m2test's text grew from 31104 to 34240 B, past 32 KB: one more 4 KB
+# page.  The test itself sets the cache budget to 0 (pkg, tar, sh and
+# sleep run more than twice there): nothing changed in how often the
+# cache writes.
+m2      cache   10
 m2      inst    0
