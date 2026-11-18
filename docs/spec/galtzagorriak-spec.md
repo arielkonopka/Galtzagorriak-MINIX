@@ -3823,6 +3823,112 @@ how to read the TSV log; that the canary never sends keystrokes, files or networ
 hides the console; that a malicious host can still lie about itself, so "power only" means "did
 nothing during this session", not "is safe".
 
+### 11.3 USB gadgets as window apps (owner pick, 2026-11-18)
+
+The owner picked the USB gadgets as the next family of window apps (K.8) after Kanpaia and
+Ordua. They cover the stock **USB** apps: Bad USB, and the USB half of the stock HID remote
+(keyboard, numpad, media keys, mouse, mouse clicker, mouse jiggler). U2F stays in Phase 17/18
+(it needs the CPU2 enclave). Every screen follows K.2 ("Pine meets modern UX": black title bar,
+bottom hint line, full selection bar).
+
+**Layers.** Kernel/HAL: R10.1/R10.2 (composite CDC console + HID keyboard, mouse and consumer
+control). User space: `libhid` (static), the `badusb` and `jiggle` commands, and two window apps.
+The apps never touch USB registers; they write reports to device files.
+
+- **R11.3.1 Device files** (Phase 10 detail, one HID interface with report ids, so one
+  re-enumeration covers all of it):
+  - `/dev/hidkbd`: `write()` of 8-byte boot keyboard reports (modifiers, 0, 6 keys); `read()`
+    returns the host's LED byte (Caps/Num/Scroll lock) when it changes.
+  - `/dev/hidmouse`: `write()` of 4-byte reports (buttons, dx, dy, wheel), dx/dy −127..127.
+  - `/dev/hidcons`: `write()` of 2-byte consumer usages (volume, mute, play/pause, next,
+    previous, brightness).
+  - `ioctl(HIDIOCSTATE)`: attached, configured by the host, suspended. `poll()` on any of them
+    wakes when that state changes (R4b.6), so no app polls in a loop.
+  - Group `usb`, mode 0660. `open()` returns `EBUSY` while a non-HID USB persona owns the bus
+    (the 11.2 canary, an 11.1 reader mode, mass storage): **one USB persona at a time**, and the
+    canary always wins (it must never send anything).
+  - **QEMU backend** (`BOARD=qemu`, no USB in QEMU): each report is printed on the console as one
+    line, `hid< kbd 02 00 0b 00 00 00 00 00`, and `HIDIOCSTATE` says "configured". nattest and
+    M2 check typed text through these lines. Kernel RAM for it ≤ 32 B.
+- **R11.3.2 `libhid`** (static, host-testable): ASCII/UTF-8 → usage + modifiers through a layout,
+  report builders, key-up after each key. Layouts are the stock `.kl` files (256 × 2 B), read
+  from `/usr/share/hid/layouts/` or `/ext/badusb/assets/layouts/` into a 512 B stack buffer
+  when a script or the keyboard page starts. US is `const` in flash.
+- **R11.3.3 `badusb` command:** the stock Bad USB script engine (DuckyScript 1.0 and the stock
+  extensions: `STRING`, `STRINGLN`, `DELAY`, `DEFAULT_DELAY`, `REPEAT`, `HOLD`/`RELEASE`, `ALTCHAR`,
+  `ALTSTRING`, `SYSRQ`, `ID`, `WAIT_FOR_BUTTON_PRESS`, `MOUSE_*`, `MEDIA`...) ported to MINIX
+  (GPL, section on licence). `badusb [-l LAYOUT] [-n] FILE` runs a script; `-n` only checks it
+  and prints the first error with its line. It reads the script one line at a time (no whole
+  file in RAM), sleeps in `nanosleep`/`poll()` between keys, and stops on `SIGTERM` or `SIGINT`
+  within 100 ms with every key released (AC11.R). `ID` (VID/PID/strings) is honoured only for
+  the strings, VID/PID through a re-enumeration that `usbmode` does (one place for it).
+- **R11.3.4 Bad USB window app** (`badusb-gui`, launcher name **Bad USB**, `Type: window`):
+  - list of scripts in `/ext/badusb/` (paged, `.txt`), then a `confirm` window: script name,
+    layout, "Connect the USB cable to the target. Run?"; then a `text` window with the running
+    line, `n / total` lines and the host state (waiting for host, running, done, error at line N).
+  - It runs `badusb` as a child and shows its progress; Back sends `SIGTERM` (≤ 100 ms).
+  - Settings: layout (`enum` from the layout files), default delay; saved in
+    `/etc/flipper/badusb.conf` only on change (K.7 rule).
+  - Never runs a script without the confirm step; nothing runs at boot unless the owner adds a
+    `badusb` line to a timer or to `/etc/rc.local`.
+- **R11.3.5 USB Remote window app** (`usbremote`, launcher name **Teklatua**, Basque for keyboard):
+  pages (Left/Right on the first row) **Keyboard**, **Numpad**, **Media**, **Mouse**, **Clicker**,
+  **Jiggler**.
+  - Keyboard/Numpad: the desktop's on-screen keyboard (K.8 `input`) in a LIVE window: each key is
+    one `submit`, the app writes one report and its key-up. Holding OK sends Enter.
+  - Media: `action` rows (vol ±, mute, play/pause, next, previous) → `/dev/hidcons`.
+  - Mouse: the d-pad moves (acceleration while held: 1, 2, 4, 8 px per report every 10 ms),
+    OK = left click, long OK = right click, Back + Up/Down = wheel. Key → report ≤ 20 ms
+    (the desktop forwards keys in this window kind: new K.8 window kind `pad`, raw key events
+    `key KEY press|release|repeat`, no rows).
+  - Clicker: `int` rate (1–50 clicks/s), `enum` button, OK starts/stops.
+  - Jiggler: `int` interval (default 30 s), `enum` pattern (tiny
+    1-px square, invisible: dx 0 report). OK starts the `jiggle` command **in the background**
+    and the app may close: the jiggler costs no window RAM.
+- **R11.3.6 `jiggle` command:** `jiggle [-i SECONDS] [-p tiny|zero]`, a ≤ 1 KB process (no stdio,
+  no malloc, no MM gap). It sleeps in `poll()` on `/dev/hidmouse` with the interval as timeout,
+  so it wakes once per interval and **not at all** while USB is unplugged or suspended (state
+  change wakes it). It puts `status jiggle J` on the desktop (`guimod` record, K.6) while it runs,
+  and `jiggle -k` (or the app's Stop) ends it. It needs no parking (spec 12d),
+  so the owner's typical third app (Mouse Jiggler) costs ~1 KB, not a window app's ~4 KB.
+- **R11.3.7 Canary and personas:** the 11.2 canary's `usb` module and these apps share the bus
+  through R11.3.1's `EBUSY`; the desktop status line shows the active persona (`HID`, `CAN`
+  for canary, `RD` for a reader mode). Starting the canary while `jiggle` runs asks once
+  (`confirm`) and stops `jiggle`.
+
+**Security.** These apps type into another computer, which is their purpose. Rules: only group
+`usb` can open the HID files; Bad USB always asks before running; the shell over USB CDC (K4) is
+a separate item; the reports are built by `libhid` from bounded inputs (layout file checked to be
+exactly 512 B, script lines cut at 256 B, `REPEAT` bounded); a fuzz test feeds random scripts to
+`badusb -n` on the host.
+
+**Acceptance.**
+- AC11.3.1 (QEMU, cloud) nattest: `badusb` on the stock example scripts prints the expected
+  `hid<` lines for US and DE layouts; `badusb -n` reports a bad line with its number; Back in the
+  Bad USB app stops a `DELAY 10000` script within 100 ms with all keys released (last report all
+  zeros).
+- AC11.3.2 (QEMU) Teklatua: typing "Kaixo!" on the Keyboard page prints the right reports;
+  Media "vol +" prints one consumer report; the Mouse page prints a move report per key repeat.
+- AC11.3.3 (QEMU) `jiggle -i 2` prints a mouse report every 2 s ± 0.2 s and none while
+  `HIDIOCSTATE` says unplugged (QEMU test hook); the desktop shows `J`; `jiggle -k` ends it.
+- AC11.3.4 (device) AC11.1 (stock example scripts on Windows and Linux, US and DE), AC10.1;
+  the jiggler keeps a Windows PC from locking for 1 h; the console keeps working during it.
+- AC11.3.5 (device) With the canary armed, opening `/dev/hidkbd` fails with `EBUSY`.
+
+**Responsiveness.** Window keys stay local (K.8); Mouse page key → report ≤ 20 ms; Back stops a
+script ≤ 100 ms; L1 holds while a script types 10,000 characters.
+
+**RAM.** Each window app ≤ 4.5 KB open (K.8 rule, ACK8.3 method); `badusb` ≤ 3 KB while running
+(512 B layout on its stack, one 256 B line); `jiggle` ≤ 1 KB; kernel: R10.1 budget (≤ +150 B),
+QEMU backend ≤ 32 B. **Flash writes:** 0 at run time (settings on the card, only on change).
+Flash: `libhid` + engine ≈ 8 KB installed, apps ≈ 4 KB each.
+
+**Notes for the system manual** (`docs/manual/usb-gadgets.md`, written by the PRs that add the
+apps): how to put scripts and layouts on the card, the confirm step, how to stop a script, the
+jiggler running without its window and the `J` mark, why the canary blocks the HID apps, and
+that a host sees a keyboard named after the Flipper unless a script's `ID` line changes it.
+
+
 ---
 
 ## Phase 12: Swapping to the SD card

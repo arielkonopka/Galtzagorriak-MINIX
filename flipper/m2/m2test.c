@@ -1218,6 +1218,8 @@ static int row_text(int i)		/* row i of a page has text */
 	return 0;
 }
 
+static int sectors_written(void);
+
 static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 {
 	FILE *f;
@@ -1227,6 +1229,7 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	long ms, worst = 0;
 	pid_t mod, w[4];
 	struct stat sb;
+	int s0;
 
 	ok = stat("/var/run/gui", &sb) == 0 && S_ISFIFO(sb.st_mode)
 		&& (sb.st_mode & 07777) == 0620 && sb.st_uid == 0 && sb.st_gid == 10;
@@ -1290,6 +1293,8 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 
 	/* ACK.3: four modules as fast as they can, keys on APPS */
 	wtap(b, 0x04);					/* Left: APPS */
+	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
+	s0 = sectors_written();
 	fflush(stdout);
 	for (i = 0; i < 4; i++)
 		if ((w[i] = fork()) == 0) {
@@ -1321,6 +1326,10 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	for (i = 0; i < 4; i++) kill(w[i], SIGKILL);
 	for (i = 0; i < 4; i++) (void) waitpid(w[i], &st, 0);
 	(void) poll((struct pollfd *) NULL, 0, 100);
+	s0 = sectors_written() - s0;
+	printf("  ACK.5 4 modules flooding /var/run/gui, then sync: %d sectors"
+		" written\n", s0);
+	check(s0 == 0, "ACK.5: FIFO records never reach the card (K.6)");
 	wtap(b, 0x02);
 	lgrab(l, "ack3-gone");
 	check(!row_text(0), "ACK.2: four killed modules: their tiles go");
@@ -1379,10 +1388,9 @@ static long free_ram(void)
 }
 
 /* What the window's two pipes cost on the card (s0: the counter now):
- * pipe() allocates an inode on the root device (fs/pipe.c), so its inode
- * and the bitmaps are written at the next sync, also when the data never
- * is (T9).  Not settings' writes: K.6 "pipe data never reaches the card"
- * (T23a's FS part) takes the rest away. */
+ * nothing since K.6 "pipe data never reaches the card" (T23a's FS part):
+ * a pipe's inode and zones are in core only, no bitmap is written.  It
+ * was 6 sectors before (an inode bit and zone bits, T9). */
 static int pipe_sectors(int s0)
 {
 	int p[2], q[2];
@@ -1484,9 +1492,9 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	printf("  ACK7.2 settings time, no saved change: %d sectors written,"
 		" the window's pipes alone %d (the probe's own sync: %d)\n",
 		s1 - s0, ps, s0 - z0);
-	check(z0 >= 0 && ps >= 0 && s1 - s0 <= ps,
+	check(z0 >= 0 && ps == 0 && s1 - s0 == 0,
 		"ACK7.2: a group opened and left without a change writes 0 sectors"
-		" (beyond the K.8 pipes' inode)");
+		" (its K.8 pipes too, K.6)");
 	check((stat("/etc/TZ", &st) == 0) == tz0
 		&& (stat("/etc/flipper/time.conf", &st) == 0) == conf0,
 		"ACK7.2: no /etc/TZ, no time.conf written");
@@ -1776,6 +1784,40 @@ int main(int argc, char **argv)
 	wait(&st);
 	check(n == 17 && strcmp(buf, "through the pipe") == 0,
 						"fork + pipe");
+
+	/* Spec K.6: pipe data lives in the cache only, at most half of it
+	 * (fs/write.c, pipe_zone); 3 full pipes (21 blocks, the cache has
+	 * 18) take real zones beyond that.  Every byte must come back. */
+	{
+		/* (heap, not .bss: a bigger image fails the forks below) */
+		unsigned char *pb = (unsigned char *) malloc(512);
+		int pp[3][2], k, j, okk = pb != NULL, np = 0;
+
+		for (k = 0; pb != NULL && k < 3; k++)
+			if (pipe(pp[k]) == 0) np++;
+		for (k = 0; k < np; k++)
+			for (j = 0; j < 14; j++) {
+				memset(pb, (k * 14 + j) & 0xFF, 512);
+				if (write(pp[k][1], (char *) pb, 512) != 512)
+					okk = 0;
+			}
+		n = open("/bin/sh", O_RDONLY);	/* files go on meanwhile */
+		if (n < 0 || read(n, (char *) pb, 512) != 512)
+			okk = 0;
+		if (n >= 0) close(n);
+		for (k = 0; k < np; k++) {
+			for (j = 0; j < 14; j++) {
+				if (read(pp[k][0], (char *) pb, 512) != 512)
+					okk = 0;
+				else if (pb[0] != ((k * 14 + j) & 0xFF)
+				    || pb[511] != pb[0]) okk = 0;
+			}
+			close(pp[k][0]);
+			close(pp[k][1]);
+		}
+		free(pb);
+		check(np == 3 && okk, "3 full pipes: the data comes back (K.6)");
+	}
 
 	/* Shadowing under load: parent and child (same addresses) take
 	 * turns 200 times; each flip exchanges their images (flipclicks).

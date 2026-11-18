@@ -31,7 +31,7 @@ struct buf {
   struct buf *b_hash;		/* used to link bufs on hash chains */
   block_t b_blocknr;		/* block number of its (minor) device */
   dev_t b_dev;			/* major | minor device where block resides */
-  char b_dirt;			/* CLEAN or DIRTY */
+  char b_dirt;			/* CLEAN, DIRTY or PIPE_DIRTY */
   char b_count;			/* number of users of this buffer */
 };
 
