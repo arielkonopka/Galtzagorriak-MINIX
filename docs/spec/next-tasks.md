@@ -394,6 +394,30 @@ Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, s
 - Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
 - ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
 
+## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; owner pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
+Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
+
+### T28a (`lane:cloud`, QEMU + host): device-file interface, QEMU backend, `libhid`
+- `/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`, `HIDIOCSTATE`, `poll()` on state change, group `usb` 0660, `EBUSY` persona lock (R11.3.1), with the **QEMU backend** that prints `hid< …` lines. The minor numbers and ioctl codes go in a header the HAL backend (T28b) implements unchanged.
+- `libhid` (R11.3.2): layouts (stock `.kl`, US `const`), UTF-8 → reports; host test `hidtest` (all printable ASCII in US and DE round-trip through a reverse table).
+- M2: write a report on each file, check the console line; `EBUSY` with a fake persona held.
+- Kernel RAM ≤ 32 B (QEMU backend), ramcheck.
+
+### T28b (`lane:local`, Flipper): R10.1/R10.2 real backend
+- Composite descriptors (`const`) in `flipper/hal/flipper/usb.c`: CDC console + one HID interface with report ids (keyboard, mouse, consumer), endpoint buffers in the PMA, LED OUT report → `read()` on `/dev/hidkbd`; attach/configure/suspend → `HIDIOCSTATE` and `poll()`; same header as T28a.
+- AC10.1, AC10.R, AC11.3.5; kernel ≤ +150 B; L1 while typing.
+
+### T28c (`lane:cloud`): `badusb` command + Bad USB window app
+- R11.3.3 engine (port stock `bad_usb` script code), R11.3.4 app (`badusb-gui`, launcher name "Bad USB"), example scripts and the DE layout in the package; fuzz `badusb -n` on the host.
+- AC11.3.1; RAM per 11.3.
+
+### T28d (`lane:cloud`): Teklatua (`usbremote`) window app + K.8 `pad` window kind
+- R11.3.5 pages; the new K.8 window kind `pad` (raw `key KEY press|release|repeat` events to the app, desktop draws only the title and hint lines, the app sends a `line` record to show state) goes in spec K.8, devguide K.8 table and `libgm`.
+- AC11.3.2; ≤ 4.5 KB open.
+
+### T28e (`lane:cloud`): `jiggle` command
+- R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
+
 ## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
