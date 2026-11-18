@@ -432,6 +432,18 @@ Windows and Linux copy files with their own drivers, nothing installed on the PC
 - MTP interface (bulk IN/OUT + interrupt IN) in `flipper/hal/flipper/usb.c`, PMA buffers, Microsoft OS descriptors (`0xEE` string, extended compat ID `MTP`), in the default and HID configurations, left out for canary/reader/mass-storage personas; `devd` starts `mtpd` on configure, stops it on detach or 30 s suspend.
 - AC10.4.1–AC10.4.4, AC10.4.7 (AC10.4.5 once the PIN lock exists) and AC10.4.R on the device, Windows 11 (+ Windows 10 if at hand) and Linux; throughput into PORTING.md. Kernel ≤ +96 B (`ramcheck`).
 
+## T30. Radio stacks on the SD card (spec R16.0, R2b.1a; owner request and decision 2026-11-18): milestone M7, with R16.1.0 at the start of Phase 16
+Several ST CPU2 images on the card, switched with `radio use` in maintenance mode; the radio slot holds only the run-time cache. Order: T30a any time → T30b after Phase 15 (R15.1) works. Every PR updates `docs/manual/radio.md` (new page, linked from the manual index).
+
+### T30a (`lane:cloud`, host + QEMU): tool and layout, no FUS
+- `radio` manifest parser, `list`/`add`/`rm` checks, `/etc/radio.slot`; R2b.1a in the flash layout code (installed end = `min(guard, SLOT)`, `pkg` refuses the slot, dead records/cache entries above the guard at boot); QEMU fakes `SFSA` and the R2b.10 info so the layout can be tested at several slot sizes.
+- Host tests: manifests with bad hash / too-new `fus` / slot over the base system refused; `pkg install --flash` stops at the slot. `ramcheck`: 0 B resident.
+- `tools/radio-fetch.py` (R16.0.1a): pinned STM32CubeWB tag, checked table vs. release notes, `list`/`get`/`from-fuf`, `--fus`; CI test against the pinned tag (network allowed) plus an offline test with a fake release tree. Manual page explains fetching the images with Basque-named examples.
+
+### T30b (`lane:local`, Flipper): FUS client and maintenance mode
+- SHCI FUS commands, maintenance mode (R16.0.3) with LCD progress, `radio use`/`repair`; the first use is the R16.1.0 light → full install, with before/after `SFSA`, SRAM2 reservation and FS cache blocks in PORTING.md.
+- AC16.0.1, AC16.0.2, AC16.0.3, AC16.0.R. Never `radio fus` without the owner present.
+
 ## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 

@@ -360,12 +360,14 @@ goes into the system image; user flash goes into the installed region.
 |---|---|---|---|
 | CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.11, with frequency hopping), within the kernel's band and duty-cycle limits (R8.2) |
 | ST25R3916 (NFC) | None: register-configured | Modes NFC-A/B/F/V reader, card emulation, NFC-DEP (P2P), transparent mode | All NFC features. IP over NFC is not worth it |
-| CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" chosen at install time. Switching stacks is a FUS operation: slow, wears flash, and a failure leaves the radio unusable until repaired with qFlipper. Not something to switch at run time |
+| CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" at a time. Several ST images may be kept on the SD card and switched with `radio use` (R16.0, owner request 2026-11-18): a FUS operation in maintenance mode, ~30–90 s with 2–3 reboots, only on an explicit command. A failed swap is repaired from the same SD image, no PC needed |
 
 Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is the smallest; the
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
-region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
+region shrinks automatically. With several images on the card, the flash the largest of them
+would need is the **radio slot** (R2b.1a): it holds only the run-time text cache, so a swap
+never displaces installed programs and no flash sits idle. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
 for central and GATT client apps; R19.13 for Thread or Zigbee).
 
 ---
@@ -2262,7 +2264,7 @@ Package signatures (Phase 17, R17.2) become mandatory for this path once they ex
 | **Installed programs** (new) | 0x0803_0000 | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
 | Run-time text cache | after the installed region | 128 KB default (`CACHE_SIZE`) | exec (as now) |
 | Guard | `SFSA − 16 pages` to `SFSA` | 64 KB | never |
-| CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except an updater stack swap (R17.3) |
+| CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except a stack swap (`radio use`, R16.0; same FUS path as R17.3) |
 
 With the BLE light stack the flash between 0x0803_0000 and the guard is about 520 KB. That has to
 hold the base userland (436 KB of text measured, mostly duplicate libc) plus the device apps
@@ -2276,6 +2278,16 @@ Requirements:
   installed region and the cache are laid out from this value at boot, not at build time.
   Placement is tiered: base system and launcher first (lowest addresses), then installed
   packages, then the run-time cache at the top.
+- **R2b.1a Radio slot** (owner decision 2026-11-18, R16.0): the installed region ends at
+  `min(SFSA − 16 pages, SLOT)`, where `SLOT` is the lowest ST install address among the stack
+  images registered on the SD card (`/etc/radio.slot`, written by `radio add`/`radio rm`, one
+  number; missing file = no slot, today's layout). Between `SLOT` and the guard only the run-time
+  cache lives, so the space is used while a smaller stack runs and a swap destroys only cache
+  entries (disposable by design, R1.4). `pkg install --flash` never writes there; an install that
+  doesn't fit says "radio slot: N KB reserved for <stack>". At boot, records and cache entries at
+  or above the current guard are treated as dead (they can only exist after a swap), at 0 B RAM.
+  The cache keeps a minimum of 32 KB below the guard; `radio add` refuses an image whose slot
+  would break that or reach the base system, libc (R2b.9) or launcher.
 - **R2b.2** `hal_flash_region()` returns two regions (installed, cache). The existing
   `SYS_FLASH` call takes a region argument:
   - **cache** writes stay MM-only, as now;
@@ -4904,6 +4916,89 @@ RAM: kernel SRAM1 ≈ +1 KB (task stack + state), SRAM2 6–8 KB (taken from the
 Acceptance: AC16.1 Pairing, unpairing and reconnect after reboot work with Android and iOS.
 AC16.R BLE remote keypress → host event ≤ 30 ms p99 (connection interval 7.5–15 ms).
 
+### 16.0 Radio stacks on the SD card: `radio` (owner request 2026-11-18)
+
+The owner keeps several ST CPU2 images on the SD card (BLE full, BLE light, BLE + Zigbee,
+BLE + Thread, Zigbee, Thread, ...) and switches between them without a PC. CPU2 runs code only
+from its secure flash and only FUS can install an image, so a switch is a **maintenance swap**,
+not a hot swap: one reboot into maintenance mode, the FUS install, one or two reboots, about
+30–90 s, the radio gone meanwhile. Report: `reports/cpu2-stack-swap-analysis.md` (project files).
+Sizes and install addresses below are ST's (AN5185, STM32CubeWB release notes): check them for
+the exact versions; record measured values in PORTING.md.
+
+- **R16.0.1** SD layout: `/ext/radio/<name>/` holds the ST image unchanged
+  (`stm32wb5x_*_fw.bin`) and a `manifest` (TSV, one key per line): `name`, `type` (as R2b.10
+  reports it), `version`, `fus` (minimum FUS version), `addr` (ST install address for 1 MB
+  parts), `size`, `sha256`, and optional `note`. Example `name zigbee-baserria`
+  (*baserria*: the farmhouse network). No ST image is shipped in the MINIX image.
+- **R16.0.1a** Getting the images (owner 2026-11-18): host tool `tools/radio-fetch.py`, run on a
+  PC (the Flipper has no internet until Phase 22):
+  - source: ST's public `STM32CubeWB` repository, `Projects/STM32WB_Copro_Wireless_Binaries/
+    STM32WB5x/`, at a **pinned release tag** kept in the script (one place to bump); the images
+    are ST's encrypted, signed binaries, used unchanged, under ST's licence (shipped in the same
+    way by the stock firmware);
+  - `radio-fetch.py list` shows the stacks of that release with size, install address and the
+    FUS version they need, taken from the release notes of the same tag (the script also carries
+    a checked table for the pinned tag and stops if the two disagree);
+  - `radio-fetch.py get ble-full zigbee-ble ... --to /media/<card>/radio/` downloads over HTTPS,
+    writes `/ext/radio/<name>/` with the image and the R16.0.1 manifest (SHA-256 computed after
+    download and compared with the checked table), and never overwrites an existing directory
+    without `--force`;
+  - `--fus 1.2.0` (the version `radio` prints on the device) makes it refuse stacks that need a
+    newer FUS, with a note that `radio fus` is needed first;
+  - alternative source, no network: `radio-fetch.py from-fuf <stock update dir>` extracts the radio
+    image the stock/Unleashed updater package carries, with its address from the package manifest;
+  - the card can also be filled over MTP (R10.4) once that exists; `radio add` on the device does
+    the same checks again, so a hand-copied image is fine too.
+- **R16.0.2** `radio` tool (root for changes, anyone for reading):
+  - `radio`: current stack (R2b.10 line), `SFSA`, secure SRAM2 reservation, slot (R2b.1a), FS
+    cache blocks;
+  - `radio list`: images on the card, marking the running one and any that can't be installed
+    (FUS too old, bad hash, slot too small);
+  - `radio add <dir>` / `radio rm <name>`: validate (manifest, SHA-256, `fus`, R2b.1a limits),
+    then rewrite `/etc/radio.slot`. A slot that grows takes effect at the next boot and may move
+    installed programs out of the way **once**, via R2b.7 compaction/`pkg`, after a confirm
+    screen showing the KB and programs involved; a slot that shrinks returns the space to `pkg`;
+  - `radio use <name>`: checks again (plus battery > 50 % or USB power), shows a confirm screen
+    ("BLE pairings stay on SD; BLE apps unavailable until done; ~1 min"), then reboots into
+    maintenance mode (R16.0.3);
+  - `radio repair`: reinstalls the last stack that booted fine (name kept in `/etc/radio.last`).
+  - GUI: a "Radio" page in `settings` with the same functions, in the K.2 screen style.
+- **R16.0.3** Maintenance mode (single user, no apps, INIT starts only the swapper, interrupts
+  on for the display and buttons):
+  1. ask the running stack to hand over to FUS (SHCI `FUS_GetState` twice) and wait for FUS;
+  2. `FUS_FW_DELETE` (delete first, as AN5185 recommends);
+  3. copy the image from SD to `addr`, page by page with CRC check (pages there are the slot,
+     i.e. cache, or the freed stack area), then `FUS_FW_UPGRADE`;
+  4. poll `FUS_GetState` until done, showing progress on the LCD; then reboot normally.
+  Power loss or a crash anywhere leaves at worst "FUS only": MINIX boots without BLE (R15.1)
+  and the next boot offers `radio repair` / `radio use` again from the same SD image.
+  FUS itself (`stm32wb5x_FUS_fw.bin`) is never updated by `radio use`; that stays a separate,
+  extra-confirmed `radio fus <file>` used only when a stack needs a newer FUS.
+- **R16.0.4** Never automatic: no app, script or daemon may start a swap; apps declare what they
+  need in their manifest (`Radio: ble`, `ble-central`, `zigbee`, `thread`) and the launcher
+  greys out what the running stack can't serve, with the hint line naming a stack on the card
+  that can (`OK` opens the Radio page). BLE pairings stay on SD (R15.4) and are reloaded when the
+  new stack has BLE.
+- **R16.0.5** After the reboot, R2b.1 lays out flash from the new `SFSA`, R15.3 sizes the FS
+  cache from the new secure SRAM2 reservation, R2b.10 prints the new stack.
+
+Acceptance (local agent, on the device; CPU2/FUS is never done without it):
+- AC16.0.1 Light ↔ full round trip with `radio use`, both directions; installed programs untouched
+  (SHA-256 of the installed region below the slot equal before/after); pairings with the phone
+  still work after returning to a BLE stack.
+- AC16.0.2 Battery pulled during step 3 and during step 4: the next boot runs, says the radio is
+  missing, and `radio repair` restores the previous stack.
+- AC16.0.3 `radio add` of an image with a wrong hash, a too-new `fus`, or a slot reaching the base
+  system is refused with a clear message.
+- AC16.0.R During maintenance mode the LCD shows progress at least every second; outside it,
+  `radio`, `radio list` and the Radio page change nothing in flash.
+
+Cost: 0 B resident RAM (the swapper runs only in maintenance mode); flash: the `radio` tool and
+the FUS client ≈ 3–5 KB (the same FUS client R16.1.0 and Phase 21 need). Flash writes per swap:
+≈ 2 × the image size (staging + FUS's own copy), only on command. Manual: a "Radio stacks" page in
+`docs/manual/`, written with the implementation.
+
 ### 16.1 Bluetooth adapter: BLE mouse and keyboard → USB (native app `btbridge`, section F)
 
 Owner request (2026-11-14): the Flipper acts as a Bluetooth adapter, for example for a mouse. It
@@ -4927,8 +5022,8 @@ Requirements:
 - **R16.1.0** Decided by the owner (2026-11-14): install the full BLE stack. When: at the start
   of Phase 16, after Phase 15 works on the stack already installed (R15.1), as one FUS update
   (R17.3 path, as qFlipper does), with the before/after `SFSA`, installed-region size and SRAM2
-  reservation recorded in the PR. One install, no run-time switching (rule: minimize flash
-  writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
+  reservation recorded in the PR. Done with `radio use` (R16.0); later switches only on an
+  explicit command, never automatically (rule: minimize flash writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
   report "needs the full BLE stack" and exit.
 - **R16.1.1** `bled` gains the central role: scan (filtered to HID service UUID 0x1812), connect,
   pair/bond (LE Secure Connections; passkey shown on or typed into the Flipper as the device
