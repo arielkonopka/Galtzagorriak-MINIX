@@ -2,6 +2,7 @@
 """powercut - AC2b.5: cut the power during installs, in QEMU.
 
 Usage: powercut.py [-j JOBS] [--all] [N[:MODE] ...]
+       powercut.py --selftest	(the console filter, Run.feed, offline)
 
 Each run boots a fresh copy of build/qemu/minix/disk.img in QEMU and, as
 root, installs two versions of /tmp/p into the installed-programs region
@@ -104,33 +105,54 @@ class Run:
 			stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 		self.out = b""		# the console without LCD frames
 		self.pend = b""		# read, maybe the start of a frame
+		self.done = 0		# bytes of self.pend in self.out already
 		self.frames = 0
 		self.seen = 0
 
 	def feed(self, d):
-		"""Add what QEMU printed to self.out, without the LCD frames."""
+		"""Add what QEMU printed to self.out, without the LCD frames.
+
+		Only a tail that may start a frame and is longer than "\r\n"
+		(so from "\r\n+") is held back: almost every line ends in
+		"\r\n", and wait() on a pattern ending in "\n" must see it
+		at once (#281 review).  Such a "\r\n" goes to self.out and
+		also stays in self.pend (self.done: how many bytes at the
+		start of self.pend are in self.out already), so a frame that
+		starts in the next read is still dropped; only its leading
+		"\r\n" then stays in the output."""
 		buf = self.pend + d
+		done = self.done	# buf[:done] is in self.out already
+		pos = 0			# buf[:pos] is handled
+
+		def emit(upto):
+			s = max(pos, done)
+			if upto > s:
+				self.out += buf[s:upto]
+			return upto
+
 		while True:
-			i = buf.find(FRAME_HEAD)
+			i = buf.find(FRAME_HEAD, pos)
 			if i < 0:	# keep back what may start a frame
-				k = min(len(buf), len(FRAME_HEAD) - 1)
+				k = min(len(buf) - pos, len(FRAME_HEAD) - 1)
 				while k > 0 and not FRAME_HEAD.startswith(buf[-k:]):
 					k -= 1
-				self.out += buf[:len(buf) - k]
-				self.pend = buf[len(buf) - k:]
+				keep = len(buf) - k
+				upto = len(buf) if k <= 2 else keep
+				emit(upto)
+				self.pend = buf[keep:]
+				self.done = max(0, max(done, upto) - keep)
 				return
-			self.out += buf[:i]
-			buf = buf[i:]
-			e = frame_end(buf)
+			pos = emit(i)
+			e = frame_end(buf[i:])
 			if e == 0:		# the rest comes later
-				self.pend = buf
+				self.pend = buf[i:]
+				self.done = max(0, done - i)
 				return
 			if e < 0:		# not a frame: output
-				self.out += buf[:len(FRAME_HEAD)]
-				buf = buf[len(FRAME_HEAD):]
+				pos = emit(i + len(FRAME_HEAD))
 			else:
 				self.frames += 1
-				buf = buf[e:]
+				pos = i + e
 
 	def wait(self, pat, secs=60):
 		"""Read until pat (bytes regex) appears after the last match."""
@@ -333,13 +355,79 @@ def reference():
 		r.close()
 
 
+def selftest():
+	"""Offline test of Run.feed() (no QEMU); raises AssertionError."""
+	def run():
+		r = Run.__new__(Run)
+		r.out, r.pend, r.done, r.frames = b"", b"", 0, 0
+		return r
+
+	def frame(bad=False):
+		row = "|" + "\u2580\u2584" * (LCD_W // 2) + "|\r\n"
+		f = (FRAME_HEAD + row.encode() * FRAME_ROWS + FRAME_BORDER)
+		if bad:		# one cell that is no half block
+			k = f.index("\u2584".encode(), len(f) // 2)
+			f = f[:k] + b"x" + f[k + 3:]
+		return f
+
+	# a trailing "\r\n" is output at once (p3check: GPKG READY\n)
+	r = run()
+	r.feed(b"GPKG READY\r\n")
+	assert r.out == b"GPKG READY\r\n", r.out
+	assert r.pend == b"\r\n" and r.done == 2
+	r.feed(b"next\r\n")
+	assert r.out == b"GPKG READY\r\nnext\r\n", r.out
+	# a frame in a line, split across 3 reads, is dropped
+	f = frame()
+	d = b"12345" + f + b"67 abc\r\n$ "
+	a, b = 9, 9 + len(f) // 2
+	r = run()
+	for x in (d[:a], d[a:b], d[b:]):
+		r.feed(x)
+	assert r.out == b"1234567 abc\r\n$ " and r.frames == 1, r.out
+	assert r.pend == b""
+	# split right after the "\r\n": out keeps only that "\r\n"
+	r = run()
+	r.feed(b"done\r\n")
+	r.feed(f[2:] + b"$ ")
+	assert r.out == b"done\r\n$ " and r.frames == 1, r.out
+	# split inside the head after "\r\n+": held back, then dropped
+	r = run()
+	r.feed(b"x" + f[:5])
+	assert r.out == b"x" and r.pend == f[:5], (r.out, r.pend)
+	r.feed(f[5:] + b"y")
+	assert r.out == b"xy" and r.frames == 1, r.out
+	# a fake frame (one bad cell) stays byte for byte, also split
+	g = frame(bad=True)
+	d = b"a" + g + b"b\r\n"
+	for cut in (None, 3, len(g) // 2, len(g)):
+		r = run()
+		for x in ((d,) if cut is None else (d[:cut], d[cut:])):
+			r.feed(x)
+		assert r.out == d and r.frames == 0, cut
+	# byte by byte: each read ends in "\r\n" once, so the frame's
+	# leading "\r\n" stays; nothing else differs from one read
+	d = b"p\r\n" + f + b"q\r\n" + g + b"\r\nr\r\n"
+	r = run()
+	for i in range(len(d)):
+		r.feed(d[i:i + 1])
+	want = b"p\r\n\r\nq\r\n" + g + b"\r\nr\r\n"
+	assert r.out == want and r.frames == 1, r.out[-300:]
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("-j", type=int, default=4)
 	ap.add_argument("--all", action="store_true")
 	ap.add_argument("--compact", action="store_true")
+	ap.add_argument("--selftest", action="store_true",
+			help="only the offline test of the console filter")
 	ap.add_argument("cuts", nargs="*")
 	a = ap.parse_args()
+	selftest()		# milliseconds; also in every CI run
+	if a.selftest:
+		print("selftest ok")
+		return
 	if a.compact:
 		STEPS[:] = [A, B, FILL, KEEP, A, B]
 
