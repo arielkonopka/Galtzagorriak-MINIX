@@ -24,7 +24,7 @@
 #define HID_KL_CHARS	128		/* its entries: ASCII 0-127 */
 #define HID_KL_US	"en-US"		/* the built-in one */
 #define HID_KL_DIR1	"/usr/share/hid/layouts/"
-#define HID_KL_DIR2	"/ext/badusb/assets/layouts/"
+#define HID_KL_DIR2	"/home/flipper/badusb/assets/layouts/"	/* /ext */
 #define HID_KL_NAME	32		/* longest layout name */
 
 extern const unsigned char hid_us[HID_KL_SIZE];
