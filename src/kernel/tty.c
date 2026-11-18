@@ -907,8 +907,13 @@ int count;			/* number of input characters */
 	/* Canonical mode? */
 	if (tp->tty_termios.c_lflag & ICANON) {
 
-		/* Erase processing (rub out of last character). */
-		if (ch == tp->tty_termios.c_cc[VERASE]) {
+		/* Erase processing (rub out of last character).  Terminals
+		 * send DEL or ^H for Backspace: while erase is one of them,
+		 * both rub out. */
+		if (ch == tp->tty_termios.c_cc[VERASE]
+		    || ((ch == '\177' || ch == '\b')
+			&& (tp->tty_termios.c_cc[VERASE] == '\177'
+			    || tp->tty_termios.c_cc[VERASE] == '\b'))) {
 			(void) back_over(tp);
 			if (!(tp->tty_termios.c_lflag & ECHOE)) {
 				(void) echo(tp, ch);
