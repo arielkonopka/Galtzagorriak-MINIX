@@ -2,7 +2,7 @@
  *
  * The LCD is emulated by dumping the framebuffer as ASCII art to the UART
  * when hal_lcd_flush() is called, so display code can be tested headless.
- * There are no buttons; test code may set qemu_fake_buttons. */
+ * There are no buttons; test code may set them (hal_buttons_fake). */
 #include <stdint.h>
 #include <string.h>
 #include "hal.h"
@@ -151,14 +151,30 @@ long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
 int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
 void hal_subghz_off(void) { }
 
-unsigned hal_buttons(void)
+/* With no button interrupt the kernel samples the buttons once a clock
+ * tick (flipdev_tick, 1/HZ s).  A fake press (/dev/buttons write) and its
+ * release can both come within one tick, the time of one short command
+ * in the tests: then no sample saw the press and the key was lost (#260,
+ * more often with a warm text cache).  So a press stays down until a
+ * sample has seen it; the release shows at the next sample. */
+static unsigned fake_unseen;		/* pressed, not sampled yet */
+
+unsigned hal_buttons(void)		/* the clock interrupt: a sample */
 {
-	return qemu_fake_buttons;
+	unsigned b = qemu_fake_buttons | fake_unseen;
+
+	fake_unseen = 0;
+	return b;
 }
 
-int hal_buttons_fake(unsigned mask)
+int hal_buttons_fake(unsigned mask)	/* the device task */
 {
+	uint32_t pm;
+
+	__asm volatile ("mrs %0, primask\n\tcpsid i" : "=r" (pm) :: "memory");
+	fake_unseen |= mask & ~qemu_fake_buttons;
 	qemu_fake_buttons = mask;
+	__asm volatile ("msr primask, %0" :: "r" (pm) : "memory");
 	return 0;
 }
 
