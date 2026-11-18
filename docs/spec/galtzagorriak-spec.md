@@ -1201,7 +1201,7 @@ copy. A window app carries none of it.
   - Pipe data never reaches the card (K.6, `PIPE_DIRTY`).
   - Background modules (tiles, K.3) keep `/var/run/gui`.
 - **Records** (TSV, one per line, one `write()` ≤ 512 B; a window is at most 640 B of text):
-  - `win ID KIND TITLE`, where KIND is `list`, `text`, `clock` or `confirm`, then rows, then `show`.
+  - `win ID KIND TITLE`, where KIND is `list`, `text`, `clock`, `confirm` or `pad`, then rows, then `show`.
   - Rows:
     - `item KEY LABEL [RIGHT]`: an entry that opens something;
     - `int KEY LABEL MIN MAX STEP VALUE [UNIT]`, `enum KEY LABEL INDEX OPT|OPT|…`,
@@ -1212,13 +1212,22 @@ copy. A window app carries none of it.
     - `action KEY LABEL`: a button row.
   - `clock`: the desktop draws big HH:MM from the RTC, plus two lines of text from the app. It
     updates the minute itself, only while in the foreground with the screen on (K.6).
+  - `pad` (T28d, for Teklatua's mouse, R11.3.5): no rows but `line` records (the app's state);
+    the desktop draws the title, the lines and the hint line, and sends **every key** to the app
+    raw: `key KEY press|release|repeat` (KEY `up` `down` `left` `right` `ok` `back`). While the
+    last key pressed (not Back) is held, a `repeat` every `REPEAT=MS` (option on `win`, 10–1000,
+    default 100; the first after 200 ms; rounded to the 60 Hz clock's ticks). Back is sent too
+    (Back + Up/Down is the mouse wheel), and a lone short Back (pressed alone, let go within 1 s)
+    is also Back as in every window, so Back always works. No key held: 0 wakeups.
   - `busy` / `idle`, `close`.
 - **Events to the app** (fd 3): `ok WIN KEY`, `submit WIN KEY=VALUE…` (only the changed rows,
   sent when the person leaves a list whose values changed, or presses an `action` row), `back WIN`,
   `page WIN FIRST` (long lists, below), `redraw`, `close`.
   - A `win … LIVE` window (T24d, the settings groups of K.7) gets `submit` also right after each
-    value change (a `time`/`date`/`days` row: when its edit ends), so the app applies it at once
+    value change (a `time`/`date`/`days` row: when its edit ends; an `input` row: after every key
+    on the desktop's keyboard, with the whole text, T28d), so the app applies it at once
     through the driver; the app does not answer it, and the desktop's key → frame is unchanged.
+  - `key KEY press|release|repeat`: the keys of a `pad` window (above).
 - **Look:** the desktop draws every window in the one K.2 / R5.6a.7 style.
   - The title bar shows the app name.
   - The hint line is made by the desktop from the row under the cursor: "OK Open", "◀▶ Change",
@@ -3876,9 +3885,14 @@ The apps never touch USB registers; they write reports to device files.
   **Jiggler**.
   - Keyboard/Numpad: the desktop's on-screen keyboard (K.8 `input`) in a LIVE window: each key is
     one `submit`, the app writes one report and its key-up. Holding OK sends Enter.
+    *(T28d as built: the submit carries the row's whole text and the app types the difference,
+    Del → Backspace; Enter, Backspace, Tab and Esc are `action` rows on the page. Holding OK on
+    the keyboard was left out: it needs a timer in the desktop, and in QEMU, where the launcher's
+    text is in RAM, M2's ACK.3 flood had no room left for it.)*
   - Media: `action` rows (vol ±, mute, play/pause, next, previous) → `/dev/hidcons`.
   - Mouse: the d-pad moves (acceleration while held: 1, 2, 4, 8 px per report every 10 ms),
-    OK = left click, long OK = right click, Back + Up/Down = wheel. Key → report ≤ 20 ms
+    OK = left click, long OK = right click, Back + Up/Down = wheel. *(T28d: the reports come one
+    per pad `repeat`, `REPEAT=10`, i.e. one per 60 Hz tick, ~17 ms.)* Key → report ≤ 20 ms
     (the desktop forwards keys in this window kind: new K.8 window kind `pad`, raw key events
     `key KEY press|release|repeat`, no rows).
   - Clicker: `int` rate (1–50 clicks/s), `enum` button, OK starts/stops.

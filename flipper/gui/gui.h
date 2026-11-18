@@ -43,11 +43,17 @@ struct gui_in {
 	unsigned char down;		/* keys down now */
 	unsigned char spoilt;		/* down together with another key */
 	long t[6];			/* clock ticks at each key's press */
+	unsigned char raw;		/* gui_wait: releases too (GUI_UP) */
 };
 int gui_input(struct gui_in *in, int clicks, int ms);
 /* gui_input, and also returns GUI_FD as soon as fd (>= 0, e.g. a window
  * app's records, spec K.8) is readable or closed.  Keys come first. */
 #define GUI_FD		0x100
+/* With in->raw set (a K.8 pad window), every press is returned at once,
+ * clicks included, and every release as KEY | GUI_UP, with GUI_CLICK too
+ * when it ends a click (a key in clicks, alone, held less than ~1 s). */
+#define GUI_UP		0x200
+#define GUI_CLICK	0x400
 int gui_wait(struct gui_in *in, int clicks, int ms, int fd);
 int gui_click(void);			/* the next click of any key */
 /* An 8-pixel-wide bitmap, n rows of one byte (MSB left) at x, y. */

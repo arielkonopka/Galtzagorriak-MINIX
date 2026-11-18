@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [badusb|jiggle]  (only the AC11.3.1 or AC11.3.3 part)
+Usage: nattest.py [badusb|jiggle|teklatua]  (only the AC11.3.1, AC11.3.3
+       or AC11.3.2 part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -34,6 +35,16 @@ timed, remind and alarm packages and checks:
   ACK8.3   free -v with Ordua open: at most 4.5 KB more than the
            launcher alone; free -v with alert open gives the RAM it takes
            (printed as "RAM:" lines, issue #201)
+  AC11.3.2 Teklatua (usbrem 1.0, spec R11.3.5) as the user usbremote:
+           typing "Kaixo!" on the Keyboard page (the desktop's keyboard
+           in a LIVE window, a submit with the text after each key)
+           prints its key reports and key-ups (hid< kbd), Del a
+           Backspace, the Enter row Enter; Media "Volume +"
+           prints one consumer report; the Mouse pad (K.8 pad window)
+           prints a move report on the press and per key repeat, OK a
+           click; a lone Back leaves the pad, Back again closes it
+  ACK8.3   free -v with Teklatua open: at most 4.5 KB more than the
+           launcher alone
   AC11.3.1 badusb (T28c): the package adds the user badusb (group usb),
            Bad USB on the launcher, the example scripts in /ext/badusb;
            badusb on each example script, US and DE, prints exactly the
@@ -193,6 +204,13 @@ def hm(t):
 LOGF = "/home/flipper/apps_data/remind/log"
 
 
+def hold(r, key, secs=1):
+	"""A fake button held down for secs, then let go (repeats)."""
+	r.sh("cat /tmp/kbl >/dev/backlight; cat /tmp/k%s >/dev/buttons; "
+	     "sleep %d; cat /tmp/k000 >/dev/buttons; sleep 1"
+	     % (KEY[key], secs), 30)
+
+
 def win_only(r, prog):
 	"""The launcher of /etc/rc with one window app under its cursor.  It
 	read /etc/apps at boot; it reads it again when an app it ran ends, so
@@ -209,9 +227,17 @@ def win_only(r, prog):
 	# after kanpaia()); Back ends it and the launcher reads both files
 	# again.  Wait until its RAM is free: a full-screen app can take a
 	# few seconds in QEMU, and a key meanwhile would go to it.
+	# Right after boot (a nattest part alone) the Console may take
+	# longer to start than the 3 s here: then wait for it (its RAM
+	# taken) before the Back, else the Back is lost and a later OK
+	# lands in the Console instead of the app under test.
 	before = freebytes(r)
-	tap(r, "ok", 3)
-	tap(r, "back", 3)
+	tap(r, "ok", 3, lit=True)
+	for _ in range(5):
+		if freebytes(r) < before - 256:
+			break
+		r.sh("sleep 2", 20)
+	tap(r, "back", 3, lit=True)
 	for _ in range(15):
 		if freebytes(r) >= before - 256:
 			break
@@ -369,6 +395,112 @@ def ordua(r):
 	for m in re.finditer(rb"memuse: alarm .*", r.out[mark:]):
 		print("  " + m.group(0).decode().strip())
 	win_restore(r)
+
+
+def teklatua(r):
+	"""AC11.3.2, ACK8.3: Teklatua through the launcher of /etc/rc."""
+	check(r.sh("pkg install /lib/pkg/usbrem_1.0.tar", 120) == 0,
+		"install the usbrem package")
+	out = r.output("grep -c '^usbremote:.:24:12:' /etc/passwd; "
+		"grep -c '^Teklatua:usbremote:@usb:=/usr/bin/usbremote$' /etc/apps",
+		60)
+	check(out is not None and out.split()[:2] == [b"1", b"1"],
+		"F.4: user usbremote (uid 24, group usb), Teklatua on the launcher")
+	if fails: print(out)
+	base = win_only(r, "usbremote")
+	mark = len(r.out)
+	win_tap(r, "ok", rb"gui< win\tmain\t.*?gui< show")	# Teklatua
+	now = freebytes(r)
+	print("  RAM: Teklatua open: %d bytes (free %d -> %d)" % (base - now,
+		base, now), flush=True)
+	log = lambda: r.out[mark:].replace(b"\r", b"")
+	check(re.search(rb"gui< win\tmain\tlist\tTeklatua\tLIVE", log())
+	      is not None and b"gui< enum\tpage\tPage\t0\tKeyboard|" in log()
+	      and b"gui< line\tUSB: ready" in log(),
+	      "AC11.3.2: the launcher starts Teklatua, its Keyboard page, USB ready")
+	check(0 < base - now <= 4608,
+		"ACK8.3: Teklatua open takes <= 4.5 KB more than the launcher "
+		"alone (%d B)" % (base - now))
+	# The Keyboard page: Down x2 to Type, OK opens the keyboard (the
+	# cursor on 'a').  K: Up to Aa, OK (shift), Down, Right x10, OK;
+	# Up (Spc), Left x2 (Aa), OK (no shift); Down 'a' OK; Right x8 'i'
+	# OK; Down 'y', Left 'x' OK; Up 'h', Right x7 'o' OK; Down x2 '@',
+	# Left x2 '!' OK.  Each key is a submit with the text so far; the
+	# app types what is new: one key report and its key-up.
+	mk = len(r.out)
+	keys(r, ("down", "down", "ok", "up", "ok", "down") + ("right",) * 10
+	     + ("ok", "up", "left", "left", "ok", "down", "ok") + ("right",) * 8
+	     + ("ok", "down", "left", "ok", "up") + ("right",) * 7
+	     + ("ok", "down", "down", "left", "left", "ok"))
+	r.sh("sleep 2", 20)
+	out = r.out[mk:].replace(b"\r", b"")
+	z = b"hid< kbd 00 00 00 00 00 00 00 00\n"
+	want = []
+	for mod, use in (("02", "0e"), ("00", "04"), ("00", "0c"), ("00", "1b"),
+			 ("00", "12"), ("02", "1e")):	# K a i x o !
+		want += [("hid< kbd %s 00 %s 00 00 00 00 00\n" % (mod, use)).encode(), z]
+	got = re.findall(rb"hid< kbd [0-9a-f ]+\n", out)
+	check(got == want
+	      and re.search(rb"gui> submit\tmain\tkbd=K\n", out) is not None
+	      and re.search(rb"gui> submit\tmain\tkbd=Kaixo!\n", out) is not None,
+	      "AC11.3.2: \"Kaixo!\" on the Keyboard page: K a i x o ! and a "
+	      "key-up after each (hid< kbd), a submit per key")
+	if fails: print(b"".join(got).decode(errors="replace"))
+	# Del on the keyboard (Down x2: the command row under '!', Done;
+	# Left x2: Del): Backspace; Back closes it; Down: the Enter row, OK
+	mk = len(r.out)
+	keys(r, ("down", "down", "left", "left", "ok", "back", "down"))
+	tap(r, "ok", 2)
+	out = r.out[mk:].replace(b"\r", b"")
+	check(re.search(rb"gui> submit\tmain\tkbd=Kaixo\n", out) is not None
+	      and b"hid< kbd 00 00 2a 00 00 00 00 00\nhid< kbd 00 00 00 00 00 00 00 00"
+	      in out and b"hid< kbd 00 00 28 00 00 00 00 00\nhid< kbd 00 00 00 00 00 00 00 00"
+	      in out, "AC11.3.2: Del on the keyboard types Backspace, the Enter "
+	      "row Enter")
+	if fails: print(out.decode(errors="replace")[-1500:])
+	# Up x3: the page row; Right x2: Media
+	mk = len(r.out)
+	keys(r, ("up", "up", "up", "right", "right@main", "down"))
+	tap(r, "ok", 2)				# Volume +
+	out = r.out[mk:].replace(b"\r", b"")
+	check(out.count(b"hid< cons e9 00\n") == 1
+	      and b"hid< cons e9 00\nhid< cons 00 00" in out
+	      and b"gui< action\tvolup\tVolume +" in out,
+	      "AC11.3.2: Media \"Volume +\" prints one consumer report (and "
+	      "its release)")
+	if fails: print(out.decode(errors="replace")[-1500:])
+	# Up, Right: the Mouse page; Down, OK: the pad (K.8 kind pad)
+	mk = len(r.out)
+	keys(r, ("up", "right@main", "down", "ok@mouse"))
+	out = r.out[mk:].replace(b"\r", b"")
+	check(re.search(rb"gui< win\tmouse\tpad\tMouse\tREPEAT=10\n", out)
+	      is not None, "K.8: the Mouse pad is a pad window (REPEAT=10)")
+	mk = len(r.out)
+	hold(r, "right")
+	tap(r, "ok", 2)				# a left click
+	out = r.out[mk:].replace(b"\r", b"")
+	reps = out.count(b"gui> key\tright\trepeat\n")
+	moves = len(re.findall(rb"hid< mouse 00 0[1248] 00 00\n", out))
+	print("  pad: %d repeats, %d move reports" % (reps, moves), flush=True)
+	check(b"gui> key\tright\tpress\n" in out and b"gui> key\tright\trelease\n"
+	      in out and reps >= 5 and moves == reps + 1,
+	      "AC11.3.2: the Mouse pad prints a move report on the press and "
+	      "per key repeat (raw key events)")
+	check(b"hid< mouse 01 00 00 00\nhid< mouse 00 00 00 00" in out,
+	      "the Mouse pad: OK clicks the left button")
+	if fails: print(out.decode(errors="replace")[-2500:])
+	mk = len(r.out)
+	keys(r, ("back",))
+	r.sh("sleep 1", 20)
+	check(b"gui> back\tmouse" in r.out[mk:],
+	      "K.8: a lone Back leaves the pad (Back always works)")
+	keys(r, ("back!",))
+	after = ram_back(r, base)
+	check(after >= base - 256,
+		"Teklatua: Back closes it, its RAM is free again (%d -> %d)"
+		% (base, after))
+	for m in re.finditer(rb"memuse: usbremot .*", r.out[mark:]):
+		print("  " + m.group(0).decode().strip())
 
 
 def clean(out):
@@ -633,19 +765,23 @@ def badusb(r):
 	win_restore(r)
 
 
+PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua}
+
+
 def main():
-	only = sys.argv[1:] == ["badusb"]
+	if len(sys.argv) > 2 or sys.argv[1:] and sys.argv[1] not in PARTS:
+		print(__doc__.split("\n\n")[1], file=sys.stderr)
+		return 2
 	r = powercut.Run(0, 0)
 	try:
 		if not r.login():
 			check(False, "login")
 			return 1
-		if sys.argv[1:] == ["jiggle"] or only:
-			if only:
+		part = sys.argv[1] if len(sys.argv) > 1 else None
+		if part is not None:
+			if part != "jiggle":
 				keyfiles(r)
-				badusb(r)
-			else:
-				jiggle(r)
+			PARTS[part](r)
 			if os.environ.get("NATTEST_LOG"):
 				with open(os.environ["NATTEST_LOG"], "wb") as f:
 					f.write(r.out)
@@ -789,6 +925,7 @@ def main():
 		kanpaia(r)
 
 		ordua(r)
+		teklatua(r)
 		jiggle(r)
 		badusb(r)
 		if os.environ.get("NATTEST_LOG"):
