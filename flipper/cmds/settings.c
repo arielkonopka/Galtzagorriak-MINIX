@@ -12,6 +12,10 @@
  * profile, fstab, setup, passwd, group) are copied from the default
  * instead, so the card keeps one.  The accounts (passwd, group) are reset
  * only when they are named.
+ *
+ *		settings apply		every group's file of the system
+ *					settings (/etc/flipper, spec K.7) applied
+ *					through the drivers: the boot script
  */
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -19,8 +23,11 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include "../../src/commands/settings/sgroup.h"
 
 #define ROM	"/rom"
 
@@ -130,9 +137,33 @@ static int walk(const char *dir, int all)
 	return r;
 }
 
+/* ---- the system settings (spec K.7) ----
+ * settings apply: every group's file applied (the boot script).  The
+ * groups' screens are the window app setgroup (src/commands/settings,
+ * K.8), which the launcher's SETTINGS page starts. */
+void sg_show(int g)		/* only setgroup sends windows */
+{
+	(void) g;
+}
+
 int main(int argc, char **argv)
 {
-	int i, r = 0;
+	int i, r = 0, k;
+
+	if (argc == 2 && strcmp(argv[1], "apply") == 0) {	/* at boot */
+		for (i = 0; i < SG_N; i++) {
+			for (k = 0; k < SG_ROWS; k++) sg_val[k] = -1;
+			(void) sg_call(i, SG_LOAD, -1, NULL);
+			conf_load(i);
+			(void) sg_call(i, SG_APPLY, -1, NULL);
+		}
+		return 0;
+	}
+	if (argc == 2 && sg_find(argv[1]) >= 0) {
+		fprintf(stderr, "settings: %s is a screen of the launcher's "
+			"SETTINGS page (setgroup %s)\n", argv[1], argv[1]);
+		return 1;
+	}
 
 	if (argc == 2 && strcmp(argv[1], "diff") == 0) return walk("/etc", 0);
 	if (argc == 2 && strcmp(argv[1], "reset") == 0) return walk("/etc", 1);
@@ -148,6 +179,6 @@ int main(int argc, char **argv)
 		}
 		return r;
 	}
-	fprintf(stderr, "Usage: settings diff | reset [path ...]\n");
+	fprintf(stderr, "Usage: settings diff | reset [path ...] | apply\n");
 	return 1;
 }

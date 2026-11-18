@@ -52,12 +52,21 @@
 # T19b R9.0.4 (RFID read carrier modes, #210): kernel +4 B: the mode byte
 # (125 kHz / 62.5 kHz 25 % for PSK / 134.2 kHz) and its padding.  Spec
 # allows <= +4 B for R9.0.4, <= +32 B for R9.0.4-R9.0.6 together.
+# R6.7 part 3 (Dallas key emulation, 1-Wire slave on EXTI 14): kernel
+# +16 B: the key's ROM (8 B) and the slave's state (slot counter, command,
+# served count, owner, the slot's start as a 16-bit us clock).  R6 budget
+# +300 B.
+# T28a (spec R11.3.1, USB HID device files): kernel +12 B: the HID
+# files' state in hiddev.c (change flags, poll registrations, the persona
+# and its holder, the LED reader's slot and buffer: 9 B, padded).  The
+# spec allows <= 32 B for the QEMU backend; the QEMU board's own 8 B (its
+# state and the last line's hash) are not in the Flipper image.
 # T19b R9.0.5 (RFID streaming capture): kernel +4 B: who streams, halves
 # filled and handed out, a waiting read (spec: <= +8 B).
 # T19b R9.0.6 (RFID long emulation from a run list): kernel +16 B: the run
 # list and the ring (physical addresses), their sizes, the run playing and
 # its segments left (spec: <= +16 B; R9.0.4-R9.0.6 together +24 of 32 B).
-kernel    160    14684  14844
+kernel    160    14712  14872
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows
@@ -72,4 +81,6 @@ mm        32     10196  10228
 # DEV_SELECTED count and the pipe-poller count (1 B each), padding 6 B.
 # Spec budget for 4b: FS +400 B.
 fs        20     27372  27392
-init      100    664    764
+# T17a (spec N.5): INIT +4 B, the SIGPWR and grace-alarm flags of the
+# orderly halt on low battery (spec allows INIT +16 B).  FS +0 B (N.1).
+init      100    668    768

@@ -74,7 +74,8 @@ Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build
 programs on the card use the C library in the flashed image (one copy for all of them), and they
 run only with the library of their own build: with another one every program, the shell
 included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg: base needs
-shared libc ..., this system has ..."), and `free -v` shows the library and its id.
+shared libc ..., this system has ..."; the same for the GUI apps' library, "needs shared
+libfuri ..."), and `free -v` shows both libraries (`shared libc:`, `shared libfuri:`) and their ids.
 
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
@@ -177,13 +178,16 @@ The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, a
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
 
-**The clock keeps UTC.** Local time comes from the `TZ` variable, a POSIX rule; put it into
-`~/.profile`, for example for Central Europe:
+**The clock keeps UTC.** Local time comes from the time zone in `/etc/TZ`, a POSIX rule; choose
+it on the launcher under SETTINGS > Time (see [The launcher](launcher.md)), or write it yourself,
+for example for Central Europe:
 
-    TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ
+    # Europe/Warsaw
+    CET-1CEST,M3.5.0,M10.5.0/3
 
-Without `TZ` the time shown is UTC. `date` prints local time, `date -u` UTC. To set the clock (as
-root): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
+INIT gives it as `TZ` to everything it starts, and `/etc/profile` reads it for login shells. A
+`TZ` set in `~/.profile` still wins for that user. Without `/etc/TZ` the time shown is UTC.
+`date` prints local time, `date -u` UTC. To set the clock (as root; or on SETTINGS > Time): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
 (`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
 use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
 
@@ -191,8 +195,7 @@ In `/tmp` and `/usr/tmp` (sticky directories, mode 1777) everybody may create fi
 file's owner (or root) may delete or rename it.
 
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
-date, time zone and location (spec Phase 18b), and `/etc/TZ` for the whole system. Until then the
-clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
+date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
 but MINIX reads it as UTC: set it once with `date -u ...Z`.
 
 ## 7. Installing apps and updating the system
@@ -214,6 +217,15 @@ path, a `..` component, a name too long for `tar`, or is a link or device; packa
 `Depends:` names are 1–32 letters, digits and `._+-`. `pkg remove` deletes only the files the
 package installed.
 
+A package is installed only when its setup script (`postinst`) ran and ended without an error.
+Otherwise `pkg` says why and exits 1: `pkg: NAME: postinst cannot start: REASON` (for example when
+there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N` (128 + the signal number if it was killed). Then
+`pkg: NAME VERSION is not set up: pkg install FILE again`: the files are in place, and the same
+command runs the script again. When RAM is short for a moment, `pkg` and the shell wait and try
+again (1 s apart, up to 10 s) before they give up. While a subshell of yours runs in the
+background (for example `( ... ) &`), the shell cannot wait this way: it says
+`NAME: no memory to start it` at once; run the command again a moment later.
+
 ### Updating to a newer build without erasing the card
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
@@ -225,7 +237,15 @@ you need from `/home` first. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
-same build. Builds that do not touch the library keep its id, and the steps below work.)
+same build. Builds that do not touch the library keep its id, and the steps below work, but only
+when they are made with the same compiler: a build from another computer (another GCC version) has
+another id. If you flash first anyway, the Flipper starts without a console (`init: console: Exec
+format error`) until you rewrite the card.)
+
+(Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
+32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
+`minix.bin`) and install the app packages (`remind`, `alarm`, `timed`) again: what was installed
+before is not found at the new place.)
 
 
 1. Build the new version (section 2).
@@ -268,7 +288,8 @@ a hang just reboots the Flipper, like the stock firmware.
   lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
   power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
   [Power and battery](power.md).
-- The time zone is set per user with `TZ` (section 6); there is no system-wide `/etc/TZ` yet.
+- A new time zone reaches programs started after the change; open shells keep the old one until
+  the next login (section 6).
 - The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).

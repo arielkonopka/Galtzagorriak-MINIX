@@ -340,6 +340,140 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
+## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, owner request 2026-11-17): milestone M3
+Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
+
+### T23a: desktop core
+- First, in FS (`src/fs/`, 0 B): pipe and FIFO blocks never written back by `sync`/`update` (`PIPE_DIRTY`, dropped when read; inode not dirtied by pipe I/O), spec K.6 "Pipe data never reaches the card". ACK.5 with the WINCHESTER sector counter. Can be its own PR before the desktop.
+- Pages in the launcher, in a row: Settings ← **Apps** → Home → Notifications → Running. Left/Right move along the row, so R5.6a stays as it is (Left from Apps = Settings, Right = the next page, which R5.6a leaves free). A page move happens on the release of a short Left/Right press; it uses `gui_click()` (new in `gui.c`, spec K.6): fires on the release of a key pressed alone and held < ~1 s, so a key that was part of a chord does nothing (ACK.6). If T21a already adds `gui_click()`, reuse it. Apps is the start page. Notifications and Running appear when T23c and R12.20 add them. The page name is in the title bar.
+- Status line (time, battery percentage, number of unread notifications), redrawn only on change: the minute from a `poll()` timeout, the battery from `/dev/power` at most once a minute. Both only while the launcher is in the foreground and the screen is on; otherwise `poll()` waits with no timeout.
+- `/var/run/gui` FIFO (mode 0620, group `gui`). Records `tile`, `status`, `notify`, `close` (K.3), one per `write()` ≤ `PIPE_BUF`. A record from an unknown or exited module is dropped. Module id = the writer's uid plus the module's name; a module can only change its own tiles.
+- Fixed table: 16 tiles × 48 B. Parsing in a pure function with a host test (malformed lines, overlong fields, escapes).
+- `guimod` shell command: `guimod tile NAME TEXT`, `guimod close NAME`. Example module in `/usr/share/examples/gui/`: battery tile in 3 lines.
+- RAM and responsiveness numbers in the PR (ACK.3, ACK.4). 0 run-time flash writes.
+
+- Follow-up when #145 has chord events: a chords page in Settings that lists the chords and maps the free ones (Right+Up, Left+Down) to actions in `/etc/chords.conf` (spec K.6 "Button chords"). Chords never appear in hint lines.
+
+### T23b: the window server (spec K.8): first, before T23a
+- Needs T21a (#234) on main; does not need T23a or #235.
+- The launcher starts `Type: window` packages as children with two pipes (fd 3 events, fd 4 records). Parser for the K.8 records in a pure function with a host test (malformed, overlong, 640 B limit, every row type).
+- Drawing of `list`, `text`, `clock`, `confirm` in the K.2/R5.6a.7 style with `gui.c`; hint line from the row type; local cursor, Left/Right value changes, 2-deep window stack, keyboard for `input` rows, paging with `page`.
+- Busy mark at 150 ms, non-blocking writes, Back closes at once, `SIGTERM` after 2 s; INIT respawns the launcher.
+- `libgm` (static, `src/lib/gm/`): `gm_init`, `gm_win`, `gm_item`, `gm_int`, `gm_enum`, `gm_bool`, `gm_time`, `gm_date`, `gm_days`, `gm_input`, `gm_line`, `gm_action`, `gm_show`, `gm_event`; lines built in a caller buffer, no `malloc`, no stdio. A C example window app in `/usr/share/examples/gui/`.
+- Logging switch (`/etc/launcher.conf` `GuiLog: on`) that copies traffic to the console (K.3 debugging).
+- ACK8.4, ACK8.5, ACK8.6 with the example app; desktop RAM within the K.6 budget (`make ramcheck` style number in the PR).
+
+### T23c: notifications and Running
+- `notify_post()` (libapp) sends `info` and `reminder` notifications to the desktop as well; the Notifications page keeps the last 8, OK opens one, Back clears it. Alarms stay with `alert` (K.4).
+- The Running page when R12.20 (park) is on main: otherwise a follow-up in the same task.
+- Docs: manual chapter "Desktop and modules" (writing a module in C and shell), devguide section, CHANGELOG.
+
+## T24. System settings (spec K.7, owner decision 2026-11-17 on #110): milestone M3, next after T21a
+One plain C program `settings GROUP`, a window app (K.8, `libgm`; its screens need T23b), one source file per group under `src/commands/settings/`, started from the launcher's SETTINGS page. Writes `/etc/flipper/<group>.conf` with `cfopen()` only on a real change; 0 internal-flash writes; ≤ 3 KB RAM while open.
+
+### T24a (`lane:local`, the local agent offered it): SETTINGS page and the device groups
+- The launcher's Left page lists the groups (K.7) and runs `settings GROUP`; Launcher's own settings stay inside it (#234).
+- **Display** (brightness, idle timeout, forced mode) and **Sound** (volume, test beep), applied at once through `/dev/backlight` and `/dev/speaker`, and at boot from the files.
+- ACK7.1, ACK7.3 on the device; L1 unchanged.
+
+### T24b (`lane:cloud`, after T24a has put the program skeleton on main): Time and About
+- **Time:** date and time (UTC RTC), time zone from the shared zone list (`/etc/TZ`, `SIGHUP` to INIT), 12/24 h.
+- **About:** base version, ABI, kernel build id, free RAM, the `free -v` library lines, serial, licence.
+- Pure parsing/formatting in a host test; ACK7.2 and ACK7.4 in QEMU.
+
+### T24c (later): LED, Power (R7.1 `power` app or a group that starts it), Storage, System; Gestures = R7.2.
+
+## T25. Kanpaia and Ordua as window apps (spec K.8, owner 2026-11-17): milestone M3, after T23b
+Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, snooze, history) stays; the `libfuri` GUI code goes. Package `Type: window`, `Background: exit`, `Flash: yes`; link `libgm` and the needed `libapp` parts statically, not the shared `libfuri`. Remove CHMEM overrides that no longer apply and measure. Manual `remind-alarm.md` updated (screens, RAM).
+
+### T25a: Kanpaia (`remind`)
+- Lists (today, upcoming, history) as `list` windows with paging; new/edit reminder as a form (`input` text, `date`, `time`, `enum` repeat); snooze settings.
+- ACK8.1, ACK8.3 (≤ 4.0 KB open). `nattest`/`timedtest` keep passing.
+
+### T25b: Ordua (`alarm`)
+- Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
+- ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
+
+## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; owner pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
+Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
+
+### T28a (`lane:cloud`, QEMU + host): device-file interface, QEMU backend, `libhid`
+- `/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`, `HIDIOCSTATE`, `poll()` on state change, group `usb` 0660, `EBUSY` persona lock (R11.3.1), with the **QEMU backend** that prints `hid< …` lines. The minor numbers and ioctl codes go in a header the HAL backend (T28b) implements unchanged.
+- `libhid` (R11.3.2): layouts (stock `.kl`, US `const`), UTF-8 → reports; host test `hidtest` (all printable ASCII in US and DE round-trip through a reverse table).
+- M2: write a report on each file, check the console line; `EBUSY` with a fake persona held.
+- Kernel RAM ≤ 32 B (QEMU backend), ramcheck.
+
+### T28b (`lane:local`, Flipper): R10.1/R10.2 real backend
+- Composite descriptors (`const`) in `flipper/hal/flipper/usb.c`: CDC console + one HID interface with report ids (keyboard, mouse, consumer), endpoint buffers in the PMA, LED OUT report → `read()` on `/dev/hidkbd`; attach/configure/suspend → `HIDIOCSTATE` and `poll()`; same header as T28a.
+- AC10.1, AC10.R, AC11.3.5; kernel ≤ +150 B; L1 while typing.
+
+### T28c (`lane:cloud`): `badusb` command + Bad USB window app
+- R11.3.3 engine (port stock `bad_usb` script code), R11.3.4 app (`badusb-gui`, launcher name "Bad USB"), example scripts and the DE layout in the package; fuzz `badusb -n` on the host.
+- AC11.3.1; RAM per 11.3.
+
+### T28d (`lane:cloud`): Teklatua (`usbremote`) window app + K.8 `pad` window kind
+- R11.3.5 pages; the new K.8 window kind `pad` (raw `key KEY press|release|repeat` events to the app, desktop draws only the title and hint lines, the app sends a `line` record to show state) goes in spec K.8, devguide K.8 table and `libgm`.
+- AC11.3.2; ≤ 4.5 KB open.
+
+### T28e (`lane:cloud`): `jiggle` command
+- R11.3.6, `guimod status jiggle J`; AC11.3.3; ≤ 1 KB; no MM gap; Teklatua's Jiggler page starts/stops it (can land before or after T28d: the page is in T28d, the command here).
+
+## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
+Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
+
+### T29a (`lane:cloud`, host + QEMU): `mtpd` core
+- Container parser and the operation set of R10.4 behind a small transport interface (`read container`, `write container`, `send event`). Transports: USB (T29b) and, for tests, a pipe/serial transport: on QEMU over the second console line, on the host over a pipe.
+- Object handles = inode numbers; parent ring ≤ 256 × 8 B with path rebuild by directory scan (no FS change); `GetStorageInfo` from O.5's free counters; partial `SendObject` removed on cancel; `StorageInfoChanged` rate-limited; PIN-lock behaviour behind a stub until the PIN lock exists.
+- Tests: a Python host driver (`tools/mtphost.py`) that speaks the same containers: list, get, send, delete, rename, move, 60-char names, `NAME_MAX`+1, cancel mid-send; fuzz the parser on the host (libFuzzer or AFL, sanitizers, ≥ 1 h in the PR, a short run in CI) = AC10.4.6. M2 runs `mtphost.py` against `mtpd` on QEMU.
+- `ramcheck`: `mtpd` ≤ 8 KB peak; gone after the transport closes. Flash: `mtpd` size in the PR.
+- Docs: manual `usb-files.md` (how it looks on Windows and Linux, what is visible, PIN lock, the K.7 switch; example file `etxea.sub`), `man 8 mtpd`, CHANGELOG.
+
+### T29b (`lane:local`, Flipper): the USB side
+- MTP interface (bulk IN/OUT + interrupt IN) in `flipper/hal/flipper/usb.c`, PMA buffers, Microsoft OS descriptors (`0xEE` string, extended compat ID `MTP`), in the default and HID configurations, left out for canary/reader/mass-storage personas; `devd` starts `mtpd` on configure, stops it on detach or 30 s suspend.
+- AC10.4.1–AC10.4.4, AC10.4.7 (AC10.4.5 once the PIN lock exists) and AC10.4.R on the device, Windows 11 (+ Windows 10 if at hand) and Linux; throughput into PORTING.md. Kernel ≤ +96 B (`ramcheck`).
+
+## T30. Radio stacks on the SD card (spec R16.0, R2b.1a; owner request and decision 2026-11-18): milestone M7, with R16.1.0 at the start of Phase 16
+Several ST CPU2 images on the card, switched with `radio use` in maintenance mode; the radio slot holds only the run-time cache. Order: T30a any time → T30b after Phase 15 (R15.1) works. Every PR updates `docs/manual/radio.md` (new page, linked from the manual index).
+
+### T30a (`lane:cloud`, host + QEMU): tool and layout, no FUS
+- `radio` manifest parser, `list`/`add`/`rm` checks, `/etc/radio.slot`; R2b.1a in the flash layout code (installed end = `min(guard, SLOT)`, `pkg` refuses the slot, dead records/cache entries above the guard at boot); QEMU fakes `SFSA` and the R2b.10 info so the layout can be tested at several slot sizes.
+- Host tests: manifests with bad hash / too-new `fus` / slot over the base system refused; `pkg install --flash` stops at the slot. `ramcheck`: 0 B resident.
+- `tools/radio-fetch.py` (R16.0.1a): pinned STM32CubeWB tag, checked table vs. release notes, `list`/`get`/`from-fuf`, `--fus`; CI test against the pinned tag (network allowed) plus an offline test with a fake release tree. Manual page explains fetching the images with Basque-named examples.
+
+### T30b (`lane:local`, Flipper): FUS client and maintenance mode
+- SHCI FUS commands, maintenance mode (R16.0.3) with LCD progress, `radio use`/`repair`; the first use is the R16.1.0 light → full install, with before/after `SFSA`, SRAM2 reservation and FS cache blocks in PORTING.md.
+- AC16.0.1, AC16.0.2, AC16.0.3, AC16.0.R. Never `radio fus` without the owner present.
+
+## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
+One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
+
+### T27a (`lane:cloud`, QEMU): driver positions, FS V3, tools
+- O.3: needs R12.39 (amended: `dv_size` in sectors, `HIGHPOS`, `DIOCPRW`, `DIOCGETPS`), done once in `disk.c`/`drvlib.c` by the local lane (#110). T27a only sets `HIGHPOS` in FS `rw_block`/`rw_scattered` (64-bit position) and adds libc `bread`/`bwrite`.
+- O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, message otherwise); 32-bit `ino_t` (FS `i_num` repacked +0 B, MM `mp_ino` ≤ +32 B, `st_ino`/`d_ino`, on-disk V1/V2 fields explicit `u16_t`, ABI bump); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; libc `readdir` parses V2 and V3 entries (format from `fstatfs`), flex dropped; triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
+- O.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
+- O.6: `fsck` V3 (`-3` implied by the magic), high-water mark windows, `fsck -L`; `mkfs -3` (room for the largest zone map); `tools/mkfsimg.py -3`.
+- O.7: `/etc/setup` layout, `setup -H` conversion with resume.
+- Tests: ACO.1–ACO.6 with sparse images; host util-linux `mkfs.minix -3`/`fsck.minix -3` cross-checks in CI; `ramcheck` FS ≤ +28 B static, MM ≤ +32 B, stack within budget; flashcheck unchanged.
+- Docs: manual `sdcard.md` (V3 `/home`, Linux access, `setup -H`, `df` estimate), `man` pages for `mkfs -3`, `fsck -L`, `statfs`; devguide note on `NAME_MAX` 60 and `pathconf`; CHANGELOG (ABI: 32-bit `ino_t`, `NAME_MAX`, new FS call, bump per spec J).
+
+### T27b (`lane:local`, Flipper)
+- ACO.7 on a 64 GB or larger card; the numbers (recount time, `fsck` time) into PORTING.md.
+
+## T26. Data modems between two Flippers: RFID, Sub-GHz, NFC, BLE (spec section P; owner request 2026-11-17)
+Owner request outside the milestone order (like T19). Analysis and design: spec section P. The second Flipper of the two-device tests runs Unleashed, which has no such modem: MINIX-to-MINIX rows need a second MINIX Flipper for the session (`twoflip.py --peer-minix`, devguide part 2, 6.12).
+
+### T26a (`lane:cloud`, host + QEMU): DONE in the PR that added section P
+- `src/lib/modem` (frames, CRC, ARQ, carousel, RFID line code P4, CC1101 presets, band table, duty counter), `make modemtest` (ACP.1, ACP.2) in `tests/host`; `gmodem` with the RFID backend on today's `/dev/rfid` and `gmodem info`; `gmodem info` in the M2 self-test; `twoflip.py` `modem` rows and `--peer-minix`; manual chapter "Data modems", `gmodem(1)`.
+
+### T26b (`lane:local`, Flipper): the device side
+- RFID first, no kernel change: two MINIX Flippers back to back, `twoflip.py --peer-minix modem-rfid` (or 6.12 "By hand"); write the measured B/s of `fast` and `robust` and the best spacer into PORTING.md and the manual's table. If P4 fails on the real comparator, tune Q or the dwell in `gmodem.c` and the decoder tolerance in `p4.c` (host tests must stay green).
+- RP.5c reverse channel: field-gap timestamps while `RFIDIOCEMU` runs (ring in the caller's pinned buffer, `poll`), kernel ≤ +8 B; then the RFID ARQ mode in `gmodem`.
+- RP.8 + RP.7, with Phase 8 R8.1 part 2 / R8.2: `/dev/subghz` transmit in packet mode, `SGIOCPHY` computed by `src/lib/modem/cc1101.c` compiled into the kernel, the region band table (check every number of spec P.4 against the current ERC/REC 70-03, EN 300 220 and FCC 15.249 texts and the stock firmware's region data first, and say in the PR what was checked), the duty counter (7 slots, ≤ +24 B), CCA before transmit; kernel ≤ +32 B in total. Then the Sub-GHz PHY in `gmodem` (ARQ, W = 4) and ACP.R with `lat` during a transfer.
+- Never enabled by default without the device checks; Sub-GHz transmit is RF, so this whole item is local-only (Autonomy rules).
+
+### T26c NFC (M6, after Phase 13) and T26d BLE (M7, after Phase 15)
+- P.6: ISO 14443-4 frames between an NFC-A initiator and a card-emulating target, S(WTX) answered by the driver. P.7: one L2CAP CoC, bonded and encrypted, `gmodem pair -m ble`.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.

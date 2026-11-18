@@ -178,11 +178,12 @@ void notify_policy(struct notify_policy *p, const char *home)
  * id and snooze (t->id empty: none), flags what notify_flags() allowed;
  * vol the speaker volume (notify_volume(), 1-100); uid >= 0: the owner of
  * a snooze timer (alert started by root).
- * Returns the pid, or -1. */
+ * Returns the pid, or -1 (errno: also when alert could not start). */
 int app_alert(const struct app_timer *t, int cat, int flags, int vol,
 								int uid)
 {
 	char fb[4], zb[4], rb[4], sb[4], vb[4], ub[8], *argv[30];
+	volatile int err;
 	int n = 0, pid, i;
 
 	/* alert's -f: 1 sound, 2 vibro, 4 LED, 16 screen, as two digits.
@@ -239,9 +240,19 @@ int app_alert(const struct app_timer *t, int cat, int flags, int vol,
 	argv[n++] = (char *) t->title;
 	argv[n++] = (char *) t->text;
 	argv[n] = NULL;
+	/* vfork: the child runs in this frame and we wait until its exec or
+	 * _exit, so an exec that fails (no memory hole: EAGAIN) shows in
+	 * err; it returns -1 then, not the pid of a child that ran nothing
+	 * (#253).  volatile: in memory, not in a register of ours. */
+	err = 0;
 	if ((pid = vfork()) == 0) {
 		execv(APP_ALERT, argv);
+		err = errno != 0 ? errno : ENOEXEC;
 		_exit(127);
+	}
+	if (pid >= 0 && err != 0) {
+		errno = err;
+		return -1;
 	}
 	return pid;
 }

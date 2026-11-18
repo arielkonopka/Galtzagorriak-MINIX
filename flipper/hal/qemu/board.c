@@ -2,7 +2,7 @@
  *
  * The LCD is emulated by dumping the framebuffer as ASCII art to the UART
  * when hal_lcd_flush() is called, so display code can be tested headless.
- * There are no buttons; test code may set qemu_fake_buttons. */
+ * There are no buttons; test code may set them (hal_buttons_fake). */
 #include <stdint.h>
 #include <string.h>
 #include "hal.h"
@@ -134,23 +134,47 @@ int hal_lcd_flush(const uint8_t *fb)
 int hal_gauge_read(unsigned cmd) { (void) cmd; return -2; }
 int hal_charger_read(unsigned reg) { (void) reg; return -2; }
 int hal_charger_set(int what, int on) { (void) what; (void) on; return -1; }
+static int vol_def = 100;			/* QEMU: no backup register */
+int hal_vol_default(void) { return vol_def; }
+void hal_vol_default_set(int v) { vol_def = v < 0 ? 0 : v > 100 ? 100 : v; }
 
 void hal_ow_line(int low) { (void) low; }
 int hal_ow_read(void) { return 1; }	/* nobody pulls it down */
 void hal_ow_delay(unsigned us) { (void) us; }
+uint16_t hal_ow_now(void) { return 0; }
+void hal_ib_emu(int on) { (void) on; }		/* no reader in QEMU */
+int hal_ib_edge(void) { return 0; }
+void hal_ib_clear(void) { }
+int hal_btn_pending(void) { return 1; }
 
 long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
 int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
 void hal_subghz_off(void) { }
 
-unsigned hal_buttons(void)
+/* With no button interrupt the kernel samples the buttons once a clock
+ * tick (flipdev_tick, 1/HZ s).  A fake press (/dev/buttons write) and its
+ * release can both come within one tick, the time of one short command
+ * in the tests: then no sample saw the press and the key was lost (#260,
+ * more often with a warm text cache).  So a press stays down until a
+ * sample has seen it; the release shows at the next sample. */
+static unsigned fake_unseen;		/* pressed, not sampled yet */
+
+unsigned hal_buttons(void)		/* the clock interrupt: a sample */
 {
-	return qemu_fake_buttons;
+	unsigned b = qemu_fake_buttons | fake_unseen;
+
+	fake_unseen = 0;
+	return b;
 }
 
-int hal_buttons_fake(unsigned mask)
+int hal_buttons_fake(unsigned mask)	/* the device task */
 {
+	uint32_t pm;
+
+	__asm volatile ("mrs %0, primask\n\tcpsid i" : "=r" (pm) :: "memory");
+	fake_unseen |= mask & ~qemu_fake_buttons;
 	qemu_fake_buttons = mask;
+	__asm volatile ("msr primask, %0" :: "r" (pm) : "memory");
 	return 0;
 }
 
@@ -222,6 +246,7 @@ const char *hal_reset_cause(void) { return "power on"; }
 #endif
 static int disk_fd = -1;
 static int disk_fake;		/* N.6 test hook: 0 in, 1 out, 2 another card */
+static uint32_t disk_wsect;	/* sectors written (hook 3: ACK7.2, AC12.14) */
 static uint32_t disk_sectors;
 
 int hal_disk_init(void)
@@ -263,6 +288,7 @@ int hal_disk_id(uint32_t *id)
 
 int hal_disk_fake(int state)
 {
+	if (state == 3) return (int) (disk_wsect & 0x7FFFFFFFu);	/* K.7 */
 	if (state < 0 || state > 2) return -1;
 	disk_fake = state;
 	return 0;
@@ -314,6 +340,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
 
 	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
+	disk_wsect += count;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }
 
@@ -349,6 +376,56 @@ unsigned hal_usb_room(void) { return 512; }
 int hal_usb_getc(void) { return -1; }
 int hal_usb_peekc(void) { return -1; }
 
+/* USB HID, the QEMU backend (spec R11.3.1): no USB here, so each report
+ * becomes one console line, "hid< kbd 02 00 0b 00 00 00 00 00", which
+ * nattest and M2 check.  Configured from the start; hal_hid_fake() plays
+ * the host (unplug, suspend, LEDs).  RAM: the state and the last line's
+ * hash, 8 B (the spec allows 32). */
+static uint32_t hid_st = HAL_HID_ATTACHED | HAL_HID_CONFIGURED;
+static uint32_t hid_hash;
+
+static void hid_put(int c)
+{
+	hid_hash = (hid_hash ^ (uint8_t) c) * 16777619u;	/* FNV-1a */
+	kputc(c);
+}
+
+uint32_t hal_hid_state(void) { return hid_st; }
+
+int hal_hid_send(unsigned kind, const uint8_t *rep, unsigned n)
+{
+	static const char names[3][6] = { "kbd", "mouse", "cons" };
+	static const char hex[] = "0123456789abcdef";
+	const char *s;
+
+	if (kind > HAL_HID_CONS || (hid_st & (HAL_HID_CONFIGURED |
+			HAL_HID_SUSPENDED)) != HAL_HID_CONFIGURED) return -1;
+	hid_hash = 2166136261u;
+	for (s = "hid< "; *s; s++) hid_put(*s);
+	for (s = names[kind]; *s; s++) hid_put(*s);
+	while (n-- > 0) {
+		hid_put(' ');
+		hid_put(hex[*rep >> 4]);
+		hid_put(hex[*rep++ & 15]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_hid_fake(uint32_t st)
+{
+	hid_st = st & (0xFF0000u | HAL_HID_ATTACHED | HAL_HID_CONFIGURED
+						| HAL_HID_SUSPENDED);
+	if (!(hid_st & HAL_HID_ATTACHED)) hid_st &= 0xFF0000u;	/* unplugged */
+	return 0;
+}
+
+int hal_hid_line(uint32_t *hash)
+{
+	*hash = hid_hash;
+	return 0;
+}
+
 void hal_backlight(unsigned level) { (void) level; }
 int hal_disk_dma_irq(void) { return -1; }	/* QEMU: semihosting, no DMA */
 void hal_disk_dma_ack(void) { }
@@ -370,16 +447,17 @@ unsigned hal_disk_mhz;
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
 	l[HAL_FL_SFSA] = 0x00090000;
-	l[HAL_FL_INST] = 0x00040000;		/* after 192 KB of system and
-						 * 64 KB of shared libc */
+	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
+						 * 96 KB of shared libc and
+						 * libfuri (<minix/shlibc.h>) */
 	l[HAL_FL_INST_SIZE] = 0x00020000;
-	l[HAL_FL_CACHE] = 0x00060000;
+	l[HAL_FL_CACHE] = 0x00068000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
-	l[HAL_FL_ROM] = 0x00040000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM] = 0x00048000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
 
-uint32_t hal_rom_base(void) { return 0x00040000 + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void) { return 0x00048000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

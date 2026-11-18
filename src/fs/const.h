@@ -55,6 +55,7 @@
 
 #define CLEAN              0	/* disk and memory copies identical */
 #define DIRTY              1	/* disk and memory copies differ */
+#define PIPE_DIRTY         2	/* b_dirt: pipe data, in the cache only (K.6) */
 #define ATIME            002	/* set if atime field needs updating */
 #define CTIME            004	/* set if ctime field needs updating */
 #define MTIME            010	/* set if mtime field needs updating */

@@ -25,8 +25,11 @@
  *				app manifest (spec F.2): Timers: yes|no,
  *				Notify: alarm|reminder|info, DeskMode:
  *				yes|no, checked here, granted with the
- *				app's own uid (A.3)
- *	CONTROL/postinst	optional, run with sh after installing
+ *				app's own uid (A.3); Type: app|window
+ *				(window: a window app, spec K.8)
+ *	CONTROL/postinst	optional, run with sh after installing; if
+ *				it cannot start or fails, install says
+ *				why and exits 1 (#271)
  *	CONTROL/prerm		optional, run with sh before removing
  * The database is /usr/var/pkg/info: NAME.control, NAME.list (the files),
  * NAME.postinst, NAME.prerm.
@@ -75,6 +78,7 @@ static int to_flash;			/* install --flash */
 static int ctl_flash;			/* this package says Flash: yes */
 static char ctl_abi[8];			/* Abi: N or any; none = 1 (J.3) */
 static char ctl_libc[12];		/* Libc: shared libc id (R2b.9) */
+static char ctl_furi[12];		/* Furi: shared libfuri id (R2b.9) */
 static char ctl_name[64], ctl_version[32], ctl_depends[LINE];
 
 static void cleanup(void);
@@ -86,26 +90,84 @@ static void die(const char *msg, const char *arg)
 	exit(1);
 }
 
-/* Run a program in a directory and wait for it; returns its exit status. */
+/* Run a program in a directory and wait for it.  Returns its exit status;
+ * -1 when it could not start (errno: why); 128+N when signal N killed it
+ * (as sh says it).
+ *
+ * vfork: the child runs in this frame and we wait until its exec or
+ * _exit, so what it stores in err we see here (as timed does, #253).  An
+ * exec that fails must not pass for a program that ran: under load MM
+ * has no memory hole for it (EAGAIN), and the child's _exit(127) alone
+ * said nothing - pkg install printed "installed" with no postinst run
+ * (#271).  EAGAIN passes once other programs end, so it is tried again,
+ * RETRIES times a second apart (sleep: no busy wait). */
+#define RETRIES	10
 static int run(const char *dir, char *const argv[])
 {
+	static int tries;	/* not a local: the vfork child runs in this
+				 * frame and may reuse a slot it does not
+				 * need */
+	volatile int err;
 	pid_t pid;
 	int st;
 
-	fflush(stdout);
-	if ((pid = vfork()) < 0) die("cannot fork:", strerror(errno));
-	if (pid == 0) {			/* vfork: only chdir, open, dup, exec */
-		if (dir != NULL && chdir(dir) < 0) _exit(127);
-		if (strcmp(argv[0], "/bin/tar") == 0) {	/* "Made directory" */
-			close(1);
-			open("/dev/null", O_WRONLY);
-			dup2(1, 2);	/* (tar's status still reports errors) */
+	tries = 0;
+	for (;;) {
+		fflush(stdout);
+		err = 0;
+		if ((pid = vfork()) < 0) {
+			if (errno == EAGAIN && tries++ < RETRIES) {
+				sleep(1);
+				continue;
+			}
+			return -1;
 		}
-		execv(argv[0], argv);
-		_exit(127);
+		if (pid == 0) {		/* vfork: only chdir, open, dup, exec */
+			if (dir != NULL && chdir(dir) < 0) {
+				err = errno != 0 ? errno : ENOENT;
+				_exit(127);
+			}
+			if (strcmp(argv[0], "/bin/tar") == 0) {
+				close(1);	/* "Made directory" */
+				open("/dev/null", O_WRONLY);
+				dup2(1, 2);	/* (tar's status still
+						 * reports errors) */
+			}
+			execv(argv[0], argv);
+			err = errno != 0 ? errno : ENOEXEC;
+			_exit(127);
+		}
+		while (waitpid(pid, &st, 0) < 0)
+			if (errno != EINTR) return -1;
+		if (err == 0) break;
+		if (err != EAGAIN || tries++ >= RETRIES) {
+			errno = err;
+			return -1;
+		}
+		sleep(1);
 	}
-	while (waitpid(pid, &st, 0) < 0) if (errno != EINTR) return -1;
-	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+}
+
+/* One message for every program that could not start: 4 B of GOT each
+ * saved keeps pkg in its old number of memory clicks. */
+static const char START[] = "pkg: %s: %s cannot start: %s\n";
+
+/* Run a postinst or prerm with sh.  Returns 0 if it ran and ended with
+ * status 0; else says why on stderr and returns -1 (start failed) or 1. */
+static int script(const char *name, const char *what, char *path)
+{
+	char *argv[3];
+	int r;
+
+	argv[0] = "/bin/sh"; argv[1] = path; argv[2] = NULL;
+	if ((r = run(NULL, argv)) == 0) return 0;
+	if (r < 0) {
+		fprintf(stderr, START, name, what, strerror(errno));
+		return -1;
+	}
+	fprintf(stderr, "pkg: %s: %s failed: exit %d\n", name, what, r);
+	return 1;
 }
 
 static int rm_r(const char *path)
@@ -247,6 +309,12 @@ static unsigned long libc_id(void)
 	return SHLIBC_HDR->sh_magic == SHLIBC_MAGIC ? SHLIBC_HDR->sh_id : 0;
 }
 
+/* The same for the shared libfuri + libapp after it. */
+static unsigned long furi_id(void)
+{
+	return SHFURI_HDR->sh_magic == SHFURI_MAGIC ? SHFURI_HDR->sh_id : 0;
+}
+
 /* Copy a control field into a buffer of size bytes; 0: it does not fit. */
 static int field(char *to, size_t size, const char *v)
 {
@@ -266,7 +334,7 @@ static int read_control(const char *path)
 
 	ctl_name[0] = ctl_version[0] = ctl_depends[0] = 0;
 	ctl_flash = 0;
-	ctl_abi[0] = ctl_libc[0] = 0;
+	ctl_abi[0] = ctl_libc[0] = ctl_furi[0] = 0;
 	if ((f = fopen(path, "r")) == NULL) return -1;
 	while (why == NULL && fgets(line, sizeof line, f) != NULL) {
 		if ((n = strlen(line)) > 0 && line[n - 1] == '\n')
@@ -287,12 +355,17 @@ static int read_control(const char *path)
 			if (!field(ctl_abi, sizeof ctl_abi, v)) why = "Abi: too long";
 		} else if (strcmp(line, "Libc") == 0) {
 			if (!field(ctl_libc, sizeof ctl_libc, v)) why = "Libc: too long";
+		} else if (strcmp(line, "Furi") == 0) {
+			if (!field(ctl_furi, sizeof ctl_furi, v)) why = "Furi: too long";
 		} else if (strcmp(line, "Flash") == 0 && strcmp(v, "yes") == 0) {
 			ctl_flash = 1;	/* spec R2b.5 */
 		} else if (strcmp(line, "Timers") == 0
 			   || strcmp(line, "DeskMode") == 0) {
 			if (strcmp(v, "yes") != 0 && strcmp(v, "no") != 0)
 				why = "Timers:/DeskMode: is not yes or no";
+		} else if (strcmp(line, "Type") == 0) {
+			if (strcmp(v, "app") != 0 && strcmp(v, "window") != 0)
+				why = "Type: is not app or window";
 		} else if (strcmp(line, "Notify") == 0) {
 			if (strcmp(v, "alarm") != 0 && strcmp(v, "reminder") != 0
 			    && strcmp(v, "info") != 0)
@@ -564,7 +637,7 @@ static int install(const char *file)
 	char abs[PATH_MAX], path[PATH_MAX], rel[PATH_MAX], buf[PATH_MAX];
 	char *argv[4];
 	char *dep, *p;
-	int upgrade;
+	int upgrade, r;
 
 	if (!exists(file)) die("no such file:", file);
 	if (file[0] == '/') fmt(abs, sizeof abs, "%s", file);
@@ -582,7 +655,11 @@ static int install(const char *file)
 			return 1;
 	}
 	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
-	if (run(tmp, argv) != 0) die("cannot unpack", file);
+	if ((r = run(tmp, argv)) != 0) {
+		if (r < 0)			/* tar did not start (#271) */
+			fprintf(stderr, START, file, argv[0], strerror(errno));
+		die("cannot unpack", file);
+	}
 	fmt(path, sizeof path, "%s/CONTROL/control", tmp);
 	if (read_control(path) < 0) {
 		fprintf(stderr, "pkg: no valid CONTROL/control in %s\n", file);
@@ -602,6 +679,13 @@ static int install(const char *file)
 		fprintf(stderr, "pkg: %s needs shared libc %s, this system has "
 			"%08lx: flash minix-base.bin of the same build\n",
 			ctl_name, ctl_libc, libc_id());
+		cleanup();
+		return 1;
+	}
+	if (ctl_furi[0] != 0 && strtoul(ctl_furi, NULL, 16) != furi_id()) {
+		fprintf(stderr, "pkg: %s needs shared libfuri %s, this system has "
+			"%08lx: flash minix-base.bin of the same build\n",
+			ctl_name, ctl_furi, furi_id());
 		cleanup();
 		return 1;
 	}
@@ -640,18 +724,23 @@ static int install(const char *file)
 	dbpath(buf, ctl_name, "prerm"); unlink(buf);
 	fmt(path, sizeof path, "%s/CONTROL/postinst", tmp);
 	dbpath(buf, ctl_name, "postinst");
-	if (exists(path)) copy(path, buf);
+	if (exists(path) && copy(path, buf) < 0) die("cannot write", buf);
 	fmt(path, sizeof path, "%s/CONTROL/prerm", tmp);
 	dbpath(buf, ctl_name, "prerm");
-	if (exists(path)) copy(path, buf);
+	if (exists(path) && copy(path, buf) < 0) die("cannot write", buf);
 	cleanup();
 
+	/* A postinst that did not run or failed is not "installed": exit 1
+	 * with the reason (#271).  The files stay; pkg install again runs
+	 * it again (an upgrade to the same version). */
 	dbpath(buf, ctl_name, "postinst");
-	if (exists(buf)) {
-		argv[0] = "/bin/sh"; argv[1] = buf; argv[2] = NULL;
-		run(NULL, argv);
-	}
+	r = exists(buf) ? script(ctl_name, "postinst", buf) : 0;
 	sync();
+	if (r != 0) {
+		fprintf(stderr, "pkg: %s %s is not set up: pkg install %s "
+				"again\n", ctl_name, ctl_version, file);
+		return 1;
+	}
 	printf("%s %s installed\n", ctl_name, ctl_version);
 	return 0;
 }
@@ -659,7 +748,6 @@ static int install(const char *file)
 static int remove_pkg(const char *name)
 {
 	char buf[PATH_MAX], line[PATH_MAX], other[64];
-	char *argv[3];
 	DIR *d;
 	struct dirent *e;
 	FILE *list;
@@ -686,11 +774,11 @@ static int remove_pkg(const char *name)
 		closedir(d);
 	}
 
+	/* A prerm that cannot start: nothing is removed yet, stop here
+	 * (#271).  One that ran and failed is said (script()); the package
+	 * goes all the same. */
 	dbpath(buf, name, "prerm");
-	if (exists(buf)) {
-		argv[0] = "/bin/sh"; argv[1] = buf; argv[2] = NULL;
-		run(NULL, argv);
-	}
+	if (exists(buf) && script(name, "prerm", buf) < 0) return 1;
 	dbpath(buf, name, "list");
 	/* Only the paths the list recorded at install time, whole (R3.6). */
 	if ((list = fopen(buf, "r")) != NULL) {

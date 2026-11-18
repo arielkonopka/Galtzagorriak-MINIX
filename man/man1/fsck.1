@@ -1,8 +1,8 @@
 .TH FSCK 1
 .SH NAME
-fsck, fsck1 \- perform file system consistency check
+fsck \- perform file system consistency check
 .SH SYNOPSIS
-\fBfsck\fR [\fB\-aclmrs\fR]\fR [\fIdevice\fR] ...\fR
+\fBfsck\fR [\fB\-aciklprsvz\fR] [\fB\-m\fR \fIkb\fR] [\fB\-w\fR \fIs\fR] [\fB\-L\fR \fIlog\fR] \fIdevice\fR ...
 .br
 .de FL
 .TP
@@ -16,36 +16,81 @@ fsck, fsck1 \- perform file system consistency check
 ..
 .SH OPTIONS
 .FL "\-a" "Automatically repair inconsistencies"
-.FL "\-c" "Check and list only the specified i-nodes
-.FL "\-l" "List the files and directories in the filesytem
-.FL "\-r" "Prompt user for repairs if inconsistencies are found
+.FL "\-c" "Check and list only the specified i-nodes"
+.FL "\-i" "Report the specified i-nodes when they are found"
+.FL "\-k" "Stop when the Back button is pressed (exit status 8, the check is done again next time)"
+.FL "\-l" "List the files and directories in the filesytem"
+.FL "\-L log" "Append the \fB\-v\fR lines to the file \fIlog\fR"
+.FL "\-m kb" "Use at most \fIkb\fR KB for the maps (default 64, at least 8)"
+.FL "\-p" "Preen: if the file system is marked clean and not marked for a check, do nothing (one block is read); else check and repair as \fB\-a\fR"
+.FL "\-r" "Prompt user for repairs if inconsistencies are found"
 .FL "\-s" "List the superblock of the file system"
+.FL "\-v" "Short output for the Flipper's 32-column screen: a header, the step with a spinner and a percentage redrawn in place, one line per repair and a summary"
+.FL "\-w s" "With \fB\-v\fR: after repairs, keep the summary on the screen until a button or \fIs\fR seconds"
+.FL "\-z" "Report the specified zones when they are found"
 .SH EXAMPLES
 .EX "fsck /dev/hd4" "Check file system on \fI/dev/hd4\fR"
-.EX "fsck \-a /dev/at0" "Automatically fix errors on \fI/dev/at0\fR"
-.EX "fsck \-l /dev/fd0" "List the contents of \fI/dev/fd0\fR"
+.EX "fsck \-a /dev/hd2" "Automatically fix errors on \fI/dev/hd2\fR"
+.EX "fsck \-p \-v /dev/hd1" "What /etc/rc does at boot"
+.EX "fsck \-l /dev/hd4" "List the contents of \fI/dev/hd4\fR"
 .EX "fsck \-c 2 3 /dev/hd3" "Check and list \fI/dev/hd3\fR i-nodes 2 & 3"
 .SH DESCRIPTION
 .PP
-\fIFsck\fR performs consistency checks on the file systems which reside 
-on the specified devices.
-\fIFsck1\fR is an alternate version for use on obsolete V1 file systems.
-When either the \fB\-a\fR or \fB\-r\fR flags are given, the file system
-will be repaired if errors are found.
-Before running \fIfsck\fR on a mounted file system, it must first be unmounted.
-Trying to repair a mounted file system is dangerous and should not be 
-attempted.
+\fIFsck\fR performs consistency checks on the MINIX V2 file systems which
+reside on the specified devices.
+When either the \fB\-a\fR, \fB\-p\fR or \fB\-r\fR flags are given, the file
+system will be repaired if errors are found.
 .PP
-To repair the root file system (which cannot be unmounted), first 
-type CTRL-F9 at the console to kill any and all processes.  Log back in
-as \fBroot\fR, type \fIsync\fR to force any buffered changes to disk,
-run \fIfsck\fR on the root file system and immediately reboot the
-computer by typing \fIreboot\fR.
+Every file system has two flags in its super block (the same as Linux and
+util-linux \fIfsck.minix\fR): \fBclean\fR (nothing written since it was
+last consistent) and \fBcheck\fR (found unclean, not checked since).
+The file system server clears \fBclean\fR before the first write, and sets
+it again when nothing has been written for one \fIupdate\fR period, at
+\fIumount\fR and at an orderly power off.
+\fI/etc/rc\fR runs \fBfsck \-p \-v\fR on the root file system first and on
+\fI/usr\fR and \fI/home\fR before mounting them, so only a file system that
+was not left clean is checked.
+After a check with repairs allowed, \fBcheck\fR is cleared, and \fBclean\fR
+is set if the file system is not mounted.
 .PP
-It is necessary to kill all processes before repairing the root file system
-to prevent them from modifying any disk blocks while \fIfsck\fR is running.
-This is only necessary for the root file system, any other file system can
-simply be unmounted before it is checked.
+\fIFsck\fR keeps the computed zone map in memory only for a window of the
+zones as large as \fB\-m\fR allows; a larger file system is checked in
+several passes (shown as \fIn\fR/\fIN\fR).
+The disk's maps are compared one block at a time, and link counts are kept
+for the i-nodes up to the highest one in use.
+\fIFsck\fR needs about 90 KB of memory: at boot it is free; later, close the
+apps first.
+.PP
+Repairing a mounted file system is safe only for the root file system just
+after boot, as \fI/etc/rc\fR does it: if anything was repaired there,
+\fIfsck\fR exits with 2 and \fI/etc/rc\fR restarts the system at once.
+Any other file system should be unmounted before it is repaired.
+.SH "EXIT STATUS"
+.TP 5
+0
+The file system is clean (or \fB\-p\fR found it marked clean).
+.TP 5
+1
+Errors were found and repaired.
+.TP 5
+2
+The mounted root file system was repaired: reboot now.
+.TP 5
+4
+Errors are left (not repaired).
+.TP 5
+8
+The file system could not be checked (no memory, unreadable, not a V2 file
+system, or stopped with \fB\-k\fR).
+.SH FILES
+.TP 20
+.B /etc/rc.conf
+\fBfsck_mem\fR: the \fB\-m\fR value used at boot.
+.TP 20
+.B /usr/adm/fsck.log
+What the boot checks of \fI/usr\fR and \fI/home\fR printed.
 .SH "SEE ALSO"
 .BR mkfs (1),
-.BR mount (1).
+.BR mount (1),
+.BR fsck.minix (8)
+(util-linux, on a PC).

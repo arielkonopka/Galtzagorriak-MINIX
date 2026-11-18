@@ -1,0 +1,5 @@
+heatshrink 0.4.1 (commit 7d419e1, 2015; LZSS compression for embedded systems), by Scott Vokes, ISC
+licence (LICENSE): https://github.com/atomicobject/heatshrink, copied
+unchanged except heatshrink_config.h (static buffers, window 8, lookahead
+4, no index).  Used by libmodem's -z (src/lib/modem/zstream.c, spec P.3a).
+The stock Flipper firmware uses the same library.

@@ -135,7 +135,8 @@ PUBLIC int do_sync()
 
   register struct inode *rip;
   register struct buf *bp;
-  int i;
+  struct super_block *sp;
+  int i, shutdown;
 
   /* The order in which the various tables are flushed is critical.  The
    * blocks must be flushed last, since rw_inode() leaves its results in
@@ -151,6 +152,15 @@ PUBLIC int do_sync()
 	if ((bp = BUF(i))->b_dev != NO_DEV && bp->b_dirt == DIRTY)
 		flushall(bp->b_dev);
 
+  /* Spec N.2: the sync call (update's every 30 s, sync) marks a file system
+   * CLEAN after a quiet period; MM's at shutdown (do_reboot, SYNC_SHUTDOWN)
+   * marks every read-write one CLEAN.  Internal calls (umount, close of a
+   * block device) are not periods. */
+  if (fs_call == SYNC) {
+	shutdown = (who == MM_PROC_NR && m.m1_i1 == SYNC_SHUTDOWN);
+	for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+		sf_clean(sp, shutdown);
+  }
   return(OK);		/* sync() can't fail */
 }
 

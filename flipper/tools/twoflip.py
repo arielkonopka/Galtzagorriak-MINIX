@@ -6,6 +6,7 @@ receiving or reading.
 
 Usage: twoflip.py [-m PORT] [-u PORT] [-r N] [--map FILE] [--baseline FILE]
                   [--log FILE] [--t5577] [--rw1990] [PATTERN ...]
+       twoflip.py --peer-minix [-m PORT] [-u PORT] [-r N] [modem...]
        twoflip.py --list [PATTERN ...] | --ports | --selftest
 
 Both Flippers hang on the same PC by USB.  The MINIX one is logged in as
@@ -44,6 +45,10 @@ PATTERN selects rows by id (shell-style, or a prefix): "rfid", "ir-*-m2u",
   --rw1990        a blank RW1990 key is at hand: run the iButton write rows
   --freq HZ       Sub-GHz frequency of the raw and Princeton rows
   --log FILE      everything both consoles said, with times
+  --peer-minix    the second Flipper (-u) runs MINIX too: only the "modem"
+                  rows run (spec section P: data modems between two MINIX
+                  Flippers, which the Unleashed firmware does not have);
+                  without it those rows are N/A
 
 Linux, macOS and Windows.  pyserial is needed on Windows and for --ports
 ("pip install pyserial"); on Linux and macOS the script runs without it.
@@ -165,7 +170,11 @@ class Port:
 
 	def wait(self, pat, secs):
 		"""The first match of pat after pos (pos moves past it), or None
-		after secs."""
+		after secs.  USB delivers a line in pieces: a pattern that ends
+		in a number must also require the character after it ((?=\\D),
+		(?=[^0-9A-F]), (?=\\r?\\n)), or "0x08" can match as "0x0" and
+		"@@R=127" as "@@R=12" (seen on the device; the simulator splits
+		lines to catch it)."""
 		end = time.time() + secs
 		rx = re.compile(pat)
 		while True:
@@ -260,7 +269,7 @@ class Minix(Port):
 			for ln in body.split("\n"):
 				self.write(ln + "\r")
 			self.write("TFEOF\r")
-		m = self.wait(rb"@@R=(\d+)", secs)
+		m = self.wait(rb"@@R=(\d+)(?=\D)", secs)
 		if not m:
 			self.sync()
 			return None, self.text(start)
@@ -481,8 +490,8 @@ def rfid_write_m2u(ul, mx, opt, proto, data):
 
 # --- infrared ------------------------------------------------------------
 
-MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)"
-UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)"
+MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)(?=[^0-9a-fA-F])"
+UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)(?=[^0-9A-Fa-f])"
 
 
 def ir_u2m(ul, mx, opt, p, a, c):
@@ -538,7 +547,7 @@ def close_to(want, got):
 def ir_raw_u2m(ul, mx, opt):
 	mx.start("ir rx -r -n 1")
 	ul.run("ir tx RAW F:38000 DC:33 " + " ".join(map(str, IR_RAW)), 5)
-	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)", 3)
+	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)(?=\r?\n)", 3)
 	out = mx.stop()
 	if missing(None, out):
 		return "MISSING", "ir rx -r: " + last(out)
@@ -557,7 +566,7 @@ def ir_raw_m2u(ul, mx, opt):
 	if missing(rc, out):
 		ul.stop()
 		return "MISSING", "ir tx raw: " + last(out)
-	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)", 3)
+	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)(?=\r?\n)", 3)
 	ul.stop()
 	if not m:
 		return "FAIL", "Unleashed received nothing"
@@ -569,7 +578,7 @@ def ir_raw_m2u(ul, mx, opt):
 
 # --- iButton -------------------------------------------------------------
 
-UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)"
+UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)(?=[^0-9A-F])"
 
 
 def od_bytes(text):
@@ -694,6 +703,16 @@ MX_SG = r"rssi=(-?\d+)(?: peak=(-?\d+))?"
 UL_TX_REFUSED = rb"restricted|only be used for RX|must be in|[Ee]rror|failed"
 
 
+def ul_refused(out):
+	"""Why Unleashed did not transmit, with the usual cause named."""
+	why = last(out)
+	if "failed to start" in why:
+		why += " (Unleashed unlshd-095 CLI bug: the internal CC1101 has " \
+			"no begin(), so every subghz tx/rx on device 0 fails; use " \
+			"another Unleashed release)"
+	return why
+
+
 def sg_level(mx):
 	rc, out = mx.run("cat /dev/subghz", 5)
 	m = re.search(MX_SG, out)
@@ -719,7 +738,7 @@ def subghz_rssi_u2m(ul, mx, opt, freq):
 		out = ul.stop()
 		mx.run("echo 0 > /dev/subghz")
 		return "BLOCKED", "Unleashed does not transmit at %d Hz here: %s" \
-			% (freq, last(out))
+			% (freq, ul_refused(out))
 	loud = [x for x in (sg_level(mx) for _ in range(6)) if x is not None]
 	if ul.wait(UL_PROMPT, 15) is None:
 		ul.stop()
@@ -784,7 +803,7 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
 	if re.search(UL_TX_REFUSED.decode(), uo):
 		mx.stop()
-		return "BLOCKED", "Unleashed: " + last(uo)
+		return "BLOCKED", "Unleashed: " + ul_refused(uo)
 	mx.wait(re.escape(f["proto"]).encode(), 3)
 	time.sleep(0.5)
 	out = mx.stop()
@@ -908,6 +927,56 @@ def nfc_m2u(ul, mx, opt, f):
 		last(out, 2))
 
 
+# --- data modems between two MINIX Flippers (spec section P) -----------
+
+# A test text of 1 KB, the same every run, a little Basque in it.
+MODEM_TEXT = "".join("%04d Kaixo, galtzagorriak! Datuak irratiz doaz, "
+	"bit bat, bi bit, hiru bit.\n" % i for i in range(16))
+MODEM_IN = MX_TMP + "/mdm.in"
+MODEM_OUT = MX_TMP + "/mdm.out"
+MODEM_MEDIA = [("rfid", ["fast", "robust"]),
+	("subghz", ["narrow", "std", "wide", "max"]),
+	("nfc", [""]), ("ble", [""])]
+
+
+def modem_row(ul, mx, opt, medium, preset, dirn):
+	"""MINIX sends MODEM_TEXT with `gmodem send`, the other MINIX Flipper
+	receives it with `gmodem recv`; PASS when the checksums agree."""
+	if not opt.peer_minix:
+		return "N/A", "needs a second Flipper with MINIX (--peer-minix): " \
+			"the Unleashed firmware has no such modem"
+	tx, rx = (mx, ul) if dirn == "m2u" else (ul, mx)
+	for side, name in ((tx, "sender"), (rx, "receiver")):
+		if not side.exists("gmodem"):
+			return "MISSING", "no gmodem command on the " + name
+	p = " -p " + preset if preset else ""
+	if not tx.upload(MODEM_IN, MODEM_TEXT):
+		return "FAIL", "could not write " + MODEM_IN
+	rc, want = tx.run("cksum < " + MODEM_IN, 10)
+	rx.run("rm -f " + MODEM_OUT, 5)
+	rx.start("gmodem recv -m %s%s -o %s -t 60; echo @@M\"\"=$?"
+		% (medium, p, MODEM_OUT))
+	time.sleep(1)
+	tx.start("gmodem send -m %s%s %s" % (medium, p, MODEM_IN))
+	m = rx.wait(rb"@@M=(\d+)(?=\D)", 180)
+	txt = tx.stop()
+	got = rx.stop()
+	if missing(None, txt) or missing(None, got):
+		return "MISSING", "gmodem: " + last(txt if missing(None, txt)
+			else got)
+	if not m:
+		return "FAIL", "the receiver did not finish in 180 s: " + last(got)
+	if m.group(1) != b"0":
+		return "FAIL", "gmodem recv exit %s: %s" % (m.group(1).decode(),
+			last(got))
+	rc, have = rx.run("cksum < " + MODEM_OUT, 10)
+	if last(have) != last(want):
+		return "FAIL", "checksums differ: sent %s, got %s" % (last(want),
+			last(have))
+	s = re.search(r"(\d+) bytes, (\d+) frames, (\d+) s", got)
+	return "PASS", ("%s B in %s s" % (s.group(1), s.group(3))) if s else ""
+
+
 # --- the rows ------------------------------------------------------------
 
 def rid(*parts):
@@ -958,6 +1027,13 @@ def build_rows(opt):
 	for f in nfc_files():
 		add("nfc", f["file"][:-4], "u2m", nfc_u2m, f)
 		add("nfc", f["file"][:-4], "m2u", nfc_m2u, f)
+	for medium, presets in MODEM_MEDIA:
+		for pr in presets:
+			feat = medium + (" " + pr if pr else "")
+			add("modem", feat, "m2u", modem_row, medium, pr, "m2u")
+			add("modem", feat, "u2m", modem_row, medium, pr, "u2m")
+	if getattr(opt, "peer_minix", False):	# the rest needs Unleashed
+		rows = [r for r in rows if r[1] == "modem"]
 	return rows
 
 
@@ -1134,6 +1210,9 @@ def login(mx, password):
 def versions(ul, mx):
 	rc, out = mx.run("ver", 5)
 	mv = last(out) if rc == 0 else "?"
+	if isinstance(ul, Minix):		# --peer-minix
+		rc, out = ul.run("ver", 5)
+		return mv, "MINIX " + (last(out) if rc == 0 else "?")
 	ok, uo = ul.run("info device", 5)
 	m = (re.search(r"firmware\.version\s*:\s*(\S+)", uo)
 		or re.search(r"firmware\.branch\.name\s*:\s*(\S+)", uo))
@@ -1155,6 +1234,7 @@ def main():
 	ap.add_argument("--ports", action="store_true")
 	ap.add_argument("--password")
 	ap.add_argument("--selftest", action="store_true")
+	ap.add_argument("--peer-minix", action="store_true")
 	ap.add_argument("patterns", nargs="*")
 	opt = ap.parse_args()
 
@@ -1179,6 +1259,8 @@ def main():
 		return 0
 
 	mport, uport = opt.minix, opt.unleashed
+	if opt.peer_minix:
+		return main_peer_minix(opt, rows, mport, uport)
 	if not mport or not uport:
 		for path, desc in candidates():
 			if path in (mport, uport):
@@ -1203,6 +1285,33 @@ def main():
 			or not mx.sync():
 		sys.exit("twoflip: no root shell on the MINIX Flipper on %s"
 			% mport)
+	return finish(ul, mx, opt, rows)
+
+
+def main_peer_minix(opt, rows, mport, uport):
+	"""Both Flippers run MINIX: -m is "this" one, -u the peer."""
+	if not mport or not uport:
+		for path, desc in candidates():
+			if path in (mport, uport):
+				continue
+			if probe(path) not in ("minix", "login", "user shell"):
+				continue
+			if not mport:
+				mport = path
+			elif not uport:
+				uport = path
+	if not mport or not uport:
+		sys.exit("twoflip: --peer-minix needs two MINIX Flippers (found %s, "
+			"%s); run with --ports, then give -m and -u" % (mport, uport))
+	print("MINIX on %s, MINIX peer on %s" % (mport, uport), flush=True)
+	log = open(opt.log, "w") if opt.log else None
+	mx = Minix(mport, "M", log)
+	ul = Minix(uport, "P", log)
+	pw = opt.password or os.environ.get("TWOFLIP_PASSWORD")
+	for side, port in ((mx, mport), (ul, uport)):
+		if not login(side, pw) or not side.sync():
+			sys.exit("twoflip: no root shell on the MINIX Flipper on %s"
+				% port)
 	return finish(ul, mx, opt, rows)
 
 
