@@ -467,6 +467,11 @@ MISSING; anything else that does not match is FAIL.
   card; `mx.run(cmd)` runs a MINIX command and returns its exit status and output,
   `mx.start` / `mx.stop` the long ones, `mx.exists(word)` whether a command exists,
   `mx.upload(path, text)` writes a file. `wait(regex, secs)` waits for output.
+- **A pattern that ends in a number must also match the character after it**: `(?=\D)`,
+  `(?=[^0-9A-F])` or `(?=\r?\n)`. USB delivers a line in pieces. Without that,
+  `command 0x08` matched as `0x0` (5 of 10 IR rows failed on the device) and `@@R=127` as `@@R=12`
+  (a missing command counted as present). The simulator sends the last character of each line
+  20 ms late, so `--selftest` catches such a pattern.
 - New test files go into `twoflip_data/subghz/` or `twoflip_data/nfc/`; they become rows by
   themselves.
 - The simulator `twoflip_sim.py` imitates both Flippers as main has them; when MINIX gains a

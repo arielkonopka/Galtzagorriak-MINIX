@@ -170,7 +170,11 @@ class Port:
 
 	def wait(self, pat, secs):
 		"""The first match of pat after pos (pos moves past it), or None
-		after secs."""
+		after secs.  USB delivers a line in pieces: a pattern that ends
+		in a number must also require the character after it ((?=\\D),
+		(?=[^0-9A-F]), (?=\\r?\\n)), or "0x08" can match as "0x0" and
+		"@@R=127" as "@@R=12" (seen on the device; the simulator splits
+		lines to catch it)."""
 		end = time.time() + secs
 		rx = re.compile(pat)
 		while True:
@@ -265,7 +269,7 @@ class Minix(Port):
 			for ln in body.split("\n"):
 				self.write(ln + "\r")
 			self.write("TFEOF\r")
-		m = self.wait(rb"@@R=(\d+)", secs)
+		m = self.wait(rb"@@R=(\d+)(?=\D)", secs)
 		if not m:
 			self.sync()
 			return None, self.text(start)
@@ -486,8 +490,8 @@ def rfid_write_m2u(ul, mx, opt, proto, data):
 
 # --- infrared ------------------------------------------------------------
 
-MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)"
-UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)"
+MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)(?=[^0-9a-fA-F])"
+UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)(?=[^0-9A-Fa-f])"
 
 
 def ir_u2m(ul, mx, opt, p, a, c):
@@ -543,7 +547,7 @@ def close_to(want, got):
 def ir_raw_u2m(ul, mx, opt):
 	mx.start("ir rx -r -n 1")
 	ul.run("ir tx RAW F:38000 DC:33 " + " ".join(map(str, IR_RAW)), 5)
-	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)", 3)
+	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)(?=\r?\n)", 3)
 	out = mx.stop()
 	if missing(None, out):
 		return "MISSING", "ir rx -r: " + last(out)
@@ -562,7 +566,7 @@ def ir_raw_m2u(ul, mx, opt):
 	if missing(rc, out):
 		ul.stop()
 		return "MISSING", "ir tx raw: " + last(out)
-	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)", 3)
+	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)(?=\r?\n)", 3)
 	ul.stop()
 	if not m:
 		return "FAIL", "Unleashed received nothing"
@@ -574,7 +578,7 @@ def ir_raw_m2u(ul, mx, opt):
 
 # --- iButton -------------------------------------------------------------
 
-UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)"
+UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)(?=[^0-9A-F])"
 
 
 def od_bytes(text):
@@ -944,7 +948,7 @@ def modem_row(ul, mx, opt, medium, preset, dirn):
 		% (medium, p, MODEM_OUT))
 	time.sleep(1)
 	tx.start("gmodem send -m %s%s %s" % (medium, p, MODEM_IN))
-	m = rx.wait(rb"@@M=(\d+)", 180)
+	m = rx.wait(rb"@@M=(\d+)(?=\D)", 180)
 	txt = tx.stop()
 	got = rx.stop()
 	if missing(None, txt) or missing(None, got):
