@@ -340,6 +340,60 @@ The owner wants every app reached from the launcher to look like it: title bar w
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
 
+## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, owner request 2026-11-17): milestone M3
+Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
+
+### T23a: desktop core
+- First, in FS (`src/fs/`, 0 B): pipe and FIFO blocks never written back by `sync`/`update` (`PIPE_DIRTY`, dropped when read; inode not dirtied by pipe I/O), spec K.6 "Pipe data never reaches the card". ACK.5 with the WINCHESTER sector counter. Can be its own PR before the desktop.
+- Pages in the launcher, in a row: Settings ← **Apps** → Home → Notifications → Running. Left/Right move along the row, so R5.6a stays as it is (Left from Apps = Settings, Right = the next page, which R5.6a leaves free). A page move happens on the release of a short Left/Right press; it uses `gui_click()` (new in `gui.c`, spec K.6): fires on the release of a key pressed alone and held < ~1 s, so a key that was part of a chord does nothing (ACK.6). If T21a already adds `gui_click()`, reuse it. Apps is the start page. Notifications and Running appear when T23c and R12.20 add them. The page name is in the title bar.
+- Status line (time, battery percentage, number of unread notifications), redrawn only on change: the minute from a `poll()` timeout, the battery from `/dev/power` at most once a minute. Both only while the launcher is in the foreground and the screen is on; otherwise `poll()` waits with no timeout.
+- `/var/run/gui` FIFO (mode 0620, group `gui`). Records `tile`, `status`, `notify`, `close` (K.3), one per `write()` ≤ `PIPE_BUF`. A record from an unknown or exited module is dropped. Module id = the writer's uid plus the module's name; a module can only change its own tiles.
+- Fixed table: 16 tiles × 48 B. Parsing in a pure function with a host test (malformed lines, overlong fields, escapes).
+- `guimod` shell command: `guimod tile NAME TEXT`, `guimod close NAME`. Example module in `/usr/share/examples/gui/`: battery tile in 3 lines.
+- RAM and responsiveness numbers in the PR (ACK.3, ACK.4). 0 run-time flash writes.
+
+- Follow-up when #145 has chord events: a chords page in Settings that lists the chords and maps the free ones (Right+Up, Left+Down) to actions in `/etc/chords.conf` (spec K.6 "Button chords"). Chords never appear in hint lines.
+
+### T23b: the window server (spec K.8): first, before T23a
+- Needs T21a (#234) on main; does not need T23a or #235.
+- The launcher starts `Type: window` packages as children with two pipes (fd 3 events, fd 4 records). Parser for the K.8 records in a pure function with a host test (malformed, overlong, 640 B limit, every row type).
+- Drawing of `list`, `text`, `clock`, `confirm` in the K.2/R5.6a.7 style with `gui.c`; hint line from the row type; local cursor, Left/Right value changes, 2-deep window stack, keyboard for `input` rows, paging with `page`.
+- Busy mark at 150 ms, non-blocking writes, Back closes at once, `SIGTERM` after 2 s; INIT respawns the launcher.
+- `libgm` (static, `src/lib/gm/`): `gm_init`, `gm_win`, `gm_item`, `gm_int`, `gm_enum`, `gm_bool`, `gm_time`, `gm_date`, `gm_days`, `gm_input`, `gm_line`, `gm_action`, `gm_show`, `gm_event`; lines built in a caller buffer, no `malloc`, no stdio. A C example window app in `/usr/share/examples/gui/`.
+- Logging switch (`/etc/launcher.conf` `GuiLog: on`) that copies traffic to the console (K.3 debugging).
+- ACK8.4, ACK8.5, ACK8.6 with the example app; desktop RAM within the K.6 budget (`make ramcheck` style number in the PR).
+
+### T23c: notifications and Running
+- `notify_post()` (libapp) sends `info` and `reminder` notifications to the desktop as well; the Notifications page keeps the last 8, OK opens one, Back clears it. Alarms stay with `alert` (K.4).
+- The Running page when R12.20 (park) is on main: otherwise a follow-up in the same task.
+- Docs: manual chapter "Desktop and modules" (writing a module in C and shell), devguide section, CHANGELOG.
+
+## T24. System settings (spec K.7, owner decision 2026-11-17 on #110): milestone M3, next after T21a
+One plain C program `settings GROUP`, a window app (K.8, `libgm`; its screens need T23b), one source file per group under `src/commands/settings/`, started from the launcher's SETTINGS page. Writes `/etc/flipper/<group>.conf` with `cfopen()` only on a real change; 0 internal-flash writes; ≤ 3 KB RAM while open.
+
+### T24a (`lane:local`, the local agent offered it): SETTINGS page and the device groups
+- The launcher's Left page lists the groups (K.7) and runs `settings GROUP`; Launcher's own settings stay inside it (#234).
+- **Display** (brightness, idle timeout, forced mode) and **Sound** (volume, test beep), applied at once through `/dev/backlight` and `/dev/speaker`, and at boot from the files.
+- ACK7.1, ACK7.3 on the device; L1 unchanged.
+
+### T24b (`lane:cloud`, after T24a has put the program skeleton on main): Time and About
+- **Time:** date and time (UTC RTC), time zone from the shared zone list (`/etc/TZ`, `SIGHUP` to INIT), 12/24 h.
+- **About:** base version, ABI, kernel build id, free RAM, the `free -v` library lines, serial, licence.
+- Pure parsing/formatting in a host test; ACK7.2 and ACK7.4 in QEMU.
+
+### T24c (later): LED, Power (R7.1 `power` app or a group that starts it), Storage, System; Gestures = R7.2.
+
+## T25. Kanpaia and Ordua as window apps (spec K.8, owner 2026-11-17): milestone M3, after T23b
+Both `lane:cloud`, can run in parallel. The logic (timer files, ring settings, snooze, history) stays; the `libfuri` GUI code goes. Package `Type: window`, `Background: exit`, `Flash: yes`; link `libgm` and the needed `libapp` parts statically, not the shared `libfuri`. Remove CHMEM overrides that no longer apply and measure. Manual `remind-alarm.md` updated (screens, RAM).
+
+### T25a: Kanpaia (`remind`)
+- Lists (today, upcoming, history) as `list` windows with paging; new/edit reminder as a form (`input` text, `date`, `time`, `enum` repeat); snooze settings.
+- ACK8.1, ACK8.3 (≤ 4.0 KB open). `nattest`/`timedtest` keep passing.
+
+### T25b: Ordua (`alarm`)
+- Alarm list, edit form (`time`, `days`, `bool` on/off), ring settings (escalating/steady, vibro, LED, screen flash, beep, tones, melody, volume) as `enum`/`bool`/`int` rows; the desk clock as a `clock` window with the next alarm in its text lines.
+- ACK8.2, ACK8.3 (≤ 4.5 KB open). `alert` unchanged.
+
 ## T27. Bigger `/home` as MINIX V3 (spec section O; owner request 2026-11-17): owner approved the MINIX V3 on-disk change 2026-11-17
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 

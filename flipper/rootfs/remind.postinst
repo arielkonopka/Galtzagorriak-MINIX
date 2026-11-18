@@ -1,19 +1,20 @@
-# postinst of the remind package (spec 7b, F.4).  The app's own user
+# postinst of the remind package (spec 7b, F.4, K.8).  The app's own user
 # (remind, group timers: it may add timers to /var/timers; spec A.3) and
-# its line on the launcher.  The launcher starts it as root; once it has
-# the screen and buttons it becomes the user remind (one gid per process,
-# so it cannot get both gui and timers from the launcher yet).
+# its line on the launcher.  Since 1.1 it is a window app (T25a): "=" before
+# the program, the launcher starts it as the user remind with its pipes on
+# fd 3 and 4 (its own gid, timers: it needs no screen) and draws it.
 grep '^remind:' /etc/passwd >/dev/null || {
 	echo 'remind:*:21:11:Reminders:/home/flipper:' >> /etc/passwd
 	echo "remind: added the user remind (uid 21, group timers)"
 }
 # The launcher line: Kanpaia, a Basque touch (owner 2026-11-17), with its
-# icon; older lines (Remind, with or without the icon) become it.
-sed -e 's|^Remind:root:/usr/bin/remind$|Kanpaia:root:@bell:/usr/bin/remind|' \
-    -e 's|^Remind:root:@bell:/usr/bin/remind$|Kanpaia:root:@bell:/usr/bin/remind|' /etc/apps > /etc/apps.new &&
-	mv /etc/apps.new /etc/apps
-grep ':/usr/bin/remind$' /etc/apps >/dev/null || {
-	echo 'Kanpaia:root:@bell:/usr/bin/remind' >> /etc/apps
+# icon; older lines (Remind, Kanpaia as root, full screen) become it.
+sed -e 's|^Remind:root:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
+    -e 's|^Remind:root:@bell:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
+    -e 's|^Kanpaia:root:@bell:/usr/bin/remind$|Kanpaia:remind:@bell:=/usr/bin/remind|' \
+    /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+grep ':=/usr/bin/remind$' /etc/apps >/dev/null || {
+	echo 'Kanpaia:remind:@bell:=/usr/bin/remind' >> /etc/apps
 	echo "remind: the launcher now has Kanpaia"
 }
 test -d /home/flipper/apps_data/remind || mkdir /home/flipper/apps_data/remind

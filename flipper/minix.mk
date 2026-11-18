@@ -269,7 +269,8 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 # Flash it with DFU like minix.bin, together with the base package or card
 # of the same build; /etc/rc binds them at the next boot (pkg bind).
 BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
-	      test rfid
+	      test rfid fsck
+# fsck: /etc/rc runs it before /usr is mounted (spec N.3), text in place.
 # rfid: 46 KB of text with liblfrfid (spec R9.0.1); from here it runs in
 # place, instead of from RAM until the run-time cache has copied it (12
 # pages written at run time).
@@ -295,7 +296,7 @@ base-flash: $(MB)/minix-base.bin
 # The shell, the MINIX commands (src/commands/simple, halt) and m2test.
 CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   dirname du echo ed expand expr factor fgrep find fold getty grep \
-	   head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
+	   fsck head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
 	   printenv printroot pwd rev rmdir sed sleep sort split strings stty \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
@@ -367,6 +368,11 @@ CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
+CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
+			# fit, fsck shrinks its zone window) + 24 KB (stack:
+			# ~0.5 KB per directory level, stdio).  Runs at boot
+			# from /etc/rc, when the RAM is free; later it may need
+			# apps closed first.
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
@@ -583,7 +589,7 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello remind timed alert
+FURIPROGS := furihello timed alert
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
@@ -594,9 +600,9 @@ OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
 CHMEM_alert := 6144	# gui, poll, the 1 KB picture under it (R7b.2); timedtest memuse
-# The native app remind (spec 7b.1, F.4): libfuri GUI, libapp timers;
-# package remind (/usr/bin, own user).  alarm: WINPROGS below.
-NATPROGS := remind
+# The native apps (spec 7b.1, 7b.2) are window apps now (WINAPPS below);
+# the nat rules stay for native apps that still use libfuri.
+NATPROGS :=
 NAT_CFLAGS = $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -I$(APP_DIR)/include -Iapps/native
 $(MB)/cmd/nat/%.o: apps/%.c $(FURI_HDR) $(APP_DIR)/include/app.h apps/native/nat.h
 	@mkdir -p $(dir $@)
@@ -605,21 +611,43 @@ $(foreach p,$(NATPROGS),$(eval OBJS_$(p) = $(MB)/cmd/nat/$(p)/$(p).o \
 	$(MB)/cmd/nat/native/nat_core.o $(FURI_LINK)))
 # chmem: libfuri's main stack 3 KB and gui thread 2 KB (#188), the heap
 # (Canvas 1.1 KB, views, the lists) and MM's 1.5 KB safety gap above it.
-# nattest (3 runs, 12 KB): never used remind 3.8-4.0 KB, alarm 3.2-3.4 KB;
-# what is left keeps at least 1 KB for the heap to grow (issue #201).
-CHMEM_remind := 11264	# 7b.1
-# Ordua (alarm) is a window app (spec K.8, T25b): libgm, libapp and
-# nat_core statically, no libfuri.  No malloc (opendir() is not used),
-# no stdio; chmem: the stack (timer_add() keeps 2 x 512 B on it while it
-# saves) and MM's 1.5 KB gap.
-WINPROGS := alarm
-$(MB)/cmd/win/%.o: apps/%.c $(APP_DIR)/include/app.h apps/native/nat.h \
-		$(GM_DIR)/gm.h
+# Window apps with timers (spec K.8, T25a): remind (Kanpaia) describes its
+# windows with libgm and keeps its timers with libapp, both linked
+# statically (--gc-sections), never the shared libfuri: no Canvas, no gui
+# thread, no furi data area.  Package remind (/usr/bin, own user).
+# Their objects without -fdata-sections and with -fno-merge-constants:
+# under -mno-pic-data-is-text-relative every static variable and string
+# literal of its own section costs a GOT word in RAM; in one .data/.bss/
+# .rodata per object they share one (section anchors): remind's GOT 868 ->
+# ~300 B.  Unused rodata then stays in flash, not RAM.
+WINAPPS	:= remind alarm
+WIN_CFLAGS = $(APP_CFLAGS) -fno-data-sections -fno-merge-constants \
+	-I$(GM_DIR) -Iapps/native
+$(MB)/cmd/win/%.o: apps/%.c $(GM_DIR)/gm.h $(APP_DIR)/include/app.h \
+		apps/native/nat.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(APP_CFLAGS) -I$(GM_DIR) -Iapps/native -MMD -MP -c $< -o $@
-OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(MB)/cmd/nat/native/nat_core.o \
-	$(MB)/gm/gm.o $(APP_OBJ)
-CHMEM_alarm  := 2048	# 7b.2, K.8
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/%.o: $(APP_DIR)/src/%.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/win/lib/nat_core.o: apps/native/nat_core.c apps/native/nat.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
+WIN_LIB	:= $(addprefix $(MB)/cmd/win/lib/,gm.o nat_core.o tspec.o io.o tune.o)
+OBJS_remind = $(MB)/cmd/win/remind/remind.o $(WIN_LIB)
+CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
+			# all stack, ~1.7 KB used (nattest memuse).  No heap:
+			# MM's 1.5 KB gap is checked only by brk() and a caught
+			# signal, and remind never calls brk and catches none.
+# Ordua (alarm, T25b): the same libraries; no malloc (alarms are read by
+# name, no opendir()), no stdio, no signal handler (libgm ignores SIGPIPE),
+# so no MM gap either: the stack, where timer_add() keeps 2 x 512 B while
+# it saves (nattest memuse).
+OBJS_alarm = $(MB)/cmd/win/alarm/alarm.o $(WIN_LIB)
+CHMEM_alarm  := 2560	# K.8 (ACK8.3: <= 4.5 KB open)
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -673,7 +701,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -683,7 +711,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
-	   $(PKGDIR)/remind_1.0.tar $(PKGDIR)/alarm_1.1.tar
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -705,12 +733,13 @@ $(PKGDIR)/timed_1.2.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
 # The native apps (spec 7b.1, 7b.2): their own users, the launcher line.
-$(PKGDIR)/remind_1.0.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
+# remind 1.1 (T25a): a window app (Type: window), ended on Back.
+$(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst \
 		rootfs/remind.prerm
-	python3 -I tools/mkpkg.py -n remind -v 1.0 -d timed -o $(PKGDIR) \
-	   --timers --notify reminder --flash \
-	   --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
-	   -D "Interval reminder: water, stretching, ..." /usr/bin/remind=$<
+	python3 -I tools/mkpkg.py -n remind -v 1.1 -d timed -o $(PKGDIR) \
+	   --timers --notify reminder --flash --window --background exit \
+	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
+	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 # Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
 $(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
@@ -742,7 +771,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.12
+BASE_VER := 4.13
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

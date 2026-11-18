@@ -596,6 +596,91 @@ static void card_tests(void)
 	check(r3 == (int) sizeof b, "card: the same card back carries on");
 }
 
+/* The root's s_flags on the disk (spec N.1), read through /dev/hd1 (the
+ * same cache as the FS: what is on the card).  -1: not that device. */
+static int root_sflags(void)
+{
+	static unsigned char b[1024];
+	struct stat sr, sd;
+	int fd, n;
+
+	if (stat("/", &sr) != 0 || stat("/dev/hd1", &sd) != 0
+					|| sd.st_rdev != sr.st_dev)
+		return(-1);
+	if ((fd = open("/dev/hd1", O_RDONLY)) < 0) return(-1);
+	lseek(fd, 1024L, SEEK_SET);
+	n = read(fd, b, sizeof b);
+	close(fd);
+	return(n == (int) sizeof b ? (b[18] | b[19] << 8) : -1);
+}
+
+static int fill_file(char *path, int c)
+{
+	static char b[1024];
+	int fd, n;
+
+	memset(b, c, sizeof b);
+	if ((fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
+		return(-1);
+	n = write(fd, b, sizeof b);
+	close(fd);
+	return(n == (int) sizeof b ? 0 : -1);
+}
+
+/* T17a: spec N.1, N.2 (CLEAN off before the first write, on again after a
+ * quiet sync period; a read writes nothing) and the FS side of N.6 (a
+ * dirty block written while the card is out stays in the cache and goes
+ * to the card when it is back, not "Unrecoverable write error"). */
+static void sflag_tests(void)
+{
+	static char b[1024];
+	int fd, f0, f1, f2, st, i, n, same;
+
+	if (fill_file("/tmp/n6", 'A') != 0) {
+		check(0, "fs flags: write /tmp/n6");
+		return;
+	}
+	f0 = root_sflags();
+	sync();
+	sync();
+	f1 = root_sflags();
+	if ((fd = open("/etc/motd", O_RDONLY)) >= 0) {
+		while (read(fd, b, sizeof b) > 0) {}
+		close(fd);
+	}
+	sync();
+	sync();
+	f2 = root_sflags();
+	check(f0 >= 0 && !(f0 & 1), "fs flags: CLEAN off before the first write");
+	check(f1 >= 0 && (f1 & 1), "fs flags: CLEAN again after a quiet sync");
+	check(f2 >= 0 && (f2 & 1), "fs flags: a read writes nothing (no atime)");
+
+	/* N.6: the card out while a dirty block is written. */
+	n = fill_file("/tmp/n6", 'B');
+	if (n != 0 || (fd = open("/dev/hd0", O_RDONLY)) < 0) {
+		check(0, "card out: write /tmp/n6 again");
+		return;
+	}
+	fflush(stdout);
+	st = 1;
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	sync();				/* fails: the blocks stay dirty */
+	st = 0;
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	close(fd);
+	sync();				/* the card is back: written now */
+	same = 0;
+	if ((fd = open("/tmp/n6", O_RDONLY)) >= 0) {
+		n = read(fd, b, sizeof b);
+		for (i = 0; i < n && b[i] == 'B'; i++) {}
+		same = (n == (int) sizeof b && i == n);
+		close(fd);
+	}
+	check(same, "card out: a dirty block is kept until the card is back");
+	unlink("/tmp/n6");
+	sync();
+}
+
 /* R12.40: DIOCDISCARD on the whole disk's last sector, which no partition
  * or swap test uses.  QEMU's card zero-fills a discarded range, so the
  * pattern written first reads back as zeros; empty and too-long ranges
@@ -1590,6 +1675,7 @@ int main(int argc, char **argv)
 	ibutton_tests();
 	gpio_tests();
 	card_tests();
+	sflag_tests();
 	discard_tests();
 	preempt_tests();
 #endif

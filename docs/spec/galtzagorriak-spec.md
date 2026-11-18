@@ -1037,7 +1037,260 @@ modules that refresh periodically run from `timed` and exit (0 B RAM between ref
 VT100-complete by task T8 (`next-tasks.md`). `ed` stays for scripts. A small text editor is
 part of the base system so scripts and settings can be edited on the device.
 
-For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
+**K.6 The graphical system: layers and order (owner, 2026-11-17: "build the graphical system we
+will use").** K.2–K.4 and R5.6a describe the pieces; this section fixes how they fit and in
+which order they are built.
+
+- **Layers**, bottom up. Each layer uses only the ones below it:
+  1. **Kernel:** `/dev/lcd` and `/dev/buttons`, foreground ownership (R4b.8), `FGIOCPREEMPT`
+     (R7b.2), `DEV_SELECT` for `poll()` (R4b.6). Done.
+  2. **Drawing:** two libraries with **one look** (K.2 title bar, R5.6a.7 screen style):
+     - `gui.c` for small plain C programs, linked statically (a few hundred bytes);
+     - `libfuri` + `libapp`, one shared library in flash (#201), for everything bigger and for
+       ported stock apps.
+     The screen-style helpers (title with a counter, hint line, notice line, scroll mark,
+     `[value]` rows) exist once in each and draw the same pixels; a host test compares them.
+  3. **The desktop = the launcher.** The launcher is already resident, owns the screen when no
+     app runs and is the app menu. It grows into the K.2 desktop instead of adding a second
+     resident program: app list (R5.6a), status line (time, battery, unread notifications), a
+     home page of module tiles, the notification list, the Running list (R12.20) and settings
+     pages. Each page is the same Pine-style list screen. The pages sit in a row,
+     Settings ← Apps → Home → Notifications → Running, and Left/Right move along it, which keeps
+     R5.6a's keys (Left from Apps = Settings). A page move happens on the **release** of a short
+     Left/Right press, and a key that was part of a chord (R6.10 backlight gestures, #145) does
+     nothing. This is a userland rule, 0 B kernel: R6.10 passes the down and up events of chord
+     keys to the app, so `gui.c` gets `gui_click()` next to `gui_key()` (which returns on the
+     press). A click fires on the release of a key pressed **alone** (no other key went down
+     while it was held) and held < ~1 s; a few bytes of stack, no `.bss`. The launcher and small
+     C apps use it for Left/Right/OK actions. `libfuri` apps already behave this way (a 1.5 s
+     chord is past `GUI_INPUT_LONG_COUNTS`, so the release sends no `InputTypeShort`). No kernel
+     flag on key events: it would break `libfuri`'s `gui_buttons_event` (a flagged release would
+     be dropped and the key would repeat forever). So Left+Up held for
+     the backlight never jumps to Settings. The status line (minute, battery) wakes the launcher
+     only while it is in the foreground **and** the screen is on; with an app running or the
+     backlight off the launcher sleeps in `poll()` with no timeout (M3 idle ≤ 1.5 mA). RAM budget
+     for the whole desktop: ≤ 3 KB data + heap above today's launcher, 0 B kernel.
+  4. **Modules** (K.2–K.3): separate processes that write TSV records to `/var/run/gui` and
+     read events from their reply FIFO. A C helper in `libapp` (`gm_open`, `gm_tile`, `gm_menu`,
+     `gm_event`) and a shell helper `guimod` (one record per call) come first; the Berry `gui`
+     and `desktop` bindings come with 7c (R7c.3) on the same protocol.
+  5. **Full-screen apps:** `libfuri` apps, ported stock apps (`fam2pkg`, R5.5) and Berry apps
+     take the whole screen as today, in the same style. The desktop is not involved while they
+     run.
+- **Button chords are hidden system actions (owner, 2026-11-17, on #231).** They never appear
+  in hint lines. They are listed, and later configured, on a chords page in the desktop's
+  Settings (chord → action). The page moves still need no chord: Settings stays on Left.
+  - The two backlight chords of R6.10 stay in the kernel with fixed defaults, so they work even
+    when userland hangs.
+  - Other chords are reported as events (a chord code on `/dev/buttons`) and mapped to actions
+    by userland. The mapping lives in a config file on the SD card (`/etc/chords.conf`, no
+    internal flash), edited from the chords page. Free chords today: Right+Up, Left+Down.
+    Back is never part of a chord (R6.10).
+  - How other chords reach userland (an event on `/dev/buttons` that works while any app is in
+    the foreground) is decided with R6.10 in a later step, `lane:local`; never as a flag on
+    ordinary key events (see the click rule above). The chords page is a follow-up of T23a.
+- **Pipe data never reaches the card (FS, 0 B, local-lane review of #231).** `PIPE_DEV` is
+  `ROOT_DEV`, so a pipe's or FIFO's data lives in its inode's zones on the SD card through the
+  buffer cache, and `update` would write the dirty blocks and the inode times every 30 s. With
+  four modules on `/var/run/gui` that means steady card writes, battery, and a root file system
+  that is almost never clean (spec N: `fsck` at nearly every boot after a power loss). So:
+  - a block written through a pipe or FIFO is marked `b_dirt = PIPE_DIRTY` (a third value of the
+    existing `char`, 0 B). `sync`, `update` and unmount skip it; it is written only if the cache
+    must evict it while it still holds unread data (rare: a pipe is at most 7 blocks);
+  - when the readers catch up (the pipe's position goes back to 0) its blocks become `CLEAN` and
+    are dropped from the cache without a write;
+  - pipe and FIFO data I/O does not mark the inode dirty (size, `mtime`, `ctime` stay in core).
+    Deviation from POSIX: FIFO times on disk are not updated. The contents of a pipe never
+    survive a reboot anyway.
+  The alternative, a RAM-only `/var/run`, costs RAM and is not taken.
+- **Rules kept from K.2–K.4:**
+  - the desktop does navigation locally, so a key press never waits for a module;
+  - alarms ring through `timed` + `alert`, never through the desktop;
+  - tile refreshes run from `timed` and exit;
+  - nothing is written to internal flash.
+- **Order** (tasks T21–T23 in `next-tasks.md`):
+  1. #201 (shared `libfuri` + `libapp`) and T21a (launcher icons, Pine look, the page table of
+     R5.6a.4) run in parallel: T21a uses plain `gui.c` and does not need #201;
+  2. T22a/T22b: the other apps restyled (T22b after #201);
+  3. T23b first: the window server of K.8 (owner priority: alarm and reminders), then T25:
+     Kanpaia and Ordua as window apps;
+  4. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
+     records, `guimod`);
+  5. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
+  6. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
+- **Acceptance:**
+  - ACK.1 A shell module of three lines puts a tile on the home page and changes it.
+  - ACK.2 Killing a module removes its tile, and the desktop keeps working.
+  - ACK.3 With four modules writing as fast as they can, key → frame on the desktop stays
+    within L1.
+  - ACK.4 Desktop RAM within the budget above (`free` in QEMU with 4 tiles and 8
+    notifications).
+  - ACK.5 QEMU (sector counter in WINCHESTER, as AC12.14): four modules writing to
+    `/var/run/gui` for 60 s, then `sync` → 0 sectors written, and the spec N clean mark stays set.
+  - ACK.6 QEMU with fake buttons: Left+Up held 1.5 s on the Apps page → the page stays Apps; a
+    short Left press moves to Settings on release, not on press.
+
+**K.7 System settings (owner, 2026-11-17 ~22:10 Warsaw, on #110): next after T21a (#234).** This is
+the "Settings" row of the stock-app table (Phase 7): display, sound, LED, time, power, storage,
+about, system.
+
+- **Where.** The launcher's Left page (K.6 layer 3, R5.6a.4) is **SETTINGS**: a Pine-style list of
+  groups: Display, Sound, LED, Time, Power, Storage, Gestures, Launcher, About.
+  - **Launcher** (Icons, Hints, Battery: R5.6a.4, #234) stays inside the launcher.
+  - **Gestures** is the chord screen of K.6 and the `gestures` app of R7.2: one program, not two.
+  - Every other group is a **separate small program run like an app**, `settings GROUP` (for
+    example `settings display`). The launcher does not grow in RAM, and a group costs RAM only
+    while it is open.
+- **Program.** `settings` is one plain C program with code in flash, and a **window app (K.8)**:
+  it describes its screens with `libgm`, and the desktop draws them. Until T23b is on main, the
+  driver side (applying values, the boot script) can be built first.
+  - Each group is its own source file (`src/commands/settings/<group>.c`) with one entry function,
+    so the two lanes can work on different groups without conflicts.
+  - Each screen is a `list` window of `int`/`enum`/`bool` rows. Left/Right change a value in the
+    desktop, OK opens a sub-list, Back returns to the launcher's SETTINGS page. Values arrive with
+    `submit`.
+  - RAM while open: ≤ 3 KB (data + bss + stack), 0 B kernel.
+- **Saving.**
+  - A group writes `/etc/flipper/<group>.conf` on the SD card with `cfopen()` (L.3), and only when a
+    value really changed, once when the screen is left (not at every key).
+  - Defaults stay in `/rom`, and nothing goes to internal flash.
+  - Each change is also applied at once through the driver (`/dev/backlight`, `/dev/speaker`, …),
+    and a boot script applies the files at start-up, as `gestures.conf` does (R6.10).
+- **Groups and their order:**
+  1. **Display:** brightness, idle timeout (default 15 s), forced backlight mode (R6.9, R6.10). The
+     drivers exist.
+  2. **Sound:** volume, using the speaker volume of #192 (`hal_tone(hz, vol)`, volume note
+     0xFFFF), plus a test beep.
+  3. **Time:** date and time (UTC in the RTC, I.1), the time zone from the zone list (`/etc/TZ`,
+     shared with the 18b wizard), 12/24 h. **About:** version (base package, ABI, kernel build
+     id), free RAM, the shared-library lines of `free -v`, serial number, licence.
+  4. The rest: **LED** (notification colours, brightness), **Power** (the `power` app of R7.1
+     with its profiles, or a group that starts it), **Storage** (`df` of the SD card, card info,
+     "format SD" disabled while it is mounted), **System** (hostname, swap, `GuiLog`).
+- **Acceptance:**
+  - ACK7.1 QEMU with fake buttons: Left from Apps → SETTINGS → Display → change brightness → Back.
+    The backlight value changes at once, and `/etc/flipper/display.conf` is written once.
+  - ACK7.2 Opening and leaving a group without changing anything writes 0 sectors (WINCHESTER
+    sector counter, as AC12.14).
+  - ACK7.3 After a reboot the saved values are applied. Deleting the file restores the default.
+  - ACK7.4 `free` while a group is open: ≤ 3 KB more than with the launcher alone.
+
+**K.8 Window apps: the desktop draws, the app only describes (owner, 2026-11-17: "the desktop
+model should be designed now"; alarm and reminders first).** #235 showed that the shared
+`libfuri` saves flash, not RAM: an open `remind` still takes 15.4 KB. In that 15.4 KB, the main
+stack is 3 KB, the gui thread 2 KB, the heap (Canvas, views, list) about 3 KB, the furi data area
+2.4 KB and the MM gap 1.5 KB. All of that is GUI machinery, and every GUI app carries its own
+copy. A window app carries none of it.
+
+- **Two kinds of GUI app.**
+  - **Window app** (`Type: window` in the package): a plain C program with no `libfuri`, no Canvas
+    and no gui thread. It sends **window records** that describe a screen (a list of rows, text,
+    a clock). The desktop (K.6 layer 3, the launcher) draws them, moves the cursor and changes
+    values. The app gets an event only when the person does something that needs the app: OK on
+    a row, Submit, Back from the top window.
+  - **Full-screen app** (K.6 layer 5): `libfuri` and ported stock apps, which draw on their own
+    as today, with their RAM cost. These are for apps that need their own drawing (Sub-GHz
+    waterfall, games).
+  - Alarm (**Ordua**) and reminders (**Kanpaia**), the settings groups (K.7) and most small
+    tools are window apps.
+- **Connection, 0 B kernel.**
+  - The launcher starts a window app as its child with two anonymous pipes: fd 3 carries events
+    to the app, and fd 4 carries records to the desktop.
+  - There is no name in the file system, so no other process can talk to the window, and the
+    pipe itself is the app's identity.
+  - Pipe data never reaches the card (K.6, `PIPE_DIRTY`).
+  - Background modules (tiles, K.3) keep `/var/run/gui`.
+- **Records** (TSV, one per line, one `write()` ≤ 512 B; a window is at most 640 B of text):
+  - `win ID KIND TITLE`, where KIND is `list`, `text`, `clock` or `confirm`, then rows, then `show`.
+  - Rows:
+    - `item KEY LABEL [RIGHT]`: an entry that opens something;
+    - `int KEY LABEL MIN MAX STEP VALUE [UNIT]`, `enum KEY LABEL INDEX OPT|OPT|…`,
+      `bool KEY LABEL 0|1`, `time KEY LABEL HH:MM`, `date KEY LABEL YYYY-MM-DD`,
+      `days KEY LABEL MASK`: values changed with Left/Right **in the desktop**;
+    - `input KEY LABEL TEXT MAX`: text entry with the desktop's keyboard;
+    - `line TEXT`: a static line;
+    - `action KEY LABEL`: a button row.
+  - `clock`: the desktop draws big HH:MM from the RTC, plus two lines of text from the app. It
+    updates the minute itself, only while in the foreground with the screen on (K.6).
+  - `busy` / `idle`, `close`.
+- **Events to the app** (fd 3): `ok WIN KEY`, `submit WIN KEY=VALUE…` (only the changed rows,
+  sent when the person leaves a list whose values changed, or presses an `action` row), `back WIN`,
+  `page WIN FIRST` (long lists, below), `redraw`, `close`.
+- **Look:** the desktop draws every window in the one K.2 / R5.6a.7 style.
+  - The title bar shows the app name.
+  - The hint line is made by the desktop from the row under the cursor: "OK Open", "◀▶ Change",
+    "Back".
+  - The selection bar spans the full row.
+  - Every window app looks the same, with no style code in the app.
+- **Long lists:** a `list` window holds at most 16 rows. For more, the app sends `win … ROWS=N`
+  and the first page, and the desktop asks for the next page with `page` when the cursor
+  reaches the edge. The app reads the page from its file, so its RAM does not grow with the
+  data.
+- **RAM budget for an open window app** (code in flash, `Flash: yes`):
+
+  | | `remind` (Kanpaia) | `alarm` (Ordua) |
+  |---|---|---|
+  | shared libc data area | 0.6 KB | 0.6 KB |
+  | own data + bss (alarm table, ring settings) | ≤ 0.4 KB | ≤ 0.9 KB |
+  | stack (record lines are built in a 128 B buffer on it) | 1.0 KB | 1.0 KB |
+  | heap (no stdio `FILE` buffers: `read`/`write`, or `setvbuf` with 128 B) | ≤ 0.5 KB | ≤ 0.5 KB |
+  | MM gap (today) | 1.5 KB | 1.5 KB |
+  | **total** (Phase 7b budgets: 4 and 5 KB) | **≤ 4.0 KB** | **≤ 4.5 KB** |
+
+  - Window apps link `libgm` and the parts of `libapp` they need **statically**, with
+    `--gc-sections`, and never the shared `libfuri`, whose 2.4 KB data area each process would
+    carry.
+  - **Measured (#251):** Kanpaia open = 4096 B. MM checks its 1.5 KB stack/heap gap only on
+    `brk()` and when it delivers a caught signal, so a window app with no `malloc`, no stdio and
+    no signal handler (SIGPIPE ignored) may leave the gap out of its CHMEM (remind: 2304 B, with
+    592 B never used). An app that adds a handler or `malloc` must add the gap back, and window
+    apps keep large local buffers and deep recursion out.
+- **Desktop cost:** one window buffer for the current window and one for its parent
+  (2 × 640 B), a table of 4 clients (4 × 16 B) and a 64 B keyboard buffer: ≈ 1.4 KB, inside the
+  K.6 budget of ≤ 3 KB with tiles and notifications. Its code (drawing rows, keyboard, clock
+  digits) runs from flash.
+- **Gain:** three open GUI apps take ≈ 13 KB instead of ≈ 47 KB. A closed window app takes 0 B,
+  because its state lives in files and timers, so it can exit on Back.
+- **Responsiveness:**
+  - **Key → frame** (cursor, value change, page change already loaded, Back to the parent) never
+    waits for the app. The desktop parses at most 640 B (< 1 ms) and draws, so L1 is the same
+    as the launcher's list (≤ 30 ms p99).
+  - **OK / Submit → new window:** one pipe write to the app, the app works and writes ≤ 640 B,
+    and the desktop draws. Targets: ≤ 50 ms p99 with the app in RAM, ≤ 150 ms if it is parked
+    (swap-in of 4 KB ≈ 5 ms at the measured 69 ms per 64 KB, plus the queue).
+  - **No answer within 150 ms:** the desktop puts a busy mark in the title bar and keeps
+    responding. Back always works: it closes the window at once and sends `close`. An app that
+    is still alive 2 s later gets `SIGTERM`.
+  - The desktop never blocks on an app: its writes to fd 3 are non-blocking, and a full pipe
+    marks the app busy.
+  - An idle window app sleeps in `poll()` with no timeout: 0 wakeups and 0 mA. The desk clock
+    ticks in the desktop.
+  - **The alarm never depends on the desktop.** `timed` + `alert` ring as today (K.4), and
+    `alert` stays a small separate `gui.c` program that preempts any app (R7b.2). If the desktop
+    dies, INIT restarts it, and window apps get `EPIPE` and exit.
+- **Swap (spec 12):**
+  - Window apps are cheap to end, so they default to `Background: exit` and need no parking
+    (0 swap writes, 12g).
+  - An app may still declare `Background: park`. Parking then writes ≈ 4 KB instead of ≈ 16 KB,
+    and while the app is out the desktop still shows and navigates its window; only OK/Submit
+    waits for the swap-in.
+  - Swappable blocks (12h) do not belong in the desktop model, since its data is tiny (a whole
+    1-bit screen is 1 KB). They stay for apps with really large data (NFC dumps, Sub-GHz
+    captures, `mined`, Berry `vbytes`).
+- **Acceptance:**
+  - ACK8.1 QEMU with fake buttons: Kanpaia adds a reminder (list → form → keyboard → Submit),
+    and the timer file appears in `/var/timers`.
+  - ACK8.2 Ordua edits an alarm (time, days, ring settings), and the desk clock shows the next
+    alarm.
+  - ACK8.3 `free` with Kanpaia open: ≤ 4.0 KB more than the launcher alone; with Ordua open:
+    ≤ 4.5 KB more.
+  - ACK8.4 A client that never reads fd 3: the desktop stays at L1, a busy mark appears after
+    150 ms, and Back closes it.
+  - ACK8.5 Key → frame on a window app's list within L1 under the L1 load. OK → next window
+    ≤ 50 ms p99 (QEMU timestamps; device numbers in #109).
+  - ACK8.6 An open window app makes 0 wakeups per minute while idle (the `lat`/`ps` counters).
+
+For the manual: the `-t` convention, the desktop/module model and protocol, the SETTINGS groups (K.7), writing a window app (K.8), writing a module in
 C, Berry or shell, and the `mined` key table.
 
 ## L. Flash writes and default settings (owner request, 2026-11-15)

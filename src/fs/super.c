@@ -9,11 +9,15 @@
  *   get_super:       search the 'superblock' table for a device
  *   mounted:         tells if file inode is on mounted (or ROOT) file system
  *   read_super:      read a superblock
+ *   put_sflags:      change the CLEAN/CHECK bits on the disk (spec N.1)
+ *   sf_mounted:      a file system was mounted read-write (N.1)
+ *   sf_clean:        mark a file system clean when idle or at shutdown (N.2)
  */
 
 #include "fs.h"
 #include <string.h>
 #include <minix/boot.h>
+#include <minix/com.h>
 #include "buf.h"
 #include "inode.h"
 #include "super.h"
@@ -232,6 +236,8 @@ register struct super_block *sp; /* pointer to a superblock */
   sp->s_log_zone_size = conv2(native, (int) sp->s_log_zone_size);
   sp->s_max_size =      conv4(native, sp->s_max_size);
   sp->s_zones =         conv4(native, sp->s_zones);
+  /* N.1: in core only whether CLEAN is on the disk; never the disk bits. */
+  sp->s_flags = (conv2(native, (int) sp->s_flags) & SF_CLEAN) ? SF_DCLEAN : 0;
 
   /* In V1, the device size was kept in a short, s_nzones, which limited
    * devices to 32K zones.  For V2, it was decided to keep the size as a
@@ -285,4 +291,101 @@ register struct super_block *sp; /* pointer to a superblock */
   }
   sp->s_dev = dev;		/* restore device number */
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				put_sflags				     *
+ *===========================================================================*/
+PUBLIC int put_sflags(sp, set, clr)
+register struct super_block *sp; /* a mounted file system */
+int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
+{
+/* Spec N.1: change the flag bits of the super block on the disk by read-
+ * modify-write of block 1 through the cache, written through at once (one
+ * 1 KB write).  On success the in-core SF_DCLEAN follows the disk.  A failed
+ * write never leaves CLEAN = 1 in the cache (it could reach the disk after
+ * other blocks later); CLEAN = 0 or CHECK = 1 stay dirty, the safe way.
+ */
+  register struct buf *bp;
+  struct super_block *dsp;
+  unsigned old, new;
+  int r;
+
+  bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
+  if (bp->b_dev != sp->s_dev) {		/* the read failed */
+	put_block(bp, ZUPER_BLOCK);
+	return(EIO);
+  }
+  dsp = (struct super_block *) bp->b_data;
+  old = (unsigned) conv2(sp->s_native, (int) dsp->s_flags) & 0xFFFF;
+  new = ((old | set) & ~clr) & SF_DISK;
+  dsp->s_flags = conv2(sp->s_native, (int) new);
+  r = dev_io(DEV_WRITE, FALSE, sp->s_dev, (off_t) SUPER_BLOCK * BLOCK_SIZE,
+					BLOCK_SIZE, FS_PROC_NR, bp->b_data);
+  if (r == BLOCK_SIZE) {
+	bp->b_dirt = CLEAN;
+	if (new & SF_CLEAN) sp->s_flags |= SF_DCLEAN;
+	else sp->s_flags &= ~SF_DCLEAN;
+	r = OK;
+  } else {
+	if ((new & SF_CLEAN) && !(old & SF_CLEAN))
+		dsp->s_flags = conv2(sp->s_native, (int) old);
+	else
+		bp->b_dirt = DIRTY;
+	if (r >= 0) r = EIO;
+  }
+  put_block(bp, ZUPER_BLOCK & ~WRITE_IMMED);
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				sf_mounted				     *
+ *===========================================================================*/
+PUBLIC void sf_mounted(sp)
+register struct super_block *sp; /* just mounted read-write */
+{
+/* Spec N.1: a file system that was not left clean gets CHECK = 1 on the
+ * disk at once, so that a later boot checks it even if it is clean by then
+ * (one 1 KB write, only after an unclean end).
+ */
+  if (sp->s_rd_only || (sp->s_flags & SF_DCLEAN)) return;
+  (void) put_sflags(sp, SF_CHECK, 0);
+}
+
+
+/*===========================================================================*
+ *				sf_clean				     *
+ *===========================================================================*/
+PUBLIC void sf_clean(sp, force)
+register struct super_block *sp; /* a mounted file system, after a sync */
+int force;			/* shutdown or unmount: no idle period */
+{
+/* Spec N.2: called after a sync.  A read-write file system that is not
+ * CLEAN on the disk becomes CLEAN when nothing was written to it since the
+ * previous sync (unless 'force'), none of its buffers or in-core inodes is
+ * dirty (a write that failed, e.g. the card out, keeps it unclean) and no
+ * file of it is open after its last link went (unless 'force': every
+ * process has gone).  Unnamed pipes never reach the disk (T9).
+ */
+  register struct buf *bp;
+  register struct inode *rip;
+  dev_t dev = sp->s_dev;
+  int i;
+
+  if (dev == NO_DEV || sp->s_rd_only || (sp->s_flags & SF_DCLEAN)) return;
+  if (sp->s_flags & SF_WRITTEN) {
+	sp->s_flags &= ~SF_WRITTEN;
+	if (!force) return;
+  }
+  for (i = 0; i < NR_BUFS; i++)
+	if ((bp = BUF(i))->b_dev == dev && bp->b_dirt == DIRTY) return;
+  for (rip = &inode[0]; rip < &inode[NR_INODES]; rip++) {
+	if (rip->i_count == 0 || rip->i_dev != dev) continue;
+	if (rip->i_pipe == I_PIPE && (rip->i_nlinks & BYTE) == 0) continue;
+	if (rip->i_dirt == DIRTY) return;
+	if (!force && (rip->i_nlinks & BYTE) == 0) return;
+  }
+  (void) put_sflags(sp, SF_CLEAN, 0);
 }

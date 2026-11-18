@@ -5,7 +5,7 @@ Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
            [--postinst FILE] [--prerm FILE] [--timers]
            [--notify alarm|reminder|info] [--deskmode] [--flash] [-i ICON]
-           [--window] [--background exit|park|event|hibernate|stream]
+           [--window] [--background event|hibernate|park|stream|exit]
            -o OUTDIR
            dest=source ...
 
@@ -20,8 +20,8 @@ manifests, the package's postinst writes it into its /etc/apps line.
 --window: Type: window, a window app (spec K.8): the launcher starts it
 with its event and record pipes on fd 3 and 4 and draws its windows; its
 postinst writes "=" before the program in its /etc/apps line.
---background: Background:, what the app does when it leaves the screen
-(spec 12d, K.8: window apps default to exit; pkg does not read it yet).
+--background: Background: line, what the app does when it is not in
+front (spec 12d tiers; "exit": a window app that ends on Back, spec K.8).
 --flash: Flash: yes, the programs go into the installed region (internal
 flash) as with pkg install --flash: their text is not copied into RAM.
 
@@ -72,9 +72,8 @@ def main():
     ap.add_argument("--flash", action="store_true", help="Flash: yes")
     ap.add_argument("-i", "--icon", help="Icon: the launcher icon (R5.6a.1)")
     ap.add_argument("--window", action="store_true", help="Type: window (K.8)")
-    ap.add_argument("--background",
-                    choices=("exit", "park", "event", "hibernate", "stream"),
-                    help="Background: (spec 12d, K.8)")
+    ap.add_argument("--background", choices=("event", "hibernate", "park",
+                                             "stream", "exit"))
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 

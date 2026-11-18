@@ -24,12 +24,7 @@
  * never turns a page.  The look is spec R5.6a.7 ("Pine meets modern UX");
  * with icons and hints off it is the old screen, pixel for pixel.
  *
- *	launcher [-a apps] [-c conf] [-f]
- *
- * -a, -c: other files; -f: take the screen and the buttons from the
- * launcher of /etc/rc until SIGTERM.  For the QEMU tests
- * (tools/nattest.py), which start a launcher from a shell; the first key
- * after it starts still ends the other one's read (a key it ignores).
+ *	launcher [-a apps] [-c conf]	other files, for the QEMU tests
  */
 #include <lib.h>
 #include <minix/callnr.h>
@@ -68,6 +63,7 @@ struct app {
 	char *cmd;
 } apps[MAXAPPS];
 int napps;
+int fsck_err;		/* /etc/rc found errors on the card (spec N.3) */
 static unsigned short has_icon;
 static unsigned char opt;		/* OPT_* below */
 #define OPT_ICONS	1
@@ -104,6 +100,7 @@ static void load_apps(const char *apps_file)
 	size_t la, lu, lc;
 	int ic;
 
+	fsck_err = access("/etc/.fsck-errors", F_OK) == 0;
 	free_apps();
 	/* the card's copy, else the default in /rom (spec L.3) */
 	if ((f = cfopen(apps_file, "r")) == NULL) return;
@@ -323,7 +320,8 @@ static void draw(int pg, int sel, int top, const char *note)
 	char pos[12], *t;
 
 	gui_clear();
-	gui_title(p->title);
+	gui_title(fsck_err && pg == PG_APPS ? "CARD HAS ERRORS: RUN FSCK"
+						: p->title);
 	if (opt & OPT_BATT) {
 		bat_read();
 		bat_draw();
@@ -425,17 +423,6 @@ static char *run(struct app *ap)
 	return NULL;
 }
 
-static int fg_fd = -1;			/* -f: /dev/lcd, the buttons held */
-
-static void fg_end(int sig)
-{
-	int none = 0;
-
-	(void) sig;
-	(void) ioctl(fg_fd, FGIOCSET, &none);
-	_exit(0);
-}
-
 int main(int argc, char **argv)
 {
 	struct gui_in in;
@@ -443,24 +430,15 @@ int main(int argc, char **argv)
 	char *note = NULL;
 	char *apps_file = "/etc/apps", *conf_file = "/etc/launcher.conf";
 
-	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-f") == 0) fg_fd = 0;
-		else if (i + 1 < argc && strcmp(argv[i], "-a") == 0)
-			apps_file = argv[++i];
-		else if (i + 1 < argc && strcmp(argv[i], "-c") == 0)
-			conf_file = argv[++i];
+	for (i = 1; i + 1 < argc; i += 2) {
+		if (strcmp(argv[i], "-a") == 0) apps_file = argv[i + 1];
+		else if (strcmp(argv[i], "-c") == 0) conf_file = argv[i + 1];
 	}
 	signal(SIGHUP, SIG_IGN);
 	signal(SIGINT, SIG_IGN);
 	if (gui_open() < 0) {
 		fprintf(stderr, "launcher: cannot open /dev/lcd or /dev/buttons\n");
 		return 1;
-	}
-	if (fg_fd == 0 && (fg_fd = open("/dev/lcd", O_RDONLY)) >= 0) {
-		int me = getpid();
-
-		signal(SIGTERM, fg_end);
-		(void) ioctl(fg_fd, FGIOCSET, &me);
 	}
 	load_conf(conf_file);
 	load_apps(apps_file);
@@ -479,8 +457,6 @@ int main(int argc, char **argv)
 		win_reap(0);
 		i = win_pending();
 		if (note != NULL && (i < 0 || i > NOTE_MS)) i = NOTE_MS;
-		if (i < 0 && fg_fd >= 0) i = 60000;	/* -f: poll(), as the
-			 * launcher of /etc/rc may hold the one blocking read */
 		k = gui_input(&in, KEY_LEFT | KEY_RIGHT, i);
 		if (k == 0 && note != NULL && win_pending() >= 0) {
 			win_reap(0);	/* only the window app's time */

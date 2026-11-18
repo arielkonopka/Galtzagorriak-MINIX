@@ -194,7 +194,12 @@ int rw_flag;			/* READING or WRITING */
   if (r == OK) {
 	if (rw_flag == READING) rip->i_update |= ATIME;
 	if (rw_flag == WRITING) rip->i_update |= CTIME | MTIME;
-	rip->i_dirt = DIRTY;		/* inode is thus now dirty */
+	/* Spec N.2: a read does not dirty the inode for its access time (no
+	 * SD write per exec or cat; the file system stays CLEAN); the time
+	 * goes to the card when the inode is written for another reason.
+	 * A pipe's read changes its size: dirty as before. */
+	if (rw_flag == WRITING || rip->i_pipe == I_PIPE)
+		rip->i_dirt = DIRTY;	/* inode is thus now dirty */
 	if (partial_pipe) {
 		partial_pipe = 0;
 			/* partial write on pipe with */
