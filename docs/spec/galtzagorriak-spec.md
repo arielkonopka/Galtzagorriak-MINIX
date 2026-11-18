@@ -1216,6 +1216,9 @@ copy. A window app carries none of it.
 - **Events to the app** (fd 3): `ok WIN KEY`, `submit WIN KEY=VALUE…` (only the changed rows,
   sent when the person leaves a list whose values changed, or presses an `action` row), `back WIN`,
   `page WIN FIRST` (long lists, below), `redraw`, `close`.
+  - A `win … LIVE` window (T24d, the settings groups of K.7) gets `submit` also right after each
+    value change (a `time`/`date`/`days` row: when its edit ends), so the app applies it at once
+    through the driver; the app does not answer it, and the desktop's key → frame is unchanged.
 - **Look:** the desktop draws every window in the one K.2 / R5.6a.7 style.
   - The title bar shows the app name.
   - The hint line is made by the desktop from the row under the cursor: "OK Open", "◀▶ Change",

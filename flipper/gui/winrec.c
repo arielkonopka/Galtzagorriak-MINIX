@@ -150,8 +150,9 @@ void wr_start(struct wr_win *w, char **f, int n, int len)
 	w->bad = 0;
 	w->st = WS_BUILD;
 	w->total = w->first = 0;
+	w->live = 0;
 	w->kind = WK_LIST;
-	if (n < 4 || n > 6 || f[1][0] == 0) w->bad = 1;
+	if (n < 4 || n > 7 || f[1][0] == 0) w->bad = 1;
 	for (i = 0; n >= 3 && i < 4; i++)
 		if (strcmp(f[2], kinds + 8 * i) == 0) break;
 	if (n < 3 || i == 4) w->bad = 1;
@@ -165,6 +166,8 @@ void wr_start(struct wr_win *w, char **f, int n, int len)
 		else if (strncmp(f[i], "FIRST=", 6) == 0 && num(f[i] + 6, &v) == 0
 			 && v >= 0)
 			w->first = (unsigned short) v;
+		else if (strcmp(f[i], "LIVE") == 0)
+			w->live = 1;
 		else
 			w->bad = 1;
 	}

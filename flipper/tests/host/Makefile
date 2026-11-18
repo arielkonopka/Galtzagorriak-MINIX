@@ -81,13 +81,14 @@ $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winre
 	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
 	    $(MROOT)/src/lib/gm/gm.c -o $@
 
-# settings time and about (spec K.7, T24b): the zone table, /etc/TZ, the
-# About rows.
+# settings time and about (spec K.7, T24b, T24d): the zone table, /etc/TZ,
+# local time from a rule, the About rows, a group's file.
 SETDIR	:= $(MROOT)/src/commands/settings
-$(B)/settimetest: settimetest.c $(SETDIR)/zones.c $(SETDIR)/zones.h \
-		$(SETDIR)/afmt.c $(SETDIR)/afmt.h
+SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c
+$(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
+		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) settimetest.c $(SETDIR)/zones.c $(SETDIR)/afmt.c -o $@
+	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
 
 clean:
 	rm -rf $(B)

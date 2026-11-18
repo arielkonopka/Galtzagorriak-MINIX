@@ -1,78 +1,79 @@
 /* Time (spec K.7, I.1): the date and time, the time zone and 12/24 h.
  *
- * The RTC keeps UTC; the rows show local time.  A date or time row moves
- * the clock at once (stime) by its step from the time now, so the minutes
- * that pass while the screen is open are not lost; hour and minute also
- * zero the seconds, as on a watch.  The zone comes from the const table
- * shared with the first-boot wizard (zones.c); changing it only changes
- * what this screen shows until Back, which writes /etc/TZ once (through
- * a new file and rename, R18b.3) and gives INIT SIGHUP (the zone of what
- * it starts) and SIGRTC (timed re-arms the local-time timers).  "other":
- * a rule not in the table, kept as it is.  Clock (12/24 h) is saved in
+ * The RTC keeps UTC; the rows show local time.  A new date (OK, the
+ * fields, OK) moves the clock at once and keeps the time of day; a new
+ * time keeps the date and sets the seconds to 0, as on a watch.  The
+ * local time comes from the zone's POSIX rule (zones.c tz_off): no
+ * localtime(), mktime() or putenv(), whose zone code and data would be
+ * linked into the program.  Zone opens a list of the const table shared
+ * with the first-boot wizard (zones.c), a long list read page by page
+ * (K.8 ROWS=); choosing one only changes what this screen shows until
+ * Back, which writes /etc/TZ once (through a new file and rename,
+ * R18b.3) and gives INIT SIGHUP (the zone of what it starts) and SIGRTC
+ * (timed re-arms the local-time timers).  "other": a rule not in the
+ * table, kept as it is.  Clock (12/24 h) is saved in
  * /etc/flipper/time.conf for the clock apps.  None of it is applied at
  * boot: the RTC runs on, and INIT reads /etc/TZ itself. */
 #include <sys/types.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdio.h>		/* rename() only: no stdio is used */
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include "sgroup.h"
 #include "zones.h"
+#include "gm.h"
 
 #define PATH_TZ		"/etc/TZ"
+#define ZPAGE		12	/* zones per page of the list (<= 16 rows,
+				 * <= 640 B of records) */
 
-enum { R_YEAR, R_MON, R_DAY, R_HOUR, R_MIN, R_ZONE, R_CLOCK };
+enum { R_DATE, R_TIME, R_ZONE, R_CLOCK };
 
-static const char * const clock_name[] = { "24 h", "12 h" };
-
-static struct srow rows[] = {
-	{ "Year", S_INT, S_NOSAVE, 2024, 2099, 1, "", 0, 2026 },
-	{ "Month", S_INT, S_NOSAVE, 1, 12, 1, "", 0, 1 },
-	{ "Day", S_INT, S_NOSAVE, 1, 31, 1, "", 0, 1 },
-	{ "Hour", S_INT, S_NOSAVE, 0, 23, 1, "", 0, 0 },
-	{ "Minute", S_INT, S_NOSAVE, 0, 59, 1, "", 0, 0 },
-	{ "Zone", S_ENUM, S_NOSAVE, 0, 0, 1, 0, 0, 0 },	/* label(): zones.c */
-	{ "Clock", S_ENUM, 0, 0, 1, 1, 0, clock_name, 0 },
+const struct srow time_rows[] = {
+	{ "Date", S_DATE, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Time", S_TIME, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Zone", S_ITEM, S_NOSAVE, 0, 0, 0, "", "" },
+	{ "Clock", S_ENUM, 0, 0, 1, 1, "", "24 h|12 h" },
 };
 
-static int shown[R_MIN + 1];		/* the date and time rows as drawn */
-static int nzones;			/* tz_count(): "other" is that one */
-static int zone0;			/* the zone in /etc/TZ */
-static char rule0[TZ_RULE_MAX];		/* its rule ("other": kept) */
-static char tzenv[3 + TZ_RULE_MAX] = "TZ=";
+static short nzones;			/* tz_count(): "other" is that one */
+static short zone0;			/* the zone in /etc/TZ */
+static short zone;			/* the zone on this screen */
+static char rule0[TZ_RULE_MAX];		/* /etc/TZ's rule ("other": kept) */
 
-static void use_zone(const char *rule)
+static const char *rule(void)
 {
-	strcpy(tzenv + 3, rule[0] != 0 ? rule : "UTC0");
-	putenv(tzenv);
+	return zone < nzones ? tz_rule(zone) : rule0;
+}
+
+static long day_of(time_t t)		/* floor(t / 86400) */
+{
+	return (long) (t / 86400 - (t % 86400 < 0));
 }
 
 /* The rows from the clock now, in this screen's zone. */
 static void show_time(void)
 {
-	time_t now = time((time_t *) 0);
-	struct tm *tm = localtime(&now);
-	int i;
+	time_t loc = time((time_t *) 0);
+	long d;
+	int y, m, dd;
 
-	rows[R_YEAR].val = tm->tm_year + 1900;
-	rows[R_MON].val = tm->tm_mon + 1;
-	rows[R_DAY].val = tm->tm_mday;
-	rows[R_HOUR].val = tm->tm_hour;
-	rows[R_MIN].val = tm->tm_min;
-	for (i = 0; i <= R_MIN; i++) shown[i] = rows[i].val;
+	loc += tz_off(rule(), loc);
+	d = day_of(loc);
+	tz_date(d, &y, &m, &dd);
+	if (y < 2000 || y > 2127) y = 2000, m = dd = 1;	/* the row's range */
+	sg_val[R_DATE] = (short) SG_DATE(y, m, dd);
+	sg_val[R_TIME] = (short) ((loc - (time_t) d * 86400) / 60);
 }
 
-static void load(struct sgroup *g)
+static void load(void)
 {
 	char buf[96], label[TZ_LABEL_MAX];
 	int fd, n = -1;
 
-	(void) g;
-	nzones = tz_count();
-	rows[R_ZONE].max = (short) nzones;	/* the last one: "other" */
+	nzones = (short) tz_count();
 	rule0[0] = 0;
 	if ((fd = open(PATH_TZ, O_RDONLY)) >= 0) {
 		n = (int) read(fd, buf, sizeof buf - 1);
@@ -82,59 +83,68 @@ static void load(struct sgroup *g)
 		strcpy(rule0, "UTC0");		/* no /etc/TZ: UTC */
 		label[0] = 0;
 	}
-	zone0 = tz_find(label, rule0);
-	rows[R_ZONE].val = zone0;
-	use_zone(rule0);
+	zone = zone0 = (short) tz_find(label, rule0);
+	if (sg_val[R_CLOCK] < 0) sg_val[R_CLOCK] = 0;
 	show_time();
 }
 
-/* A date or time row moved by d from what was shown: the clock too. */
-static void set_clock(int row, int d)
+/* A new date or time from the desktop: the clock too.  1: the window
+ * again (a date the RTC cannot hold: it counts years 2000-2099). */
+static int set_clock(int row)
 {
-	time_t now = time((time_t *) 0), t;
-	struct tm tm = *localtime(&now);
-	int md;
+	time_t loc = time((time_t *) 0), nl, t;
+	long d, tod;
+	int v = sg_val[row], y = SG_Y(v);
 
-	switch (row) {
-	case R_YEAR:	tm.tm_year += d; break;
-	case R_MON:	tm.tm_mon += d; break;
-	case R_DAY:	tm.tm_mday += d; break;
-	case R_HOUR:	tm.tm_hour += d; tm.tm_sec = 0; break;
-	default:	tm.tm_min += d; tm.tm_sec = 0; break;
-	}
-	if (row == R_YEAR || row == R_MON) {	/* 31 Jan -> 28 Feb, not 3 Mar */
-		md = tz_mdays(tm.tm_year + 1900, tm.tm_mon + 1);
-		if (tm.tm_mday > md) tm.tm_mday = md;
-	}
-	if (row == R_DAY) {			/* within the month, no wrap */
-		md = tz_mdays(tm.tm_year + 1900, tm.tm_mon + 1);
-		if (tm.tm_mday < 1 || tm.tm_mday > md) return;
-	}
-	tm.tm_isdst = -1;
-	if ((t = mktime(&tm)) != (time_t) -1) (void) stime(&t);
+	loc += tz_off(rule(), loc);
+	d = day_of(loc);
+	tod = (long) (loc - (time_t) d * 86400);
+	if (row == R_DATE) {
+		if (y > 2099 || SG_M(v) < 1 || SG_M(v) > 12
+		    || SG_D(v) < 1 || SG_D(v) > tz_mdays(y, SG_M(v))) {
+			show_time();
+			return 1;
+		}
+		nl = (time_t) tz_days(y, SG_M(v), SG_D(v)) * 86400 + tod;
+	} else
+		nl = (time_t) d * 86400 + (long) (v / 60 % 24) * 3600
+			+ (v % 60) * 60;
+	t = tz_utc(rule(), nl);
+	(void) stime(&t);
+	show_time();
+	return 0;
 }
 
-static void apply(struct sgroup *g, int row)
+static char *dec(char *t, int v)	/* t: 8 bytes */
 {
-	(void) g;
-	if (row < 0) return;			/* boot: nothing to do */
-	if (row <= R_MIN) set_clock(row, rows[row].val - shown[row]);
-	else if (row == R_ZONE)
-		use_zone(rows[R_ZONE].val < nzones
-			? tz_rule(rows[R_ZONE].val) : rule0);
-	else return;				/* Clock: the file on Back */
-	show_time();
+	char *p = t + 7;
+
+	*p = 0;
+	do *--p = (char) ('0' + v % 10); while ((v /= 10) > 0);
+	return p;
+}
+
+/* One page of the zone list, from entry first. */
+static void zones(int first)
+{
+	int all = nzones + (zone0 >= nzones), i;
+	char t[8];
+
+	if (first < 0 || first >= all) first = 0;
+	gm_win("zone", "list", "Zone", all, first);
+	for (i = first; i < all && i < first + ZPAGE; i++)
+		gm_item(dec(t, i), tz_label(i), i == zone ? "*" : "");
+	(void) gm_show();
 }
 
 /* Back: /etc/TZ only when another zone of the table was chosen. */
-static void leave(struct sgroup *g)
+static void leave(void)
 {
 	char buf[TZ_LABEL_MAX + TZ_RULE_MAX + 8];
-	int z = rows[R_ZONE].val, fd, n, ok;
+	int fd, n, ok;
 
-	(void) g;
-	if (z == zone0 || z >= nzones) return;
-	if ((n = tz_format(buf, (int) sizeof buf, z)) < 0) return;
+	if (zone == zone0 || zone >= nzones) return;
+	if ((n = tz_format(buf, (int) sizeof buf, zone)) < 0) return;
 	if ((fd = open(PATH_TZ ".new", O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
 		ok = 0;
 	else {
@@ -143,13 +153,49 @@ static void leave(struct sgroup *g)
 	}
 	if (!ok || rename(PATH_TZ ".new", PATH_TZ) < 0) {
 		(void) unlink(PATH_TZ ".new");
-		fprintf(stderr, "settings: cannot write %s\n", PATH_TZ);
+		(void) write(2, "settings: cannot write /etc/TZ\n", 31);
 		return;
 	}
 	(void) kill(1, SIGHUP);			/* INIT: TZ for what it starts */
 	(void) kill(1, SIGRTC);			/* timed: the local timers */
 }
 
-struct sgroup time_group = {
-	"time", "TIME", rows, 7, load, apply, leave, tz_label
-};
+/* An event of the zone list (row: its GM_ type). */
+static int event(int type, char **f)
+{
+	const char *p;
+	int v = 0;
+
+	if (f[1] == NULL || strcmp(f[1], "zone") != 0) return 0;
+	if (type == GM_OK || type == GM_PAGE) {
+		if (f[2] == NULL) return 0;
+		for (p = f[2]; *p >= '0' && *p <= '9' && v < 1000; p++)
+			v = v * 10 + (*p - '0');
+		if (type == GM_PAGE) {
+			zones(v);
+			return 1;
+		}
+		if (v <= nzones && (v < nzones || zone0 == nzones)) zone = (short) v;
+		show_time();
+		sg_show(2);			/* the parent again, updated */
+	}
+	return 1;
+}
+
+int time_fn(int op, int row, void *buf)
+{
+	switch (op) {
+	case SG_LOAD: load(); break;
+	case SG_APPLY:
+		if (row == R_DATE || row == R_TIME) return set_clock(row);
+		break;				/* boot, Clock: nothing to do */
+	case SG_LEAVE: leave(); break;
+	case SG_TEXT:
+		strncpy((char *) buf, tz_label(zone), SG_TEXTMAX - 1);
+		((char *) buf)[SG_TEXTMAX - 1] = 0;
+		break;
+	case SG_OPEN: zones(zone); break;
+	case SG_EVENT: return event(row, (char **) buf);
+	}
+	return 0;
+}

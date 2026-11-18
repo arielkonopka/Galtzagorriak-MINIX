@@ -64,7 +64,8 @@ struct wr_win {
 	unsigned short total, first;	/* ROWS=N paging: all rows, this page */
 	unsigned char kind, nrows;
 	unsigned char sel, top;		/* the desktop's cursor */
-	unsigned char bad;		/* overflow: dropped at show */
+	unsigned char bad : 1;		/* overflow: dropped at show */
+	unsigned char live : 1;		/* LIVE: submit after every change */
 	unsigned char st;		/* WS_* */
 	struct wr_row row[WR_ROWS];
 	char pool[WR_POOL];

@@ -107,11 +107,11 @@ static char *num(char *t, int v, int width)
 	return p;
 }
 
-void gm_win(const char *id, const char *kind, const char *title, int rows,
-	    int first)
+static void win(const char *id, const char *kind, const char *title,
+		int rows, int first, int live)
 {
 	char r[18], fi[18], a[12];
-	const char *f[6];
+	const char *f[7];
 	int n = 4;
 
 	f[0] = "win"; f[1] = id; f[2] = kind; f[3] = title;
@@ -123,7 +123,21 @@ void gm_win(const char *id, const char *kind, const char *title, int rows,
 		strcpy(fi + 6, num(a, first, 1));
 		f[n++] = fi;
 	}
+	if (live) f[n++] = "LIVE";
 	rec(f, n);
+}
+
+void gm_win(const char *id, const char *kind, const char *title, int rows,
+	    int first)
+{
+	win(id, kind, title, rows, first, 0);
+}
+
+/* A LIVE window (settings): the desktop sends every change at once. */
+void gm_win_live(const char *id, const char *kind, const char *title,
+		 int live)
+{
+	win(id, kind, title, 0, 0, live);
 }
 
 void gm_item(const char *key, const char *label, const char *right)

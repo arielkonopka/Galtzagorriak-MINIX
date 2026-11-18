@@ -1,5 +1,4 @@
 /* afmt.c - the About rows' text (spec K.7); see afmt.h. */
-#include <stdio.h>
 #include <string.h>
 #include "afmt.h"
 
@@ -19,16 +18,34 @@ int af_field(const char *line, const char *key, char *v, int n)
 	return 1;
 }
 
+/* No sprintf: the window app links no stdio (K.8). */
+char *af_dec(char *p, unsigned long v)
+{
+	char t[12];
+	int n = 0;
+
+	do t[n++] = (char) ('0' + v % 10); while ((v /= 10) > 0);
+	while (n > 0) *p++ = t[--n];
+	*p = 0;
+	return p;
+}
+
 void af_ram(char *buf, long total, long hole)
 {
-	sprintf(buf, "%ld KB (hole %ld)", total / 1024 % 10000,
-		hole / 1024 % 10000);
+	char *p = af_dec(buf, (unsigned long) (total / 1024 % 10000));
+
+	strcpy(p, " KB (hole ");
+	p = af_dec(p + 10, (unsigned long) (hole / 1024 % 10000));
+	strcpy(p, ")");
 }
 
 void af_lib(char *buf, unsigned long size, unsigned long area)
 {
-	sprintf(buf, "%lu KB, %lu B each", (size + 1023) / 1024 % 10000,
-		area % 100000);
+	char *p = af_dec(buf, (size + 1023) / 1024 % 10000);
+
+	strcpy(p, " KB, ");
+	p = af_dec(p + 5, area % 100000);
+	strcpy(p, " B each");
 }
 
 void af_hex(char *buf, const unsigned char *b, int n)
