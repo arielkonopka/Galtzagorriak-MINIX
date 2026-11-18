@@ -385,6 +385,9 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_rfid     := 8192	# emulate: the protocol dictionary (1.5 KB), a 2 KB
+			# pulse buffer and 3 encoder states for the period
+			# search; 6 KB aborted with "out of memory" (twoflip)
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -889,7 +892,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.24
+BASE_VER := 4.25
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
