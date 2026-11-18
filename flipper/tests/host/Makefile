@@ -13,7 +13,8 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem run-hid
+all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem run-hid \
+     run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -38,6 +39,15 @@ run-modem:
 # DE, UTF-8, the report builders (make hidtest).
 run-hid:
 	$(MAKE) -C $(MROOT)/flipper/tests/hid test
+
+# mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
+# pipe, then a short libFuzzer run of the container parser (AC10.4.6;
+# needs clang, skipped without it; the PR runs it for an hour).
+run-mtpd:
+	$(MAKE) -C $(MROOT)/flipper/mtpd test
+	if command -v clang >/dev/null; then \
+	  $(MAKE) -C $(MROOT)/flipper/mtpd fuzz FUZZTIME=60; \
+	else echo "mtpd fuzz: no clang, skipped"; fi
 
 run-%: $(B)/%
 	./$<
