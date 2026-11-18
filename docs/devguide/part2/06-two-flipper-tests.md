@@ -404,6 +404,7 @@ table is about FAIL and BLOCKED rows and about the script not starting.
 | `ibutton-Dallas_dev_ibutton-u2m` FAIL "no ROM" | The wires: pin 17 to 17 and 18 to 18 (count from the printed numbers), pins pushed fully in. 5V on GPIO off on Unleashed. |
 | `ir-*` FAIL "received nothing" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder or encoder bug: report it. |
 | `subghz-level_*` BLOCKED | Unleashed may not transmit at that frequency with its region settings. Normal for 315 or 868 MHz in some regions. |
+| Every Sub-GHz row BLOCKED with `Device 0 failed to start` (`subghz chat` works) | A bug in Unleashed `unlshd-095`'s command line, not the radio: the internal CC1101's driver has no `begin()` (`cc1101_int_interconnect.c`), `subghz_devices_begin()` then returns false, and the new start check in `subghz_cli.c` takes that as a failure, so `subghz tx`, `rx` and `tx_from_file` on device 0 always stop there. Install another Unleashed release on the reference Flipper (the script was written against `53818b1`). The region is not the cause: Unleashed reports `hardware.region.provisioned : 00` even with a valid `/int/.region_data`. |
 | `subghz-level_*` FAIL with a small rise | Another transmitter nearby during the quiet reading; run that row again. |
 | A row hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun that row with `--log` and report the log. |
 
@@ -467,6 +468,11 @@ MISSING; anything else that does not match is FAIL.
   card; `mx.run(cmd)` runs a MINIX command and returns its exit status and output,
   `mx.start` / `mx.stop` the long ones, `mx.exists(word)` whether a command exists,
   `mx.upload(path, text)` writes a file. `wait(regex, secs)` waits for output.
+- **A pattern that ends in a number must also match the character after it**: `(?=\D)`,
+  `(?=[^0-9A-F])` or `(?=\r?\n)`. USB delivers a line in pieces. Without that,
+  `command 0x08` matched as `0x0` (5 of 10 IR rows failed on the device) and `@@R=127` as `@@R=12`
+  (a missing command counted as present). The simulator sends the last character of each line
+  20 ms late, so `--selftest` catches such a pattern.
 - New test files go into `twoflip_data/subghz/` or `twoflip_data/nfc/`; they become rows by
   themselves.
 - The simulator `twoflip_sim.py` imitates both Flippers as main has them; when MINIX gains a
