@@ -156,7 +156,9 @@ Once booted, the LCD shows the **launcher**: Up/Down select an app, OK starts it
 An app that does not react to Back can still be closed: **hold Back for a second**. The app is
 asked to end (SIGTERM), and stopped for good 3 seconds later if it has not. While an app runs it
 owns the screen and the buttons; other programs cannot draw over it.
-Today it offers *Console* (the system console on the LCD, 32x10 characters), *About* and
+Today it offers *Console* (the system console on the LCD, 31x10 characters in a frame; it shows
+what the USB console prints from the moment you open it, and says "USB console: waiting for
+text" until then), *About* and
 *Lights*. *About* shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
 based on, the machine and ABI number, the host name and the uptime; `uname -a` and `ver` print
 the same on the console. After 5 minutes without a key the backlight fades out; the next key only turns it on.
