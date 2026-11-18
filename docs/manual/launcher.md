@@ -1,7 +1,14 @@
 # The launcher
 
 The launcher is the main screen: the list of apps you see after the boot screen, and where you
-come back to when an app ends.
+come back to when an app ends. It is also the **desktop** (spec K.6): its pages sit in a row,
+
+```
+SETTINGS  <-  APPS  ->  HOME
+```
+
+and Left/Right move along it. APPS, the app list, is the page you start on. Notifications and
+Running pages come later, to the right of HOME.
 
 ![The app list](img/launcher-list.png)
 
@@ -9,17 +16,58 @@ come back to when an app ends.
 
 - **Up/Down** choose an app, **OK** starts it. Back (long, in any app) ends the app and brings
   you back here.
-- The black title bar shows, on the left, the battery: its level, the charge in percent and a
-  bolt while it charges. On the right is the position of the chosen app, e.g. `3/12`.
-- The line at the bottom says what the buttons do on this screen: `<Setup  OK Run`.
+- The black title bar is the **status line**: on the left the battery (its level, the charge in
+  percent and a bolt while it charges), in the middle the page's name, on the right the time,
+  the number of unread notifications (`*2`), a module's short status and the position of the
+  chosen app, e.g. `3/12`, as far as they fit, in that order.
+- The line at the bottom says what the buttons do on this screen: `<Settings OK Run >Home`.
 - With more apps than fit (8 rows), a thin line on the right edge shows which part of the list
   you see.
 - Short notices, such as `unknown user` or `app crashed`, appear on the bottom line for 2
   seconds instead of covering the screen. The list stays visible.
 
-**Left** opens **SETTINGS**, the system settings. Left counts only as a short press on its
-own: holding Left+Up to turn off the backlight (see [Buttons and gestures](buttons.md)) does
-not open them.
+**Left** opens **SETTINGS**, the system settings, **Right** the **HOME** page. Left and Right
+count only as a short press on their own, when you let go: holding Left+Up to turn off the
+backlight (see [Buttons and gestures](buttons.md)) does not turn the page.
+
+## HOME and modules
+
+HOME shows the **tiles** of the desktop's modules: small programs, often shell scripts, that
+put one line each on this page, such as the battery or the next bus. Up/Down move the bar,
+Left goes back to APPS. With no module running it says `no tiles`.
+
+A module writes its lines with the `guimod` command:
+
+```
+guimod tile NAME TEXT ...      set or change the module's tile
+guimod status NAME TEXT ...    a short text (6 characters) on the status line
+guimod notify NAME TEXT ...    a notification: the count on the status line, the text noted
+guimod close NAME              its tile and status go
+```
+
+The example module `/usr/share/examples/gui/battile.sh` (package `gmdemo`) is a battery tile
+in three lines:
+
+```
+IFS='= '
+while read key soc rest </dev/power
+do guimod tile battery "Battery $soc%"; sleep 60; done
+```
+
+Start it with `sh /usr/share/examples/gui/battile.sh &`. When the module ends or is killed,
+its tile goes (at the next key, or within a minute while HOME is shown). A module is your user
+plus its name, so it can change only its own tiles; at most 16 tiles and statuses together.
+
+A notification shows its text on the bottom line for 2 seconds and counts on the status line
+(`*1`). Until the Notifications page comes, going to HOME shows the last one again and clears the
+count.
+
+**When the screen is redrawn.** Only when something changes: a key, a record from a module
+that changes what is shown, and the minute of the clock. With the light off, or while an app is
+open, the launcher does not wake up at all; the time disappears from the title bar while the
+light is off and comes back with the next key. Records sent while a full-screen app is open wait
+in `/var/run/gui` (up to 7 KB) and are shown when you come back; `guimod` never waits for them.
+
 
 ## SETTINGS
 

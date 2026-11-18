@@ -440,7 +440,7 @@ static int gui_gid(void)
 	static const char want[] = "gui";
 	char b[64], ch;
 	int fd = open("/etc/group", O_RDONLY), n, i, col = 0, field = 0;
-	int match = 1;
+	int match = 1, digits = 0;
 	long gid = 0;
 
 	if (fd < 0) return -1;
@@ -448,12 +448,13 @@ static int gui_gid(void)
 		for (i = 0; i < n; i++) {
 			ch = b[i];
 			if (ch == '\n') {
-				col = field = 0;
+				if (field == 2 && match && digits > 0) break;
+				col = field = digits = 0;
 				match = 1;
 				gid = 0;
 			} else if (ch == ':') {
 				if (field == 0 && col != 3) match = 0;
-				if (++field == 3 && match) {
+				if (++field == 3 && match && digits > 0) {
 					close(fd);
 					return (int) gid;
 				}
@@ -463,12 +464,16 @@ static int gui_gid(void)
 				col++;
 			} else if (field == 2 && match) {
 				if (ch < '0' || ch > '9' || gid > 30000) match = 0;
-				else gid = gid * 10 + ch - '0';
+				else {
+					gid = gid * 10 + ch - '0';
+					digits++;
+				}
 			}
 		}
+		if (i < n) break;		/* "gui:*:10" with no members */
 	}
 	close(fd);
-	return -1;
+	return field == 2 && match && digits > 0 ? (int) gid : -1;
 }
 
 /* Run an app as its user and wait for it.  NULL, or a notice to show. */
