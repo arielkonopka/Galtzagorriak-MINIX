@@ -58,6 +58,9 @@ For people changing the kernel, the servers, the drivers and the build.
 6. [Testing radios against a second Flipper](part2/06-two-flipper-tests.md): a stock
    (Unleashed) Flipper as the partner for RFID, IR, iButton and Sub-GHz tests, the physical
    setup without special parts, and `twoflip.py` on Linux, macOS or Windows.
+7. [The overnight battery test](part2/07-overnight-power-test.md): AC6.6 (no reset, clock,
+   more than 99 % in Stop2) and the night's current, set up from a fresh computer, `nightpower.py`,
+   reading and recording the result, and the nights measured so far.
 
 ## Where else to look
 
