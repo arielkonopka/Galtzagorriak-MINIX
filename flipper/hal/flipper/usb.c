@@ -469,3 +469,17 @@ int hal_usb_getc(void)
 	irq_restore(s);
 	return c;
 }
+
+/* USB HID (R10.2, R11.3.1): not yet on the device.  T28b adds the HID
+ * interface to the composite descriptors and implements these; until then
+ * the HID files exist but the bus is "not attached" (writes: EAGAIN). */
+uint32_t hal_hid_state(void) { return 0; }
+
+int hal_hid_send(unsigned kind, const uint8_t *rep, unsigned n)
+{
+	(void) kind; (void) rep; (void) n;
+	return -1;
+}
+
+int hal_hid_fake(uint32_t st) { (void) st; return -1; }
+int hal_hid_line(uint32_t *hash) { (void) hash; return -1; }

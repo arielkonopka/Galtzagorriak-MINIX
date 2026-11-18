@@ -13,7 +13,7 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
+all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem run-hid
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -34,6 +34,10 @@ run-lfrfid:
 # Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
 run-modem:
 	$(MAKE) -C $(MROOT)/flipper/tests/modem test
+# libhid (spec R11.3.2): layouts, all printable ASCII round trip in US and
+# DE, UTF-8, the report builders (make hidtest).
+run-hid:
+	$(MAKE) -C $(MROOT)/flipper/tests/hid test
 
 run-%: $(B)/%
 	./$<
@@ -97,4 +101,4 @@ $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid

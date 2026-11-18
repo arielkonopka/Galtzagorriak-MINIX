@@ -20,6 +20,8 @@
 #include <sys/times.h>
 #include <minix/fg.h>
 #include <minix/ibutton.h>
+#include <minix/hid.h>
+#include "libhid.h"
 #include <minix/partition.h>
 #include <time.h>
 #include <utime.h>
@@ -556,6 +558,152 @@ static void devpoll_tests(void)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "poll: speaker child done");
 	close(s);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* R11.3.1 (T28a): the USB HID files with QEMU's backend, which prints each
+ * report as a console line "hid< kbd 02 00 0b ..."; HIDIOCLINE gives that
+ * line's FNV-1a hash, so the test checks the very line on the console.
+ * HIDIOCFAKE plays the host (unplug, LEDs); HIDP_TEST is a fake persona
+ * holding the bus. */
+static unsigned long fnv(const char *s)
+{
+	unsigned long h = 2166136261UL;
+
+	while (*s) h = ((h ^ (unsigned char) *s++) * 16777619UL) & 0xFFFFFFFFUL;
+	return h;
+}
+
+static int hid_line(int fd, const char *want)
+{
+	long h = 0;
+
+	return ioctl(fd, HIDIOCLINE, &h) == 0
+			&& ((unsigned long) h & 0xFFFFFFFFUL) == fnv(want);
+}
+
+static void hid_tests(void)
+{
+	unsigned char r[16];
+	struct pollfd p;
+	struct stat sb;
+	struct tms tm;
+	clock_t t0, t1;
+	int k, m, c, n, st, v, e;
+	pid_t pid;
+
+	k = open("/dev/hidkbd", O_RDWR);
+	m = open("/dev/hidmouse", O_WRONLY);
+	c = open("/dev/hidcons", O_WRONLY);
+	check(k >= 0 && m >= 0 && c >= 0, "hid: open hidkbd, hidmouse, hidcons");
+	if (k < 0 || m < 0 || c < 0) return;
+	check(stat("/dev/hidkbd", &sb) == 0 && (sb.st_mode & 0777) == 0660
+		&& sb.st_gid == 12 && (sb.st_rdev & 0xFF) == HID_KBD_MINOR,
+		"hid: /dev/hidkbd is group usb (12), 0660, minor 17");
+	v = 0;
+	check(ioctl(k, HIDIOCSTATE, &v) == 0 && (v & 0xFF) == (HID_ATTACHED
+		| HID_CONFIGURED) && HID_PERSONA(v) == HIDP_NONE,
+		"hid: HIDIOCSTATE says configured, no persona");
+
+	hid_kbd(r, HID_MOD_LSHIFT, 0x0B);
+	check(write(k, (char *) r, 8) == 8
+		&& hid_line(k, "hid< kbd 02 00 0b 00 00 00 00 00"),
+		"hid: a keyboard report, its console line");
+	hid_mouse(r, HID_BTN_LEFT, 5, -3, 0);
+	check(write(m, (char *) r, 4) == 4
+		&& hid_line(m, "hid< mouse 01 05 fd 00"),
+		"hid: a mouse report, its console line");
+	hid_cons(r, HID_CC_VOL_UP);
+	check(write(c, (char *) r, 2) == 2 && hid_line(c, "hid< cons e9 00"),
+		"hid: a consumer report, its console line");
+	check(hid_type(k, hid_us, "Hi", &n) == 2 && n == 0
+		&& hid_line(k, "hid< kbd 00 00 00 00 00 00 00 00"),
+		"hid: libhid types \"Hi\", the last line is all keys up");
+	r[0] = 0; r[1] = 0x80; r[2] = 0; r[3] = 0;
+	e = write(m, (char *) r, 4) < 0 && errno == EINVAL;
+	check(e && write(k, (char *) r, 7) < 0 && errno == EINVAL,
+		"hid: dx -128 and a short report: EINVAL");
+
+	/* the host unplugs: POLLIN (a change), writes EAGAIN, no POLLOUT;
+	 * plugged in again by a child: poll(POLLOUT) wakes */
+	(void) ioctl(m, HIDIOCSTATE, &v);		/* seen */
+	p.fd = m; p.events = POLLIN | POLLOUT; p.revents = 0;
+	check(poll(&p, 1, 0) == 1 && p.revents == POLLOUT,
+		"hid: poll: writable, no change");
+	v = 0;
+	check(ioctl(k, HIDIOCFAKE, &v) == 0 && poll(&p, 1, 0) == 1
+		&& p.revents == POLLIN, "hid: unplugged: POLLIN, not writable");
+	hid_mouse(r, 0, 1, 0, 0);
+	e = write(m, (char *) r, 4) < 0 && errno == EAGAIN;
+	check(e && ioctl(m, HIDIOCSTATE, &v) == 0 && (v & 0xFF) == 0
+		&& poll(&p, 1, 0) == 0, "hid: unplugged: EAGAIN, state 0, "
+		"POLLIN cleared by HIDIOCSTATE");
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		(void) poll((struct pollfd *) NULL, 0, 300);
+		v = HID_ATTACHED | HID_CONFIGURED;
+		_exit(ioctl(k, HIDIOCFAKE, &v) == 0 ? 0 : 1);
+	}
+	p.events = POLLOUT;
+	t0 = times(&tm);
+	n = poll(&p, 1, 3000);
+	t1 = times(&tm);
+	check(n == 1 && p.revents == POLLOUT && t1 - t0 >= 12 && t1 - t0 < 60,
+		"hid: poll(POLLOUT) wakes when the host configures us");
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "hid: the host child done");
+
+	/* the LED byte: a read waits for a change */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		(void) poll((struct pollfd *) NULL, 0, 300);
+		v = HID_ATTACHED | HID_CONFIGURED | HID_LED_CAPS << 16;
+		_exit(ioctl(k, HIDIOCFAKE, &v) == 0 ? 0 : 1);
+	}
+	r[0] = 0xFF;
+	t0 = times(&tm);
+	n = read(k, (char *) r, 1);
+	t1 = times(&tm);
+	check(n == 1 && r[0] == HID_LED_CAPS && t1 - t0 >= 12,
+		"hid: read on hidkbd waits for the LEDs, gets Caps Lock");
+	(void) waitpid(pid, &st, 0);
+	n = open("/dev/hidkbd", O_RDONLY | O_NONBLOCK);
+	e = n >= 0 && read(n, (char *) r, 1) < 0 && errno == EAGAIN;
+	check(e, "hid: no change since: O_NONBLOCK read EAGAIN");
+	if (n >= 0) close(n);
+	(void) ioctl(k, HIDIOCSTATE, &v);
+	v = HID_ATTACHED | HID_CONFIGURED;		/* LEDs off again */
+	(void) ioctl(k, HIDIOCFAKE, &v);
+	(void) read(k, (char *) r, 1);
+
+	/* one persona at a time: a fake one holds the bus */
+	v = HIDP_TEST;
+	check(ioctl(k, HIDIOCSPERSONA, &v) == 0, "hid: HIDIOCSPERSONA test");
+	n = open("/dev/hidmouse", O_WRONLY);
+	e = n < 0 && errno == EBUSY;
+	check(e, "hid: persona held: open() EBUSY");
+	if (n >= 0) close(n);
+	hid_cons(r, HID_CC_MUTE);
+	e = write(c, (char *) r, 2) < 0 && errno == EBUSY;
+	check(e && ioctl(k, HIDIOCSTATE, &v) == 0
+		&& HID_PERSONA(v) == HIDP_TEST, "hid: persona held: write EBUSY, "
+		"HIDIOCSTATE names it");
+	fflush(stdout);
+	if ((pid = fork()) == 0) {		/* not the holder */
+		v = HIDP_NONE;
+		_exit(ioctl(k, HIDIOCSPERSONA, &v) < 0 && errno == EBUSY ? 0 : 1);
+	}
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "hid: another process cannot let go");
+	close(k);				/* the holder's close lets go */
+	k = open("/dev/hidkbd", O_RDWR);
+	hid_kbd(r, 0, 0);
+	check(k >= 0 && write(k, (char *) r, 8) == 8,
+		"hid: the holder closed: open and write again");
+	close(k);
+	close(m);
+	close(c);
 }
 #endif
 
@@ -2344,6 +2492,7 @@ int main(int argc, char **argv)
 #ifdef BOARD_QEMU
 	devpoll_tests();
 	ibutton_tests();
+	hid_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();

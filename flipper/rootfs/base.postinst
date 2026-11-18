@@ -126,6 +126,30 @@ then
 	chgrp gui /dev/rfid 2>/dev/null
 	chmod 660 /dev/rfid 2>/dev/null
 fi
+# Cards made before R11.3.1 (T28a) lack the group usb and the USB HID
+# files (keyboard, mouse, consumer control; root and group usb).
+grep '^usb:' /etc/group >/dev/null || {
+	echo 'usb:*:12:' >> /etc/group
+	echo "base: /etc/group now has usb"
+}
+if test ! -r /dev/hidkbd
+then
+	mknod /dev/hidkbd c 6 17 || echo "base: could not make /dev/hidkbd"
+	chgrp usb /dev/hidkbd 2>/dev/null
+	chmod 660 /dev/hidkbd 2>/dev/null
+fi
+if test ! -r /dev/hidmouse
+then
+	mknod /dev/hidmouse c 6 18 || echo "base: could not make /dev/hidmouse"
+	chgrp usb /dev/hidmouse 2>/dev/null
+	chmod 660 /dev/hidmouse 2>/dev/null
+fi
+if test ! -r /dev/hidcons
+then
+	mknod /dev/hidcons c 6 19 || echo "base: could not make /dev/hidcons"
+	chgrp usb /dev/hidcons 2>/dev/null
+	chmod 660 /dev/hidcons 2>/dev/null
+fi
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then
