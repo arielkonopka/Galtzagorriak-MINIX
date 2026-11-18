@@ -15,6 +15,9 @@
  *   reads or writes out of bounds (the sanitizers).
  *
  * Usage: ducktest LAYOUTDIR [ROUNDS].  Exit status: failures.
+ *	  ducktest -r LAYOUT.kl|us SCRIPT: the reports SCRIPT makes, one
+ *	  per line as QEMU prints them without "hid< " (tools/nattest.py
+ *	  compares badusb in QEMU with them; waits are left out).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -440,10 +443,49 @@ static void fuzz(const unsigned char *kl, int rounds)
 	      "button go");
 }
 
+/* -r: the reports of one script file. */
+static int reports(const char *layout, const char *file)
+{
+	unsigned char kl[HID_KL_SIZE];
+	struct dk d;
+	char *l, *nl;
+	int fd, r;
+
+	if (strcmp(layout, "us") == 0) memcpy(kl, hid_us, sizeof kl);
+	else if (hid_kl_read(kl, layout) < 0) {
+		perror(layout);
+		return 2;
+	}
+	if ((fd = open(file, O_RDONLY)) < 0) {
+		perror(file);
+		return 2;
+	}
+	reset();
+	memset(&d, 0, sizeof d);
+	d.kl = kl;
+	d.io = &io;
+	r = dk_run(&d, fd);
+	close(fd);
+	for (l = rec; *l != 0; l = nl + 1) {
+		if ((nl = strchr(l, '\n')) == NULL) break;
+		if (strncmp(l, "wait", 4) != 0 && strncmp(l, "button", 6) != 0)
+			fwrite(l, 1, (size_t) (nl + 1 - l), stdout);
+	}
+	if (r != DK_DONE) {
+		fprintf(stderr, "ducktest: %s: line %d: %s %s\n", file, d.line,
+			d.err ? d.err : "stopped", d.errarg);
+		return 1;
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned char de[HID_KL_SIZE];
 	char p[512];
+
+	if (argc == 4 && strcmp(argv[1], "-r") == 0)
+		return reports(argv[2], argv[3]);
 
 	if (argc < 2) {
 		fprintf(stderr, "usage: ducktest LAYOUTDIR [ROUNDS]\n");

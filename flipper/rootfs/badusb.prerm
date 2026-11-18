@@ -1,0 +1,6 @@
+# prerm of the badusb package: off the launcher.  The scripts in
+# /home/flipper/badusb, the settings and the user badusb stay (pkg install
+# badusb brings it back as it was; rm them by hand to forget).
+grep -v '^Bad USB:badusb:@usb:=/usr/bin/badusb-gui$' /etc/apps > /etc/apps.new &&
+	cp /etc/apps.new /etc/apps
+rm -f /etc/apps.new

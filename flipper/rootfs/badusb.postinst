@@ -1,0 +1,30 @@
+# postinst of the badusb package (spec R11.3.3, R11.3.4, F.4, K.8).  The
+# app's own user badusb (uid 23) in group usb: only that group may open
+# the HID device files (R11.3.1).  The launcher line "Bad USB", a window
+# app ("=": the launcher starts it as badusb with its pipes on fd 3 and 4).
+grep '^badusb:' /etc/passwd >/dev/null || {
+	echo 'badusb:*:23:12:Bad USB:/home/flipper:' >> /etc/passwd
+	echo "badusb: added the user badusb (uid 23, group usb)"
+}
+grep ':=/usr/bin/badusb-gui$' /etc/apps >/dev/null || {
+	echo 'Bad USB:badusb:@usb:=/usr/bin/badusb-gui' >> /etc/apps
+	echo "badusb: the launcher now has Bad USB"
+}
+# The scripts: /ext/badusb (/home/flipper/badusb).  The examples go there
+# when they are not (a script of the same name is never replaced).
+if test -d /home/flipper
+then
+	test -d /home/flipper/badusb || mkdir /home/flipper/badusb
+	for f in windows macos linux keys
+	do
+		test -f /home/flipper/badusb/$f.txt ||
+			cp /usr/share/badusb/$f.txt /home/flipper/badusb/$f.txt
+	done
+fi
+# The settings (K.7): written by the app only when a value changes; an
+# empty file is the defaults (en-US, no delay).  It belongs to badusb,
+# which may not make files in /etc/flipper.
+test -d /etc/flipper || mkdir /etc/flipper
+test -f /etc/flipper/badusb.conf || >/etc/flipper/badusb.conf
+chown badusb /etc/flipper/badusb.conf
+chmod 644 /etc/flipper/badusb.conf
