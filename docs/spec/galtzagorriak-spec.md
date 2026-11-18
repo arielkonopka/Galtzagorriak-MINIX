@@ -23,6 +23,9 @@ CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background:
 report `tcpip-stack-analysis.md` (Polish, not in the repo).
 Addition (2026-11-17): section P (data modems between two Flippers over RFID, NFC, Sub-GHz and
 BLE: one link layer, four backends, the `gmodem` command; owner request).
+Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
+its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
+the card and installed once into flash; owner request).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -783,13 +786,15 @@ spare bytes. The owner suggested shifting the epoch or widening the type. Five w
 | File | Content | Owner, mode | Read by |
 |---|---|---|---|
 | `/etc/hostname` | one line, `[a-z0-9-]`, 1–8 characters (the stock name limit; the BLE name becomes `Flipper <name>`, as stock) | root, 0644 | shell prompt, `bled` advertising name, USB product string, RPC device info |
-| `/etc/flipper/region` | radio region code (R8.2) | root, 0644 | the Sub-GHz transmit check (R8.2), NFC/RFID power limits |
+| `/etc/flipper/region` | radio region code (R8.2): a text copy for scripts and apps; the binding copy is the flash record of RQ.2 | root, 0644 | apps that show the region; the kernel reads the flash record (section Q) |
 | `/etc/TZ` | POSIX `TZ` string, and the zone label in a `#` comment | root, 0644 | INIT puts it into the environment of everything it starts; re-read on `SIGHUP` and `SIGRTC` |
 | `/etc/location` | FlipperFormat: `Latitude`, `Longitude` (decimal degrees, 4 decimals), `Elevation` (m), `Source` (`manual`, `city`, `sun`, `gps`), `Accuracy_km`, `Set` (UTC time) | root, **0640, group `location`** | apps whose manifest says `Location: yes` (granted group `location`) |
 
 - **Location is private data.** It is not readable by `nobody`, not sent over RPC or BLE unless the
   caller is root, and not written to logs.
-- **Region** default: the hardware region in OTP (as stock `furi_hal_version_get_hw_region`).
+- **Region** is a country (section Q). Default: derived from the hardware region in OTP (as
+  stock `furi_hal_version_get_hw_region`: the EU/RU hardware gives `EU`, the US/CA/AU hardware
+  gives `US`), until the wizard or `region set` installs the user's country.
   Changing it requires root and is logged to `/var/log/messages`.
 - An optional GPS module on the header UART (section H) can later fill both the location
   (`Source: gps`) and the time.
@@ -1966,21 +1971,12 @@ from its 26 MHz crystal, computed by `mdm_cc1101_regs()` and printed by `gmodem 
 
 `-b BAUD -d DEV -w BW` set a custom PHY (each rounded to the nearest CC1101 value, printed).
 
-**Legal limits.** The region is `/etc/flipper/region` (I.4). The table below is the first
-version; like R19.11 it MUST be checked against the current ERC/REC 70-03 Annex 1, EN 300 220 and
-FCC part 15 text, and against the stock firmware's region data, before transmit is enabled
-(T26b). Everything is `const` in flash.
-
-| Region | Band (MHz) | Max power | Duty cycle | Note |
-|---|---|---|---|---|
-| EU | 433.050–434.790 | 10 mW e.r.p. | ≤ 10 % | default `-f 433.92` |
-| EU | 868.000–868.600 | 25 mW e.r.p. | ≤ 1 % | |
-| EU | 868.700–869.200 | 25 mW e.r.p. | ≤ 0.1 % | |
-| EU | 869.400–869.650 | 500 mW e.r.p. (the Flipper gives ≈ 10 mW) | ≤ 10 % | |
-| EU | 869.700–870.000 | 5 mW e.r.p. | none | sustained transfers |
-| US | 902–928 | FCC 15.249 field strength (≈ −1 dBm EIRP) | none | default `-f 915` |
-| US | 315, 433.92 | — | — | FCC 15.231 does not allow data: refused |
-| other | — | — | — | refused until the table has the region |
+**Legal limits.** The region and its band table are section Q: the user's country, installed
+once into flash, with power, duty cycle, bandwidth and kind of use per band, and the source of
+every row. `gmodem` transmits as `SG_DATA` (RQ.6), so it uses only rows marked `any`, `per`
+(USA/Canada 315/433 MHz: 1 s bursts at −30 dBm) and, for the hopping link, `fhss`. Default
+frequency: `-f 433.92` (EU, CEPT countries), `-f 915` (US, CA). Countries without a table:
+refused.
 
 - **RP.6 Every transmit is checked** (in the kernel, R8.2, and before that in `libmodem` so the
   user gets a clear message instead of `EPERM`): the **whole occupied bandwidth**
@@ -1995,14 +1991,15 @@ FCC part 15 text, and against the stock firmware's region data, before transmit 
   busy-waits (rule 0.8). The kernel's counter is the one that is binding.
 - **What the law means for speed** (to put in the manual): with 10 % the 433 MHz band carries on
   average ≈ 1/10 of the preset's rate, 868.0–868.6 MHz ≈ 1/100. Long transfers in the EU belong on
-  869.7–870.0 MHz (no duty limit, 5 mW) or on BLE.
+  the bands without a duty limit (Q.4): 434.04–434.79 MHz at 10 mW with `narrow`,
+  433.05–434.79 MHz at 1 mW, 869.7–870.0 MHz at 5 mW, or on BLE.
 - **RP.8 Kernel interface (T26b, Phase 8 R8.1 part 2):** `ioctl(SGIOCPHY, struct sg_phy)` with
   frequency, modulation, rate, deviation, filter, power (all in Hz/dBm; the kernel computes the
   registers with the same `cc1101calc.c` the library uses, so the check and the setting cannot
   disagree), `write()` = one packet (blocks until sent; `EAGAIN` when the duty budget is spent),
   `read()` = one packet with good CRC + RSSI + LQI, `poll()` for timeouts. The packet goes
   between the caller's pinned buffer and the 64 B FIFO; the GDO0 interrupt does ≤ 100 µs of SPI
-  (rule R0.8b). Kernel RAM ≤ +32 B with RP.7. 61 B packets in v1; longer ones by FIFO refill
+  (rule R0.8b). Kernel RAM ≤ +32 B with RP.7, ≤ +44 B with the region record and timing of RQ.7. 61 B packets in v1; longer ones by FIFO refill
   later (shared with R19.11).
 - Interoperability: the presets are our own. A preset matching Unleashed's `subghz chat` would
   let the Unleashed reference Flipper test the MINIX PHY (P.9); it is added if its parameters are
@@ -2095,8 +2092,8 @@ and cannot drift.
 - **ACP.R (responsiveness):** during a `gmodem` transfer on any medium L1–L10 stay within
   budget (`lat`), the launcher scrolls without a visible stall, and the SD card keeps working
   (the SPI bus is held for one packet at a time).
-- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), with or without `-z` (P.3a), 0 B afterwards; kernel ≤ +32 B for Sub-GHz
-  (RP.8, RP.7), ≤ +8 B for RFID (RP.5c).
+- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), with or without `-z` (P.3a), 0 B afterwards; kernel ≤ +44 B for Sub-GHz
+  (RP.8, RP.7, RQ.7), ≤ +8 B for RFID (RP.5c).
 
 ### P.10 Notes for the system manual
 
@@ -2104,6 +2101,274 @@ What each medium can do (the table of P.1 with measured numbers), the command, p
 range and how to hold two Flippers for RFID and NFC (backs together), the presets and the
 trade-off of bandwidth against range, the legal limits and why 433 MHz transfers pause (duty
 cycle), the region setting, "nothing is encrypted except BLE", and the exit statuses.
+
+---
+
+## Q. Radio regions: per-country Sub-GHz limit tables (owner request, 2026-11-18)
+
+**Goal:** the user picks a **country**, and every Sub-GHz transmit (the `subghz` app, `gmodem`,
+the IP link R19.11) stays inside that country's rules. The owner accepted the limits as a legal
+requirement and asked for tables for Canada, the USA, the EU (one table where the EU rules are
+unified, per country where they are not), Albania, Bosnia and Herzegovina and North Macedonia.
+All tables live on the SD card; the chosen one is written **once** into internal flash, so the
+limits survive a restart and a missing card (owner, 2026-11-18). The first-boot wizard asks for
+the country (R18b.2 step 3). This section replaces the first-version table of P.4 and makes R8.2
+concrete.
+
+### Q.1 Is the EU unified? Mostly yes.
+
+- **Binding core.** Commission Decision 2006/771/EC, whose annex was last replaced by
+  Commission Implementing Decision **(EU) 2022/180** of 8 February 2022, obliges every member
+  state to make the listed SRD bands available under exactly these conditions. For the bands the
+  CC1101 can reach (300–348, 387–464, 779–928 MHz) that covers 433.05–434.79 MHz and
+  862–870 MHz. One table, `EU`, holds it, and every member state uses it unchanged.
+- **Not unified:** 870–876 MHz and 915–921 MHz. Decision **(EU) 2018/1538** (amended by
+  (EU) 2022/172) opens them only "where available": a state may protect existing (defence,
+  ER-GSM) use or leave rows unimplemented (its Art. 3 and footnotes 5–7), and its rows are
+  restricted to data networks under a master access point. ERC/REC 70-03 (March 2024),
+  Appendix 1, shows the real status (Q.5). These rows are the only per-country part, so each
+  member state gets its own file `XX` = `Base: EU` + its own extra rows (Q.5).
+- **Albania, Bosnia and Herzegovina, North Macedonia** are CEPT members outside the EU. They
+  are not bound by the EU decision; their status per ERC/REC 70-03 Annex 1 band is in its
+  Appendix 1 (March 2024), and their own rules are made by AKEP (AL), RAK (BA) and AEK (MK).
+  Each gets its own table with only the bands Appendix 1 marks **Y** (implemented).
+- **USA and Canada** have no band plan for SRDs: any frequency outside the restricted bands may
+  be used, at a field strength that depends on the frequency and on the kind of use
+  (FCC part 15 / ISED RSS-210, RSS-247). The tables turn that into frequency ranges.
+
+### Q.2 The table format (on the card)
+
+One file per region, `/usr/share/region/<CC>.reg` (`CC` = ISO 3166 alpha-2, plus `EU`), part of
+the base package on the card's root file system, owned by root, mode 0644. Text, so the user can
+read it with `more`; a header in the stock `Key: value` style and then one row per band, fields
+separated by tabs:
+
+```
+Filetype: Galtzagorriak region
+Version: 1
+Region: PL
+Name: Polska
+Base: EU
+Checked: 2026-11-18
+Source: ERC/REC 70-03 (03.2024) App. 1; Decision (EU) 2018/1538
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+#?870.000	873.000	14	1%	600	any	70-03 h2 (PL: status "*", not checked)
+```
+
+| Field | Meaning |
+|---|---|
+| `lo_mhz`, `hi_mhz` | the band edges; the whole occupied bandwidth plus 2 × 20 ppm crystal error must lie inside (RP.6) |
+| `dbm` | the legal power limit rounded **down** to whole dBm: e.r.p. as the law says it (EU, CEPT), or the e.i.r.p. computed from the field strength at 3 m, EIRP = (E·3 m)² / 30 Ω (USA, Canada). The kernel uses the highest CC1101 PATABLE step ≤ this value (−30, −20, −15, −10, −6, 0, 5, 7, 10 dBm), assuming a 0 dBi antenna (the Flipper's is below that) |
+| `duty` | the duty-cycle limit over any 60 minutes (RP.7), `none` if there is none |
+| `bw_khz` | the largest occupied bandwidth (2 · dev + rate, without crystal error), `0` = no limit |
+| `use` | `any`: any kind of transmission inside the limits. `ctl`: control signals only (US/CA momentary remotes): no data except with a control signal, each transmission ends ≤ 5 s after it started, no regular periodic sending. `per`: any kind of transmission, but each one ≤ 1 s and then silence ≥ 30 × its length and never < 10 s. `fhss`: only the frequency-hopping link (R19.11), whose hop table the kernel checks at arm time |
+| `ref` | the exact source of the row (decision and row, or rule section). Every row has one |
+
+- `Base: EU` includes the rows of `EU.reg` first (one level only, no loops).
+- A row starting `#?` is a row we know about but have **not verified** for that country: it is
+  shown by `region show` and in the wizard (grey, "not checked"), and never used. Turning it on
+  is a one-line edit after the national text is checked (Q.6).
+- Overlapping rows are fine (EU 869.7–870 MHz has two). The kernel takes the **first** row, in
+  file order, that admits the transmit (band, bandwidth, power, `use` allowed for the caller's
+  mode, and the row's duty or timing budget still has room). Files list rows without a duty
+  limit first, so long transfers go there by themselves.
+
+### Q.3 Where the chosen table lives: flash, written once
+
+- **RQ.1 `region` command** (root): `region list`, `region show [CC]` (the table, with the
+  CC1101 step each row gets), `region set CC`. `set` reads the file (and its base), checks every
+  row (edges inside the CC1101 ranges, `dbm` ≤ 10, a known `use`, a `ref` present), prints the
+  table, asks for confirmation ("I will use this device under the rules of PL"), and installs it.
+- **RQ.2 Compiled record in the installed region.** `region set` compiles the table into one
+  binary blob: header 16 B (magic `RGN1`, version, region code, row count, CRC-32) and 16 B per
+  active row (lo, hi in Hz as `u32`; dbm `s8`; duty in 0.01 % `u16`; bw in kHz `u16`; use `u8`;
+  flags), at most 32 rows (≤ 528 B). MM writes it like a program's text, as a record of kind
+  `region` in the installed-region directory (R2b.3, R2b.5: root only, read back and compared),
+  and marks the previous region record dead. **One flash write per change of region** (at the
+  first boot, and when the user travels); nothing is written at run time otherwise. The write
+  happens at install time, in the sense of the flash-write rule; the PR states that count.
+- **RQ.3 Boot.** The kernel finds the live `region` record, checks magic and CRC and keeps a
+  pointer to it: the rows are read in place (XIP), **0 B of table in RAM**. No record, or a bad
+  CRC: Sub-GHz transmit is off (`EPERM`, "no radio region installed"), receive works. The card
+  is not needed after the install: a missing or swapped card changes nothing.
+- **RQ.4 `/etc/flipper/region`** stays (I.4) as a text copy of the code, written by
+  `region set`, for scripts and apps; the kernel trusts only the flash record. `sysctl`-style
+  read: `region` without arguments prints the installed code and the record's CRC.
+- **RQ.5 Tables from this firmware.** The build puts the SHA-256 of every shipped `.reg` file in
+  a `const` list in flash (≈ 40 × 34 B ≈ 1.4 KB, 0 B RAM). A file whose hash is not in the list
+  is a **custom table**: `region set` says so, shows the differences from the shipped file of the
+  same code if there is one, and needs `-f`. The change is logged to `/var/log/messages` with
+  the hash. (The user is responsible for a custom table, as with stock's custom region data.)
+- **RQ.6 Caller's mode.** `struct sg_phy` (RP.8) gets a `mode`: `SG_CTL` (the `subghz` app
+  sending a remote's code) or `SG_DATA` (`gmodem`, the IP link). `SG_DATA` may only use rows
+  with `use` `any`, `per` or `fhss`; `SG_CTL` may use any row. `SG_CTL` transmissions are cut by
+  the kernel at 5 s; the `subghz` app offers no timed auto-repeat in a `ctl` row.
+- **RQ.7 Kernel RAM.** The pointer (4 B) and one timestamp + length for `per`/`ctl` timing
+  (6 B, shared, only one transmit is active), on top of RP.7's duty counter: the Sub-GHz total
+  of RP.8 grows from ≤ +32 B to **≤ +44 B**. Wait times are returned (`EAGAIN` + the wait in
+  `sg_status`), never busy-waited (rule 0.8).
+- **RQ.8 NFC and RFID** keep their own fixed limits (they are the same everywhere for the
+  Flipper's power); the record has room for later per-region rows (flag bit) if a country needs
+  them.
+
+### Q.4 The tables
+
+PA = the CC1101 step the kernel uses. "Duty" uses the duty-cycle alternative of each EU row:
+the "spectrum access and mitigation techniques" alternative (LBT + AFA per EN 300 220) is not
+implemented, CCA alone is not enough for it.
+
+**`EU` (all 27 member states; Decision 2006/771/EC, annex as replaced by (EU) 2022/180; the
+ERC/REC 70-03 Annex 1 band in brackets):**
+
+| Band (MHz) | Power | PA | Duty | Bandwidth | Use | Source |
+|---|---|---|---|---|---|---|
+| 433.050–434.790 | 1 mW e.r.p. (−13 dBm/10 kHz above 250 kHz bandwidth) | 0 | none | – | any | 2022/180 row 44a (g2) |
+| 434.040–434.790 | 10 mW e.r.p. | 10 | none | ≤ 25 kHz | any | 2022/180 row 45c (g3) |
+| 433.050–434.790 | 10 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 44b (g1) |
+| 869.700–870.000 | 5 mW e.r.p. | 7 | none | – | any | 2022/180 row 56a (h1.8) |
+| 862.000–863.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | ≤ 350 kHz | any | 2022/180 row 87 (h0) |
+| 863.000–865.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 46a (h1.3) |
+| 865.000–868.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 47 (h1.4) |
+| 868.000–868.600 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 48 (h1.5) |
+| 868.700–869.200 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 50 (h1.6) |
+| 869.400–869.650 | 500 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 54 (h1.7) |
+| 869.700–870.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 56b (h1.9) |
+
+Not used: the alarm-only and social-alarm sub-bands 868.6–868.7 and 869.2–869.4 MHz
+(rows 49, 51–53), 869.65–869.7 MHz (row 55, alarms), the wideband-data and RFID rows (84, 47a,
+47b: data networks or interrogators only), 863–865 MHz audio (46b).
+What this changes for `gmodem` (P.4): long transfers in the EU now have three bands with no duty
+limit: 434.04–434.79 MHz at 10 mW with the `narrow` preset (12 kHz ≤ 25 kHz), 433.05–434.79 MHz
+at 1 mW with any preset, and 869.7–870.0 MHz at 5 mW.
+
+**`US` (47 CFR part 15; restricted bands of 15.205 in the CC1101 ranges: 322–335.4 and
+399.9–410 MHz, so no row touches them):**
+
+| Band (MHz) | Limit (at 3 m) | Power (e.i.r.p.) | PA | Bandwidth | Use | Source |
+|---|---|---|---|---|---|---|
+| 902.000–928.000 | 50 mV/m | −1.2 dBm → −2 | −6 | – | any | 15.249(a) |
+| 902.000–928.000 | 1 W conducted, ≥ 50 hop channels, ≤ 0.4 s per channel in 20 s | +30 dBm | 10 | 20 dB bandwidth < 250 kHz | fhss | 15.247(a)(1)(i), (b)(2) |
+| 300.000–308.560 | 5,417–5,767 µV/m | −21 | −30 | ≤ 750 kHz (0.25 %) | ctl | 15.231(a)–(c) |
+| 308.560–322.000 | up to 6,333 µV/m | −20 | −20 | ≤ 771 kHz | ctl | 15.231(a)–(c) |
+| 335.400–348.000 | 6,892–7,417 µV/m | −19 | −20 | ≤ 838 kHz | ctl | 15.231(a)–(c) |
+| 387.000–399.900 | 9,042–9,579 µV/m | −17 | −20 | ≤ 967 kHz | ctl | 15.231(a)–(c) |
+| 410.000–416.400 | 10,000–10,267 µV/m | −16 | −20 | ≤ 1,025 kHz | ctl | 15.231(a)–(c) |
+| 416.400–464.000 | 10,267–12,250 µV/m | −15 | −15 | ≤ 1,041 kHz | ctl | 15.231(a)–(c) |
+| 300.000–322.000 | 2,167–2,533 µV/m | −29 | −30 | ≤ 750 kHz | per | 15.231(e) |
+| 335.400–348.000 | 2,757–2,967 µV/m | −27 | −30 | ≤ 838 kHz | per | 15.231(e) |
+| 387.000–399.900 | 3,617–3,832 µV/m | −25 | −30 | ≤ 967 kHz | per | 15.231(e) |
+| 410.000–464.000 | 4,000–4,900 µV/m | −24 | −30 | ≤ 1,025 kHz | per | 15.231(e) |
+
+- 15.231(b)/(e) give the field strength by linear interpolation over 260–470 MHz
+  (3,750 → 12,500 µV/m for (a), 1,500 → 5,000 µV/m for (e)); each row uses the value at its lower
+  edge (the lowest), rounded down. The rows are split where the next PA step becomes legal
+  (308.56 MHz = −20 dBm, 416.4 MHz = −15 dBm for `ctl`).
+- `ctl` is 15.231(a): a remote's code (garage, gate, doorbell) sent by the user, stopping ≤ 5 s.
+  `per` is 15.231(e): any use, data included, ≤ 1 s, then ≥ 30 × silence and ≥ 10 s. A 1 s
+  `gmodem` packet burst at 38.4 kBaud moves ≈ 4.8 KB per 31 s (≈ 150 B/s), at −30 dBm.
+- So the old P.4 line "315, 433.92: FCC 15.231 does not allow data: refused" was too strict:
+  data is allowed under 15.231(e), at the lower field strength and with the 1 s / 30× rule.
+- The 902–928 MHz `fhss` row is for the hopping link (R19.11, ≥ 50 channels of < 250 kHz); the
+  Flipper's +10 dBm is far below the 1 W limit. The DTS alternative (15.247(a)(2): 6 dB bandwidth
+  ≥ 500 kHz) is not offered: the `max` preset is not reliably that wide.
+- The amateur bands (420–450, 902–928 MHz, part 97) need a licence and are not in the table.
+
+**`CA` (ISED RSS-210 Issue 10 + Amendment April 2020; RSS-247 Issue 3, August 2023;
+RSS-Gen Issue 6 section 7.5 restricted bands, the same in these ranges: 322–335.4 and
+399.9–410 MHz):** the same rows and numbers as `US`, with these sources:
+
+| US row | Canadian rule (same numbers) |
+|---|---|
+| 902–928 `any` | RSS-210 Annex B, Table B2: 50 mV/m at 3 m (quasi-peak) |
+| 902–928 `fhss` | RSS-247 5.1 c) (≥ 50 channels if 20 dB bandwidth < 250 kHz, ≤ 0.4 s in 20 s), 5.4 a) (1 W) |
+| `ctl` rows | RSS-210 A.1.1–A.1.3, Table A1: (41.67 × f) − 7083 µV/m for 260–470 MHz; bandwidth ≤ 0.25 % |
+| `per` rows | RSS-210 A.1.4, Table A2: (16.67 × f) − 2833.33 µV/m; ≤ 1 s, silence ≥ 30 × and ≥ 10 s |
+
+- Note in Tables A1/A2: 225–328.6 and 335.4–399.9 MHz are for the exclusive use of the Government
+  of Canada; licence-exempt devices may still work there but get no protection. `region show CA`
+  prints that note for the 300–322, 335.4–348 and 387–399.9 MHz rows.
+
+**`AL`, `BA`, `MK`** (ERC/REC 70-03, March 2024: Annex 1 conditions, Appendix 1 status;
+Y = implemented, N = not implemented, `*` = no information): the rows are the EU rows with the
+same Annex 1 conditions (same power, duty and bandwidth as in `EU`), plus the 870/915 MHz rows of
+Q.5 where marked:
+
+| Annex 1 band | MHz | AL | BA | MK |
+|---|---|---|---|---|
+| g1 / g2 / g3 | 433.05–434.79 (3 rows) | Y | Y | Y |
+| h0 | 862–863 | Y | `*` → `#?` | Y |
+| h1.3 | 863–865 | `*` → `#?` | `*` → `#?` | Y |
+| h1.4 | 865–868 | `*` → `#?` | N → left out | Y |
+| h1.5 | 868.0–868.6 | Y | Y | Y |
+| h1.6 | 868.7–869.2 | Y | Y | Y |
+| h1.7 | 869.4–869.65 | Y | Y | Y |
+| h1.8 | 869.7–870, 5 mW | Y | Y | Y |
+| h1.9 | 869.7–870, 25 mW 1 % | `*` → `#?` | N → left out | Y |
+| h2 | 870–874.4 | Y → `#?` (Q.5) | N → left out | Y → `#?` (Q.5) |
+| h3 | 915–919.4 | Y → `#?` (Q.5) | N → left out | Y → `#?` (Q.5) |
+
+- The matrix was read from the PDF's text by column position: T32 checks every AL/BA/MK cell
+  against the PDF page and reads Appendix 3 (national restrictions) before transmit is enabled.
+
+### Q.5 The bands that differ between countries: 870–876 and 915–921 MHz
+
+ERC/REC 70-03 Annex 1 rows (conditions the same everywhere they are implemented):
+h2 870–874.4 MHz, 25 mW e.r.p., ≤ 1 %, ≤ 600 kHz (ER-GSM protection 873–876 MHz: ≤ 0.01 % and
+≤ 5 ms per 1 s); h3 915–919.4 MHz, 25 mW e.r.p. (100 mW in the RFID channels 916.3, 917.5,
+918.7 MHz), ≤ 1 %, ≤ 600 kHz (ER-GSM protection 918–921 MHz the same). The EU decision 2018/1538
+adds data-network-only rows (874–874.4, 917.3–918.9 MHz: master access point required) that a
+pair of Flippers is not, so they are not used.
+
+v1 ships these as `#?` rows at the safe parts **870.000–873.000** and **915.000–918.000 MHz**
+(outside the ER-GSM ranges) with 25 mW, 1 %, 600 kHz, for every country whose Appendix 1 status
+is Y, and leaves them out where it is N:
+
+| Status (70-03 App. 1, 03.2024) | h2 870–874.4 | h3 915–919.4 |
+|---|---|---|
+| Y | AT, BG, DK, ES, EE, GR, HU, IT, IE, LU, PT, SE, SK, SI, AL, MK | AT, BG, DK, ES, EE, GR, HU, IE, LU, PT, SE, SK, SI, AL, MK |
+| L (limited) | BE, FI, LT | BE, LT |
+| U (under study) | HR | HR |
+| `*` (no information) | CY, CZ, MT, PL, RO | CY, CZ, IT, MT, PL, RO |
+| N (left out) | DE, FR, NL, LV, BA | DE, FR, FI, NL, LV, BA |
+
+Each EU country file therefore holds `Base: EU` and at most these two `#?` rows; for DE, FR, NL,
+LV the file is `Base: EU` alone. A `#?` row becomes active only after the national regulator's
+own text has been checked and cited in its `ref` (Q.6).
+
+### Q.6 Keeping the tables right
+
+- Every row carries its source; `Checked:` in the header is the date the file was checked.
+- **Before transmit is enabled (T32b)** every number is checked once more against the original
+  texts: the EUR-Lex consolidated 2006/771/EC, ERC/REC 70-03 (PDF pages 44–46 for Appendix 1,
+  Appendix 3 for national restrictions), 47 CFR 15.205/15.231/15.247/15.249 (eCFR), RSS-210,
+  RSS-247 and RSS-Gen at ised-isde.canada.ca, and the AKEP/RAK/AEK rules for AL/BA/MK. The PR
+  lists what was checked.
+- Countries not in the list: `region set` refuses with "no table for XX; transmit stays off".
+  A new country is a new file + a manual line; nothing in the kernel changes.
+- The tables are data on the card and a 0.5 KB record in flash: adding a country costs no RAM
+  and no firmware rebuild (only RQ.5's hash list, so a firmware update marks it as shipped).
+
+Acceptance:
+- ACQ.1 (host) Every shipped `.reg` parses; `region show US` prints the Q.4 table; a file with a
+  row outside the CC1101 ranges, `dbm` > 10, an unknown `use`, no `ref`, or a `Base` loop is
+  refused with the line number.
+- ACQ.2 (host + QEMU, the same `cc1101calc.c`/region code as the kernel) With `EU`, an
+  `SG_DATA` transmit at 433.92 MHz, 10 dBm, `std` goes through until 10 % of the hour is spent,
+  then `EAGAIN` with the wait; at 0 dBm it never waits. With `US`, `SG_DATA` at 433.92 MHz is
+  allowed only at −30 dBm, ≤ 1 s, then waits ≥ 30 × and ≥ 10 s; `SG_CTL` at −15 dBm is cut at
+  5 s; `SG_DATA` at −15 dBm is `EPERM`. With `BA`, 866 MHz is `EPERM`.
+- ACQ.3 (Flipper) No region record: transmit `EPERM`, receive works. `region set PL` writes the
+  record with 0 page erases in the normal case (flash write counter, Phase 2b); after a reboot
+  with the card removed the PL limits still apply.
+- ACQ.4 A changed `.reg` file needs `-f`, and the change is logged with its hash.
+
+### Q.7 Notes for the system manual
+
+Which countries exist, how to read `region show` (power, duty, `ctl`/`per` explained in plain
+words: "remote buttons only", "short bursts with a pause"), why a transfer pauses, that the
+region is kept in internal flash and survives a card change, that changing it needs root and is
+logged, `#?` rows, custom tables and `-f`, and that the user is responsible for using the device
+legally (a note for travellers: set the region of the country you are in).
 
 ---
 
@@ -3371,8 +3636,10 @@ data; 0 between timer events. Flash: interpreter ≈ 40–60 KB shared, bindings
   - Before any transmit, the kernel reads back the frequency registers (`FREQ2..0`), the PA
     table and the data rate, and refuses (`EPERM`) anything outside the band table for the
     configured region.
-  - The table is `const` in flash, with the same bands as stock.
-  - The region is set by root (`/etc/flipper/region`) and applied at boot.
+  - The table is the region record in flash (section Q, RQ.2–RQ.3): per-country rows with
+    power, duty cycle, bandwidth and kind of use, read in place (0 B RAM).
+  - The region is set by root (`region set`, or the first-boot wizard) and applied at boot;
+    without a record there is no transmit.
   - Registers that bypass the check while transmitting are write-protected while TX is active.
 - **R8.3 External CC1101** on the header SPI (stock supports it): same driver, second instance,
   selected by `ioctl`; the 5 V OTG is enabled through `/dev/power`.
@@ -5334,8 +5601,13 @@ table), 15 (BLE name), section I.
   kept and the summary says "skipped"):
   1. Welcome (and the root password of R3.4, if not yet set; it moves into the wizard here).
   2. **Hostname:** default from the OTP name, as stock; 1–8 characters `[a-z0-9-]` (I.4).
-  3. **Region:** default from OTP; a list with the allowed transmit bands of each region; the user
-     confirms they will use the device under that region's rules (I.4, R8.2).
+  3. **Region:** a list of **countries** (grouped: EU, other Europe, North America; the
+     cursor starts on the OTP default, I.4). OK on a country shows its table as `region show`
+     does (band, power, duty, "remote buttons only" / "short bursts"; `#?` rows grey); the user
+     confirms they will use the device under that country's rules, and at the end (R18b.3) the
+     wizard runs `region set` (one flash write, RQ.2). Skipped: the OTP default is installed, and the
+     summary says so. The same screen is the `Region` line of the launcher's SETTINGS page
+     (section Q, R8.2).
   4. **Date, time and time zone:** zone from the `const` zone table (grouped by region); date and
      time entered in **local** time and stored in **UTC**. The field is pre-filled from the RTC
      with a note that, after a switch from the stock firmware, the RTC still holds the old
