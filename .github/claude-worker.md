@@ -38,6 +38,13 @@ When you are started on a PR, read its commits and your earlier comment first
 and continue from the first unchecked step; do not redo finished steps.
 Plan big tasks so that each step is a few files, not the whole task at once.
 
+**Run tests in the foreground.** This is a headless run: when you end your turn
+(for example with "waiting for X to finish"), the job ends and every background
+command is killed. Never use `run_in_background`, and never end your turn while
+something is still running. Give long commands `timeout: 600000` (10 min). Split
+anything longer, e.g. `tools/pkgload.py` or powercut in batches, and commit
+between the batches.
+
 ## Check your work (all in this runner; the toolchain is installed)
 ```
 cd flipper
