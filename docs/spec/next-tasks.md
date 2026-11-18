@@ -441,6 +441,21 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 
+## T33. Signed update file `Galtzagorriak.update` (spec section S; user request 2026-11-18): milestone M3, after T29 (MTP)
+Goal: Windows users update by dragging one signed file onto the Flipper and pressing OK. No CPU2 needed.
+
+### T33a (`lane:cloud`, host + QEMU)
+- `tools/mkupdate.py`, `tools/gzsign` (`--new-key`), `tools/gzupdate-check.py`; `make BOARD=flipper update` (RS.17); format of RS.1/RS.2 documented in `flipper/PORTING.md`.
+- Ed25519 + SHA-512 verifier in C, shared by `atea` and libc's crypto part (RS.4); host tests with RFC 8032 vectors and the ACS.1 bad files (ASan/UBSan, `flipper/tests/host`).
+- `gzupdate check|apply|finish|commit` (RS.8–RS.10, RS.14 manifest, RS.15) and the INIT tree switch (RS.14), with `powercut.py` cut points (ACS.2, ACS.3). In QEMU `atea`'s flash step is simulated on the QEMU flash image.
+- CI: `release` job signs and attaches `Galtzagorriak-X.Y.Z.update` + `.sha512` (RS.18), secret `GZ_UPDATE_KEY` in the GitHub environment `release` (the user creates the key and the environment, RS.20; until then the job skips signing and says so). `GZ_EPOCH` + `versioncheck` (RS.19).
+- Manual: `install.md` §7 "Updating with the update file" (S.11).
+
+### T33b (`lane:local`, Flipper)
+- `atea` at 0x0800_0000 (≤ 16 KB): DFU checks as `hal_early_boot`, `BKP11R`, polled SD SPI, LCD progress, page compare/erase/program with first-page-last, epoch and downgrade press, trial counter and rollback question (RS.11–RS.16). System image linked at 0x0800_4000, installed region +16 KB (S.8; one full DFU flash, as #201).
+- `mtpd` hook (RS.7) and the confirmation window (RS.8, K.2 style).
+- ACS.4–ACS.8 on the device; measure verify time, `atea` size and stack, update time for a full and a one-program change; report page erases.
+
 ## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; owner decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
 
