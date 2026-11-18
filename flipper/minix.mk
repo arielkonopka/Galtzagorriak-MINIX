@@ -269,7 +269,8 @@ $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
 # Flash it with DFU like minix.bin, together with the base package or card
 # of the same build; /etc/rc binds them at the next boot (pkg bind).
 BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
-	      test rfid
+	      test rfid fsck
+# fsck: /etc/rc runs it before /usr is mounted (spec N.3), text in place.
 # rfid: 46 KB of text with liblfrfid (spec R9.0.1); from here it runs in
 # place, instead of from RAM until the run-time cache has copied it (12
 # pages written at run time).
@@ -295,7 +296,7 @@ base-flash: $(MB)/minix-base.bin
 # The shell, the MINIX commands (src/commands/simple, halt) and m2test.
 CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   dirname du echo ed expand expr factor fgrep find fold getty grep \
-	   head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
+	   fsck head id kill login ls mkdir mkfifo mknod mkfs mount od paste \
 	   printenv printroot pwd rev rmdir sed sleep sort split strings stty \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
@@ -367,6 +368,11 @@ CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
+CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
+			# fit, fsck shrinks its zone window) + 24 KB (stack:
+			# ~0.5 KB per directory level, stdio).  Runs at boot
+			# from /etc/rc, when the RAM is free; later it may need
+			# apps closed first.
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
@@ -761,7 +767,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.11
+BASE_VER := 4.13
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

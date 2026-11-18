@@ -17,4 +17,5 @@ ir	4344
 # brings libc's TZ state (~400 B).  The rest is the frame buffer (1 KB)
 # and getpwnam/getgrnam's line buffers.  K.6 budget: <= 3 KB above the
 # launcher before the desktop (.bss +1.9 KB, .data +0.4 KB here).
-launcher	5284
+# T17a (#249): +4 B, fsck_err (the "card has errors" title).
+launcher	5288

@@ -28,7 +28,7 @@ EXTERN struct super_block {
   short s_log_zone_size;	/* log2 of blocks/zone */
   off_t s_max_size;		/* maximum file size on this device */
   short s_magic;		/* magic number to recognize super-blocks */
-  short s_pad;			/* try to avoid compiler-dependent padding */
+  unsigned short s_flags;	/* ex s_pad: SF_* below (spec N.1) */
   zone_t s_zones;		/* number of zones (replaces s_nzones in V2) */
 
   /* The following items are only used when the super_block is in memory. */
@@ -46,5 +46,15 @@ EXTERN struct super_block {
 } super_block[NR_SUPERS];
 
 #define NIL_SUPER (struct super_block *) 0
+
+/* s_flags (spec N.1).  On disk only bits 0-1, the values of Linux's minix
+ * driver (MINIX_VALID_FS, MINIX_ERROR_FS) and MINIX 3's MFSFLAG_CLEAN.  The
+ * FS keeps no copy of them: it changes them by read-modify-write of block 1
+ * (put_sflags).  In core only bits 14-15, never written to the disk. */
+#define SF_CLEAN	0x0001	/* disk: nothing written since consistent */
+#define SF_CHECK	0x0002	/* disk: found unclean, not checked since */
+#define SF_DISK		0x00FF	/* the bits that live on the disk */
+#define SF_DCLEAN	0x4000	/* core: CLEAN is set on the disk */
+#define SF_WRITTEN	0x8000	/* core: written since the last sync */
 #define IMAP		0	/* operating on the inode bit map */
 #define ZMAP		1	/* operating on the zone bit map */

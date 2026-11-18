@@ -71,4 +71,6 @@ mm        32     10196  10228
 # DEV_SELECTED count and the pipe-poller count (1 B each), padding 6 B.
 # Spec budget for 4b: FS +400 B.
 fs        20     27372  27392
-init      100    664    764
+# T17a (spec N.5): INIT +4 B, the SIGPWR and grace-alarm flags of the
+# orderly halt on low battery (spec allows INIT +16 B).  FS +0 B (N.1).
+init      100    668    768
