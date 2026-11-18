@@ -302,7 +302,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem
+	    swapon gmodem guimod
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -319,7 +319,10 @@ UPROGS	+= furitest furihello gmdemo
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
-SUIDPROGS := passwd su
+SUIDPROGS := passwd su guimod
+# guimod (spec K.6, T23a): set-uid root only to write the real uid into a
+# desktop record (a FIFO does not say who wrote it); root's rights end
+# right after it opens /var/run/gui.
 # Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
 # never swapped to the card in plain mode (spec R12.28).  login runs as
 # root without set-uid, so the set-uid rule alone would not cover it.
@@ -415,7 +418,10 @@ OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
-OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/winrec.o
+OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/winrec.o \
+		 $(MB)/cmd/gui/desktop.o
+# the desktop's module records (spec K.3, K.6): guimod builds them
+OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -722,7 +728,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
-	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.0.tar \
+	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(NATPROGS:%=$(PKGDIR)/%_1.0.tar) $(PKGDIR)/remind_1.1.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
@@ -759,16 +765,19 @@ $(PKGDIR)/alarm_1.0.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 	   --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Alarm clock with a desk clock" /usr/bin/alarm=$<
 # The example window app (spec K.8): the program, its launcher line, and
-# its source with libgm in /usr/share/examples/gui.
-$(PKGDIR)/gmdemo_1.0.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \
-		rootfs/gmdemo.prerm apps/gmdemo.c $(GM_DIR)/gm.c $(GM_DIR)/gm.h
-	python3 -I tools/mkpkg.py -n gmdemo -v 1.0 -o $(PKGDIR) --window --flash \
+# its source with libgm in /usr/share/examples/gui; with them the example
+# desktop module of spec K.6 (battile.sh, a battery tile in three lines).
+$(PKGDIR)/gmdemo_1.1.tar: $(MB)/bin/gmdemo tools/mkpkg.py rootfs/gmdemo.postinst \
+		rootfs/gmdemo.prerm apps/gmdemo.c $(GM_DIR)/gm.c $(GM_DIR)/gm.h \
+		apps/battile.sh
+	python3 -I tools/mkpkg.py -n gmdemo -v 1.1 -o $(PKGDIR) --window --flash \
 	   -i @app --postinst rootfs/gmdemo.postinst --prerm rootfs/gmdemo.prerm \
 	   -D "Example window app (spec K.8): the launcher draws it" \
 	   /usr/bin/gmdemo=$< \
 	   /usr/share/examples/gui/gmdemo.c=apps/gmdemo.c \
 	   /usr/share/examples/gui/gm.c=$(GM_DIR)/gm.c \
-	   /usr/share/examples/gui/gm.h=$(GM_DIR)/gm.h
+	   /usr/share/examples/gui/gm.h=$(GM_DIR)/gm.h \
+	   /usr/share/examples/gui/battile.sh=apps/battile.sh$(COMMA)644
 # The hardware self test (spec 7b.3).
 $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/selftest.postinst rootfs/selftest.prerm \
@@ -782,7 +791,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.14
+BASE_VER := 4.15
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst

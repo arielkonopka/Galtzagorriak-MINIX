@@ -1,0 +1,69 @@
+.TH GUIMOD 1
+.SH NAME
+guimod \- send a desktop module's record (tile, status, notification)
+.SH SYNOPSIS
+.nf
+\fBguimod tile\fR \fIname\fR \fItext\fR ...
+\fBguimod status\fR \fIname\fR \fItext\fR ...
+\fBguimod notify\fR \fIname\fR \fItext\fR ...
+\fBguimod close\fR \fIname\fR
+.fi
+.SH DESCRIPTION
+.B Guimod
+writes one record to the desktop's FIFO
+.BR /var/run/gui ,
+which the launcher reads (Galtzagorriak MINIX, spec K.3, K.6).
+A
+.I module
+is the caller's real uid plus
+.I name
+(1 to 10 characters): it can change only its own entries.
+Its process is
+.BR guimod 's
+parent, usually the shell running the module script; when that process
+exits or is killed, its tile and status go.
+.TP
+.B tile
+sets or changes the module's tile, one row on the launcher's HOME page
+(at most 31 characters are shown).
+.TP
+.B status
+sets the module's short text on the status line (the title bar), at most
+6 characters.
+.TP
+.B notify
+counts a notification (the unread count on the status line) and shows
+its text on the message line for 2 seconds.
+.TP
+.B close
+removes the module's tile and status.
+.PP
+The words of
+.I text
+are joined with spaces, as by
+.BR echo .
+A record is at most 128 bytes.
+.B Guimod
+never waits: with no desktop running, or a full FIFO while a full-screen
+app runs, the record is dropped.
+.PP
+.B Guimod
+is set-uid root only to write the real uid into the record (a FIFO does
+not say who wrote into it); it drops root right after opening the FIFO.
+.SH "EXIT STATUS"
+0 sent, 1 no desktop or the desktop is busy, 2 usage.
+.SH EXAMPLE
+A battery tile in three lines
+.RB ( /usr/share/examples/gui/battile.sh ,
+package gmdemo):
+.PP
+.nf
+IFS='= '
+while read key soc rest </dev/power
+do guimod tile battery "Battery $soc%"; sleep 60; done
+.fi
+.SH FILES
+/var/run/gui	the desktop's FIFO (root, mode 0620, group gui)
+.SH "SEE ALSO"
+The manual chapter "The launcher" (docs/manual/launcher.md), the
+Development Guide chapter 7.
