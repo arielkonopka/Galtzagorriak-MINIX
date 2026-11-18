@@ -1472,8 +1472,9 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	lgrab(l, "ack3-home");
 	check(ms >= 0 && ms < 500 && row_text(0) && row_text(3) && !row_text(4),
 		"ACK.3: HOME has the 4 modules' tiles, keys still move");
-	for (i = 0; i < 4; i++) kill(w[i], SIGKILL);
-	for (i = 0; i < 4; i++) (void) waitpid(w[i], &st, 0);
+	for (i = 0; i < 4; i++)		/* not kill(-1): a fork that failed */
+		if (w[i] > 0) kill(w[i], SIGKILL);
+	for (i = 0; i < 4; i++) if (w[i] > 0) (void) waitpid(w[i], &st, 0);
 	(void) poll((struct pollfd *) NULL, 0, 100);
 	s0 = sectors_written() - s0;
 	printf("  ACK.5 4 modules flooding /var/run/gui, then sync: %d sectors"
@@ -1551,6 +1552,57 @@ static long free_ram(void)
 #define PP_ERR	"/tmp/pkgpost.err"
 #define PP_LOAD	2		/* installs under load (M2 has 90 s) */
 
+/* The strings of the pkg test, in one const struct (flash): with -fpic
+ * every string literal has its own GOT word, in each process's data; the
+ * pkg test's 44 put every copy of m2test one 256 B click over, and one of
+ * ACK.3's 4 flooders could not fork. */
+#define PK_STRINGS(S) \
+	S(o7, "%07o") \
+	S(o11, "%011o") \
+	S(o6, "%06o") \
+	S(ustar, "ustar") \
+	S(v00, "00") \
+	S(bin, "bin") \
+	S(oper, "operator") \
+	S(err, PP_ERR) \
+	S(tar, PP_TAR) \
+	S(ran, PP_RAN) \
+	S(fail, PP_FAIL) \
+	S(pkgbin, "/bin/pkg") \
+	S(said, "  pkg said: %s%s") \
+	S(nl, "\n") \
+	S(scratch, "/usr/var/pkg/tmp") \
+	S(sleepbin, "/bin/sleep") \
+	S(s60, "60") \
+	S(f, "f") \
+	S(control, "Package: pkgpost\nVersion: 1.0\n" "Abi: any\nDescription: M2 test of postinst (#271)\n") \
+	S(postinst, "echo ran >> " PP_RAN "\n" "test -f " PP_FAIL " && exit 3\nexit 0\n") \
+	S(var, "/usr/var") \
+	S(varpkg, "/usr/var/pkg") \
+	S(info, "/usr/var/pkg/info") \
+	S(cmake, "pkg #271: make the test package") \
+	S(mctl, "CONTROL/control") \
+	S(mpost, "CONTROL/postinst") \
+	S(pf, "/tmp/pkgpost.f") \
+	S(install, "install") \
+	S(installed, "installed") \
+	S(cinst, "pkg #271: install runs the postinst, exit 0") \
+	S(sectors, "  pkg install: %d card sectors written\n") \
+	S(failed, "pkg: pkgpost: postinst failed: exit 3") \
+	S(notset, "is not set up") \
+	S(cfail, "pkg #271: a postinst that fails: exit 1, says why") \
+	S(pkgc, "pkg: ") \
+	S(loadbad, "  pkg install under load: exit %d, postinst " "lines %d -> %d, %d left in the scratch " "directory\n") \
+	S(started, "  pkg install under load: %d of %d started\n") \
+	S(cload, "pkg #271: under load, exit 0 only " "with the postinst run, else a reason") \
+	S(remove, "remove") \
+	S(pkgpost, "pkgpost") \
+	S(cremove, "pkg #271: remove") \
+
+#define PK_DECL(n, s)	char n[sizeof s];
+#define PK_INIT(n, s)	s,
+static const struct { PK_STRINGS(PK_DECL) } pk = { PK_STRINGS(PK_INIT) };
+
 /* A member: data, or (data NULL) n bytes of 'x'. */
 static void tar_member(int fd, const char *name, const char *data, int n,
 								int mode)
@@ -1562,19 +1614,19 @@ static void tar_member(int fd, const char *name, const char *data, int n,
 	if (data != NULL) n = (int) strlen(data);
 	memset(h, 0, sizeof h);
 	strcpy(h, name);
-	sprintf(h + 100, "%07o", mode);
-	sprintf(h + 108, "%07o", 2);		/* bin */
-	sprintf(h + 116, "%07o", 0);		/* operator */
-	sprintf(h + 124, "%011o", n);
-	sprintf(h + 136, "%011o", 0);
+	sprintf(h + 100, pk.o7, mode);
+	sprintf(h + 108, pk.o7, 2);		/* bin */
+	sprintf(h + 116, pk.o7, 0);		/* operator */
+	sprintf(h + 124, pk.o11, n);
+	sprintf(h + 136, pk.o11, 0);
 	h[156] = '0';
-	memcpy(h + 257, "ustar", 6);
-	memcpy(h + 263, "00", 2);
-	strcpy(h + 265, "bin");
-	strcpy(h + 297, "operator");
+	memcpy(h + 257, pk.ustar, 6);
+	memcpy(h + 263, pk.v00, 2);
+	strcpy(h + 265, pk.bin);
+	strcpy(h + 297, pk.oper);
 	memset(h + 148, ' ', 8);
 	for (i = 0; i < 512; i++) sum += (unsigned char) h[i];
-	sprintf(h + 148, "%06o", sum);		/* then NUL, ' ' */
+	sprintf(h + 148, pk.o6, sum);		/* then NUL, ' ' */
 	write(fd, h, sizeof h);
 	memset(h, 0, sizeof h);
 	for (i = 0; i < n; i += 512) {
@@ -1594,13 +1646,13 @@ static pid_t pkg_start(const char *op, const char *arg, int out)
 
 	fflush(stdout);
 	if ((pid = fork()) != 0) return pid;	/* < 0: no memory */
-	if ((fd = creat(PP_ERR, 0644)) >= 0) {
+	if ((fd = creat(pk.err, 0644)) >= 0) {
 		dup2(out >= 0 ? out : fd, 1);
 		dup2(fd, 2);
 		close(fd);
 	}
 	if (out >= 0) close(out);
-	execl("/bin/pkg", "pkg", op, arg, (char *) NULL);
+	execl(pk.pkgbin, pk.pkgbin + 5, op, arg, (char *) NULL);
 	_exit(errno == EAGAIN ? 126 : 127);
 }
 
@@ -1635,7 +1687,7 @@ static int err_has(const char *want)
 	char buf[256];
 	int fd, n;
 
-	if ((fd = open(PP_ERR, O_RDONLY)) < 0) return 0;
+	if ((fd = open(pk.err, O_RDONLY)) < 0) return 0;
 	n = read(fd, buf, sizeof buf - 1);
 	close(fd);
 	buf[n > 0 ? n : 0] = 0;
@@ -1647,12 +1699,12 @@ static void err_show(void)
 	char buf[256];
 	int fd, n;
 
-	if ((fd = open(PP_ERR, O_RDONLY)) < 0) return;
+	if ((fd = open(pk.err, O_RDONLY)) < 0) return;
 	n = read(fd, buf, sizeof buf - 1);
 	close(fd);
 	buf[n > 0 ? n : 0] = 0;
-	printf("  pkg said: %s%s", buf,
-			n > 0 && buf[n - 1] == '\n' ? "" : "\n");
+	printf(pk.said, buf,
+			n > 0 && buf[n - 1] == '\n' ? pk.nl + 1 : pk.nl);
 }
 
 /* Entries left in pkg's scratch directory (cleanup: rm -r). */
@@ -1662,7 +1714,7 @@ static int scratch_left(void)
 	struct dirent *e;
 	int n = 0;
 
-	if ((d = opendir("/usr/var/pkg/tmp")) == NULL) return 0;
+	if ((d = opendir(pk.scratch)) == NULL) return 0;
 	while ((e = readdir(d)) != NULL) n += e->d_name[0] != '.';
 	closedir(d);
 	return n;
@@ -1692,7 +1744,7 @@ static pid_t filler(int ms, int ready)
 			err = 0;
 			if ((pid = vfork()) < 0) break;
 			if (pid == 0) {
-				execl("/bin/sleep", "sleep", "60",
+				execl(pk.sleepbin, pk.sleepbin + 5, pk.s60,
 							(char *) NULL);
 				err = errno != 0 ? errno : ENOEXEC;
 				_exit(127);
@@ -1702,7 +1754,7 @@ static pid_t filler(int ms, int ready)
 		}
 		if (!said) {
 			said = 1;
-			write(ready, "f", 1);
+			write(ready, pk.f, 1);
 		}
 		poll(NULL, 0, 10);
 	} while ((long) (times(&tm) - t0) < (long) ms * HZ / 1000);
@@ -1728,26 +1780,22 @@ static long fc_budget(int pages)
 
 static void __attribute__((noinline)) pkg_tests(void)
 {
-	static const char control[] = "Package: pkgpost\nVersion: 1.0\n"
-		"Abi: any\nDescription: M2 test of postinst (#271)\n";
-	static const char postinst[] = "echo ran >> " PP_RAN "\n"
-		"test -f " PP_FAIL " && exit 3\nexit 0\n";
 	int fd, st, i, ok, before, started = 0, bad = 0, s0, s1;
 	pid_t f, f2;
 
 	fc_budget(0);
-	mkdir("/usr/var", 0755);
-	mkdir("/usr/var/pkg", 0755);
-	mkdir("/usr/var/pkg/info", 0755);
-	unlink(PP_RAN);
-	unlink(PP_FAIL);
-	if ((fd = creat(PP_TAR, 0644)) < 0) {
-		check(0, "pkg #271: make the test package");
+	mkdir(pk.var, 0755);
+	mkdir(pk.varpkg, 0755);
+	mkdir(pk.info, 0755);
+	unlink(pk.ran);
+	unlink(pk.fail);
+	if ((fd = creat(pk.tar, 0644)) < 0) {
+		check(0, pk.cmake);
 		return;
 	}
-	tar_member(fd, "CONTROL/control", control, 0, 0644);
-	tar_member(fd, "CONTROL/postinst", postinst, 0, 0755);
-	tar_member(fd, "tmp/pkgpost.f", NULL, 600, 0644);
+	tar_member(fd, pk.mctl, pk.control, 0, 0644);
+	tar_member(fd, pk.mpost, pk.postinst, 0, 0755);
+	tar_member(fd, pk.pf + 1, NULL, 600, 0644);
 	{	char z[1024];
 		memset(z, 0, sizeof z);
 		write(fd, z, sizeof z);
@@ -1755,22 +1803,22 @@ static void __attribute__((noinline)) pkg_tests(void)
 	close(fd);
 
 	s0 = sectors_written();
-	st = pkg_run("install", PP_TAR);
+	st = pkg_run(pk.install, pk.tar);
 	s1 = sectors_written();
-	ok = st == 0 && file_lines(PP_RAN) == 1 && err_has("installed");
-	check(ok, "pkg #271: install runs the postinst, exit 0");
+	ok = st == 0 && file_lines(pk.ran) == 1 && err_has(pk.installed);
+	check(ok, pk.cinst);
 	if (!ok) err_show();
 	if (s0 >= 0 && s1 >= 0)
-		printf("  pkg install: %d card sectors written\n", s1 - s0);
+		printf(pk.sectors, s1 - s0);
 
-	close(creat(PP_FAIL, 0644));
-	st = pkg_run("install", PP_TAR);
-	ok = st == 1 && file_lines(PP_RAN) == 2
-		&& err_has("pkg: pkgpost: postinst failed: exit 3")
-		&& err_has("is not set up");
-	check(ok, "pkg #271: a postinst that fails: exit 1, says why");
+	close(creat(pk.fail, 0644));
+	st = pkg_run(pk.install, pk.tar);
+	ok = st == 1 && file_lines(pk.ran) == 2
+		&& err_has(pk.failed)
+		&& err_has(pk.notset);
+	check(ok, pk.cfail);
 	if (!ok) err_show();
-	unlink(PP_FAIL);
+	unlink(pk.fail);
 
 	/* Under load, the moment of #271: pkg has unpacked the package and
 	 * is about to start rm (its cleanup) and sh (the postinst), with no
@@ -1783,14 +1831,14 @@ static void __attribute__((noinline)) pkg_tests(void)
 		int p[2], q[2];
 		char c[64];
 
-		before = file_lines(PP_RAN);
+		before = file_lines(pk.ran);
 		if (pipe(p) < 0) break;
 		if (pipe(q) < 0) { close(p[0]); close(p[1]); break; }
 		fcntl(p[1], F_SETFL, O_NONBLOCK);
 		while (write(p[1], c, sizeof c) == (int) sizeof c) ;
 		while (write(p[1], c, 1) == 1) ;	/* full */
 		fcntl(p[1], F_SETFL, 0);
-		f = pkg_start("install", PP_TAR, p[1]);
+		f = pkg_start(pk.install, pk.tar, p[1]);
 		close(p[1]);
 		poll(NULL, 0, 300);		/* pkg: tar, then stops */
 		f2 = filler(1500, q[1]);
@@ -1803,28 +1851,25 @@ static void __attribute__((noinline)) pkg_tests(void)
 		if (f2 > 0) waitpid(f2, NULL, 0);
 		if (st == -2 || st == 126) continue;	/* pkg did not start */
 		started++;
-		if ((st == 0 ? file_lines(PP_RAN) != before + 1
-			     : !err_has("pkg: ")) || scratch_left() != 0) {
+		if ((st == 0 ? file_lines(pk.ran) != before + 1
+			     : !err_has(pk.pkgc)) || scratch_left() != 0) {
 			bad++;
-			printf("  pkg install under load: exit %d, postinst "
-				"lines %d -> %d, %d left in the scratch "
-				"directory\n", st, before, file_lines(PP_RAN),
+			printf(pk.loadbad, st, before, file_lines(pk.ran),
 				scratch_left());
 			err_show();
 		}
 	}
-	printf("  pkg install under load: %d of %d started\n", started,
+	printf(pk.started, started,
 								PP_LOAD);
-	check(started > 0 && bad == 0, "pkg #271: under load, exit 0 only "
-				"with the postinst run, else a reason");
+	check(started > 0 && bad == 0, pk.cload);
 
-	st = pkg_run("remove", "pkgpost");
-	check(st == 0 && access("/tmp/pkgpost.f", F_OK) < 0,
-						"pkg #271: remove");
+	st = pkg_run(pk.remove, pk.pkgpost);
+	check(st == 0 && access(pk.pf, F_OK) < 0,
+						pk.cremove);
 	if (st != 0) err_show();
-	unlink(PP_TAR);
-	unlink(PP_RAN);
-	unlink(PP_ERR);
+	unlink(pk.tar);
+	unlink(pk.ran);
+	unlink(pk.err);
 	/* The budget stays 0: MM copies a program to the cache in the
 	 * background, after its 3rd run - it would still do so for pkg,
 	 * tar, sh and sleep if the budget came back now. */
