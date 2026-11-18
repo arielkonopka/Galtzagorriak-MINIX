@@ -6,14 +6,14 @@
 #include <unistd.h>
 #include "sgroup.h"
 
-static struct srow rows[] = {
-	{ "Volume", S_INT, 0, 0, 100, 10, "%", 0, 100 },
-	{ "Test beep", S_ACT, S_NOSAVE, 0, 0, 0, 0, 0, 0 },
+const struct srow sound_rows[] = {
+	{ "Volume", S_INT, 0, 0, 100, 10, "%", "" },
+	{ "Test beep", S_ACT, S_NOSAVE, 0, 0, 0, "", "" },
 };
 
 static void notes(const unsigned short *n, int k)
 {
-	unsigned char b[4 * 8];
+	unsigned char b[4 * 4];
 	int fd, i;
 
 	for (i = 0; i < k; i++) {
@@ -27,18 +27,12 @@ static void notes(const unsigned short *n, int k)
 	close(fd);
 }
 
-static void load(struct sgroup *g)
-{
-	(void) g;		/* the value comes from the file (or 100) */
-}
-
-static void apply(struct sgroup *g, int row)
+static void apply(int row)
 {
 	unsigned short n[8];
 
-	(void) g;
 	n[0] = 0xFFFE;			/* the default volume, then a sound */
-	n[1] = (unsigned short) rows[0].val;
+	n[1] = (unsigned short) sg_val[0];
 	if (row == 0) {			/* a short tick at the new level */
 		n[2] = 1000; n[3] = 40;
 		notes(n, 2);
@@ -51,6 +45,12 @@ static void apply(struct sgroup *g, int row)
 		notes(n, 1);		/* only the volume (at boot) */
 }
 
-struct sgroup sound_group = {
-	"sound", "SOUND", rows, 2, load, apply
-};
+int sound_fn(int op, int row, void *buf)
+{
+	(void) buf;
+	if (op == SG_LOAD) {		/* the file's value (read before), or
+					 * 100 (sg_val[] starts at -1) */
+		if (sg_val[0] < 0) sg_val[0] = 100;
+	} else if (op == SG_APPLY) apply(row);
+	return 0;
+}

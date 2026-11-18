@@ -16,13 +16,22 @@
  * moves through them itself (winsrv.c), so the app needs no GUI code and
  * an open one costs about 4 KB.
  *
- * Pages (R5.6a.4): the app list, and Left to the settings page (icons and
- * the hint line on or off, /etc/launcher.conf).  A page is an entry of
- * pages[]: its name, rows, OK and hint text; later pages (the desktop,
- * spec K.6) are new entries.  Left and Right act on the release of a key
- * pressed alone (gui_input), so the backlight gesture Left+Up (R6.10)
- * never turns a page.  The look is spec R5.6a.7 ("Pine meets modern UX");
- * with icons and hints off it is the old screen, pixel for pixel.
+ * Pages (R5.6a.4, spec K.6): in a row, SETTINGS <- APPS -> HOME (later
+ * Notifications and Running).  APPS is the app list; SETTINGS the system
+ * groups (K.7) and the launcher's own (icons, hints, battery,
+ * /etc/launcher.conf); HOME the tiles of the desktop's modules.  A page is
+ * an entry of pages[]: its name, hint text and neighbours.  Left and
+ * Right act on the release of a key pressed alone (gui_input), so the
+ * backlight gesture Left+Up (R6.10) never turns a page.  The look is spec
+ * R5.6a.7 ("Pine meets modern UX").
+ *
+ * The desktop (spec K.6, T23a): the title bar is the status line - the
+ * battery on the left, the page's name, and on the right the time, the
+ * unread notifications and a module's status.  It is redrawn only when
+ * something changes: a key, a record, the minute (a poll() timeout, only
+ * while the screen is on: with the light off the launcher sleeps with no
+ * timeout).  Modules write records to the FIFO /var/run/gui (desktop.c,
+ * guimod); the launcher reads it when poll() says so, keys first.
  *
  *	launcher [-a apps] [-c conf]	other files, for the QEMU tests
  */
@@ -31,10 +40,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/times.h>
 #include <minix/fg.h>
+#include <errno.h>
 #include <fcntl.h>
-#include <grp.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -45,6 +55,7 @@
 #include "gui.h"
 #include "appline.h"
 #include "winsrv.h"
+#include "desktop.h"
 
 #define MAXAPPS	16
 #define MAXARGS	8
@@ -78,6 +89,13 @@ static unsigned char bat;
 static unsigned short bat_t;		/* seconds (mod 2^16) of that reading */
 #define BAT_CHG		0x80
 #define BAT_NONE	0x7F
+/* The desktop (spec K.3, K.6): the module table, the FIFO (read end, and
+ * a write end of our own so that it never reads as closed), the light. */
+static struct desk desk;
+static int dk_rfd = -1, dk_wfd = -1, bl_fd = -1;
+static char dk_skip;			/* the rest of an overlong record */
+static char clock_shown;		/* the frame on the LCD has the time */
+static time_t shown_min;		/* and this minute (time() / 60) */
 
 #define ICON(i)	((unsigned char *) apps[i].label - ICON_H)
 
@@ -169,44 +187,48 @@ static void save_conf(const char *conf_file)
  * No pointers, so the table stays in flash (a PIC program's pointers
  * would be relocated into RAM); the rows are drawn by page number. */
 struct page {
-	char title[14];
-	char hints[22];
+	char title[10];
+	char hints[24];
 	signed char left, right;		/* page index, -1: none */
 };
 
 #define PG_APPS	0
 #define PG_SYS	1			/* SETTINGS: the groups (K.7) */
 #define PG_SET	2			/* the launcher's own settings */
+#define PG_HOME	3			/* the modules' tiles (K.6) */
 static const struct page pages[] = {
-	{ "GALTZAGORRIAK", "<Settings  OK Run", PG_SYS, -1 },
+	{ "APPS", "<Settings OK Run >Home", PG_SYS, PG_HOME },
 	{ "SETTINGS", "OK Open  Back Done", -1, -1 },
 	{ "LAUNCHER", "OK Toggle  Back Done", -1, -1 },
+	{ "HOME", "<Apps", PG_APPS, -1 },
 };
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
- * like an app; "" = not there yet.  Power is today's app until its
- * group comes (T24c). */
+ * like an app, the groups of setgroup as window apps ("=", K.8: the
+ * launcher draws them); "" = not there yet.  Power is today's app until
+ * its group comes (T24c). */
 static const struct {
 	char name[9];
 	char user[7];
-	char cmd[22];
+	char cmd[24];
 } sys_tab[] = {
-	{ "Display", "root", "/bin/settings display" },
-	{ "Sound", "root", "/bin/settings sound" },
+	{ "Display", "root", "=/bin/setgroup display" },
+	{ "Sound", "root", "=/bin/setgroup sound" },
 	{ "LED", "", "" },
-	{ "Time", "root", "/bin/settings time" },
+	{ "Time", "root", "=/bin/setgroup time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
-	{ "About", "root", "/bin/settings about" },
+	{ "About", "root", "=/bin/setgroup about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
 #define SYS_LAUNCHER	7
 
 static int page_rows(int pg)
 {
-	return pg == PG_APPS ? napps : pg == PG_SYS ? SYS_N : 3;
+	return pg == PG_APPS ? napps : pg == PG_SYS ? SYS_N
+		: pg == PG_HOME ? dk_tiles(&desk) : 3;
 }
 
 static const char set_name[3][8] = { "Icons", "Hints", "Battery" };
@@ -217,7 +239,9 @@ static void page_row(int pg, int i, int y, int inv)
 {
 	int on;
 
-	if (pg == PG_SYS) {
+	if (pg == PG_HOME)
+		gui_text(6, y, dk_tile(&desk, i)->text, inv);
+	else if (pg == PG_SYS) {
 		gui_text(6, y, sys_tab[i].name, inv);
 		if (sys_tab[i].cmd[0] == 0 && i != SYS_LAUNCHER)
 			gui_text(50, y, "(later)", inv);
@@ -310,26 +334,77 @@ static char *pos_text(char *p, int n, int m)
 	return q;
 }
 
-/* Draw a page: title (with the position on the app list), rows, the
- * scroll mark, and the hint line or a notice in its place. */
+/* The screen is lit (/dev/backlight, HAL_BL_OFF clear); no device: yes. */
+static int screen_on(void)
+{
+	unsigned long st;
+
+	if (bl_fd < 0) return 1;
+	lseek(bl_fd, 0L, SEEK_SET);
+	if (read(bl_fd, (char *) &st, 4) != 4) return 1;
+	return !(st & 0x08000000UL);
+}
+
+/* The right of the status line, right to left while there is room (x0:
+ * the first column free right of the title): the time (only while the
+ * screen is lit: after a dark spell it would be old until the next key),
+ * the unread notifications, a module's status, the position on the list. */
+static void status_right(int x0, int pg, int sel, int n)
+{
+	char b[12], *t;
+	int x = GUI_W - 1, part, w;
+
+	clock_shown = 0;
+	for (part = 0; part < 4; part++) {
+		t = NULL;
+		if (part == 0 && screen_on()) {
+			time_t now = time((time_t *) NULL);
+			struct tm *tm = localtime(&now);
+
+			shown_min = now / 60;
+			clock_shown = 1;
+			b[0] = (char) ('0' + tm->tm_hour / 10);
+			b[1] = (char) ('0' + tm->tm_hour % 10);
+			b[2] = ':';
+			b[3] = (char) ('0' + tm->tm_min / 10);
+			b[4] = (char) ('0' + tm->tm_min % 10);
+			b[5] = 0;
+			t = b;
+		} else if (part == 1 && desk.unread > 0) {
+			t = pos_text(b, 0, desk.unread) + 2;
+			*--t = '*';		/* "*3": over "0/3" */
+		} else if (part == 2 && desk.st >= 0) {
+			memcpy(b, desk.t[(int) desk.st].text, DK_STATUS);
+			b[DK_STATUS] = 0;
+			t = b;
+		} else if (part == 3 && (opt & OPT_HINTS) && pg == PG_APPS && n > 0)
+			t = pos_text(b, sel + 1, n);
+		if (t == NULL || *t == 0) continue;
+		w = (int) strlen(t) * 4;
+		if (x - w < x0 + 2) continue;
+		x -= w;
+		gui_text(x, 1, t, 1);
+		x -= 4;
+	}
+}
+
+/* Draw a page: the status line (title bar), rows, the scroll mark, and
+ * the hint line or a notice in its place. */
 static void draw(int pg, int sel, int top, const char *note)
 {
 	const struct page *p = &pages[pg];
 	int hints = (opt & OPT_HINTS) != 0;
 	int vis = GUI_ROWS - 1 - hints, n = page_rows(pg), i, y;
-	char pos[12], *t;
+	const char *title = fsck_err && pg == PG_APPS
+				? "CARD HAS ERRORS: RUN FSCK" : p->title;
 
 	gui_clear();
-	gui_title(fsck_err && pg == PG_APPS ? "CARD HAS ERRORS: RUN FSCK"
-						: p->title);
+	gui_title(title);
 	if (opt & OPT_BATT) {
 		bat_read();
 		bat_draw();
 	}
-	if (hints && pg == PG_APPS && n > 0) {
-		t = pos_text(pos, sel + 1, n);
-		gui_text(GUI_W - (int) strlen(t) * 4 - 1, 1, t, 1);
-	}
+	status_right((GUI_W + (int) strlen(title) * 4) / 2, pg, sel, n);
 	for (i = 0; i < vis && top + i < n; i++) {
 		y = ROW_Y(i);
 		if (top + i == sel) gui_fill(0, y - 1, GUI_W - 1, y + 5, 1);
@@ -347,6 +422,7 @@ static void draw(int pg, int sel, int top, const char *note)
 						|| i > ROW_Y(sel - top) + 5);
 	}
 	if (pg == PG_APPS && n == 0) gui_center(30, "no apps in /etc/apps", 0);
+	if (pg == PG_HOME && n == 0) gui_center(30, "no tiles", 0);
 	if (hints) {
 		gui_hline(0, GUI_W - 1, HINT_Y - 2, 1);
 		gui_text(1, HINT_Y, note != NULL ? note : p->hints, 0);
@@ -357,13 +433,56 @@ static void draw(int pg, int sel, int top, const char *note)
 /*===========================================================================*
  *				Running an app				     *
  *===========================================================================*/
+/* The gid of group "gui" in /etc/group, or -1.  Read in small pieces on
+ * the stack: getgrnam() would keep 1.3 KB of buffers in .bss for this one
+ * number (the room the desktop's tiles take, spec K.6). */
+static int gui_gid(void)
+{
+	static const char want[] = "gui";
+	char b[64], ch;
+	int fd = open("/etc/group", O_RDONLY), n, i, col = 0, field = 0;
+	int match = 1, digits = 0;
+	long gid = 0;
+
+	if (fd < 0) return -1;
+	while ((n = read(fd, b, sizeof b)) > 0) {
+		for (i = 0; i < n; i++) {
+			ch = b[i];
+			if (ch == '\n') {
+				if (field == 2 && match && digits > 0) break;
+				col = field = digits = 0;
+				match = 1;
+				gid = 0;
+			} else if (ch == ':') {
+				if (field == 0 && col != 3) match = 0;
+				if (++field == 3 && match && digits > 0) {
+					close(fd);
+					return (int) gid;
+				}
+				col = 0;
+			} else if (field == 0) {
+				if (col >= 3 || ch != want[col]) match = 0;
+				col++;
+			} else if (field == 2 && match) {
+				if (ch < '0' || ch > '9' || gid > 30000) match = 0;
+				else {
+					gid = gid * 10 + ch - '0';
+					digits++;
+				}
+			}
+		}
+		if (i < n) break;		/* "gui:*:10" with no members */
+	}
+	close(fd);
+	return field == 2 && match && digits > 0 ? (int) gid : -1;
+}
+
 /* Run an app as its user and wait for it.  NULL, or a notice to show. */
 static char *run(struct app *ap)
 {
 	char cmd[CMDMAX], *argv[MAXARGS + 1], *p;
 	struct passwd *pw;
-	struct group *gr;
-	int argc = 0, st, fg;
+	int argc = 0, st, fg, gid;
 	pid_t pid;
 
 	strcpy(cmd, ap->cmd);
@@ -386,7 +505,7 @@ static char *run(struct app *ap)
 	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
-	gr = getgrnam("gui");		/* before: stdio state is ours */
+	gid = gui_gid();		/* before: the child only execs */
 	{	/* R12.22: the app goes low in RAM, idle images stay high, so a
 		 * swapped one finds its addresses free again; never swapped */
 		message m;
@@ -397,7 +516,7 @@ static char *run(struct app *ap)
 	if ((pid = vfork()) == 0) {	/* R2c.2; the child only sets ids,
 					 * changes directory and execs */
 		if (pw->pw_uid != 0) {
-			if (setgid(gr != NULL ? gr->gr_gid : pw->pw_gid) < 0
+			if (setgid(gid >= 0 ? (gid_t) gid : pw->pw_gid) < 0
 			    || setuid(pw->pw_uid) < 0)
 				_exit(126);	/* never run with root rights */
 		}
@@ -423,10 +542,108 @@ static char *run(struct app *ap)
 	return NULL;
 }
 
+/*===========================================================================*
+ *				The desktop's FIFO			     *
+ *===========================================================================*/
+/* /var/run/gui (spec K.6): a FIFO, root's, 0620, group gui; made or fixed
+ * here (written only when it is not so already).  Opened without
+ * blocking, and once more for writing, so that a FIFO with no module
+ * never reads as closed (a read is EAGAIN until a record comes). */
+static void desk_open(void)
+{
+	struct stat st;
+	int g = gui_gid();
+	gid_t gid = g >= 0 ? (gid_t) g : 0;
+
+	desk.st = -1;
+	if ((bl_fd = open("/dev/backlight", O_RDONLY)) >= 0)
+		(void) fcntl(bl_fd, F_SETFD, FD_CLOEXEC);
+	(void) mkdir("/var/run", 0755);
+	if (stat(DK_PATH, &st) == 0 && !S_ISFIFO(st.st_mode))
+		(void) unlink(DK_PATH);
+	if (stat(DK_PATH, &st) < 0) {
+		if (mkfifo(DK_PATH, 0600) < 0 || stat(DK_PATH, &st) < 0) return;
+	}
+	if (st.st_uid != 0 || st.st_gid != gid) (void) chown(DK_PATH, 0, gid);
+	if ((st.st_mode & 07777) != 0620) (void) chmod(DK_PATH, 0620);
+	if ((dk_rfd = open(DK_PATH, O_RDONLY | O_NONBLOCK)) < 0) return;
+	if ((dk_wfd = open(DK_PATH, O_WRONLY | O_NONBLOCK)) < 0) {
+		close(dk_rfd);
+		dk_rfd = -1;
+		return;
+	}
+	(void) fcntl(dk_rfd, F_SETFD, FD_CLOEXEC);	/* not the apps' */
+	(void) fcntl(dk_wfd, F_SETFD, FD_CLOEXEC);
+}
+
+static int alive(int pid)
+{
+	return kill(pid, 0) == 0 || errno == EPERM;
+}
+
+/* Read the records waiting in the FIFO: what changed (DC_* bits).  A
+ * tile or status of a module that has exited is dropped (a notification
+ * is not: it owns nothing, and its sender may be gone already).  A
+ * record is written whole (one write() of at most 128 B), so a read that
+ * ends inside one finds its rest in the FIFO at once: the line buffer is
+ * on the stack, nothing is kept between calls but the "overlong" mark.
+ * At most 4 reads at a record's end, then back to poll() (keys first). */
+static int desk_read(void)
+{
+	char buf[2 * DK_LINE], *p, *nl;
+	int n, len = 0, c = 0, reads = 0;
+	struct dk_rec r;
+
+	for (;;) {
+		n = read(dk_rfd, buf + len, sizeof buf - 1 - len);
+		if (n <= 0) break;		/* EAGAIN: empty */
+		len += n;
+		p = buf;
+		while ((nl = memchr(p, '\n', (size_t) (buf + len - p))) != NULL) {
+			*nl = 0;
+			if (dk_skip)
+				dk_skip = 0;
+			else if (dk_parse(p, &r) > 0 && (r.verb == DV_NOTIFY
+				 || r.verb == DV_CLOSE || alive(r.pid)))
+				c |= dk_apply(&desk, &r);	/* else dropped */
+			p = nl + 1;
+		}
+		len -= (int) (p - buf);
+		memmove(buf, p, (size_t) len);
+		if (len >= DK_LINE) {		/* overlong: up to its '\n' */
+			dk_skip = 1;
+			len = 0;
+		}
+		if (len == 0 && ++reads >= 4) break;
+	}
+	return c & ~DC_FULL;
+}
+
+/* ms until the clock's next minute: only while it is on the screen and
+ * the screen is lit (else -1: no wake-ups for it). */
+static int minute_ms(void)
+{
+	time_t now;
+
+	if (!clock_shown || !screen_on()) return -1;
+	now = time((time_t *) NULL);
+	if (now / 60 != shown_min) return 0;
+	return (int) (60 - now % 60) * 1000;
+}
+
+static long now_ticks(void)
+{
+	struct tms tm;
+
+	return (long) times(&tm);
+}
+
 int main(int argc, char **argv)
 {
 	struct gui_in in;
-	int pg = PG_APPS, sel = 0, top = 0, k, n, vis, i, was = 0, saved = 0;
+	int pg = PG_APPS, sel = 0, top = 0, k, n, vis, i, m, c;
+	int was = 0, saved = 0, dirty = 1;
+	long note_t = 0;
 	char *note = NULL;
 	char *apps_file = "/etc/apps", *conf_file = "/etc/launcher.conf";
 
@@ -442,6 +659,7 @@ int main(int argc, char **argv)
 	}
 	load_conf(conf_file);
 	load_apps(apps_file);
+	desk_open();
 	bat_stale();				/* read at the first frame */
 	memset(&in, 0, sizeof in);
 	for (;;) {
@@ -451,24 +669,55 @@ int main(int argc, char **argv)
 		if (sel < top) top = sel;
 		if (sel >= top + vis) top = sel - vis + 1;
 		if (top > 0 && top + vis > n) top = n > vis ? n - vis : 0;
-		draw(pg, sel, top, note);
-		/* a notice: the hint line back after NOTE_MS or at a key; a
-		 * closed window app: its SIGTERM when its 2 s are over */
+		/* a frame only when something changed (spec K.6) */
+		if (dirty) draw(pg, sel, top, note);
+		dirty = 0;
+		/* the next thing to do without a key: a closed window app's
+		 * SIGTERM, the end of a notice, the clock's minute */
 		win_reap(0);
 		i = win_pending();
-		if (note != NULL && (i < 0 || i > NOTE_MS)) i = NOTE_MS;
-		k = gui_input(&in, KEY_LEFT | KEY_RIGHT, i);
-		if (k == 0 && note != NULL && win_pending() >= 0) {
-			win_reap(0);	/* only the window app's time */
+		if (note != NULL) {
+			m = NOTE_MS - (int) ((now_ticks() - note_t) * 1000 / CLK_TCK);
+			if (m < 0) m = 0;
+			if (i < 0 || m < i) i = m;
+		}
+		if ((m = minute_ms()) >= 0 && (i < 0 || m < i)) i = m;
+		if (i < 0 && clock_shown) {	/* the light went off: no old
+						 * time when it comes back */
+			dirty = 1;
+			continue;
+		}
+		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, i, dk_rfd);
+		if (k == GUI_FD) {		/* records from modules */
+			c = desk_read();
+			if (c & DC_NOTE) {
+				note = desk.note;
+				note_t = now_ticks();
+			}
+			if ((c & (DC_STATUS | DC_NOTE))
+			    || ((c & DC_TILES) && pg == PG_HOME)) dirty = 1;
+			continue;
+		}
+		if (k == 0) {
+			if (note != NULL && now_ticks() - note_t
+					>= (long) NOTE_MS * CLK_TCK / 1000) {
+				note = NULL;
+				dirty = 1;
+			}
+			if (clock_shown && time((time_t *) NULL) / 60
+						!= shown_min) dirty = 1;
+			if (pg == PG_HOME && dk_purge(&desk, alive)) dirty = 1;
 			continue;
 		}
 		note = NULL;
-		if (k == 0) continue;
+		dirty = 1;
+		if (pg == PG_HOME) (void) dk_purge(&desk, alive);
 		if (k == KEY_UP) sel = sel > 0 ? sel - 1 : (n > 0 ? n - 1 : 0);
 		else if (k == KEY_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
 		else if (pg == PG_APPS) {
 			if (k == KEY_OK && napps > 0) {
 				note = run(&apps[sel]);
+				note_t = now_ticks();
 				memset(&in, 0, sizeof in);	/* the app had them */
 				load_conf(conf_file);
 				load_apps(apps_file);
@@ -478,6 +727,24 @@ int main(int argc, char **argv)
 				saved = opt;
 				pg = pages[pg].left;
 				sel = top = 0;
+			} else if (k == KEY_RIGHT && pages[pg].right >= 0) {
+				was = sel;
+				pg = pages[pg].right;
+				sel = top = 0;
+				(void) dk_purge(&desk, alive);
+				if (desk.unread > 0) {	/* until the Notifications
+							 * page (T23c): the last
+							 * one, and seen */
+					note = desk.note;
+					note_t = now_ticks();
+					desk.unread = 0;
+				}
+			}
+		} else if (pg == PG_HOME) {
+			if (k == KEY_LEFT) {
+				pg = PG_APPS;
+				sel = was;
+				top = 0;
 			}
 		} else if (pg == PG_SYS) {
 			if (k == KEY_OK && sel == SYS_LAUNCHER) {
@@ -485,19 +752,22 @@ int main(int argc, char **argv)
 				sel = top = 0;
 			} else if (k == KEY_OK && sys_tab[sel].cmd[0] != 0) {
 				struct app a;
-				char cmd[sizeof sys_tab[0].cmd], user[8];
+				char cmd[sizeof sys_tab[0].cmd], user[8], name[9];
 
 				strcpy(cmd, sys_tab[sel].cmd);
 				strcpy(user, sys_tab[sel].user);
-				a.label = cmd;
+				strcpy(name, sys_tab[sel].name);
+				a.label = name;
 				a.user = user;
 				a.cmd = cmd;
 				note = run(&a);
+				note_t = now_ticks();
 				memset(&in, 0, sizeof in);
 				bat_stale();
-			} else if (k == KEY_OK)
+			} else if (k == KEY_OK) {
 				note = "not there yet";
-			else if (k == KEY_BACK) {
+				note_t = now_ticks();
+			} else if (k == KEY_BACK) {
 				if (opt != saved) save_conf(conf_file);	/* only a change */
 				pg = PG_APPS;
 				sel = was;

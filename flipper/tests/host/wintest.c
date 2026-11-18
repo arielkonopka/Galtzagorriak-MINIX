@@ -182,6 +182,12 @@ static void kinds_paging(void)
 	T(feed(&w, "win\t\tlist\tX\nshow\n") == WR_BAD, "empty id: dropped");
 	T(feed(&w, "win\tl\tlist\nshow\n") == WR_BAD, "no title: dropped");
 	T(feed(&w, "win\tl\tlist\tX\tFOO=1\nshow\n") == WR_BAD, "unknown option");
+	T(feed(&w, "win\ts\tlist\tDisplay\tLIVE\nint\ta\tB\t0\t9\t1\t5\nshow\n")
+		== WR_SHOW && w.live, "LIVE (settings, K.7)");
+	T(feed(&w, "win\tl\tlist\tLong\tROWS=40\tFIRST=16\tLIVE\nshow\n")
+		== WR_SHOW && w.live && w.total == 40, "ROWS= FIRST= LIVE");
+	T(feed(&w, "win\tl\tlist\tX\nshow\n") == WR_SHOW && !w.live,
+		"not LIVE unless asked");
 }
 
 static void malformed(void)

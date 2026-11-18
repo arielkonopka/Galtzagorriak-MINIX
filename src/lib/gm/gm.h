@@ -41,6 +41,8 @@
 int gm_init(char *buf, int size);
 void gm_win(const char *id, const char *kind, const char *title, int rows,
 	    int first);
+void gm_win_live(const char *id, const char *kind, const char *title,
+		 int live);
 void gm_item(const char *key, const char *label, const char *right);
 void gm_int(const char *key, const char *label, int min, int max, int step,
 	    int val, const char *unit);
