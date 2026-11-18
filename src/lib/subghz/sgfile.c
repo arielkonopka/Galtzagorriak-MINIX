@@ -3,6 +3,8 @@
 #include "sgfile.h"
 
 #include <subghz/registry.h>
+#include <subghz/blocks/custom_btn.h>
+#include <subghz/blocks/generic.h>
 #include <lib/flipper_format/flipper_format.h>
 
 /* ---- .sub files ---- */
@@ -227,6 +229,11 @@ SubGhzTransmitter* sg_transmitter(SubGhzEnvironment* env, FlipperFormat* ff, con
     FuriString* proto = furi_string_alloc();
     SubGhzTransmitter* t = NULL;
 
+    /* Unleashed keeps the "custom button" and override state in globals
+     * the decoders set; a key file is sent as it is (stock's app resets them
+     * when it loads one) */
+    subghz_custom_btns_reset();
+    subghz_block_generic_global_reset(NULL);
     flipper_format_rewind(ff);
     if(!flipper_format_read_string(ff, "Protocol", proto)) {
         *why = "no Protocol line";
