@@ -27,14 +27,17 @@ them is also in the [manual's device chapter](../../manual/devices.md).
 | `/dev/subghz` | 660 `gui` | one text line: RSSI, peak, frequency | text: the frequency to listen on (receive only) |
 | `/dev/subghzraw` | 660 `gui` | the demodulated signal as durations | |
 | `/dev/rtc` | 660 `timers` | | `ioctl`s: Alarm A, calibration |
+| `/dev/hidkbd` | 660 `usb` | the host's lock LEDs, 1 byte, on a change; blocks | 8-byte keyboard reports (3.10e) |
+| `/dev/hidmouse` | 660 `usb` | | 4-byte mouse reports |
+| `/dev/hidcons` | 660 `usb` | | 2-byte consumer (media key) usages |
 | `/dev/power` | 444 | one text line from the fuel gauge, charger and sleep statistics | |
 | `/dev/random` | 444 (major 1) | hardware random bytes | |
 
 The user's view of most of these, with shell examples, is in the
 [manual's device chapter](../../manual/devices.md); this chapter is the programmer's view.
 
-Not yet: Sub-GHz transmit, `/dev/nfc`, `/dev/ble`, `/dev/sensor/*`, `/dev/usbhid` are
-**(planned)** in spec Phases 8, 10, 13, 15 and section H.
+Not yet: Sub-GHz transmit, `/dev/nfc`, `/dev/ble`, `/dev/sensor/*` are **(planned)** in spec
+Phases 8, 13, 15 and section H; the HID files work in QEMU, on the Flipper with T28b (3.10e).
 
 Rules that apply to all of them:
 - **Permissions decide access.** Launcher apps run in group `gui`. A program run from a login
@@ -329,6 +332,52 @@ Where each radio stands on main, so you know what you can build on today:
 What you can do now for the planned radios: write the protocol logic as a host-tested core with
 no I/O (the `sbctl` and `camfind` pattern, chapter 2), so it only needs a thin layer once the
 device exists. Spec sections: NFC 13–14 and 14.1–14.2, BLE 15–16, Sub-GHz 8–9.
+
+## 3.10e USB keyboard, mouse, media keys: `/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`
+
+Root and group `usb` (`<minix/hid.h>`, R10.2, R11.3.1; the user's view is the manual's
+[USB gadgets](../../manual/usb-gadgets.md)). Minors 17-19; the header is the contract every
+backend implements: QEMU's prints each report as a console line `hid< kbd 02 00 0b ...`, the
+Flipper's USB one is T28b (until then the bus reads "not attached").
+
+- **Write whole reports**: 8 bytes on `hidkbd` (modifiers, 0, six key codes), 4 on `hidmouse`
+  (buttons, dx, dy, wheel; −127..127, so 0x80 is `EINVAL`), 2 on `hidcons` (a consumer usage,
+  little endian). One write may carry several reports, up to `HID_MAXWRITE` (64) bytes; they go
+  out in order. A report is a state: send the key-up (all zeros) yourself, or use `libhid`.
+- **Not listening**: no cable, not configured or suspended gives `EAGAIN`. Wait with `poll()`:
+  `POLLOUT` when a report would go out, `POLLIN` when the state changed since your last
+  `HIDIOCSTATE` (and, on `hidkbd`, when the LEDs changed since the last read). A program that
+  only needs to act on a change (the coming `jiggle`) sleeps in `poll()` and costs nothing
+  while unplugged.
+- `ioctl(HIDIOCSTATE, &int)`: `HID_ATTACHED`, `HID_CONFIGURED`, `HID_SUSPENDED` in bits 0-7,
+  the persona holding the bus in 8-15 (`HID_PERSONA()`), the LED byte in 16-23 (`HID_LEDS()`).
+- **One USB persona at a time**: `ioctl(HIDIOCSPERSONA, &p)` takes the bus for a non-HID persona
+  (`HIDP_CANARY`, `HIDP_READER`, `HIDP_STORAGE`), 0 gives it back, and so does the holder's
+  close. Meanwhile `open()` of a HID file and writes on open ones fail with `EBUSY`. Taking it
+  never waits: the canary always wins.
+- QEMU test hooks (`ENOTTY` on the Flipper): `HIDIOCFAKE` plays the host (bus bits, LEDs <<
+  16); `HIDIOCLINE` gives the FNV-1a hash of the last `hid<` line, which `m2test` compares with
+  the line it expects.
+
+**`libhid`** (`src/lib/hid`, static, no malloc, no stdio; R11.3.2) builds the reports. Layouts are
+the stock Bad USB `.kl` files: exactly 256 bytes, 128 little-endian entries, one per ASCII code,
+each the key code (low byte) and the boot modifier byte (high byte: Shift 0x02, AltGr 0x40). US is
+built in (`hid_us`, const); `hid_kl_load(kl, "de-DE")` reads `/usr/share/hid/layouts/de-DE.kl`
+or `/ext/badusb/assets/layouts/de-DE.kl` into your 256-byte buffer and refuses a file of another
+size. `hid_type(fd, kl, "Kaixo!\n", &skipped)` types UTF-8 text, key then key-up in one write per
+character; characters without a key are counted in `skipped`. `hid_mouse()` clamps to −127..127.
+Host test: `make hidtest` (all printable ASCII in US and DE back through a reverse table).
+
+```c
+#include <fcntl.h>
+#include <minix/hid.h>
+#include "libhid.h"
+
+int fd = open("/dev/hidkbd", O_WRONLY), skipped;
+
+if (fd < 0) ...			/* EBUSY: another USB persona has the port */
+if (hid_type(fd, hid_us, "Kaixo!\n", &skipped) < 0) ...	/* EAGAIN: unplugged */
+```
 
 ## 3.11 Battery: `/dev/power`
 

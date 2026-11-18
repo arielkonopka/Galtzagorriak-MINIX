@@ -91,7 +91,9 @@ message *m_ptr;
 /*===========================================================================*
  *				hid_rw					     *
  *===========================================================================*/
-PRIVATE int hid_rw(m_ptr, user, count)
+/* (not inlined: its report buffer stays off do_rw's frame, which every
+ * other minor's deep paths share) */
+PRIVATE __attribute__((noinline)) int hid_rw(m_ptr, user, count)
 message *m_ptr;
 phys_bytes user;		/* the caller's buffer, mapped */
 int count;
