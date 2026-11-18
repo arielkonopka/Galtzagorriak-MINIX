@@ -11,6 +11,8 @@
 #ifndef ZONES_H
 #define ZONES_H
 
+#include <time.h>
+
 #define TZ_RULE_MAX	40	/* longest rule kept, '\0' included */
 #define TZ_LABEL_MAX	32
 
@@ -35,8 +37,8 @@ int tz_mdays(int y, int m);
 /* Local time without the libc's zone code: tz_off() the seconds to add to
  * UTC t under a POSIX TZ rule (east positive), tz_utc() the UTC of a local
  * time; tz_days() days since 1970-01-01 of a date, tz_date() back. */
-long tz_off(const char *rule, long t);
-long tz_utc(const char *rule, long local);
+long tz_off(const char *rule, time_t t);
+time_t tz_utc(const char *rule, time_t local);
 long tz_days(int y, int m, int d);
 void tz_date(long days, int *y, int *m, int *d);
 

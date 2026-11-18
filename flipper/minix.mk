@@ -359,8 +359,9 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
 CHMEM_settings := 4096	# diff/reset (stdio, opendir's 1 KB DIR), apply at boot
-CHMEM_setgroup := 1024	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
-			# MM gap: no malloc, no stdio, no signal handler)
+CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
+			# MM gap: no malloc, no stdio, no signal handler);
+			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
@@ -781,7 +782,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.13
+BASE_VER := 4.14
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -850,6 +851,7 @@ TIMECHECK_SRC := $(CMDS:%=$(MROOT)/src/commands/simple/%.c) \
 	   $(MROOT)/src/commands/sh $(MROOT)/src/commands/mined \
 	   $(MROOT)/src/commands/reboot/halt.c $(MROOT)/src/commands/reboot/log.c \
 	   cmds gui apps lib/app tests m2 $(MROOT)/src/tools/init.c \
+	   $(MROOT)/src/commands/settings \
 	   $(LIBDIRS:%=$(MROOT)/src/lib/%) $(MROOT)/include
 .PHONY: timecheck check
 timecheck:

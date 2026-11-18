@@ -640,7 +640,7 @@ static char *key(struct ses *s, int k)
 		move(s, w, dir);
 		break;
 	case KEY_LEFT: case KEY_RIGHT:
-		if (wr_change(w, w->sel, dir) == 0) live(s);
+		if (wr_change(w, w->sel, dir)) live(s);
 		break;
 	case KEY_OK:
 		switch (r->kind) {
@@ -650,7 +650,7 @@ static char *key(struct ses *s, int k)
 			expect(s);
 			break;
 		case RK_INT: case RK_ENUM: case RK_BOOL:
-			if (wr_change(w, w->sel, 1) == 0) live(s);
+			if (wr_change(w, w->sel, 1)) live(s);
 			break;
 		case RK_INPUT:
 			kb_open(s, w);

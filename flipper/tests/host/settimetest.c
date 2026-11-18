@@ -215,7 +215,11 @@ int main(void)
 				    && offset(tz_rule(i), (time_t) t + 3600) * 60 == o)
 					back++;
 			}
-		check(bad == 0, "tz_off: every zone's offset as the libc's");
+		for (i = 0; i < n; i++)		/* after 2038: 64-bit time_t */
+			for (t = 2240611200L; t < 2272147200L; t += 3600L * 23 + 7)
+				if (tz_off(tz_rule(i), (time_t) t)
+				    != offset(tz_rule(i), (time_t) t) * 60) bad++;
+		check(bad == 0, "tz_off: every zone's offset as the libc's (2024-2031, 2041)");
 		check(back == 0, "tz_utc: local time back to UTC");
 		check(tz_off("CET-1CEST", 1784116800L) == 7200
 			&& tz_off("CET-1CEST", 1768478400L) == 3600,

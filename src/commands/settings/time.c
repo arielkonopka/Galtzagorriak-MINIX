@@ -48,22 +48,24 @@ static const char *rule(void)
 	return zone < nzones ? tz_rule(zone) : rule0;
 }
 
-static long day_of(long t)		/* floor(t / 86400) */
+static long day_of(time_t t)		/* floor(t / 86400) */
 {
-	return t / 86400 - (t % 86400 < 0);
+	return (long) (t / 86400 - (t % 86400 < 0));
 }
 
 /* The rows from the clock now, in this screen's zone. */
 static void show_time(void)
 {
-	long loc = (long) time((time_t *) 0), d;
+	time_t loc = time((time_t *) 0);
+	long d;
 	int y, m, dd;
 
 	loc += tz_off(rule(), loc);
 	d = day_of(loc);
 	tz_date(d, &y, &m, &dd);
+	if (y < 2000 || y > 2127) y = 2000, m = dd = 1;	/* the row's range */
 	sg_val[R_DATE] = (short) SG_DATE(y, m, dd);
-	sg_val[R_TIME] = (short) ((loc - d * 86400) / 60);
+	sg_val[R_TIME] = (short) ((loc - (time_t) d * 86400) / 60);
 }
 
 static void load(void)
@@ -87,26 +89,27 @@ static void load(void)
 }
 
 /* A new date or time from the desktop: the clock too.  1: the window
- * again (a date the clock cannot hold). */
+ * again (a date the RTC cannot hold: it counts years 2000-2099). */
 static int set_clock(int row)
 {
-	long loc = (long) time((time_t *) 0), d, tod, nl;
+	time_t loc = time((time_t *) 0), nl, t;
+	long d, tod;
 	int v = sg_val[row], y = SG_Y(v);
-	time_t t;
 
 	loc += tz_off(rule(), loc);
 	d = day_of(loc);
-	tod = loc - d * 86400;
+	tod = (long) (loc - (time_t) d * 86400);
 	if (row == R_DATE) {
-		if (y < 1971 || y > 2037 || SG_M(v) < 1 || SG_M(v) > 12
+		if (y > 2099 || SG_M(v) < 1 || SG_M(v) > 12
 		    || SG_D(v) < 1 || SG_D(v) > tz_mdays(y, SG_M(v))) {
 			show_time();
-			return 1;		/* 32-bit time_t: until 2038 */
+			return 1;
 		}
-		nl = tz_days(y, SG_M(v), SG_D(v)) * 86400 + tod;
+		nl = (time_t) tz_days(y, SG_M(v), SG_D(v)) * 86400 + tod;
 	} else
-		nl = d * 86400 + (long) (v / 60 % 24) * 3600 + (v % 60) * 60;
-	t = (time_t) tz_utc(rule(), nl);
+		nl = (time_t) d * 86400 + (long) (v / 60 % 24) * 3600
+			+ (v % 60) * 60;
+	t = tz_utc(rule(), nl);
 	(void) stime(&t);
 	show_time();
 	return 0;

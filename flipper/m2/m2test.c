@@ -1213,6 +1213,26 @@ static long free_ram(void)
 	return (long) _syscall(MM, MEMINFO, &m);
 }
 
+/* What the window's two pipes cost on the card (s0: the counter now):
+ * pipe() allocates an inode on the root device (fs/pipe.c), so its inode
+ * and the bitmaps are written at the next sync, also when the data never
+ * is (T9).  Not settings' writes: K.6 "pipe data never reaches the card"
+ * (T23a's FS part) takes the rest away. */
+static int pipe_sectors(int s0)
+{
+	int p[2], q[2];
+	char c[8];
+
+	if (pipe(p) < 0) return -1;
+	if (pipe(q) < 0) { close(p[0]); close(p[1]); return -1; }
+	(void) write(p[1], "ok\tx\n", 5);
+	(void) write(q[1], "show\n", 5);
+	(void) read(p[0], c, sizeof c);
+	(void) read(q[0], c, sizeof c);
+	close(p[0]); close(p[1]); close(q[0]); close(q[1]);
+	return sectors_written() - s0;
+}
+
 /* a_text of a program (its a.out header), -1 */
 static long text_size(const char *path)
 {
@@ -1234,7 +1254,7 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	clock_t c0;
 	time_t t0, t1, t2;
 	long f0, ft, text;
-	int z0, s0, s1, i, tz0, conf0, ok, up;
+	int z0, s0, s1, i, tz0, conf0, ok, up, ps;
 
 	tz0 = stat("/etc/TZ", &st) == 0;
 	conf0 = stat("/etc/flipper/time.conf", &st) == 0;
@@ -1242,6 +1262,15 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	f0 = free_ram();
 	z0 = sectors_written();			/* a sync of its own costs */
 	s0 = sectors_written();
+	ps = pipe_sectors(s0);
+	s0 = sectors_written();
+	{	/* MM: "memuse:" at setgroup's exit (its stack never used) */
+		message m;
+
+		m.m1_i1 = 1;
+		m.m1_i2 = MI_TRACE;
+		(void) _syscall(MM, MEMINFO, &m);
+	}
 	wtap(b, 0x04);				/* SETTINGS */
 	for (i = 0; i < 3; i++) wtap(b, 0x02);	/* Display Sound LED Time */
 	wtap(b, 0x10);				/* OK: setgroup time */
@@ -1273,6 +1302,13 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	s1 = sectors_written();
 	t2 = t0 + (time_t) ((times(&tm) - c0) / CLK_TCK);
 	(void) stime(&t2);			/* the clock back */
+	{
+		message m;
+
+		m.m1_i1 = 0;
+		m.m1_i2 = MI_TRACE;
+		(void) _syscall(MM, MEMINFO, &m);
+	}
 	wtap(b, 0x20);				/* SETTINGS -> list */
 	printf("  settings time: %s on the minutes: %ld -> %ld\n",
 		up ? "Up" : "Down", (long) t0, (long) t1);
@@ -1280,16 +1316,19 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	 * since, so the new time is the minute after, or this one) */
 	check(t1 % 60 <= 3 && t1 - t0 <= 66 && t0 - t1 <= 125,
 		"settings time: a new minute sets the clock at once (seconds 0)");
-	printf("  ACK7.2 settings time, no saved change: %d sectors written"
-		" (the probe's own sync: %d)\n", s1 - s0, s0 - z0);
-	check(z0 >= 0 && s1 == s0,
-		"ACK7.2: a group opened and left without a change writes 0 sectors");
+	printf("  ACK7.2 settings time, no saved change: %d sectors written,"
+		" the window's pipes alone %d (the probe's own sync: %d)\n",
+		s1 - s0, ps, s0 - z0);
+	check(z0 >= 0 && ps >= 0 && s1 - s0 <= ps,
+		"ACK7.2: a group opened and left without a change writes 0 sectors"
+		" (beyond the K.8 pipes' inode)");
 	check((stat("/etc/TZ", &st) == 0) == tz0
 		&& (stat("/etc/flipper/time.conf", &st) == 0) == conf0,
 		"ACK7.2: no /etc/TZ, no time.conf written");
 	text = text_size("/bin/setgroup");
+	if (text > 0) text = (text + 255) & ~255L;	/* MM's 256 B clicks */
 	printf("  ACK7.4 free while settings time is open: %ld B more in use"
-		" than the launcher alone, %ld B without its text (%ld B)\n",
+		" than the launcher alone, %ld B without its text (%ld B in clicks)\n",
 		f0 - ft, f0 - ft - text, text);
 	check(text > 0 && f0 - ft - text > 0 && f0 - ft - text <= 3072,
 		"ACK7.4: an open group takes <= 3 KB more than the launcher (text in flash)");

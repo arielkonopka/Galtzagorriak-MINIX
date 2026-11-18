@@ -9,7 +9,9 @@
  * +05.  One const string, "label\0rule\0label\0rule\0...\0": flash, 0 B
  * RAM (an array of pointers would sit in RAM, relocated, in a PIC
  * program); a lookup walks it, 80 short entries. */
+#include <sys/types.h>
 #include <string.h>
+#include <time.h>
 #include "zones.h"
 
 #define EU_CET	"CET-1CEST,M3.5.0,M10.5.0/3"
@@ -323,10 +325,11 @@ static const char *change(const char *p, int y, long *day, long *secs)
 	return p;
 }
 
-long tz_off(const char *rule, long t)
+long tz_off(const char *rule, time_t t)
 {
 	const char *p = skip_name(rule), *r;
-	long std, dst, sd, ss, ed, es, start, end;
+	long std, dst, sd, ss, ed, es;
+	time_t start, end, l;
 	int y, m, d;
 
 	p = hms(p, &std);
@@ -339,17 +342,18 @@ long tz_off(const char *rule, long t)
 		dst = -dst;
 	}
 	if (*p != ',') p = ",M3.2.0,M11.1.0";
-	tz_date((t + std) / 86400 - ((t + std) % 86400 < 0), &y, &m, &d);
+	l = t + std;
+	tz_date((long) (l / 86400 - (l % 86400 < 0)), &y, &m, &d);
 	p = change(p + 1, y, &sd, &ss);
 	if (*p != ',') return std;
 	(void) change(p + 1, y, &ed, &es);
-	start = sd * 86400 + ss - std;	/* in standard time */
-	end = ed * 86400 + es - dst;	/* in summer time */
+	start = (time_t) sd * 86400 + ss - std;	/* in standard time */
+	end = (time_t) ed * 86400 + es - dst;	/* in summer time */
 	if (start < end) return t >= start && t < end ? dst : std;
 	return t >= end && t < start ? std : dst;	/* the south */
 }
 
-long tz_utc(const char *rule, long local)
+time_t tz_utc(const char *rule, time_t local)
 {
 	return local - tz_off(rule, local - tz_off(rule, local));
 }
