@@ -349,8 +349,23 @@ goes into the system image; user flash goes into the installed region.
 - **Third-party parts inside the stock tree keep their own licenses:** u8g2 (BSD-2), nanopb (zlib),
   mbedTLS (Apache-2.0), ST CMSIS/HAL (BSD-3/Apache-2.0). All are GPL-3.0-compatible. Any ST
   middleware is under ST's own terms; check it before reuse.
-- **Never included:** Keeloq manufacturer keys and similar secrets; the stock firmware doesn't
-  ship them either. The Sub-GHz app loads a user-supplied keystore.
+- **Code yes, secret data files no** (owner, 2026-11-18: "the KeeLoq code has no keys in it").
+  A feature is never dropped because it can use keys or secret data:
+  - **The code is ported in full:** protocol decoders and encoders, ciphers (KeeLoq included),
+    key-recovery tools (`mfkey`), dictionary attacks and the "add manually" paths that need a
+    key.
+  - **Only secret data files are not shipped.** These are the manufacturer keys (KeeLoq
+    `mfcodes` and the like) and any leaked or vendor-private key lists.
+  - **The user's own file on the card works like stock.** The app reads it from the same path and
+    format as stock (`/ext/...` = `/home/flipper/...`). Without it, the feature works as far as
+    it can (a remote is recognised, the encrypted part is not decoded) and says which file is
+    missing.
+  - **Stock's encrypted key file.** The stock firmware ships its KeeLoq key file encrypted with a
+    key held in each Flipper's CPU2 secure enclave. Once the enclave is reachable (R17.1, after
+    BLE), MINIX reads that file the same way, on the same device. Nothing secret is in our tree.
+    This is to be checked against the stock `subghz_keystore` source when Phase 9 starts.
+  - **Public data that stock itself ships stays in,** e.g. the system MIFARE Classic dictionary
+    (`mf_classic_dict.nfc`) and the IR universal remote files.
 
 ### D.4 Unleashed as a second source (owner question 2026-11-18)
 
@@ -3490,7 +3505,7 @@ RAM: kernel ≤ +200 B (state only; streams use user buffers, R4b.5). Flash: ≈
 
 | Stock app | MINIX mapping | Notes |
 |---|---|---|
-| Sub-GHz: Read, Read RAW, Saved, Add manually, Frequency analyzer, Region info | `subghz` app, group `subghz`; stock `lib/subghz` protocols, `.sub` files (including RAW); keystore from `/home/flipper/subghz/assets` | Decoders run on capture blocks from `read()`; history kept in a bounded file-backed list to cap RAM |
+| Sub-GHz: Read, Read RAW, Saved, Add manually, Frequency analyzer, Region info | `subghz` app, group `subghz`; stock `lib/subghz` protocols plus the Unleashed extras (D.4), KeeLoq and the other rolling codes included, `.sub` files (including RAW); keystore from `/home/flipper/subghz/assets` (the user's own file, or stock's encrypted one once the enclave works: D.3) | Decoders run on capture blocks from `read()`; history kept in a bounded file-backed list to cap RAM |
 | Sub-GHz CLI | `subghz` command (`rx`, `tx`, `chat`) | Unix pipes allow `subghz rx \| grep` |
 | 125 kHz RFID: Read, Saved, Add manually, Extra actions (T5577) | `lfrfid` app, group `rfid`; stock `lib/lfrfid` | — |
 
@@ -4809,7 +4824,7 @@ RAM: kernel ≤ +200 B. Flash: ≈ +10 KB kernel.
 
 | Stock app | MINIX mapping |
 |---|---|
-| NFC: Read, Detect reader, Saved, Extra actions (MIFARE Classic keys, Unlock with reader…), Add manually | `nfc` app, group `nfc`; stock `lib/nfc` (protocols, pollers, listeners), dictionaries streamed from `/home/flipper/nfc/assets` instead of loaded whole |
+| NFC: Read, Detect reader, Saved, Extra actions (MIFARE Classic keys, Unlock with reader…), Add manually | `nfc` app, group `nfc`; stock `lib/nfc` (protocols, pollers, listeners) plus Unleashed's extra parsers (D.4); dictionaries streamed from `/home/flipper/nfc/assets` instead of loaded whole: the system dictionary stock ships is included, the user dictionary works as in stock (D.3) |
 | `mfkey` (key recovery on device) | separate `mfkey` command, runs as a normal process (swappable when idle) |
 
 Acceptance:
