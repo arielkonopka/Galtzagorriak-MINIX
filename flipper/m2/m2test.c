@@ -1344,6 +1344,8 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	lgrab(l, "desk-note");
 	check(lsum(0, 6) != s1 && lsum(57, 63) != apps,
 		"desktop: a notification: the count on the status line, the text noted");
+}
+
 /* T24b, T24d / spec K.7, K.8: settings time from the launcher's SETTINGS
  * page, the window app setgroup (the launcher draws it), run once here
  * and once for Display (more runs would make the run-time cache copy
