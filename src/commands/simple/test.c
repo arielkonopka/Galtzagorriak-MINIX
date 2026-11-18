@@ -10,7 +10,8 @@
  *			| "(" expr ")"
  *			| "!" expr
  *			;
- *		unary-operator ::= "-r"|"-w"|"-f"|"-d"|"-s"|"-t"|"-z"|"-n"|"-x";
+ *		unary-operator ::= "-r"|"-w"|"-f"|"-d"|"-s"|"-t"|"-z"|"-n"|"-x"
+ *				 |"-e"|"-b"|"-c"|"-p"|"-L"|"-h"|"-u"|"-g"|"-k";
  *		binary-operator ::= "="|"!="|"-eq"|"-ne"|"-ge"|"-gt"|"-le"|"-lt";
  *		operand ::= <any legal UNIX file name>
  *
@@ -37,6 +38,12 @@
  *
  *		Add Kees J. Bot 02/19/92 kjb@cs.vu.nl
  *		    Binary operator 'f1 -newer f2'.
+ *
+ *		Add Galtzagorriak MINIX (#118)
+ *		    The POSIX file tests -e -b -c -p -L -h -u -g -k.  Before,
+ *		    they were taken as strings, so "test -c /nofile" was true.
+ *		    MINIX 2.0 has no symbolic links (no lstat): there -L and -h
+ *		    are always false.
  */
 
 #include <sys/types.h>
@@ -70,6 +77,14 @@
 #define OPERAND	22
 #define FILXQ	23
 #define FILNW	24
+#define FILEX	25
+#define FILBK	26
+#define FILCH	27
+#define FILPI	28
+#define FILLN	29
+#define FILSU	30
+#define FILSG	31
+#define FILSK	32
 
 #define UNOP	1
 #define BINOP	2
@@ -152,6 +167,33 @@ struct op {
 	"-newer", FILNW, BINOP
   },
   {
+	"-e", FILEX, UNOP
+  },
+  {
+	"-b", FILBK, UNOP
+  },
+  {
+	"-c", FILCH, UNOP
+  },
+  {
+	"-p", FILPI, UNOP
+  },
+  {
+	"-L", FILLN, UNOP
+  },
+  {
+	"-h", FILLN, UNOP
+  },
+  {
+	"-u", FILSU, UNOP
+  },
+  {
+	"-g", FILSG, UNOP
+  },
+  {
+	"-k", FILSK, UNOP
+  },
+  {
 	0, 0, 0
   }
 };
@@ -219,6 +261,29 @@ int mode;
 	return(isatty((int) num(nm)));
       case FILXQ:
 	return(access(nm, 1) == 0);
+      case FILLN:
+#ifdef S_ISLNK
+	return(lstat(nm, &s) == 0 && S_ISLNK(s.st_mode));
+#else
+	return(0);		/* no symbolic links */
+#endif
+  }
+  if (stat(nm, &s) != 0) return(0);
+  switch (mode) {
+      case FILEX:
+	return(1);
+      case FILBK:
+	return(S_ISBLK(s.st_mode));
+      case FILCH:
+	return(S_ISCHR(s.st_mode));
+      case FILPI:
+	return(S_ISFIFO(s.st_mode));
+      case FILSU:
+	return((s.st_mode & S_ISUID) != 0);
+      case FILSG:
+	return((s.st_mode & S_ISGID) != 0);
+      case FILSK:
+	return((s.st_mode & S_ISVTX) != 0);
   }
   return(0);
 }
