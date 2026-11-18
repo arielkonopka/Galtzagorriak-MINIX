@@ -1239,7 +1239,11 @@ static int play_runs(uint16_t *runs, int n, int ring_n, const char *what)
  * the frame has at most 512, else (FSK and PSK frames: 540 to 3534) as a
  * run list of equal segments through a refilled ring (RFIDIOCEMURUN,
  * R9.0.6). */
-#define MAXRUNS	512
+/* The runs go into the segment buffer, which the segments did not fit:
+ * 2 KB hold 256 runs of 8 B, the longest frame needs 201 (Indala224,
+ * make lfrfidtest).  A separate 4 KB list ran rfid out of memory once the
+ * freed 2 KB could not hold it (twoflip: "lfrfid: out of memory"). */
+#define MAXRUNS	(MAXD * sizeof(unsigned long) / (4 * sizeof(uint16_t)))
 
 static int emulate_lf(int p, uint8_t *data)
 {
@@ -1252,12 +1256,11 @@ static int emulate_lf(int p, uint8_t *data)
 	nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
 					(uint32_t *) pulse, MAXD);
 	if (nseg < 0) {			/* a long frame: runs */
-		free(pulse);
-		if ((runs = malloc(MAXRUNS * 4 * sizeof(*runs))) == NULL) return 1;
-		n = lfrfid_emu_runs(p, data, lf_size(p), runs, MAXRUNS);
+		runs = (uint16_t *) pulse;	/* the same 2 KB */
+		n = lfrfid_emu_runs(p, data, lf_size(p), runs, (int) MAXRUNS);
 		if (n < 0) {
 			fprintf(stderr, "rfid: a %s frame is more than %d runs "
-				"(%s)\n", protocol_dict_get_name(lf(), p), MAXRUNS,
+				"(%s)\n", protocol_dict_get_name(lf(), p), (int) MAXRUNS,
 				lf_modulation(lf_config(p, data)));
 			return 1;
 		}
