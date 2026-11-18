@@ -145,6 +145,29 @@ def keys(r, seq):
 			tap(r, k, lit=True)
 
 
+def file_out(r, cmd, ok, secs=20):
+	"""The output of cmd once ok(output) holds, polled for up to secs
+	(a file an app writes after its window: QEMU can be slow), else the
+	last output."""
+	end = time.time() + secs
+	while True:
+		out = r.output(cmd, 20)
+		if (out is not None and ok(out)) or time.time() >= end:
+			return out
+		r.sh("sleep 1", 20)
+
+
+def ram_back(r, base, secs=20):
+	"""Free RAM once it is back to base (an app that ended: its memory
+	is freed when the launcher has reaped it), polled for up to secs."""
+	end = time.time() + secs
+	while True:
+		now = freebytes(r)
+		if now >= base - 256 or time.time() >= end:
+			return now
+		r.sh("sleep 1", 20)
+
+
 def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
@@ -203,9 +226,11 @@ def kanpaia(r):
 	# command row, Right x3: Done, OK; Up wraps to Save; OK.
 	keys(r, ("up", "ok@edit", "ok", "ok", "up", "right", "right", "right",
 		 "ok", "up", "ok@main"))
-	r.sh("sleep 2", 20)
-	out = r.output("cat /var/timers/remind-1; ls -l /var/timers/remind-1",
-		20)
+	# The desktop sends the text and Save before Kanpaia answers with
+	# main; the timer file is written by then, but give QEMU time.
+	seen(r, mark, rb"gui> submit\tedit\ttext=.*?gui> ok\tedit\tsave", 20)
+	out = file_out(r, "cat /var/timers/remind-1; ls -l /var/timers/remind-1",
+		lambda o: b"Log: remind" in o and b"remind " in o)
 	check(out is not None and b"Kind: interval" in out
 		and b"Start: 09:00" in out and b"Every: 30" in out
 		and b"Text: Drink a glass of watera" in out
@@ -244,8 +269,7 @@ def kanpaia(r):
 		"Kanpaia: History lists the reminders marked done")
 	if fails: print(r.out[mark:].decode(errors="replace"))
 	keys(r, ("back", "back!"))
-	r.sh("sleep 3", 20)
-	after = freebytes(r)
+	after = ram_back(r, base)
 	check(after >= base - 256,	# (others may have ended meanwhile)
 		"Kanpaia: Back closes it, its RAM is free again (%d -> %d)"
 		% (base, after))
@@ -296,8 +320,9 @@ def ordua(r):
 	      "ACK8.2: list -> form -> ring settings -> Save (the desktop "
 	      "changes the values, the app gets them in submit)")
 	if fails: print(out.decode("latin-1")[-3000:])
-	out = r.output("cat /var/timers/alarm-1; ls -l /var/timers/alarm-1; "
-		       "/usr/bin/alarm -n", 20)
+	out = file_out(r, "cat /var/timers/alarm-1; ls -l /var/timers/alarm-1; "
+		       "/usr/bin/alarm -n", lambda o: re.search(
+		       rb"alarm-1 \d+ \d\d:\d\d ", o) is not None)
 	check(out is not None and b"Kind: daily" in out
 	      and b"Time: 08:00" in out and b"Days: Mo Tu We Th Fr Sa" in out
 	      and b"Category: alarm" in out and b"Out: sound,led,screen" in out
@@ -319,8 +344,7 @@ def ordua(r):
 	keys(r, ("back", "back!"))		# closes Ordua
 	check(b"gui> close" in r.out[mark2:],
 	      "ACK8.2: Back on the list closes Ordua")
-	r.sh("sleep 3", 20)
-	after = freebytes(r)
+	after = ram_back(r, base)
 	check(after >= base - 256,
 		"Ordua: Back closes it, its RAM is free again (%d -> %d)"
 		% (base, after))
