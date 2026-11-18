@@ -10,6 +10,15 @@
  * the values that changed (submit), of Back from a child window and of a
  * page of a long list.
  *
+ * A pad window (K.8, the mouse of Teklatua) is the exception: its keys go
+ * to the app raw, "key KEY press|release|repeat", a repeat every REPEAT
+ * ms while one is held (the first after 200 ms; the 60 Hz clock rounds
+ * them to ticks), and the desktop draws only its title, its lines and
+ * the hint.  Back still works: a lone short Back (a click) is Back as in
+ * every window; Back held with another key is only the app's.  In a LIVE
+ * window the keyboard sends every key at once ("submit WIN KEY=c", \b
+ * for Del, \n when OK is held 0.5 s: Enter), for apps that type.
+ *
  * Never blocking on the app: the events are written without blocking (a
  * full pipe marks the app busy), the records are read only when poll()
  * says so, a busy mark appears in the title bar 150 ms after an event
@@ -47,6 +56,9 @@
 #define TERM_MS		2000		/* closed and still alive: SIGTERM */
 #define NOTE_MS		2000
 #define EVMAX		256		/* one event line, on the stack */
+#define REP_FIRST	200		/* pad: the first repeat, ms */
+#define REP_MS		100		/* pad: then every, unless REPEAT= */
+#define ENTER_MS	500		/* LIVE keyboard: OK held, Enter */
 
 static struct wr_win wins[2];		/* the current window and its parent */
 static char lbuf[WR_LINE];		/* the record being read */
@@ -86,7 +98,14 @@ struct ses {
 	unsigned char keep_sel, keep_top;
 	unsigned short keep_first;
 	char root[16];			/* the id of the first window */
+	unsigned char rkey;		/* pad: the key that repeats, 0 none */
+	long rep_t;			/* ticks: its next repeat */
+	struct gui_in *in;		/* the buttons' state (held keys) */
 };
+
+/* Key names of the pad's events, by bit (KEY_UP is bit 0). */
+static const char knames[] = "up\0\0\0\0" "down\0\0" "left\0\0" "right\0"
+			     "ok\0\0\0\0" "back\0\0";
 
 static long ticks(void)
 {
@@ -481,11 +500,44 @@ static const char kb_rows[4][17] = {
 
 static void kb_open(struct ses *s, struct wr_win *w)
 {
-	strncpy(kbt, wr_third(w, w->sel), WR_INMAX);
+	strncpy(kbt, w->live ? "" : wr_third(w, w->sel), WR_INMAX);
 	kbt[WR_INMAX] = 0;
 	s->kb = 1;
 	s->kx = s->ky = 0;
 	s->shift = 0;
+	if (s->in != NULL)		/* the OK that opened it is no click */
+		s->in->spoilt |= s->in->down;
+}
+
+/* LIVE keyboard: one key to the app at once, as the row's value ("c",
+ * "\b" Del, "\n" Enter); the text on the screen only shows what went. */
+static void kb_live(struct ses *s, struct wr_win *w, int c)
+{
+	char k[2];
+	int n = (int) strlen(kbt);
+
+	if (c == '\b') {
+		if (n > 0) kbt[n - 1] = 0;
+	} else if (c == '\n')
+		kbt[0] = 0;
+	else {
+		if (n >= 30) memmove(kbt, kbt + 1, (size_t) n--);
+		kbt[n] = (char) c;
+		kbt[n + 1] = 0;
+	}
+	k[0] = (char) c;
+	k[1] = 0;
+	if (wr_set_text(w, w->sel, k) < 0) return;
+	w->row[w->sel].flags |= RF_CHANGED;	/* also the same key again */
+	submit(s, w);
+}
+
+/* The keyboard closes; in a LIVE window the row is empty again. */
+static void kb_close(struct ses *s, struct wr_win *w)
+{
+	s->kb = 0;
+	if (w->live && wr_set_text(w, w->sel, "") == 0)
+		w->row[w->sel].flags &= (unsigned char) ~RF_CHANGED;
 }
 
 static void kb_key(struct ses *s, int k)
@@ -505,13 +557,14 @@ static void kb_key(struct ses *s, int k)
 					 : (s->kx + 1) % 16);
 		break;
 	case KEY_BACK:
-		s->kb = 0;			/* cancel */
+		kb_close(s, w);			/* cancel */
 		break;
 	case KEY_OK:
 		if (s->ky < KB_CMDY) {
 			c = kb_rows[s->ky][s->kx];
 			if (s->shift && c >= 'a' && c <= 'z') c -= 'a' - 'A';
-			if (n < max && n < WR_INMAX) {
+			if (w->live) kb_live(s, w, c);
+			else if (n < max && n < WR_INMAX) {
 				kbt[n] = (char) c;
 				kbt[n + 1] = 0;
 			}
@@ -519,19 +572,24 @@ static void kb_key(struct ses *s, int k)
 		}
 		switch (s->kx / 4) {
 		case 0: s->shift = (unsigned char) !s->shift; break;
-		case 1: if (n > 0) kbt[n - 1] = 0; break;
+		case 1:
+			if (w->live) kb_live(s, w, '\b');
+			else if (n > 0) kbt[n - 1] = 0;
+			break;
 		case 2:
-			if (n < max && n < WR_INMAX) {
+			if (w->live) kb_live(s, w, ' ');
+			else if (n < max && n < WR_INMAX) {
 				kbt[n] = ' ';
 				kbt[n + 1] = 0;
 			}
 			break;
 		default:
-			if (wr_set_text(w, w->sel, kbt) < 0) {
+			if (w->live) ;
+			else if (wr_set_text(w, w->sel, kbt) < 0) {
 				s->note = "too long";
 				s->note_t = ticks();
 			}
-			s->kb = 0;
+			kb_close(s, w);
 		}
 		break;
 	}
@@ -596,6 +654,29 @@ static void move(struct ses *s, struct wr_win *w, int dir)
 			return;
 		}
 	}
+}
+
+/* A key in a pad window: to the app as it is.  The key last pressed
+ * (not Back: Back + Up/Down is the mouse wheel) repeats while held. */
+static void pad_key(struct ses *s, int k)
+{
+	int key = k & 0x3F, b;
+
+	for (b = 0; b < 6 && !(key & (1 << b)); b++) ;
+	if (b == 6) return;
+	ev(s, "key", knames + 6 * b, k & GUI_UP ? "release" : "press");
+	if (!(k & GUI_UP)) {
+		if (key != KEY_BACK) {
+			s->rkey = (unsigned char) key;
+			s->rep_t = ticks() + ms_ticks(REP_FIRST);
+		}
+	} else if (key == s->rkey)
+		s->rkey = 0;
+}
+
+static int pad_on(struct ses *s)
+{
+	return s->cur >= 0 && wins[s->cur].kind == WK_PAD && !s->kb;
 }
 
 /* Back always works: out of a field edit, to the parent window, or (on
@@ -807,6 +888,7 @@ static void hints(struct ses *s, struct wr_win *w, char *h)
 	h[0] = 0;
 	if (s->kb) t = "OK Type  Back Cancel";
 	else if (w == NULL) ;
+	else if (w->kind == WK_PAD) t = "Keys go to the app  Back";
 	else if (w->kind == WK_LIST && w->nrows > 0) {
 		struct wr_row *r = &w->row[w->sel];
 
@@ -860,6 +942,10 @@ static void draw_kb(struct ses *s)
 	}
 	/* the text, its end if long, and the cursor */
 	text_n(1, 8, n > 30 ? kbt + n - 30 : kbt, 30, 0);
+	if (w->live) {			/* each key goes at once */
+		gui_text(1, HINT_Y, s->note != NULL ? s->note
+			 : "OK Type  Hold OK Enter  Back", 0);
+	}
 	gui_hline(1 + (n > 30 ? 30 : n) * 4, 4 + (n > 30 ? 30 : n) * 4, 14, 1);
 	c[1] = 0;
 	for (y = 0; y < KB_CMDY; y++)
@@ -879,7 +965,9 @@ static void draw_kb(struct ses *s)
 			 cmds[i], on);
 	}
 	gui_hline(0, GUI_W - 1, HINT_Y - 2, 1);
-	gui_text(1, HINT_Y, s->note != NULL ? s->note : "OK Type  Back Cancel", 0);
+	if (!w->live)
+		gui_text(1, HINT_Y, s->note != NULL ? s->note
+			 : "OK Type  Back Cancel", 0);
 	gui_flush();
 }
 
@@ -901,6 +989,7 @@ static void draw(struct ses *s)
 	if (w != NULL) switch (w->kind) {
 	case WK_LIST:
 	case WK_TEXT:
+	case WK_PAD:
 		for (i = 0; i < VIS && w->top + i < w->nrows; i++)
 			row(s, w, w->top + i, ROW_Y(i),
 			    w->kind == WK_LIST && w->top + i == w->sel);
@@ -953,6 +1042,13 @@ static void draw(struct ses *s)
 /*===========================================================================*
  *				The session				     *
  *===========================================================================*/
+/* LIVE keyboard: OK down on the keyboard, not yet a click or Enter. */
+static int enter_held(struct ses *s)
+{
+	return s->kb && s->cur >= 0 && wins[s->cur].live && s->in != NULL
+	       && (s->in->down & KEY_OK) && !(s->in->spoilt & KEY_OK);
+}
+
 /* ms until the next thing to do without a key: the busy mark, the end
  * of a notice, the clock's next minute; -1: nothing (0 wakeups). */
 static int timeout(struct ses *s)
@@ -970,6 +1066,17 @@ static int timeout(struct ses *s)
 		m = (int) (60 - now % 60) * 1000;
 		if (t < 0 || m < t) t = m;
 	}
+	if (s->rkey && pad_on(s)) {	/* the next repeat: no +1 ms, so
+					 * one tick is one tick */
+		long d = s->rep_t - ticks();
+
+		m = d <= 0 ? 0 : (int) (d * 1000 / CLK_TCK);
+		if (t < 0 || m < t) t = m;
+	}
+	if (enter_held(s)) {
+		m = ms_until(s->in->t[4] + ms_ticks(ENTER_MS));
+		if (t < 0 || m < t) t = m;
+	}
 	return t;
 }
 
@@ -985,6 +1092,23 @@ static void timed(struct ses *s)
 		s->dirty = 1;
 	}
 	if (s->cur >= 0 && wins[s->cur].kind == WK_CLOCK) s->dirty = 1;
+	if (s->rkey && !pad_on(s)) s->rkey = 0;
+	if (s->rkey && ticks() - s->rep_t >= 0) {
+		struct wr_win *w = &wins[s->cur];
+		long iv = ms_ticks(w->rep ? w->rep * 10 : REP_MS) - 1;
+		int b;
+
+		if (iv < 1) iv = 1;	/* (ms_ticks rounds up) */
+		for (b = 0; !(s->rkey & (1 << b)); b++) ;
+		ev(s, "key", knames + 6 * b, "repeat");
+		s->rep_t += iv;
+		if (ticks() - s->rep_t >= 0) s->rep_t = ticks() + iv;
+	}
+	if (enter_held(s) && ticks() - s->in->t[4] >= ms_ticks(ENTER_MS)) {
+		s->in->spoilt |= KEY_OK;	/* its release types nothing */
+		kb_live(s, &wins[s->cur], '\n');
+		s->dirty = 1;
+	}
 }
 
 /* Start a window app and serve it until it ends or Back closes it.  NULL,
@@ -1048,9 +1172,18 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log)
 	expect(&s);			/* its first window (the screen as it
 					 * was until it comes or 150 ms pass) */
 	memset(&in, 0, sizeof in);
+	s.in = &in;
 	while (!s.ended) {
+		int clicks = KEY_LEFT | KEY_RIGHT, pad = pad_on(&s);
+
 		if (s.dirty) draw(&s);
-		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, timeout(&s), s.recfd);
+		if (pad) clicks = KEY_BACK;		/* a lone Back: Back */
+		else if (s.kb && s.cur >= 0 && wins[s.cur].live)
+			clicks |= KEY_OK;	/* a click types, held: Enter */
+		/* raw: the pad's keys; the LIVE keyboard's OK press, so
+		 * that the timeout for Enter starts with it */
+		in.raw = (unsigned char) (pad || (clicks & KEY_OK));
+		k = gui_wait(&in, clicks, timeout(&s), s.recfd);
 		if (k == GUI_FD) {
 			if (records(&s) < 0) note = end(&s, 0);
 			continue;
@@ -1060,6 +1193,18 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log)
 			continue;
 		}
 		if (s.note != NULL && !s.kb) s.note = NULL;
+		if (pad) {
+			pad_key(&s, k);
+			if ((k & (GUI_CLICK | KEY_BACK)) != (GUI_CLICK | KEY_BACK))
+				continue;
+			k = KEY_BACK;
+		} else if (in.raw) {	/* as without raw: clicks on release */
+			if (k & GUI_UP) {
+				if (!(k & GUI_CLICK)) continue;
+				k &= 0x3F;
+			} else if (clicks & k)
+				continue;
+		}
 		note = key(&s, k);
 		if (!s.ended && s.waiting) timed(&s);
 	}

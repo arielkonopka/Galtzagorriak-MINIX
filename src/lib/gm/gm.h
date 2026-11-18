@@ -37,12 +37,18 @@
 #define GM_PAGE		4		/* page WIN FIRST: send that page */
 #define GM_REDRAW	5		/* redraw: send the current window again */
 #define GM_CLOSE	6		/* close, or the desktop is gone: exit */
+#define GM_KEY		7		/* key KEY press|release|repeat: a pad */
 
 int gm_init(char *buf, int size);
 void gm_win(const char *id, const char *kind, const char *title, int rows,
 	    int first);
 void gm_win_live(const char *id, const char *kind, const char *title,
 		 int live);
+/* A pad window (K.8): no rows but lines; every key comes to the app as
+ * GM_KEY, f[1] up|down|left|right|ok|back, f[2] press|release|repeat, a
+ * repeat every repeat_ms (10-1000, 0: the desktop's 100) while held.  A
+ * lone short Back is still Back (GM_BACK, or the app ends). */
+void gm_win_pad(const char *id, const char *title, int repeat_ms);
 void gm_item(const char *key, const char *label, const char *right);
 void gm_int(const char *key, const char *label, int min, int max, int step,
 	    int val, const char *unit);
@@ -57,6 +63,9 @@ void gm_action(const char *key, const char *label);
 int gm_show(void);
 int gm_busy(int busy);
 int gm_event(char *buf, int size, char **f, int nf);
+/* Wait at most ms (< 0: no limit) for an event: 1 when gm_event() has one
+ * (or the desktop is gone), 0 when the time is up.  buf as gm_event's. */
+int gm_wait(const char *buf, int ms);
 char *gm_kv(char *pair, char **val);
 
 #endif /* GM_H */

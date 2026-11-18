@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
@@ -138,6 +139,21 @@ void gm_win_live(const char *id, const char *kind, const char *title,
 		 int live)
 {
 	win(id, kind, title, 0, 0, live);
+}
+
+/* A pad: keys to the app raw (GM_KEY), REPEAT=ms for the repeats. */
+void gm_win_pad(const char *id, const char *title, int repeat_ms)
+{
+	char r[20], a[12];
+	const char *f[5];
+
+	f[0] = "win"; f[1] = id; f[2] = "pad"; f[3] = title;
+	if (repeat_ms > 0) {
+		memcpy(r, "REPEAT=", 7);
+		strcpy(r + 7, num(a, repeat_ms, 1));
+		f[4] = r;
+	}
+	rec(f, repeat_ms > 0 ? 5 : 4);
 }
 
 void gm_item(const char *key, const char *label, const char *right)
@@ -336,7 +352,28 @@ int gm_event(char *buf, int size, char **f, int nf)
 	if (strcmp(f[0], "page") == 0 && n >= 3) return GM_PAGE;
 	if (strcmp(f[0], "redraw") == 0) return GM_REDRAW;
 	if (strcmp(f[0], "close") == 0) return GM_CLOSE;
+	if (strcmp(f[0], "key") == 0 && n >= 3) return GM_KEY;
 	return GM_NONE;
+}
+
+/* An event within ms?  One already read (a whole line after the one
+ * returned last), or the pipe readable or closed. */
+int gm_wait(const char *buf, int ms)
+{
+	struct pollfd p;
+	int r;
+
+	if (ev_len > ev_used
+	    && memchr(buf + ev_used, '\n', (unsigned) (ev_len - ev_used)) != NULL)
+		return 1;
+	for (;;) {
+		p.fd = GM_EVFD;
+		p.events = POLLIN;
+		p.revents = 0;
+		r = poll(&p, 1, ms);
+		if (r < 0 && errno == EINTR) continue;
+		return r != 0;		/* an error too: gm_event says close */
+	}
 }
 
 /* "KEY=VALUE" of a submit: the key, *val the value (in place). */
