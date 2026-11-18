@@ -356,7 +356,7 @@ PUBLIC int do_reboot()
 
   tell_fs(EXIT, INIT_PROC_NR, 0, 0);	/* cleanup init */
 
-  tell_fs(SYNC,0,0,0);
+  tell_fs(SYNC, SYNC_SHUTDOWN, 0, 0);	/* N.2: and mark every FS clean */
 
   sys_abort(reboot_flag, monitor_code);
   /* NOTREACHED */

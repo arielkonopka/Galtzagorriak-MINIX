@@ -11,3 +11,15 @@ lat	9832
 # buffer is the /dev/ir transmit format (first word: carrier), and long
 # air-conditioner frames need several hundred durations.
 ir	4344
+# launcher: the desktop (spec K.6, K.8, T23b).  Its window server keeps
+# the window on the screen and its parent (2 x 658 B), a record line
+# (128 B) and the keyboard's text (64 B); the clock window's localtime()
+# brings libc's TZ state (~400 B).  The rest is the frame buffer (1 KB)
+# and getpwnam/getgrnam's line buffers.  K.6 budget: <= 3 KB above the
+# launcher before the desktop (.bss +1.9 KB, .data +0.4 KB here).
+# T17a (#249): +4 B, fsck_err (the "card has errors" title).
+# T23a (K.6): +0.8 KB, the desktop's tile table (16 x 48 B) and its state;
+# -1.3 KB, getgrnam()'s buffers (the gid of "gui" is read on the stack).
+# Data + bss: 6196 B, +1864 B above the launcher before the desktop
+# (4332 B at d704a5c), inside the K.6 budget of 3 KB.
+launcher	4788

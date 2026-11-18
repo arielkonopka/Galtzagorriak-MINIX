@@ -6,6 +6,7 @@
  *   get_inode:	   search inode table for a given inode; if not there, read it
  *   put_inode:	   indicate that an inode is no longer needed in memory
  *   alloc_inode:  allocate a new, unused inode
+ *   pipe_inode:   an inode for an unnamed pipe, in core only
  *   wipe_inode:   erase some fields of a newly allocated inode
  *   free_inode:   mark an inode as available for a new file
  *   update_times: update atime, ctime, and mtime
@@ -27,6 +28,9 @@ FORWARD _PROTOTYPE( void old_icopy, (struct inode *rip, d1_inode *dip,
 						int direction, int norm));
 FORWARD _PROTOTYPE( void new_icopy, (struct inode *rip, d2_inode *dip,
 						int direction, int norm));
+FORWARD _PROTOTYPE( void init_inode, (struct inode *rip, Dev_t dev,
+					struct super_block *sp, Mode_t bits)	);
+FORWARD _PROTOTYPE( int disk_zones, (struct inode *rip)			);
 
 
 /*===========================================================================*
@@ -84,7 +88,7 @@ register struct inode *rip;	/* pointer to inode to be released */
  * return it to the pool of available inodes.
  */
 
-  int unnamed;
+  int unnamed, dirt;
 
   if (rip == NIL_INODE) return;	/* checking here is easier than in caller */
   unnamed = rip->i_pipe == I_PIPE && (rip->i_nlinks & BYTE) == 0;
@@ -95,8 +99,12 @@ register struct inode *rip;	/* pointer to inode to be released */
 		rip->i_mode = I_NOT_ALLOC;	/* clear I_TYPE field */
 		rip->i_dirt = DIRTY;
 		free_inode(rip->i_dev, rip->i_num);
-	} else {
-		if (rip->i_pipe == I_PIPE) truncate(rip);
+	} else if (rip->i_pipe == I_PIPE) {
+		/* A FIFO: its data, size and positions were never on the
+		 * disk (rw_inode), unless it has zones there (K.6). */
+		dirt = disk_zones(rip) ? DIRTY : rip->i_dirt;
+		truncate(rip);
+		rip->i_dirt = dirt;
 	}
 	rip->i_pipe = NO_PIPE;  /* should always be cleared */
 	if (unnamed) rip->i_dirt = CLEAN;	/* never on the disk (T9) */
@@ -143,24 +151,81 @@ mode_t bits;			/* mode of the inode */
 	free_bit(sp, IMAP, b);
   } else {
 	/* An inode slot is available. Put the inode just allocated into it. */
-	rip->i_mode = bits;		/* set up RWX bits */
-	rip->i_nlinks = (nlink_t) 0;	/* initial no links */
-	rip->i_uid = fp->fp_effuid;	/* file's uid is owner's */
-	rip->i_gid = fp->fp_effgid;	/* ditto group id */
-	rip->i_dev = dev;		/* mark which device it is on */
-	rip->i_ndzones = sp->s_ndzones;	/* number of direct zones */
-	rip->i_nindirs = sp->s_nindirs;	/* number of indirect zones per blk*/
-	rip->i_sp = sp;			/* pointer to super block */
-
-	/* Fields not cleared already are cleared in wipe_inode().  They have
-	 * been put there because truncate() needs to clear the same fields if
-	 * the file happens to be open while being truncated.  It saves space
-	 * not to repeat the code twice.
-	 */
-	wipe_inode(rip);
+	init_inode(rip, dev, sp, bits);
   }
 
   return(rip);
+}
+
+
+/*===========================================================================*
+ *				pipe_inode				     *
+ *===========================================================================*/
+PUBLIC struct inode *pipe_inode()
+{
+/* Spec K.6: an unnamed pipe's inode lives in core only (rw_inode never
+ * writes it, T9), so it takes no bit of the inode map either: no SD write
+ * for it, and nothing for fsck after a power cut.  Its number is past the
+ * device's inodes, one per inode slot, so no file has it.
+ */
+  register struct inode *rip;
+  register struct super_block *sp;
+
+  sp = get_super(PIPE_DEV);
+  if ((long) sp->s_ninodes + NR_INODES >= (long) (ino_t) ~0)
+	return(alloc_inode(PIPE_DEV, I_REGULAR));	/* no number free */
+  if (sp->s_rd_only) {
+	err_code = EROFS;
+	return(NIL_INODE);
+  }
+  if ((rip = get_inode(NO_DEV, 0)) == NIL_INODE) return(NIL_INODE);
+  rip->i_num = sp->s_ninodes + 1 + (ino_t) (rip - &inode[0]);
+  init_inode(rip, PIPE_DEV, sp, I_REGULAR);
+  return(rip);
+}
+
+
+/*===========================================================================*
+ *				init_inode				     *
+ *===========================================================================*/
+PRIVATE void init_inode(rip, dev, sp, bits)
+register struct inode *rip;	/* a new inode's slot */
+dev_t dev;			/* its device */
+struct super_block *sp;		/* and super block */
+mode_t bits;			/* mode of the inode */
+{
+  rip->i_mode = bits;		/* set up RWX bits */
+  rip->i_nlinks = (nlink_t) 0;	/* initial no links */
+  rip->i_uid = fp->fp_effuid;	/* file's uid is owner's */
+  rip->i_gid = fp->fp_effgid;	/* ditto group id */
+  rip->i_dev = dev;		/* mark which device it is on */
+  rip->i_ndzones = sp->s_ndzones;	/* number of direct zones */
+  rip->i_nindirs = sp->s_nindirs;	/* number of indirect zones per blk*/
+  rip->i_sp = sp;			/* pointer to super block */
+
+  /* Fields not cleared already are cleared in wipe_inode().  They have
+   * been put there because truncate() needs to clear the same fields if
+   * the file happens to be open while being truncated.  It saves space
+   * not to repeat the code twice.
+   */
+  wipe_inode(rip);
+}
+
+
+/*===========================================================================*
+ *				disk_zones				     *
+ *===========================================================================*/
+PRIVATE int disk_zones(rip)
+register struct inode *rip;	/* an open pipe or FIFO */
+{
+/* Has a FIFO direct zones on the disk (an old file system's, or one taken
+ * with the cache half full of pipe data), not only in core (K.6)? */
+  register int i;
+
+  for (i = 0; i < rip->i_ndzones; i++)
+	if (rip->i_zone[i] != NO_ZONE && rip->i_zone[i] < rip->i_sp->s_zones)
+		return(TRUE);
+  return(FALSE);
 }
 
 /*===========================================================================*
@@ -244,6 +309,9 @@ int rw_flag;			/* READING or WRITING */
   d1_inode *dip;
   d2_inode *dip2;
   block_t b, offset;
+  zone_t zones[V2_NR_TZONES];
+  off_t size;
+  int i, fifo;
 
   /* An unnamed pipe lives only in memory: its inode is never read back,
    * and writing it would only cost SD writes (T9). */
@@ -263,9 +331,23 @@ int rw_flag;			/* READING or WRITING */
   dip2 = bp->b_v2_ino + (rip->i_num - 1) % V2_INODES_PER_BLOCK;
 
   /* Do the read or write. */
+  fifo = FALSE;
   if (rw_flag == WRITING) {
 	if (rip->i_update) update_times(rip);	/* times need updating */
 	if (sp->s_rd_only == FALSE) bp->b_dirt = DIRTY;
+
+	/* Spec K.6: an open FIFO's data, size and file positions are in
+	 * core only: the disk gets its zones there (none, normally). */
+	if (rip->i_pipe == I_PIPE) {
+		fifo = TRUE;
+		size = rip->i_size;
+		if (!disk_zones(rip)) rip->i_size = 0;
+		for (i = 0; i < V2_NR_TZONES; i++) {
+			zones[i] = rip->i_zone[i];
+			if (i >= rip->i_ndzones || zones[i] >= sp->s_zones)
+				rip->i_zone[i] = NO_ZONE;
+		}
+	}
   }
 
   /* Copy the inode from the disk block to the in-core table or vice versa.
@@ -275,7 +357,11 @@ int rw_flag;			/* READING or WRITING */
 	old_icopy(rip, dip,  rw_flag, sp->s_native);
   else
 	new_icopy(rip, dip2, rw_flag, sp->s_native);
-  
+
+  if (fifo) {
+	rip->i_size = size;
+	for (i = 0; i < V2_NR_TZONES; i++) rip->i_zone[i] = zones[i];
+  }
   put_block(bp, INODE_BLOCK);
   rip->i_dirt = CLEAN;
 }

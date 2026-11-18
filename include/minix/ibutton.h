@@ -5,6 +5,7 @@
  * programs that talk to other 1-Wire parts (writing an RW1990 blank: the
  * ikey command).  Each bit slot masks interrupts for at most ~70 us; pauses
  * the parts need (EEPROM programming) are the caller's, between calls.
+ * IBIOCEMU makes the Flipper the key instead (R6.7 part 3).
  */
 #ifndef _MINIX_IBUTTON_H
 #define _MINIX_IBUTTON_H
@@ -27,5 +28,19 @@ struct ib_run {
 	unsigned char out[IB_MAXOUT];
 };
 #define IBIOCRUN	_IOW('i', 1, struct ib_run)
+
+/* IBIOCEMU: be a Dallas key (DS1990A) for a reader on the contacts, until
+ * on = 0 or the caller's close.  The ROM is 8 bytes, family code first,
+ * CRC last (as read() gives it).  The reader may use READ ROM or SEARCH
+ * ROM.  served (out) counts the readers that got the whole ROM, mod 256.
+ * EBUSY: another process emulates; read() and IBIOCRUN give EBUSY while
+ * a key is emulated. */
+struct ib_emu {
+	unsigned char rom[8];
+	unsigned char on;
+	unsigned char served;		/* out */
+	unsigned char pad[2];
+};
+#define IBIOCEMU	_IOW('i', 2, struct ib_emu)
 
 #endif /* _MINIX_IBUTTON_H */

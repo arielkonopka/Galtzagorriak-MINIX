@@ -123,6 +123,10 @@ rtc                            # the alarm timed has set
 
 In QEMU there is no alarm: `timed` says `no RTC alarm, next at …` instead.
 
+When the alert or a timer's program cannot start (most often too little free RAM: several alerts
+still ringing, or a big app open), `timed` writes `timed: ID: cannot start it: REASON` to the
+console log instead of firing it silently. A `once` timer is still deleted then.
+
 ## Where it writes
 
 `/var/timers` is on the SD card's root file system. Each run of `timed` writes one small file,

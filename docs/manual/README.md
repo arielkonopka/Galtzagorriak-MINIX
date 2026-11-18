@@ -14,8 +14,11 @@ that brings them.
 7. [Timers and alerts](timers.md): `/var/timers`, `timed`, `alert`, do-not-disturb (`/etc/notify.conf`).
 8. [The self test](selftest.md): the hardware self test (`stest` package, `selftest -a`).
 9. [Reminders and the alarm clock](remind-alarm.md): the `remind` and `alarm` apps, the desk clock.
+10. [The launcher](launcher.md): the app list, icons, the settings page, `/etc/apps`, window apps, the desktop (HOME, status line, modules, `guimod`).
+11. [Data modems](modem.md): files between two Flippers over RFID (Sub-GHz, NFC and BLE planned), `gmodem`.
+12. [USB gadgets](usb-gadgets.md): the Flipper as a USB keyboard, mouse and media keys (`/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`, layouts); Bad USB and Teklatua planned.
 
-More chapters (using the launcher and apps, the shell and commands, packages, settings, the
+More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
 [`CHANGELOG.md`](../../CHANGELOG.md); the design is in [`docs/spec/`](../spec/README.md).
 Writing software for the system, or working on it: the

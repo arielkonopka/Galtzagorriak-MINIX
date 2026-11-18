@@ -2,7 +2,8 @@
  * next one, exit (Galtzagorriak MINIX, spec F.2, R7b.3, R7b.4).
  *
  * Usage:	/usr/lib/timed [-v] [-n SECONDS]
- *	-v	say what it fires and what it arms
+ *	-v	say what it fires (with the pid it started) and what it
+ *		arms
  *	-n	take SECONDS since 1970 (UTC) as the time now: tests, and
  *		QEMU, which has no RTC alarm
  *
@@ -89,6 +90,8 @@ static void fire(struct app_timer *t, struct stat *st, time_t now)
 {
 	struct notify_policy p;
 	struct passwd *pw;
+	char why[64];
+	volatile int err;
 	int f, pid;
 
 	if ((pw = getpwuid(st->st_uid)) == NULL) {
@@ -99,12 +102,22 @@ static void fire(struct app_timer *t, struct stat *st, time_t now)
 		strcpy(henv + 5, "/");
 		if (strlen(pw->pw_dir) < sizeof henv - 5)
 			strcpy(henv + 5, pw->pw_dir);
+		/* vfork: the child runs in this frame and we wait until its
+		 * exec or _exit, so what it stores in err we see here.  An
+		 * exec that fails (no memory hole: EAGAIN; no such program)
+		 * must not pass for "fired" (#253). */
+		err = 0;
 		if ((pid = vfork()) == 0) {
 			if (setgid(pw->pw_gid) == 0 && setuid(st->st_uid) == 0
 			    && getuid() == st->st_uid)
 				execle(t->prog, t->prog, "--timer", t->id,
 							(char *) NULL, runenv);
+			err = errno != 0 ? errno : EPERM;
 			_exit(127);
+		}
+		if (pid >= 0 && err != 0) {
+			errno = err;
+			pid = -1;
 		}
 	} else {
 		notify_policy(&p, pw->pw_dir);
@@ -115,8 +128,12 @@ static void fire(struct app_timer *t, struct stat *st, time_t now)
 		pid = app_alert(t, t->cat, f, notify_volume(&p, t, t->cat),
 							(int) st->st_uid);
 	}
-	if (pid < 0) say(t->id, ": cannot start it", 0);
-	else if (verbose) say(t->id, ": fired", 0);
+	if (pid < 0) {
+		strcpy(why, ": cannot start it: ");
+		strncat(why, strerror(errno), sizeof why - 20);
+		say(t->id, why, 0);
+	}
+	else if (verbose) say(t->id, ": fired, pid", pid);
 }
 
 int main(int argc, char **argv)

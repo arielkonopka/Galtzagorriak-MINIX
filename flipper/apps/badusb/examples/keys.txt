@@ -1,0 +1,14 @@
+REM Bad USB example: the layout test.  Open an empty editor on the
+REM computer first; WAIT_FOR_BUTTON_PRESS waits for OK (Continue).
+REM With the layout of the computer chosen in Settings every line
+REM comes out as written here.
+WAIT_FOR_BUTTON_PRESS
+STRINGLN abcdefghijklmnopqrstuvwxyz
+STRINGLN ABCDEFGHIJKLMNOPQRSTUVWXYZ
+STRINGLN 0123456789
+STRINGLN !"#$%&'()*+,-./:;<=>?@[\]_{|}
+DEFAULT_DELAY 50
+LEFTARROW
+REPEAT 3
+END
+STRINGLN  Kaixo!

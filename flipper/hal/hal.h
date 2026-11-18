@@ -98,6 +98,15 @@ void hal_subghz_off(void);
 void hal_ow_line(int low);
 int hal_ow_read(void);
 void hal_ow_delay(unsigned us);
+uint16_t hal_ow_now(void);		/* a us clock, mod 2^16 */
+/* R6.7 part 3: Dallas key emulation (1-Wire slave).  hal_ib_emu(1) arms
+ * an interrupt on both edges of the contact, in the buttons' vector (its
+ * handler asks hal_ib_edge() first, then hal_btn_pending()).  hal_ib_clear
+ * forgets the edges of a pulse we drove ourselves. */
+void hal_ib_emu(int on);
+int hal_ib_edge(void);
+void hal_ib_clear(void);
+int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
  * little endian), read only; -1 on a bus error, -2 if there is none. */
@@ -122,6 +131,10 @@ int hal_charger_read(unsigned reg);
 #define HAL_CHG_OTG		3
 #define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
 int hal_charger_set(int what, int on);
+/* The default speaker volume (0-100; 100 if never set), kept over resets
+ * in a backup register (K.7 Sound). */
+int hal_vol_default(void);
+void hal_vol_default_set(int v);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
@@ -245,6 +258,31 @@ unsigned hal_usb_room(void);		/* ring room; nobody listening: all */
 int hal_usb_getc(void);			/* -1 if nothing received */
 int hal_usb_peekc(void);		/* the same byte, left in place */
 
+/* USB HID (R10.2, R11.3.1), behind /dev/hidkbd, hidmouse, hidcons
+ * (<minix/hid.h>, kernel/arm/hiddev.c).  hal_hid_state(): the bus bits
+ * (HAL_HID_*, the same values as HID_*) | the host's LED byte << 16.
+ * hal_hid_send(): one report of n bytes for kind (HAL_HID_KBD...): 0 when
+ * it went out (or is queued), -1 when it cannot now.  The backend calls
+ * the kernel's hid_event(HAL_HID_EV_*) from its interrupt when the state
+ * or the LED byte changes, so that poll() and the LED reader wake.
+ * QEMU's backend prints each report as one console line,
+ * "hid< kbd 02 00 0b 00 00 00 00 00", and is always configured unless
+ * hal_hid_fake() (its test hook; -1 on the Flipper) says otherwise;
+ * hal_hid_line(): the FNV-1a hash of the last line (-1 on the Flipper). */
+#define HAL_HID_ATTACHED	0x01
+#define HAL_HID_CONFIGURED	0x02
+#define HAL_HID_SUSPENDED	0x04
+#define HAL_HID_KBD		0
+#define HAL_HID_MOUSE		1
+#define HAL_HID_CONS		2
+#define HAL_HID_EV_STATE	1
+#define HAL_HID_EV_LED		2
+uint32_t hal_hid_state(void);
+int hal_hid_send(unsigned kind, const uint8_t *rep, unsigned n);
+int hal_hid_fake(uint32_t st);
+int hal_hid_line(uint32_t *hash);
+void hid_event(unsigned what);		/* the kernel's; interrupt level */
+
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
  * All return 0 on success, -1 on error. */
@@ -267,7 +305,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
  * is in), and an id of the card in the slot (a hash of its CID:
  * manufacturer, product, serial), read after hal_disk_init(): 0, or -1.
  * hal_disk_fake() is QEMU's test hook: 0 card in, 1 out, 2 another card
- * in (-1 on the Flipper). */
+ * in, 3 returns the sectors written since boot (-1 on the Flipper). */
 int hal_disk_present(void);
 int hal_disk_id(uint32_t *id);
 int hal_disk_fake(int state);

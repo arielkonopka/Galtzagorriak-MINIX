@@ -32,6 +32,7 @@
 #define UTIME		  30 
 #define ACCESS		  33 
 #define SYNC		  36 
+#define SYNC_SHUTDOWN	   1	/* m1_i1 of MM's SYNC in do_reboot (spec N.2) */
 #define KILL		  37
 #define RENAME		  38
 #define MKDIR		  39

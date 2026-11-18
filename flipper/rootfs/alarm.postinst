@@ -1,15 +1,21 @@
-# postinst of the alarm package (spec 7b, F.4).  The app's own user
+# postinst of the alarm package (spec 7b, F.4, K.8).  The app's own user
 # (alarm, group timers: it may add timers to /var/timers; spec A.3) and
-# its line on the launcher.  The launcher starts it as root; once it has
-# the screen and buttons it becomes the user alarm (one gid per process,
-# so it cannot get both gui and timers from the launcher yet).
+# its line on the launcher.  Ordua is a window app (Type: window): "="
+# before the program, and the launcher starts it as the user alarm with
+# its pipes on fd 3 and 4 and draws its windows itself.
 grep '^alarm:' /etc/passwd >/dev/null || {
 	echo 'alarm:*:22:11:Alarm clock:/home/flipper:' >> /etc/passwd
 	echo "alarm: added the user alarm (uid 22, group timers)"
 }
-grep '^Alarm:' /etc/apps >/dev/null || {
-	echo 'Alarm:root:/usr/bin/alarm' >> /etc/apps
-	echo "alarm: the launcher now has Alarm"
+# The launcher line: Ordua, a Basque touch (owner 2026-11-17), with its
+# icon; older lines (Alarm or Ordua, full-screen as root) become it.
+sed -e 's|^Alarm:root:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
+    -e 's|^Alarm:root:@alarm:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
+    -e 's|^Ordua:root:@alarm:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
+    /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+grep ':=/usr/bin/alarm$' /etc/apps >/dev/null || {
+	echo 'Ordua:alarm:@alarm:=/usr/bin/alarm' >> /etc/apps
+	echo "alarm: the launcher now has Ordua"
 }
 test -d /home/flipper/apps_data/alarm || mkdir /home/flipper/apps_data/alarm
 chown alarm /home/flipper/apps_data/alarm
