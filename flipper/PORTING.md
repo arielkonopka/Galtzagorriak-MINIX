@@ -690,6 +690,73 @@ are a local-agent check):
   libc-heavy command (each libc call is a stub and a load from flash),
   free flash after `make base-flash`.
 
+R2b.9 part 2, libfuri + libapp as one shared library (issue #201,
+2026-11-17, QEMU; device numbers are a local-agent check):
+- Layout: the libc's slot shrinks to 48 KB (0x08030000, the library is
+  18.5 KB, its address and id are unchanged), the furi library follows at
+  0x0803C000 (48 KB slot), the installed region starts at 0x08048000 (the
+  ROM image at 0x0804A000).  `minix.bin` carries both libraries (287 KB);
+  QEMU: 0x3C000, installed region 0x48000, cache 0x68000.
+- The library: libfuri (core, GUI, modules, u8g2, fonts) and libapp,
+  linked once at its flash address with `--gc-sections`; the roots are
+  the 73 functions in `furi.exports` (what furihello, remind, alarm,
+  timed and alert call, plus `localtime`/`mktime`, the static libc
+  members libapp needs, exported so the apps share that copy).  41 376 B
+  of text (the R5.2 budget is 45 KB; unfiltered, every libfuri member,
+  about 66 KB).  The u8g2 part that stays is about 7 KB (the four stock
+  fonts 3.5 KB); nothing of u8g2 is exported.
+- Same mechanism as the libc (`tools/mkshlibc.py image --dep`): header
+  (magic `GZLF`), frozen entry table, 12-byte stubs.  It calls the libc
+  through the libc's stubs (in its own text), so its area - GOT 1 304 B,
+  data 324 B, bss 784 B: 2 416 B - follows the libc area at r9
+  (`ld/shfuri.ld` starts its GOT section `SHLIBC_AREA` bytes in), and
+  its id covers the libc's id.  `a_dbase` of the 48-byte header holds
+  it; MM's exec refuses another build (ENOEXEC, abiexec tests 6), `pkg`
+  a package with another `Furi:`.  0 = not used: no ABI change, old
+  programs run as before.  The kernel takes its flash as a copy source
+  too (libapp's file names).
+- Per program (Flipper build), text / data+bss before -> after:
+  furihello 28 820 / 2 008 -> 1 060 / 3 108, remind 31 796 / 3 744 ->
+  5 324 / 4 164, alarm 34 592 / 3 864 -> 7 752 / 4 272, alert 13 988 /
+  4 092 -> 6 408 / 5 680, timed 11 924 / 3 256 -> 3 488 / 4 764.  Text
+  -96 KB for the five, +41 KB of library once.  Data + bss grow by 0.4 KB
+  (remind, alarm: they used most of the library anyway) to 1.6 KB
+  (alert, timed: libapp only, but the area is the whole library's).
+  Sharing saves flash, not RAM, for a program whose text runs from flash.
+- RAM while open (QEMU, `free -v` before and with the app open, nattest
+  "RAM:" lines; remind and alarm installed in flash, alert from RAM):
+  remind 16 128 -> 15 616 B, alarm 16 384 -> 16 128 B, alert 24 320 ->
+  18 688 B, furihello 16 896 B after (about 43 KB before, from its
+  sizes); data + bss + chmem, which is what exec takes: remind 15 432,
+  alarm 16 048, alert 11 824 + 6 408 of text (one alarm run gave 14 080:
+  a free delta can pick up another process).  remind and alarm gain from
+  a smaller chmem (12 KB -> 11 KB
+  and 11.5 KB: nattest leaves 3.8-4.0 KB and 3.2-3.4 KB of 12 KB never
+  used; what is left keeps at least 1 KB for the heap above MM's 1.5 KB
+  safety gap); alert and timed from the text they no longer load.  timed
+  (5 KB chmem, 1.9 KB used) and alert (6 KB, all touched) keep theirs.
+- What is left of the Phase 7b budgets (remind 4, alarm 5, alert 4,
+  timed 3 KB), remind as the example, 15.4 KB: chmem 11 KB = libfuri's
+  main stack 3 KB + the gui thread 2 KB (#188) + heap about 3 KB (Canvas
+  1.1 KB, views, the list) + MM's safety gap 1.5 KB + 1 KB to grow; data
+  4.1 KB = libc area 0.6 + furi area 2.4 + its own 1.1.  What would close
+  it: (1) a GUI server (one gui thread, Canvas and input for every app:
+  -3.1 KB per app); (2) a main stack sized per app instead of 3 KB
+  (`FURI_MAIN_STACK` is now inside the library: it needs a run-time
+  setting, e.g. from the package's chmem line); (3) a smaller furi area
+  (`const` pointer tables, fewer GOT entries in libapp's parser: 80 of
+  its 326 GOT words); (4) a smaller MM safety gap for programs whose heap
+  is bounded.  Even all four leave about 7 KB: 4 KB needs apps that hold
+  no GUI state of their own (a GUI server or 7c-style modules in one
+  host process).  alert and timed (no libfuri): text in flash (`Flash:
+  yes` for the timed package) would save their 6.4 / 3.5 KB of text in
+  RAM; their data is mostly the furi area and libapp's timer struct.
+- AC5.3: with remind and alarm installed, `free -v` shows `shared
+  libfuri: 41 KB at 0003c000 ...` once; `installed programs: 2, 16 of
+  128 KB` (they were 68 KB with libfuri inside).
+- Flash writes: none at run time; the library is written by DFU with
+  `minix.bin`.  M2 flashcheck cache 6/6, inst 0/0.
+
 T4b step 1, the SD card's busy wait (2026-11-15, Flipper): after a write
 the card programs for up to ~9 ms, and `sd_wait_ready` polled it all
 that time in the disk task: the last cause of infrared underruns (R0.8b

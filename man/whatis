@@ -367,3 +367,4 @@ indent (9) - reformat the layout of a program
 roff (9) - text formatter
 kermit (9) - transfer a file using the kermit protocol
 rfid (1) - read, write, copy and emulate 125 kHz RFID tags
+gmodem (1) - move files between two Flippers over RFID, Sub-GHz, NFC or BLE

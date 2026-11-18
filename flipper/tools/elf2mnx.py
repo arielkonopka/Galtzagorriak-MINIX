@@ -31,6 +31,10 @@ the libc area, filled here with the library's initial GOT and data (and its
 relocations); addresses inside the library's flash are absolute and stay as
 they are.  The header is 48 bytes, with flag A_LIBC and the library's build
 id in a_tbase: exec refuses the program with any other library.
+
+With --furi FURI.json as well (ld/user-shfuri.ld) it also uses the shared
+libfuri + libapp library (R2b.9, R5.2): its area follows the libc area and
+is filled the same way, and a_dbase holds that library's build id.
 """
 import argparse
 import json
@@ -74,14 +78,25 @@ def main():
     ap.add_argument("--stack", type=int, default=6144,
                     help="bytes for stack and heap (like chmem)")
     ap.add_argument("--libc", help="shared libc description (mkshlibc.py)")
+    ap.add_argument("--furi", help="shared libfuri + libapp description "
+                    "(mkshlibc.py; needs --libc)")
     ap.add_argument("--secret", action="store_true",
                     help="A_NOSWAP: it holds secrets, never swap it in "
                     "plain mode (Secret: yes, spec R12.28)")
     a = ap.parse_args()
-    a.lib = None
+    a.lib = a.flib = None
     if a.libc:
         with open(a.libc) as f:
             a.lib = json.load(f)
+    if a.furi:
+        if not a.lib:
+            sys.exit("--furi needs --libc")
+        with open(a.furi) as f:
+            a.flib = json.load(f)
+        if a.flib["start"] != a.lib["area"]:
+            sys.exit(f"{a.furi}: built against another libc (its area "
+                     f"starts at {a.flib['start']}, the libc area is "
+                     f"{a.lib['area']} bytes)")
     with open(a.elf, "rb") as f:
         elf = f.read()
 
@@ -222,15 +237,21 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     bss = secs.get(".bss")
     a_bss = bss[3] + bss[5] - d_end if bss and bss[5] else 0
     syms = symbols(elf, secs)
-    lib = a.lib
+    lib, flib = a.lib, a.flib
+    # The areas at the start of the data: the libc's, then the furi
+    # library's; their contents come from the libraries' descriptions.
     area = lib["area"] if lib else 0
-    lib_lo = lib["base"] if lib else 0
-    lib_hi = lib_lo + lib["size"] if lib else 0
+    if flib:
+        area += flib["area"]
+    libs = [l for l in (lib, flib) if l]
+
+    def in_lib(v):
+        return any(l["base"] <= v < l["base"] + l["size"] for l in libs)
     if lib and secs.get(".got", (0,) * 4)[3] != d_start:
         sys.exit(f"{a.elf}: --libc needs the GOT first in the data "
                  "(ld/user-shlibc.ld)")
     if lib and any(data[:area]):
-        sys.exit(f"{a.elf}: the libc area is not empty")
+        sys.exit(f"{a.elf}: the libraries' areas are not empty")
 
     def in_area(v):
         return lib and d_start <= v < d_start + area
@@ -268,19 +289,20 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     if got:
         for off in range(got[3] - d_start + area, got[3] - d_start + got[5], 4):
             v = struct.unpack_from("<I", data, off)[0]
-            if v != 0 and not (lib and lib_lo <= v < lib_hi):
+            if v != 0 and not in_lib(v):
                 relocs.add(off)
     for off in relocs:
         v = struct.unpack_from("<I", data, off)[0]
         if not (v < len(t_bytes) + 1 or d_start <= v <= d_end + a_bss):
             sys.exit(f"{a.elf}: data word at {off:#x} = {v:#x} is neither "
                      "a text nor a data address")
-    if lib:                       # the area: the library's own GOT and data
-        tmpl = bytes.fromhex(lib["template"])
-        if len(tmpl) > area:
-            sys.exit(f"{a.libc}: template longer than the area")
-        data[0:len(tmpl)] = tmpl
-        relocs |= set(lib["relocs"])
+    for l in libs:                # the areas: the libraries' GOT and data
+        tmpl = bytes.fromhex(l["template"])
+        start = l.get("start", 0)
+        if len(tmpl) > l["area"]:
+            sys.exit(f"{a.elf}: a library's template is longer than its area")
+        data[start:start + len(tmpl)] = tmpl
+        relocs |= set(l["relocs"])
     offs = sorted(relocs)
     a_text, a_data = len(t_bytes), len(data)
     a_total = a_data + a_bss + a.stack
@@ -289,13 +311,13 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, flags, A_ARMCM,
                       48 if lib else 32, 0, GZ_ABI, a_text, a_data, a_bss,
                       e_entry, a_total, crc)
-    if lib:                       # a_trsize, a_drsize, a_tbase = id, a_dbase
-        hdr += struct.pack("<IIII", 0, 0, lib["id"], 0)
+    if lib:                       # a_trsize, a_drsize, a_tbase, a_dbase
+        hdr += struct.pack("<IIII", 0, 0, lib["id"], flib["id"] if flib else 0)
     with open(a.out, "wb") as f:
         f.write(hdr + t_bytes + data + reloc_stream(offs))
     print(f"  {a.out}: text {a_text} data {a_data} bss {a_bss} "
           f"total {a_total} (+text), {len(offs)} relocations, PIC"
-          f"{', shared libc' if lib else ''}")
+          f"{', shared libc' if lib else ''}{' and furi' if flib else ''}")
 
 
 if __name__ == "__main__":

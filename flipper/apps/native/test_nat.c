@@ -145,6 +145,70 @@ static void test_log(void)
 	free(s);
 }
 
+/* nat_log_back(): newest first, skip and max, junk, chunk borders */
+static char got[64][24];
+static long long gott[64];
+static int ngot;
+
+static void take(time_t t, const char *id, void *arg)
+{
+	(void) arg;
+	if (ngot < 64) {
+		gott[ngot] = (long long) t;
+		snprintf(got[ngot++], sizeof got[0], "%s", id);
+	}
+}
+
+static int back(const char *s, int skip, int max)
+{
+	int fd = logfile(s), r;
+
+	ngot = 0;
+	r = nat_log_back(fd, skip, max, take, NULL);
+	close(fd);
+	return r;
+}
+
+static void test_back(void)
+{
+	char buf[256], *s;
+	int i, ok;
+
+	CHECK(back("", 0, 8) == 0 && ngot == 0);
+	CHECK(nat_log_back(-1, 0, 8, take, NULL) == -1);
+	CHECK(back("10 a\n20 b\n30 c\n", 0, 8) == 3 && ngot == 3);
+	CHECK(strcmp(got[0], "c") == 0 && gott[0] == 30);
+	CHECK(strcmp(got[2], "a") == 0 && gott[2] == 10);
+	/* a page: skip 1, take 1; the count stops at skip + max */
+	CHECK(back("10 a\n20 b\n30 c\n", 1, 1) == 2 && ngot == 1
+	      && strcmp(got[0], "b") == 0);
+	/* counting only (fn NULL) */
+	{
+		int fd = logfile("10 a\n20 b\n30 c\n");
+
+		CHECK(nat_log_back(fd, 0, 2, NULL, NULL) == 2);
+		close(fd);
+	}
+	/* junk, empty lines, no newline at the end */
+	CHECK(back("junk\n\n10 a\nx 1\n15\n20 b", 0, 8) == 2
+	      && strcmp(got[0], "b") == 0 && strcmp(got[1], "a") == 0);
+	/* an over-long line is skipped */
+	s = malloc(400);
+	memset(s, 'x', 300);
+	s[300] = 0;
+	snprintf(buf, sizeof buf, "10 a\n20 %.200s\n30 b\n", s);
+	free(s);
+	CHECK(back(buf, 0, 8) == 2 && strcmp(got[0], "b") == 0
+	      && strcmp(got[1], "a") == 0);
+	/* lines cut by chunk borders: the last 50 of 3 days, in order */
+	s = biglog(1000000, 60, 3 * 1440);
+	CHECK(back(s, 10, 50) == 60 && ngot == 50);
+	for (ok = 1, i = 0; i < 50; i++)
+		if (gott[i] != 1000000 + 60LL * (3 * 1440 - 11 - i)) ok = 0;
+	CHECK(ok);
+	free(s);
+}
+
 static void test_misc(void)
 {
 	char b[16];
@@ -189,6 +253,7 @@ int main(void)
 	tzset();
 	test_log();
 	test_misc();
+	test_back();
 	setenv("TZ", "UTC0", 1);
 	tzset();
 	test_log();

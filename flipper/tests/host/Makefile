@@ -11,9 +11,9 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest
+TESTS	:= parttest usbtest ibemutest icontest wintest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid
+all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -30,6 +30,10 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
+# libmodem (spec section P, ACP.1, ACP.2): data modems between two
+# Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
+run-modem:
+	$(MAKE) -C $(MROOT)/flipper/tests/modem test
 
 run-%: $(B)/%
 	./$<
@@ -59,6 +63,23 @@ $(B)/usbtest: usbtest.c $(B)/usb.c stubs/usb/*.h \
 		$(MROOT)/flipper/vendor/libusb_stm32/src/usbd_core.c
 	$(CC) $(CFLAGS) $(USBINC) -D'T_ASM(...)=((void) 0)' usbtest.c \
 	    $(B)/usb.c $(MROOT)/flipper/vendor/libusb_stm32/src/usbd_core.c -o $@
+
+# ibemu.c: the Dallas key's 1-Wire slave (R6.7 part 3), included whole.
+$(B)/ibemutest: ibemutest.c $(MROOT)/src/kernel/arm/ibemu.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-old-style-definition ibemutest.c -o $@
+
+# appline.c: the launcher's /etc/apps lines and icons (R5.6a, T21a).
+$(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/appline.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) icontest.c $(MROOT)/flipper/gui/appline.c -o $@
+
+# winrec.c and libgm: the window records of spec K.8 (T23b).
+$(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
+		$(MROOT)/src/lib/gm/gm.c $(MROOT)/src/lib/gm/gm.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
+	    $(MROOT)/src/lib/gm/gm.c -o $@
 
 clean:
 	rm -rf $(B)

@@ -9,39 +9,63 @@ done today, or use the desk clock.
 
 ```
 pkg install /lib/pkg/timed_1.2.tar     # needed by both
-pkg install /lib/pkg/remind_1.0.tar
+pkg install /lib/pkg/remind_1.1.tar
 pkg install /lib/pkg/alarm_1.0.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
-on the launcher (**Remind**, **Alarm**) and its data directory
+on the launcher (**Kanpaia**, "bell" in Basque, for the reminders, and **Ordua**, "the hour",
+for the alarm clock) and its data directory
 `/home/flipper/apps_data/remind` or `…/alarm` (mode 700, the app's user). The programs go into
 the internal flash at install time (`Flash: yes`), so their code is not copied into RAM.
 `pkg remove` takes the app off the launcher; your timers, your data and the user stay, and
 installing the package again brings everything back.
 
-The launcher starts the apps as root; as soon as an app has the screen and buttons it becomes its
-own user, so it can only touch its own timers and files.
+Kanpaia is a [window app](launcher.md) (spec K.8, `Type: window`): its launcher line is
+`Kanpaia:remind:@bell:=/usr/bin/remind`, so the launcher starts it as the user `remind` and draws
+its windows itself. Ordua is still a full-screen app: the launcher starts it as root, and as soon as
+it has the screen and buttons it becomes its own user. Either way an app can only touch its own
+timers and files. Installing `remind` 1.1 over 1.0 turns the old launcher line into the new one.
 
-## Remind
+## Remind (Kanpaia)
 
-**Main screen:** how many reminders you marked done today and a bar chart of the last 7 days.
-OK opens the list of reminders, Back closes the app.
+The launcher draws every window, moves the cursor and changes the values; Kanpaia only describes
+them and sleeps until you press OK, so the keys never wait for it. Back goes one window back and
+closes the app on the first one. Nothing of it stays in RAM after that.
 
-**List:** the first line, **+ New reminder**, adds one; OK on a reminder edits it.
+**Main window:**
 
-**Form** (Up/Down: field, Left/Right: change, OK: toggle or the next value, Back: cancel):
+| row | right side | OK |
+|---|---|---|
+| Today | reminders marked done today | the reminders that ring today, by their next time (`rang`: none left today) |
+| Upcoming | how many reminders there are | every reminder by its next time: `14:30` today, `Tu 09:00` this week, `11-24 09:00` later, `--` never again |
+| History | marked done in the last 7 days | the last 64 times you marked one done, newest first |
+| + New reminder | | an empty form |
 
-| field | values |
+Long lists come 8 rows at a time; the launcher fetches the next page when the cursor reaches the
+edge, so the RAM stays the same however many reminders or log lines there are. OK on a reminder in
+any list opens its form.
+
+**Form** (Up/Down: row; Left/Right or OK: change; OK on a time, date or days row edits it one
+field at a time; Back: cancel):
+
+| row | values |
 |---|---|
-| (text) | Drink a glass of water, Stand up and stretch, Rest your eyes, Take your medicine, Breathe slowly, Check your posture |
-| Every | 5 … 60 minutes in 5-minute steps, then up to 240 in 15-minute steps |
-| From, To | the daily window, 15-minute steps (default 09:00–17:00) |
-| Days | Left/Right moves along `MTWTFSS`, OK switches the day on or off |
-| Ring at To | `yes`: the end of the window rings too |
+| Text | OK opens the keyboard (up to 40 characters; default "Drink a glass of water") |
+| Repeat | `once`, `daily`, `interval` |
+| Date | `once`: the day |
+| Time | `once`, `daily`: when it rings; `interval`: the start of the window (default 09:00) |
+| Until | `interval`: the end of the window (default 17:00) |
+| Every | `interval`: 5 … 240 minutes in 5-minute steps (default 30) |
+| Days | `daily`, `interval`: the days of the week |
+| Snooze | off, 5, 10, 15, 30 minutes for Up/Down on the alert |
 | Sound, Vibro, LED | what the alert uses (do-not-disturb and `/etc/notify.conf` still apply) |
-| Snooze | 0, 5, 10, 15, 30 minutes for Up/Down on the alert |
-| Save, Delete | OK on them |
+| Save, Delete | OK on them; Delete only on a reminder that exists |
+
+Save checks the form first: a text, a time still to come for `once`, at least one day, and Time
+before Until for `interval`. When something is missing, the form's title tells you what, and
+nothing is written. Kanpaia keeps up to 32 reminders (`remind-1` … ); a reminder file written by
+older versions with Ring at To (`Inclusive: yes`) keeps it.
 
 When a reminder rings, **OK** on the alert counts it as done: `alert` appends one line,
 `TIME remind-N`, to `/home/flipper/apps_data/remind/log`, as the user `remind`. Back
@@ -102,8 +126,12 @@ alarm -n         # alarm-1 1794985200 07:00 Wake up   (id, time in seconds, loca
 
 ## Limitations
 
-- An app uses about **15–16 KB of RAM while it is open** (its own copy of the `libfuri` GUI,
-  its thread stacks and screen buffer); nothing while it is closed.
+- **Kanpaia takes 4.0 KB of RAM while it is open** (`free -v` before and after; it was 15.6 KB
+  as a full-screen app): no GUI library, screen buffer or thread, only its form, the time-zone
+  data of `localtime` and a 2.25 KB stack. **Ordua takes about
+  16.1 KB** (its thread stacks, screen buffer and the data of the GUI library; the library's code
+  is in flash once for all apps, `free -v` shows it as `shared libfuri`) until it becomes a window
+  app too (T25b). Both take nothing while closed.
 - The desk clock wakes once a minute from a timed wait; the RTC wake-up timer (planned, R7b.1)
   will replace it.
 

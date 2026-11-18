@@ -4,13 +4,24 @@
 Usage:
   mkpkg.py -n NAME -v VERSION [-d DEP,DEP] [-D "description"]
            [--postinst FILE] [--prerm FILE] [--timers]
-           [--notify alarm|reminder|info] [--deskmode] [--flash] -o OUTDIR
+           [--notify alarm|reminder|info] [--deskmode] [--flash] [-i ICON]
+           [--window] [--background event|hibernate|park|stream|exit]
+           -o OUTDIR
            dest=source ...
 
 --timers, --notify, --deskmode: the app manifest fields of spec F.2
 (Timers: yes = may add timers, group timers; Notify: the highest
 category it may post; DeskMode: yes = may keep the backlight on while
 charging).
+-i ICON: Icon: line, the app's launcher icon (spec R5.6a.1): @name of a
+built-in icon (e.g. @bell), # and 12 hex digits (8x6 pixels, one byte a
+row, top first, MSB left), or 1-2 characters.  Until the launcher reads
+manifests, the package's postinst writes it into its /etc/apps line.
+--window: Type: window, a window app (spec K.8): the launcher starts it
+with its event and record pipes on fd 3 and 4 and draws its windows; its
+postinst writes "=" before the program in its /etc/apps line.
+--background: Background: line, what the app does when it is not in
+front (spec 12d tiers; "exit": a window app that ends on Back, spec K.8).
 --flash: Flash: yes, the programs go into the installed region (internal
 flash) as with pkg install --flash: their text is not copied into RAM.
 
@@ -59,6 +70,10 @@ def main():
     ap.add_argument("--notify", choices=("alarm", "reminder", "info"))
     ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
     ap.add_argument("--flash", action="store_true", help="Flash: yes")
+    ap.add_argument("-i", "--icon", help="Icon: the launcher icon (R5.6a.1)")
+    ap.add_argument("--window", action="store_true", help="Type: window (K.8)")
+    ap.add_argument("--background", choices=("event", "hibernate", "park",
+                                             "stream", "exit"))
     ap.add_argument("files", nargs="+", metavar="dest=source")
     a = ap.parse_args()
 
@@ -66,9 +81,10 @@ def main():
     # "any" for a package without programs (spec J.3).
     # Libc: the build id of the shared libc its programs were linked with
     # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
+    # Furi: the same for the shared libfuri + libapp (a_dbase, 0: unused).
     # Secret: yes when a program is marked A_NOSWAP (elf2mnx --secret): in
     # plain swap mode its RAM never goes to the card (spec R12.28).
-    abis, libcs, secret = set(), set(), False
+    abis, libcs, furis, secret = set(), set(), set(), False
     for spec in a.files:
         with open(spec.split("=", 1)[1].rsplit(",", 1)[0], "rb") as f:
             h = f.read(48)
@@ -77,21 +93,30 @@ def main():
             secret = secret or bool(h[2] & 0x80)
             if h[2] & 0x08 and h[4] >= 48 and len(h) == 48:
                 libcs.add(struct.unpack_from("<I", h, 40)[0])
+                if struct.unpack_from("<I", h, 44)[0]:
+                    furis.add(struct.unpack_from("<I", h, 44)[0])
     if len(abis) > 1:
         sys.exit(f"mkpkg: programs for different ABIs: {sorted(abis)}")
     if len(libcs) > 1:
         sys.exit("mkpkg: programs for different shared libc builds: "
                  + " ".join(f"{x:08x}" for x in sorted(libcs)))
+    if len(furis) > 1:
+        sys.exit("mkpkg: programs for different shared libfuri builds: "
+                 + " ".join(f"{x:08x}" for x in sorted(furis)))
     control = (f"Package: {a.name}\nVersion: {a.version}\n"
                + (f"Depends: {a.depends}\n" if a.depends else "")
                + f"Abi: {abis.pop() if abis else 'any'}\n"
                + (f"Libc: {libcs.pop():08x}\n" if libcs else "")
+               + (f"Furi: {furis.pop():08x}\n" if furis else "")
                + (f"Os: {a.os}\n" if a.os else "")
                + ("Secret: yes\n" if secret else "")
                + ("Timers: yes\n" if a.timers else "")
                + (f"Notify: {a.notify}\n" if a.notify else "")
                + ("DeskMode: yes\n" if a.deskmode else "")
                + ("Flash: yes\n" if a.flash else "")
+               + (f"Icon: {a.icon}\n" if a.icon else "")
+               + ("Type: window\n" if a.window else "")
+               + (f"Background: {a.background}\n" if a.background else "")
                + (f"Description: {a.description}\n" if a.description else ""))
     out = os.path.join(a.outdir, f"{a.name}_{a.version}.tar")
     os.makedirs(a.outdir, exist_ok=True)
