@@ -23,9 +23,59 @@
 # PR 2 sleep blocker (4 B) fills (T14b budget: +24 B).
 # T14b PR 2 (tickless idle, Stop2): kernel +16 B: pm_busy 4, statistics 8,
 # the ms timer's idle client 2, padding 2; T14b in all +24 B (its budget).
-kernel    164    14628  14792
+# T16 (R6.10 backlight gestures, owner 2026-11-16): kernel +4 B: the LED's
+# colour saved during the blink (3 B, padded); the gesture table is const.
+# R6.4 part 2 (ADC stream into the reader, R4b.5): kernel +8 B: the
+# stream's configuration and the suspended reader (R6 budget +300 B).
+# R7b.5 (LED patterns and colour sequences, owner 2026-11-16): kernel +8 B:
+# the two colours of dual/dualsoft/morph (6 B, padded); the sequence state
+# and its ms-timer slot fill existing padding.  Phase 7b budget: +64 B.
+# R7b.1 (RTC alarm, owner-tested 2026-11-16): kernel +8 B: a 9th IRQ
+# handler slot (the alarm's; R4b.7 part 1 frees the IR receive one) and
+# its object's padding; rtc_fired sits in existing padding.  Phase 7b
+# kernel so far: +16 of its +64 B.
+# R4b.7 part 1 (IR receive by TIM2 capture + DMA): kernel -20 B: the
+# receive ring's state and its IRQ handler slot (8 slots again).
+# R6.5 part 1 (/dev/rfid read): kernel +8 B: the RFID read's ms-timer
+# slot (2 B), the input kind and poll count (2 B), padding.  R6 budget
+# +300 B.
+# R6.5 part 2 (/dev/rfid write): kernel +4 B: the frame's target (the
+# RFID antenna or the IR LED) in the device task and in the HAL; the HAL's
+# two carrier flags made bytes (were ints) to win back the rest.
+# N.6 / T17b (SD card pulled out, #163): kernel +4 B: the card's CID hash
+# taken at the first open, to tell the same card from another when one is
+# put back (spec: <= +32 B).  The card-out state is in the existing
+# 'present' word.
+# R6.4 GPIO edge events (poll on /dev/gpio): kernel +4 B: the watched,
+# last-level and changed masks of the 8 header pins and the watcher's slot
+# (its close ends the watch).  R6 budget +300 B.
+# T19b R9.0.4 (RFID read carrier modes, #210): kernel +4 B: the mode byte
+# (125 kHz / 62.5 kHz 25 % for PSK / 134.2 kHz) and its padding.  Spec
+# allows <= +4 B for R9.0.4, <= +32 B for R9.0.4-R9.0.6 together.
+# R6.7 part 3 (Dallas key emulation, 1-Wire slave on EXTI 14): kernel
+# +16 B: the key's ROM (8 B) and the slave's state (slot counter, command,
+# served count, owner, the slot's start as a 16-bit us clock).  R6 budget
+# +300 B.
+# T28a (spec R11.3.1, USB HID device files): kernel +12 B: the HID
+# files' state in hiddev.c (change flags, poll registrations, the persona
+# and its holder, the LED reader's slot and buffer: 9 B, padded).  The
+# spec allows <= 32 B for the QEMU backend; the QEMU board's own 8 B (its
+# state and the last line's hash) are not in the Flipper image.
+kernel    160    14692  14852
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
-mm        32     10140  10172
-fs        20     27176  27196
-init      100    664    764
+# R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows
+# +96 B): when each process began to wait (16 x 2 B), the reserve job
+# (CRC, slot, offset), the device, mode, reserve and its rate window, and
+# swap-out/in counters.  The header goes through mbuf; kernel +0 B.
+mm        32     10196  10228
+# Phase 2d (UTC, 64-bit time_t): FS -72 B, its two static clock messages
+# moved to the stack (+1 B: the once-only "past 2106" note); kernel, MM 0.
+# R4b.6 poll() (#169): FS +268 B: one poll record per process (16 B x 16:
+# due tick, 4 registered devices, flags), the alarm asked for (4 B), the
+# DEV_SELECTED count and the pipe-poller count (1 B each), padding 6 B.
+# Spec budget for 4b: FS +400 B.
+fs        20     27372  27392
+# T17a (spec N.5): INIT +4 B, the SIGPWR and grace-alarm flags of the
+# orderly halt on low battery (spec allows INIT +16 B).  FS +0 B (N.1).
+init      100    668    768

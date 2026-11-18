@@ -49,10 +49,14 @@ struct	exec {			/* a.out header */
 #define A_UZP	0x01	/* unmapped zero page (pages) */
 #define A_PAL	0x02	/* page aligned executable */
 #define A_NSYM	0x04	/* new style symbol table */
+#define A_LIBC	0x08	/* uses the shared libc in flash: a_tbase = its id
+			 * (Galtzagorriak, R2b.9, <minix/shlibc.h>) */
 #define A_EXEC	0x10	/* executable */
 #define A_SEP	0x20	/* separate I/D */
 #define A_PURE	0x40	/* pure text */		/* not used */
 #define A_TOVLY	0x80	/* text overlay */	/* not used */
+#define A_NOSWAP 0x80	/* ARM_CM: never swap it in plain mode, the package
+			 * says Secret: yes (R12.28; A_TOVLY was unused) */
 
 /* Offsets of various things. */
 #define A_MINHDR	32

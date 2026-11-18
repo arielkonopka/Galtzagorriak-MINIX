@@ -21,6 +21,11 @@ Addition (2026-11-15): Phase 19 rewritten (lwIP as a low-priority `udrv` driver,
 BSD sockets in libc, USB ECM/NCM with DHCP and mDNS, Wi-Fi module, PPP with frequency hopping on
 CC1101, BLE Ethernet bridge; no TLS on the Flipper); owner decision. Background: the project
 report `tcpip-stack-analysis.md` (Polish, not in the repo).
+Addition (2026-11-17): section P (data modems between two Flippers over RFID, NFC, Sub-GHz and
+BLE: one link layer, four backends, the `gmodem` command; owner request).
+Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
+its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
+the card and installed once into flash; owner request).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -247,6 +252,7 @@ goes into the system image; user flash goes into the installed region.
 | NFC (A/B/F/V, MIFARE Classic, NTAG, DESFire, EMV read; emulation) | — | ST25R3916 on SPI1 + IRQ: field, poll, transceive straight between the 512 B chip FIFO and the user buffer; listener mode using the chip's automatic anticollision; RT wake (A.4) | Protocol stack, MIFARE Classic crypto1 and key recovery, dictionaries streamed from SD, `.nfc` files | ~96 B | 15–35 KB | 8 / 100 KB |
 | BadUSB | CDC only | Composite USB CDC + HID keyboard/mouse; endpoint buffers in the USB PMA | DuckyScript interpreter, keyboard layouts | ~64 B | 4 KB | 4 / 10 KB |
 | USB mass storage (SD as a drive) | — | Mass-storage class (BOT/SCSI), sector by sector from the SD driver; requires `/home` unmounted | Mode switch app | 0 extra (shares the disk buffer) | — | 4 KB / — |
+| Files to a PC over MTP (R10.4; Windows and Linux without drivers) | — | MTP interface in the composite device (bulk + interrupt, PMA buffers, MS OS descriptor) | `mtpd`, started on USB configure, exits on detach; `/home` stays mounted | ≤ 96 B | ≤ 8 KB while plugged in, 0 otherwise | 1.5 / 14 KB |
 | U2F / FIDO | — | HID FIDO interface; PKA ECDSA P-256 sign; counter in a flash page; key wrapping in the CPU2 secure enclave (as the stock firmware does) | CTAP1 logic | ~64 B | 3 KB | 6 / 8 KB |
 | Bluetooth LE (mobile app, serial, HID, remote) | — | CPU2 start (FUS + BLE light stack, as stock), IPCC mailbox + HSEM, transport task; mailbox and event buffers in SRAM2 | `bled` (GATT: serial, battery, device info, HID), pairing UI | ~1 KB SRAM1 (task stack) + 6–8 KB **SRAM2** | `bled` 6 KB | 8 / 20 KB |
 | qFlipper / mobile app RPC | — | — | `rpcd`: protobuf (nanopb) RPC over the USB CDC data interface and BLE serial: storage, app start, screen mirror, input, system info | 0 | 6–10 KB | — / 25 KB |
@@ -357,12 +363,14 @@ goes into the system image; user flash goes into the installed region.
 |---|---|---|---|
 | CC1101 (Sub-GHz) | None: a register-configured transceiver | Everything in its registers: 300–348, 387–464 and 779–928 MHz; 2-FSK, GFSK, 4-FSK, MSK, ASK/OOK; 0.6–600 kbps; packet handler, FEC, whitening. Presets are just register tables (as stock's custom presets) | All Sub-GHz features; also a **low-rate IP link** between two Flippers (R19.11, with frequency hopping), within the kernel's band and duty-cycle limits (R8.2) |
 | ST25R3916 (NFC) | None: register-configured | Modes NFC-A/B/F/V reader, card emulation, NFC-DEP (P2P), transparent mode | All NFC features. IP over NFC is not worth it |
-| CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" chosen at install time. Switching stacks is a FUS operation: slow, wears flash, and a failure leaves the radio unusable until repaired with qFlipper. Not something to switch at run time |
+| CPU2 (Cortex-M0+ wireless co-processor) | Yes, but **only ST-signed, encrypted images**, installed by ST's FUS. Our own code can't run there | Pick among ST's stacks: BLE full, light (stock), extended, HCI-only; 802.15.4 MAC; Thread FTD/MTD; Zigbee; concurrent BLE + Thread or BLE + Zigbee; BLE LLD (proprietary 2.4 GHz) | One "radio personality" at a time. Several ST images may be kept on the SD card and switched with `radio use` (R16.0, owner request 2026-11-18): a FUS operation in maintenance mode, ~30–90 s with 2–3 reboots, only on an explicit command. A failed swap is repaired from the same SD image, no PC needed |
 
 Flash cost of a CPU2 stack comes out of the same 1 MB. The BLE light stack is the smallest; the
 Thread, Zigbee and concurrent stacks are much larger (check ST's release notes for the exact size
 of the chosen version). `SFSA` moves accordingly, and R2b.1 reads it at boot, so the installed
-region shrinks automatically. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
+region shrinks automatically. With several images on the card, the flash the largest of them
+would need is the **radio slot** (R2b.1a): it holds only the run-time text cache, so a swap
+never displaces installed programs and no flash sits idle. Choosing a bigger stack is an owner decision (R16.1.0, decided 2026-11-14: the full BLE stack,
 for central and GATT client apps; R19.13 for Thread or Zigbee).
 
 ---
@@ -438,6 +446,51 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (owner, 2026-11-15). Details in next-tasks T14c.
+- **Wake, do the job, off again (owner, 2026-11-17).** A timer file may say `After: off` (and
+  `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
+  log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
+  and the Flipper goes back to ship mode. The rules:
+  - **Never off if the Flipper was on before the job.** `timed` powers off only when **this** boot
+    was caused by the RTC alarm (wake reason read at boot, F.3 above, kept in an RTC backup
+    register bit, 0 B RAM). If the Flipper was already running when the timer fired, the job runs
+    and the Flipper stays on, exactly as for a timer without `After: off`;
+  - not if a button was pressed since the boot, or a user session (USB console, launcher app in
+    front) is active: the user took it in hand, so it stays on;
+  - several jobs due close together: off only after the last; if the next timer of any kind is
+    due in less than ≈ 4 min, sleep (Stop2) instead of off (a boot costs more than that much sleep;
+    `reports/hibernation-analysis.md`);
+  - a job that hangs is ended after its `Timeout:` (default 60 s; SIGTERM, then SIGKILL after
+    3 s) and the Flipper still goes off, so a stuck beacon cannot drain the battery;
+  - with USB attached ship mode cannot cut power: sleep instead;
+  - the boot after an RTC wake with an `After: off` job due is **quiet**: no splash, backlight
+    off, no CPU2/Bluetooth, no launcher; a button press during it turns it into a normal boot
+    (and cancels the power-off, rule above);
+  - power-off is the normal orderly halt (sync, N.2 clean flags, then ship mode).
+- **Timer type `emergency` (owner, 2026-11-17).** `Type: emergency` is for a rescue signal
+  (beacon, screen flash, Morse). It means `After: off` with the rules above, and in addition:
+  - it ignores do-not-disturb and the notification policy (like an alarm);
+  - it is never skipped: `Missed: fire-once` is forced, and a timer due during a normal session
+    still runs (the signal goes out, the Flipper stays on);
+  - low battery does not cancel it; `timed` **thins it out by halving** (owner, 2026-11-17):
+    below the low-battery threshold (default 20 %) it skips every second occurrence; each time
+    the remaining charge halves again (10 %, 5 %, 2.5 %, ...) it skips every second one of those
+    that are left, so the signal runs at 1/2, 1/4, 1/8 ... of its rate (at most 1/64). Each level
+    then lasts about as long as the one before (half the charge at half the rate), so the beacon
+    keeps going for as long as possible instead of dying early. The level and the occurrence
+    counter live in RTC backup register bits (0 B RAM); the app gets the level in `TIMED_LOWBAT`
+    and may also shorten each signal. Only the charger's own cut-off stops it;
+  - only a package with `Timers: emergency` in its manifest (F.2, checked by `pkg`) may create one,
+    so an ordinary app can't keep waking a switched-off Flipper.
+  Other wake-and-off jobs (weather log, sensor sample) use plain `After: off`.
+- **Timer type `wakeup` (owner, 2026-11-17: "wake_up_on_time").** The alarm clock's timers
+  (`alarm`, 7b.2). Normal battery: as today (rings on time, from off too, with the boot lead).
+  **Below 10 %** (configurable) the alarm itself is **not run**: `timed` does not start the app,
+  and instead gives one minimal notice that the alarm was skipped, whichever costs less: a short
+  LED blink pattern (LP5562, a few mA for well under a second) by default, or a short beep
+  (`notify.conf`: `lowbat_notice=led|beep`). The skip is logged (`/var/log/timed`, batched,
+  N.2) and the alarm app shows "Alarm skipped: battery low" when next opened. The notice runs
+  from Stop2 or from a quiet boot (no screen). Note for the manual: an LED blink will not wake
+  a sleeper; the alarm app warns when an alarm is armed and the battery is under 15 %.
 - LSE accuracy is about ±20 ppm (≈ 2 s a day). Settings expose RTC smooth calibration (`RTC_CALR`),
   and the clock is synced from the mobile app's date/time RPC (R15.5) or NTP over Phase 19.
 
@@ -733,13 +786,15 @@ spare bytes. The owner suggested shifting the epoch or widening the type. Five w
 | File | Content | Owner, mode | Read by |
 |---|---|---|---|
 | `/etc/hostname` | one line, `[a-z0-9-]`, 1–8 characters (the stock name limit; the BLE name becomes `Flipper <name>`, as stock) | root, 0644 | shell prompt, `bled` advertising name, USB product string, RPC device info |
-| `/etc/flipper/region` | radio region code (R8.2) | root, 0644 | the Sub-GHz transmit check (R8.2), NFC/RFID power limits |
+| `/etc/flipper/region` | radio region code (R8.2): a text copy for scripts and apps; the binding copy is the flash record of RQ.2 | root, 0644 | apps that show the region; the kernel reads the flash record (section Q) |
 | `/etc/TZ` | POSIX `TZ` string, and the zone label in a `#` comment | root, 0644 | INIT puts it into the environment of everything it starts; re-read on `SIGHUP` and `SIGRTC` |
 | `/etc/location` | FlipperFormat: `Latitude`, `Longitude` (decimal degrees, 4 decimals), `Elevation` (m), `Source` (`manual`, `city`, `sun`, `gps`), `Accuracy_km`, `Set` (UTC time) | root, **0640, group `location`** | apps whose manifest says `Location: yes` (granted group `location`) |
 
 - **Location is private data.** It is not readable by `nobody`, not sent over RPC or BLE unless the
   caller is root, and not written to logs.
-- **Region** default: the hardware region in OTP (as stock `furi_hal_version_get_hw_region`).
+- **Region** is a country (section Q). Default: derived from the hardware region in OTP (as
+  stock `furi_hal_version_get_hw_region`: the EU/RU hardware gives `EU`, the US/CA/AU hardware
+  gives `US`), until the wizard or `region set` installs the user's country.
   Changing it requires root and is logged to `/var/log/messages`.
 - An optional GPS module on the header UART (section H) can later fill both the location
   (`Source: gps`) and the time.
@@ -938,6 +993,37 @@ tiles, notification list, app menu), extended by modules.
   `gui` binding and desktop `window` records draw the same bar, so the look stays one across C,
   Berry and shell. Exceptions: the text console, full-screen content where a bar would hide
   data (e.g. a picture viewer), and `alert` screens, which may invert the whole screen to stand out.
+- **Screen style: "Pine meets modern UX" (owner decision, 2026-11-17).** Every GUI screen of the
+  system (launcher, apps, desktop windows, C, `libfuri`, Berry or shell) follows the launcher's
+  look of R5.6a.7, so a user who knows one screen knows them all: text first, every screen says
+  what its buttons do, nothing hidden, modern spacing. The parts:
+  - **Title bar** (above), optionally with a short state on the right: position `3/12` in a
+    list, `REC`, `12%`, at most 6 characters.
+  - **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58 in Pine's
+    `key action` style (`<Back  OK Run  >More`, `OK Toggle  Back Done`). It names every button
+    that does something on that screen, and only those. Long Back is not listed (it always ends
+    or parks the app, R4b.8, R12.20).
+  - **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+  - **Values** of settings in brackets, right-aligned or after the name: `Icons   [on]`.
+  - **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+  - **Message line**: a short notice replaces the hint line for 2 s, then the hints come back; the
+    screen behind stays drawn. Whole-screen notices are only for errors that end the app and for
+    `alert`.
+  - **Icons** (R5.6a): at most 8×6 pixels, two characters of the 4×6 font, before a list entry.
+  - Exceptions, as for the title bar: the text console, full-screen content (pictures, graphs,
+    the map), `alert`, and games or ported stock apps whose own screens would be cut. A ported
+    stock app keeps its layout; its stock `elements_button_left/center/right` hints are already
+    the same idea and stay as they are.
+  - **Free for app authors, no RAM:** the parts come from the shared code, as `const` strings and
+    stack, so an app writes its hints, not the drawing: `gui.c` for plain `/dev/lcd` programs
+    (`gui_title2(title, right)`, `gui_hints(text)`, `gui_note(text)` with a timed key read through
+    `poll`, `gui_scroll(top, shown, total)`, `gui_bits8()`), the `libfuri` standard modules
+    (Submenu, VariableItemList, Popup, DialogEx, TextInput: hints from their button labels; part
+    of the shared library, #201), the Berry `gui` binding (R7c) and the desktop `window` records
+    (K.3, a `hints` field). No periodic redraw is added for any of it.
+  - Existing apps are aligned in task T22: `info`, `lights`, `power`, `lfrfid` and the menu of
+    `console` (`flipper/gui/`), `selftest`, `furihello`, `remind` and `alarm` (7b.1/7b.2), `camfind`
+    and `sbctl` when they get their screens. New apps follow it from the start; reviews check it.
 
 **K.3 Desktop protocol (TSV lines).**
 - Modules write records to the desktop's FIFO (`/dev/gui` or `/var/run/gui`); one record per
@@ -959,7 +1045,272 @@ modules that refresh periodically run from `timed` and exit (0 B RAM between ref
 VT100-complete by task T8 (`next-tasks.md`). `ed` stays for scripts. A small text editor is
 part of the base system so scripts and settings can be edited on the device.
 
-For the manual: the `-t` convention, the desktop/module model and protocol, writing a module in
+**K.6 The graphical system: layers and order (owner, 2026-11-17: "build the graphical system we
+will use").** K.2–K.4 and R5.6a describe the pieces; this section fixes how they fit and in
+which order they are built.
+
+- **Layers**, bottom up. Each layer uses only the ones below it:
+  1. **Kernel:** `/dev/lcd` and `/dev/buttons`, foreground ownership (R4b.8), `FGIOCPREEMPT`
+     (R7b.2), `DEV_SELECT` for `poll()` (R4b.6). Done.
+  2. **Drawing:** two libraries with **one look** (K.2 title bar, R5.6a.7 screen style):
+     - `gui.c` for small plain C programs, linked statically (a few hundred bytes);
+     - `libfuri` + `libapp`, one shared library in flash (#201), for everything bigger and for
+       ported stock apps.
+     The screen-style helpers (title with a counter, hint line, notice line, scroll mark,
+     `[value]` rows) exist once in each and draw the same pixels; a host test compares them.
+  3. **The desktop = the launcher.** The launcher is already resident, owns the screen when no
+     app runs and is the app menu. It grows into the K.2 desktop instead of adding a second
+     resident program: app list (R5.6a), status line (time, battery, unread notifications), a
+     home page of module tiles, the notification list, the Running list (R12.20) and settings
+     pages. Each page is the same Pine-style list screen. The pages sit in a row,
+     Settings ← Apps → Home → Notifications → Running, and Left/Right move along it, which keeps
+     R5.6a's keys (Left from Apps = Settings). A page move happens on the **release** of a short
+     Left/Right press, and a key that was part of a chord (R6.10 backlight gestures, #145) does
+     nothing. This is a userland rule, 0 B kernel: R6.10 passes the down and up events of chord
+     keys to the app, so `gui.c` gets `gui_click()` next to `gui_key()` (which returns on the
+     press). A click fires on the release of a key pressed **alone** (no other key went down
+     while it was held) and held < ~1 s; a few bytes of stack, no `.bss`. The launcher and small
+     C apps use it for Left/Right/OK actions. `libfuri` apps already behave this way (a 1.5 s
+     chord is past `GUI_INPUT_LONG_COUNTS`, so the release sends no `InputTypeShort`). No kernel
+     flag on key events: it would break `libfuri`'s `gui_buttons_event` (a flagged release would
+     be dropped and the key would repeat forever). So Left+Up held for
+     the backlight never jumps to Settings. The status line (minute, battery) wakes the launcher
+     only while it is in the foreground **and** the screen is on; with an app running or the
+     backlight off the launcher sleeps in `poll()` with no timeout (M3 idle ≤ 1.5 mA). RAM budget
+     for the whole desktop: ≤ 3 KB data + heap above today's launcher, 0 B kernel.
+  4. **Modules** (K.2–K.3): separate processes that write TSV records to `/var/run/gui` and
+     read events from their reply FIFO. A C helper in `libapp` (`gm_open`, `gm_tile`, `gm_menu`,
+     `gm_event`) and a shell helper `guimod` (one record per call) come first; the Berry `gui`
+     and `desktop` bindings come with 7c (R7c.3) on the same protocol.
+  5. **Full-screen apps:** `libfuri` apps, ported stock apps (`fam2pkg`, R5.5) and Berry apps
+     take the whole screen as today, in the same style. The desktop is not involved while they
+     run.
+- **Button chords are hidden system actions (owner, 2026-11-17, on #231).** They never appear
+  in hint lines. They are listed, and later configured, on a chords page in the desktop's
+  Settings (chord → action). The page moves still need no chord: Settings stays on Left.
+  - The two backlight chords of R6.10 stay in the kernel with fixed defaults, so they work even
+    when userland hangs.
+  - Other chords are reported as events (a chord code on `/dev/buttons`) and mapped to actions
+    by userland. The mapping lives in a config file on the SD card (`/etc/chords.conf`, no
+    internal flash), edited from the chords page. Free chords today: Right+Up, Left+Down.
+    Back is never part of a chord (R6.10).
+  - How other chords reach userland (an event on `/dev/buttons` that works while any app is in
+    the foreground) is decided with R6.10 in a later step, `lane:local`; never as a flag on
+    ordinary key events (see the click rule above). The chords page is a follow-up of T23a.
+- **Pipe data never reaches the card (FS, 0 B, local-lane review of #231).** `PIPE_DEV` is
+  `ROOT_DEV`, so a pipe's or FIFO's data lives in its inode's zones on the SD card through the
+  buffer cache, and `update` would write the dirty blocks and the inode times every 30 s. With
+  four modules on `/var/run/gui` that means steady card writes, battery, and a root file system
+  that is almost never clean (spec N: `fsck` at nearly every boot after a power loss). So:
+  - a block written through a pipe or FIFO is marked `b_dirt = PIPE_DIRTY` (a third value of the
+    existing `char`, 0 B). `sync`, `update` and unmount skip it; it is written only if the cache
+    must evict it while it still holds unread data (rare: a pipe is at most 7 blocks);
+  - when the readers catch up (the pipe's position goes back to 0) its blocks become `CLEAN` and
+    are dropped from the cache without a write;
+  - pipe and FIFO data I/O does not mark the inode dirty (size, `mtime`, `ctime` stay in core).
+    Deviation from POSIX: FIFO times on disk are not updated. The contents of a pipe never
+    survive a reboot anyway.
+  The alternative, a RAM-only `/var/run`, costs RAM and is not taken.
+- **Rules kept from K.2–K.4:**
+  - the desktop does navigation locally, so a key press never waits for a module;
+  - alarms ring through `timed` + `alert`, never through the desktop;
+  - tile refreshes run from `timed` and exit;
+  - nothing is written to internal flash.
+- **Order** (tasks T21–T23 in `next-tasks.md`):
+  1. #201 (shared `libfuri` + `libapp`) and T21a (launcher icons, Pine look, the page table of
+     R5.6a.4) run in parallel: T21a uses plain `gui.c` and does not need #201;
+  2. T22a/T22b: the other apps restyled (T22b after #201);
+  3. T23b first: the window server of K.8 (owner priority: alarm and reminders), then T25:
+     Kanpaia and Ordua as window apps;
+  4. T23a: desktop core (status line, pages, the FIFO and `tile`/`status`/`notify`/`close`
+     records, `guimod`);
+  5. T23c: the notification list fed by `notify_post`, and the Running list when R12.20 lands;
+  6. then Berry (7c) with its `gui`/`desktop` bindings, and `fam2pkg`.
+- **Acceptance:**
+  - ACK.1 A shell module of three lines puts a tile on the home page and changes it.
+  - ACK.2 Killing a module removes its tile, and the desktop keeps working.
+  - ACK.3 With four modules writing as fast as they can, key → frame on the desktop stays
+    within L1.
+  - ACK.4 Desktop RAM within the budget above (`free` in QEMU with 4 tiles and 8
+    notifications).
+  - ACK.5 QEMU (sector counter in WINCHESTER, as AC12.14): four modules writing to
+    `/var/run/gui` for 60 s, then `sync` → 0 sectors written, and the spec N clean mark stays set.
+  - ACK.6 QEMU with fake buttons: Left+Up held 1.5 s on the Apps page → the page stays Apps; a
+    short Left press moves to Settings on release, not on press.
+
+**K.7 System settings (owner, 2026-11-17 ~22:10 Warsaw, on #110): next after T21a (#234).** This is
+the "Settings" row of the stock-app table (Phase 7): display, sound, LED, time, power, storage,
+about, system.
+
+- **Where.** The launcher's Left page (K.6 layer 3, R5.6a.4) is **SETTINGS**: a Pine-style list of
+  groups: Display, Sound, LED, Time, Power, Storage, Gestures, Launcher, About.
+  - **Launcher** (Icons, Hints, Battery: R5.6a.4, #234) stays inside the launcher.
+  - **Gestures** is the chord screen of K.6 and the `gestures` app of R7.2: one program, not two.
+  - Every other group is a **separate small program run like an app**, `settings GROUP` (for
+    example `settings display`). The launcher does not grow in RAM, and a group costs RAM only
+    while it is open.
+- **Program.** `settings` is one plain C program with code in flash, and a **window app (K.8)**:
+  it describes its screens with `libgm`, and the desktop draws them. Until T23b is on main, the
+  driver side (applying values, the boot script) can be built first.
+  - Each group is its own source file (`src/commands/settings/<group>.c`) with one entry function,
+    so the two lanes can work on different groups without conflicts.
+  - Each screen is a `list` window of `int`/`enum`/`bool` rows. Left/Right change a value in the
+    desktop, OK opens a sub-list, Back returns to the launcher's SETTINGS page. Values arrive with
+    `submit`.
+  - RAM while open: ≤ 3 KB (data + bss + stack), 0 B kernel.
+- **Saving.**
+  - A group writes `/etc/flipper/<group>.conf` on the SD card with `cfopen()` (L.3), and only when a
+    value really changed, once when the screen is left (not at every key).
+  - Defaults stay in `/rom`, and nothing goes to internal flash.
+  - Each change is also applied at once through the driver (`/dev/backlight`, `/dev/speaker`, …),
+    and a boot script applies the files at start-up, as `gestures.conf` does (R6.10).
+- **Groups and their order:**
+  1. **Display:** brightness, idle timeout (default 15 s), forced backlight mode (R6.9, R6.10). The
+     drivers exist.
+  2. **Sound:** volume, using the speaker volume of #192 (`hal_tone(hz, vol)`, volume note
+     0xFFFF), plus a test beep.
+  3. **Time:** date and time (UTC in the RTC, I.1), the time zone from the zone list (`/etc/TZ`,
+     shared with the 18b wizard), 12/24 h. **About:** version (base package, ABI, kernel build
+     id), free RAM, the shared-library lines of `free -v`, serial number, licence.
+  4. The rest: **LED** (notification colours, brightness), **Power** (the `power` app of R7.1
+     with its profiles, or a group that starts it), **Storage** (`df` of the SD card, card info,
+     "format SD" disabled while it is mounted; `USB files [on]` for MTP, R10.4), **System** (hostname, swap, `GuiLog`).
+- **Acceptance:**
+  - ACK7.1 QEMU with fake buttons: Left from Apps → SETTINGS → Display → change brightness → Back.
+    The backlight value changes at once, and `/etc/flipper/display.conf` is written once.
+  - ACK7.2 Opening and leaving a group without changing anything writes 0 sectors (WINCHESTER
+    sector counter, as AC12.14).
+  - ACK7.3 After a reboot the saved values are applied. Deleting the file restores the default.
+  - ACK7.4 `free` while a group is open: ≤ 3 KB more than with the launcher alone.
+
+**K.8 Window apps: the desktop draws, the app only describes (owner, 2026-11-17: "the desktop
+model should be designed now"; alarm and reminders first).** #235 showed that the shared
+`libfuri` saves flash, not RAM: an open `remind` still takes 15.4 KB. In that 15.4 KB, the main
+stack is 3 KB, the gui thread 2 KB, the heap (Canvas, views, list) about 3 KB, the furi data area
+2.4 KB and the MM gap 1.5 KB. All of that is GUI machinery, and every GUI app carries its own
+copy. A window app carries none of it.
+
+- **Two kinds of GUI app.**
+  - **Window app** (`Type: window` in the package): a plain C program with no `libfuri`, no Canvas
+    and no gui thread. It sends **window records** that describe a screen (a list of rows, text,
+    a clock). The desktop (K.6 layer 3, the launcher) draws them, moves the cursor and changes
+    values. The app gets an event only when the person does something that needs the app: OK on
+    a row, Submit, Back from the top window.
+  - **Full-screen app** (K.6 layer 5): `libfuri` and ported stock apps, which draw on their own
+    as today, with their RAM cost. These are for apps that need their own drawing (Sub-GHz
+    waterfall, games).
+  - Alarm (**Ordua**) and reminders (**Kanpaia**), the settings groups (K.7) and most small
+    tools are window apps.
+- **Connection, 0 B kernel.**
+  - The launcher starts a window app as its child with two anonymous pipes: fd 3 carries events
+    to the app, and fd 4 carries records to the desktop.
+  - There is no name in the file system, so no other process can talk to the window, and the
+    pipe itself is the app's identity.
+  - Pipe data never reaches the card (K.6, `PIPE_DIRTY`).
+  - Background modules (tiles, K.3) keep `/var/run/gui`.
+- **Records** (TSV, one per line, one `write()` ≤ 512 B; a window is at most 640 B of text):
+  - `win ID KIND TITLE`, where KIND is `list`, `text`, `clock`, `confirm` or `pad`, then rows, then `show`.
+  - Rows:
+    - `item KEY LABEL [RIGHT]`: an entry that opens something;
+    - `int KEY LABEL MIN MAX STEP VALUE [UNIT]`, `enum KEY LABEL INDEX OPT|OPT|…`,
+      `bool KEY LABEL 0|1`, `time KEY LABEL HH:MM`, `date KEY LABEL YYYY-MM-DD`,
+      `days KEY LABEL MASK`: values changed with Left/Right **in the desktop**;
+    - `input KEY LABEL TEXT MAX`: text entry with the desktop's keyboard;
+    - `line TEXT`: a static line;
+    - `action KEY LABEL`: a button row.
+  - `clock`: the desktop draws big HH:MM from the RTC, plus two lines of text from the app. It
+    updates the minute itself, only while in the foreground with the screen on (K.6).
+  - `pad` (T28d, for Teklatua's mouse, R11.3.5): no rows but `line` records (the app's state);
+    the desktop draws the title, the lines and the hint line, and sends **every key** to the app
+    raw: `key KEY press|release|repeat` (KEY `up` `down` `left` `right` `ok` `back`). While the
+    last key pressed (not Back) is held, a `repeat` every `REPEAT=MS` (option on `win`, 10–1000,
+    default 100; the first after 200 ms; rounded to the 60 Hz clock's ticks). Back is sent too
+    (Back + Up/Down is the mouse wheel), and a lone short Back (pressed alone, let go within 1 s)
+    is also Back as in every window, so Back always works. No key held: 0 wakeups.
+  - `busy` / `idle`, `close`.
+- **Events to the app** (fd 3): `ok WIN KEY`, `submit WIN KEY=VALUE…` (only the changed rows,
+  sent when the person leaves a list whose values changed, or presses an `action` row), `back WIN`,
+  `page WIN FIRST` (long lists, below), `redraw`, `close`.
+  - A `win … LIVE` window (T24d, the settings groups of K.7) gets `submit` also right after each
+    value change (a `time`/`date`/`days` row: when its edit ends; an `input` row: after every key
+    on the desktop's keyboard, with the whole text, T28d), so the app applies it at once
+    through the driver; the app does not answer it, and the desktop's key → frame is unchanged.
+  - `key KEY press|release|repeat`: the keys of a `pad` window (above).
+- **Look:** the desktop draws every window in the one K.2 / R5.6a.7 style.
+  - The title bar shows the app name.
+  - The hint line is made by the desktop from the row under the cursor: "OK Open", "◀▶ Change",
+    "Back".
+  - The selection bar spans the full row.
+  - Every window app looks the same, with no style code in the app.
+- **Long lists:** a `list` window holds at most 16 rows. For more, the app sends `win … ROWS=N`
+  and the first page, and the desktop asks for the next page with `page` when the cursor
+  reaches the edge. The app reads the page from its file, so its RAM does not grow with the
+  data.
+- **RAM budget for an open window app** (code in flash, `Flash: yes`):
+
+  | | `remind` (Kanpaia) | `alarm` (Ordua) |
+  |---|---|---|
+  | shared libc data area | 0.6 KB | 0.6 KB |
+  | own data + bss (alarm table, ring settings) | ≤ 0.4 KB | ≤ 0.9 KB |
+  | stack (record lines are built in a 128 B buffer on it) | 1.0 KB | 1.0 KB |
+  | heap (no stdio `FILE` buffers: `read`/`write`, or `setvbuf` with 128 B) | ≤ 0.5 KB | ≤ 0.5 KB |
+  | MM gap (today) | 1.5 KB | 1.5 KB |
+  | **total** (Phase 7b budgets: 4 and 5 KB) | **≤ 4.0 KB** | **≤ 4.5 KB** |
+
+  - Window apps link `libgm` and the parts of `libapp` they need **statically**, with
+    `--gc-sections`, and never the shared `libfuri`, whose 2.4 KB data area each process would
+    carry.
+  - **Measured (#251):** Kanpaia open = 4096 B. MM checks its 1.5 KB stack/heap gap only on
+    `brk()` and when it delivers a caught signal, so a window app with no `malloc`, no stdio and
+    no signal handler (SIGPIPE ignored) may leave the gap out of its CHMEM (remind: 2304 B, with
+    592 B never used). An app that adds a handler or `malloc` must add the gap back, and window
+    apps keep large local buffers and deep recursion out.
+- **Desktop cost:** one window buffer for the current window and one for its parent
+  (2 × 640 B), a table of 4 clients (4 × 16 B) and a 64 B keyboard buffer: ≈ 1.4 KB, inside the
+  K.6 budget of ≤ 3 KB with tiles and notifications. Its code (drawing rows, keyboard, clock
+  digits) runs from flash.
+- **Gain:** three open GUI apps take ≈ 13 KB instead of ≈ 47 KB. A closed window app takes 0 B,
+  because its state lives in files and timers, so it can exit on Back.
+- **Responsiveness:**
+  - **Key → frame** (cursor, value change, page change already loaded, Back to the parent) never
+    waits for the app. The desktop parses at most 640 B (< 1 ms) and draws, so L1 is the same
+    as the launcher's list (≤ 30 ms p99).
+  - **OK / Submit → new window:** one pipe write to the app, the app works and writes ≤ 640 B,
+    and the desktop draws. Targets: ≤ 50 ms p99 with the app in RAM, ≤ 150 ms if it is parked
+    (swap-in of 4 KB ≈ 5 ms at the measured 69 ms per 64 KB, plus the queue).
+  - **No answer within 150 ms:** the desktop puts a busy mark in the title bar and keeps
+    responding. Back always works: it closes the window at once and sends `close`. An app that
+    is still alive 2 s later gets `SIGTERM`.
+  - The desktop never blocks on an app: its writes to fd 3 are non-blocking, and a full pipe
+    marks the app busy.
+  - An idle window app sleeps in `poll()` with no timeout: 0 wakeups and 0 mA. The desk clock
+    ticks in the desktop.
+  - **The alarm never depends on the desktop.** `timed` + `alert` ring as today (K.4), and
+    `alert` stays a small separate `gui.c` program that preempts any app (R7b.2). If the desktop
+    dies, INIT restarts it, and window apps get `EPIPE` and exit.
+- **Swap (spec 12):**
+  - Window apps are cheap to end, so they default to `Background: exit` and need no parking
+    (0 swap writes, 12g).
+  - An app may still declare `Background: park`. Parking then writes ≈ 4 KB instead of ≈ 16 KB,
+    and while the app is out the desktop still shows and navigates its window; only OK/Submit
+    waits for the swap-in.
+  - Swappable blocks (12h) do not belong in the desktop model, since its data is tiny (a whole
+    1-bit screen is 1 KB). They stay for apps with really large data (NFC dumps, Sub-GHz
+    captures, `mined`, Berry `vbytes`).
+- **Acceptance:**
+  - ACK8.1 QEMU with fake buttons: Kanpaia adds a reminder (list → form → keyboard → Submit),
+    and the timer file appears in `/var/timers`.
+  - ACK8.2 Ordua edits an alarm (time, days, ring settings), and the desk clock shows the next
+    alarm.
+  - ACK8.3 `free` with Kanpaia open: ≤ 4.0 KB more than the launcher alone; with Ordua open:
+    ≤ 4.5 KB more.
+  - ACK8.4 A client that never reads fd 3: the desktop stays at L1, a busy mark appears after
+    150 ms, and Back closes it.
+  - ACK8.5 Key → frame on a window app's list within L1 under the L1 load. OK → next window
+    ≤ 50 ms p99 (QEMU timestamps; device numbers in #109).
+  - ACK8.6 An open window app makes 0 wakeups per minute while idle (the `lat`/`ps` counters).
+
+For the manual: the `-t` convention, the desktop/module model and protocol, the SETTINGS groups (K.7), writing a window app (K.8), writing a module in
 C, Berry or shell, and the `mined` key table.
 
 ## L. Flash writes and default settings (owner request, 2026-11-15)
@@ -985,7 +1336,7 @@ Instead:
     that flash range read-only as a block device, read in place (XIP) through the FS cache. FS is
     unchanged.
   - `/etc/rc` mounts it read-only on `/rom` first.
-  - RAM: 0 B static (one of the existing 8 super block slots, one mount).
+  - RAM: 0 B static (one of the existing 4 super block slots, one mount).
 - **L.3 Changes go to the SD card, defaults stay in ROM.** Settings are read with a libc helper,
   `FILE *cfopen(const char *path, const char *mode)`:
   - for reading, open `path` (on the SD card); if it does not exist, open `/rom` + `path`;
@@ -1072,6 +1423,952 @@ section sets the rules for all of them.
 
 Out of scope: canaries that need to transmit to provoke the other side (active probing) and
 anything that breaks a link to see the reaction.
+
+---
+
+## N. SD card: power loss and card removal (owner request, 2026-11-16)
+
+The owner asked whether MINIX has journaling. It has none: MINIX FS writes back through the
+buffer cache, `update` syncs every 30 s, and nothing records whether a file system was left in a
+consistent state. Only internal flash is power-cut safe today (`tools/powercut.py`). **Owner
+decision (2026-11-16): no journaling.** Instead a "cleanly unmounted" flag, `fsck` at boot only
+after an unclean end with its `-v` output on the Flipper's screen, and a sync before ship mode.
+The owner added (2026-11-16): the main threat is **someone pulling the card out while it is in
+use**, more than a flat battery. N.6 covers that.
+
+What can end the system without a sync, and what each case needs:
+
+| Event | Today | After this section |
+|---|---|---|
+| `halt`, power menu, automatic power-off (R7.1) | MM kills, FS `SYNC`, ship mode | same, and every file system is marked clean (N.1) |
+| Low battery (R6.1 `SIGPWR`, R7.1 SYSDWN) | `SIGPWR` to INIT, which ignores it | INIT does an orderly halt (N.5) |
+| Battery cut by its protection, brownout, Left+Back reset, watchdog, panic | unclean, never checked | unclean only if a write was in flight in the last ~30–60 s (N.2); then `fsck` at the next boot (N.3) |
+| Card pulled out | FS drops the buffers that fail to write, the system runs on with a missing root | writes stop, dirty buffers stay in RAM, "Put the card back" on the screen; the same card resumes with no loss (N.6) |
+
+### N.1 Two flag bits in the super block (0 B RAM)
+
+- The 16-bit `s_pad` field of the V2 super block (offset 18) becomes `s_flags`. Bit 0 **CLEAN**:
+  nothing was written since the file system was last consistent. Bit 1 **CHECK**: it was found
+  unclean and has not been checked since. These are the bits Linux's `minix` driver already uses
+  in the same field (`MINIX_VALID_FS` = 1, `MINIX_ERROR_FS` = 2) and bit 0 is MINIX 3's
+  `MFSFLAG_CLEAN`, so util-linux `fsck.minix` on a PC reads and sets them the same way. Old
+  readers ignore the field.
+- `mkfs`, `flipper/tools/mkfsimg.py` and `/etc/setup` write CLEAN = 1, CHECK = 0.
+- The FS never keeps its own copy of the on-disk bits: it changes them by read-modify-write of
+  block 1 through the buffer cache, written through at once. `fsck` writes the same block
+  through the block device, which goes through the same cache, so the two never disagree.
+  In-core state lives in spare bits of the in-core `s_pad` (bit 15 "written since the last
+  sync", bit 14 "CLEAN on disk"); these bits are masked out of every disk write. FS static
+  RAM: **+0 B**.
+- **Mount** (also the root at boot), read-write: if CLEAN is 0, set CHECK = 1 on disk at once
+  (one 1 KB SD write, only after an unclean end). Read-only mounts write nothing.
+- **First write** after the flag is CLEAN on disk: before any other block of that device goes
+  to the card, write CLEAN = 0 synchronously. The hook is the one write path in `cache.c`
+  (`rw_block` and `rw_scattered`, WRITING), so the order is guaranteed without touching the
+  callers.
+
+### N.2 Clean again when idle
+
+- In `do_sync` (called by `update` every 30 s, and by `sync`): a read-write file system whose
+  flag is not CLEAN on disk is marked CLEAN when (a) nothing was written to it since the
+  previous sync, (b) no buffer or in-core inode of it is dirty, and (c) no in-core inode of it
+  has `i_nlinks == 0` while it is on disk (an unlinked file still open; pipes are never on disk,
+  T9). So a file system becomes clean 30–60 s after its last write burst.
+- Cost: two 1 KB SD writes per write burst on that file system (CLEAN off, CLEAN on), none while
+  idle. A program that writes the card often (e.g. a statistics logger) should batch its writes
+  (every 15 min, or on clean shutdown) rather than writing each sample; the manual says so.
+- Effect: most of the time the card is clean. A power loss, reset or card removal while the
+  Flipper is idle needs no check at all.
+- **No atime writes on read** (needed for N.2 and N.3, and it saves SD writes on every `exec`):
+  a read sets `ATIME` in the in-core inode but no longer marks it dirty
+  (`src/fs/read.c`); the access time reaches the card only when the inode is written for
+  another reason. `stat` still shows it while the inode is in core.
+- **Orderly shutdown.** MM's `do_reboot` already sends `SYNC` after killing every process. It
+  now sends `SYNC` with a "shutdown" flag: FS flushes and marks every read-write file system
+  CLEAN unconditionally (CHECK stays as it is on disk). The SD driver already waits for the
+  card's busy signal after each write (`sd_wait_ready`), so when `SYNC` returns the data is in
+  the card. `hal_power_off` (ship mode) is only reached through `wreboot(RBT_HALT)`, after it.
+- The idle ladder's "SD card power off" step (R7.1) runs only after a sync with nothing dirty,
+  i.e. when the card is CLEAN.
+
+### N.3 `fsck` at boot, only when needed, on the screen
+
+- `fsck` (V2, `src/commands/simple/fsck.c`) is built, goes into the base flash image (it runs
+  before `/usr` is mounted; text XIP from flash) and gets new options:
+  - `-p` (preen): read the super block; if CLEAN = 1 and CHECK = 0, print nothing and exit 0
+    (one block read, ≈ 2 ms). Otherwise check and repair automatically (as `-a`).
+  - `-v`: verbose for a 32×10 LCD console: one header line (`fsck /dev/hd1 /: unclean`, plus
+    the last reset cause from `hal_reset_cause`, e.g. `(watchdog)`), the current phase with a
+    percentage updated in place at least once a second, one short line per repair, and a summary
+    (`fixed 3, left 0, 4.1 s`). Lines ≤ 32 characters.
+  - Exit status as BSD: 0 clean, 1 repaired, 2 root repaired (reboot now), 4 errors left,
+    8 could not check (no memory, read error). The existing `-a -r -l -s -c -i -z` stay.
+  - After a successful check: CHECK = 0; on an unmounted file system also CLEAN = 1.
+- `/etc/rc`, before anything else writes the card (before `printroot >/etc/mtab`):
+  1. `fsck -p -v /dev/hd1` (root, mounted). Exit 2: show the summary until a key or 10 s, then
+     `reboot` at once (BSD practice: the in-core FS state may be older than the repaired disk).
+     N.2's "no atime writes" keeps the in-core inodes clean at that point, so the reboot's sync
+     cannot write stale inodes back.
+  2. `fsck -p -v` on `/usr` and `/home` **before** mounting them (unmounted: no cache issues).
+  3. Exit 4 or 8 on `/usr` or `/home`: mount it read-only (`mount -r`) and say so; the launcher
+     shows a notice "Card has errors: run fsck" until the next clean check.
+- The output goes to the console, which is the LCD while the launcher has not started (boot
+  messages are already shown there). If anything was repaired the summary stays on screen until a
+  key or 5 s. The `/usr` and `/home` output is also appended to `/usr/adm/fsck.log` (kept under
+  16 KB) once `/usr` is mounted read-write. A root repair is shown on screen only: writing a log
+  to the root just before the reboot is what the reboot avoids.
+- **Skip:** holding Back during a `/usr` or `/home` check stops it; that file system is mounted
+  read-only with CHECK still set, so the next boot checks it again. The root check cannot be
+  skipped (it is small, N.4).
+- First boot after updating to this version: existing cards have `s_flags` = 0, so each file
+  system is checked once. CHANGELOG and manual say so.
+
+### N.4 `fsck` memory: bounded for any card below 4 GB
+
+Stock `fsck` keeps five bit maps and a link-count byte per inode in RAM. On the 3.8 GB card
+laid out by `/etc/setup` (1 KB blocks, 1 KB zones):
+
+| File system | Zones | Inodes | Stock `fsck` needs | After N.4 |
+|---|---|---|---|---|
+| `/` (`/dev/hd1`, 32 MB) | 32 K | ≤ 8 K | ≈ 19 KB | ≈ 12 KB, 1 pass |
+| `/usr` (`/dev/hd2`, 2 GB) | 2 M | 65 535 (`INODE_MAX`) | ≈ 600 KB (2 × 256 KB zone maps, 64 KB counts) | ≤ 64 KB, 4 zone passes |
+| `/home` (rest, ≈ 1.5–1.9 GB) | 1.5–1.9 M | 65 535 | ≈ 450–550 KB | ≤ 64 KB, 3–4 zone passes |
+
+About 106 KB is free at boot (nothing else runs before the launcher), so the stock program
+cannot check `/usr` or `/home` at all. Changes, all in `fsck`, no format change:
+- The `spec_imap`/`spec_zmap` maps are allocated only when `-i`/`-z` is given. The disk maps are
+  compared one 1 KB block at a time (`chkmap` streams), not loaded whole.
+- The link-count array covers only inodes up to the highest one in use in the disk inode map
+  (inodes are allocated from the bottom: a card with 5 000 files needs ≈ 5 KB). If that does not
+  fit, the tree walk is repeated per inode range.
+- **Zone windows.** The computed zone map is a window of W zones (W from the memory left, at
+  most `fsck_mem` in `/etc/rc.conf`, default 64 KB, minimum 8 KB). Pass 1 walks the tree as
+  today (directories, link counts, inode map) and marks zones inside window 0; it also records
+  per used inode one byte with the windows its zones touch. Each later pass reads only the
+  inodes, indirect and double-indirect blocks that touch its window, marks the zones, finds
+  duplicates, and compares with that slice of the disk map. Typical cost of the extra passes:
+  one more read of the used inodes and indirect blocks in total, since a file's zones are
+  mostly in one window.
+- Optional, for `/etc/setup` on new cards: `mkfs -i 16384` for `/usr` (packages are few files)
+  cuts its inode table, map and count array by 4×.
+- `chmem` of `fsck`: the window size plus ≈ 24 KB; it runs at boot when the RAM is free.
+- A PC fallback for a bad case: util-linux `fsck.minix -av /dev/sdX2` checks the same file
+  systems on a computer (the manual shows how).
+
+Time targets (SD ≈ 300 KB/s single-block, more with multi-block, R4b.9): root ≤ 3 s; a card
+with ≤ 5 000 files and ≤ 1 GB used ≤ 30 s for `/usr` and `/home` together; nothing at all on a
+clean card (three super block reads). Progress at least once a second (N.3).
+
+### N.5 Low battery and other power-off paths
+
+- INIT handles `SIGPWR` (R6.1) like the power menu's power off: `SIGTERM` to all processes,
+  up to 2 s grace, then `reboot(RBT_HALT)` (N.2 marks the card clean, then ship mode). The
+  whole path takes ≤ 3 s; the low-battery threshold (R7.1, default SYSDWN) must leave at least
+  10 s of battery under full load.
+- Every software power-off (power menu, `halt`, automatic power-off, low battery) goes through
+  `reboot(RBT_HALT)`; no code calls `hal_power_off` another way.
+- Hardware events cannot sync: Left+Back reset, the battery's own protection, watchdog, panic.
+  N.2 makes them harmless when idle and N.3 repairs the rest. The manual says that Left+Back
+  does not save.
+
+### N.6 Card pulled out while in use (owner, 2026-11-16)
+
+The card has a card-detect switch on PC10 (configured in `hal_disk_init`, never read today). Its
+EXTI line 10 belongs to the Up button (PB10), so it is **polled**: before every SD command, and
+in the clock task each tick while the card is selected or a buffer is dirty (one GPIO read, 0 B
+RAM). A socket's detect switch opens while the contacts may still touch, but the timing is not
+guaranteed: the write in flight can be lost or torn (1 KB block = two 512 B sectors). The aim is
+therefore: **nothing else is lost, and nothing is written to the wrong card**.
+
+- **R-N6.1 Freeze.** When the line says "no card", or a transfer fails and the line then says
+  "no card", the SD driver returns a distinct error (`ENXIO`) for every request until the card
+  is back. FS treats `ENXIO` on write as "keep the buffer dirty", not as today's "Unrecoverable
+  write error" which drops it (`cache.c`), and does not count it as a write for N.2. Reads fail
+  with `EIO` to the program. `update` keeps trying every 30 s at no cost.
+- **R-N6.2 Tell the user.** The kernel sets a "card out" state; the launcher (or the console if
+  no launcher) shows "SD card removed: put it back" with a short vibration. Apps running from
+  flash keep running; programs that need a file wait or fail with `EIO`.
+- **R-N6.3 Same card only.** When the card comes back the driver initialises it and compares its
+  CID (manufacturer, serial) and the root super block with the copies taken at boot (16 B CID +
+  a 4 B CRC of block 1 of each mounted file system, in the existing driver state where possible;
+  RAM ≤ 32 B kernel). Same card: rewrite the dirty buffers (the torn block too, since it stayed
+  dirty), clear the state, carry on: **no loss**. A different card or no match: never write
+  to it; the screen says "Different card: put the original back or power off". Power off then
+  ends without the sync for that device and the next boot checks the original card (N.3).
+- **R-N6.4 Never returned.** The user can power off from the screen; the original card has CLEAN
+  set if it was idle (N.2), else it is checked at its next boot.
+- **R-N6.5 Swap.** R12.25 already turns swap off on card removal; with N.6 it also waits for the
+  same card before turning swap back on.
+
+### N.7 Flash and RAM
+
+- Internal flash: **0 run-time writes**. Everything here writes the SD card only; `fsck`'s
+  text goes into the base image at build time (≈ 20 KB, checked by the base image size).
+- RAM: FS +0 B (spare `s_pad` bits), MM +0 B (a flag in the existing `SYNC` message), kernel
+  ≤ +32 B for N.6 (CID and super block CRCs), INIT ≤ +16 B for `SIGPWR`. `fsck` uses RAM only
+  while it runs, at boot.
+
+Acceptance:
+- ACN.1 (QEMU) Kill QEMU with no sync while `cp` writes `/home`: the next boot prints the `fsck`
+  lines on the console, repairs, the boot after that runs no check; files synced before the kill
+  are intact.
+- ACN.2 (QEMU) Kill QEMU 90 s after the last write: the next boot runs no check (N.2).
+- ACN.3 (QEMU) `fsck -v` on a full-size 2 GB image (sparse file) with 5 000 files, damaged with
+  `tools/fsdamage.py` style edits (zone marked free but used, duplicate zone, wrong link count,
+  orphan inode): every error repaired, peak memory ≤ `fsck_mem` + 24 KB, a second run clean.
+  Same image through util-linux `fsck.minix -n` on the host: clean.
+- ACN.4 (QEMU) Root damaged: `fsck` exits 2, `rc` reboots, the second boot is clean.
+- ACN.5 (Flipper) Pull the card while `cp` writes a 1 MB file and put it back within 10 s: the
+  message shows, then the copy completes and `cmp` matches; no `fsck` at the next boot after a
+  clean halt. Pull it and insert another card: nothing is written to the other card.
+- ACN.6 (Flipper) Unclean boot on the 3.8 GB card with ~5 000 files: the `fsck -v` lines are
+  readable on the LCD, progress moves at least once a second, total ≤ 30 s; Back skips `/home`
+  and it is mounted read-only.
+- ACN.7 (Flipper) Low battery (simulated threshold): orderly halt, the next boot runs no check.
+- ACN.8 Normal use for a day: internal-flash erase counters unchanged (ACL.3); SD writes for the
+  flags ≤ 2 per write burst.
+
+For the manual: what CLEAN means, why a check may run after a reset or a pulled card, what the
+screen shows and how to skip, `fsck_mem`, `/usr/adm/fsck.log`, checking the card on a PC with
+`fsck.minix`, "put the card back" and "different card", Left+Back does not save, batch your
+writes.
+
+---
+
+## O. Bigger `/home`: the MINIX V3 file system (owner request, 2026-11-17)
+
+The owner has a 128 GB card and asked for more partitions or bigger ones, assuming bigger ones
+would break the file system. They do not: the limits are in our code, not in the V2 format. The
+owner then preferred **one other partition type with a Unix lineage** that Linux mounts, and named
+**MINIX V3** (2026-11-17). This section turns `/home` into a MINIX V3 file system that fills the
+card between `/usr` and swap. **Owner approved the on-disk change (2026-11-17, MINIX V3 for
+`/home`).**
+
+### O.1 What limits a partition today
+
+| Limit | Where | Size | Format or code? |
+|---|---|---|---|
+| Partition ≤ 4 GiB | FS sends byte positions (`off_t`, 32-bit) to the driver; `dv_size` in bytes (R12.39) | 4 GiB | code |
+| Zone numbers | V2 super block `s_zones`, inode zones: 32-bit | 4 Ti zones | format, ample |
+| Zone map size | `s_zmap_blocks`, 16-bit | 256 GiB at 1 KB zones | format, ample |
+| Files + directories per FS (in total, not per directory) | `ino_t` is 16-bit (V2 `s_ninodes` too) | 65 535 | format (V2) and ABI; V3 on disk is 32-bit |
+| File name | V2 directory entry: 14 characters (`NAME_MAX` 14) | 14 | **format** |
+| File size | V2 code has no triple indirect zone: 7 + 256 + 256² blocks | ≈ 64 MB | code |
+| Mounted file systems | `NR_SUPERS` 4: `/`, `/usr`, `/home`, `/rom`, all used | 4 | code, ≈ 68 B per slot |
+
+The bit maps are **not** kept in RAM: `alloc_bit` reads them through the buffer cache. A bigger
+partition costs no RAM at run time. What grows with size is the **time** of anything that reads the
+whole zone map: counting free space (`df`) and `fsck` (O.5, O.6).
+
+The 14-character name is the real gap for feature parity: stock files under `/ext` often have
+longer names (`mf_classic_dict_user.nfc`, `demo_windows.txt`, saved `.sub`/`.ir` files named by
+users). Today such a file cannot be copied to the Flipper under its own name.
+
+### O.2 Options compared
+
+| Option | RAM | Compatibility | Risk | Verdict |
+|---|---|---|---|---|
+| More mount slots (`NR_SUPERS` 4 → 6), several ≤ 4 GiB partitions | ≈ +68 B per slot, 2 inodes pinned per mount from the shared table of 40 | no format change | low; but many small partitions, still 14-char names | not chosen (owner: one partition is enough) |
+| Bigger block size (4 KB) | buffer cache 18 × 1 KB → 72 KB, or only 4 buffers | Linux `minix` needs zone = block | high (RAM, responsiveness) | rejected |
+| Bigger zones on V2 (`s_log_zone_size` 2–4) | 0 B | Linux `minix` and util-linux assume zone = block | wastes 4–16 KB per small file; PC tools break | rejected |
+| V2 partitions past 4 GiB (64-bit positions only) | ≈ 0 B | no format change; Linux mounts V2 | low; keeps 14-char names and 64 MB files | part of the plan (O.3), not enough alone |
+| Automount (mount on access, unmount when idle) | a daemon (KBs) or FS hooks | none | complexity, surprise delays | rejected |
+| FAT32 / exFAT `/home` | FS +≈ 300 B, flash +10–15 KB, a second FS model (no inodes, owners, modes, links; inode numbers synthesised) | Windows, macOS, stock Flipper | large FS change; no Unix permissions | not chosen (owner prefers Unix lineage) |
+| ext2 `/home` | FS +≈ 100 B; in-core inode needs 15 block pointers (+20 B × 40) or lazy reads | Linux, WSL, macOS with FUSE; `e2fsck` | new allocator, group descriptors, ≈ 12–20 KB flash | second choice: scales better, costs more |
+| **MINIX V3 `/home`** | **FS ≤ +20 B static, ≤ +256 B stack** | **Linux mounts it (`mount -t minix`), util-linux `mkfs.minix -3`, `fsck.minix`** | **small: same inode and bit maps as V2** | **recommended** |
+
+MINIX V3 (as written by MINIX 3 and by Linux): super block magic `0x4D5A`, 32-bit inode count, a
+`s_blocksize` field, the V2 disk inode unchanged (64 B, 7 direct + indirect + double + triple
+indirect), and **64-byte directory entries: 32-bit inode number + 60-character name**. Everything
+the FS does with inodes, zones and bit maps stays as it is. Windows and macOS do not read it (they
+do not read V2 either; AC10.2 is corrected to Linux).
+
+### O.3 Partitions past 4 GiB: in R12.39 (one design)
+
+The WINCHESTER changes live in **R12.39** only, so `disk.c`/`drvlib.c` change once (local
+lane, #110): `dv_base` and `dv_size` in sectors, a 64-bit request position (`HIGHPOS`), the
+`DIOCPRW` raw I/O and `DIOCGETPS` ioctls, and `mkpart` without the 4 GiB size limit for 0x81
+partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `block × 1024` in
+64 bits and set `HIGHPOS`; on-device `fsck` reads with `bread()`. File offsets stay 32-bit
+(`off_t`): one file ≤ 4 GiB − 1. USB mass storage (R10.3) already works in sectors.
+
+### O.4 MINIX V3 in the FS server
+
+- **Mount:** `read_super` recognises `SUPER_V3` (`0x4D5A`) and its layout (`s_ninodes` u32 at 0,
+  `s_imap_blocks` 6, `s_zmap_blocks` 8, `s_firstdatazone` 10, `s_log_zone_size` 12, `s_max_size`
+  16, `s_zones` 20, `s_magic` 24, `s_blocksize` 28, `s_disk_version` 30). Refused with a message
+  unless `s_blocksize` = 1024 and `s_log_zone_size` = 0. util-linux
+  `mkfs.minix -3` writes exactly this; MINIX 3's own `mkfs` defaults to 4 KB blocks (`-B 1024`
+  needed). The in-core super block keeps its fields (`s_ninodes` becomes 32-bit with `ino_t`);
+  `s_version` = 3.
+- **32-bit `ino_t` (owner question 2026-11-17: 65 535 files in all is too few).** The limit was
+  our ABI, not V3 (V3 stores 32-bit inode numbers; ext2 would hit the same 16-bit `ino_t`).
+  `ino_t` becomes `unsigned long`:
+  - FS `struct inode`: `i_num` 4 B, `i_dev` moved next to the `char` fields: **+0 B** (same
+    padding); `super_block.s_ninodes` +2 B × 4. MM `mproc.mp_ino` 4 B, `mp_dev` packed beside
+    the other 16-bit fields: ≤ +32 B (16 slots). Kernel 0 B.
+  - `struct stat.st_ino` and `struct dirent.d_ino` 32-bit: an **ABI change** (spec J: ABI number
+    bump, every program rebuilt, which the base image and packages are anyway). The install-time
+    binding (dev, ino, ctime) records widen; R2b.12 rebinds by SHA.
+  - On-disk V1/V2 structures keep 16-bit fields (`d1_`/`d2_` inode, `struct direct` →
+    explicit `u16_t`); V2 file systems still hold at most 65 535 inodes.
+  - Practical V3 limit: the 16-bit `s_firstdatazone` keeps bit maps + inode table below 64 MB
+    with 1 KB blocks, so a 101 GiB `/home` holds up to ≈ 800 000 files and directories in all
+    (`mkfs -3` default: one inode per 128 KB, capped there). A directory holds any number of
+    entries; at most 65 535 subdirectories per directory (16-bit link count, all formats).
+- **Clean flags (section N):** V3 has no state field that Linux uses, and offset 18 (V2 `s_pad`)
+  is inside `s_max_size`. N.1's CLEAN/CHECK bits go into the spare 16-bit `s_pad2` at offset 26
+  (check in the PR which pad MINIX 3.3 uses for its `s_flags` and use the same one). Linux
+  ignores them: after a Linux crash, run `fsck.minix -3` on the PC (manual).
+- **Directories:** entry size and name length per super block (V1/V2 16 B / 14, V3 64 B / 60):
+  `search_dir`, `new_node`, `do_mkdir`, `do_rename`, `unlink_file`. Path parsing buffers grow to
+  60 characters; `NAME_MAX` in `<limits.h>` becomes 60, and `pathconf(_PC_NAME_MAX)` answers per
+  file system (14 on V2). A name longer than the FS allows gets `ENAMETOOLONG` (no silent cut).
+- **Reading a directory:** `read()` on a V3 directory returns the raw 64-byte entries (FS does
+  no translation). libc `opendir` asks `fstatfs()` (O.5) for the format once; `readdir` parses V2
+  entries (16 B, `u16_t` inode) or V3 entries (64 B, `u32_t` inode, 60-character name) into
+  `struct dirent { ino_t d_ino; char d_name[61]; }`. The old "flex" format (never on our disks)
+  is dropped; `d_extent` users are fixed. `DIR` stays 1 KB per open directory.
+- **Triple indirect zone** for V3 files over ≈ 64 MB (`read_map`, `write_map`, `truncate`);
+  V2 stays as it is.
+- Programs that read raw `struct direct` are checked (`ash/dirent.c`, `sh4.c`, `tar`, `de`,
+  `traverse`, `cgrep`, `atrun`, `readfs`, `fsck`, `mkfs`): each uses `readdir` or learns V3.
+- **RAM:** FS static ≤ +28 B (O.5, `s_ninodes`), MM ≤ +32 B (`mp_ino`), FS stack ≤ +200 B (longer
+  name buffers on the deepest path, `rename`), measured by `ramcheck`. Flash: FS ≈ +3 KB, `fsck`/`mkfs` ≈ +2 KB
+  each.
+
+### O.5 Free space without reading 13 MB
+
+A 100 GiB `/home` with 1 KB zones has a zone map of ≈ 12.6 MB. Counting it takes ≈ 13–40 s, too
+long for `df` or the launcher's storage line.
+- FS keeps a **free-zone counter** per mounted file system (4 B × 4 slots) plus one "changed
+  since the recount started" delta (4 B): **+20 B**. `alloc_bit`/`free_bit` update it. A new FS
+  call `FSTATFS` (libc `fstatfs()`/`statfs()`: total, free zones and inodes) answers from it; `df`
+  and `libfuri` storage info use it.
+- At mount the counter starts from a **hint** stored in the spare bytes of super block 1 (written
+  together with the CLEAN flag, so no extra card writes) and is marked "estimate".
+- An idle-priority job (`update`, R0.8 idle rules) recounts the zone and inode maps a few blocks
+  per idle tick and hands the result to FS (`fsctl`); the delta covers allocations made meanwhile.
+  It never delays a foreground request. Linux cannot invalidate the hint (it does not know it), so
+  the recount always runs once per mount.
+- Allocation itself is unchanged: `s_zsearch` keeps searches short; files are allocated from the
+  bottom, so the used part of the map stays dense.
+
+### O.6 `fsck` on a big `/home`
+
+N.4's zone windows grow with the partition (100 GiB: ≈ 200 windows of 64 KB). Because the FS
+allocates from the bottom, the used zones lie below a **high-water mark** (the highest zone any
+inode owns, found in pass 1).
+- Windows cover only zones up to the high-water mark; the per-inode window byte becomes a first
+  and last window (2 B per used inode, ≈ 10 KB for 5 000 files).
+- Above the mark the only possible error is a leaked zone (marked used, owned by nobody): a space
+  loss, not a danger. `fsck -p` skips that range; `fsck -L` (run at idle or by hand) clears it.
+- Cost then follows the used space, not the card: ACO.3.
+- `fsck` reads past 4 GiB with `bread()` (O.3).
+- **Many files (32-bit `ino_t`).** Time follows the used inodes and directories (64 B each, read
+  multi-block at ≈ 1–2 MB/s): 10 000 files ≈ 2–5 s, 100 000 ≈ 10–45 s, 800 000 ≈ 1.5–6 min.
+  The link-count byte per inode (and the 2-byte window record) no longer fit `fsck_mem` above
+  ≈ 30 000 used inodes: past that, `fsck` keeps them in a scratch area at the start of the swap
+  partition (`hd3`/`hd3a`, swap is still off during boot checks), 1 KB pages through a small LRU,
+  so RAM stays ≤ `fsck_mem` + 24 KB whatever the count.
+- **Large directories.** Lookup is linear (16 V3 entries per block, 18-block cache): a missing
+  name in a 10 000-entry directory reads ≈ 625 KB (≈ 0.5–2 s). The manual advises ≤ ≈ 1 000
+  entries per directory (≤ ≈ 100 ms); apps that store many files (Sub-GHz, NFC, IR libraries)
+  use subdirectories. Run-time RAM does not depend on the number of files.
+
+### O.7 Layout and moving an existing `/home`
+
+- `/etc/setup` on a new card: `/home` is MINIX V3 and takes **all space between `/usr` and swap**
+  (R12.34's swap rules unchanged). 128 GB card (≈ 119 GiB): root 64 MB, `/usr` 2 GB, swap 16 GiB
+  at the end → `/home` ≈ 101 GiB, ≈ 12.6 MB zone map, ≈ 50 MB inode table (≈ 800 000 inodes),
+  first data zone ≈ 17 000 (the V3 field is 16-bit: the format fits up to ≈ 480 GiB with
+  1 KB blocks). Root and `/usr` stay V2.
+- `mkfs -3` leaves room for the zone map of the largest `/home` the card allows, so `/home` can
+  later grow into swap space (R12.34's reserve) with a small `growfs` (later task).
+- **Existing cards:** `setup -H` converts `/home`: swap off, `tar` of `/home` onto the swap
+  partition (disposable, R12.34), compare, `mkfs -3` with the new size, restore, swap on. A power
+  loss in between leaves the copy on the swap partition; `setup -H` resumes from it. Nothing is
+  converted without the user starting it.
+- `NR_SUPERS` stays 4 (no new mount slot).
+
+### O.8 Flash writes, RAM, responsiveness
+
+- Internal flash: 0 run-time writes. SD: the hint rides on the CLEAN write.
+- RAM: kernel +0 B, FS ≤ +28 B static and ≤ +200 B stack, MM ≤ +32 B, per `opendir` unchanged.
+- Responsiveness: no step reads the whole zone map in the foreground; the recount and `fsck -L`
+  run only at idle.
+
+Acceptance:
+- ACO.1 (QEMU, sparse 128 GB image) `/home` V3 past 4 GiB: create, write, read back and delete
+  a file whose blocks lie past 100 GiB; `sync`; util-linux `fsck.minix -3 -f` on the host:
+  clean. An image made by `mkfs.minix -3` on the host mounts on the Flipper.
+- ACO.2 (QEMU) Names: a 60-character name works (e.g. the 57-character
+  `galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub`) with `ls`, `cp`, `mv`, `rm`, the archive
+  app; 61 characters gives `ENAMETOOLONG`; on V2 `/usr` 15 characters gives `ENAMETOOLONG`.
+- ACO.3 (QEMU) Unclean boot with 5 000 files and 1 GB used on the 101 GiB `/home`: `fsck -p`
+  ≤ 30 s, peak ≤ `fsck_mem` + 24 KB; damage from ACN.3 repaired.
+- ACO.4 (QEMU) `df` answers in ≤ 50 ms right after mount ("estimate" until the recount ends);
+  the recount finishes at idle and matches `fsck`; L1 (button → frame) holds during it.
+- ACO.5 (QEMU) A 100 MB file (triple indirect) reads back identical; also through Linux.
+- ACO.6 (QEMU) `setup -H` on a 3.8 GB V2 `/home` with 5 000 files: every file identical after;
+  killed at each step, it resumes and loses nothing.
+- ACO.7 (Flipper) A 64 GB or larger card: first-boot setup, `/home` past 4 GiB, ACN.5 card pull
+  during `cp` to a block past 4 GiB, USB mass storage of `/home` mounts on Linux.
+
+For the manual: why `/home` is MINIX V3 and `/usr` V2, reading the card on Linux
+(`mount -t minix`), `fsck.minix -3`, 60-character names, `df` "estimate", `setup -H`.
+
+---
+
+## P. Data modems: RFID, NFC, Sub-GHz and BLE between two Flippers (owner request, 2026-11-17)
+
+The owner asked whether two Flippers can stream data over 125 kHz RFID, and then for modems over
+all four radios: RFID, NFC, Sub-GHz (with a selectable bandwidth and data rate) and BLE. This
+section is the design: one link layer, four physical backends, one command. Milestones: the link
+layer, its host tests and the RFID backend on today's kernel now (owner request outside the
+milestone order, like T19); the Sub-GHz backend with Phase 8's transmit path (M5); NFC with
+Phase 13 (M6); BLE with Phase 15 (M7). Task: T26 in `next-tasks.md`.
+
+What it is for: moving a file, a note or a log from one Flipper to the other without a PC or a
+phone, a text chat, and later the MAC under PPP (R19.10, R19.11) and the BLE bridge (R19.12).
+What it is not: a network stack, a resident daemon or a secure channel (P.8).
+
+### P.1 The four media compared
+
+| | 125 kHz RFID | NFC 13.56 MHz | Sub-GHz (CC1101) | BLE (CPU2) |
+|---|---|---|---|---|
+| Roles | reader (makes the field) + tag (loads it) | initiator + target | two equal transceivers | central + peripheral |
+| Duplex | half, very asymmetric | half (command/response) | half | full (radio is TDD, the stack hides it) |
+| Raw rate | tag→reader 4.5 kbit/s (`fast`) or 2.2 (`robust`); reader→tag ≈ 1–2 kbit/s by field gaps | 106 kbit/s (NFC-A), 212/424 (NFC-F) | 0.6–500 kBaud, presets P.4 | 1 or 2 Mbit/s PHY |
+| Net, estimate | today ≈ 50–100 B/s one way (carousel); ≈ 400 B/s with R9.0.5/R9.0.6 | ≈ 5–10 KB/s at 106 kbit/s | ≈ 0.1–14 KB/s by preset, **capped by the band's duty cycle** (P.4) | ≈ 10–80 KB/s |
+| Range | 1–3 cm, backs together | ≤ 4 cm | metres to hundreds of metres by preset | 10–30 m |
+| Link MTU (payload) | 24 B | 250 B | 54 B (FIFO-only, v1); 248 B with FIFO refill (v2, as R19.11) | 240 B (L2CAP CoC SDU) |
+| Driver today | `/dev/rfid`: read ≤ 512 edges, `RFIDIOCEMU` ≤ 512 segments, field hold, gap writes | none (Phase 13) | `/dev/subghz` receive only, `/dev/subghzraw` timings; **no transmit** (R8.1 part 2, R8.2) | none (Phase 15, R16.1.0) |
+| Milestone | now (simplex), reverse channel with RP.5 | M6 | M5 | M7 |
+
+Numbers marked "estimate" are to be measured with `gmodem info -m MEDIUM` and `twoflip.py`
+(P.9) and written into PORTING.md; the manual quotes measured numbers only.
+
+### P.2 Layers and the user interface
+
+```
+ gmodem send / recv / chat / info        (flipper/cmds/gmodem.c, one process, nothing resident)
+ ─────────────────────────────────────
+ libmodem link layer                     (src/lib/modem: frames, CRC, ARQ, carousel, datagrams)
+ ─────────────────────────────────────
+ PHY backend: rfid | nfc | subghz | ble  (a struct of 3 functions + MTU + airtime)
+ ─────────────────────────────────────
+ /dev/rfid   /dev/nfc   /dev/subghz   /dev/ble*  (kernel drivers / bled)
+```
+
+- **RP.1 No modem daemon, no `/dev/modem`.** The link layer is a library linked into the program
+  that uses it; a transfer is one process for its duration and nothing stays in RAM afterwards.
+  A shared modem server would cost RAM all the time for a feature used now and then. The PPP
+  links of Phase 19 link the same library into their link process.
+- **RP.2 The command** `gmodem` ("Galtzagorriak modem"; MINIX's own `modem(1)` switches a serial line
+  between dial-in and dial-out). Access through the group of the medium's device (`rfid`, `nfc`,
+  `subghz`, `ble`):
+  ```
+  gmodem send -m MEDIUM [-p PRESET] [-f MHZ] [-n ROUNDS] [FILE]   send FILE (stdin if none)
+  gmodem recv -m MEDIUM [-p PRESET] [-f MHZ] [-o FILE] [-t SEC]
+  gmodem chat -m MEDIUM [-p PRESET] [-f MHZ]                lines both ways (datagrams)
+  gmodem info [-m MEDIUM] [-p PRESET] [-f MHZ]                presets, rates, the region's
+                                                             limits, the duty budget left
+  ```
+  Unix pipes work: `tar cf - notes | gmodem send -m subghz`, `gmodem recv -m subghz | tar xf -`.
+  Exit status 0 only when every byte arrived with a good CRC. Progress (`12/40 frames, 1.2 KB/s`)
+  goes to stderr at most twice a second. A medium whose driver is not there yet prints
+  `gmodem: MEDIUM: not implemented yet (needs ...)` and exits 2.
+- **RP.3 The library API** (`<modem.h>`): a PHY is
+  `struct mdm_phy { void *ctx; int mtu; long turn_ms; int (*send)(ctx, buf, n);
+  int (*recv)(ctx, buf, max, ms); long (*airtime)(ctx, n); }`. `mdm_send()` and `mdm_recv()`
+  move a byte stream through source/sink callbacks with the ARQ of P.3; `mdm_car_*` is the
+  carousel for simplex media; a datagram is one `MDM_T_DGRAM` frame (`mdm_pack`/`mdm_unpack`).
+  All of it is plain C89 without `malloc` (the caller passes the window buffers), so a Berry
+  binding (7c) and the PPP link process can use it.
+
+### P.3 The link layer (`libmodem`, every medium)
+
+One frame format on every medium; the PHY adds only its own sync and (for the CC1101) its own
+length byte.
+
+```
+byte 0   type (high nibble) | flags (low nibble)
+byte 1   sid    session id: random per transfer; frames of another sid are ignored
+byte 2   a      DATA: seq   ACK: next expected seq   CAR: index, low byte
+byte 3   b      DATA: 0     ACK: bitmap, bit i = seq a+1+i arrived   CAR: index, high byte
+byte 4   len    payload bytes (≤ the PHY's MTU)
+5..      payload
+last 2   CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) of bytes 0..4+len-1, big-endian
+types: 1 DATA, 2 ACK, 3 CAR, 4 DGRAM (anything else: dropped)
+flags: 1 TURN (the other side may send now), 2 LAST (the last frame of the stream),
+       4 Z (the stream is compressed, P.3a)
+```
+
+- **RP.4 Three services.**
+  - **ARQ stream** (half or full duplex): selective repeat with a window of W ≤ 8 frames
+    (default 4). The sender sends every unacknowledged frame of its window, the last with TURN;
+    the receiver answers one ACK (cumulative `a` + bitmap `b`, TURN). Missing frames go again in
+    the next burst. The sender waits the ACK's airtime + 2 turnarounds, each with the
+    scheduler's slack (≥ 25 ms on MINIX); after 20 bursts in a row without progress the
+    transfer fails (exit 1). The receiver locks on the `sid` of the first DATA frame inside its
+    window, stays long enough after the LAST frame to answer a repeated burst (its ACK was
+    lost), then ends. A receiver that hears nothing for `-t SEC` (default 30) gives up.
+  - **Carousel** (simplex, no way back): the sender repeats every frame, numbered 0..N-1, the
+    last with LAST, round and round (`-n ROUNDS`, default until Ctrl-C). The receiver keeps a
+    bitmap (N/8 bytes, N ≤ 4096), writes each new frame at its offset and ends when all N are in.
+    Used by the RFID backend until the reverse channel (RP.5c) exists.
+  - **Datagrams** (DGRAM): one frame, CRC-checked, no ACK; `gmodem chat` and beacons.
+- **Inputs are hostile** (security rule, owner 2026-11-16): every byte the radio delivers is
+  parsed by `mdm_unpack()` alone, which checks `len` against the buffer and the PHY's MTU before
+  anything else and returns a frame only with a good CRC. Host test: 10⁶ random and mutated frames
+  under ASan/UBSan (ACP.2). No length from the air ever sizes a copy without that check.
+
+### P.3a Compression: `gmodem -z` (owner request, 2026-11-17)
+
+The owner asked whether the modems compress. The link layer does not do it by itself (a frame of
+24 B is too small for any compressor to find much in it); the **stream** is compressed before it
+is cut into frames, and only when the user asks for it.
+
+- **RP.9 `-z` on the sender, nothing on the receiver.** `gmodem send -z` compresses the whole
+  input with heatshrink (LZSS, ISC licence, v0.4.1 in `src/lib/modem/heatshrink`) into a scratch
+  file in `/tmp` (created `O_EXCL`, unlinked at once) and sends that, with flag Z on every DATA
+  and CAR frame. The receiver sees Z and unpacks at the end (carousel: frames go to a scratch file
+  at their offsets, unpacked when all are in) or as the frames come (ARQ). Frames of one transfer
+  whose Z differs from the first frame's are refused (`mdm_car_take` -1). A pipe into
+  `gmodem send -z` may be bigger than the 1 KB a plain pipe allows (it is in `/tmp` by then).
+- **The format is fixed:** window 2^8 = 256 B, lookahead 2^4 = 16 B, no index. Both ends must use
+  the same numbers, so changing them is a format change (a new flag). RAM: the encoder ≈ 560 B, the
+  decoder ≈ 300 B, in one union with the 1 KB pipe buffer (never needed at once), so `gmodem`'s
+  `.bss` stays under 4 KB and its RAM is unchanged (RP.5a). CPU: well under the airtime on every
+  medium (a 256 B window without index is ≈ 1 ms per 100 B on the M4 at 64 MHz).
+- **Gain:** text and configuration files shrink to 15–40 % (the host test's text: 14 %);
+  random or already compressed data grows by up to ≈ 12 %, so `-z` stays off by default.
+- **Hostile input:** the decoder never writes past its own window; a forged compressed stream can
+  at most expand ≈ 10× (a 13-bit back reference yields up to 17 bytes), so a carousel of at most
+  4096 × 24 B gives at most ≈ 1 MB on the card. `gmodem` reports "unpacking failed" (exit 1) when
+  the stream does not end cleanly.
+- **Test (ACP.1):** round trip of text and random data through `mdm_zget`/`mdm_zput` with every
+  read and write size, and a 100 KB ARQ transfer with Z through the lossy channel.
+
+### P.4 Sub-GHz backend: selectable bandwidth and data rate, inside the law
+
+**Physical layer.** CC1101 packet mode, 2-FSK/GFSK (OOK only on request), preamble 4 B, sync word
+`0xD3 0x91` twice (30/32 sync bits), variable length (length byte), hardware CRC on with
+auto-flush (bad packets never reach the CPU) and our CRC on top (one format for every PHY),
+data whitening on, CCA (carrier sense) before every transmit.
+
+**Presets** (`-p`; the bandwidth is the receive filter; values are what the CC1101 really gets
+from its 26 MHz crystal, computed by `mdm_cc1101_regs()` and printed by `gmodem info`):
+
+| Preset | Modulation | Data rate | Deviation | RX filter | Occupied ≈ 2·dev + rate | Use |
+|---|---|---|---|---|---|---|
+| `narrow` | GFSK | 1.2 kBaud | 5.2 kHz | 58 kHz | 12 kHz | longest range, slow |
+| `slow` | GFSK | 4.8 kBaud | 11.9 kHz | 68 kHz | 29 kHz | |
+| `std` (default) | GFSK | 38.4 kBaud | 20.6 kHz | 102 kHz | 80 kHz | |
+| `wide` | GFSK | 100 kBaud | 47.6 kHz | 325 kHz | 195 kHz | |
+| `max` | GFSK | 250 kBaud | 127 kHz | 650 kHz | 504 kHz | short range, only bands ≥ 0.6 MHz wide |
+
+`-b BAUD -d DEV -w BW` set a custom PHY (each rounded to the nearest CC1101 value, printed).
+
+**Legal limits.** The region and its band table are section Q: the user's country, installed
+once into flash, with power, duty cycle, bandwidth and kind of use per band, and the source of
+every row. `gmodem` transmits as `SG_DATA` (RQ.6), so it uses only rows marked `any`, `per`
+(USA/Canada 315/433 MHz: 1 s bursts at −30 dBm) and, for the hopping link, `fhss`. Default
+frequency: `-f 433.92` (EU, CEPT countries), `-f 915` (US, CA). Countries without a table:
+refused.
+
+- **RP.6 Every transmit is checked** (in the kernel, R8.2, and before that in `libmodem` so the
+  user gets a clear message instead of `EPERM`): the **whole occupied bandwidth**
+  (centre ± (dev + rate/2), plus 2 × 20 ppm crystal error) lies inside one band of the region;
+  the output power is the highest PATABLE step ≤ the band's limit assuming a 0 dBi antenna (the
+  Flipper's antenna has less); the duty cycle of that band is respected.
+- **RP.7 Duty cycle, counted strictly** (EN 300 220 defines it over one hour): transmit time in
+  10 ms units in 7 slots of 10 minutes (14 B); a packet may go only if the sum of the 7 slots plus
+  its airtime stays ≤ the limit, so every possible 60-minute window holds. Other bands used in the
+  last hour keep one 4 B summary each (2 entries). Kernel RAM ≤ +24 B; the library keeps the same
+  count only to tell the user how long to wait ("duty limit 10 %: next packet in 41 s"); it never
+  busy-waits (rule 0.8). The kernel's counter is the one that is binding.
+- **What the law means for speed** (to put in the manual): with 10 % the 433 MHz band carries on
+  average ≈ 1/10 of the preset's rate, 868.0–868.6 MHz ≈ 1/100. Long transfers in the EU belong on
+  the bands without a duty limit (Q.4): 434.04–434.79 MHz at 10 mW with `narrow`,
+  433.05–434.79 MHz at 1 mW, 869.7–870.0 MHz at 5 mW, or on BLE.
+- **RP.8 Kernel interface (T26b, Phase 8 R8.1 part 2):** `ioctl(SGIOCPHY, struct sg_phy)` with
+  frequency, modulation, rate, deviation, filter, power (all in Hz/dBm; the kernel computes the
+  registers with the same `cc1101calc.c` the library uses, so the check and the setting cannot
+  disagree), `write()` = one packet (blocks until sent; `EAGAIN` when the duty budget is spent),
+  `read()` = one packet with good CRC + RSSI + LQI, `poll()` for timeouts. The packet goes
+  between the caller's pinned buffer and the 64 B FIFO; the GDO0 interrupt does ≤ 100 µs of SPI
+  (rule R0.8b). Kernel RAM ≤ +32 B with RP.7, ≤ +44 B with the region record and timing of RQ.7. 61 B packets in v1; longer ones by FIFO refill
+  later (shared with R19.11).
+- Interoperability: the presets are our own. A preset matching Unleashed's `subghz chat` would
+  let the Unleashed reference Flipper test the MINIX PHY (P.9); it is added if its parameters are
+  confirmed from the Unleashed source.
+
+### P.5 RFID backend: a line code for the tag→reader direction
+
+The reader (`gmodem recv -m rfid`) makes the 125 kHz field; the tag (`gmodem send -m rfid`) loads
+its antenna in step with that field (`RFIDIOCEMU`), so the bit clock is the reader's own carrier
+and cannot drift.
+
+- **Line code "P4"** (2 bits per antenna cycle, one `RFIDIOCEMU` segment per cycle): a cycle is
+  Q carrier periods loaded, then (L−1)·Q unloaded, with L = 2, 3, 4, 5 for the bit pairs 00, 01,
+  10, 11 (most significant pair first). A sync cycle has L = 7. Q = 16 periods (128 µs, preset
+  `fast`, average 3.5·Q per 2 bits ≈ 4.5 kbit/s) or Q = 32 (`robust`, ≈ 2.2 kbit/s).
+- **Why this code:** the comparator's edges one way are exact and the other way drift while the
+  envelope settles (as `rfid`'s EM4100 decoder found). P4 puts the information only in the time
+  between two edges *of the same kind* (one full cycle), so the drift cancels; the decoder tries
+  both edge kinds and both polarities and the CRC picks. Cycle lengths are ≥ 2·Q apart from the
+  sync and Q apart from each other, the same 128 µs resolution `rfid` already decodes at RF/32.
+  It also needs one segment per 2 bits, where Manchester needs up to two per bit: four times
+  more data per 512-segment emulation list.
+- **RP.5a Today's kernel (simplex carousel):** a frame is sync + 31 B (5 B header, 24 B payload,
+  CRC) = 125 cycles ≈ 56 ms; a capture of 512 edges (256 cycles) always holds one whole frame.
+  The tag plays a list of 2 frames (250 segments, 2 KB of pinned buffer) and moves to the next
+  pair every 0.6 s (`-p fast`; 1.2 s `robust`); the reader reads again and again and keeps what
+  it has not got yet. Estimate ≈ 50–100 B/s. RAM: one 2 KB buffer (the tag's pattern or the
+  reader's capture, never both), 1 KB for a pipe's data, the 512 B bitmap, the default 6 KB
+  stack and heap: ≈ 11 KB while `gmodem` runs.
+- **RP.5b With R9.0.5/R9.0.6 (streaming capture, long emulation):** the carousel streams
+  without the per-read restart: ≈ 400 B/s. No change in the format.
+- **RP.5c Reverse channel (kernel, T26b):** while `RFIDIOCEMU` runs, the kernel timestamps the
+  reader's field gaps (no carrier for > 8 periods) into a ring in the caller's pinned buffer
+  (`poll()` POLLIN), ≤ +8 B kernel RAM. The reader already has what it needs: `RFIDIOCFIELD`
+  holds the field, `write()` plays gaps (T5577 style: gap 16 periods, then 24 periods for 0, 56
+  for 1). Then the reader polls the tag ("send frames from k", ACK bitmap) and RFID uses the ARQ
+  stream of P.3 with the reader as master: no more blind repetition.
+- Exclusive with `/dev/nfc` (shared pin, R8.4) and with IR transmit (shared timers), as today.
+
+### P.6 NFC backend (Phase 13, M6)
+
+- ST25R3916 as **initiator** on one Flipper and **target in card-emulation mode** (NFC-A, the
+  chip's automatic anticollision answers the polling) on the other. After SELECT the initiator
+  sends our frames inside ISO 14443-4 I-blocks (FSD/FSC 256) and the target answers each with
+  its own (the turn is natural: command/response). v2: NFC-F at 212/424 kbit/s.
+- MTU 250 B, ARQ with W = 1 (every response is the ACK), net ≈ 5–10 KB/s at 106 kbit/s
+  (estimate). The target side has to answer within the frame waiting time the initiator set
+  (FWI): the driver answers S(WTX) itself while the process prepares the data, so a busy system
+  never drops the link (rule 0.8).
+- Needs `/dev/nfc` (Phase 13): raw ISO 14443-A initiator and card-emulation modes. Shares SPI
+  with the CC1101: one at a time (as R19.11).
+
+### P.7 BLE backend (Phase 15, M7)
+
+- One **L2CAP connection-oriented channel** (LE credit-based, the same as R19.12's bridge)
+  between the two Flippers, bonded and encrypted with LE Secure Connections before data flows
+  (R19.14). The link layer runs in "reliable" mode: framing and CRC only, no ARQ (L2CAP already
+  retransmits). MTU 240 B, 2M PHY when both sides have it.
+- Pairing: `gmodem pair -m ble` on both (6-digit numeric comparison on both screens). Bonds on
+  the SD card (R15.4).
+- Needs the full BLE stack on CPU2 (R16.1.0) and `bled`'s L2CAP CoC API.
+
+### P.8 Security
+
+- The modem carries **no encryption** except on BLE (P.7). Anyone in range can listen to RFID,
+  NFC and Sub-GHz transfers. `gmodem info` and the manual say so plainly. AES-CCM with a shared
+  passphrase over the AES1 block (12b's driver) is a later option (milestone M6 or later).
+- Everything received is hostile input (P.3); `gmodem recv` writes only the file the user named
+  (created with the user's umask; never follows a name sent over the air).
+- No reception path runs as root; the group of the device gives access.
+
+### P.9 Tests
+
+- **ACP.1 (host, `make modemtest`, run by `tests/host` in CI):** the ARQ stream moves 100 KB
+  through a simulated half-duplex channel with 20 % frame loss, 5 % corrupted frames and
+  reordering, byte-exact; the carousel completes with 30 % loss; the P4 code round-trips random
+  frames through synthetic comparator edges with ±15 µs jitter, ±40 µs edge skew, both
+  polarities and any start phase, in both presets; the CC1101 register values equal the
+  datasheet's examples for every preset; the legal check refuses every frequency and preset
+  combination that leaves a band and accepts the rest; the duty counter never allows more than
+  the limit in any 60-minute window over a simulated week of random traffic.
+- **ACP.2 (host):** 10⁶ random and mutated frames and edge streams into the decoders under
+  ASan/UBSan: no fault, no frame with a bad CRC accepted.
+- **ACP.3 (two Flippers, both on MINIX):** `twoflip.py --peer-minix` (devguide part 2,
+  chapter 6) sends 1 KB with each available medium and compares checksums; with the usual
+  Unleashed peer these rows are N/A, since the Unleashed firmware has no such modem. **A
+  MINIX-to-MINIX test needs a second Flipper running MINIX**; until there is one, the RFID rows
+  can be run by flashing the reference Flipper with MINIX for the session and back to Unleashed
+  afterwards.
+- **ACP.R (responsiveness):** during a `gmodem` transfer on any medium L1–L10 stay within
+  budget (`lat`), the launcher scrolls without a visible stall, and the SD card keeps working
+  (the SPI bus is held for one packet at a time).
+- **RAM:** `gmodem` ≈ 11 KB while it runs (RP.5a), with or without `-z` (P.3a), 0 B afterwards; kernel ≤ +44 B for Sub-GHz
+  (RP.8, RP.7, RQ.7), ≤ +8 B for RFID (RP.5c).
+
+### P.10 Notes for the system manual
+
+What each medium can do (the table of P.1 with measured numbers), the command, pipes, the
+range and how to hold two Flippers for RFID and NFC (backs together), the presets and the
+trade-off of bandwidth against range, the legal limits and why 433 MHz transfers pause (duty
+cycle), the region setting, "nothing is encrypted except BLE", and the exit statuses.
+
+---
+
+## Q. Radio regions: per-country Sub-GHz limit tables (owner request, 2026-11-18)
+
+**Goal:** the user picks a **country**, and every Sub-GHz transmit (the `subghz` app, `gmodem`,
+the IP link R19.11) stays inside that country's rules. The owner accepted the limits as a legal
+requirement and asked for tables for Canada, the USA, the EU (one table where the EU rules are
+unified, per country where they are not), Albania, Bosnia and Herzegovina and North Macedonia.
+All tables live on the SD card; the chosen one is written **once** into internal flash, so the
+limits survive a restart and a missing card (owner, 2026-11-18). The first-boot wizard asks for
+the country (R18b.2 step 3). This section replaces the first-version table of P.4 and makes R8.2
+concrete.
+
+### Q.1 Is the EU unified? Mostly yes.
+
+- **Binding core.** Commission Decision 2006/771/EC, whose annex was last replaced by
+  Commission Implementing Decision **(EU) 2022/180** of 8 February 2022, obliges every member
+  state to make the listed SRD bands available under exactly these conditions. For the bands the
+  CC1101 can reach (300–348, 387–464, 779–928 MHz) that covers 433.05–434.79 MHz and
+  862–870 MHz. One table, `EU`, holds it, and every member state uses it unchanged.
+- **Not unified:** 870–876 MHz and 915–921 MHz. Decision **(EU) 2018/1538** (amended by
+  (EU) 2022/172) opens them only "where available": a state may protect existing (defence,
+  ER-GSM) use or leave rows unimplemented (its Art. 3 and footnotes 5–7), and its rows are
+  restricted to data networks under a master access point. ERC/REC 70-03 (March 2024),
+  Appendix 1, shows the real status (Q.5). These rows are the only per-country part, so each
+  member state gets its own file `XX` = `Base: EU` + its own extra rows (Q.5).
+- **Albania, Bosnia and Herzegovina, North Macedonia** are CEPT members outside the EU. They
+  are not bound by the EU decision; their status per ERC/REC 70-03 Annex 1 band is in its
+  Appendix 1 (March 2024), and their own rules are made by AKEP (AL), RAK (BA) and AEK (MK).
+  Each gets its own table with only the bands Appendix 1 marks **Y** (implemented).
+- **USA and Canada** have no band plan for SRDs: any frequency outside the restricted bands may
+  be used, at a field strength that depends on the frequency and on the kind of use
+  (FCC part 15 / ISED RSS-210, RSS-247). The tables turn that into frequency ranges.
+
+### Q.2 The table format (on the card)
+
+One file per region, `/usr/share/region/<CC>.reg` (`CC` = ISO 3166 alpha-2, plus `EU`), part of
+the base package on the card's root file system, owned by root, mode 0644. Text, so the user can
+read it with `more`; a header in the stock `Key: value` style and then one row per band, fields
+separated by tabs:
+
+```
+Filetype: Galtzagorriak region
+Version: 1
+Region: PL
+Name: Polska
+Base: EU
+Checked: 2026-11-18
+Source: ERC/REC 70-03 (03.2024) App. 1; Decision (EU) 2018/1538
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+#?870.000	873.000	14	1%	600	any	70-03 h2 (PL: status "*", not checked)
+```
+
+| Field | Meaning |
+|---|---|
+| `lo_mhz`, `hi_mhz` | the band edges; the whole occupied bandwidth plus 2 × 20 ppm crystal error must lie inside (RP.6) |
+| `dbm` | the legal power limit rounded **down** to whole dBm: e.r.p. as the law says it (EU, CEPT), or the e.i.r.p. computed from the field strength at 3 m, EIRP = (E·3 m)² / 30 Ω (USA, Canada). The kernel uses the highest CC1101 PATABLE step ≤ this value (−30, −20, −15, −10, −6, 0, 5, 7, 10 dBm), assuming a 0 dBi antenna (the Flipper's is below that) |
+| `duty` | the duty-cycle limit over any 60 minutes (RP.7), `none` if there is none |
+| `bw_khz` | the largest occupied bandwidth (2 · dev + rate, without crystal error), `0` = no limit |
+| `use` | `any`: any kind of transmission inside the limits. `ctl`: control signals only (US/CA momentary remotes): no data except with a control signal, each transmission ends ≤ 5 s after it started, no regular periodic sending. `per`: any kind of transmission, but each one ≤ 1 s and then silence ≥ 30 × its length and never < 10 s. `fhss`: only the frequency-hopping link (R19.11), whose hop table the kernel checks at arm time |
+| `ref` | the exact source of the row (decision and row, or rule section). Every row has one |
+
+- `Base: EU` includes the rows of `EU.reg` first (one level only, no loops).
+- A row starting `#?` is a row we know about but have **not verified** for that country: it is
+  shown by `region show` and in the wizard (grey, "not checked"), and never used. Turning it on
+  is a one-line edit after the national text is checked (Q.6).
+- Overlapping rows are fine (EU 869.7–870 MHz has two). The kernel takes the **first** row, in
+  file order, that admits the transmit (band, bandwidth, power, `use` allowed for the caller's
+  mode, and the row's duty or timing budget still has room). Files list rows without a duty
+  limit first, so long transfers go there by themselves.
+
+### Q.3 Where the chosen table lives: flash, written once
+
+- **RQ.1 `region` command** (root): `region list`, `region show [CC]` (the table, with the
+  CC1101 step each row gets), `region set CC`. `set` reads the file (and its base), checks every
+  row (edges inside the CC1101 ranges, `dbm` ≤ 10, a known `use`, a `ref` present), prints the
+  table, asks for confirmation ("I will use this device under the rules of PL"), and installs it.
+- **RQ.2 Compiled record in the installed region.** `region set` compiles the table into one
+  binary blob: header 16 B (magic `RGN1`, version, region code, row count, CRC-32) and 16 B per
+  active row (lo, hi in Hz as `u32`; dbm `s8`; duty in 0.01 % `u16`; bw in kHz `u16`; use `u8`;
+  flags), at most 32 rows (≤ 528 B). MM writes it like a program's text, as a record of kind
+  `region` in the installed-region directory (R2b.3, R2b.5: root only, read back and compared),
+  and marks the previous region record dead. **One flash write per change of region** (at the
+  first boot, and when the user travels); nothing is written at run time otherwise. The write
+  happens at install time, in the sense of the flash-write rule; the PR states that count.
+- **RQ.3 Boot.** The kernel finds the live `region` record, checks magic and CRC and keeps a
+  pointer to it: the rows are read in place (XIP), **0 B of table in RAM**. No record, or a bad
+  CRC: Sub-GHz transmit is off (`EPERM`, "no radio region installed"), receive works. The card
+  is not needed after the install: a missing or swapped card changes nothing.
+- **RQ.4 `/etc/flipper/region`** stays (I.4) as a text copy of the code, written by
+  `region set`, for scripts and apps; the kernel trusts only the flash record. `sysctl`-style
+  read: `region` without arguments prints the installed code and the record's CRC.
+- **RQ.5 Tables from this firmware.** The build puts the SHA-256 of every shipped `.reg` file in
+  a `const` list in flash (≈ 40 × 34 B ≈ 1.4 KB, 0 B RAM). A file whose hash is not in the list
+  is a **custom table**: `region set` says so, shows the differences from the shipped file of the
+  same code if there is one, and needs `-f`. The change is logged to `/var/log/messages` with
+  the hash. (The user is responsible for a custom table, as with stock's custom region data.)
+- **RQ.6 Caller's mode.** `struct sg_phy` (RP.8) gets a `mode`: `SG_CTL` (the `subghz` app
+  sending a remote's code) or `SG_DATA` (`gmodem`, the IP link). `SG_DATA` may only use rows
+  with `use` `any`, `per` or `fhss`; `SG_CTL` may use any row. `SG_CTL` transmissions are cut by
+  the kernel at 5 s; the `subghz` app offers no timed auto-repeat in a `ctl` row.
+- **RQ.7 Kernel RAM.** The pointer (4 B) and one timestamp + length for `per`/`ctl` timing
+  (6 B, shared, only one transmit is active), on top of RP.7's duty counter: the Sub-GHz total
+  of RP.8 grows from ≤ +32 B to **≤ +44 B**. Wait times are returned (`EAGAIN` + the wait in
+  `sg_status`), never busy-waited (rule 0.8).
+- **RQ.8 NFC and RFID** keep their own fixed limits (they are the same everywhere for the
+  Flipper's power); the record has room for later per-region rows (flag bit) if a country needs
+  them.
+
+### Q.4 The tables
+
+PA = the CC1101 step the kernel uses. "Duty" uses the duty-cycle alternative of each EU row:
+the "spectrum access and mitigation techniques" alternative (LBT + AFA per EN 300 220) is not
+implemented, CCA alone is not enough for it.
+
+**`EU` (all 27 member states; Decision 2006/771/EC, annex as replaced by (EU) 2022/180; the
+ERC/REC 70-03 Annex 1 band in brackets):**
+
+| Band (MHz) | Power | PA | Duty | Bandwidth | Use | Source |
+|---|---|---|---|---|---|---|
+| 433.050–434.790 | 1 mW e.r.p. (−13 dBm/10 kHz above 250 kHz bandwidth) | 0 | none | – | any | 2022/180 row 44a (g2) |
+| 434.040–434.790 | 10 mW e.r.p. | 10 | none | ≤ 25 kHz | any | 2022/180 row 45c (g3) |
+| 433.050–434.790 | 10 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 44b (g1) |
+| 869.700–870.000 | 5 mW e.r.p. | 7 | none | – | any | 2022/180 row 56a (h1.8) |
+| 862.000–863.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | ≤ 350 kHz | any | 2022/180 row 87 (h0) |
+| 863.000–865.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 46a (h1.3) |
+| 865.000–868.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 47 (h1.4) |
+| 868.000–868.600 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 48 (h1.5) |
+| 868.700–869.200 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 50 (h1.6) |
+| 869.400–869.650 | 500 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 54 (h1.7) |
+| 869.700–870.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 56b (h1.9) |
+
+Not used: the alarm-only and social-alarm sub-bands 868.6–868.7 and 869.2–869.4 MHz
+(rows 49, 51–53), 869.65–869.7 MHz (row 55, alarms), the wideband-data and RFID rows (84, 47a,
+47b: data networks or interrogators only), 863–865 MHz audio (46b).
+What this changes for `gmodem` (P.4): long transfers in the EU now have three bands with no duty
+limit: 434.04–434.79 MHz at 10 mW with the `narrow` preset (12 kHz ≤ 25 kHz), 433.05–434.79 MHz
+at 1 mW with any preset, and 869.7–870.0 MHz at 5 mW.
+
+**`US` (47 CFR part 15; restricted bands of 15.205 in the CC1101 ranges: 322–335.4 and
+399.9–410 MHz, so no row touches them):**
+
+| Band (MHz) | Limit (at 3 m) | Power (e.i.r.p.) | PA | Bandwidth | Use | Source |
+|---|---|---|---|---|---|---|
+| 902.000–928.000 | 50 mV/m | −1.2 dBm → −2 | −6 | – | any | 15.249(a) |
+| 902.000–928.000 | 1 W conducted, ≥ 50 hop channels, ≤ 0.4 s per channel in 20 s | +30 dBm | 10 | 20 dB bandwidth < 250 kHz | fhss | 15.247(a)(1)(i), (b)(2) |
+| 300.000–308.560 | 5,417–5,767 µV/m | −21 | −30 | ≤ 750 kHz (0.25 %) | ctl | 15.231(a)–(c) |
+| 308.560–322.000 | up to 6,333 µV/m | −20 | −20 | ≤ 771 kHz | ctl | 15.231(a)–(c) |
+| 335.400–348.000 | 6,892–7,417 µV/m | −19 | −20 | ≤ 838 kHz | ctl | 15.231(a)–(c) |
+| 387.000–399.900 | 9,042–9,579 µV/m | −17 | −20 | ≤ 967 kHz | ctl | 15.231(a)–(c) |
+| 410.000–416.400 | 10,000–10,267 µV/m | −16 | −20 | ≤ 1,025 kHz | ctl | 15.231(a)–(c) |
+| 416.400–464.000 | 10,267–12,250 µV/m | −15 | −15 | ≤ 1,041 kHz | ctl | 15.231(a)–(c) |
+| 300.000–322.000 | 2,167–2,533 µV/m | −29 | −30 | ≤ 750 kHz | per | 15.231(e) |
+| 335.400–348.000 | 2,757–2,967 µV/m | −27 | −30 | ≤ 838 kHz | per | 15.231(e) |
+| 387.000–399.900 | 3,617–3,832 µV/m | −25 | −30 | ≤ 967 kHz | per | 15.231(e) |
+| 410.000–464.000 | 4,000–4,900 µV/m | −24 | −30 | ≤ 1,025 kHz | per | 15.231(e) |
+
+- 15.231(b)/(e) give the field strength by linear interpolation over 260–470 MHz
+  (3,750 → 12,500 µV/m for (a), 1,500 → 5,000 µV/m for (e)); each row uses the value at its lower
+  edge (the lowest), rounded down. The rows are split where the next PA step becomes legal
+  (308.56 MHz = −20 dBm, 416.4 MHz = −15 dBm for `ctl`).
+- `ctl` is 15.231(a): a remote's code (garage, gate, doorbell) sent by the user, stopping ≤ 5 s.
+  `per` is 15.231(e): any use, data included, ≤ 1 s, then ≥ 30 × silence and ≥ 10 s. A 1 s
+  `gmodem` packet burst at 38.4 kBaud moves ≈ 4.8 KB per 31 s (≈ 150 B/s), at −30 dBm.
+- So the old P.4 line "315, 433.92: FCC 15.231 does not allow data: refused" was too strict:
+  data is allowed under 15.231(e), at the lower field strength and with the 1 s / 30× rule.
+- The 902–928 MHz `fhss` row is for the hopping link (R19.11, ≥ 50 channels of < 250 kHz); the
+  Flipper's +10 dBm is far below the 1 W limit. The DTS alternative (15.247(a)(2): 6 dB bandwidth
+  ≥ 500 kHz) is not offered: the `max` preset is not reliably that wide.
+- The amateur bands (420–450, 902–928 MHz, part 97) need a licence and are not in the table.
+
+**`CA` (ISED RSS-210 Issue 10 + Amendment April 2020; RSS-247 Issue 3, August 2023;
+RSS-Gen Issue 6 section 7.5 restricted bands, the same in these ranges: 322–335.4 and
+399.9–410 MHz):** the same rows and numbers as `US`, with these sources:
+
+| US row | Canadian rule (same numbers) |
+|---|---|
+| 902–928 `any` | RSS-210 Annex B, Table B2: 50 mV/m at 3 m (quasi-peak) |
+| 902–928 `fhss` | RSS-247 5.1 c) (≥ 50 channels if 20 dB bandwidth < 250 kHz, ≤ 0.4 s in 20 s), 5.4 a) (1 W) |
+| `ctl` rows | RSS-210 A.1.1–A.1.3, Table A1: (41.67 × f) − 7083 µV/m for 260–470 MHz; bandwidth ≤ 0.25 % |
+| `per` rows | RSS-210 A.1.4, Table A2: (16.67 × f) − 2833.33 µV/m; ≤ 1 s, silence ≥ 30 × and ≥ 10 s |
+
+- Note in Tables A1/A2: 225–328.6 and 335.4–399.9 MHz are for the exclusive use of the Government
+  of Canada; licence-exempt devices may still work there but get no protection. `region show CA`
+  prints that note for the 300–322, 335.4–348 and 387–399.9 MHz rows.
+
+**`AL`, `BA`, `MK`** (ERC/REC 70-03, March 2024: Annex 1 conditions, Appendix 1 status;
+Y = implemented, N = not implemented, `*` = no information): the rows are the EU rows with the
+same Annex 1 conditions (same power, duty and bandwidth as in `EU`), plus the 870/915 MHz rows of
+Q.5 where marked:
+
+| Annex 1 band | MHz | AL | BA | MK |
+|---|---|---|---|---|
+| g1 / g2 / g3 | 433.05–434.79 (3 rows) | Y | Y | Y |
+| h0 | 862–863 | Y | `*` → `#?` | Y |
+| h1.3 | 863–865 | `*` → `#?` | `*` → `#?` | Y |
+| h1.4 | 865–868 | `*` → `#?` | N → left out | Y |
+| h1.5 | 868.0–868.6 | Y | Y | Y |
+| h1.6 | 868.7–869.2 | Y | Y | Y |
+| h1.7 | 869.4–869.65 | Y | Y | Y |
+| h1.8 | 869.7–870, 5 mW | Y | Y | Y |
+| h1.9 | 869.7–870, 25 mW 1 % | `*` → `#?` | N → left out | Y |
+| h2 | 870–874.4 | Y → `#?` (Q.5) | N → left out | Y → `#?` (Q.5) |
+| h3 | 915–919.4 | Y → `#?` (Q.5) | N → left out | Y → `#?` (Q.5) |
+
+- The matrix was read from the PDF's text by column position: T32 checks every AL/BA/MK cell
+  against the PDF page and reads Appendix 3 (national restrictions) before transmit is enabled.
+
+### Q.5 The bands that differ between countries: 870–876 and 915–921 MHz
+
+ERC/REC 70-03 Annex 1 rows (conditions the same everywhere they are implemented):
+h2 870–874.4 MHz, 25 mW e.r.p., ≤ 1 %, ≤ 600 kHz (ER-GSM protection 873–876 MHz: ≤ 0.01 % and
+≤ 5 ms per 1 s); h3 915–919.4 MHz, 25 mW e.r.p. (100 mW in the RFID channels 916.3, 917.5,
+918.7 MHz), ≤ 1 %, ≤ 600 kHz (ER-GSM protection 918–921 MHz the same). The EU decision 2018/1538
+adds data-network-only rows (874–874.4, 917.3–918.9 MHz: master access point required) that a
+pair of Flippers is not, so they are not used.
+
+v1 ships these as `#?` rows at the safe parts **870.000–873.000** and **915.000–918.000 MHz**
+(outside the ER-GSM ranges) with 25 mW, 1 %, 600 kHz, for every country whose Appendix 1 status
+is Y, and leaves them out where it is N:
+
+| Status (70-03 App. 1, 03.2024) | h2 870–874.4 | h3 915–919.4 |
+|---|---|---|
+| Y | AT, BG, DK, ES, EE, GR, HU, IT, IE, LU, PT, SE, SK, SI, AL, MK | AT, BG, DK, ES, EE, GR, HU, IE, LU, PT, SE, SK, SI, AL, MK |
+| L (limited) | BE, FI, LT | BE, LT |
+| U (under study) | HR | HR |
+| `*` (no information) | CY, CZ, MT, PL, RO | CY, CZ, IT, MT, PL, RO |
+| N (left out) | DE, FR, NL, LV, BA | DE, FR, FI, NL, LV, BA |
+
+Each EU country file therefore holds `Base: EU` and at most these two `#?` rows; for DE, FR, NL,
+LV the file is `Base: EU` alone. A `#?` row becomes active only after the national regulator's
+own text has been checked and cited in its `ref` (Q.6).
+
+### Q.6 Keeping the tables right
+
+- Every row carries its source; `Checked:` in the header is the date the file was checked.
+- **Before transmit is enabled (T32b)** every number is checked once more against the original
+  texts: the EUR-Lex consolidated 2006/771/EC, ERC/REC 70-03 (PDF pages 44–46 for Appendix 1,
+  Appendix 3 for national restrictions), 47 CFR 15.205/15.231/15.247/15.249 (eCFR), RSS-210,
+  RSS-247 and RSS-Gen at ised-isde.canada.ca, and the AKEP/RAK/AEK rules for AL/BA/MK. The PR
+  lists what was checked.
+- Countries not in the list: `region set` refuses with "no table for XX; transmit stays off".
+  A new country is a new file + a manual line; nothing in the kernel changes.
+- The tables are data on the card and a 0.5 KB record in flash: adding a country costs no RAM
+  and no firmware rebuild (only RQ.5's hash list, so a firmware update marks it as shipped).
+
+Acceptance:
+- ACQ.1 (host) Every shipped `.reg` parses; `region show US` prints the Q.4 table; a file with a
+  row outside the CC1101 ranges, `dbm` > 10, an unknown `use`, no `ref`, or a `Base` loop is
+  refused with the line number.
+- ACQ.2 (host + QEMU, the same `cc1101calc.c`/region code as the kernel) With `EU`, an
+  `SG_DATA` transmit at 433.92 MHz, 10 dBm, `std` goes through until 10 % of the hour is spent,
+  then `EAGAIN` with the wait; at 0 dBm it never waits. With `US`, `SG_DATA` at 433.92 MHz is
+  allowed only at −30 dBm, ≤ 1 s, then waits ≥ 30 × and ≥ 10 s; `SG_CTL` at −15 dBm is cut at
+  5 s; `SG_DATA` at −15 dBm is `EPERM`. With `BA`, 866 MHz is `EPERM`.
+- ACQ.3 (Flipper) No region record: transmit `EPERM`, receive works. `region set PL` writes the
+  record with 0 page erases in the normal case (flash write counter, Phase 2b); after a reboot
+  with the card removed the PL limits still apply.
+- ACQ.4 A changed `.reg` file needs `-f`, and the change is logged with its hash.
+
+### Q.7 Notes for the system manual
+
+Which countries exist, how to read `region show` (power, duty, `ctl`/`per` explained in plain
+words: "remote buttons only", "short bursts with a pause"), why a transfer pauses, that the
+region is kept in internal flash and survives a card change, that changing it needs root and is
+logged, `#?` rows, custom tables and `-f`, and that the user is responsible for using the device
+legally (a note for travellers: set the region of the country you are in).
 
 ---
 
@@ -1232,7 +2529,7 @@ Package signatures (Phase 17, R17.2) become mandatory for this path once they ex
 | **Installed programs** (new) | 0x0803_0000 | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
 | Run-time text cache | after the installed region | 128 KB default (`CACHE_SIZE`) | exec (as now) |
 | Guard | `SFSA − 16 pages` to `SFSA` | 64 KB | never |
-| CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except an updater stack swap (R17.3) |
+| CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except a stack swap (`radio use`, R16.0; same FUS path as R17.3) |
 
 With the BLE light stack the flash between 0x0803_0000 and the guard is about 520 KB. That has to
 hold the base userland (436 KB of text measured, mostly duplicate libc) plus the device apps
@@ -1246,6 +2543,16 @@ Requirements:
   installed region and the cache are laid out from this value at boot, not at build time.
   Placement is tiered: base system and launcher first (lowest addresses), then installed
   packages, then the run-time cache at the top.
+- **R2b.1a Radio slot** (owner decision 2026-11-18, R16.0): the installed region ends at
+  `min(SFSA − 16 pages, SLOT)`, where `SLOT` is the lowest ST install address among the stack
+  images registered on the SD card (`/etc/radio.slot`, written by `radio add`/`radio rm`, one
+  number; missing file = no slot, today's layout). Between `SLOT` and the guard only the run-time
+  cache lives, so the space is used while a smaller stack runs and a swap destroys only cache
+  entries (disposable by design, R1.4). `pkg install --flash` never writes there; an install that
+  doesn't fit says "radio slot: N KB reserved for <stack>". At boot, records and cache entries at
+  or above the current guard are treated as dead (they can only exist after a swap), at 0 B RAM.
+  The cache keeps a minimum of 32 KB below the guard; `radio add` refuses an image whose slot
+  would break that or reach the base system, libc (R2b.9) or launcher.
 - **R2b.2** `hal_flash_region()` returns two regions (installed, cache). The existing
   `SYS_FLASH` call takes a region argument:
   - **cache** writes stay MM-only, as now;
@@ -1643,21 +2950,116 @@ RAM budget: kernel ≤ +256 B; FS ≤ +400 B (groups, poll). Flash: ≈ +10 KB k
   groups, chmem, license) and the launcher entry. Assets go under `/usr/share/apps/<appid>`.
 - **R5.6** Launcher: categories, icons, app manifests from installed packages; runs each app as its
   own uid with its declared groups (R4b.4); shows "app crashed" on abnormal exit.
+- **R5.6a Launcher icons** (owner request 2026-11-17, out of milestone order; task T21). The
+  launcher can show a small icon before each label in the app list. An icon is **at most two
+  characters of the list font**: 8×6 pixels, the cell of two 4×6 glyphs, so a row stays 6 pixels
+  high and the list keeps its 9 visible rows. The black title bar stays as it is.
+  - **R5.6a.1 Where an icon comes from.** `/etc/apps` gets an optional third field:
+    `Label:user:icon:/program arg ...`. The old form `Label:user:/program ...` stays valid: the
+    launcher tells them apart by the field after the user, which is the program only if it starts
+    with `/` (programs in `/etc/apps` are absolute paths; the manual says so). The icon field is
+    one of:
+    - empty (`Label:user::/program`): no icon;
+    - `@name`: a built-in icon (R5.6a.2), e.g. `@bell`; an unknown name draws no icon;
+    - `#` and 12 hex digits: an 8×6 bitmap, six rows top to bottom, one byte per row, the most
+      significant bit on the left (the same layout as one row of two font glyphs), e.g. a
+      small bell `#183C3C7E0018`;
+    - otherwise 1 or 2 printable ASCII characters, drawn in the list font, e.g. `>_`, `Zz`, `!`.
+      A text icon cannot contain `:` or start with `/`, `@` or `#` (use the bitmap form).
+    A malformed field (bad hex, too long) is treated as no icon; the entry itself still loads.
+    For packages the same value goes into an `Icon:` line of `CONTROL/control` (mkpkg.py `-i`);
+    until the launcher reads manifests itself (R5.6), the package's `postinst` writes it into
+    its `/etc/apps` line. `fam2pkg` (R5.5) makes the `Icon:` from the stock 10×10 `fap_icon` by
+    a 2×2-box downscale to 8×6 with a threshold, or takes `fap_icon_mini` / an explicit value
+    from the build file.
+  - **R5.6a.2 Built-in icons.** A `const` table in the launcher (in the text segment, i.e. flash,
+    since the launcher runs from the installed region): about 24 icons, each 6 bytes plus a name
+    of at most 8 characters, at most 400 B of text in total and 0 B of RAM. At least: `app`,
+    `console`, `info`, `light`, `power`, `battery`, `rfid`, `nfc`, `subghz`, `ir`, `ibutton`,
+    `gpio`, `usb`, `ble`, `clock`, `alarm`, `bell`, `timer`, `sensor`, `game`, `music`, `tools`,
+    `file`, `settings`. Original drawings (not copies of stock or Unleashed icons), one host tool
+    renders them enlarged into a PNG for review. The base `/etc/apps` uses them for its own apps
+    (`Console` `@console`, `About` `@info`, `Lights` `@light`, `Power` `@power`, `RFID` `@rfid`)
+    and the base `postinst` lines get icons too.
+  - **R5.6a.3 Drawing.** Icons on: `>` at x = 1 as today, the icon at x = 6–13, the label from
+    x = 16 (23 characters still fit). An entry without an icon gets an empty 8×6 cell, so labels
+    stay in one column. The selected row is inverted, icon included. Icons off: the screen is
+    **pixel for pixel** what it is today. `gui` gets one helper,
+    `gui_bits8(x, y, const unsigned char *rows, int n, int inverse)`, which the text drawing can
+    share; text icons are rendered into the 6 bytes when `/etc/apps` is read, so drawing never
+    looks at the font for icons.
+  - **R5.6a.4 The setting.** `/etc/launcher.conf`, stock `Key: value` style, read with `cfopen()`
+    (spec L.3): `Icons: on|off`, `Hints: on|off`, `Battery: on|off` (owner 2026-11-17), each
+    default `on` in `/rom/etc/launcher.conf`. In the launcher,
+    **Left** opens a one-screen settings page (black title bar `LAUNCHER`, a line `Icons  on`;
+    OK or Left/Right toggles and redraws at once; Back returns to the list). The card's file is
+    written once, on Back, and only if the value changed; nothing is ever written to internal
+    flash. Right stays free for the next page (Running, R12.20; the desktop pages of K.6).
+    The settings page is a **page**, not a special mode: the launcher keeps a small `const`
+    table of pages (name, row source, OK handler, hint text), the app list and settings are its
+    first two entries, and both use the same list drawing, scrolling and key loop, so later
+    pages (K.6) are new table entries.
+    Page switching (Left to Settings, Right to the next page) acts on the **release of a short
+    press**, never on the press, so the backlight gesture Left+Up (R6.10) never opens a page.
+    The rule is userland only (no kernel flag): `gui.c` gets `gui_click()` next to `gui_key()`,
+    which returns a key on its release if it was pressed alone (no other key went down while it
+    was held) and held less than about 1 s; stack only, no `.bss`. The desktop pages (K.6) reuse it. The launcher reads the setting at
+    start, after its settings page, and together with `/etc/apps` when an app exits (one more
+    `cfopen` of a ~12-byte file), so a change from the shell (`echo 'Icons: off' >
+    /etc/launcher.conf`) shows after the next app.
+  - **R5.6a.5 RAM.** Icons cost 6 B of heap per entry that has one, inside the entry's existing
+    `malloc` block (no new allocation per entry); `.bss` grows by at most 8 B; the settings page
+    uses only stack. Worst case, 16 entries with icons: ≤ 104 B. Nothing is resident besides
+    the launcher itself.
+  - **R5.6a.6 Speed.** No icon work on the key path: a key press redraws exactly as today plus
+    at most 9 × 6 byte copies. Parsing happens only when `/etc/apps` is read.
+  - **R5.6a.7 "Pine meets modern UX"** (owner, 2026-11-17; the system-wide screen style of K.2
+    starts here). The launcher's look follows the
+    Pine mail program: text first, every screen says what each button does, nothing hidden; with
+    modern touches: icons, even spacing, a clear selection bar, a quiet scroll mark. Layout on
+    128×64 with the 4×6 font:
+    - **Title bar** (black, as now): the screen name centred; on the right, the position
+      `3/12` of the selected entry (the list only); on the left, with `Battery: on` (owner
+      2026-11-17, #110), a small battery (about 11×5 plus its tip) solid when full and emptying
+      from the left, the charge in percent and a bolt while charging. It is read from
+      `/dev/power` only at a redraw that happens anyway, at most once a minute (and after an app
+      ends): the battery never wakes the launcher or causes a redraw of its own.
+    - **List**: 8 rows (y = 7 + 6·i), the selected row a full-width inverted bar with `>`;
+      when there are more than 8 entries, a 1-pixel scroll mark at x = 127 whose length and
+      place show the visible part (no arrows, no animation).
+    - **Hint line**: a 1-pixel rule at y = 56 and one line at y = 58 naming the buttons in
+      Pine's `key action` style, e.g. `<Setup  OK Run  >Running` (`>Running` only once R12.20
+      exists). Every launcher screen has one: the settings page says `OK Toggle  Back Done`.
+    - **Message line**: short notices that today take the whole screen (`unknown user`, `app
+      crashed`, the park hint of R12.20) replace the hint line for 2 s instead, so the list stays
+      visible; the hint line comes back at the next key or after the 2 s.
+    - **Settings page**: one line per setting, value in brackets (`Icons   [on]`,
+      `Hints   [on]`, `Battery [on]`); Up/Down choose, OK or Left/Right toggles. (K.7: the
+      launcher's Left page grows into the system SETTINGS list; these three stay in the
+      launcher as its `Launcher` group.)
+    - `Hints: on|off` in `/etc/launcher.conf` (default `on`): off gives the list its 9th row back
+      and drops the title counter. Icons, hints and battery all off = today's screen exactly.
+    - No extra RAM beyond R5.6a.5 (the strings are `const`, the counter is formatted on the
+      stack); no timer and no redraw when nothing changes (the 2 s message uses a timed key read
+      through `poll`, not a periodic tick). Any timed wake of the launcher (this message, a
+      later status line) runs only while the launcher is in the foreground and the screen is on;
+      otherwise it waits for a key with no timeout.
 - **R5.7** (old A9) Opt-in FPU with lazy stacking, as in the earlier proposal: S16–S31 saved on the
   process stack, registers cleared on exec and on handover; `fam2pkg` sets the FP flags for apps
   that use `float`.
-  **Done** (kernel part, 2026-11-16): `FPCCR.ASPEN|LSPEN`, CP10/CP11 on at boot. The FP
-  registers of the last FP process stay in the FPU (`fp_live`, a 4-byte kernel variable that
-  took alignment padding: kernel RAM +0 B) until `restart` enters another process; only then
+  **Done** (kernel part, 2026-11-18): `FPCCR.ASPEN|LSPEN`, CP10/CP11 on at boot. The FP
+  registers of the last FP process stay in the FPU (a `CONTROL_FPLIVE` bit in its
+  `p_reg.control`; only `mpu_proc`, the last user process run, can have it, so no variable is
+  needed: kernel RAM +0 B) until `restart` enters another process; only then
   S16–S31 go to that process's stack (64 B below the CPU's extended frame, which already holds
   S0–S15 and FPSCR) and the FPU is zeroed. A system call or interrupt that returns to the same
   process saves nothing (even the lazy S0–S15 save is skipped). Cost: processes without the
   FPU ~10 cycles per kernel entry; an FP process ~110 cycles per switch away and back (~1.7 µs
   at 64 MHz) and 136 B of its own stack. Build flags `UFPFLAGS`/`UFPLDFLAGS` in
   `flipper/minix.mk`; FP programs use `fork` for `vfork` (the vfork child would overwrite the
-  parent's saved S16–S31); `setjmp` does not save S16–S31. QEMU test: `m2test` `fpu:` checks
+  parent's saved S16–S31); `setjmp` does not save S16–S31. QEMU test: `/bin/fptest` (run by `m2test`)
   (arithmetic, two FP processes by IPC and by time slice, no leak to another process, signal
-  handler, fork, exec). Still open: `fam2pkg` flag (with R5.5); a device run of `m2test`.
+  handler, fork, exec). Still open: `fam2pkg` flag (with R5.5); a device run of `fptest`.
 - **R5.8** Provenance per D.3: upstream notices kept, SPDX lines, source file noted.
 
 Acceptance:
@@ -1665,6 +3067,19 @@ Acceptance:
   launcher unchanged except for the build file.
 - AC5.2 A ported app that calls `furi_crash` is ended alone; the launcher comes back.
 - AC5.3 Two `libfuri` apps installed: the shared library (R2b.9) is in flash once (`free -v`).
+- AC5.4 (R5.6a) In QEMU, with the base `/etc/apps` and an extra entry of each icon form (empty,
+  `@bell`, `@nosuch`, `#` bitmap, `#` bad hex, `>_`, `!`, old two-field form), the launcher's
+  frame shows each icon at x = 6–13 of its row (inverted on the selected row) and a blank cell
+  for the empty, unknown and malformed ones; every app still starts.
+- AC5.5 (R5.6a) With `Icons: off`, `Hints: off` and `Battery: off` the launcher's frames are byte-identical to the frames of the
+  launcher before R5.6a for the same `/etc/apps` (old and new forms) and the same keys.
+- AC5.6 (R5.6a) Left, OK, Back on the list: the setting toggles, `/etc/launcher.conf` on the card
+  holds the new value, the list redraws without icons; Left, Back without a change writes
+  nothing (the file's mtime is unchanged). No internal-flash erase (`flashcheck` unchanged).
+- AC5.7 (R5.6a.7) With hints on: 12 entries show 8 rows, the title shows `1/12` … `12/12` while
+  moving, the scroll mark moves, the hint line is on every screen; an entry with an unknown user
+  shows the notice on the message line with the list still drawn, and the hint line is back
+  after 2 s with no key pressed.
 
 Responsiveness: AC5.R A `libfuri` app's view redraw after a key event meets L1; the cooperative threads of one app never block its input thread for more than 10 ms (measured with `lat`).
 
@@ -1968,6 +3383,20 @@ Infrastructure (section F):
 - Each alarm is one `once` or `daily` timer, category `alarm`: it **always** sounds or vibrates
   per its own setting, regardless of the foreground app, the global sound switch and
   do-not-disturb.
+- **Ring settings per alarm** (owner, 2026-11-17), in the timer file: `Mode: escalating|steady`
+  (escalating: by stages of `Step:` seconds, sparse beeps, denser beeps, the full sound, then
+  vibro, LED and screen flash on top; steady: one level for the whole ring time), `Out:` any of
+  sound, vibro, led, screen (the screen flash toggles the backlight from `alert`'s own blocking
+  loop, no kernel work, and restores it on exit), `Sound: single|multi` (one tone or the
+  melody), `Volume: 1-100` (`/dev/speaker` volume note: frequency 0xFFFF, the volume in the
+  duration field, cubic duty curve as stock `furi_hal_speaker_start`, reset to 100 on close).
+  Escalating ramps the volume from a fifth of `Volume:` to all of it over the three sound
+  stages; `/etc/notify.conf` `Volume` is the volume of reminders and info, never of alarms.
+  The ring rhythm (owner, 2026-11-17): escalating rings start 5, 5, 4, 4, 3, 3, 2, 2 s apart,
+  then every second, timed from each ring's start by `poll()` on `/dev/buttons`; steady keeps one
+  interval (alarm 1 s). The default stage is 10 s, so rhythm and volume reach full together.
+  The alert comes over any app with `FGIOCPREEMPT` (R7b.2), waits on `EBUSY`, and writes the
+  saved picture back before `FGIOCRELEASE`.
 - **Desk clock mode:** the app in the foreground shows a large clock and the next alarm; display
   update once a minute from the RTC wake-up timer (CPU in Stop2 in between); backlight level
   chosen in settings (off, dim, on; "on while charging" when `DeskMode` is granted). Buttons work
@@ -2220,8 +3649,10 @@ data; 0 between timer events. Flash: interpreter ≈ 40–60 KB shared, bindings
   - Before any transmit, the kernel reads back the frequency registers (`FREQ2..0`), the PA
     table and the data rate, and refuses (`EPERM`) anything outside the band table for the
     configured region.
-  - The table is `const` in flash, with the same bands as stock.
-  - The region is set by root (`/etc/flipper/region`) and applied at boot.
+  - The table is the region record in flash (section Q, RQ.2–RQ.3): per-country rows with
+    power, duty cycle, bandwidth and kind of use, read in place (0 B RAM).
+  - The region is set by root (`region set`, or the first-boot wizard) and applied at boot;
+    without a record there is no transmit.
   - Registers that bypass the check while transmitting are write-protected while TX is active.
 - **R8.3 External CC1101** on the header SPI (stock supports it): same driver, second instance,
   selected by `ioctl`; the 5 V OTG is enabled through `/dev/power`.
@@ -2263,6 +3694,131 @@ Acceptance:
 - AC9.3 The Sub-GHz app's peak RAM (`free -t`) ≤ 20 KB.
 
 Flash: ≈ 85 KB installed (protocols are the bulk).
+
+### 9.0 LF RFID: every protocol of the Unleashed firmware (owner request 2026-11-17)
+
+The owner wants every 125 kHz decoder of the Unleashed firmware (DarkFlippers/unleashed-firmware,
+`lib/lfrfid/protocols/`, checked at commit `53818b1`, 2026-11-16) working on MINIX. GPLv3: the
+protocol files are copied almost verbatim (rule of the whole project), not rewritten.
+
+What MINIX has today (R6.5 parts 1–5, #174–#194): `/dev/rfid` read at 125 kHz with 50 % duty,
+one-shot capture of up to 512 edges; `rfid` decodes **EM4100 at RF/64 only**; T5577/EM4305 write
+of an EM4100 number, T5577 block read, password clear (proxmark3 dictionary); EM4100 emulation
+(`RFIDIOCEMU`, ≤ 512 segments); the `lfrfid` launcher app (read, save `.rfid`, write, emulate).
+
+**Gap table** (Unleashed protocol list order; "seg/frame" is the number of `RFIDIOCEMU` segments
+one frame needs today, where one segment is one PWM period of the pull pin):
+
+| # | Protocol (Unleashed name) | Maker | Modulation, rate | Frame | Read mode | seg/frame | MINIX read | emulate | write |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | EM4100 | EM-Micro | Manchester RF/64 | 64 b | ASK 125 k | ≤ 128 | ✅ | ✅ | ✅ T5577, EM4305 |
+| 2 | EM4100/32 | EM-Micro | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 3 | EM4100/16 | EM-Micro | Manchester RF/16 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 4 | Electra | Electra | Manchester RF/64 (EM4100 + 64-bit epilogue) | 128 b | ASK | ≤ 256 | ❌ | ❌ | ❌ |
+| 5 | H10301 | HID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 6 | Idteck | IDTECK | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 7 | Indala26 | Motorola | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ (summary only) | ❌ > 512 | ❌ |
+| 8 | IoProxXSF | Kantech | FSK2a RF/64 | 64 b | ASK | ≈ 460 | ❌ | ❌ (tight) | ❌ |
+| 9 | AWID | AWID | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 10 | FDX-A | FECAVA | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 11 | FDX-B | ISO 11784/5 (animals) | Biphase (diphase) RF/32 | 128 b | ASK; Unleashed also 134.2 kHz | ≤ 256 | ❌ | ❌ | ❌ |
+| 12 | HIDProx (generic) | Generic | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 13 | HIDExt (generic) | Generic | FSK2a RF/50 | 6 blocks, 192 b | ASK | ≈ 1080 | ❌ | ❌ > 512 | ❌ |
+| 14 | Pyramid | Farpointe | FSK2a RF/50 | 128 b | ASK | ≈ 720 | ❌ | ❌ > 512 | ❌ |
+| 15 | Viking | Viking | Manchester RF/32 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 16 | Jablotron | Jablotron | Biphase (diphase) RF/64 | 64 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 17 | Paradox | Paradox | FSK2a RF/50 | 96 b | ASK | ≈ 540 | ❌ | ❌ > 512 | ❌ |
+| 18 | PAC/Stanley | N/A | Direct (NRZ) RF/32 | 128 b | ASK | ≤ 128 | ❌ | ❌ | ❌ |
+| 19 | Keri | Keri | PSK1 RF/32 | 64 b | PSK | ≈ 2048 | ❌ | ❌ > 512 | ❌ |
+| 20 | Gallagher | Gallagher | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 21 | Nexwatch | Honeywell | PSK1 RF/32 | 96 b | PSK | ≈ 3072 | ❌ | ❌ > 512 | ❌ |
+| 22 | Radio Key (Securakey) | Securakey | Manchester RF/40 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 23 | GProxII | Guardall | Biphase RF/64 | 90 b | ASK | ≤ 180 | ❌ | ❌ | ❌ |
+| 24 | Noralsy | Noralsy | Manchester RF/32 | 96 b | ASK | ≤ 192 | ❌ | ❌ | ❌ |
+| 25 | Indala224 | Motorola | PSK2 RF/32 | 224 b | PSK | ≈ 7168 | ❌ | ❌ > 512 | ❌ |
+
+**Encoders** (owner, 2026-11-17: "and the encoders too"): every one of the 25 Unleashed protocols
+has an encoder (`encoder_yield`, used for emulation) and a `write_data` that fills T5577 blocks;
+8 of them can also be written to an EM4305 (EM4100 and its /32, /16 variants, Electra, FDX-B,
+Gallagher, GProxII, Jablotron, Radio Key, Viking). MINIX has the encoder and both write paths for
+EM4100 RF/64 only, so 24 encoders and 24 T5577 / 9 EM4305 write paths are missing; R9.0.3 and
+R9.0.6 bring all of them.
+
+Also in Unleashed `lib/lfrfid`, not protocols: write targets **Hitag µ (ID8265, ID8210, H55)** and
+**Hitag S (ID8268)** besides T5577/EM4305 (MINIX: T5577/EM4305 only); **RAW read/emulate**
+(`.ask.raw`/`.psk.raw`, varint pairs; MINIX: none); the **134.2 kHz ASK read mode** (MINIX: none);
+`.rfid` save/load for every protocol (MINIX: EM4100 only).
+
+Result: 1 of 25 protocols done (EM4100 RF/64): 24 decoders and 24 encoders missing. What blocks them is mostly not the
+decoders (pure C, host-testable) but four kernel gaps: the PSK carrier, the 134.2 kHz carrier, a
+capture longer than 512 edges, and emulation of more than 512 segments.
+
+Requirements:
+
+- **R9.0.1 `liblfrfid`** (user space, `src/lib/lfrfid/`): the Unleashed `lib/lfrfid/protocols/*`,
+  `tools/fsk_demod`, `tools/fsk_osc`, `tools/t5577`, `tools/em4305` and the toolbox pieces they use
+  (`protocol_dict`, `manchester_decoder`, `bit_lib`, `level_duration`, `varint_pair`) copied with a
+  thin `furi` shim (`furi_assert`, `malloc`, `FuriString` → fixed `char` buffers). The worker
+  threads, `furi_hal_rfid` and the GUI are not ported: the caller feeds edges and plays segments.
+  One protocol table, so a new Unleashed protocol is one more file and one table line.
+  - RAM: the decoders' state is allocated only while a read runs (`protocol_dict_alloc` of all 25:
+    measure it; budget ≤ 6 KB heap in the `rfid` process, freed at exit). Nothing resident.
+  - Flash: ≈ 25 KB text (XIP), linked into `rfid` (no shared library needed). 0 run-time flash
+    writes.
+- **R9.0.2 Host tests** (`flipper/tests/lfrfid/`, `make lfrfidtest` on the PC and in CI): for each
+  of the 25 protocols, encoder → edge timings (± jitter, random start phase, inverted polarity) →
+  all decoders: exactly that protocol decodes, the same bytes, `render_data` text equal to
+  Unleashed's for a fixed vector per protocol. Also EM4100 vectors captured on the Flipper by
+  `rfid -r` (from #174) still decode. No hardware needed.
+- **R9.0.3 `rfid` uses the library:** `rfid` (read) prints `PROTOCOL HEXDATA` and the rendered
+  text (as the stock app's info screen); `rfid write PROTO HEX…` writes any protocol whose
+  `write_data` fills T5577 (or EM4305) blocks, verified by reading back and decoding (as stock);
+  `rfid emulate PROTO HEX…`; `rfid copy` for every protocol. EM4100 behaviour and options stay as
+  they are (`write EM …` kept as an alias). `.rfid` files in the stock format for every protocol
+  (`Key type:` = the Unleashed protocol name). Read alternates ASK and PSK windows as the stock
+  worker does (ASK 2 s, PSK 2 s; `-a`/`-p` for one only).
+- **R9.0.4 Kernel: read carrier modes** (`/dev/rfid`, `ioctl RFIDIOCCARRIER`): 125 kHz/50 % (ASK
+  and FSK, today's default), **62.5 kHz/25 % (PSK, as stock `furi_hal_rfid_tim_read_start(62500,
+  0.25)`)** and **134.2 kHz/50 %** (FDX-B, Unleashed's ASK134 mode). One byte of state, kernel
+  RAM ≤ +4 B. The mode resets to 125 kHz at close.
+- **R9.0.5 Kernel: continuous capture.** A PSK or FSK frame is far longer than 512 edges
+  (Indala26 ≈ 33 ms; Indala224 ≈ 115 ms; FSK edges every 32–40 µs). `/dev/rfid` gets a streaming
+  read: the comparator capture keeps running into a ring in the caller's pinned buffer (two
+  halves; `read` returns a full half; `poll` readable when one is full), without losing an edge
+  between reads; an overrun is reported (`EOVERFLOW` on the next read), never silent. The decoder
+  runs in the `rfid` process at normal priority: the UI stays responsive (AC9.0.4). Kernel RAM ≤
+  +8 B.
+- **R9.0.6 Kernel: long emulation.** FSK and PSK frames need 460–7200 PWM segments (table), so
+  `RFIDIOCEMU` with ≤ 512 pinned words cannot play them. Add a compact run list, e.g.
+  `struct rfid_emu_run { u16 period_minus_1; u16 pulse; u16 count; }` (count = how many equal
+  segments in a row: an FSK bit is one run, a PSK bit one or two runs), at most 512 runs, played by
+  the kernel: the DMA keeps reading a small ping-pong ring of ARR/CCR pairs in the caller's pinned
+  memory, refilled from the run list in the DMA half/complete interrupt (as stock refills from the
+  encoder in its DMA ISR). The interrupt is O(ring half), ≤ 10 µs, at ≤ 2 kHz (PSK worst case).
+  The agent may pick a different mechanism with the same limits (no CPU work per carrier period,
+  kernel RAM ≤ +16 B, the reader's clock drives it). `RFIDIOCEMU` stays for EM4100.
+- **R9.0.7 Hitag µ / Hitag S write targets** (Unleashed `tools/hitagmicro.c`, `tools/hitags.c`): as
+  extra targets of `rfid write` for EM4100 data, after R9.0.1–R9.0.6. Uses the existing field-gap
+  write and the held-field capture (R6.5 part 3); kernel unchanged if the timings fit.
+- **R9.0.8 RAW read** (`rfid raw FILE`, `.ask.raw`/`.psk.raw` as Unleashed, varint pairs) on the
+  SD card, for tags no decoder knows; RAW emulate optional. Writes go to the SD card only.
+- **R9.0.9 `lfrfid` app:** the read screen shows the protocol name and the rendered data; saved
+  files of every protocol load, write and emulate; "Add manually" lists all 25 protocols (data
+  entered as hex bytes). Black title bar as every GUI app.
+
+Acceptance:
+- AC9.0.1 `make lfrfidtest`: all 25 protocols round-trip encoder → decoder on the PC, with jitter
+  and both polarities, and no protocol decodes another's frame.
+- AC9.0.2 On the Flipper, with real tags or a T5577 written by `rfid write PROTO …`: each protocol
+  is read, written, read back, and emulated to a second reader (the owner's stock/Unleashed Flipper
+  or a reader) — at least EM4100 RF/32, H10301, Indala26, FDX-B, Viking, Paradox, Keri, Nexwatch,
+  PAC/Stanley, Indala224; the others where a T5577 can carry them. Results table in PORTING.md.
+- AC9.0.3 A PSK read of 10 s and an FSK emulation of 60 s lose no edge and no segment (overrun
+  counter 0).
+- AC9.0.4 While `rfid` reads (streaming, all decoders) or emulates PSK, L1 (button → pixel) stays
+  within budget and the launcher scrolls without a visible hitch; `lat` numbers in the PR.
+- AC9.0.5 Kernel RAM growth for R9.0.4–R9.0.6 together ≤ 32 B (`ramcheck`); no internal flash
+  writes at run time (`flashcheck`).
 
 ### 9.1 Hidden camera finder `camfind`, version 1 (gadget, F.5)
 
@@ -2412,15 +3968,85 @@ Flash: ≈ 85 KB installed (protocols are the bulk).
 - **R10.3** Mass storage: exposes `/dev/hd4` (`/home`) as a USB drive.
   - Only when `/home` is unmounted (`EBUSY` otherwise).
   - SCSI READ/WRITE stream sector by sector through the shared sector buffer.
+  - For Windows and macOS, which do not read MINIX file systems, use MTP (R10.4) instead.
+- **R10.4 Files over MTP (owner decision, 2026-11-18): the way to copy files to and from a PC.**
+  Windows and macOS do not read MINIX file systems (section O), and the owner wants nothing
+  installed on the PC. MTP (Media Transfer Protocol, the protocol phones use) has a built-in driver
+  on Windows 10/11 and on Linux (gvfs/KIO through libmtp): the Flipper shows up under "This PC"
+  as a portable device and files are dragged in and out. MTP works **file by file**, not sector
+  by sector, so our FS server does every read and write: `/home` **stays mounted**, apps and the
+  alarm keep running, and the on-disk format (V2, V3, a later ext2) does not matter. Analysis:
+  `reports/windows-file-transfer-analysis.md` in the project files.
+  - **USB interface:** one MTP interface (class 06/01/01, still image/PTP with MTP extensions):
+    bulk IN, bulk OUT, interrupt IN (events). Microsoft OS descriptor (string `0xEE` + extended
+    compat ID `MTP`) so Windows binds its own WPD/MTP driver; no `.inf`. Descriptors `const`,
+    endpoint buffers in the PMA (A.6). It is part of the **default configuration** (CDC console +
+    MTP) and of the HID configuration of 11.3 (MTP is file-level, so it does not conflict with HID).
+    It is **left out** while a persona that owns the bus or the disk is active: the 11.2 canary
+    (never sends anything), an 11.1 reader mode, R10.3 mass storage.
+  - **Daemon `mtpd`:** started by `devd` when the host configures the device, exits on detach
+    or after 30 s of USB suspend, like `rpcd`/`bled`. **0 B RAM while no cable is plugged in.**
+    Runs as user `flipper`; the one storage it offers is `/home/flipper` (= `/ext`, the same
+    tree as `rpcd`, R15.5), shown with the volume label of the SD card. File modes and owners
+    are the normal ones for user `flipper`; new files get `flipper`'s `umask`.
+  - **Object handles = inode numbers** (32-bit `ino_t`, spec O), so a handle stays valid while a
+    file is renamed on the Flipper. No FS change: `mtpd` keeps a **parent ring** (inode → parent
+    inode, ≤ 256 entries × 8 B, LRU) filled while it lists directories, and rebuilds a path by
+    walking the ring up to the storage root and finding each name with one scan of the parent
+    directory (from the buffer cache, directories ≤ ~1000 entries, O.7). A ring miss answers
+    `Invalid_ObjectHandle`; Windows lists the folder again. An "open by inode" FS call is
+    **only** added if the PR measures the rebuild as too slow, and then only for inodes the
+    caller owns.
+  - **Operations:** `GetDeviceInfo`, `OpenSession`/`CloseSession`, `GetStorageIDs`,
+    `GetStorageInfo` (free space from O.5's counters, never a zone map scan),
+    `GetObjectHandles`, `GetObjectInfo`, `GetObject`, `GetPartialObject`, `SendObjectInfo` +
+    `SendObject`, `DeleteObject`, `MoveObject`, and the object properties Windows Explorer asks
+    for (`GetObjectPropsSupported`, `GetObjectPropDesc`, `GetObjectPropValue`,
+    `GetObjectPropList` for file name, size, format, parent, date modified, persistent UID;
+    `SetObjectPropValue` on the file name = rename). Anything else: `Operation_Not_Supported`,
+    never a stall or disconnect (as R15.7). Events `ObjectAdded`/`ObjectRemoved` for changes made
+    through MTP; for changes made on the Flipper while connected, one `StorageInfoChanged` when a
+    file under `/home/flipper` is closed after writing (rate-limited to 1 per 2 s), so Explorer
+    refreshes. Files ≤ 4 GiB − 1 (O.3).
+  - **Data path:** one 1 KB buffer (one FS block) in `mtpd`; each USB transfer step moves one
+    block, so no request holds the FS longer than one block operation. An incomplete
+    `SendObject` (cable pulled, host cancel) removes the partial file.
+  - **Lock:** while the optional desktop PIN lock is on (stock mapping table; not specified yet, so this applies once it exists), `GetStorageIDs` returns no storage and the
+    device answers `Device_Busy` to object operations, as phones do; unlocking sends
+    `StoreAdded`.
+  - **Security (received-signal threat model):** the container parser is the attack surface from
+    the USB host. Lengths are checked against the 1 KB buffer and the container header before
+    any copy; names are checked (no `/`, no `..`, ≤ `NAME_MAX`, UTF-16 → UTF-8 bounded); the
+    parser builds on the host for fuzzing. Setting `USB files [on]` in K.7 (default on) turns the
+    interface off for people who never want it.
+  - **Flash writes:** internal flash 0. SD writes only for the files the user copies; reading
+    does not dirty atime (N).
 
 Acceptance:
 - AC10.1 The console keeps working while HID types 10,000 characters into a PC editor without loss.
-- AC10.2 The SD `/home` partition mounts on Linux, Windows and macOS as a drive; after eject and remount on
-  the Flipper, `fsck` is clean.
+- AC10.2 The SD `/home` partition mounts on Linux as a drive (`mount -t minix`; Windows and macOS do not
+  read MINIX file systems, section O); after eject and remount on the Flipper, `fsck` is clean.
+- AC10.4.1 Windows 11 and Windows 10 22H2, fresh user, no driver installed: the Flipper appears under
+  "This PC"; copy a 10 MB file both ways (SHA-256 equal), make a folder, rename, delete.
+- AC10.4.2 Linux (GNOME Files over gvfs, and `mtp-detect`): the same steps pass.
+- AC10.4.3 A 60-character V3 name (e.g. `galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub`)
+  shows in Explorer and round-trips unchanged; a name > `NAME_MAX` sent from the PC gets an
+  error, not a cut name.
+- AC10.4.4 Cable pulled during a 50 MB send: the partial file is gone, `mtpd` has exited,
+  `ramcheck` shows the RAM back, `fsck` is clean.
+- AC10.4.5 (once the PIN lock exists) PIN lock on: no storage visible; after unlocking it appears without replugging.
+- AC10.4.6 Host fuzzing of the container parser (≥ 1 h, sanitizers on): no crash, hang or
+  out-of-bounds access; malformed lengths give a response code.
+- AC10.4.7 A file written on the Flipper while connected appears in Explorer within 3 s.
 
 Responsiveness: AC10.R HID report latency ≤ 2 ms from the app's write (USB frame-bound); L1 holds while HID typing runs.
+AC10.4.R While a 50 MB file is copied over MTP in either direction, L1 holds, the console answers,
+and an alarm due during the copy rings ≤ 1 s late. Throughput is measured and recorded in
+PORTING.md (target ≥ 300 KB/s from the Flipper).
 
-RAM: kernel ≤ +150 B. Flash: ≈ +8 KB kernel.
+RAM: kernel ≤ +150 B (HID, mass storage) + ≤ 96 B (MTP). `mtpd` ≤ 8 KB while running (parent ring
+2 KB included), 0 B when unplugged. Flash: ≈ +8 KB kernel, ≈ +1.5 KB for MTP; `mtpd` ≈ 10–14 KB
+installed (XIP).
 
 ## Phase 11: App ports III: BadUSB and the USB modes
 
@@ -2569,6 +4195,117 @@ how to read the TSV log; that the canary never sends keystrokes, files or networ
 hides the console; that a malicious host can still lie about itself, so "power only" means "did
 nothing during this session", not "is safe".
 
+### 11.3 USB gadgets as window apps (owner pick, 2026-11-18)
+
+The owner picked the USB gadgets as the next family of window apps (K.8) after Kanpaia and
+Ordua. They cover the stock **USB** apps: Bad USB, and the USB half of the stock HID remote
+(keyboard, numpad, media keys, mouse, mouse clicker, mouse jiggler). U2F stays in Phase 17/18
+(it needs the CPU2 enclave). Every screen follows K.2 ("Pine meets modern UX": black title bar,
+bottom hint line, full selection bar).
+
+**Layers.** Kernel/HAL: R10.1/R10.2 (composite CDC console + HID keyboard, mouse and consumer
+control). User space: `libhid` (static), the `badusb` and `jiggle` commands, and two window apps.
+The apps never touch USB registers; they write reports to device files.
+
+- **R11.3.1 Device files** (Phase 10 detail, one HID interface with report ids, so one
+  re-enumeration covers all of it):
+  - `/dev/hidkbd`: `write()` of 8-byte boot keyboard reports (modifiers, 0, 6 keys); `read()`
+    returns the host's LED byte (Caps/Num/Scroll lock) when it changes.
+  - `/dev/hidmouse`: `write()` of 4-byte reports (buttons, dx, dy, wheel), dx/dy −127..127.
+  - `/dev/hidcons`: `write()` of 2-byte consumer usages (volume, mute, play/pause, next,
+    previous, brightness).
+  - `ioctl(HIDIOCSTATE)`: attached, configured by the host, suspended. `poll()` on any of them
+    wakes when that state changes (R4b.6), so no app polls in a loop.
+  - Group `usb`, mode 0660. `open()` returns `EBUSY` while a non-HID USB persona owns the bus
+    (the 11.2 canary, an 11.1 reader mode, mass storage): **one USB persona at a time**, and the
+    canary always wins (it must never send anything).
+  - **QEMU backend** (`BOARD=qemu`, no USB in QEMU): each report is printed on the console as one
+    line, `hid< kbd 02 00 0b 00 00 00 00 00`, and `HIDIOCSTATE` says "configured". nattest and
+    M2 check typed text through these lines. Kernel RAM for it ≤ 32 B.
+- **R11.3.2 `libhid`** (static, host-testable): ASCII/UTF-8 → usage + modifiers through a layout,
+  report builders, key-up after each key. Layouts are the stock `.kl` files (128 ASCII entries × 2 B = 256 B: usage + modifier << 8), read
+  from `/usr/share/hid/layouts/` or `/ext/badusb/assets/layouts/` into a 256 B stack buffer
+  when a script or the keyboard page starts. US is `const` in flash.
+- **R11.3.3 `badusb` command:** the stock Bad USB script engine (DuckyScript 1.0 and the stock
+  extensions: `STRING`, `STRINGLN`, `DELAY`, `DEFAULT_DELAY`, `REPEAT`, `HOLD`/`RELEASE`, `ALTCHAR`,
+  `ALTSTRING`, `SYSRQ`, `ID`, `WAIT_FOR_BUTTON_PRESS`, `MOUSE_*`, `MEDIA`...) ported to MINIX
+  (GPL, section on licence). `badusb [-l LAYOUT] [-n] FILE` runs a script; `-n` only checks it
+  and prints the first error with its line. It reads the script one line at a time (no whole
+  file in RAM), sleeps in `nanosleep`/`poll()` between keys, and stops on `SIGTERM` or `SIGINT`
+  within 100 ms with every key released (AC11.R). `ID` (VID/PID/strings) is honoured only for
+  the strings, VID/PID through a re-enumeration that `usbmode` does (one place for it).
+- **R11.3.4 Bad USB window app** (`badusb-gui`, launcher name **Bad USB**, `Type: window`):
+  - list of scripts in `/ext/badusb/` (paged, `.txt`), then a `confirm` window: script name,
+    layout, "Connect the USB cable to the target. Run?"; then a `text` window with the running
+    line, `n / total` lines and the host state (waiting for host, running, done, error at line N).
+  - It runs `badusb` as a child and shows its progress; Back sends `SIGTERM` (≤ 100 ms).
+  - Settings: layout (`enum` from the layout files), default delay; saved in
+    `/etc/flipper/badusb.conf` only on change (K.7 rule).
+  - Never runs a script without the confirm step; nothing runs at boot unless the owner adds a
+    `badusb` line to a timer or to `/etc/rc.local`.
+- **R11.3.5 USB Remote window app** (`usbremote`, launcher name **Teklatua**, Basque for keyboard):
+  pages (Left/Right on the first row) **Keyboard**, **Numpad**, **Media**, **Mouse**, **Clicker**,
+  **Jiggler**.
+  - Keyboard/Numpad: the desktop's on-screen keyboard (K.8 `input`) in a LIVE window: each key is
+    one `submit`, the app writes one report and its key-up. Holding OK sends Enter.
+    *(T28d as built: the submit carries the row's whole text and the app types the difference,
+    Del → Backspace; Enter, Backspace, Tab and Esc are `action` rows on the page. Holding OK on
+    the keyboard was left out: it needs a timer in the desktop, and in QEMU, where the launcher's
+    text is in RAM, M2's ACK.3 flood had no room left for it.)*
+  - Media: `action` rows (vol ±, mute, play/pause, next, previous) → `/dev/hidcons`.
+  - Mouse: the d-pad moves (acceleration while held: 1, 2, 4, 8 px per report every 10 ms),
+    OK = left click, long OK = right click, Back + Up/Down = wheel. *(T28d: the reports come one
+    per pad `repeat`, `REPEAT=10`, i.e. one per 60 Hz tick, ~17 ms.)* Key → report ≤ 20 ms
+    (the desktop forwards keys in this window kind: new K.8 window kind `pad`, raw key events
+    `key KEY press|release|repeat`, no rows).
+  - Clicker: `int` rate (1–50 clicks/s), `enum` button, OK starts/stops.
+  - Jiggler: `int` interval (default 30 s), `enum` pattern (tiny
+    1-px square, invisible: dx 0 report). OK starts the `jiggle` command **in the background**
+    and the app may close: the jiggler costs no window RAM.
+- **R11.3.6 `jiggle` command:** `jiggle [-i SECONDS] [-p tiny|zero]`, a ≤ 1 KB process (no stdio,
+  no malloc, no MM gap). It sleeps in `poll()` on `/dev/hidmouse` with the interval as timeout,
+  so it wakes once per interval and **not at all** while USB is unplugged or suspended (state
+  change wakes it). It puts `status jiggle J` on the desktop (`guimod` record, K.6) while it runs,
+  and `jiggle -k` (or the app's Stop) ends it. It needs no parking (spec 12d),
+  so the owner's typical third app (Mouse Jiggler) costs ~1 KB, not a window app's ~4 KB.
+- **R11.3.7 Canary and personas:** the 11.2 canary's `usb` module and these apps share the bus
+  through R11.3.1's `EBUSY`; the desktop status line shows the active persona (`HID`, `CAN`
+  for canary, `RD` for a reader mode). Starting the canary while `jiggle` runs asks once
+  (`confirm`) and stops `jiggle`.
+
+**Security.** These apps type into another computer, which is their purpose. Rules: only group
+`usb` can open the HID files; Bad USB always asks before running; the shell over USB CDC (K4) is
+a separate item; the reports are built by `libhid` from bounded inputs (layout file checked to be
+exactly 256 B, script lines cut at 256 B, `REPEAT` bounded); a fuzz test feeds random scripts to
+`badusb -n` on the host.
+
+**Acceptance.**
+- AC11.3.1 (QEMU, cloud) nattest: `badusb` on the stock example scripts prints the expected
+  `hid<` lines for US and DE layouts; `badusb -n` reports a bad line with its number; Back in the
+  Bad USB app stops a `DELAY 10000` script within 100 ms with all keys released (last report all
+  zeros).
+- AC11.3.2 (QEMU) Teklatua: typing "Kaixo!" on the Keyboard page prints the right reports;
+  Media "vol +" prints one consumer report; the Mouse page prints a move report per key repeat.
+- AC11.3.3 (QEMU) `jiggle -i 2` prints a mouse report every 2 s ± 0.2 s and none while
+  `HIDIOCSTATE` says unplugged (QEMU test hook); the desktop shows `J`; `jiggle -k` ends it.
+- AC11.3.4 (device) AC11.1 (stock example scripts on Windows and Linux, US and DE), AC10.1;
+  the jiggler keeps a Windows PC from locking for 1 h; the console keeps working during it.
+- AC11.3.5 (device) With the canary armed, opening `/dev/hidkbd` fails with `EBUSY`.
+
+**Responsiveness.** Window keys stay local (K.8); Mouse page key → report ≤ 20 ms; Back stops a
+script ≤ 100 ms; L1 holds while a script types 10,000 characters.
+
+**RAM.** Each window app ≤ 4.5 KB open (K.8 rule, ACK8.3 method); `badusb` ≤ 3 KB while running
+(256 B layout on its stack, one 256 B line); `jiggle` ≤ 1 KB; kernel: R10.1 budget (≤ +150 B),
+QEMU backend ≤ 32 B. **Flash writes:** 0 at run time (settings on the card, only on change).
+Flash: `libhid` + engine ≈ 8 KB installed, apps ≈ 4 KB each.
+
+**Notes for the system manual** (`docs/manual/usb-gadgets.md`, written by the PRs that add the
+apps): how to put scripts and layouts on the card, the confirm step, how to stop a script, the
+jiggler running without its window and the `J` mark, why the canary blocks the HID apps, and
+that a host sees a keyboard named after the Flipper unless a script's `ID` line changes it.
+
+
 ---
 
 ## Phase 12: Swapping to the SD card
@@ -2660,6 +4397,13 @@ Design rationale: report Part 4.
 - **R12.12** Swap-in:
   - decrypt and verify;
   - on a tag mismatch, the process MUST be killed (SIGKILL), never run.
+- **R12.10a** Per-chunk encryption, so R12.29 (write only what changed) keeps working: each 4 KB
+  chunk has its own nonce (boot nonce, slot, chunk number, the chunk's own write counter) and its
+  own tag, and only changed chunks are re-encrypted. 48 tags × 16 B do not fit in one sector, so
+  the header grows to 2 sectors (on the card only). The chunk counters live in the header, and the
+  header has its own tag over the chunk counters and tags, bound to the slot's RAM write counter
+  (R12.10), so an old chunk or header can't be replayed; RAM stays as R12.26. The header must not hold plaintext CRCs in `crypt` mode (they leak about the
+  data). Decide this before 12b's format is fixed.
 - **R12.13** QEMU build: software AES-GCM behind the same interface (flash only).
 
 ### 12c. Later extension (separate sign-off)
@@ -2805,6 +4549,358 @@ background work must either be very small or be swapped cleverly. Each backgroun
   per-slot write counters (16 × 4 B, needed against rollback, R12.10) and the boot nonce SHOULD
   live in SRAM2 (A.6). Total MM swap state ≤ 96 B.
 
+### 12g. SD card wear (owner request 2026-11-17; milestone M3)
+
+Swap can't avoid wearing the card, but it can write much less, and write in a shape the card's
+controller (FTL) handles well. The analysis is in `reports/sd-swap-wear-analysis.md` (project
+files). In short: typical use writes about 1 MB a day, which is harmless on a card with normal wear
+levelling. The cases worth guarding against are a cheap card whose wear levelling only has a small
+pool of free blocks (a card that was once full and never erased), and **ping-pong**: a parked app
+with a short timer that the reserve writes out after 10 s and its timer brings back a minute later
+(≈ 35 MB a day).
+
+Owner rule for this section: only measures that cost **0 B of RAM** and **no noticeable CPU** on
+the foreground path (the AmigaOS feel: the UI always answers, whatever the rest is doing).
+
+- **R12.29 Write only what changed.** Sector 0 of a slot (R12.2) also holds a **CRC-32 of every
+  4 KB chunk** of the image (192 KB / 4 KB = 48 × 4 B = 192 B, fits in the 512 B header):
+  - swap-out first reads the slot's header (a read does not wear the card, ≈ 1 ms). If its magic,
+    pid, `dstart`, `dlen`, `sstart` and `slen` match the image now, a chunk whose CRC from RAM equals
+    the stored one is **not written**. If nothing changed, nothing is written, not even the header;
+  - otherwise (other pid or layout, bad header) every chunk is written, as today;
+  - the CRC is the one swap-out already computes (R12.28), restarted at each chunk, so the CPU cost is
+    the same as today plus one sector read, and every chunk not written saves a polled SD write
+    (≈ 5–10 ms of disk-task time per 4 KB);
+  - swap-in checks each chunk against its own CRC (this replaces the one CRC of the whole image);
+    a mismatch kills the process as R12.28;
+  - the reserve (R12.5 b) works chunk by chunk as today: each step re-reads the header (MM's `mbuf`
+    does not live between steps) and the new header is written last, from CRCs taken in that job
+    (the process is blocked, so its RAM does not change while the job runs; `sw_touch` still
+    voids the job);
+  - a stale chunk can only survive a CRC-32 collision of a changed chunk (2⁻³² per compared chunk;
+    at ~1000 compares a day, once in about 10 000 years per device). Accepted: it is the same
+    strength as today's card-error check;
+  - RAM: +0 B (header in `mbuf`, as today).
+- **R12.30 The reserve leaves alone what will wake soon.** A process brought back from the card by
+  its own wake (timer, signal) gets a flag (`SWAPHOT`, a spare `mp_flags` bit). The reserve swaps a
+  `SWAPHOT` process out only after it has waited **≥ 120 s** (instead of 10 s); the flag clears
+  when it has waited that long once. On-demand swap-out (R12.5 a) ignores the flag: when RAM is
+  really needed, the foreground wins. A parked app with a 1-minute timer therefore stays in RAM
+  unless memory runs short, and when it is written, R12.29 writes only its changed chunks. RAM +0 B,
+  CPU: one flag test per candidate.
+- **R12.31 Large, sequential writes.** Swap-out computes the chunk CRCs, then writes the header
+  **first** and the chunks to be written in ascending order (no jump back to sector 0 at the end).
+  The WINCHESTER task passes a request of several sectors to the HAL as **one CMD25** (up to 4 KB,
+  the swap chunk; today it splits into 1 KB transfers), optionally with ACMD23 (pre-erase count).
+  Same bytes over SPI, fewer commands and busy waits: the card sees one sequential write. The
+  4 KB chunk stays the unit that other card requests can get in between (R12.23), so no foreground
+  request waits longer than today. RAM +0 B.
+- **R12.32 Partitions aligned to the card's erase unit.** `mkpart` (first-boot setup) and the PC
+  image tool align every partition start to **4 MiB** (the usual SD allocation unit) instead of
+  1 MiB, so the 3 MB of swap slots lie inside one erase unit. New installs only; an existing card
+  keeps its layout. Install time only, RAM +0 B.
+- **R12.33 Tell the card what is empty (install time only; DISCARD at run time: R12.40).** First-boot setup (`/etc/setup`
+  stage 2) sends **ERASE** (CMD32/CMD33/CMD38, supported in SPI mode) over the new `/usr`, swap and
+  `/home` partitions before `mkfs`, with a line on the screen ("Preparing the card..."). A card that
+  was once full (camera, phone) gets back its whole free pool for wear levelling. HAL:
+  `hal_disk_erase(first, last)`; WINCHESTER: a root-only ioctl (`DIOCERASE`) on a partition device;
+  command: `erase /dev/hdN` (refuses a mounted partition). Never at run time: no erase on swap-in,
+  kill or at every boot (on cheap cards an erase can itself trigger garbage collection, and a 64 MB
+  erase can take seconds). RAM +0 B (kernel: a few bytes of stack in the WINCHESTER task).
+- **Left out on purpose** (they cost RAM, see the report): a swap KB-written counter in `free -v`
+  and a daily reserve budget (≈ 4 B in MM, within R12.26's budget but not 0 B), and rotating the
+  slots over the 64 MB partition per boot (needs a stored offset; helps only very primitive FTLs).
+  They can come back with the owner's yes.
+- **Hibernation.** If a whole-RAM hibernation image is ever added (analysis
+  `reports/hibernation-analysis.md`, level 2), R12.29, R12.31 and R12.32 apply to it too; frequent
+  cycles should use the cold-boot level 1, which writes nothing.
+
+Acceptance criteria:
+- AC12.14 QEMU (`tests/swapwear`, counting sectors written through the WINCHESTER task): swap a
+  32 KB process out, swap it in, park it again without touching its heap: the second swap-out
+  writes **0 sectors**; change 1 byte of the heap: it writes the header and **one** 4 KB chunk.
+  AC12.4/AC12.13 (one flipped byte on the card kills on swap-in) still pass, for a skipped chunk too.
+- AC12.15 QEMU: a parked test app with a 30 s timer, reserve on and free RAM under the reserve,
+  for 10 min: no reserve swap-out of it (swap trace); an `exec` that needs its memory still swaps
+  it out at once.
+- AC12.16 Device: the swap-in time of a 64 KB image (today 69 ms) and L1/L2 during a swap-out are
+  no worse; a 4 KB swap write is one CMD25 (trace). Numbers in PORTING.md.
+- AC12.17 Device: `/etc/setup` on a card filled with data before: ERASE runs on the three partitions,
+  the screen shows the step, `mkfs` and the first boot finish; `erase` on a mounted partition fails
+  with `EBUSY`.
+
+### 12h. Swappable blocks for apps (owner request 2026-11-17; milestone M4)
+
+An app written for it may keep **more working data than fits in RAM**: numbered 4 KB blocks on
+the swap partition that it reads into, and writes from, buffers of its own. There is no MMU, so
+this is not transparent paging: like overlays or EMS, the app asks for a block by number and gets
+it in a buffer (a "frame"); pointers never point at data on the card. A library gives the
+comfortable form (frames, LRU, record arrays), and in Berry the illusion is complete (`vbytes`).
+Analysis: `reports/swappable-blocks-api-analysis.md` (project files), which also rejects the
+fully virtual variant (MPU trap + instruction emulation in the kernel: kernel RAM, 100–300× slower
+per access, a large privileged attack surface).
+
+Use: working memory that lives as long as the process (map tiles, Sub-GHz history, NFC dumps and
+nonce logs, the text of a large file in an editor, Berry data arrays). Data that must survive the
+process or a reboot stays in files. Owner rule as in 12g: kernel 0 B, MM a few bytes, no
+noticeable CPU on the foreground path.
+
+- **R12.34 Where the blocks are, and who gets how much (owner, 2026-11-17: the app declares it;
+  no fixed equal share).** The swap partition (R12.1) holds the 16 swap slots in its first 3 MB
+  (R12.2). The rest is the **block space**, shared by all processes:
+  - it is cut into **256 extents** of equal size (block space / 256, rounded down to whole blocks;
+    MM gets the partition size at `MMSWAPON`, it already probes the end). 64 MB partition: ≈ 240 KB
+    per extent; 4 GiB: 16 MB; four 4 GiB subpartitions: 64 per subpartition, 64 MB each;
+  - a process gets block space **only by asking**: `blk_open(bytes)` (R12.38) reserves one
+    **contiguous run of extents** (first fit), rounded up to whole extents, and the app's block
+    numbers 0…N−1 are counted from the start of that run. If no free run is large enough the call
+    fails with `ENOSPC` (or, with `BLK_ANY`, gets the largest free run and is told its size);
+    nothing else is evicted or shrunk for it. A run never crosses a subpartition;
+  - **reservation table in MM: 2 B per process slot** (first extent, number of extents; 16 × 2 =
+    **32 B**). That is the price of free sizes instead of a fixed 1/16 (which cost 0 B); it is the
+    only table. Per-request work stays a range check and one addition;
+  - a reservation ends with `blk_close()`, `exec` (the program identity changes, R12.35) or exit.
+    A forked child starts without one. **Resizing at run time:** a second `blk_open` with a
+    smaller size gives the tail back at once (its extents go through R12.40 like a closed run); a
+    larger one grows the run in place if the extents right after it are free, otherwise
+    `ENOSPC` and the old run stays (moving data would cost card writes; the app can close and open
+    again). Run-time sizes cost the same 32 B as sizes fixed at install time would, and need no
+    record on the card; the price is possible fragmentation of the block space, which stays small
+    with at most 16 runs in 256 extents (first fit, the largest free run shown by INFO);
+  - limits: one process may hold at most **half** of the block space unless it runs as root (a
+    rule, 0 B), so one greedy app cannot lock everybody out; the launcher's Running list and
+    `free -v` show each process's reservation, so the user can see and end the holder;
+  - a block is **1 header sector + 8 data sectors** (4.5 KB on the card, 4 KB for the app). The
+    64 MB partition holds ≈ 13 800 blocks (≈ 54 MB of data) in all;
+  - **layout on big cards (owner, 2026-11-17):** on a card of **8 GB up to below 32 GB**, first-boot setup
+    puts swap **at the end of the card** and gives it **50 %** of the space after `/usr`, at most
+    4 GiB − 1 MiB (R12.39: one partition stays below 4 GiB); `/home` comes right after `/usr`
+    (also at most 4 GiB − 1 MiB); whatever lies between them stays free for later. The MBR entry
+    stays `/dev/hd3` (MBR order need not be disk order): `/usr`, `/home`, free space, swap.
+    Smaller cards keep today's 64 MB swap between `/usr` and `/home`. Examples (root ≈ 64 MB,
+    `/usr` 2 GB): 8 GB card (≈ 7.4 GiB) → swap ≈ 2.7 GiB (≈ 2.4 GB of blocks to share),
+    `/home` ≈ 2.7 GiB; 16 GB and larger → swap 4 GiB (≈ 3.6 GB of blocks), `/home` 4 GiB, the rest free;
+  - **maximum swap on cards of 32 GB or more (owner, 2026-11-17):** swap is the primary partition
+    `hd3` at the end of the card, split into **four MINIX subpartitions** `hd3a`…`hd3d` of 4 GiB −
+    1 MiB each (≈ 16 GiB). `/etc/rc` gives MM `hd3a`; MM finds the other three itself (their minors
+    follow `hd3a`'s, and each must have the swap type 0x82 in `hd3`'s subpartition table; `hd3` itself has the MINIX type 0x81 as a subpartition container, so `MMSWAPON`, R12.1, accepts a subpartition of the SD card whose own table entry is 0x82), and keeps their number (1 B, so MM
+    +1 B). The 16 swap slots stay in `hd3a`; the 256 extents are 64 per subpartition (≈ 14 GB of
+    blocks to share; one reservation at most one subpartition, ≈ 3.6 GB). A missing or short
+    subpartition only removes its extents; swap itself needs only `hd3a`. With root, `/usr` 2 GB and
+    `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
+    partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
+  - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
+    be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
+    swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and extents are
+    recomputed from the new size), and `/home` takes the freed space. Growing the MINIX file system
+    in place needs a small `growfs` tool (new zones and bitmap blocks; the simplest form is `mkfs`
+    leaving room for the bitmaps of the largest possible size); that tool is a later task;
+  - `mkpart` gets a way to place a partition at the end (e.g. `82:50%@end`), still never moving an
+    existing partition; install time only, an existing card keeps its layout;
+- **R12.35 Block header and validity.** Sector 0 of a block (on the card only, read and written
+  through the last sector of `mbuf` like the swap header, R12.26): magic `GZBK`, slot, pid, boot
+  stamp, the program's identity (`mp_dev`, `mp_ino`, `mp_ctime`), block number, a CRC-32 of
+  **each of the 8 data sectors** (hardware CRC unit, as R12.28), and the space 12b needs.
+  - A block is valid only if magic, slot, pid, boot stamp and program identity match the caller.
+    Otherwise it is someone else's leftover and reads as **all zeros**: every block 0…N−1 exists
+    and starts zeroed (sparse memory), so there is no allocate or free call in MM.
+  - Process exit, `blk_close` or `exec`: the reservation is freed and nothing is written (0 writes,
+    no erase; R12.33; DISCARD at idle, R12.40). Whoever reserves those extents next has another
+    pid or program and cannot see the old blocks: they read as zeros. `fork`: the child has no
+    reservation (blocks are not inherited).
+  - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
+    MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
+    nonce (R12.10) takes its place.
+  - The per-sector CRC lets an app read part of a block (from 512 B) with every sector checked.
+- **R12.36 The MM request.** A new `MEMINFO` request `MI_BLK` (no new call number). `m1_p1` points
+  to a request descriptor **in the caller's memory** (`struct blkreq`: operation and flags, block
+  number, first sector and sector count, buffer, status; ≈ 16 B). MM reads it with `sys_copy`, so
+  MM keeps no request state of its own. Checks: blocks on (R12.38), number in range, sector range
+  within the block, the buffer wholly inside the caller's data or stack segment (WINCHESTER checks
+  again with `numap`), caller not `NOSWAP` in `plain` mode (R12.37). Then:
+  - **GET** (whole block or a sector range): one contiguous read of the header and the sectors
+    needed, **straight into the caller's buffer** (WINCHESTER with `PROC_NR` = the caller, as
+    `sw_io()`; no FS, no buffer cache, no copy); invalid block → the buffer is zeroed; a CRC
+    mismatch or read error → `EIO`. The process is **not** killed: the data is not its image, the
+    app decides;
+  - **PUT** of a whole block: CRCs from the buffer, header + 8 sectors as **one CMD25** (R12.31). No
+    read before the write: the library knows which frames are dirty. Flag `BLK_IFCHANGED`: read the
+    header first (≈ 1 ms) and write nothing if every sector CRC matches;
+  - **PUT** of a sector range: read the header, write the new header, write the range (two writes;
+    for records of 1 KB and less);
+  - **OPEN** (bytes, flags) and **CLOSE**: reserve or free the caller's run (R12.34);
+  - **INFO**: the caller's reserved blocks, the largest free run, the whole block space, block
+    size, mode (`plain`/`crypt`), card present.
+  Error codes: `ENOSYS` (blocks off or no swap partition), `ENOSPC` (OPEN: no free run that
+  large), `EBADF` (GET/PUT without a reservation), `ERANGE`, `EIO`, `ENXIO` (card out,
+  N.6), `EPERM` (R12.37).
+- **R12.37 Responsiveness, isolation, card.**
+  - **Foreground** (`FGAPP`): served at once; the wait is the app's own.
+  - **Background** callers are served like the reserve (R12.5 b, R12.23): if a key came in the last
+    second or a process waits for the CPU, MM sets `BLKWAIT` (a spare `mp_flags` bit) and does not
+    reply; `sw_step()` serves one request per step at idle, after a swap-in the user waits for and
+    before reserve swap-outs, re-reading the descriptor from the caller. Their PUTs count in the
+    reserve's write budget (`sw.wkb`, 256 KB a minute), so a background app can never write more
+    than the reserve could. A `BLKWAIT` process is in an MM call, so it is never a swap victim.
+  - One request is at most ≈ 11 ms of disk-task time (PUT of 4.5 KB), and senders to MM are queued
+    in order, so other MM calls (`kill`, `alarm`, `exit`) wait at most one block operation; FS,
+    the screen and the buttons do not wait at all.
+  - A process reaches only its own reservation (MM computes the position from the caller's table
+    entry; the app gives only a block number, checked against the run's length). Raw `/dev/hd3`
+    stays root-only.
+  - `swap=plain`: blocks are on the card in clear like swap images, so set-uid, set-gid and
+    `Secret: yes` images get `EPERM` (the R12.28 `NOSWAP` condition). `swap=crypt` (12b): per-block
+    AES-GCM as R12.10a (nonce = boot nonce, slot, block number, the block's counter from its
+    header; tag in the header; no plaintext CRCs). Known limit: no protection against rolling one
+    block back to an older version of the same session (it needs the card pulled, edited elsewhere
+    and put back; N.6 notices the pull, not the edit). Accepted; the manual says so.
+  - Card pulled (N.6): the driver answers `ENXIO` while the card is out **and while a different
+    card is in** (CID), until the original is back, and never touches the other card. MM treats
+    `ENXIO` as "wait for the original", not as lost data (as swap does, R-N6.5): a **background**
+    request stays in `BLKWAIT` and `sw_step()` retries it (one card-detect read per try); a
+    **foreground** request gets `ENXIO` at once, so the UI never hangs on the card, and `libblk`
+    keeps its dirty frames and retries on the next call. The process is **not** killed (its image is
+    in RAM). When the original card is back, every block is valid again (headers match). A write cut
+    in half shows as `EIO` on that one block.
+  - Swapped or parked processes: their blocks stay on the card, nothing moves. `app_park()` and
+    `app_hibernate()` (R12.18, R12.19) call `vm_flush()` first.
+- **R12.38 Library, Berry, switch.**
+  - `/etc/rc.conf` `blk=off|on`: before 12b the default is `off` (like `swap=plain`, R12.28); with
+    12b it goes on together with `swap=crypt`. Blocks work with `swap=off` if the partition exists
+    (MM opens it for blocks only).
+  - **Declaring the size.** At run time: `blk_open(bytes, flags)` before the first block, `BLK_ANY`
+    to take what is free, `blk_close()`. In the package: the manifest field `Blocks: 64M` (the most
+    the app will ask for). `pkg install` compares it with the card's block space and warns ("needs
+    64 MB of card memory, this card has 54 MB") but installs anyway, because the card can change;
+    the launcher shows the same line when `blk_open` fails, and the app shows its own message
+    (an app that can live with less uses `BLK_ANY`). MM does not read manifests.
+  - libc `<blk.h>` (flash only): `blk_open(bytes, flags)`, `blk_close()`, `blk_info()`, `blk_get(id, buf)`, `blk_put(id, buf)`,
+    `blk_putf(id, buf, flags)`, `blk_read(id, off, buf, len)`, `blk_write(id, off, buf, len)` (off
+    and len in multiples of 512).
+  - `libblk` (flash only, ≈ 1.5 KB): `vm_open(pool, size, framesize)` with frames of 1, 2 or 4 KB
+    in the app's own memory, `vm_get(v, off, VM_RD|VM_RW|VM_PIN)` (a pointer valid until the next
+    `vm_get` unless pinned), `vm_unpin`, `vm_flush`, `vm_drop` (no write), and `VA_GET(v, T, i)`
+    for arrays of fixed-size records that never cross a frame. 8 B of metadata per frame, in the
+    app.
+  - Berry module `blk` (C, flash): `blk.vbytes(size)`, a bytes-like object whose `[]`, `get` and
+    `setbytes` go through two 1 KB frames. Berry objects themselves stay in the VM heap (pointers,
+    R12.22); only raw data goes to blocks.
+  - **Rule for app authors** (manual): whatever the current screen or a real-time loop needs is in
+    frames or plain RAM; blocks are for what is "behind the screen". Emulation (NFC, RFID,
+    iButton) and radio, DMA or USB streams never wait for a block. Prefer 1 KB frames for records,
+    4 KB for sequential data. Times (before R12.31): GET 512 B ≈ 1.2 ms, 1 KB ≈ 1.7 ms, 4 KB ≈ 5 ms;
+    PUT 4 KB ≈ 6–11 ms; 1 MB sequential ≈ 1.2 s.
+- **Later (not in this step):** asynchronous `PREFETCH` (one request in flight per process, the
+  descriptor's status field set by MM when the read lands, optional new `SIGBLK`; 0 B in MM); a
+  "discard on swap-out" hint for frame pools (+4 B per process); a soft write cap for the
+  foreground app (+4 B in MM); a Merkle root against rollback in `crypt` (32 B per process). Each
+  needs the owner's yes.
+
+- **R12.39 Partitions past 4 GiB (owner, 2026-11-17).** The stock Flipper takes microSD cards up to
+  256 GB (SDHC/SDXC), and the HAL already uses block addresses (CCS, `sd_block_addr`). The 4 GiB
+  limit is only in the WINCHESTER bookkeeping: `struct device` keeps `dv_base` and `dv_size` as
+  32-bit **byte** counts, so `drvlib.c` (`lowsec << SECTOR_SHIFT`) overflows for a partition that
+  starts past 4 GiB, and `mkpart` therefore keeps everything below 4 GiB.
+  - On ARM, `dv_base` holds the partition's **first sector** (32-bit: up to 2 TiB) instead of a byte
+    offset, and `dv_size` the partition's **sector count** (amended 2026-11-17 for section O: a
+    MINIX V3 `/home` may be larger than 4 GiB; swap partitions keep their 4 GiB − 1 MiB rule).
+  - **64-bit request position (section O):** `POSITION` (`m2_l1`) holds the low 32 bits and a new
+    `HIGHPOS` (`m2_l2`, unused by disk messages today) the high 32 bits, as in MINIX 3. Every
+    sender of `DEV_READ`/`DEV_WRITE`/`DEV_GATHER`/`DEV_SCATTER` sets it (0 when not needed): FS
+    `dev_io`, MM swap and block I/O. Drivers other than the SD card ignore it. The driver checks
+    the end of the request against `dv_size` in sectors.
+  - **Raw access past 4 GiB (section O):** block-device ioctl
+    `DIOCPRW { u32 sector; u16 count; u8 write; char *buf; }`, done by the driver straight into
+    the caller's buffer (≤ 64 sectors); FS refuses a write through it on a mounted device; libc
+    `bread()`/`bwrite()`. `DIOCGETPS` returns first sector and sector count (u32 each). Plain
+    `read`/`lseek` on `/dev/hdN` keep their 32-bit range. Changes: `drvlib.c` (partition and subpartition setup and limits),
+    `src/kernel/arm/disk.c` (`w_schedule`: sector = `dv_base` + offset sector, no more
+    `dv_base >> SECTOR_SHIFT`; `w_init`: whole-disk size and clipping), the partition ioctls (`DIOCGETP`/`DIOCSETP`
+    report and take the base in bytes as before while it fits, `EOVERFLOW` past 4 GiB; `size` stays
+    bytes), and their users are checked in the same PR (`mkpart`, the selftest `board` module that
+    reads `p.size`), with the unit written in `<minix/partition.h>`. Kernel RAM +0 B (same fields,
+    another unit).
+  - `/dev/hd0` (the whole card) stays clipped to 4 GiB as today: only partitions reach past it.
+  - `mkpart`: drops the 4 GiB ceiling for partition **placement** (start and end anywhere up to
+    the card's size, 2 TiB at most); swap partitions at most 4 GiB − 1 MiB, MINIX (0x81) file
+    systems any size up to the card (section O); `-l` prints starts and sizes past 4 GiB correctly. `/etc/setup` uses it for the layout in R12.34.
+  - More than four file systems later (space between `/home` and swap on very large cards): MINIX
+    subpartitions of `hd4` (`hd4a`…), each below 4 GiB. Not in this step.
+  - Tests: host `parttest` with partitions starting at 4 GiB, 8 GiB and 255 GiB; QEMU with a sparse
+    64 GB disk image: `/home` and swap past 4 GiB, mkfs, mount, swap-out and swap-in, a block PUT/GET
+    at the last block. Device: a 64 GB or larger card in the Flipper (AC12.25).
+
+- **R12.40 Tell the card what is garbage (DISCARD; owner, 2026-11-17).** SD cards from version 5.1
+  have **DISCARD** (CMD32/CMD33 for the range, CMD38 with argument 1), the SD form of TRIM: the
+  card only marks the range as unused and does not erase it, so its controller stops copying dead
+  data during garbage collection (less wear, faster later writes). R12.33 (no ERASE at run time)
+  stays; DISCARD is the one run-time exception, because it is cheap.
+  - Only if the card says so: the `DISCARD_SUPPORT` bit of the SD Status (ACMD13), read once at
+    card init by the HAL (`hal_disk_discard(first, last)`, `ENOTTY` otherwise, busy wait with the
+    card's timeout and card-detect checks as N.6). WINCHESTER: `DIOCDISCARD` on a partition device,
+    callable by MM and root; QEMU: fills the range with zeros so tests see it.
+  - **`blk_discard(id, n)`** (and `vm_drop()` for whole blocks): the app says it no longer needs
+    those blocks. Always served in the idle class (`BLKWAIT`, R12.37), never on the foreground
+    path; on a card without DISCARD it does nothing. Either way a discarded block's contents are
+    **undefined** for the app (old data, or zeros on QEMU), and the library treats it so.
+  - **After a reservation ends** (exit, `exec`, `blk_close`) and the process did at least one PUT
+    (a spare `mp_flags` bit, `BLKUSED`): MM sets bit *i* of a 16-bit "to discard" mask (MM
+    **+2 B**) and keeps table entry *i* as it is, so the run stays taken until `sw_step()` has
+    discarded it at idle (up to 256 MB per step, after swap-ins and block requests, before reserve
+    swap-outs); then the entry is cleared and the extents are free. A new process in slot *i*
+    gets no reservation until then (`blk_open` waits in `BLKWAIT`, at most one idle step). No
+    discard can ever touch a live reservation. On a card without DISCARD the entry is freed at once.
+  - **At `MMSWAPON`** the whole block space and the swap slots are discarded once, at idle, in
+    256 MB steps (progress kept in the reserve job's existing `sw.off`, 0 B). Nothing else is
+    discarded.
+  - Costs: MM +2 B (mask), kernel 0 B (a few bytes of stack
+    in WINCHESTER), no flash writes, no writes to the card's data.
+
+Acceptance criteria:
+- AC12.18 QEMU `tests/blk`: GET without `blk_open` gives `EBADF`; after `blk_open(1 MB)` block 0
+  and the last block read as zeros and `ERANGE` comes one past the end; `blk_open` larger than the
+  free space gives `ENOSPC`, with `BLK_ANY` the largest free run; a non-root request for more than
+  half of the block space gives `ENOSPC`; two processes reserve 3 and 5 extents and their runs do
+  not overlap (`free -v`); after the first exits, a 4-extent request fits only where it should; PUT then GET of 4 KB and of a 1 KB range return the data; a byte flipped on the
+  card (raw write as root) gives `EIO` on GET of that sector and not of the others; the process is
+  not killed.
+- AC12.19 QEMU: after the writer exits, a new process that reserves the same extents reads zeros;
+  the same after `exec` of another program; after a pid wrap (forced through a test hook) too; a
+  forked child has no reservation; a second process cannot reach the first one's run by any
+  argument.
+- AC12.20 QEMU (sector counter in WINCHESTER, as AC12.14): `blk_putf(..., BLK_IFCHANGED)` of
+  unchanged data writes 0 sectors; a whole-block PUT is one 9-sector write; process exit writes
+  nothing.
+- AC12.21 QEMU: a background caller while keys arrive is answered only at idle; its PUTs stop at
+  the reserve budget; a foreground caller is answered at once. `MI_SWAPTEST` 2 (card pulled):
+  a foreground GET gets `ENXIO` and the process lives on; a background GET waits and completes
+  when the card is back (QEMU `DIOCFAKECARD`).
+- AC12.22 `swap=plain`: a `Secret: yes` test app and a set-uid image get `EPERM`; `blk=off` gives
+  `ENOSYS`.
+- AC12.23 Device: L1 and L2 within budget while a background app reads blocks in a loop and while
+  the foreground app scrolls a 1 MB block-backed map; measured GET/PUT times in PORTING.md.
+- AC12.25 Device (R12.39): on a card of 64 GB or more, first-boot setup places `/home` and swap past
+  4 GiB as R12.34; `fsck`, swap-in of 64 KB and a block GET at the last block work; a card pulled and
+  put back (N.6) carries on.
+- AC12.26 QEMU (R12.40): a process PUTs 10 blocks and exits; at idle the trace shows one
+  `DIOCDISCARD` of its run and nothing while keys arrive; its extents are free only after that;
+  a new process's `blk_open` meanwhile waits one idle step and no discard ever touches a live run; on a card without DISCARD no
+  ioctl reaches the HAL. Device: a card with DISCARD (SD 5.1) takes it, L1/L2 unchanged.
+- AC12.24 Berry: a script fills a 2 MB `vbytes` and reads it back (CRC of the whole) with two 1 KB
+  frames; VM heap growth ≤ 3 KB.
+
+RAM budget (12h):
+- kernel +0 B; MM **+39 B** (reservation table 32 B, boot stamp 4 B, discard mask 2 B, number of
+  swap subpartitions 1 B; with today's ≈ 55 B of swap state this stays within R12.26's 96 B, SHOULD
+  be in SRAM2) and two `mp_flags` bits (`BLKWAIT`, `BLKUSED`); FS and INIT +0 B;
+- a process that does not use blocks: 0 B; one that does: its own frames (from 1 KB) + 8 B per
+  frame + the 16 B descriptor;
+- flash: MM ≈ 1–1.5 KB, libc ≈ 0.3 KB, `libblk` ≈ 1.5 KB, Berry `blk` ≈ 1 KB.
+- Effect (analysis section 7): the RAM free after login does not change (const data is already in
+  XIP flash; servers cannot use blocks), but the peak of data-heavy apps drops by 20–50 % (NFC
+  −4…12 KB, Sub-GHz −3…6 KB, IR −2…4 KB, ports with history −2…8 KB), and parked images get
+  smaller (faster L6, fewer swap writes).
+
 ### 12f. Notes for the system manual
 
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
@@ -2814,10 +4910,17 @@ background work must either be very small or be swapped cleverly. Each backgroun
   it on, with a checksum against card errors; apps marked `Secret: yes` and set-uid programs are
   never swapped). Later `swap=crypt` (12b) encrypts it with a key that is new at every boot and
   becomes the default. Nothing swapped survives a reboot, and removing the card ends the swapped apps.
+- Which card to use with swap (12g): a branded card, best a "High Endurance" or industrial (pSLC)
+  one, 8–32 GB, new or erased. First-boot setup erases the new partitions; `erase` does it by hand.
+  Swap writes only the parts of an app that changed, so a parked app that sleeps costs the card
+  nothing.
 - How to turn swap off (`swap=off` in `/etc/rc.conf`) or change the reserve (`MMSWAPRES`), and the
   effect: parked apps stay in RAM.
 - For app authors: R12.16–R12.21 (choose the cheapest tier, no pointers in a hibernation blob, no
   secrets in it, size targets).
+- Swappable blocks (12h) for app authors: the `blk`/`libblk` API and the Berry `vbytes` object,
+  the rule "what the screen needs stays in RAM", the times, that blocks die with the process and
+  with a reboot, that `blk=on` before 12b stores them in clear, and the rollback limit of `crypt`.
 
 Acceptance criteria:
 - AC12.1 QEMU: start an app that needs more memory than is free while the launcher and a shell are
@@ -3093,6 +5196,89 @@ RAM: kernel SRAM1 ≈ +1 KB (task stack + state), SRAM2 6–8 KB (taken from the
 Acceptance: AC16.1 Pairing, unpairing and reconnect after reboot work with Android and iOS.
 AC16.R BLE remote keypress → host event ≤ 30 ms p99 (connection interval 7.5–15 ms).
 
+### 16.0 Radio stacks on the SD card: `radio` (owner request 2026-11-18)
+
+The owner keeps several ST CPU2 images on the SD card (BLE full, BLE light, BLE + Zigbee,
+BLE + Thread, Zigbee, Thread, ...) and switches between them without a PC. CPU2 runs code only
+from its secure flash and only FUS can install an image, so a switch is a **maintenance swap**,
+not a hot swap: one reboot into maintenance mode, the FUS install, one or two reboots, about
+30–90 s, the radio gone meanwhile. Report: `reports/cpu2-stack-swap-analysis.md` (project files).
+Sizes and install addresses below are ST's (AN5185, STM32CubeWB release notes): check them for
+the exact versions; record measured values in PORTING.md.
+
+- **R16.0.1** SD layout: `/ext/radio/<name>/` holds the ST image unchanged
+  (`stm32wb5x_*_fw.bin`) and a `manifest` (TSV, one key per line): `name`, `type` (as R2b.10
+  reports it), `version`, `fus` (minimum FUS version), `addr` (ST install address for 1 MB
+  parts), `size`, `sha256`, and optional `note`. Example `name zigbee-baserria`
+  (*baserria*: the farmhouse network). No ST image is shipped in the MINIX image.
+- **R16.0.1a** Getting the images (owner 2026-11-18): host tool `tools/radio-fetch.py`, run on a
+  PC (the Flipper has no internet until Phase 22):
+  - source: ST's public `STM32CubeWB` repository, `Projects/STM32WB_Copro_Wireless_Binaries/
+    STM32WB5x/`, at a **pinned release tag** kept in the script (one place to bump); the images
+    are ST's encrypted, signed binaries, used unchanged, under ST's licence (shipped in the same
+    way by the stock firmware);
+  - `radio-fetch.py list` shows the stacks of that release with size, install address and the
+    FUS version they need, taken from the release notes of the same tag (the script also carries
+    a checked table for the pinned tag and stops if the two disagree);
+  - `radio-fetch.py get ble-full zigbee-ble ... --to /media/<card>/radio/` downloads over HTTPS,
+    writes `/ext/radio/<name>/` with the image and the R16.0.1 manifest (SHA-256 computed after
+    download and compared with the checked table), and never overwrites an existing directory
+    without `--force`;
+  - `--fus 1.2.0` (the version `radio` prints on the device) makes it refuse stacks that need a
+    newer FUS, with a note that `radio fus` is needed first;
+  - alternative source, no network: `radio-fetch.py from-fuf <stock update dir>` extracts the radio
+    image the stock/Unleashed updater package carries, with its address from the package manifest;
+  - the card can also be filled over MTP (R10.4) once that exists; `radio add` on the device does
+    the same checks again, so a hand-copied image is fine too.
+- **R16.0.2** `radio` tool (root for changes, anyone for reading):
+  - `radio`: current stack (R2b.10 line), `SFSA`, secure SRAM2 reservation, slot (R2b.1a), FS
+    cache blocks;
+  - `radio list`: images on the card, marking the running one and any that can't be installed
+    (FUS too old, bad hash, slot too small);
+  - `radio add <dir>` / `radio rm <name>`: validate (manifest, SHA-256, `fus`, R2b.1a limits),
+    then rewrite `/etc/radio.slot`. A slot that grows takes effect at the next boot and may move
+    installed programs out of the way **once**, via R2b.7 compaction/`pkg`, after a confirm
+    screen showing the KB and programs involved; a slot that shrinks returns the space to `pkg`;
+  - `radio use <name>`: checks again (plus battery > 50 % or USB power), shows a confirm screen
+    ("BLE pairings stay on SD; BLE apps unavailable until done; ~1 min"), then reboots into
+    maintenance mode (R16.0.3);
+  - `radio repair`: reinstalls the last stack that booted fine (name kept in `/etc/radio.last`).
+  - GUI: a "Radio" page in `settings` with the same functions, in the K.2 screen style.
+- **R16.0.3** Maintenance mode (single user, no apps, INIT starts only the swapper, interrupts
+  on for the display and buttons):
+  1. ask the running stack to hand over to FUS (SHCI `FUS_GetState` twice) and wait for FUS;
+  2. `FUS_FW_DELETE` (delete first, as AN5185 recommends);
+  3. copy the image from SD to `addr`, page by page with CRC check (pages there are the slot,
+     i.e. cache, or the freed stack area), then `FUS_FW_UPGRADE`;
+  4. poll `FUS_GetState` until done, showing progress on the LCD; then reboot normally.
+  Power loss or a crash anywhere leaves at worst "FUS only": MINIX boots without BLE (R15.1)
+  and the next boot offers `radio repair` / `radio use` again from the same SD image.
+  FUS itself (`stm32wb5x_FUS_fw.bin`) is never updated by `radio use`; that stays a separate,
+  extra-confirmed `radio fus <file>` used only when a stack needs a newer FUS.
+- **R16.0.4** Never automatic: no app, script or daemon may start a swap; apps declare what they
+  need in their manifest (`Radio: ble`, `ble-central`, `zigbee`, `thread`) and the launcher
+  greys out what the running stack can't serve, with the hint line naming a stack on the card
+  that can (`OK` opens the Radio page). BLE pairings stay on SD (R15.4) and are reloaded when the
+  new stack has BLE.
+- **R16.0.5** After the reboot, R2b.1 lays out flash from the new `SFSA`, R15.3 sizes the FS
+  cache from the new secure SRAM2 reservation, R2b.10 prints the new stack.
+
+Acceptance (local agent, on the device; CPU2/FUS is never done without it):
+- AC16.0.1 Light ↔ full round trip with `radio use`, both directions; installed programs untouched
+  (SHA-256 of the installed region below the slot equal before/after); pairings with the phone
+  still work after returning to a BLE stack.
+- AC16.0.2 Battery pulled during step 3 and during step 4: the next boot runs, says the radio is
+  missing, and `radio repair` restores the previous stack.
+- AC16.0.3 `radio add` of an image with a wrong hash, a too-new `fus`, or a slot reaching the base
+  system is refused with a clear message.
+- AC16.0.R During maintenance mode the LCD shows progress at least every second; outside it,
+  `radio`, `radio list` and the Radio page change nothing in flash.
+
+Cost: 0 B resident RAM (the swapper runs only in maintenance mode); flash: the `radio` tool and
+the FUS client ≈ 3–5 KB (the same FUS client R16.1.0 and Phase 21 need). Flash writes per swap:
+≈ 2 × the image size (staging + FUS's own copy), only on command. Manual: a "Radio stacks" page in
+`docs/manual/`, written with the implementation.
+
 ### 16.1 Bluetooth adapter: BLE mouse and keyboard → USB (native app `btbridge`, section F)
 
 Owner request (2026-11-14): the Flipper acts as a Bluetooth adapter, for example for a mouse. It
@@ -3116,8 +5302,8 @@ Requirements:
 - **R16.1.0** Decided by the owner (2026-11-14): install the full BLE stack. When: at the start
   of Phase 16, after Phase 15 works on the stack already installed (R15.1), as one FUS update
   (R17.3 path, as qFlipper does), with the before/after `SFSA`, installed-region size and SRAM2
-  reservation recorded in the PR. One install, no run-time switching (rule: minimize flash
-  writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
+  reservation recorded in the PR. Done with `radio use` (R16.0); later switches only on an
+  explicit command, never automatically (rule: minimize flash writes). Until it is installed, `btbridge`, `sbctl` (16.4) and the BLE part of `camfind` (16.3)
   report "needs the full BLE stack" and exit.
 - **R16.1.1** `bled` gains the central role: scan (filtered to HID service UUID 0x1812), connect,
   pair/bond (LE Secure Connections; passkey shown on or typed into the Flipper as the device
@@ -3428,8 +5614,13 @@ table), 15 (BLE name), section I.
   kept and the summary says "skipped"):
   1. Welcome (and the root password of R3.4, if not yet set; it moves into the wizard here).
   2. **Hostname:** default from the OTP name, as stock; 1–8 characters `[a-z0-9-]` (I.4).
-  3. **Region:** default from OTP; a list with the allowed transmit bands of each region; the user
-     confirms they will use the device under that region's rules (I.4, R8.2).
+  3. **Region:** a list of **countries** (grouped: EU, other Europe, North America; the
+     cursor starts on the OTP default, I.4). OK on a country shows its table as `region show`
+     does (band, power, duty, "remote buttons only" / "short bursts"; `#?` rows grey); the user
+     confirms they will use the device under that country's rules, and at the end (R18b.3) the
+     wizard runs `region set` (one flash write, RQ.2). Skipped: the OTP default is installed, and the
+     summary says so. The same screen is the `Region` line of the launcher's SETTINGS page
+     (section Q, R8.2).
   4. **Date, time and time zone:** zone from the `const` zone table (grouped by region); date and
      time entered in **local** time and stored in **UTC**. The field is pre-filled from the RTC
      with a note that, after a switch from the stock firmware, the RTC still holds the old
@@ -3834,6 +6025,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | USB HID, mass storage, CDC | 10 |
 | Swap (Part 4), A13 | 12 |
 | Background apps: tiers, park/hibernate API, Running list (owner request) | 12d–12f (R12.18 may land with 7b) |
+| Swappable memory blocks for apps: `blk`, `libblk`, Berry `vbytes` (owner request) | 12h |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
@@ -3849,4 +6041,6 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
+| SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (owner request; no journaling) | section N, T17 |
+| Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (owner request) | section P, T26; 8, 13, 15 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

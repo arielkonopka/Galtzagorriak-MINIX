@@ -1,0 +1,19 @@
+# postinst of the timed package (spec F.2, R7b.4): the timer spool and the
+# notification policy, also on cards made before them.  /var/timers is on
+# the SD card's root file system: root and group timers may add timers,
+# each one only removes its own (sticky).
+test -d /var || mkdir /var
+test -d /var/timers || mkdir /var/timers
+chgrp timers /var/timers
+chmod 1770 /var/timers
+test -f /etc/notify.conf || {
+	(echo 'Volume: 80'; echo 'Vibro: yes'; echo 'Led: yes'; echo 'Dnd: off') >/etc/notify.conf
+	chmod 644 /etc/notify.conf
+}
+# App settings (libapp settings_get/set): /ext/apps_data, which is
+# /home/flipper/apps_data (spec R5.3); each app makes its own directory.
+test -d /home/flipper || mkdir /home/flipper
+chmod 755 /home/flipper
+test -d /home/flipper/apps_data || mkdir /home/flipper/apps_data
+chmod 1777 /home/flipper/apps_data
+echo "timed: timers in /var/timers; INIT runs /usr/lib/timed (also now: kill -7 1)"

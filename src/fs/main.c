@@ -48,6 +48,10 @@ PUBLIC void main()
   /* This is the main loop that gets work, processes it, and sends replies. */
   while (TRUE) {
 	get_work();		/* sets who and fs_call */
+	if (who == SYN_ALRM_TASK) {	/* CLOCK_INT: a poll() timeout */
+		poll_timer();
+		continue;
+	}
 
 	fp = &fproc[who];	/* pointer to proc table struct */
 	super_user = (fp->fp_effuid == SU_UID ? TRUE : FALSE);   /* su? */
@@ -365,5 +369,6 @@ dev_t super_dev;			/* place to get superblock from */
   dup_inode(rip);
   sp->s_isup = rip;
   sp->s_rd_only = 0;
+  sf_mounted(sp);		/* N.1: unclean: CHECK = 1 on the disk */
   return;
 }

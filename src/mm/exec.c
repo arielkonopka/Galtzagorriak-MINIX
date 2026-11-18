@@ -18,6 +18,7 @@
 #include "mm.h"
 #include <sys/stat.h>
 #include <minix/gzversion.h>
+#include <minix/shlibc.h>
 #include <minix/callnr.h>
 #include <a.out.h>
 #include <signal.h>
@@ -81,6 +82,7 @@ PUBLIC int do_exec()
   unsigned long fc_text;	/* flash address of the text, 0: in RAM */
   off_t text_off;
   int text_read;		/* fc_sync() has read the text already */
+  int secret;			/* A_NOSWAP: a Secret: yes package */
 #endif
 
   /* Do some validity checks. */
@@ -111,6 +113,9 @@ PUBLIC int do_exec()
 	close(fd);		/* something wrong with header */
 	return(ENOEXEC);
   }
+#if (CHIP == ARM_CM)
+  secret = (m == 1);		/* never swapped in plain mode (R12.28) */
+#endif
 #if (CHIP == ARM_CM)
   text_off = lseek(fd, 0L, SEEK_CUR);	/* where the text is in the file */
 #endif
@@ -150,7 +155,8 @@ PUBLIC int do_exec()
 	fc_new = (fc_text == 0);	/* to be cached once it runs */
   }
 #else
-  sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
+  sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev,
+						(ftime32_t) s_buf.st_ctime);
 #endif
 
   /* Allocate new memory and release old memory.  Fix map and tell kernel. */
@@ -187,7 +193,7 @@ PUBLIC int do_exec()
   /* Save file identification to allow it to be shared. */
   rmp->mp_ino = s_buf.st_ino;
   rmp->mp_dev = s_buf.st_dev;
-  rmp->mp_ctime = s_buf.st_ctime;
+  rmp->mp_ctime = (ftime32_t) s_buf.st_ctime;
 
   /* Patch up stack and copy it from MM to new core image. */
   vsp = (vir_bytes) rmp->mp_seg[S].mem_vir << CLICK_SHIFT;
@@ -231,6 +237,15 @@ PUBLIC int do_exec()
 				text_crc, (unsigned long) s_buf.st_uid))
 #endif
   close(fd);			/* don't need exec file any more */
+
+#if (CHIP == ARM_CM)
+  /* Swap (R12.28, R12.22): set-uid, set-gid and secret images never go to
+   * the card in clear; the launcher's child is the foreground app. */
+  rmp->mp_flags &= ~NOSWAP;
+  if (secret || (s_buf.st_mode & (I_SET_UID_BIT | I_SET_GID_BIT)))
+	rmp->mp_flags |= NOSWAP;
+  if (rmp->mp_flags & FGEXEC) rmp->mp_flags = (rmp->mp_flags & ~FGEXEC) | FGAPP;
+#endif
 
   /* Take care of setuid/setgid bits. */
   if ((rmp->mp_flags & TRACED) == 0 && !reloc_bad) {
@@ -342,10 +357,33 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 #if (CHIP == ARM_CM)
   if (hdr.a_cpu != A_ARMCM) return(ENOEXEC);
   /* Built for another ABI (spec J.3): 0 is a program from before the
-   * stamp, ABI 1.  Refused before anything is allocated. */
-  if (hdr.a_version != 0 && hdr.a_version != GZ_ABI) return(ENOEXEC);
-#endif
+   * stamp, ABI 1, whose 32-bit time_t ABI 2 dropped (R2d.1).  Refused
+   * before anything is allocated. */
+  if (hdr.a_version != GZ_ABI) return(ENOEXEC);
+  /* Linked against the shared libc in flash (R2b.9): its data area is in
+   * the program, so only the very build it was linked with will do.  The
+   * id is in a_tbase of the long header; the library's header is read in
+   * place (XIP).  Refused before anything is allocated. */
+  if (hdr.a_flags & A_LIBC) {
+	if ((hdr.a_hdrlen & BYTE) != sizeof(hdr)
+	    || read(fd, (char *) &hdr.a_trsize, sizeof(hdr) - A_MINHDR)
+					!= sizeof(hdr) - A_MINHDR
+	    || SHLIBC_HDR->sh_magic != SHLIBC_MAGIC
+	    || SHLIBC_HDR->sh_id != (unsigned long) hdr.a_tbase
+	    || !(hdr.a_flags & A_SEP))
+		return(ENOEXEC);
+	/* The same for the shared libfuri + libapp (R2b.9, R5.2), whose
+	 * area follows the libc's: a_dbase is its id, 0 when unused. */
+	if (hdr.a_dbase != 0
+	    && (SHFURI_HDR->sh_magic != SHFURI_MAGIC
+		|| SHFURI_HDR->sh_id != (unsigned long) hdr.a_dbase))
+		return(ENOEXEC);
+  }
+  if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC | A_NOSWAP)) != 0)
+	return(ENOEXEC);
+#else
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP)) != 0) return(ENOEXEC);
+#endif
 
   *ft = ( (hdr.a_flags & A_SEP) ? SEPARATE : 0);    /* separate I & D or not */
 
@@ -399,6 +437,9 @@ vir_bytes *pc;			/* program entry point (initial PC) */
   m = size_ok(*ft, tc, dc, sc, dvir, s_vir);
   ct = hdr.a_hdrlen & BYTE;		/* header length */
   if (ct > A_MINHDR) lseek(fd, (off_t) ct, SEEK_SET); /* skip unused hdr */
+#if (CHIP == ARM_CM)
+  if (m == OK && (hdr.a_flags & A_NOSWAP)) m = 1;	/* Secret: yes */
+#endif
   return(m);
 }
 
@@ -455,6 +496,12 @@ unsigned long fc_text;		/* the text in the flash cache, or 0 */
    * releasing the old core image before allocating the new one, since we
    * know it will succeed.  If there is not enough, return failure.
    */
+#if (CHIP == ARM_CM)
+  /* R12.5: swap idle processes out to make the hole, if the header buffer
+   * (mbuf's last sector, swap.c) is not part of the stack image. */
+  if (text_clicks + tot_clicks > max_hole() && stk_bytes <= ARG_MAX - 512)
+	sw_room(text_clicks + tot_clicks);
+#endif
   if (text_clicks + tot_clicks > max_hole()) return(EAGAIN);
 
   /* There is enough memory for the new core image.  Release the old one. */
@@ -476,7 +523,10 @@ unsigned long fc_text;		/* the text in the flash cache, or 0 */
 #if (CHIP == ARM_CM)
   /* Program images from the top, fork copies from the bottom: see
    * alloc_mem_high() - this keeps free memory in one piece. */
-  new_base = alloc_mem_high(text_clicks + tot_clicks);
+  /* R12.22: the foreground app from the bottom, the rest from the top, so
+   * that a swapped image usually finds its addresses free again. */
+  new_base = (mp->mp_flags & FGEXEC) ? alloc_mem(text_clicks + tot_clicks)
+				: alloc_mem_high(text_clicks + tot_clicks);
 #else
   new_base = alloc_mem(text_clicks + tot_clicks);	/* new core image */
 #endif
@@ -642,7 +692,7 @@ PUBLIC struct mproc *find_share(mp_ign, ino, dev, ctime)
 struct mproc *mp_ign;		/* process that should not be looked at */
 ino_t ino;			/* parameters that uniquely identify a file */
 dev_t dev;
-time_t ctime;
+ftime32_t ctime;
 {
 /* Look for a process that is the file <ino, dev, ctime> in execution.  Don't
  * accidentally "find" mp_ign, because it is the process on whose behalf this

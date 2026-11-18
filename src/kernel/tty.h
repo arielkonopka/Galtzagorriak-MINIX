@@ -55,6 +55,8 @@ typedef struct tty {
   int tty_outcum;		/* # chars output so far */
   char tty_iocaller;		/* process that made the call (usually FS) */
   char tty_ioproc;		/* process that wants to do an ioctl */
+  char tty_selops;		/* poll(): SEL_RD|SEL_WR FS waits for (R4b.6) */
+  char tty_selminor;		/* ... on this minor (LOG_MINOR shares tty 0) */
   int tty_ioreq;		/* ioctl request code */
   vir_bytes tty_iovir;		/* virtual address of ioctl buffer */
 
@@ -85,8 +87,6 @@ EXTERN tty_t tty_table[NR_CONS+NR_RS_LINES+NR_PTYS];
 #define IN_ESC        0x4000	/* escaped by LNEXT (^V), no interpretation */
 
 /* Times and timeouts. */
-#define TIME_NEVER	((clock_t) -1 < 0 ? (clock_t) LONG_MAX : (clock_t) -1)
-#define force_timeout()	((void) (tty_timeout = 0))
 #if (CHIP == ARM_CM)
 #define TTY_SLICE_MS	2	/* the TTY task's longest run on input before
 				 * the processes get the CPU (K1) */

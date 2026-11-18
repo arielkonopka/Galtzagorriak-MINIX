@@ -61,7 +61,7 @@ PUBLIC _PROTOTYPE (int (* const call_vector[NCALLS]), (void) ) = {
 	do_pipe,	/* 42 = pipe	*/
 	do_tims,	/* 43 = times	*/
 	no_sys,		/* 44 = (prof)	*/
-	no_sys,		/* 45 = unused	*/
+	do_poll,	/* 45 = poll (R4b.6) */
 	do_set,		/* 46 = setgid	*/
 	no_sys,		/* 47 = getgid	*/
 	no_sys,		/* 48 = (signal)*/
@@ -83,7 +83,7 @@ PUBLIC _PROTOTYPE (int (* const call_vector[NCALLS]), (void) ) = {
 
 	no_sys,		/* 64 = KSIG: signals originating in the kernel	*/
 	do_unpause,	/* 65 = UNPAUSE	*/
-	no_sys, 	/* 66 = unused  */
+	do_selected,	/* 66 = DEV_SELECTED (R4b.6) */
 	do_revive,	/* 67 = REVIVE	*/
 	no_sys,		/* 68 = TASK_REPLY	*/
 	no_sys,		/* 69 = unused */

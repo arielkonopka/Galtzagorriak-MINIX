@@ -189,6 +189,7 @@ ioctl (2) - control device
 creat (2) - create a new file
 fork (2) - create a new process
 pipe (2) - create an interprocess communication channel
+poll (2) - wait for one of several file descriptors
 setsid, getpgrp (2) - create process group, get process group id
 close (2) - delete a descriptor
 access (2) - determine accessibility of file
@@ -365,3 +366,5 @@ awk (9) - pattern matching language
 indent (9) - reformat the layout of a program
 roff (9) - text formatter
 kermit (9) - transfer a file using the kermit protocol
+rfid (1) - read, write, copy and emulate 125 kHz RFID tags
+gmodem (1) - move files between two Flippers over RFID, Sub-GHz, NFC or BLE

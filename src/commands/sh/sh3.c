@@ -8,6 +8,7 @@
 #include <sys/times.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #undef NULL
 #include "sh.h"
 
@@ -18,10 +19,12 @@
  * execute tree
  */
 
-static	char	*signame[] = {
+/* Galtzagorriak: const and in flash (no pointer table in .data);
+ * "" where the shell prints nothing. */
+static const char signame[][20] = {
 	"Signal 0",
 	"Hangup",
-	(char *)NULL,	/* interrupt */
+	"",		/* interrupt */
 	"Quit",
 	"Illegal instruction",
 	"Trace/BPT trap",
@@ -32,7 +35,7 @@ static	char	*signame[] = {
 	"Bus error",
 	"Memory fault",
 	"Bad system call",
-	(char *)NULL,	/* broken pipe */
+	"",		/* broken pipe */
 	"Alarm clock",
 	"Terminated",
 };
@@ -47,31 +50,41 @@ _PROTOTYPE(static void echo, (char **wp ));
 _PROTOTYPE(static struct op **find1case, (struct op *t, char *w ));
 _PROTOTYPE(static struct op *findcase, (struct op *t, char *w ));
 _PROTOTYPE(static void brkset, (struct brkcon *bc ));
-_PROTOTYPE(int dolabel, (void));
-_PROTOTYPE(int dochdir, (struct op *t ));
-_PROTOTYPE(int doshift, (struct op *t ));
-_PROTOTYPE(int dologin, (struct op *t ));
-_PROTOTYPE(int doumask, (struct op *t ));
-_PROTOTYPE(int doexec, (struct op *t ));
-_PROTOTYPE(int dodot, (struct op *t ));
-_PROTOTYPE(int dowait, (struct op *t ));
-_PROTOTYPE(int doread, (struct op *t ));
-_PROTOTYPE(int doeval, (struct op *t ));
-_PROTOTYPE(int dotrap, (struct op *t ));
+_PROTOTYPE(static int dolabel, (void));
+_PROTOTYPE(static int dochdir, (struct op *t ));
+_PROTOTYPE(static int doshift, (struct op *t ));
+_PROTOTYPE(static int dologin, (struct op *t ));
+_PROTOTYPE(static int doumask, (struct op *t ));
+_PROTOTYPE(static int doexec, (struct op *t ));
+_PROTOTYPE(static int dodot, (struct op *t ));
+_PROTOTYPE(static int dowait, (struct op *t ));
+_PROTOTYPE(static int doread, (struct op *t ));
+_PROTOTYPE(static int doeval, (struct op *t ));
+_PROTOTYPE(static int dotrap, (struct op *t ));
 _PROTOTYPE(int getsig, (char *s ));
 _PROTOTYPE(void setsig, (int n, void (*f)()));
 _PROTOTYPE(int getn, (char *as ));
-_PROTOTYPE(int dobreak, (struct op *t ));
-_PROTOTYPE(int docontinue, (struct op *t ));
+_PROTOTYPE(static int dobreak, (struct op *t ));
+_PROTOTYPE(static int docontinue, (struct op *t ));
 _PROTOTYPE(static int brkcontin, (char *cp, int val ));
-_PROTOTYPE(int doexit, (struct op *t ));
-_PROTOTYPE(int doexport, (struct op *t ));
-_PROTOTYPE(int doreadonly, (struct op *t ));
+_PROTOTYPE(static int doexit, (struct op *t ));
+_PROTOTYPE(static int doexport, (struct op *t ));
+_PROTOTYPE(static int doreadonly, (struct op *t ));
 _PROTOTYPE(static void rdexp, (char **wp, void (*f)(), int key));
 _PROTOTYPE(static void badid, (char *s ));
-_PROTOTYPE(int doset, (struct op *t ));
+_PROTOTYPE(static int doset, (struct op *t ));
 _PROTOTYPE(void varput, (char *s, int out ));
-_PROTOTYPE(int dotimes, (void));
+_PROTOTYPE(static int dotimes, (void));
+_PROTOTYPE(static int callbuiltin, (int n, struct op *t ));
+#define BEXEC	4	/* inbuilt("exec") */
+#define VFROOM	512	/* free heap left for a vfork child's redirections */
+/* SIGINT and SIGQUIT are blocked across vfork(): the child runs in our
+ * memory and sets talking = 0 there before exec, and a ^C that reached us
+ * meanwhile ran onintr() as soon as vfork() returned, before talking was
+ * ours again: onintr() took us for a script and left() - the login shell
+ * ended (found with tools/twoflip.py, about 1 in 100 ^C).  Static, not a
+ * local: the child may reuse our frame's slots. */
+static sigset_t vfsave;
 
 int
 execute(t, pin, pout, act)
@@ -247,17 +260,18 @@ int act;
 char **wp;
 int *pforked;
 {
-	int i, rv, (*shcom)();
+	int i, rv, shcom;	/* built-in: inbuilt()'s number, else 0 */
 	register int f;
 	char *cp;
 	struct ioword **iopp;
 	int resetsig, vforked;
-	char **owp;
+	char **owp, **envp;
 
 	owp = wp;
+	envp = NULL;
 	resetsig = 0;
 	*pforked = 0;
-	shcom = NULL;
+	shcom = 0;
 	rv = -1;	/* system-detected error */
 	if (t->type == TCOM) {
 		while ((cp = *wp++) != NULL)
@@ -279,7 +293,7 @@ int *pforked;
 	t->words = wp;
 	f = act;
 	vforked = 0;
-	if (shcom == NULL && (f & FEXEC) == 0) {
+	if (shcom == 0 && (f & FEXEC) == 0) {
 		/* A simple external command: vfork (R2c.2), no image copy.
 		 * The child runs in our memory until exec, so it must not
 		 * touch our state: no assignments, no here-documents, no
@@ -290,13 +304,56 @@ int *pforked;
 		int s_talking = talking, s_intr = intr, s_execflg = execflg;
 		struct brkcon *s_brklist = brklist;
 
+		int st, quiet;
+
+		if (canv) {
+			/* Galtzagorriak: what the child takes from the heap
+			 * (environment, redirection names) is made or made
+			 * room for here: its heap grows in small steps, and
+			 * a vfork child cannot grow it (invfork). */
+			envp = makenv();
+			if (t->ioact != NULL)
+				freecell(space(VFROOM));
+		}
+		vftries = 0;
+	again:
+		/* #271: no memory hole for the program (exec: EAGAIN) is
+		 * not "not found"; it passes once others end: try again.
+		 * Only without pipes: we wait for the child here.  The
+		 * count is a global: the vfork child runs in this frame and
+		 * may reuse the slot of a local it does not need. */
+		vfagain = vfmark = 0;
+		vfquiet = canv && pin == NULL && pout == NULL
+						&& vftries < VFTRIES && vfok;
+		if (canv) {
+			sigset_t b;
+
+			sigemptyset(&b);
+			sigaddset(&b, SIGINT);
+			sigaddset(&b, SIGQUIT);
+			sigprocmask(SIG_BLOCK, &b, &vfsave);
+		}
 		i = canv ? vfork() : parent();
 		if (i != 0) {
 			if (canv) {
+				/* set after the child is done: no slot of
+				 * its in the way */
+				quiet = vfquiet;
+				if (i > 0)
+					vfok = vfmark;
+				invfork = 0;
 				talking = s_talking;
 				intr = s_intr;
 				execflg = s_execflg;
 				brklist = s_brklist;
+				vfquiet = 0;
+				/* our state is ours again: a ^C now is ours */
+				sigprocmask(SIG_SETMASK, &vfsave, NULL);
+				if (i == -1 && errno == EAGAIN && !intr
+							&& vftries++ < VFTRIES) {
+					sleep(1);
+					goto again;
+				}
 				if (i == -1)
 					warn("try again");
 			}
@@ -304,9 +361,26 @@ int *pforked;
 				return(rv);
 			if (pin != NULL)
 				closepipe(pin);
-			return(pout==NULL? setstatus(waitfor(i,0)): 0);
+			if (pout != NULL)
+				return(0);
+			st = waitfor(i, 0);
+			/* vfagain: only a vfork child sets it */
+			if (vfagain && !intr && vftries++ < VFTRIES) {
+				sleep(1);
+				goto again;
+			}
+			/* A plain fork after all, and its child was quiet:
+			 * if it could not start, say so for it. */
+			if (quiet && !vfok && st == 126) {
+				prs(wp[0]);
+				warn(": cannot start (no memory?)");
+			}
+			return(setstatus(st));
 		}
+		if (canv)
+			vfmark = 1;	/* our parent's memory: a real vfork */
 		vforked = canv;
+		invfork = canv;
 		if (talking) {
 			signal(SIGINT, SIG_IGN);
 			signal(SIGQUIT, SIG_IGN);
@@ -321,10 +395,10 @@ int *pforked;
 	}
 	if (owp != NULL)
 		while ((cp = *owp++) != NULL && assign(cp, COPYV))
-			if (shcom == NULL)
+			if (shcom == 0)
 				export(lookup(cp));
 #ifdef COMPIPE
-	if ((pin != NULL || pout != NULL) && shcom != NULL && shcom != doexec) {
+	if ((pin != NULL || pout != NULL) && shcom != 0 && shcom != BEXEC) {
 		err("piping to/from shell builtins not yet done");
 		return(-1);
 	}
@@ -338,7 +412,7 @@ int *pforked;
 		closepipe(pout);
 	}
 	if ((iopp = t->ioact) != NULL) {
-		if (shcom != NULL && shcom != doexec) {
+		if (shcom != 0 && shcom != BEXEC) {
 			prs(cp);
 			err(": cannot redirect shell command");
 			return(-1);
@@ -351,7 +425,7 @@ int *pforked;
 			}
 	}
 	if (shcom)
-		return(setstatus((*shcom)(t)));
+		return(setstatus(callbuiltin(shcom, t)));
 	/* should use FIOCEXCL */
 	for (i=FDBASE; i<NOFILE; i++)
 		close(i);
@@ -363,7 +437,19 @@ int *pforked;
 		exit(execute(t->left, NOPIPE, NOPIPE, FEXEC));
 	if (wp[0] == NULL)
 		exit(0);
-	cp = rexecve(wp[0], wp, makenv());
+	if (vforked) {
+		/* A ^C that came during the vfork must reach the program,
+		 * never onintr() in our parent's memory: caught signals go
+		 * to their default first (as exec would), ignored stay so. */
+		if (signal(SIGINT, SIG_DFL) == SIG_IGN) signal(SIGINT, SIG_IGN);
+		if (signal(SIGQUIT, SIG_DFL) == SIG_IGN) signal(SIGQUIT, SIG_IGN);
+		sigprocmask(SIG_SETMASK, &vfsave, NULL);
+	}
+	cp = rexecve(wp[0], wp, envp != NULL? envp: makenv());
+	if (vforked && vfquiet && errno == EAGAIN) {
+		vfagain = 1;		/* our parent tries again (#271) */
+		_exit(126);
+	}
 	prs(wp[0]); prs(": "); warn(cp);
 	if (vforked)
 		_exit(exstat);		/* not exit(): stdio and traps are ours */
@@ -403,6 +489,7 @@ parent()
 {
 	register int i;
 
+	vfok = 0;		/* a shadow group, maybe (#271, sh.h) */
 	i = fork();
 	if (i != 0) {
 		if (i == -1)
@@ -572,12 +659,12 @@ int canintr;
 		} else {
 			if ((rv = WAITSIG(s)) != 0) {
 				if (rv < NSIGNAL) {
-					if (signame[rv] != NULL) {
+					if (signame[rv][0] != '\0') {
 						if (pid != lastpid) {
 							prn(pid);
 							prs(": ");
 						}
-						prs(signame[rv]);
+						prs((char *)signame[rv]);
 					}
 				} else {
 					if (pid != lastpid) {
@@ -588,7 +675,7 @@ int canintr;
 				}
 				if (WAITCORE(s))
 					prs(" - core dumped");
-				if (rv >= NSIGNAL || signame[rv])
+				if (rv >= NSIGNAL || signame[rv][0])
 					prs("\n");
 				rv = -1;
 			} else
@@ -627,7 +714,7 @@ char *c, **v, **envp;
 {
 	register int i;
 	register char *sp, *tp;
-	int eacces = 0, asis = 0;
+	int eacces = 0, asis = 0, tries;
 
 	sp = any('/', c)? "": path->value;
 	asis = *sp == '\0';
@@ -644,7 +731,18 @@ char *c, **v, **envp;
 		for (i = 0; (*tp++ = c[i++]) != '\0';)
 			;
 		execve(e.linep, v, envp);
+		/* #271: no memory hole now (EAGAIN).  A forked child waits
+		 * and tries again itself; a vfork child must not (it runs
+		 * in its parent's memory): forkexec() does that for it. */
+		for (tries = 0; errno == EAGAIN && !invfork && tries < VFTRIES;
+								tries++) {
+			sleep(1);
+			execve(e.linep, v, envp);
+		}
 		switch (errno) {
+		case EAGAIN:
+			return("no memory to start it");
+
 		case ENOEXEC:
 			*v = e.linep;
 			tp = *--v;
@@ -1157,41 +1255,74 @@ dotimes()
 	return(0);
 }
 
-struct	builtin {
-	char	*command;
-	int	(*fn)();
+/*
+ * The built-in commands.  Galtzagorriak: a const table of names in flash
+ * and a switch that calls the function, so the shell keeps no table of
+ * function pointers in RAM (.data, or GOT entries: each relocated at exec).
+ * inbuilt() gives the command's number + 1 (0: not built in), BEXEC is
+ * exec's.
+ */
+static const char builtin[][9] = {
+	":",
+	"cd",
+	"shift",
+	"exec",
+	"wait",
+	"read",
+	"eval",
+	"trap",
+	"break",
+	"continue",
+	"exit",
+	"export",
+	"readonly",
+	"set",
+	".",
+	"umask",
+	"login",
+	"newgrp",
+	"times",
 };
-static struct	builtin	builtin[] = {
-	":",		dolabel,
-	"cd",		dochdir,
-	"shift",	doshift,
-	"exec",		doexec,
-	"wait",		dowait,
-	"read",		doread,
-	"eval",		doeval,
-	"trap",		dotrap,
-	"break",	dobreak,
-	"continue",	docontinue,
-	"exit",		doexit,
-	"export",	doexport,
-	"readonly",	doreadonly,
-	"set",		doset,
-	".",		dodot,
-	"umask",	doumask,
-	"login",	dologin,
-	"newgrp",	dologin,
-	"times",	dotimes,
-	0,
-};
+#define NBUILTIN (sizeof(builtin)/sizeof(builtin[0]))
 
-int (*inbuilt(s))()
+int
+inbuilt(s)
 register char *s;
 {
-	register struct builtin *bp;
+	register int i;
 
-	for (bp = builtin; bp->command != NULL; bp++)
-		if (strcmp(bp->command, s) == 0)
-			return(bp->fn);
-	return((int(*)())NULL);
+	for (i = 0; i < NBUILTIN; i++)
+		if (strcmp(builtin[i], s) == 0)
+			return(i + 1);
+	return(0);
+}
+
+static int
+callbuiltin(n, t)
+int n;
+struct op *t;
+{
+	switch (n) {
+	case 1:	return(dolabel());
+	case 2:	return(dochdir(t));
+	case 3:	return(doshift(t));
+	case 4:	return(doexec(t));
+	case 5:	return(dowait(t));
+	case 6:	return(doread(t));
+	case 7:	return(doeval(t));
+	case 8:	return(dotrap(t));
+	case 9:	return(dobreak(t));
+	case 10:	return(docontinue(t));
+	case 11:	return(doexit(t));
+	case 12:	return(doexport(t));
+	case 13:	return(doreadonly(t));
+	case 14:	return(doset(t));
+	case 15:	return(dodot(t));
+	case 16:	return(doumask(t));
+	case 17:	return(dologin(t));
+	case 18:	return(dologin(t));
+	case 19:	return(dotimes());
+	}
+	return(-1);
 }
 

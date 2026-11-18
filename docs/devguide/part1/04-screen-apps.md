@@ -5,13 +5,13 @@ launcher starts it, hands it the screen and buttons, and waits until it exits. T
 covers the small `gui` library the built-in apps use, the launcher's rules, and how to keep an
 app quick.
 
-The larger framework for ported stock apps (`libfuri`: views, scenes, menus, dialogs) and the
-desktop with tiles and notifications are **(planned)** (spec Phase 5 and K.2). What is described
-here keeps working when they come.
+The larger framework for ported stock apps (`libfuri` GUI: views, scenes, menus, dialogs) is in
+section 4.9; the desktop with tiles and notifications is **(planned)** (spec K.2). What is
+described here keeps working.
 
 ## 4.1 The `gui` library
 
-`flipper/gui/gui.h` and `gui.c`, linked into each app (there are no shared libraries yet, so
+`flipper/gui/gui.h` and `gui.c`, linked into each app (only libc is shared so far, spec R2b.9, so
 each app carries its own copy, about 1–2 KB of text in flash). The screen is 128x64 pixels;
 text uses a 4x6 font, so 32 columns by 10 rows.
 
@@ -67,7 +67,8 @@ int main(void)
 		gui_title("TALLY");
 		sprintf(line, "%d", n);
 		gui_text_big((GUI_W - 12 * (int) strlen(line)) / 2, 20, line, 3);
-		gui_center(56, "UP/DOWN  OK buzz  BACK", 0);
+		gui_hline(0, GUI_W - 1, 56, 1);		/* the hint line (4.3) */
+		gui_text(1, 58, "Up +  Dn -  OK Buzz  Back Quit", 0);
 		gui_flush();
 
 		k = gui_key();
@@ -104,8 +105,39 @@ width of the top text row with the screen's name in white, centred, in capitals.
 - Exceptions: the text console, full-screen content that a bar would hide (a picture, a
   graph that needs all 64 rows), and alert screens.
 
-The planned `libfuri` views, the Berry `gui` binding and the desktop's windows draw the same bar,
-so apps look alike whatever they are written in.
+`libfuri` apps in the Window layer get the same bar (section 4.9); the planned Berry `gui`
+binding and the desktop's windows will draw it too, so apps look alike whatever they are
+written in.
+
+### The rest of the screen: "Pine meets modern UX"
+
+Since 2026-11-17 the whole screen follows one style (owner decision, spec K.2 and R5.6a.7),
+modelled on the Pine mail program: text first, every screen says what its buttons do, nothing
+hidden. New apps follow it from the start, and reviews check it:
+
+- **Title bar** as above. On the right it may carry a short state of at most 6 characters: the
+  position `3/12` in a list, `REC`, `12%`.
+- **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58, in Pine's
+  `key action` style: `<Back  OK Run  >More`, `OK Toggle  Back Done`. Name every button that
+  does something on that screen, and only those. Do not list the long Back press: it always ends
+  (or parks) the app.
+- **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+- **Values** of settings in brackets: `Icons   [on]`.
+- **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+- **Messages**: a short notice replaces the hint line for 2 s, then the hints come back; whole
+  screen notices are only for errors that end the app (and for alerts).
+- **Icons**: at most 8x6 pixels (two characters of the font) before a list entry.
+- Exceptions as for the title bar: the console, full-screen pictures and graphs, alerts, games
+  and ported stock apps that keep their own layout.
+
+Two `gui` helpers are there already: `gui_bits8()` draws an 8-pixel-wide bitmap (an icon), and
+`gui_input()`/`gui_click()` return keys as clicks (section 4.4). The ones that draw the other
+parts for you, at no RAM cost, are **(planned)** in task T22: `gui_title2(title, right)`,
+`gui_hints(text)`, `gui_note(text)` (with a timed key read) and `gui_scroll(top, shown, total)`.
+Until they land, draw the parts with `gui_hline` and `gui_text` at the positions above, as the
+example in 4.2 does; switching to the helpers later is a few lines. The launcher has the full
+look since T21a; the other built-in apps (`info`, `lights`, `power`, `lfrfid`, `console`,
+`selftest`, `remind`, `alarm`) are being aligned in T22.
 
 ## 4.4 The launcher and `/etc/apps`
 
@@ -113,12 +145,24 @@ The launcher (`flipper/gui/launcher.c`) is started as root by `/etc/rc` and show
 `/etc/apps`, one per line:
 
 ```
-# Label:user:/program arg ...
-Console:nobody:/bin/console
-Tally:nobody:/usr/bin/tally
+# Label:user:icon:/program arg ...
+Console:nobody:@console:/bin/console
+Tally:nobody:#3C42A5A5423C:/usr/bin/tally
+Old:nobody:/usr/bin/old          (no icon field: still valid)
 ```
 
 - Up to 16 entries, 8 arguments each. Lines starting with `#` are comments.
+- The icon (spec R5.6a.1) is `@name` (a built-in one: the list is in the manual's launcher
+  chapter), `#` and 12 hex digits (8×6 pixels, a byte per row from the top, MSB left), one or two
+  characters, or empty. The program must start with `/`: that is how the launcher tells the
+  two forms apart. A bad icon is just not drawn. `flipper/gui/appline.c` parses the line; its
+  host test is `flipper/tests/host/icontest.c`.
+- Packages: `mkpkg.py -i @bell` puts `Icon: @bell` in the manifest; until the launcher reads
+  manifests, the `postinst` writes the same value into its line, e.g.
+  `echo 'Tally:nobody:@game:/usr/bin/tally' >> /etc/apps`.
+- Keys that switch pages or toggle things on a release (Left/Right in the launcher) use
+  `gui_input()` with those keys as clicks: a click is a key pressed alone and released within
+  ~1 s, so a two-button gesture never clicks. Up/Down/OK keep acting on the press (latency L1).
 - The app runs as the named user, in group `gui` (screen, buttons, LED, vibro, speaker, GPIO,
   infrared, iButton), with the user's home directory as the working directory. Only an entry
   naming `root` keeps root's rights. If the user does not exist or the ids cannot be set, the
@@ -126,8 +170,13 @@ Tally:nobody:/usr/bin/tally
 - `/etc/apps` is read with `cfopen()`: the card's copy if there is one, else the default in
   `/rom/etc/apps`. A package that adds an app appends its line in its `postinst` script
   (chapter 5); the base package does it for `Power` (see `flipper/rootfs/base.postinst`).
+- **Launcher settings** (R5.6a.4): `/etc/launcher.conf` with `Icons:`, `Hints:` and
+  `Battery:` (the battery on the title bar), each `on` by default; Left opens the launcher's
+  settings page, which writes the card's copy only when a value changed. The user's view is the
+  manual's [launcher chapter](../../manual/launcher.md).
 - Manifests in packages (label, icon, category, uid, groups) that the launcher reads by itself
   are **(planned)** (spec R5.5, R5.6, F.2).
+
 
 ## 4.5 The foreground app and the long Back press
 
@@ -151,9 +200,19 @@ What that means for an app:
   current foreground process.
 - A background program (a daemon, a script) that writes to `/dev/lcd` while an app is in front
   draws nothing. That is intended; notifications that may interrupt an app go through `alert`
-  with `FG_PREEMPT` **(planned)**, spec F.2.
+  with `FGIOCPREEMPT` (R7b.2, below).
+- **An alert over your app** (R7b.2): `ioctl(fd, FGIOCPREEMPT, 0)` on `/dev/lcd` or
+  `/dev/buttons` takes the screen and the buttons from whoever has them, until
+  `FGIOCRELEASE` or the alert's exit; a second alert meanwhile gets `EBUSY` and waits its turn.
+  Your app keeps running: its frames are dropped and its button reads wait. A read that is
+  waiting when the alert comes, or that you start meanwhile, **ends with 0 bytes** at the
+  preemption and again at the release: treat a 0-byte read as "redraw and read again" (the
+  `gui` library's `gui_key()` returns 0, and the launcher just redraws). MINIX 2 has no free
+  signal number for `SIGWINCH`. The alert puts the picture it covered back itself.
 
-When the app exits, the launcher clears the foreground and redraws its menu.
+When the app exits, the launcher clears the foreground and redraws its menu. If an app that
+was given the screen exits without handing it back, the kernel clears it at the next clock
+tick.
 
 ## 4.6 Doing something while waiting for a key
 
@@ -179,8 +238,10 @@ static void tick(int sig)
 ```
 
 Notes:
-- `alarm()` has one-second resolution (ticks of 1/60 s underneath). Sub-second timers for
-  programs (`setitimer`) and `poll()` with a timeout are **(planned)** (R4b.2, R4b.6).
+- `alarm()` has one-second resolution (ticks of 1/60 s underneath). For a sub-second wait use
+  `poll()` with a timeout (ms, rounded up to the tick; R4b.6); `setitimer` is **(planned)**
+  (R4b.2). `poll()` on `/dev/buttons` waits for a key (R4b.6), so an app can wait for keys, a pipe and a
+  timeout at once.
 - Refresh slower when nobody looks: the Power app reads every 10 s while the backlight is off
   (it reads `/dev/backlight` to know). Each wake-up costs battery.
 - Never spin on `gui_key_nowait()` in a loop. It keeps the CPU out of its sleep states and steals
@@ -206,7 +267,49 @@ In practice:
 
 ## 4.8 Shell scripts as screen apps
 
-Any program can be in `/etc/apps`, including a shell script, but a shell costs about 12 KB and
+Any program can be in `/etc/apps`, including a shell script, but a shell costs about 10 KB and
 cannot draw text conveniently. Use scripts in the launcher for actions (toggle something, run a
 job, then exit) and C for anything with a screen. Desktop modules written in shell or Berry that
 only send text records to the desktop are **(planned)** (chapter 7).
+
+## 4.9 The `libfuri` GUI (ported stock apps)
+
+`flipper/lib/furi` (spec R5.2) gives ported stock apps the stock firmware's `gui` API with the
+same names and behaviour: `#include <gui/gui.h>`, `<gui/view_dispatcher.h>`,
+`<gui/scene_manager.h>`, `<gui/elements.h>`, `<gui/modules/submenu.h>` (also `popup.h`,
+`dialog_ex.h`, `text_input.h`, `byte_input.h`, `variable_item_list.h`, `widget.h`,
+`loading.h`), `<input/input.h>`, `<assets_icons.h>`; put the program in `FURIPROGS`
+(`flipper/minix.mk`) to use the shared libfuri + libapp in flash (part 2, 1.6; a function the
+library does not export yet goes at the end of `flipper/furi.exports`). `flipper/lib/furi/hello.c`
+(`furihello`) is a complete example. What differs from the stock firmware:
+
+- The GUI service lives in the app's own process. The first `furi_record_open(RECORD_GUI)` starts
+  it: a cooperative "gui" thread with a 2 KB stack (from the app's `chmem`) that reads
+  `/dev/buttons`, turns the events into the stock sequence (Press; Short and Release on a release
+  before 300 ms; else Long at 300 ms, Repeat every 150 ms, Release) and gives them to the top
+  enabled ViewPort, and redraws when a ViewPort or View asks (`view_port_update()`, a model
+  update). There is no periodic redraw: a frame is one 1024-byte write to `/dev/lcd`. Keys that
+  were queued before the app started are dropped.
+- Draw and input callbacks run on the gui thread; keep them short (spec AC5.R: no thread may hold
+  the input thread more than 10 ms). Long work belongs in another furi thread.
+- `GuiLayerFullscreen` gets all 128x64 pixels. `GuiLayerWindow` and `GuiLayerDesktop` keep the
+  stock window (from y = 13), and the 13 pixels above carry the black title bar with the app's
+  appid in capitals instead of the stock status bar.
+- `ViewDispatcher` has no `FuriEventLoop`: `view_dispatcher_run()` waits on one queue (input and
+  custom events, 16 of 8 bytes) with the tick period as its timeout. `view_dispatcher_alloc_ex()`
+  and `view_dispatcher_get_event_loop()` do not exist.
+- Icons are stored uncompressed (`tools/icons.py` makes the C data from PNGs, as the stock asset
+  tool, so `canvas_draw_icon()` needs no decompression buffer); a heatshrink-compressed icon
+  stops the app with `furi_check`. Fonts: the stock four (`FontPrimary` helvB08,
+  `FontSecondary` haxrcorp 4089, `FontKeyboard` profont11, `FontBigNumbers` profont22).
+- `malloc()` in files that include `<furi.h>` returns zeroed memory and never NULL, as the stock
+  heap; the stock modules depend on it. Define `FURI_LIBC_MALLOC` first to get the C library's.
+- No left-handed mode, no `ViewHolder`, `ViewStack`, `FileBrowser` (it needs storage, R5.3),
+  `ButtonMenu`, `ButtonPanel`, `TextBox`, `NumberInput`, `DateTimeInput` or `EmptyScreen` yet.
+- Costs: a Submenu-and-Popup app links about 20 KB of GUI code (the program is linked with
+  `--gc-sections`, so only what it calls) plus the 8 KB core; RAM is the 1 KB frame, about 0.6 KB
+  of GUI state, the gui thread's 2 KB stack and the views' models.
+
+Host tests: `make -C flipper/lib/furi test` renders every module and compares it with the PBM
+images in `flipper/lib/furi/tests/gui` (`make gui-ref` rewrites them; look at them before you
+commit). The QEMU self-test runs `furihello` with fake buttons.

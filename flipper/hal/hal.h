@@ -56,10 +56,19 @@ void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 #define HAL_BL_STEP(s)		((s) >> 24 & 7)
 #define HAL_BL_STEPS		0x07000000u
 #define HAL_BL_LEVEL(s)		((s) >> 16 & 0xFF)
-#define HAL_BL_TIMEOUT(s)	((s) & 0xFFFF)
+#define HAL_BL_TIMEOUT(s)	((s) & 0x3FFF)	/* <= 16383 s (R6.10) */
+#define HAL_BL_MODE(s)		((s) >> 14 & 3)	/* R6.10: 0 auto, 1 forced off,
+						 * 2 forced on; cleared at boot */
+#define HAL_BL_MODES		0x0000C000u
 uint32_t hal_bl_state(void);
 void hal_bl_state_set(uint32_t s);
 void hal_led(unsigned r, unsigned g, unsigned b);	/* status LED 0..255 */
+/* R7b.5: a named pattern (blink, fast, double, pulse) run by the LED
+ * driver on its own, in the colour rgb (0xRRGGBB); hal_led() stops it.
+ * 0, or -1: no such pattern, or black. */
+int hal_led_pattern(const char *name, unsigned long rgb);
+void hal_led_pwm(unsigned r, unsigned g, unsigned b);	/* only the levels */
+void hal_led_get(unsigned char rgb[3]);		/* as last set (I2C read) */
 /* The LCD's power save (T14d): 1 = display off and all points on (the
  * ST7567 sleeps and keeps its RAM; flushes still go into it), 0 = back,
  * with no redraw.  -1: the SD card has the bus, try again later. */
@@ -73,12 +82,31 @@ int hal_lcd_save(int on);
 #define BTN_OK    0x10
 #define BTN_BACK  0x20
 unsigned hal_buttons(void);
+int hal_buttons_fake(unsigned mask);	/* QEMU tests: these held; -1 else */
+
+/* Sub-GHz receive only (R8.1 part 1): the CC1101 listens at hz (stock
+ * bands 300-348, 387-464, 779-928 MHz); returns the frequency it really
+ * tuned, or -1.  The RSSI in dBm (and the frequency), or HAL_SUBGHZ_OFF
+ * when it is not receiving.  Off: back to sleep.  No transmit path. */
+#define HAL_SUBGHZ_OFF	(-1000)
+long hal_subghz_rx(uint32_t hz);
+int hal_subghz_rssi(uint32_t *hz);
+void hal_subghz_off(void);
 
 /* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
  * it, wait some microseconds (busy: only for the slot timing). */
 void hal_ow_line(int low);
 int hal_ow_read(void);
 void hal_ow_delay(unsigned us);
+uint16_t hal_ow_now(void);		/* a us clock, mod 2^16 */
+/* R6.7 part 3: Dallas key emulation (1-Wire slave).  hal_ib_emu(1) arms
+ * an interrupt on both edges of the contact, in the buttons' vector (its
+ * handler asks hal_ib_edge() first, then hal_btn_pending()).  hal_ib_clear
+ * forgets the edges of a pulse we drove ourselves. */
+void hal_ib_emu(int on);
+int hal_ib_edge(void);
+void hal_ib_clear(void);
+int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
  * little endian), read only; -1 on a bus error, -2 if there is none. */
@@ -103,6 +131,10 @@ int hal_charger_read(unsigned reg);
 #define HAL_CHG_OTG		3
 #define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
 int hal_charger_set(int what, int on);
+/* The default speaker volume (0-100; 100 if never set), kept over resets
+ * in a backup register (K.7 Sound). */
+int hal_vol_default(void);
+void hal_vol_default_set(int v);
 /* The buttons' interrupts (EXTI, T14b): hal_btn_irq(0, 1, ...) are the
  * NVIC lines, -1 after the last (none: the kernel samples on its tick).
  * hal_btn_arm(1): an interrupt at the next edge of any button; (0): none. */
@@ -147,24 +179,62 @@ int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
  * (VREF+, ~2500 mV) in mV, or -1 (no ADC). */
 #define HAL_ADC_OVER	(-2)
 int hal_adc_mv(int *mv);
+/* R6.4 part 2: n 12-bit samples of header pin `pin` (as hal_gpio; left
+ * analog) at `rate` Hz (100..100000) by DMA to the physical address dst
+ * (even); -1 if not possible.  Left: samples still to come (0: done). */
+int hal_adc_stream(unsigned pin, unsigned rate, uint32_t dst, unsigned n);
+unsigned hal_adc_stream_left(void);
+void hal_adc_stream_stop(void);
 
-/* Infrared.  Receive: a demodulating receiver on an EXTI line; the kernel
- * takes the interrupt, hal_ir_rx_edge() acknowledges it and returns the
- * new level (0 = carrier seen, "mark").  Transmit: hal_ir_carrier()
+/* Infrared.  Receive: a demodulating receiver, timed by the pulse engine
+ * (hal_pulse_rx below, input 0).  Transmit: hal_ir_carrier()
  * switches the carrier (hal_ir_freq: frequency, duty in %); a timer
  * interrupt (hal_ir_tx_irq) at the end of every mark and space, started by
  * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
  * all in microseconds (spec R6.6). */
-int hal_ir_irq(void);			/* NVIC line, or -1: no receiver */
-void hal_ir_rx_on(int on);
-int hal_ir_rx_edge(void);
 void hal_ir_carrier(int on);
+void hal_ir_target(int rfid);		/* 0 IR LED, 1 the 125 kHz antenna */
 void hal_ir_freq(unsigned hz, unsigned duty);
 int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);
 int hal_ir_tx_ack(void);		/* the timer's interrupt: 1 if real */
 void hal_ir_tx_next(uint32_t us);
 void hal_ir_tx_stop(void);
+/* R4b.7, the pulse engine's capture: the time between edges of an input
+ * (0: the IR receiver, 1: the CC1101's demodulated data), in us, as 32-bit words by DMA straight into dst
+ * (n of them; the caller pins the memory).  The interrupt is the IR
+ * transmitter's (hal_ir_tx_irq): hal_pulse_ack() tells HAL_PULSE_START
+ * (a frame began: what follows is its), HAL_PULSE_GAP (gap_us without an
+ * edge after it: the frame is over).  hal_pulse_left: words not yet
+ * written. */
+#define HAL_PULSE_START	1
+#define HAL_PULSE_GAP	2
+int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us);
+int hal_pulse_ack(void);
+unsigned hal_pulse_left(void);
+void hal_pulse_stop(void);
+/* R6.5: reading a 125 kHz tag: the field on, the antenna's comparator
+ * captured on both edges, n 32-bit timestamps (us) by DMA into dst (the
+ * caller pins it; hal_pulse_left tells the words not yet written);
+ * hal_rfid_stop turns it all off.  -1: no reader. */
+int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier);
+/* carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz */
+void hal_rfid_stop(void);
+/* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
+ * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
+ * arms the comparator without raising a field of its own; hal_rfid_field(0)
+ * drops it.  hal_pulse_left and hal_rfid_stop count and end the capture. */
+void hal_rfid_field(int on);
+void hal_rfid_pull(int release);	/* PA2: 1 for a command, 0 to capture */
+int hal_rfid_capture(uint32_t dst, unsigned n);
+void hal_rfid_capture_stop(void);
+/* R6.5 part 4 (R8.4): pretend to be a tag.  The reader's field clocks TIM2
+ * (ETR on the carrier node) and the pull pin is PWM: dur[i] is a segment in
+ * carrier periods - 1 (ARR) and pulse[i] how many of them the pull is on
+ * (CCR3), both physical, n words each, played round and round by DMA with no
+ * CPU work.  The caller pins the memory. */
+int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n);
+void hal_rfid_emulate_stop(void);
 uint32_t hal_cycles(void);
 
 /* USB CDC-ACM serial port (Flipper; QEMU has none: init returns -1).
@@ -179,6 +249,31 @@ unsigned hal_usb_write(const void *buf, unsigned n);	/* bytes queued */
 unsigned hal_usb_room(void);		/* ring room; nobody listening: all */
 int hal_usb_getc(void);			/* -1 if nothing received */
 int hal_usb_peekc(void);		/* the same byte, left in place */
+
+/* USB HID (R10.2, R11.3.1), behind /dev/hidkbd, hidmouse, hidcons
+ * (<minix/hid.h>, kernel/arm/hiddev.c).  hal_hid_state(): the bus bits
+ * (HAL_HID_*, the same values as HID_*) | the host's LED byte << 16.
+ * hal_hid_send(): one report of n bytes for kind (HAL_HID_KBD...): 0 when
+ * it went out (or is queued), -1 when it cannot now.  The backend calls
+ * the kernel's hid_event(HAL_HID_EV_*) from its interrupt when the state
+ * or the LED byte changes, so that poll() and the LED reader wake.
+ * QEMU's backend prints each report as one console line,
+ * "hid< kbd 02 00 0b 00 00 00 00 00", and is always configured unless
+ * hal_hid_fake() (its test hook; -1 on the Flipper) says otherwise;
+ * hal_hid_line(): the FNV-1a hash of the last line (-1 on the Flipper). */
+#define HAL_HID_ATTACHED	0x01
+#define HAL_HID_CONFIGURED	0x02
+#define HAL_HID_SUSPENDED	0x04
+#define HAL_HID_KBD		0
+#define HAL_HID_MOUSE		1
+#define HAL_HID_CONS		2
+#define HAL_HID_EV_STATE	1
+#define HAL_HID_EV_LED		2
+uint32_t hal_hid_state(void);
+int hal_hid_send(unsigned kind, const uint8_t *rep, unsigned n);
+int hal_hid_fake(uint32_t st);
+int hal_hid_line(uint32_t *hash);
+void hid_event(unsigned what);		/* the kernel's; interrupt level */
 
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
@@ -198,6 +293,20 @@ void hal_disk_dma_ack(void);
 void hal_disk_wait(void);
 int hal_disk_read(uint32_t sector, void *buf, unsigned count);
 int hal_disk_write(uint32_t sector, const void *buf, unsigned count);
+/* Spec N.6, card pulled out: the card-detect switch (polled; 1 = a card
+ * is in), and an id of the card in the slot (a hash of its CID:
+ * manufacturer, product, serial), read after hal_disk_init(): 0, or -1.
+ * hal_disk_fake() is QEMU's test hook: 0 card in, 1 out, 2 another card
+ * in, 3 returns the sectors written since boot (-1 on the Flipper). */
+int hal_disk_present(void);
+int hal_disk_id(uint32_t *id);
+int hal_disk_fake(int state);
+/* R12.40: DISCARD sectors first..last (the card marks them unused, no
+ * erase): 0, -1 error, -2 the card has no DISCARD (SD Status, read at
+ * init).  The card is busy meanwhile; the HAL waits by hal_disk_nap() (the
+ * kernel's: the disk task sleeps one clock tick). */
+int hal_disk_discard(uint32_t first, uint32_t last);
+void hal_disk_nap(void);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of
  * whole pages that only the cache uses.  The kernel calls these with
@@ -256,11 +365,29 @@ const char *hal_reset_cause(void);	/* of the last reset */
 void hal_radios_park(void);
 void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 							int *smps);
-/* The RTC's time, seconds since 1970 (UTC, spec I.1); 0: it is not running
- * or was never set.  Read once at boot (the clock task). */
+/* The RTC (R6.2, R7b.1).  hal_rtc_ok: it runs and can be set (QEMU: 0, the
+ * kernel keeps its own clock).  The time in seconds since 1970 (UTC, spec
+ * I.1); 0: not running or never set.  hal_rtc_set: 2000-2099; -1: no. */
+int hal_rtc_ok(void);
 uint32_t hal_rtc_time(void);
+int hal_rtc_set(uint32_t t);
+/* Alarm A at due (UTC s, at most 27 days ahead; 0 clears it); at power-off
+ * it is moved lead seconds earlier (the boot takes that long; 0 keeps the
+ * stored lead, first 10 s).  -1: in the past, too far, or no RTC. */
+int hal_rtc_alarm(uint32_t due, unsigned lead);
+#define HAL_RTC_ARMED	1		/* it will fire */
+#define HAL_RTC_FIRED	2		/* it fired since it was set */
+#define HAL_RTC_WOKE	4		/* this boot came from it */
+uint32_t hal_rtc_alarm_get(unsigned *lead, unsigned *flags);  /* due, 0 none */
+int hal_rtc_alarm_irq(void);		/* -1: none */
+int hal_rtc_alarm_ack(void);		/* in the handler: 1 if it fired */
+/* Smooth calibration (RTC_CALR) in steps of 0.954 ppm, positive faster,
+ * -511..512; set != 0 writes v.  Returns the value in force. */
+int hal_rtc_cal(int set, int v);
 int hal_reset_bits(void);		/* RCC_CSR >> 24, 0x100: dev mode */
-void hal_tone(unsigned hz);		/* speaker; 0 = off */
+/* Speaker: a square wave at hz (0 = off) at volume vol 0..100; the duty
+ * is 50 % * (vol/100)^3, as stock furi_hal_speaker_start (100: full). */
+void hal_tone(unsigned hz, unsigned vol);
 void hal_halt(int status) __attribute__((noreturn));
 /* Power off (T14c): the charger's ship mode, as stock furi_hal_power_off;
  * on VBUS it cannot cut the power and waits for the cable to go.  QEMU:

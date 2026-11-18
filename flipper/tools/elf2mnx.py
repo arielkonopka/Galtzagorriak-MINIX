@@ -24,8 +24,20 @@ plus 1, as the GOT starts at offset 0) and cover the GOT and
 initialized pointers; exec adds the text or the data base depending on
 whether the word holds an address below or above A_DATA_LINK.  a_total
 then excludes the text and a_syms holds the CRC-32 of the text.
+
+With --libc LIBC.json (tools/mkshlibc.py; ld/user-shlibc.ld) the program
+uses the shared libc in flash (spec R2b.9): the first bytes of its data are
+the libc area, filled here with the library's initial GOT and data (and its
+relocations); addresses inside the library's flash are absolute and stay as
+they are.  The header is 48 bytes, with flag A_LIBC and the library's build
+id in a_tbase: exec refuses the program with any other library.
+
+With --furi FURI.json as well (ld/user-shfuri.ld) it also uses the shared
+libfuri + libapp library (R2b.9, R5.2): its area follows the libc area and
+is filled the same way, and a_dbase holds that library's build id.
 """
 import argparse
+import json
 import os
 import re
 import struct
@@ -52,7 +64,8 @@ PC_RELATIVE = {
     129,  # R_ARM_THM_PC12
 }
 SHN_UNDEF, SHN_ABS = 0, 0xFFF1
-A_EXEC, A_SEP, A_ARMCM = 0x10, 0x20, 0x18
+A_EXEC, A_SEP, A_ARMCM, A_LIBC = 0x10, 0x20, 0x18, 0x08
+A_NOSWAP = 0x80      # never swapped in plain mode (Secret: yes, R12.28)
 A_DATA_LINK = 0x10000000
 # Resolved at link time against the GOT origin (= start of data): no fixup.
 GOT_RELATIVE = {24, 26}    # R_ARM_GOTOFF32, R_ARM_GOT_BREL
@@ -64,7 +77,26 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--stack", type=int, default=6144,
                     help="bytes for stack and heap (like chmem)")
+    ap.add_argument("--libc", help="shared libc description (mkshlibc.py)")
+    ap.add_argument("--furi", help="shared libfuri + libapp description "
+                    "(mkshlibc.py; needs --libc)")
+    ap.add_argument("--secret", action="store_true",
+                    help="A_NOSWAP: it holds secrets, never swap it in "
+                    "plain mode (Secret: yes, spec R12.28)")
     a = ap.parse_args()
+    a.lib = a.flib = None
+    if a.libc:
+        with open(a.libc) as f:
+            a.lib = json.load(f)
+    if a.furi:
+        if not a.lib:
+            sys.exit("--furi needs --libc")
+        with open(a.furi) as f:
+            a.flib = json.load(f)
+        if a.flib["start"] != a.lib["area"]:
+            sys.exit(f"{a.furi}: built against another libc (its area "
+                     f"starts at {a.flib['start']}, the libc area is "
+                     f"{a.lib['area']} bytes)")
     with open(a.elf, "rb") as f:
         elf = f.read()
 
@@ -86,6 +118,8 @@ def main():
     secs = {name(sh[0]): sh for sh in shdrs}
     if ".data" in secs and secs[".data"][3] >= A_DATA_LINK:
         return separate(a, elf, secs, name, shdrs, e_entry)
+    if a.lib:
+        sys.exit(f"{a.elf}: --libc needs a position-independent program")
     for need in (".text", ".data", ".bss"):
         if need not in secs:
             sys.exit(f"missing section {need}")
@@ -150,7 +184,8 @@ def main():
         stream.append(0)
 
     a_total = a_text + a_data + a_bss + a.stack
-    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC, A_ARMCM, 32, 0, GZ_ABI,
+    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03,
+                      A_EXEC | (A_NOSWAP if a.secret else 0), A_ARMCM, 32, 0, GZ_ABI,
                       a_text, a_data, a_bss, e_entry, a_total, 0)
     with open(a.out, "wb") as f:
         f.write(hdr + image + stream)
@@ -202,6 +237,24 @@ def separate(a, elf, secs, name, shdrs, e_entry):
     bss = secs.get(".bss")
     a_bss = bss[3] + bss[5] - d_end if bss and bss[5] else 0
     syms = symbols(elf, secs)
+    lib, flib = a.lib, a.flib
+    # The areas at the start of the data: the libc's, then the furi
+    # library's; their contents come from the libraries' descriptions.
+    area = lib["area"] if lib else 0
+    if flib:
+        area += flib["area"]
+    libs = [l for l in (lib, flib) if l]
+
+    def in_lib(v):
+        return any(l["base"] <= v < l["base"] + l["size"] for l in libs)
+    if lib and secs.get(".got", (0,) * 4)[3] != d_start:
+        sys.exit(f"{a.elf}: --libc needs the GOT first in the data "
+                 "(ld/user-shlibc.ld)")
+    if lib and any(data[:area]):
+        sys.exit(f"{a.elf}: the libraries' areas are not empty")
+
+    def in_area(v):
+        return lib and d_start <= v < d_start + area
 
     relocs = set()
     for sname, sh in secs.items():
@@ -224,30 +277,47 @@ def separate(a, elf, secs, name, shdrs, e_entry):
                 sys.exit(f"{a.elf}: unsupported relocation type {rtype} at "
                          f"{r_offset:#x} in {target}")
             if rsym < len(syms) and syms[rsym][1] in (SHN_UNDEF, SHN_ABS):
-                continue
+                # absolute, unless it is a libc variable in the area
+                v = struct.unpack_from("<I", data, r_offset - d_start)[0]
+                if not in_area(v):
+                    continue
             relocs.add(r_offset - d_start)
     # The linker fills the GOT itself and -q emits no relocations for it:
     # every non-zero entry is an address (zero: undefined weak symbol).
+    # (Only the program's part: the libc area is still zeros.)
     got = secs.get(".got")
     if got:
-        for off in range(got[3] - d_start, got[3] - d_start + got[5], 4):
-            if struct.unpack_from("<I", data, off)[0] != 0:
+        for off in range(got[3] - d_start + area, got[3] - d_start + got[5], 4):
+            v = struct.unpack_from("<I", data, off)[0]
+            if v != 0 and not in_lib(v):
                 relocs.add(off)
     for off in relocs:
         v = struct.unpack_from("<I", data, off)[0]
         if not (v < len(t_bytes) + 1 or d_start <= v <= d_end + a_bss):
             sys.exit(f"{a.elf}: data word at {off:#x} = {v:#x} is neither "
                      "a text nor a data address")
+    for l in libs:                # the areas: the libraries' GOT and data
+        tmpl = bytes.fromhex(l["template"])
+        start = l.get("start", 0)
+        if len(tmpl) > l["area"]:
+            sys.exit(f"{a.elf}: a library's template is longer than its area")
+        data[start:start + len(tmpl)] = tmpl
+        relocs |= set(l["relocs"])
     offs = sorted(relocs)
     a_text, a_data = len(t_bytes), len(data)
     a_total = a_data + a_bss + a.stack
     crc = zlib.crc32(t_bytes) & 0xFFFFFFFF
-    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, A_EXEC | A_SEP, A_ARMCM,
-                      32, 0, GZ_ABI, a_text, a_data, a_bss, e_entry, a_total, crc)
+    flags = A_EXEC | A_SEP | (A_LIBC if lib else 0) | (A_NOSWAP if a.secret else 0)
+    hdr = struct.pack("<BBBBBBHIIIIII", 0x01, 0x03, flags, A_ARMCM,
+                      48 if lib else 32, 0, GZ_ABI, a_text, a_data, a_bss,
+                      e_entry, a_total, crc)
+    if lib:                       # a_trsize, a_drsize, a_tbase, a_dbase
+        hdr += struct.pack("<IIII", 0, 0, lib["id"], flib["id"] if flib else 0)
     with open(a.out, "wb") as f:
         f.write(hdr + t_bytes + data + reloc_stream(offs))
     print(f"  {a.out}: text {a_text} data {a_data} bss {a_bss} "
-          f"total {a_total} (+text), {len(offs)} relocations, PIC")
+          f"total {a_total} (+text), {len(offs)} relocations, PIC"
+          f"{', shared libc' if lib else ''}{' and furi' if flib else ''}")
 
 
 if __name__ == "__main__":

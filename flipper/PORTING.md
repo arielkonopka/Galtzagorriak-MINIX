@@ -104,8 +104,10 @@ Without the buttons (2026-11-14):
   | BKP18R | run-time cache erase budget (R2b.11): magic 0xA, budget (8 bits), pages erased today (8), the day (12: from the RTC date, or days of uptime when the RTC does not run) |
   | BKP17R | run-time cache pages erased in all |
   | BKP16R | installed-region pages erased in all |
+  | BKP13R | the RTC alarm's due time, s since 1970 UTC (R7b.1); 0: none |
+  | BKP12R | RTC alarm: magic 0xD (top nibble), this boot came from the alarm (bit 16), it fired since it was set (17), the boot lead in s (0-15; 0: 10 s) |
   | BKP14R | charging (R6.1): magic 0xC (top nibble), profile care (bit 0), gentle charging (bit 1) |
-  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), idle timeout in seconds (bits 0-15; 0 never, default 15) |
+  | BKP15R | backlight: magic 0xB, off by the idle timeout (bit 27), dimming step (bits 24-26), brightness (bits 16-23), the forced mode (bits 14-15, R6.10: 0 auto, 1 off, 2 on; cleared at boot), idle timeout in seconds (bits 0-13; 0 never, default 15, at most 16383) |
 
 - Where a watchdog reset goes: RTC backup register 19 ("GZ" magic) holds
   a dev bit and the reset flags of the last reset.  `reboot -d` sets the
@@ -540,7 +542,7 @@ base-flash` builds `rom.img` (a read-only MINIX file system, 32 KB, from
 `rootfs/rom.proto`: `/etc` as built, plus the default `rc.conf`, which is
 not put on the card) and puts it into `minix-base.bin` at a fixed place:
 right after the installed region's two directory pages (0x08032000 on
-the Flipper).  It is written only by DFU:
+the Flipper; 0x08042000 since the shared libc, R2b.9).  It is written only by DFU:
 - installs start after it;
 - the kernel refuses MM's erases and writes there (EROFS);
 - `/dev/rom` (memory driver, block 1/6) serves it and cannot be opened
@@ -634,6 +636,126 @@ R2b.12, rebinding by content, and the exec guard (2026-11-15, QEMU; the
   ctime), so the old record is stale.  Now 0 of 36; with compaction's
   old header-first order it still catches 13 of 22.  RAM 0 B (kernel,
   MM, FS).
+
+R2b.9, the shared libc in flash (2026-11-16, QEMU; the device numbers
+are a local-agent check):
+- Layout: the system image (at most 192 KB), then the shared libc at
+  0x08030000 (QEMU 0x30000), at most 64 KB, then the installed region
+  from 0x08040000 (the ROM image moves to 0x08042000).  `minix.bin`
+  carries the library: `make minix-flash` alone gives a working system.
+- The library: every libc-pic member except those with big per-process
+  data, linked at its flash address (`ld/shlibc.ld`, no
+  `--gc-sections`), plus libgcc's 64-bit division (R2d.4).  Header and
+  entry table first (`tools/mkshlibc.py tab`, from `libc.exports`): 352
+  functions, 18 304 B.  Programs call slot n through a weak 12-byte stub
+  (`ldr ip, =slot; ldr pc, [ip]`); weak, so a program's own `getc` or
+  `putchar` (sh, mined, date) still wins, as with the static libc (no
+  libc member calls those).
+- One base register: library and program both use r9.  The program's
+  `.got` output section starts with the libc area (`ld/user-shlibc.ld`,
+  `. = . + SHLIBC_AREA`), and ld counts GOT offsets from the start of
+  that section, so the program's offsets begin after the area while the
+  library's own start at 0.  No kernel, MM or signal change for r9.
+- The area: the library's GOT (with absolute flash addresses for its
+  constants and functions, which exec leaves alone) and its data and bss,
+  608 B.  `elf2mnx.py --libc` copies its initial contents into the
+  program and adds its 23 data relocations; `crtso` (`-DSHLIBC`) sets
+  `_brksize` to the program's `_end`.  The library's variables are
+  `PROVIDE`d at their area addresses (`shlibc-syms.ld`).
+- Binding: the program carries the area, so it fits one library build
+  only: 48-byte header, flag `A_LIBC`, `a_tbase` = the build id (CRC-32 of
+  the library and its area).  MM's exec compares it with the header in
+  flash and refuses another one (ENOEXEC) before allocating; `pkg`
+  refuses a package with another `Libc:`.  The build is reproducible: the
+  same sources give the same id, so builds that do not touch libc keep
+  working with the cards in use.
+- The kernel takes the library's flash as the source of a copy (after D
+  and T, R4a.9): `perror` and `strerror` strings, `system()`'s "/bin/sh".
+  Never as a destination.
+- Kept static (`SHLIBC_STATIC`): getpwent/getgrent (1.3/1.8 KB of bss),
+  mtab, crypt, scanf, the time zone code (`misc.c`) and what needs it
+  (localtime, mktime, strftime, ctime), the float conversion tables,
+  regexp, math, and small members few programs use whose data or GOT
+  would cost every process (getopt, termcap, tmpnam, system, qsort,
+  rand, gmtime, ...).  With them shared the area was 1104 B.
+- Numbers (Flipper build, the 96 base programs): text 606 708 B ->
+  263 440 B, plus 18 304 B of library once; `base_3.71.tar` 788 KB ->
+  481 KB; `make base-flash` programs 136 KB -> 92 KB.  Per process,
+  data + bss +172 to +452 B (the area minus the libc data the program
+  had anyway; 88 programs: +265 B on average).  For a program whose text
+  runs from RAM the total goes down (cat 15.6 -> 14.2 KB, login 22.7 ->
+  15.9 KB).  QEMU after login: free 85 KB (73 KB with static programs).
+  M2: cache erases 5 -> 4 (m2test's text is smaller).
+- Device check pending: exec latency (L6, L9), the XIP speed of a
+  libc-heavy command (each libc call is a stub and a load from flash),
+  free flash after `make base-flash`.
+
+R2b.9 part 2, libfuri + libapp as one shared library (issue #201,
+2026-11-17, QEMU; device numbers are a local-agent check):
+- Layout: the libc's slot shrinks to 48 KB (0x08030000, the library is
+  18.5 KB, its address and id are unchanged), the furi library follows at
+  0x0803C000 (48 KB slot), the installed region starts at 0x08048000 (the
+  ROM image at 0x0804A000).  `minix.bin` carries both libraries (287 KB);
+  QEMU: 0x3C000, installed region 0x48000, cache 0x68000.
+- The library: libfuri (core, GUI, modules, u8g2, fonts) and libapp,
+  linked once at its flash address with `--gc-sections`; the roots are
+  the 73 functions in `furi.exports` (what furihello, remind, alarm,
+  timed and alert call, plus `localtime`/`mktime`, the static libc
+  members libapp needs, exported so the apps share that copy).  41 376 B
+  of text (the R5.2 budget is 45 KB; unfiltered, every libfuri member,
+  about 66 KB).  The u8g2 part that stays is about 7 KB (the four stock
+  fonts 3.5 KB); nothing of u8g2 is exported.
+- Same mechanism as the libc (`tools/mkshlibc.py image --dep`): header
+  (magic `GZLF`), frozen entry table, 12-byte stubs.  It calls the libc
+  through the libc's stubs (in its own text), so its area - GOT 1 304 B,
+  data 324 B, bss 784 B: 2 416 B - follows the libc area at r9
+  (`ld/shfuri.ld` starts its GOT section `SHLIBC_AREA` bytes in), and
+  its id covers the libc's id.  `a_dbase` of the 48-byte header holds
+  it; MM's exec refuses another build (ENOEXEC, abiexec tests 6), `pkg`
+  a package with another `Furi:`.  0 = not used: no ABI change, old
+  programs run as before.  The kernel takes its flash as a copy source
+  too (libapp's file names).
+- Per program (Flipper build), text / data+bss before -> after:
+  furihello 28 820 / 2 008 -> 1 060 / 3 108, remind 31 796 / 3 744 ->
+  5 324 / 4 164, alarm 34 592 / 3 864 -> 7 752 / 4 272, alert 13 988 /
+  4 092 -> 6 408 / 5 680, timed 11 924 / 3 256 -> 3 488 / 4 764.  Text
+  -96 KB for the five, +41 KB of library once.  Data + bss grow by 0.4 KB
+  (remind, alarm: they used most of the library anyway) to 1.6 KB
+  (alert, timed: libapp only, but the area is the whole library's).
+  Sharing saves flash, not RAM, for a program whose text runs from flash.
+- RAM while open (QEMU, `free -v` before and with the app open, nattest
+  "RAM:" lines; remind and alarm installed in flash, alert from RAM):
+  remind 16 128 -> 15 616 B, alarm 16 384 -> 16 128 B, alert 24 320 ->
+  18 688 B, furihello 16 896 B after (about 43 KB before, from its
+  sizes); data + bss + chmem, which is what exec takes: remind 15 432,
+  alarm 16 048, alert 11 824 + 6 408 of text (one alarm run gave 14 080:
+  a free delta can pick up another process).  remind and alarm gain from
+  a smaller chmem (12 KB -> 11 KB
+  and 11.5 KB: nattest leaves 3.8-4.0 KB and 3.2-3.4 KB of 12 KB never
+  used; what is left keeps at least 1 KB for the heap above MM's 1.5 KB
+  safety gap); alert and timed from the text they no longer load.  timed
+  (5 KB chmem, 1.9 KB used) and alert (6 KB, all touched) keep theirs.
+- What is left of the Phase 7b budgets (remind 4, alarm 5, alert 4,
+  timed 3 KB), remind as the example, 15.4 KB: chmem 11 KB = libfuri's
+  main stack 3 KB + the gui thread 2 KB (#188) + heap about 3 KB (Canvas
+  1.1 KB, views, the list) + MM's safety gap 1.5 KB + 1 KB to grow; data
+  4.1 KB = libc area 0.6 + furi area 2.4 + its own 1.1.  What would close
+  it: (1) a GUI server (one gui thread, Canvas and input for every app:
+  -3.1 KB per app); (2) a main stack sized per app instead of 3 KB
+  (`FURI_MAIN_STACK` is now inside the library: it needs a run-time
+  setting, e.g. from the package's chmem line); (3) a smaller furi area
+  (`const` pointer tables, fewer GOT entries in libapp's parser: 80 of
+  its 326 GOT words); (4) a smaller MM safety gap for programs whose heap
+  is bounded.  Even all four leave about 7 KB: 4 KB needs apps that hold
+  no GUI state of their own (a GUI server or 7c-style modules in one
+  host process).  alert and timed (no libfuri): text in flash (`Flash:
+  yes` for the timed package) would save their 6.4 / 3.5 KB of text in
+  RAM; their data is mostly the furi area and libapp's timer struct.
+- AC5.3: with remind and alarm installed, `free -v` shows `shared
+  libfuri: 41 KB at 0003c000 ...` once; `installed programs: 2, 16 of
+  128 KB` (they were 68 KB with libfuri inside).
+- Flash writes: none at run time; the library is written by DFU with
+  `minix.bin`.  M2 flashcheck cache 6/6, inst 0/0.
 
 T4b step 1, the SD card's busy wait (2026-11-15, Flipper): after a write
 the card programs for up to ~9 ms, and `sd_wait_ready` polled it all
@@ -849,6 +971,7 @@ off for 30 s or more; the gauge counts in whole mA, so this is coarse):
 |---|---|---|---|
 | 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
 | 2026-11-16 | + T14d part 1 (#120, LCD power save) | -2 mA | same setup; the LCD blank after 15 s + 2 min |
+| 2026-11-17 | Galtzagorriak 0.1.1+124.g0566ba1 (built on the old laptop; the commit is not on GitHub) | < gauge resolution (`sby` -2 mA) | overnight, read with `nightpower.py end` and no start file: booted 22:05 UTC, on USB again 18:04 UTC, 20.0 h on battery. **Stop2 98.22 %** (70677 of 71959 s; the USB minutes before unplugging in the evening are unknown and count as awake), 151 button + ≈ 77143 other wake-ups (64 a minute; `wother` read 11607, wrapped u16, #284). No reset. Clock -1.6 s after 20 h, set by hand to the second (≈ 22 ppm). SoC ? -> 99 %. AC6.6 not passed on the Stop2 share |
 
 Not measured: the build before T14a (#112) and the stock firmware's
 battery screen for comparison (each needs two more flashes; no meter on
@@ -900,6 +1023,99 @@ How the sleep works (T14b, #115 #116 #121; for whoever changes it):
 Statistics: a `make latcheck` kernel and `lat` show the time in Stop2,
 wake-ups by source, the entry/exit time and why idle did not sleep.
 
+## Time (Phase 2d, spec section I, R2d.1-R2d.9)
+
+**Model.** The system clock keeps **UTC**, as POSIX seconds since
+1970-01-01 (no leap seconds).  Local time exists only for people: libc's
+`localtime`, `mktime`, `ctime` and `date` follow the `TZ` environment
+variable, a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3` (no `TZ`:
+UTC).  `/etc/TZ`, read by INIT for everything it starts, and the time-zone
+list of the settings app come later (I.4, Phase 18b); until then set `TZ` in
+`~/.profile` (`TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ`).
+
+**Year 2038: option E of I.2.**
+- Programs: `time_t` is a **signed 64-bit** integer (`long long`) in libc,
+  `struct stat` (48 bytes now, 16 more on the stack), `struct utimbuf`,
+  `time()` and `stime()`.  Programs compiled now need no other change for
+  time; this raised the ABI to **2** (J.3): MM's exec refuses programs of
+  ABI 1 (`a_version` 0 or 1) with `ENOEXEC`, `pkg` refuses packages with
+  `Abi: 1` or none.
+- Storage: **`ftime32_t`**, unsigned 32 bits, 1970 to 2106-02-07 06:28:15
+  UTC: MFS inode times on disk and in core (the V2 inode is unchanged, so
+  file systems made before still mount and show the same times; times
+  before 2038 read the same signed or unsigned), MM's `mp_ctime`, the
+  installed-region records and `utmp`/`wtmp` `ut_time`.  The conversion
+  happens at the boundary (`stat`, `utime`) and nowhere else.
+- Messages keep their size: a 64-bit value travels as two halves,
+  `m2_l1` low and `m2_l2` high (`time()` replies, `stime()` requests).  A
+  64-bit member in the message union is not allowed: it would make
+  `message` 8-byte aligned.
+- `utime()` refuses a time outside 1970 to 2106-02-07 06:28:14 with
+  `EINVAL` in libc (`touch -t 210701010000 f` fails, 2106 works);
+  `stime()` past 2106 gets `EINVAL` from FS.  When the clock passes 2106
+  (only possible with the RTC driver), FS stamps files with
+  `0xFFFFFFFE` and says so once on the console, instead of wrapping to
+  1970.
+- libc: `gmtime` converts with days-from-civil (no year loop; a 32-bit
+  path for 1970-2106, 64-bit division only outside it; beyond about
+  +-5 million years it returns NULL), `mktime` likewise, before 1970 too.
+  The 64-bit division helper of libgcc lives in the shared libc
+  (R2b.9).  `printf` has no `%lld`: print times through `ctime`/`strftime`/
+  `date`, or a difference cast to `long`.
+- Audit (R2d.7): `make check` and `make ramcheck` run
+  `tools/timecheck.py` over the sources that are built.  It flags a
+  `long`/`int` that holds `time()`, a cast of a time to `long`/`int`,
+  `time(&x.ut_time)`, `long`/`int` variables named `*time*`, and `%ld`/`%d`
+  next to a time value.  A line that is right as it is says
+  `/* timecheck: ok */`.  Fixed by it: `find` (`time()` into a `long`:
+  memory overwritten), `login` (`time(&ut_time)`), `tar` (times past
+  2038), `mkfs`, `date`, the power app.
+
+**The kernel's clock.**  Until the RTC driver (R6.2) reads the RTC on each
+`time()` (and the kernel's `boot_time` goes, -4 B), the clock task keeps
+`boot_time` as an `ftime32_t` read from the RTC at boot and adds the
+uptime: 0 B RAM change.  `time()` costs one message to FS and one to the
+clock task, as before.
+
+**Uptime wrap (I.3).**  `realtime`, the tick counter, is unsigned and wraps
+after 2^32 ticks (828 days at 60 Hz).  Every compare of two instants goes
+through `TDIFF(a, b)` / `DUE(t, now)` (`src/kernel/const.h`): alarms
+(`p_alarm`, `next_alarm`), the TTY timers, the tickless idle, the backlight
+timeout and the flash idle work.  "No timer" is half the range ahead
+instead of `LONG_MAX`; `force_timeout()` uses a past instant instead of 0;
+the last key press (`k_input`) is kept at most 2^30 ticks in the past so
+that it never looks like the future.  At the wrap the wall clock carries
+2^32/60 s (it loses 16 ticks, 0.27 s, every 828 days).  Test build:
+`make WRAPTEST=1` starts the counter 10 s before the wrap (`WRAPTEST=n`:
+n s); in QEMU the M2 test reaches `m2test` about 35 s after the start, so:
+
+    make -j WRAPTEST=40 INIT=m2 minix disk && make WRAPTEST=40 INIT=m2 minix-run
+
+checks an `alarm()` set before the wrap and a `sleep(2)` after it (AC2d.3),
+then runs the whole M2 test after the wrap.
+
+**QEMU checks (m2test).**  `gmtime`/`mktime` both ways for 1900-03-01,
+1969-12-31 23:59:59, 2038-01-19 03:14:08, 2100-03-01 (2100 is no leap
+year) and 9999-12-31 23:59:59; `TZ=CET-1CEST,M3.5.0,M10.5.0/3` at
+2026-03-29 00:59:59 UTC gives 01:59:59 and one second later 03:00:00
+local (AC2d.5); `utime` keeps 2106-01-01 and refuses 2107 (AC2d.2);
+`stime` refuses 2106+, sets 2038-01-19 03:14:06, and after `alarm(3)`
+`time()` is past 03:14:08 and a file stamped then shows 2038 (AC2d.1).
+
+**For the manual (I.7).**  The clock is UTC and local time comes from
+`TZ` (later `/etc/TZ`, changed with the settings app or `setup tz`);
+programs use 64-bit times, files store times up to 2106-02-07; after the
+stock firmware the RTC holds the stock firmware's local time (the
+first-boot wizard of Phase 18b will ask to confirm it; until then set it
+with `date -u ...Z`); after going back to stock, the stock clock shows UTC
+until it is set again.  `date -u` prints UTC; `date MMDDYYhhmm` sets local
+time, `date -u ...` or a trailing `Z` sets UTC.
+
+**Needs the device.**  AC2d.R: `time()` <= 5 us (one RTC read and the
+conversion, once R6.2 reads the RTC; today one FS and one clock message)
+and `ls -l` of 100 files not measurably slower (both recorded here);
+the boot still takes the clock from the RTC (#70).
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**
@@ -941,6 +1157,8 @@ disk` builds the small 8 MB `fs.img` and the QEMU `disk.img`.
 
 ### User programs
 
+Since R2b.9 against the shared libc in flash (`ld/user-shlibc.ld`, see
+the R2b.9 notes above).  Originally:
 Linked at 0 with relocations (`ld/user.ld`, `-Wl,-q`), converted by
 `tools/elf2mnx.py` to MINIX a.out (cpu `A_ARMCM`) with a GEMDOS-style
 relocation table, which exec relocates in MM (the Atari ST code path).

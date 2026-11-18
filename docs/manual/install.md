@@ -65,12 +65,17 @@ same files, without the directories):
 | File | Size (approx.) | What it is |
 |---|---|---|
 | `card.img` | 2 MB | SD card image: partition table + the 32 MB root file system |
-| `minix-base.bin` | 370 KB | **the firmware to flash**: kernel and servers, the programs used at boot (shell, launcher, login, ls, ...) and the default settings (`/rom`) |
-| `minix.bin` | 85 KB | the bare kernel and servers only, without the programs in flash and without `/rom`; for developers |
-| `pkgs/base_X.Y.tar` | 750 KB | the system programs as a package, for updating a card that is already in use (section 7) |
+| `minix-base.bin` | 390 KB | **the firmware to flash**: kernel and servers, the shared C library, the programs used at boot (shell, launcher, login, ls, ...) and the default settings (`/rom`) |
+| `minix.bin` | 210 KB | the kernel, the servers and the shared C library only, without the programs in flash and without `/rom`; for developers |
+| `pkgs/base_X.Y.tar` | 470 KB | the system programs as a package, for updating a card that is already in use (section 7) |
 | `pkgs/hello_1.0.tar` | 10 KB | an example app package |
 
-Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build**.
+Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build**. The
+programs on the card use the C library in the flashed image (one copy for all of them), and they
+run only with the library of their own build: with another one every program, the shell
+included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg: base needs
+shared libc ..., this system has ..."; the same for the GUI apps' library, "needs shared
+libfuri ..."), and `free -v` shows both libraries (`shared libc:`, `shared libfuri:`) and their ids.
 
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
@@ -80,7 +85,7 @@ stock firmware or qFlipper can install from the SD card without `dfu-util` (spec
 The same system runs in QEMU (a Cortex-M4 board), with the SD card as a file:
 
     make minix disk        # BOARD=qemu is the default
-    make minix-run         # log in as root, no password; the session ends after 60 s
+    make minix-run         # set root's password at the first boot; the session ends after 60 s
 
 ## 3. Before you start: back up the stock SD card
 
@@ -130,12 +135,19 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    |---|---|---|---|
    | `/dev/hd1` | `/` | 32 MB | the system, `/etc` settings |
    | `/dev/hd2` | `/usr` | 2 GB | programs and packages |
-   | `/dev/hd3` | (swap) | 64 MB | reserved for swapping apps to the card later |
+   | `/dev/hd3` | (swap) | 64 MB | swap for idle programs, off by default ([Swap](swap.md)) |
    | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
 
 2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
    Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
-   the launcher.
+   the launcher. The boot never waits for the console, so a Flipper with no USB host comes up as
+   usual.
+3. Root has no password on a new card, so the console asks for one **before its first login
+   prompt**: connect USB, open the serial port (see *Logging in* below), and you see
+   "root has no password yet. Press Enter to set one." Press Enter and type the password twice.
+   It is kept in `/etc/shadow`, readable only by root; `/etc/passwd` holds `##root` in its
+   place. Until it is set, `login` lets nobody in. The same happens after updating an older card
+   whose root had no password.
 
 Do not unplug or reset the Flipper during these steps. If one fails, the boot continues without
 `/usr` and `/home` and says so on the console; rewrite the card (section 4) and start again.
@@ -155,15 +167,42 @@ Connect the Flipper by USB and open its serial port; the speed setting does not 
 
     screen /dev/ttyACM0
 
-Press Enter, and log in as **root** with **no password**. Set one right away with `passwd`.
+`picocom /dev/ttyACM0` and `minicom -D /dev/ttyACM0` work as well, with their default settings:
+the console ends each line with CR LF itself (output post-processing `OPOST`/`ONLCR`, as on any
+Unix terminal; `stty -opost` switches it off, full-screen programs and file transfer do so on
+their own). Do not turn on "add carriage return" in the terminal program, or you get blank lines.
+
+Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
+it. A wrong password is refused after 2 seconds, to make guessing slow.
+
+The keys are those of a Linux terminal: **Ctrl-C** stops the running command, **Backspace**
+rubs out a character (whether the terminal sends DEL or Ctrl-H), **Ctrl-U** clears the line,
+**Ctrl-D** at the start of a line ends the input, Ctrl-\\ quits with a core dump. (MINIX 2.0
+used DEL to stop a command, which is what Backspace sends today; `stty erase ^H intr ^?` brings
+that back for the session.)
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
 
+**The clock keeps UTC.** Local time comes from the time zone in `/etc/TZ`, a POSIX rule; choose
+it on the launcher under SETTINGS > Time (see [The launcher](launcher.md)), or write it yourself,
+for example for Central Europe:
+
+    # Europe/Warsaw
+    CET-1CEST,M3.5.0,M10.5.0/3
+
+INIT gives it as `TZ` to everything it starts, and `/etc/profile` reads it for login shells. A
+`TZ` set in `~/.profile` still wins for that user. Without `/etc/TZ` the time shown is UTC.
+`date` prints local time, `date -u` UTC. To set the clock (as root; or on SETTINGS > Time): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
+(`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
+use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
+
+In `/tmp` and `/usr/tmp` (sticky directories, mode 1777) everybody may create files, but only a
+file's owner (or root) may delete or rename it.
+
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
-date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC
-holds; after the stock firmware that is your **local** time, but MINIX reads it as UTC, so
-`date` is off by your time-zone offset.
+date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
+but MINIX reads it as UTC: set it once with `date -u ...Z`.
 
 ## 7. Installing apps and updating the system
 
@@ -177,9 +216,43 @@ Packages (`name_version.tar`) are sent from the PC over the USB console:
 
 On the Flipper: `pkg list`, `pkg info NAME`, `pkg files NAME`, `pkg remove NAME`.
 
+`pkg` receives into `/usr/var/pkg/in` and unpacks in `/usr/var/pkg/tmp`, both root's only (it
+refuses to use them otherwise), and installs only the packages received in that run. It checks a
+package before unpacking anything and refuses it, with the reason, if a member has an absolute
+path, a `..` component, a name too long for `tar`, or is a link or device; package names and
+`Depends:` names are 1–32 letters, digits and `._+-`. `pkg remove` deletes only the files the
+package installed.
+
+A package is installed only when its setup script (`postinst`) ran and ended without an error.
+Otherwise `pkg` says why and exits 1: `pkg: NAME: postinst cannot start: REASON` (for example when
+there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N` (128 + the signal number if it was killed). Then
+`pkg: NAME VERSION is not set up: pkg install FILE again`: the files are in place, and the same
+command runs the script again. When RAM is short for a moment, `pkg` and the shell wait and try
+again (1 s apart, up to 10 s) before they give up. While a subshell of yours runs in the
+background (for example `( ... ) &`), the shell cannot wait this way: it says
+`NAME: no memory to start it` at once; run the command again a moment later.
+
 ### Updating to a newer build without erasing the card
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
+
+(Not across an ABI change: the new system cannot run the old programs and the old `pkg` refuses
+the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
+(64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
+you need from `/home` first. `ver` and the *About* app show the ABI.)
+
+(Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
+shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
+same build. Builds that do not touch the library keep its id, and the steps below work, but only
+when they are made with the same compiler: a build from another computer (another GCC version) has
+another id. If you flash first anyway, the Flipper starts without a console (`init: console: Exec
+format error`) until you rewrite the card.)
+
+(Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
+32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
+`minix.bin`) and install the app packages (`remind`, `alarm`, `timed`) again: what was installed
+before is not found at the new place.)
+
 
 1. Build the new version (section 2).
 2. Send the new system package: `flipper/tools/flsend build/flipper/minix/pkgs/base_X.Y.tar`.
@@ -198,7 +271,7 @@ a hang just reboots the Flipper, like the stock firmware.
 | MINIX hangs | The watchdog resets the Flipper after 2 s. Or hold Left + Back for a hardware reset. |
 | A new image does not boot | Left + Back, keep Left: DFU mode; flash a working `minix-base.bin`. If that does not work: Left + Back + OK, keep OK. |
 | `/usr` or `/home` not mounted, or the card is damaged | Rewrite the card (section 4). This erases your files on it. |
-| Forgotten root password | Rewrite the card (the password lives in `/etc/passwd` on the card). |
+| Forgotten root password | Rewrite the card (the password lives in `/etc/shadow` on the card). |
 
 **Back to the stock firmware:**
 
@@ -221,7 +294,8 @@ a hang just reboots the Flipper, like the stock firmware.
   lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
   power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
   [Power and battery](power.md).
-- The time zone is not handled yet (see section 6).
+- A new time zone reaches programs started after the change; open shells keep the old one until
+  the next login (section 6).
 - The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).

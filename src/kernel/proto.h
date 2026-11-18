@@ -23,6 +23,7 @@ _PROTOTYPE( void aha_scsi_task, (void)					);
 _PROTOTYPE( void clock_task, (void)					);
 _PROTOTYPE( void clock_stop, (void)					);
 _PROTOTYPE( clock_t get_uptime, (void)					);
+_PROTOTYPE( void force_timeout, (void)					);
 _PROTOTYPE( unsigned server_stack_used, (int t, unsigned *sizep)	);
 _PROTOTYPE( clock_t uptime_irq, (void)					);
 _PROTOTYPE( clock_t clock_idle, (void)					);
@@ -84,6 +85,7 @@ _PROTOTYPE( void cause_sig, (int proc_nr, int sig_nr)			);
 _PROTOTYPE( void inform, (void)						);
 _PROTOTYPE( phys_bytes numap, (int proc_nr, vir_bytes vir_addr, 
 		vir_bytes bytes)					);
+_PROTOTYPE( phys_bytes shlibc_src, (vir_bytes vir_addr, vir_bytes bytes) );
 _PROTOTYPE( phys_bytes numap_src, (int proc_nr, vir_bytes vir_addr, 
 		vir_bytes bytes)						);
 _PROTOTYPE( void sys_task, (void)					);
@@ -270,6 +272,9 @@ _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
 _PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp, int fp)	);
 _PROTOTYPE( void lcd_cons_putc, (int c)					);
+_PROTOTYPE( void flipdev_notice, (int kind)				);
+#define NOTICE_BACK	0	/* flipdev_notice(): the card is back (N.6) */
+#define NOTICE_OTHER	2	/* another card, or one that does not answer */
 #if LATTRACE
 #include <minix/lat.h>
 _PROTOTYPE( void lat_event, (int ev, int arg)				);
@@ -296,13 +301,16 @@ _PROTOTYPE( unsigned kstack_used, (unsigned *size)			);
 _PROTOTYPE( int arm_flash, (int op, u32_t addr, phys_bytes src,
 		unsigned len, u32_t *base, u32_t *size)			);
 extern struct proc *mpu_proc;
-extern struct proc *fp_live;
 _PROTOTYPE( void wreboot, (int how)					);
 _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
+_PROTOTYPE( void flipdev_adc_poll, (void)				);
+_PROTOTYPE( void flipdev_led_tick, (void)				);
+_PROTOTYPE( void flipdev_pulse_poll, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
 /* arm/mpx.S */

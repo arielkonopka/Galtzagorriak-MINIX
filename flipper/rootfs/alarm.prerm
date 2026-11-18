@@ -1,0 +1,8 @@
+# prerm of the alarm package: off the launcher.  Its timers in /var/timers,
+# its data in /home/flipper/apps_data/alarm and the user alarm stay (pkg
+# install alarm brings them back as they were; rm them by hand to forget).
+grep -v '^Alarm:root:/usr/bin/alarm$' /etc/apps | grep -v '^Alarm:root:@alarm:/usr/bin/alarm$' |
+	grep -v '^Ordua:root:@alarm:/usr/bin/alarm$' |
+	grep -v '^Ordua:alarm:@alarm:=/usr/bin/alarm$' > /etc/apps.new &&
+	cp /etc/apps.new /etc/apps
+rm -f /etc/apps.new

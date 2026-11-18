@@ -70,7 +70,7 @@ Budget L10 (boot to launcher menu) is 3 s.
 - **FPU** (R5.7): lazy, and nothing in the process table. A process that used the FPU gets an
   extended frame (S0-S15, FPSCR) from the CPU, written only when needed (lazy stacking);
   `p_reg.control` gets `CONTROL_FPCA` and `p_reg.sp` points 64 bytes below the frame. Its
-  registers stay in the FPU (`fp_live`) while the kernel runs and when it returns to the same
+  registers stay in the FPU (`CONTROL_FPLIVE`, only ever on `mpu_proc`) while the kernel runs and when it returns to the same
   process. Only when `restart` enters another process does `fp_flush` store S16-S31 there (which
   also makes the CPU do the lazy S0-S15 save) and clear the FPU, so nobody sees another
   process's registers; `restart` loads S16-S31 back when the process runs again. All stores
@@ -78,7 +78,7 @@ Budget L10 (boot to launcher menu) is 3 s.
   a bad stack gives it SIGSEGV (`fp_frame_recover`). The kernel, servers and libc are
   soft-float and never use the FPU. Signal handlers start without an FP context; the
   sigcontext keeps `CONTROL_FPCA`, so `sigreturn` finds the interrupted one again. Tests:
-  `m2test` (`fpu:` lines).
+  `/bin/fptest` (`m2/fptest.c`, run by `m2test`).
 - **MPU**: on every switch, `mpu_switch()` gives the process its own memory and read-only
   flash. Small or oddly aligned blocks are covered with several regions (`<minix/mpucover.h>`).
   There is no unprotected mode.
@@ -110,7 +110,9 @@ share.
 | Region | Written by | Contents |
 |---|---|---|
 | system image, from `0x08000000`, ≤ 192 KB | DFU only | kernel, MM, FS, INIT (`minix.bin`); the build fails above 192 KB |
-| installed region | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
+| shared libc, from `0x08030000`, ≤ 48 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
+| shared libfuri + libapp, from `0x0803C000`, ≤ 48 KB | DFU only | the GUI and app library, once, for the apps that use it (`minix.bin`; R2b.9, see below) |
+| installed region, from `0x08048000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
 | run-time text cache, 128 KB | MM in the background | texts of programs run often, within a daily erase budget |
 | guard pages, then the radio stack and FUS | never | the top of flash, from `SFSA` (read from `FLASH->SFR` at boot) |
 
@@ -118,6 +120,40 @@ share.
 writable regions and inside the ROM image (`EROFS`). Every erase is counted in RTC backup
 registers (`free -v`). Erases run with interrupts enabled; the CPU simply stalls on fetches for
 about 22 ms per page.
+
+**The shared libc** (`<minix/shlibc.h>`, `tools/mkshlibc.py`, `ld/shlibc.ld`). The libc members
+are linked once at a fixed address, `SHLIBC_BASE`; the image starts with a header (magic, ABI,
+build id, sizes) and the *entry table*, one word per exported function. `flipper/libc.exports`
+fixes the order of that table for the ABI: append new functions at the end, never reorder or
+remove one without a new `GZ_ABI` (the build tells you what to append). A program calls slot *n*
+through a 12-byte stub in its own text (`ldr ip, =slot; ldr pc, [ip]`), so imports cost no RAM.
+
+The library's writable data (its GOT, `errno`, stdio, `malloc` and `atexit` state; about 0.6 KB)
+is per process: the first bytes of every data segment, the *libc area*, at `r9` like the
+program's own GOT, which `ld/user-shlibc.ld` places after the area. `elf2mnx.py --libc` fills the
+area with the library's initial contents, so a program fits only the library build it was
+linked with: the a.out header is 48 bytes, flag `A_LIBC`, `a_tbase` = the build id. MM's exec
+refuses any other (`ENOEXEC`); `mkpkg.py` writes `Libc: <id>` and `pkg` refuses a mismatch. The
+kernel accepts the library's flash as the *source* of a copy (its strings passed to system
+calls), never as a destination.
+
+Members with big per-process data stay static, linked into the programs that use them
+(`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, `scanf`, the time
+zone code, the float tables, `regexp`, `getopt`, `termcap`, math, ...). `SHLIBC=0` builds every
+program static, as before.
+
+**The shared libfuri + libapp** (the "furi" library; `ld/shfuri.ld`, `flipper/furi.exports`,
+`tools/mkshlibc.py image --dep`). `libfuri` (core, GUI, u8g2, fonts) and `libapp` are linked once
+at `SHFURI_BASE`, right after the libc's slot, with the same header (magic `GZLF`) and a frozen,
+append-only entry table. Only the functions the apps call are exported, and only what they reach
+is in the library (`--gc-sections`): a ported app that needs another function appends it to
+`furi.exports`. The library calls the libc through the libc's stubs, so its per-process data
+(its GOT, data and bss, the *furi area*, about 2.4 KB) follows the libc area at `r9`, and its
+build id covers the libc's. Only the programs in `FURIPROGS` (`minix.mk`; `ld/user-shfuri.ld`,
+`elf2mnx.py --furi`) carry that area; `a_dbase` of their header holds the library's id, which
+exec checks like `a_tbase` (`ENOEXEC` on a mismatch, `0` = not used), and `mkpkg.py` writes
+`Furi: <id>`, which `pkg` checks. The static libc members the library needs (`localtime`,
+`mktime`) are inside it and exported, so an app does not get a second copy.
 
 ## 1.7 RTC backup registers
 

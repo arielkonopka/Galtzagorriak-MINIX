@@ -92,7 +92,7 @@ int override = 0, simple = 0, dflag;
 int donttest;			/* skip test if it fits on medium */
 char *progname;
 
-long current_time, bin_time;
+ftime32_t current_time, bin_time;	/* stored 32-bit (R2d.3) */
 char zero[BLOCK_SIZE], *lastp;
 char umap[MAX_INIT / 8];	/* bit map tells if block read yet */
 block_t zone_map;		/* where is zone map? (depends on # inodes) */
@@ -112,15 +112,15 @@ _PROTOTYPE(void enter_dir, (Ino_t parent, char *name, Ino_t child));
 _PROTOTYPE(void incr_size, (Ino_t n, long count));
 _PROTOTYPE(PRIVATE ino_t alloc_inode, (int mode, int usrid, int grpid));
 _PROTOTYPE(PRIVATE zone_t alloc_zone, (void));
-_PROTOTYPE(void add_zone, (Ino_t n, zone_t z, long bytes, long cur_time));
-_PROTOTYPE(void add_z_1, (Ino_t n, zone_t z, long bytes, long cur_time));
-_PROTOTYPE(void add_z_2, (Ino_t n, zone_t z, long bytes, long cur_time));
+_PROTOTYPE(void add_zone, (Ino_t n, zone_t z, long bytes, ftime32_t cur_time));
+_PROTOTYPE(void add_z_1, (Ino_t n, zone_t z, long bytes, ftime32_t cur_time));
+_PROTOTYPE(void add_z_2, (Ino_t n, zone_t z, long bytes, ftime32_t cur_time));
 _PROTOTYPE(void incr_link, (Ino_t n));
 _PROTOTYPE(void insert_bit, (block_t block, int bit));
 _PROTOTYPE(int mode_con, (char *p));
 _PROTOTYPE(void getline, (char line[LINE_LEN], char *parse[MAX_TOKENS]));
 _PROTOTYPE(void check_mtab, (char *devname));
-_PROTOTYPE(long file_time, (int f));
+_PROTOTYPE(ftime32_t file_time, (int f));
 _PROTOTYPE(void pexit, (char *s));
 _PROTOTYPE(void copy, (char *from, char *to, int count));
 _PROTOTYPE(void print_fs, (void));
@@ -158,9 +158,9 @@ char *argv[];
    * identical. First you set the time of the mkfs binary to what you
    * want, then go.
    */
-  current_time = time((time_t *) 0);	/* time mkfs is being run */
+  current_time = (ftime32_t) time((time_t *) 0);	/* time mkfs is being run */
   stat(argv[0], &statbuf);
-  bin_time = statbuf.st_mtime;	/* time when mkfs binary was last modified */
+  bin_time = (ftime32_t) statbuf.st_mtime;	/* time when mkfs binary was last modified */
 
   /* Process switches. */
   progname = argv[0];
@@ -270,8 +270,10 @@ char *argv[];
 
 #ifdef UNIX
   if (!donttest) {
-	static short testb[BLOCK_SIZE / sizeof(short)];
+	short *testb;		/* malloc'd, not in .bss (R2a.5) */
 
+	if ((testb = (short *) calloc(1, BLOCK_SIZE)) == NULL)
+		pexit("out of memory");
 	/* Try writing the last block of partition or diskette. */
 	lseek(fd, (off_t) (blocks - 1) * BLOCK_SIZE, SEEK_SET);
 	testb[0] = 0x3245;
@@ -291,6 +293,7 @@ char *argv[];
 	if (write(fd, (char *) testb, BLOCK_SIZE) != BLOCK_SIZE)
 		pexit("File system is too big for minor device");
 	lseek(fd, 0L, SEEK_SET);
+	free(testb);
   }
 #endif
 
@@ -398,6 +401,7 @@ ino_t inodes;
 	zo = V2_NR_DZONES + (zone_t) V2_INDIRECTS + v2sq;
   }
   sup->s_max_size = zo * BLOCK_SIZE;
+  sup->s_flags = SF_CLEAN;	/* spec N.1: a new file system is clean */
   zone_size = 1 << zone_shift;	/* nr of blocks per zone */
 
   put_block((block_t) 1, buf);
@@ -504,7 +508,7 @@ int f;
   int ct, i, j, k;
   zone_t z;
   char buf[BLOCK_SIZE];
-  long timeval;
+  ftime32_t timeval;
 
   do {
 	for (i = 0, j = 0; i < zone_size; i++, j += ct) {
@@ -597,7 +601,8 @@ char *name;
 void add_zone(n, z, bytes, cur_time)
 ino_t n;
 zone_t z;
-long bytes, cur_time;
+long bytes;
+ftime32_t cur_time;
 {
   if (fs_version == 1) {
 	add_z_1(n, z, bytes, cur_time);
@@ -609,7 +614,8 @@ long bytes, cur_time;
 void add_z_1(n, z, bytes, cur_time)
 ino_t n;
 zone_t z;
-long bytes, cur_time;
+long bytes;
+ftime32_t cur_time;
 {
   /* Add zone z to inode n. The file has grown by 'bytes' bytes. */
 
@@ -653,7 +659,8 @@ long bytes, cur_time;
 void add_z_2(n, z, bytes, cur_time)
 ino_t n;
 zone_t z;
-long bytes, cur_time;
+long bytes;
+ftime32_t cur_time;
 {
   /* Add zone z to inode n. The file has grown by 'bytes' bytes. */
 
@@ -919,13 +926,13 @@ char *devname;			/* /dev/hd1 or whatever */
 }
 
 
-long file_time(f)
+ftime32_t file_time(f)
 int f;
 {
 #ifdef UNIX
   struct stat statbuf;
   fstat(f, &statbuf);
-  return(statbuf.st_mtime);
+  return((ftime32_t) statbuf.st_mtime);
 #else				/* fstat not supported by DOS */
   return(0L);
 #endif

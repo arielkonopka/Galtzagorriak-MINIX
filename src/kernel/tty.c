@@ -25,6 +25,7 @@
  *   DEV_OPEN:     a tty line has been opened
  *   DEV_CLOSE:    a tty line has been closed
  *   CANCEL:       terminate a previous incomplete system call immediately
+ *   DEV_SELECT:   which ops are ready; with SEL_NOTIFY tell FS later (R4b.6)
  *
  *    m_type      TTY_LINE   PROC_NR    COUNT   TTY_SPEK  TTY_FLAGS  ADDRESS
  * ---------------------------------------------------------------------------
@@ -101,6 +102,9 @@ FORWARD _PROTOTYPE( void do_open, (tty_t *tp, message *m_ptr)		);
 FORWARD _PROTOTYPE( void do_close, (tty_t *tp, message *m_ptr)		);
 FORWARD _PROTOTYPE( void do_read, (tty_t *tp, message *m_ptr)		);
 FORWARD _PROTOTYPE( void do_write, (tty_t *tp, message *m_ptr)		);
+FORWARD _PROTOTYPE( void do_select, (tty_t *tp, message *m_ptr)		);
+FORWARD _PROTOTYPE( int sel_ready, (tty_t *tp, int ops)			);
+FORWARD _PROTOTYPE( void sel_retry, (tty_t *tp)				);
 FORWARD _PROTOTYPE( void in_transfer, (tty_t *tp)			);
 FORWARD _PROTOTYPE( int echo, (tty_t *tp, int ch)			);
 FORWARD _PROTOTYPE( void rawecho, (tty_t *tp, int ch)			);
@@ -230,6 +234,7 @@ PUBLIC void tty_task()
 	    case DEV_OPEN:	do_open(tp, &tty_mess);		break;
 	    case DEV_CLOSE:	do_close(tp, &tty_mess);	break;
 	    case CANCEL:	do_cancel(tp, &tty_mess);	break;
+	    case DEV_SELECT:	do_select(tp, &tty_mess);	break;
 	    default:		tty_reply(TASK_REPLY, tty_mess.m_source,
 						tty_mess.PROC_NR, EINVAL);
 	}
@@ -615,6 +620,66 @@ message *m_ptr;			/* pointer to message sent to task */
 
 
 /*===========================================================================*
+ *				do_select				     *
+ *===========================================================================*/
+PRIVATE void do_select(tp, m_ptr)
+register tty_t *tp;
+message *m_ptr;			/* pointer to message sent to task */
+{
+/* poll() (R4b.6, protocol #131): reply with the ops of COUNT that are ready
+ * now.  With SEL_NOTIFY, remember the ones that are not (only the bits:
+ * FS keeps the pollers) and send one DEV_SELECTED when one of them is;
+ * ops 0 forgets it.  Readable: a whole line in canonical mode, a character
+ * in raw mode (what a read would return without waiting); writable: no
+ * write is in progress.  No hangup on these lines, so never SEL_ERR.
+ */
+  int ops = m_ptr->COUNT, r;
+
+  r = sel_ready(tp, ops);
+  if ((ops & SEL_NOTIFY) && (ops & ~r & (SEL_RD | SEL_WR))) {
+	tp->tty_selops |= ops & ~r & (SEL_RD | SEL_WR);
+	tp->tty_selminor = m_ptr->TTY_LINE;
+  } else if ((ops & (SEL_RD | SEL_WR | SEL_ERR | SEL_NOTIFY)) == 0) {
+	tp->tty_selops = 0;
+  }
+  tty_reply(TASK_REPLY, m_ptr->m_source, m_ptr->PROC_NR, r);
+}
+
+
+/*===========================================================================*
+ *				sel_ready				     *
+ *===========================================================================*/
+PRIVATE int sel_ready(tp, ops)
+register tty_t *tp;
+int ops;
+{
+  int r = 0;
+
+  if ((ops & SEL_RD) && tp->tty_eotct > 0) r |= SEL_RD;
+  if ((ops & SEL_WR) && tp->tty_outleft == 0) r |= SEL_WR;
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				sel_retry				     *
+ *===========================================================================*/
+PRIVATE void sel_retry(tp)
+register tty_t *tp;
+{
+/* Something changed on the line: if an op FS waits for is ready, send it
+ * one DEV_SELECTED (DEVICE, where a reply has REP_PROC_NR) and forget the
+ * registration; the pollers that still wait register again.
+ */
+  int r;
+
+  if ((r = sel_ready(tp, tp->tty_selops)) == 0) return;
+  tp->tty_selops = 0;
+  tty_reply(DEV_SELECTED, FS_PROC_NR, tp->tty_selminor, r);
+}
+
+
+/*===========================================================================*
  *				do_cancel				     *
  *===========================================================================*/
 PRIVATE void do_cancel(tp, m_ptr)
@@ -708,6 +773,9 @@ tty_t *tp;			/* TTY to check for events. */
 								tp->tty_incum);
 	tp->tty_inleft = tp->tty_incum = 0;
   }
+
+  /* Input left over for nobody, or the output done: tell poll(). */
+  if (tp->tty_selops != 0) sel_retry(tp);
 }
 
 
@@ -839,8 +907,17 @@ int count;			/* number of input characters */
 	/* Canonical mode? */
 	if (tp->tty_termios.c_lflag & ICANON) {
 
-		/* Erase processing (rub out of last character). */
-		if (ch == tp->tty_termios.c_cc[VERASE]) {
+		/* Erase processing (rub out of last character).  Terminals
+		 * send DEL or ^H for Backspace: while erase is one of them,
+		 * both rub out - unless the other one is a key of its own
+		 * (intr, quit, kill: "stty erase ^H intr ^?"). */
+		if (ch == tp->tty_termios.c_cc[VERASE]
+		    || ((ch == '\177' || ch == '\b')
+			&& ch != tp->tty_termios.c_cc[VINTR]
+			&& ch != tp->tty_termios.c_cc[VQUIT]
+			&& ch != tp->tty_termios.c_cc[VKILL]
+			&& (tp->tty_termios.c_cc[VERASE] == '\177'
+			    || tp->tty_termios.c_cc[VERASE] == '\b'))) {
 			(void) back_over(tp);
 			if (!(tp->tty_termios.c_lflag & ECHOE)) {
 				(void) echo(tp, ch);
@@ -1358,9 +1435,9 @@ clock_t now;				/* current time */
   tty_t *tp;
 
   /* Scan the timerlist for expired timers and compute the next timeout time. */
-  tty_timeout = TIME_NEVER;
+  tty_timeout = TADD(now, LONG_MAX);	/* none: half the range ahead */
   while ((tp = tty_timelist) != NULL) {
-	if (tp->tty_time > now) {
+	if (TDIFF(tp->tty_time, now) > 0) {
 		tty_timeout = tp->tty_time;	/* this timer is next */
 		break;
 	}
@@ -1396,15 +1473,15 @@ int on;				/* set timer if true, otherwise unset */
   if (!on) return;				/* unsetting it is enough */
 
   /* Timeout occurs TIME deciseconds from now. */
-  tp->tty_time = get_uptime() + tp->tty_termios.c_cc[VTIME] * (HZ/10);
+  tp->tty_time = TADD(get_uptime(), tp->tty_termios.c_cc[VTIME] * (HZ/10));
 
   /* Find a new place in the list. */
   for (ptp = &tty_timelist; *ptp != NULL; ptp = &(*ptp)->tty_timenext) {
-	if (tp->tty_time <= (*ptp)->tty_time) break;
+	if (TDIFF(tp->tty_time, (*ptp)->tty_time) <= 0) break;
   }
   tp->tty_timenext = *ptp;
   *ptp = tp;
-  if (tp->tty_time < tty_timeout) tty_timeout = tp->tty_time;
+  if (TDIFF(tp->tty_time, tty_timeout) < 0) tty_timeout = tp->tty_time;
 }
 
 

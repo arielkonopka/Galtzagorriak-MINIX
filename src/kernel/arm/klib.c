@@ -28,7 +28,7 @@ FORWARD _PROTOTYPE( void load_boot_images, (void) );
  *				arm_flash				     *
  *===========================================================================*/
 /* Days of uptime: the erase budget's day when the RTC is not running. */
-#define UPDAY	((unsigned) (get_uptime() / ((clock_t) HZ * 86400)))
+#define UPDAY	((unsigned) ((unsigned long) get_uptime() / (HZ * 86400UL)))
 
 PUBLIC int arm_flash(op, addr, src, len, basep, sizep)
 int op;				/* FL_INFO, FL_ERASE or FL_WRITE */
@@ -371,7 +371,6 @@ int t;
 #define MPU_FIRST	1		/* region 0 is the flash */
 #define MPU_REGIONS	8
 PUBLIC struct proc *mpu_proc;		/* whose regions are loaded */
-PUBLIC struct proc *fp_live;		/* R5.7: whose FP registers the FPU holds */
 
 #include <minix/mpucover.h>
 
@@ -532,6 +531,9 @@ PRIVATE void (* const mt_func[MT_N])(void) = {
 	flipdev_btn,		/* MT_BUTTONS */
 	pm_wake,		/* MT_IDLE */
 	flipdev_vibro_off,	/* MT_VIBRO */
+	flipdev_adc_poll,	/* MT_ADC */
+	flipdev_led_tick,	/* MT_LED */
+	flipdev_pulse_poll,	/* MT_PULSE */
 };
 PRIVATE struct {		/* one object: 4 B, not 8 with alignment */
 	u16_t at[MT_N];		/* due, in timer clocks */
@@ -631,7 +633,7 @@ PUBLIC unsigned bell_ticks;	/* ticks until the speaker goes quiet */
 PUBLIC void bell()
 {
 /* ^G on the console: a short beep (stopped from the clock tick). */
-  hal_tone(2000);
+  hal_tone(2000, 100);
   bell_ticks = HZ / 6;
 }
 
@@ -646,7 +648,7 @@ unsigned exc;
   irq_handler_t handler;
 
   if (exc == EXC_SYSTICK) {		/* the watchdog: clock task */
-	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0);
+	if (bell_ticks != 0 && --bell_ticks == 0) hal_tone(0, 0);
   }
   if (exc == EXC_PENDSV) {	/* raised by the idle task or task_yield() */
 	struct proc *rp = rdy_head[TASK_Q];
@@ -760,6 +762,7 @@ PUBLIC void pm_minute()
 {
   int v, t;
 
+  subghz_minute();		/* a forgotten receiver: asleep (R8.1) */
   if ((v = hal_gauge_read(HAL_GAUGE_VOLT)) > 0) {
 	if (v < PM_LOW_MV) pm_busy |= PM_LOWBAT;
 	else if (v >= PM_LOW_MV + 100) pm_busy &= ~PM_LOWBAT;
@@ -871,6 +874,10 @@ PRIVATE int pm_sleep()
   lat_wake(hal_cycles() - cyc);
 #endif
   pm_stat.stop += e;
+  if (pm_stat.stop >= 32768UL * 60) {	/* R6.8: whole minutes apart */
+	pm_stat.stop -= 32768UL * 60;
+	pm_stat.min++;
+  }
   if (w & HAL_WAKE_BTN) pm_stat.btn++; else pm_stat.other++;
 
   /* Microseconds since the last tick (32768 Hz: 15625/512 us a clock),
@@ -1007,7 +1014,7 @@ struct proc *rp;
   /* Its FP context (R5.7) is lost with the stack; a lazy save still
    * pending would go to the bad stack. */
   rp->p_reg.control &= ~CONTROL_FPCA;
-  if (rp == fp_live) FPU_FPCCR &= ~FPCCR_LSPACT;
+  if (rp->p_reg.control & CONTROL_FPLIVE) FPU_FPCCR &= ~FPCCR_LSPACT;
   /* The frame could not be stacked, so an SVC this process made is still
    * pending: it would be taken later in whatever process runs next. */
   SCB_SHCSR &= ~SHCSR_SVCALLPENDED;

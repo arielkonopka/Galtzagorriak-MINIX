@@ -1,0 +1,7 @@
+# postinst of the gmdemo package: the example window app (spec K.8) on the
+# launcher.  "=" before the program: the launcher starts it with its pipes
+# on fd 3 and 4 and draws its windows itself.  It runs as nobody.
+grep ':=/usr/bin/gmdemo$' /etc/apps >/dev/null || {
+	echo 'Demo:nobody:@app:=/usr/bin/gmdemo' >> /etc/apps
+	echo "gmdemo: the launcher now has Demo"
+}

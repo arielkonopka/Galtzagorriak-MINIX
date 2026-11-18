@@ -21,7 +21,7 @@ _PROTOTYPE( int size_ok, (int file_type, vir_clicks tc, vir_clicks dc,
 /* exec.c */
 _PROTOTYPE( int do_exec, (void)						);
 _PROTOTYPE( struct mproc *find_share, (struct mproc *mp_ign, Ino_t ino,
-			Dev_t dev, time_t ctime)			);
+			Dev_t dev, ftime32_t ctime)			);
 
 /* forkexit.c */
 _PROTOTYPE( int do_fork, (void)						);
@@ -75,6 +75,23 @@ _PROTOTYPE( void fc_info, (struct fcinfo *fi)				);
 _PROTOTYPE( unsigned long crc32_more, (unsigned long crc,
 			const unsigned char *p, unsigned long n)		);
 _PROTOTYPE( int fc_lend, (void)						);
+_PROTOTYPE( int fc_busy, (void)						);
+/* swap.c */
+_PROTOTYPE( void sw_init, (void)					);
+_PROTOTYPE( int sw_ctl, (void)						);
+_PROTOTYPE( void sw_room, (phys_clicks clicks)				);
+_PROTOTYPE( int sw_in, (struct mproc *rmp)				);
+_PROTOTYPE( void sw_touch, (int proc_nr)				);
+_PROTOTYPE( void sw_after, (void)					);
+_PROTOTYPE( void sw_step, (void)					);
+/* alloc.c */
+_PROTOTYPE( int alloc_mem_at, (phys_clicks base, phys_clicks clicks)	);
+_PROTOTYPE( phys_clicks hole_end, (phys_clicks pos)			);
+_PROTOTYPE( phys_clicks hole_with, (phys_clicks base, phys_clicks clicks));
+_PROTOTYPE( phys_clicks mem_free, (void)				);
+_PROTOTYPE( int mem_test, (void)					);
+/* forkexit.c */
+_PROTOTYPE( void wait_retry, (struct mproc *rmp)			);
 _PROTOTYPE( void fc_return, (void)					);
 /* finst.c */
 struct stat;

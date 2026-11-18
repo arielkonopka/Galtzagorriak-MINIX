@@ -15,6 +15,8 @@ _PROTOTYPE( void invalidate, (Dev_t device)				);
 _PROTOTYPE( void put_block, (struct buf *bp, int block_type)		);
 _PROTOTYPE( void rw_block, (struct buf *bp, int rw_flag)		);
 _PROTOTYPE( void forget_zone, (Dev_t dev, zone_t z, int scale)		);
+_PROTOTYPE( int pipe_bufs, (void)						);
+_PROTOTYPE( void sb_written, (struct buf *bp)				);
 _PROTOTYPE( void rw_scattered, (Dev_t dev,
 			struct buf **bufq, int bufqsize, int rw_flag)	);
 
@@ -34,6 +36,7 @@ _PROTOTYPE( int dev_io, (int rw_flag, int nonblock, Dev_t dev,
 _PROTOTYPE( int do_ioctl, (void)					);
 _PROTOTYPE( void no_dev, (int task_nr, message *m_ptr)			);
 _PROTOTYPE( void call_ctty, (int task_nr, message *mess_ptr)		);
+_PROTOTYPE( int dev_select, (Dev_t dev, int ops, int proc)		);
 _PROTOTYPE( void tty_open, (int task_nr, message *mess_ptr)		);
 _PROTOTYPE( void ctty_close, (int task_nr, message *mess_ptr)		);
 _PROTOTYPE( void ctty_open, (int task_nr, message *mess_ptr)		);
@@ -51,6 +54,7 @@ _PROTOTYPE( struct filp *get_filp, (int fild)				);
 
 /* inode.c */
 _PROTOTYPE( struct inode *alloc_inode, (Dev_t dev, Mode_t bits)		);
+_PROTOTYPE( struct inode *pipe_inode, (void)				);
 _PROTOTYPE( void dup_inode, (struct inode *ip)				);
 _PROTOTYPE( void free_inode, (Dev_t dev, Ino_t numb)			);
 _PROTOTYPE( struct inode *get_inode, (Dev_t dev, int numb)		);
@@ -112,6 +116,14 @@ _PROTOTYPE( void release, (struct inode *ip, int call_nr, int count)	);
 _PROTOTYPE( void revive, (int proc_nr, int bytes)			);
 _PROTOTYPE( void suspend, (int task)					);
 
+/* poll.c (R4b.6) */
+_PROTOTYPE( int do_poll, (void)						);
+_PROTOTYPE( int do_selected, (void)					);
+_PROTOTYPE( void poll_cancel, (int proc_nr)				);
+_PROTOTYPE( void poll_pipe, (void)					);
+_PROTOTYPE( void poll_selected, (int task, int minor)			);
+_PROTOTYPE( void poll_timer, (void)					);
+
 /* protect.c */
 _PROTOTYPE( int do_access, (void)					);
 _PROTOTYPE( int do_chmod, (void)					);
@@ -145,6 +157,9 @@ _PROTOTYPE( void free_bit, (struct super_block *sp, int map,
 _PROTOTYPE( struct super_block *get_super, (Dev_t dev)			);
 _PROTOTYPE( int mounted, (struct inode *rip)				);
 _PROTOTYPE( int read_super, (struct super_block *sp)			);
+_PROTOTYPE( int put_sflags, (struct super_block *sp, int set, int clr)	);
+_PROTOTYPE( void sf_mounted, (struct super_block *sp)			);
+_PROTOTYPE( void sf_clean, (struct super_block *sp, int force)		);
 
 /* time.c */
 _PROTOTYPE( int do_stime, (void)					);
@@ -153,7 +168,8 @@ _PROTOTYPE( int do_tims, (void)						);
 _PROTOTYPE( int do_utime, (void)					);
 
 /* utility.c */
-_PROTOTYPE( time_t clock_time, (void)					);
+_PROTOTYPE( ftime32_t clock_time, (void)				);
+_PROTOTYPE( time_t wall_time, (void)					);
 _PROTOTYPE( unsigned conv2, (int norm, int w)				);
 _PROTOTYPE( long conv4, (int norm, long x)				);
 _PROTOTYPE( int fetch_name, (char *path, int len, int flag)		);

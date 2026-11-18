@@ -78,9 +78,19 @@
 #endif
 
 /* Clock task variables. */
-PRIVATE clock_t realtime;	/* real time clock */
-PRIVATE time_t boot_time;	/* time in seconds of system boot */
-PRIVATE clock_t next_alarm;	/* probable time of next alarm */
+/* Uptime in ticks is unsigned and wraps after 2^32 ticks (828 days at 60 Hz,
+ * spec I.3): instants are compared only through TDIFF/DUE (const.h).
+ * The uptime-wrap test build (make WRAPTEST=1, R2d.6) starts 10 s before
+ * the wrap (WRAPTEST=n: n seconds). */
+#if REALTIME_WRAP
+PRIVATE unsigned long realtime = (unsigned long) -((long) REALTIME_WRAP * HZ);
+#else
+PRIVATE unsigned long realtime;	/* real time clock */
+#endif
+/* The wall clock until the RTC driver reads it on every time() (R2d.5,
+ * R6.2): the UTC second at uptime 0, stored like a file time (1970-2106). */
+PRIVATE ftime32_t boot_time;
+PRIVATE unsigned long next_alarm;	/* probable time of next alarm */
 PRIVATE message mc;		/* message buffer for both input and output */
 PRIVATE int watchdog_proc;	/* contains proc_nr at call of *watch_dog[]*/
 PRIVATE watchdog_t watch_dog[NR_TASKS+NR_PROCS];
@@ -94,7 +104,7 @@ PRIVATE u32_t syn_bits;
 typedef char syn_bits_fit[NR_TASKS+NR_PROCS <= 32 ? 1 : -1];
 
 /* Variables changed by interrupt handler */
-PRIVATE clock_t pending_ticks;	/* ticks seen by low level only */
+PRIVATE unsigned long pending_ticks;	/* ticks seen by low level only */
 PRIVATE int sched_ticks = SCHED_RATE;	/* counter: when 0, call scheduler */
 PRIVATE struct proc *prev_ptr;	/* last user process run by clock task */
 
@@ -108,6 +118,7 @@ FORWARD _PROTOTYPE( void do_setalarm, (message *m_ptr) );
 FORWARD _PROTOTYPE( void init_clock, (void) );
 FORWARD _PROTOTYPE( void cause_alarm, (void) );
 FORWARD _PROTOTYPE( void do_setsyn_alrm, (message *m_ptr) );
+FORWARD _PROTOTYPE( long secs_left, (struct proc *rp) );
 FORWARD _PROTOTYPE( int clock_handler, (int irq) );
 #if (SHADOWING == 1) && (CHIP == ARM_CM)
 PRIVATE int tick_due;		/* the HARD_INT came from a real tick */
@@ -135,8 +146,9 @@ PUBLIC void clock_task()
  */
 
   int opcode;
+  unsigned long then;
 #if (CHIP == ARM_CM)
-  clock_t minute;
+  unsigned long minute;
 #endif
 
   init_clock();			/* initialize clock task */
@@ -152,14 +164,25 @@ PUBLIC void clock_task()
 #endif
 
      lock();
+     then = realtime;
 #if (CHIP == ARM_CM)
      minute = realtime / (60 * HZ);
 #endif
      realtime += pending_ticks;	/* transfer ticks from low level handler */
      pending_ticks = 0;		/* so we don't have to worry about them */
      unlock();
+     /* The uptime wrapped: keep the wall clock going (it loses the 16
+      * ticks of 2^32 mod HZ, 0.27 s every 828 days). */
+     if (realtime < then) boot_time += (ftime32_t) (0x100000000ULL / HZ);
 #if (CHIP == ARM_CM)
-     if (realtime / (60 * HZ) != minute) pm_minute();	/* R6.1 */
+     if (realtime / (60 * HZ) != minute) {
+	pm_minute();				/* R6.1 */
+	/* The last key press stays in the past for wrap-safe compares
+	 * (I.3): never older than 2^30 ticks (207 days), which is idle
+	 * enough for everything that asks. */
+	if (TDIFF(realtime, k_input) > 0x40000000L)
+		k_input = (clock_t) (realtime - 0x40000000UL);
+     }
 #endif
 
      switch (opcode) {
@@ -206,13 +229,13 @@ PRIVATE void do_clocktick()
   register struct proc *rp;
   register int proc_nr;
 
-  if (next_alarm <= realtime) {
+  if (DUE(next_alarm, realtime)) {
 	/* An alarm may have gone off, but proc may have exited, so check. */
-	next_alarm = LONG_MAX;	/* start computing next alarm */
+	next_alarm = realtime + LONG_MAX;	/* start computing next alarm */
 	for (rp = BEG_PROC_ADDR; rp < END_PROC_ADDR; rp++) {
 		if (rp->p_alarm != 0) {
 			/* See if this alarm time has been reached. */
-			if (rp->p_alarm <= realtime) {
+			if (DUE(rp->p_alarm, realtime)) {
 				/* A timer has gone off.  If it is a user proc,
 				 * send it a signal.  If it is a task, call the
 				 * function previously specified by the task.
@@ -228,7 +251,8 @@ PRIVATE void do_clocktick()
 			}
 
 			/* Work on determining which alarm is next. */
-			if (rp->p_alarm != 0 && rp->p_alarm < next_alarm)
+			if (rp->p_alarm != 0
+				&& TDIFF(rp->p_alarm, next_alarm) < 0)
 				next_alarm = rp->p_alarm;
 		}
 	}
@@ -270,7 +294,7 @@ PUBLIC clock_t get_uptime()
   clock_t uptime;
 
   lock();
-  uptime = realtime + pending_ticks;
+  uptime = (clock_t) (realtime + pending_ticks);
   unlock();
   return(uptime);
 }
@@ -279,16 +303,17 @@ PUBLIC clock_t get_uptime()
 #if (CHIP == ARM_CM)
 PUBLIC clock_t uptime_irq()	/* get_uptime() in the clock interrupt */
 {
-  return(realtime + pending_ticks);
+  return((clock_t) (realtime + pending_ticks));
 }
 
 /* Tickless idle (T14b, arm/klib.c), interrupts masked: how many ticks
  * may pass without the clock interrupt (alarms, TTY timers). */
 PUBLIC clock_t clock_idle()
 {
-  clock_t now = realtime + pending_ticks, d = next_alarm - now;
+  unsigned long now = realtime + pending_ticks;
+  long d = TDIFF(next_alarm, now);
 
-  if (tty_timeout - now < d) d = tty_timeout - now;
+  if (TDIFF(tty_timeout, now) < d) d = TDIFF(tty_timeout, now);
   return(d < 0 ? 0 : d);
 }
 #endif
@@ -299,9 +324,15 @@ PUBLIC clock_t clock_idle()
  *===========================================================================*/
 PRIVATE void do_get_time()
 {
-/* Get and return the current clock time in seconds. */
+/* Get and return the current clock time in seconds: from the RTC (R2d.5,
+ * R6.2: it keeps counting in Stop2 and while off, and its calibration
+ * applies), or the uptime from boot_time where there is none (QEMU). */
+  ftime32_t t;
 
-  mc.NEW_TIME = boot_time + realtime/HZ;	/* current real time */
+  if (hal_rtc_ok() && (t = (ftime32_t) hal_rtc_time()) != 0)
+	mc.NEW_TIME = (long) t;
+  else
+	mc.NEW_TIME = (long) (ftime32_t) (boot_time + realtime/HZ);
 }
 
 
@@ -311,9 +342,39 @@ PRIVATE void do_get_time()
 PRIVATE void do_set_time(m_ptr)
 message *m_ptr;			/* pointer to request message */
 {
-/* Set the real time clock.  Only the superuser can use this call. */
+/* Set the real time clock.  Only the superuser can use this call.  The RTC
+ * too (R6.2), so the time survives a reset and power-off; INIT hears of it
+ * (SIGRTC, spec F.2: timers are computed again). */
 
-  boot_time = m_ptr->NEW_TIME - realtime/HZ;
+  boot_time = (ftime32_t) m_ptr->NEW_TIME - realtime/HZ;
+  if (hal_rtc_ok()) (void) hal_rtc_set((u32_t) (ftime32_t) m_ptr->NEW_TIME);
+  cause_sig(INIT_PROC_NR, SIGRTC);
+}
+
+
+/*===========================================================================*
+ *				secs_left				     *
+ *===========================================================================*/
+PRIVATE long secs_left(rp)
+struct proc *rp;
+{
+/* Seconds until rp's alarm, 0 if none (or due). */
+  long d;
+
+  if (rp->p_alarm == 0 || (d = TDIFF(rp->p_alarm, realtime)) < 0) return(0);
+  return(d / HZ);
+}
+
+
+/*===========================================================================*
+ *				force_timeout				     *
+ *===========================================================================*/
+PUBLIC void force_timeout()
+{
+/* Make the TTY timer due now (from interrupt handlers too): an instant
+ * that has passed, not 0, which looks like the future to a wrap-safe
+ * compare half of the time (I.3). */
+  tty_timeout = (clock_t) realtime;
 }
 
 
@@ -338,7 +399,7 @@ message *m_ptr;			/* pointer to request message */
   function = (watchdog_t) m_ptr->FUNC_TO_CALL;
 					/* function to call (tasks only) */
   rp = proc_addr(proc_nr);
-  mc.SECONDS_LEFT = (rp->p_alarm == 0 ? 0 : (rp->p_alarm - realtime)/HZ );
+  mc.SECONDS_LEFT = secs_left(rp);
   if (!istaskp(rp)) function= 0;	/* user processes get signaled */
   common_setalarm(proc_nr, delta_ticks, function);
 }
@@ -361,7 +422,7 @@ message *m_ptr;			/* pointer to request message */
   proc_nr = m_ptr->CLOCK_PROC_NR;	/* process to interrupt later */
   delta_ticks = m_ptr->DELTA_TICKS;	/* how many ticks to wait */
   rp = proc_addr(proc_nr);
-  mc.SECONDS_LEFT = (rp->p_alarm == 0 ? 0 : (rp->p_alarm - realtime)/HZ );
+  mc.SECONDS_LEFT = secs_left(rp);
   common_setalarm(proc_nr, delta_ticks, cause_alarm);
 }
 
@@ -382,13 +443,15 @@ watchdog_t function;		/* function to call (0 if cause_sig is
   register struct proc *rp;
 
   rp = proc_addr(proc_nr);
-  rp->p_alarm = (delta_ticks == 0 ? 0 : realtime + delta_ticks);
+  rp->p_alarm = (delta_ticks == 0 ? 0 : TADD(realtime, delta_ticks));
+  if (delta_ticks != 0 && rp->p_alarm == 0) rp->p_alarm = 1;	/* 0: none */
   watch_dog[proc_nr+NR_TASKS] = function;
 
   /* Which alarm is next? */
-  next_alarm = LONG_MAX;
+  next_alarm = realtime + LONG_MAX;
   for (rp = BEG_PROC_ADDR; rp < END_PROC_ADDR; rp++)
-	if(rp->p_alarm != 0 && rp->p_alarm < next_alarm)next_alarm=rp->p_alarm;
+	if (rp->p_alarm != 0 && TDIFF(rp->p_alarm, next_alarm) < 0)
+		next_alarm = rp->p_alarm;
 
 }
 
@@ -504,7 +567,7 @@ int irq;
 
   register struct proc *rp;
   register unsigned ticks;
-  clock_t now;
+  unsigned long now;
 
 #if (CHIP == INTEL)
   if (ps_mca) {
@@ -530,7 +593,7 @@ int irq;
 
   pending_ticks += ticks;
   now = realtime + pending_ticks;
-  if (tty_timeout <= now) tty_wakeup(now);	/* possibly wake up TTY */
+  if (DUE(tty_timeout, now)) tty_wakeup((clock_t) now);	/* wake TTY? */
 #if (CHIP == INTEL)
   pr_restart();					/* possibly restart printer */
 #endif
@@ -542,12 +605,12 @@ int irq;
   if (sched_ticks == 1) fd_timer();		/* floppy deselect */
 #endif
 
-  if (next_alarm <= now ||
+  if (DUE(next_alarm, now) ||
 #if (CHIP == ARM_CM)
       /* At least every 32 ticks (0.53 s): the clock task kicks the
        * watchdog (R4a.4); no state needed, now - ticks was the last tick.
        */
-      ((now - ticks) ^ now) & ~(clock_t) 31 ||
+      ((now - ticks) ^ now) & ~31UL ||
 #endif
 #if (SHADOWING == 1) && (CHIP == ARM_CM)
       /* A shadowed process can only run after the clock task swapped it
@@ -682,7 +745,8 @@ PRIVATE void init_clock()
    * from the RTC comes later).  0 when it does not run: "not set", and
    * MM then makes no new installed-program bindings (their ctimes would
    * repeat between boots). */
-  boot_time = (time_t) hal_rtc_time();
+  boot_time = (ftime32_t) hal_rtc_time() - realtime / HZ;
+  k_input = (clock_t) realtime;		/* as if a key at boot */
   put_irq_handler(CLOCK_IRQ, clock_handler);
   mt_init();				/* the ms timer, R4b.2 */
   SYST_CSR = 0;

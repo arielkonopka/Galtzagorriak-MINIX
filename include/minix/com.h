@@ -27,6 +27,20 @@
 #	define SCATTERED_IO 8	/* fcn code for multiple reads/writes */
 #	define TTY_SETPGRP  9	/* fcn code for setpgroup */
 #	define TTY_EXIT	   10	/* a process group leader has exited */	
+#	define DEV_SELECT  11	/* fcn code: which ops are ready on a minor?
+				 * (R4b.6, protocol #131) */
+#	define DEV_SELECTED 66	/* task -> FS, later: ops became ready on
+				 * minor DEVICE; ops in REP_STATUS.  Like
+				 * REVIVE (callnr.h 67): FS's call_vector */
+/* DEV_SELECT's ops in COUNT; the reply's REP_STATUS (>= 0: the ops ready
+ * now) and DEV_SELECTED's use the same bits.  With SEL_NOTIFY the task
+ * remembers the requested ops that are not ready (only the bits, per
+ * minor: FS keeps the pollers) and sends one DEV_SELECTED when one of them
+ * becomes ready; that ends the registration.  Ops 0: forget it. */
+#	define SEL_RD       1	/* readable */
+#	define SEL_WR       2	/* writable */
+#	define SEL_ERR      4	/* an error or hangup is pending */
+#	define SEL_NOTIFY   8	/* not ready: send DEV_SELECTED later */
 #	define OPTIONAL_IO 16	/* modifier to DEV_* codes within vector */
 #	define SUSPEND	 -998	/* used in interrupts when tty has no data */
 
@@ -140,6 +154,8 @@
 #	define SYS_GETMAP    20	/* fcn code for sys_getmap(procno, map_ptr) */
 #	define SYS_FLASH     22	/* fcn code for sys_flash(op, addr, buf, len)
 				 * (ARM_CM: the flash text cache, MM only) */
+#	define SYS_SWAP      23	/* fcn code for sys_swap(procno, out):
+				 * P_SWAPPED on/off (R12.4, ARM_CM) */
 #	define SYS_KSTACKS   21	/* fcn code for sys_kstacks(procno, buf, len)
 				 * (ARM_CM: kernel task stack use) */
 

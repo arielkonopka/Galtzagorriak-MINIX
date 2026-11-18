@@ -38,8 +38,11 @@ PUBLIC void main()
 	/* Wait for message. */
 	get_work();		/* wait for an MM system call */
 #if (CHIP == ARM_CM)
-	if (who == SYN_ALRM_TASK) {	/* flash cache idle work (fcache.c) */
+	if (who == SYN_ALRM_TASK) {	/* idle work: flash cache (fcache.c),
+					 * swap reserve (swap.c) */
 		fc_step();
+		sw_step();
+		sw_after();
 		continue;
 	}
 #endif
@@ -57,9 +60,12 @@ PUBLIC void main()
 		error = (*call_vec[mm_call])();
 
 	/* Send the results back to the user to indicate completion. */
-	if (dont_reply) continue;	/* no reply for EXIT and WAIT */
-	if (mm_call == EXEC && error == OK) continue;
-	reply(who, error, result2, res_ptr);
+	/* no reply for EXIT and WAIT, nor for a successful EXEC */
+	if (!dont_reply && !(mm_call == EXEC && error == OK))
+		reply(who, error, result2, res_ptr);
+#if (CHIP == ARM_CM)
+	sw_after();		/* swap: waits, wakes, the reserve (swap.c) */
+#endif
   }
 }
 
@@ -91,6 +97,14 @@ char *respt;			/* result if pointer */
   register struct mproc *proc_ptr;
 
   proc_ptr = &mproc[proc_nr];
+#if (CHIP == ARM_CM)
+  sw_touch(proc_nr);		/* a reserve swap-out of it is void */
+  if (proc_nr >= 0 && (proc_ptr->mp_flags & SWAPPED)) {
+	/* every wake swaps in first (R12.6); never send into the range */
+	printf("MM: reply to swapped process %d dropped\n", proc_nr);
+	return;
+  }
+#endif
   /* 
    * To make MM robust, check to see if destination is still alive.  This
    * validy check must be skipped if the caller is a task.
@@ -114,7 +128,7 @@ PRIVATE void mm_init()
 
   static char core_sigs[] = {
 	SIGQUIT, SIGILL, SIGTRAP, SIGABRT,
-	SIGEMT, SIGFPE, SIGUSR1, SIGSEGV,
+	SIGFPE, SIGUSR1, SIGSEGV,
 	SIGUSR2, 0 };
   register int proc_nr;
   register struct mproc *rmp;
@@ -140,6 +154,7 @@ PRIVATE void mm_init()
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len
 					- kernel_map[D].mem_phys;
   fc_init();			/* the flash text cache, fcache.c */
+  sw_init();			/* swap, swap.c */
   in_init();			/* installed programs, finst.c */
 #else
   minix_clicks = kernel_map[S].mem_phys + kernel_map[S].mem_len;

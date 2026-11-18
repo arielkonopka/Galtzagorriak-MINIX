@@ -1,0 +1,90 @@
+# The shared libfuri + libapp entry table (the "furi" library; spec R2b.9,
+# R5.2, 7b, J.3; tools/mkshlibc.py, ld/shfuri.ld, <minix/shlibc.h>).
+#
+# One function per line; the line number (from 0, comments and blank lines
+# not counted) is its slot in the table at the start of the library in
+# flash (SHFURI_BASE).  FROZEN: never reorder, insert or remove a name
+# while GZ_ABI stays 2 - a program built today calls slot n forever.  New
+# functions go at the END.
+#
+# Only what the apps call is exported (and only what that reaches is in
+# the library, --gc-sections): a ported app that needs another libfuri or
+# libapp function appends it here.  localtime and mktime are the static
+# libc members libapp needs anyway: exported, so the apps share that copy.
+#
+# Started 2026-11-17 (issue #201) with the functions furihello, remind,
+# alarm, timed and alert call, sorted by name.  (Their variables, app_cats
+# and tune_names, have no slot: they are PROVIDEd at their places.)
+app_alert
+app_arm
+app_cat
+app_id_ok
+app_log
+app_save
+canvas_clear
+canvas_draw_box
+canvas_draw_frame
+canvas_draw_line
+canvas_draw_str
+canvas_draw_str_aligned
+canvas_set_color
+canvas_set_font
+canvas_string_width
+ff_load
+furi_malloc_checked
+furi_message_queue_alloc
+furi_message_queue_free
+furi_message_queue_get
+furi_message_queue_put
+furi_record_close
+furi_record_open
+furi_thread_get_id
+furi_thread_get_stack_space
+gui_add_framebuffer_callback
+gui_add_view_port
+gui_remove_framebuffer_callback
+gui_remove_view_port
+localtime
+mktime
+notify_flags
+notify_policy
+notify_volume
+popup_alloc
+popup_free
+popup_get_view
+popup_set_header
+popup_set_text
+settings_get
+settings_set
+submenu_add_item
+submenu_alloc
+submenu_free
+submenu_get_view
+submenu_set_header
+timer_add
+timer_due
+timer_format
+timer_list
+timer_next
+timer_parse
+timer_read
+timer_remove
+tune_builtin
+tune_parse
+view_dispatcher_add_view
+view_dispatcher_alloc
+view_dispatcher_attach_to_gui
+view_dispatcher_free
+view_dispatcher_remove_view
+view_dispatcher_run
+view_dispatcher_send_custom_event
+view_dispatcher_set_custom_event_callback
+view_dispatcher_set_event_callback_context
+view_dispatcher_stop
+view_dispatcher_switch_to_view
+view_port_alloc
+view_port_draw_callback_set
+view_port_free
+view_port_input_callback_set
+view_port_update
+view_set_previous_callback

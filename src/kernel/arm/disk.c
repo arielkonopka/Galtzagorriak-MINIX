@@ -9,10 +9,20 @@
  * counts, so the original drivers break past 2 GB.  Here the position is
  * taken as unsigned and the sector is computed as base sector + offset
  * sector, which works for partitions up to 4 GB anywhere on the first 2 TB.
+ *
+ * The card pulled out (spec N.6): before every request the card-detect
+ * line is read.  While the card is out, every request fails with ENXIO
+ * (FS keeps a dirty buffer dirty on it, T17a), and the console says so
+ * with a short buzz.  When a card is back it is initialised and its CID
+ * compared with the one read at the first open: the same card carries on
+ * (nothing lost); another card is never written: ENXIO until it is taken
+ * out again and the original goes in.  A transfer that fails with the line
+ * saying "no card" is ENXIO too, not EIO.
  */
 #include "../kernel.h"
 #include "../driver.h"
 #include "../drvlib.h"
+#include <sys/ioctl.h>
 #include "../proc.h"
 #include "hal.h"
 
@@ -23,14 +33,19 @@
 #define BUF_SECTORS	(BLOCK_SIZE / SECTOR_SIZE)
 
 PRIVATE u32_t w_errors;		/* hal_disk_errors last reported */
+PRIVATE u32_t w_id;		/* N.6: the card's id at the first open */
 PRIVATE struct wini {
-  int present;
+  int present;			/* W_* bits */
   unsigned open_ct;
   struct device part[DEV_PER_DRIVE];	/* hd0 = whole disk, hd1-4 */
   struct device subpart[SUB_PER_DRIVE];	/* hd1a ... hd4d */
 } wini[MAX_DRIVES];
 
 PRIVATE struct device *w_dv;		/* current device */
+#define W_IN		1	/* initialised */
+#define W_OUT		2	/* N.6: pulled out (or a failed return) */
+#define W_OTHER		4	/* N.6: another card is in: never touch it */
+#define W_NODET		8	/* N.6: the detect line is not to be trusted */
 
 FORWARD _PROTOTYPE( struct device *w_prepare, (int device)		);
 FORWARD _PROTOTYPE( char *w_name, (void)				);
@@ -39,12 +54,18 @@ FORWARD _PROTOTYPE( int w_do_open, (struct driver *dp, message *m_ptr)	);
 FORWARD _PROTOTYPE( int w_do_close, (struct driver *dp, message *m_ptr)	);
 FORWARD _PROTOTYPE( void w_geometry, (struct partition *entry)		);
 FORWARD _PROTOTYPE( int w_init, (void)					);
+FORWARD _PROTOTYPE( int w_card, (void)					);
+FORWARD _PROTOTYPE( void w_tell, (char *what)				);
+FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
+FORWARD _PROTOTYPE( int w_discard, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void w_nap_end, (void)				);
+#define DISCARD_STEP	0x20000UL	/* sectors per DISCARD: 64 MB */
 
 PRIVATE struct driver w_dtab = {
   w_name,	/* current device's name */
   w_do_open,	/* open or mount request, initialize device */
   w_do_close,	/* release device */
-  do_diocntl,	/* get or set a partition's geometry */
+  w_ioctl,	/* get or set a partition's geometry; QEMU's card hook */
   w_prepare,	/* prepare for I/O on a given minor device */
   w_schedule,	/* do the I/O */
   nop_finish,	/* nothing left to do */
@@ -113,6 +134,7 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 	? numap_src(proc_nr, (vir_bytes) iop->io_buf, nbytes)
 	: numap(proc_nr, (vir_bytes) iop->io_buf, nbytes);
   if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
+  if ((r = w_card()) != OK) return(iop->io_nbytes = r);	/* N.6 */
 
   if (pos >= w_dv->dv_size) return(OK);			/* at EOF */
   if (nbytes > w_dv->dv_size - pos) nbytes = w_dv->dv_size - pos;
@@ -137,8 +159,13 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 			w_name(), (unsigned long) w_errors, hal_disk_mhz);
 	}
 	if (r != 0) {
-		printf("%s: I/O error at sector %lu\n", w_name(), sector);
 		rp->p_physio = FALSE;
+		if (!(wini[0].present & W_NODET)
+		    && !hal_disk_present()) {	/* N.6: pulled out meanwhile */
+			(void) w_card();
+			return(iop->io_nbytes = ENXIO);
+		}
+		printf("%s: I/O error at sector %lu\n", w_name(), sector);
 		return(iop->io_nbytes = EIO);
 	}
 	sector += count >> SECTOR_SHIFT;
@@ -217,9 +244,161 @@ PRIVATE int w_init()
 	sectors = 0xFFFFFFFFUL >> SECTOR_SHIFT;
   wn->part[0].dv_base = 0;
   wn->part[0].dv_size = sectors << SECTOR_SHIFT;
-  wn->present = TRUE;
-  printf("%s: %lu MB\n", w_name(), hal_disk_sectors() >> 11);
+  wn->present = W_IN;
+  if (hal_disk_id(&w_id) != 0) w_id = 0;	/* N.6: 0 matches no card */
+  if (!hal_disk_present()) {	/* a card answers, the switch says none */
+	wn->present |= W_NODET;
+	printf("%s: card detect says no card: not used\n", w_name());
+  }
+  printf("%s: %lu MB%s\n", w_name(), hal_disk_sectors() >> 11,
+	hal_disk_discard(1, 0) == 0 ? ", DISCARD" : "");	/* R12.40 */
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_card					     *
+ *===========================================================================*/
+PRIVATE int w_card()
+{
+/* N.6: OK if the card we started with is in and ready, else ENXIO.  One
+ * GPIO read when all is well.  While it is out, every request looks at
+ * the slot again (requests are rare then: FS's update, a failing program),
+ * so a quick swap between two requests is never missed; W_OTHER only
+ * keeps the message from repeating. */
+  struct wini *wn = &wini[0];
+  u32_t id;
+
+  if (wn->present & W_NODET) return(OK);
+  if (!hal_disk_present()) {
+	if (!(wn->present & W_OUT)) {
+		wn->present |= W_OUT;
+		w_tell("SD card removed: put it back");
+	}
+	wn->present &= ~W_OTHER;	/* a next other card: say it again */
+	return(ENXIO);
+  }
+  if (!(wn->present & W_OUT)) return(OK);
+  if (hal_disk_init() != 0 || hal_disk_id(&id) != 0 || id != w_id) {
+	/* another card, or one that does not answer (a card in another
+	 * format, half in): never touched; said once until it goes */
+	if (!(wn->present & W_OTHER)) {
+		w_tell(hal_disk_sectors() == 0
+			? "the card in the slot does not answer: put the original back"
+			: "Different card: put the original back or power off");
+		flipdev_notice(NOTICE_OTHER);
+	}
+	wn->present |= W_OTHER;
+	return(ENXIO);
+  }
+  wn->present &= ~(W_OUT | W_OTHER);
+  printf("%s: the card is back, carrying on\n", w_name());
+  flipdev_notice(NOTICE_BACK);
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_tell					     *
+ *===========================================================================*/
+PRIVATE void w_tell(what)
+char *what;
+{
+/* N.6: on the console.  The screen and the buzz are flipdev's: it reads
+ * the card-detect switch every tick and keeps the notice over every
+ * frame (R-N6.2: over any app; the launcher's files are on the card). */
+  printf("%s: %s\n", w_name(), what);
+}
+
+
+/*===========================================================================*
+ *				w_ioctl					     *
+ *===========================================================================*/
+PRIVATE int w_ioctl(dp, m_ptr)
+struct driver *dp;
+message *m_ptr;
+{
+/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another;
+ * 3 puts the number of sectors written since boot in its int (K.7 ACK7.2).
+ * DIOCDISCARD (R12.40): tell the card a range of the partition is unused. */
+  int state, r;
+  phys_bytes user;
+
+  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr));
+  if (m_ptr->REQUEST != DIOCFAKECARD) return(do_diocntl(dp, m_ptr));
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&state), (phys_bytes) sizeof(int));
+  r = hal_disk_fake(state);
+  if (r < 0 || (state != 3 && r != 0)) return(EINVAL);
+  if (state == 3) phys_copy(vir2phys(&r), user, (phys_bytes) sizeof(int));
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_discard				     *
+ *===========================================================================*/
+PRIVATE int w_discard(m_ptr)
+message *m_ptr;
+{
+/* R12.40: DISCARD (SD 5.1) a sector range of the partition: the card marks
+ * it unused, nothing is erased or written.  ENOTTY if the card has none.
+ * Done in steps of DISCARD_STEP sectors with the other tasks between them;
+ * the HAL waits for the busy card by naps (hal_disk_nap), never a loop.
+ * Only MM (swap, at idle) and root reach it: /dev/hd* are root's. */
+  struct part_range rg;
+  phys_bytes user;
+  unsigned long size, sector, n;
+  int r;
+
+  if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(rg));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&rg), (phys_bytes) sizeof(rg));
+  size = w_dv->dv_size >> SECTOR_SHIFT;
+  if (rg.count == 0 || rg.first >= size || rg.count > size - rg.first)
+	return(EINVAL);
+  if ((r = w_card()) != OK) return(r);			/* N.6 */
+  sector = (w_dv->dv_base >> SECTOR_SHIFT) + rg.first;
+  while (rg.count > 0) {
+	n = rg.count < DISCARD_STEP ? rg.count : DISCARD_STEP;
+	r = hal_disk_discard(sector, sector + n - 1);
+	if (r == -2) return(ENOTTY);
+	if (r != 0) {
+		if (!(wini[0].present & W_NODET) && !hal_disk_present()) {
+			(void) w_card();
+			return(ENXIO);
+		}
+		printf("%s: discard failed at sector %lu\n", w_name(), sector);
+		return(EIO);
+	}
+	sector += n;
+	rg.count -= n;
+	task_yield();
+  }
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				hal_disk_nap				     *
+ *===========================================================================*/
+PUBLIC void hal_disk_nap()
+{
+/* The HAL waits for a card that is busy for long (DISCARD, R12.40): sleep
+ * one clock tick, so user processes run and the CPU may sleep (spec 0.8).
+ * The clock's watchdog wakes us as an interrupt would; a stale wakeup (the
+ * DMA's) only shortens the nap. */
+  message m;
+
+  clock_mess(1, w_nap_end);
+  receive(HARDWARE, &m);
+}
+
+PRIVATE void w_nap_end()
+{
+  interrupt(WINCHESTER);
 }
 
 
@@ -232,7 +411,7 @@ message *m_ptr;
 {
   struct wini *wn = &wini[0];
 
-  if (!wn->present && w_init() != OK) return(ENXIO);
+  if (!(wn->present & W_IN) && w_init() != OK) return(ENXIO);
   if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
   if (wn->open_ct++ == 0) partition(&w_dtab, 0, P_PRIMARY);
   return(OK);

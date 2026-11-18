@@ -69,15 +69,17 @@ EXTERN _PROTOTYPE( void (*level0_func), (void) );
 #if (CHIP == ARM_CM)
 /* IRQ handlers: few lines have one, so a byte per line says which of a
  * handful of slots (R2a.2: 72 instead of 256 bytes). */
-#define NR_IRQ_HANDLERS	8
+#define NR_IRQ_HANDLERS	8	/* all 8 used: the RTC alarm (R7b.1) took
+				 * the IR receiver's, which R4b.7 freed */
 EXTERN u8_t irq_slot[NR_IRQ_VECTORS];	/* 0: none, else slot + 1 */
 EXTERN irq_handler_t irq_handlers[NR_IRQ_HANDLERS];
 EXTERN reg_t kernel_sp_top;	/* top of the handler-mode (MSP) stack */
 EXTERN clock_t k_input;		/* uptime of the last key or button (T4) */
 EXTERN u32_t pm_busy;		/* sleep blockers (T14b): PM_* in const.h */
 EXTERN struct {			/* T14b statistics, since boot */
-  u32_t stop;			/* time in Stop2, ms timer clocks (36 h) */
+  u32_t stop;			/* time in Stop2, ms timer clocks (< 1 min) */
   u16_t btn, other;		/* wake-ups: a button; anything else */
+  u16_t min;			/* R6.8: and whole minutes of it (45 days) */
 } pm_stat;
 #endif
 

@@ -11,11 +11,11 @@ else runs.
 |---|---|
 | CPU | STM32WB55, Cortex-M4 at 64 MHz, Thumb-2 only. Single-precision FPU, opt-in per program (spec R5.7): code is built with `-mfloat-abi=soft` unless it asks for the FPU, see 1.5. |
 | RAM | 192 KB SRAM1 plus two 10 KB pieces of SRAM2. Kernel, MM, FS and INIT take their share; about **105 KB is free in one piece after boot**, shared by every user process. |
-| Flash | 1 MB, of which MINIX uses the lower part: the system image (at most 192 KB), the *installed region* with program text and the default settings, and the *run-time text cache*. The top belongs to the radio CPU and is never touched. |
+| Flash | 1 MB, of which MINIX uses the lower part: the system image (at most 192 KB), the shared C library (one copy for every program), the *installed region* with program text and the default settings, and the *run-time text cache*. The top belongs to the radio CPU and is never touched. |
 | Processes | `NR_PROCS` is 16: MM, FS and INIT take three, so at most **13 user processes** exist at once, shells and the launcher included. |
 | Clock | `HZ` is 60: the scheduler, `alarm()` and `sleep()` count in ticks of 16.7 ms. A millisecond timer exists in the kernel (R4b.2) but not yet for programs (`setitimer` subset, **(planned)**). |
 | Screen and buttons | 128x64 monochrome LCD, six buttons (Up, Down, Left, Right, OK, Back). |
-| Storage | The SD card holds the whole file system: `/` (32 MB), `/usr`, swap (reserved), `/home`. |
+| Storage | The SD card holds the whole file system: `/` (32 MB), `/usr`, swap (`/dev/hd3`, off by default; `swap=plain` in `/etc/rc.conf` turns it on, see the [manual](../../manual/swap.md)), `/home`. |
 
 ## 1.2 A process without an MMU
 
@@ -30,6 +30,10 @@ The Cortex-M4 has an MPU, which protects memory but does not translate addresses
 - **The block cannot move or grow in place freely.** The heap grows up and the stack down
   inside a fixed reserve set when the program is built (`chmem`, see 1.4). When that reserve is
   used up, `malloc` returns NULL; when the stack runs into the heap, the program faults.
+- **More data than RAM** will be possible for apps written for it: numbered 4 KB blocks on the
+  swap partition that the app reads into and writes from buffers of its own (`blk_open()`,
+  `Blocks:` in the package manifest; spec 12h, task T20, **(planned)**, milestone M4). There is
+  no transparent paging: a pointer never points at data on the card.
 - **The largest hole decides what can start**, not the total. `free` prints both; `free -v`
   lists the holes. `exec` places programs at the top of RAM and fork shadows at the bottom, so
   long-lived processes pile up at the top and the free space stays in one piece.
@@ -47,14 +51,44 @@ and a copy on each switch.
   variables or stdio state is a bug. The launcher is the model (`flipper/gui/launcher.c`).
 - Use `fork()` when the child must really run the parent's code on its own. Keep the parent's
   data small then, because the shadow is a copy of it.
-- `system()` and `popen()` start `/bin/sh`, which costs about 12 KB of RAM while it runs. In a
+- `system()` and `popen()` start `/bin/sh`, which costs about 10 KB of RAM while it runs. In a
   small tool, `vfork` + `execv` of the program itself is much cheaper.
 
 ### Threads
 
 There are none, and none are planned in the kernel. A second activity is a second process (with
-pipes or signals between the two), or an event loop in one process. Cooperative threads inside
-one process come with `libfuri` (Phase 5) for ported stock apps **(planned)**.
+pipes or signals between the two), or an event loop in one process.
+
+For ported stock apps, the `libfuri` core (spec R5.1, `flipper/lib/furi`) gives **cooperative
+threads inside one process** with the stock API (`furi_thread_*`, `furi_message_queue_*`,
+`furi_event_flag_*`, `furi_mutex_*`, `furi_semaphore_*`, `furi_timer_*`, records,
+`FuriString`, `furi_check`, `FURI_LOG_*`; `#include <furi.h>`; add the program to `FURIPROGS` in
+`flipper/minix.mk` to use the one copy in flash, the shared libfuri + libapp (R2b.9; part 2,
+1.6), or link `libfuri.a` statically). What to know:
+
+- A thread runs until it waits (queue, flags, mutex, semaphore, delay, join) or calls
+  `furi_thread_yield()`. Priorities are kept but not used. Timer callbacks run when a thread
+  waits or yields and must not block.
+- Thread stacks are cut from the program's stack gap, not the heap (MM accepts a stack pointer
+  only there), so the program's `chmem` must hold the main stack (libfuri leaves it 3 KB), every
+  thread stack and the heap. The C library's `printf` family alone needs about 1.2 KB of stack.
+  A 16-byte canary at the bottom of each stack is checked at every switch.
+- `furi_check`/`furi_crash` write the message to `/dev/log` and stderr and `abort()` the process;
+  the rest of the system keeps running.
+- When no thread is ready, the process sleeps in `poll()` (R4b.6) until the earliest delay or
+  timer, in ticks of 1/60 s: `furi_delay_ms(100)` takes 100–117 ms, a 20 ms timer fires every
+  one or two ticks. libfuri does not use `SIGALRM`.
+- A plain `read()` that blocks still stops every thread of the process. Inside libfuri (and for
+  R5.2/R5.4) the internal `ffd_read()`/`ffd_wait()` (`src/furi_i.h`) block only the calling
+  thread: the idle `poll()` also watches the fds threads wait for. Terminals and
+  `/dev/buttons` answer `DEV_SELECT`, so a waiting thread costs nothing until a key comes;
+  `ffd_read()` still reads with `O_NONBLOCK` and, when "ready" gave nothing (two threads on one
+  fd, or a device that counts as always ready), tries again once a tick or two instead of
+  spinning. A wait costs 24 B on the waiting thread's stack; at most 8 at once.
+- Costs on the device: about 13 KB of code (until it moves into the shared library), 84 B per
+  thread plus its stack, 32 B per queue plus its messages, 4 B of malloc overhead per object.
+- Not from signal handlers. The GUI (R5.2) is in section 4.9; storage and HAL come with R5.3–R5.4
+  **(planned)**.
 
 ## 1.3 Program text runs from flash
 
@@ -73,13 +107,16 @@ copy live in flash:
 
 So the RAM a running program costs is mostly **data + bss + chmem**, not its size on disk. Code
 is cheap; static tables and buffers are not. Make tables `const` (they then stay in flash),
-keep buffers small, and prefer the stack for short-lived work.
+keep buffers small, and prefer the stack for short-lived work. A base program may have at most
+4 KB of `.bss` (spec R2a.5; `make ramcheck` runs `tools/bsscheck.py`): read and write in 512 B–1 KB
+pieces (one SD sector or file system block), and `malloc` big tables in the size the input needs.
+The few programs allowed more are listed, with the reason, in `flipper/bss-exceptions.txt`.
 
 ## 1.4 `chmem`: the stack and heap reserve
 
 Each program file carries the size of its stack + heap reserve, like MINIX's `chmem`. The build
 sets it: 6 KB by default (`tools/elf2mnx.py`), and a `CHMEM_<program>` line in
-`flipper/minix.mk` overrides it (4 KB for small tools, 12 KB for `sh` and `ls`).
+`flipper/minix.mk` overrides it (4 KB for small tools, 10 KB for `sh`, 12 KB for `ls`).
 
 Choose it by measuring, not guessing:
 
@@ -107,14 +144,20 @@ What eats the reserve, from experience in this tree:
   accepts: no declarations inside `for (...)`, and there is no `<stdint.h>` or `<stdbool.h>`.
   Fixed-size types are `u8_t`, `u16_t`, `u32_t` from `<sys/types.h>` (`long` and `int` are 32
   bits). Host-tested cores (chapter 2) are written so they compile in both worlds.
-- **libc** is MINIX 2.0's, extended for the port. Notable points:
+- **libc** is MINIX 2.0's, extended for the port. It is one shared copy in flash: programs
+  call it in place, and each process keeps only its data (about 0.6 KB). Notable points:
   - POSIX.1 (1990) calls: files, directories, `fork`/`vfork`/`exec`, signals with
     `sigaction`, `termios`, `pipe`, `mkfifo`, `alarm`, `pause`, `sigsuspend`;
-  - **not present**: `select`/`poll` (`poll()` is spec R4b.6, **(planned)**), `usleep`,
+  - `poll()` (`<poll.h>`, R4b.6): pipes and FIFOs, character devices whose driver answers
+    `DEV_SELECT` (terminals, `/dev/buttons`, `/dev/speaker`; other devices count as always
+    ready), a timeout in ms rounded up to the 1/60 s tick, `EINTR` on a signal;
+  - **not present**: `select`, `usleep`,
     `nanosleep`, `setitimer`, `mmap`, sockets, threads, `setgroups` (R4b.4, **(planned)**);
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
   - `cfopen(path, mode)` reads a settings file from the card and falls back to the default in
     `/rom` (chapter 5);
+  - `snprintf`/`vsnprintf` store at most n - 1 characters and a null; unlike C99 they return
+    -1 when the output was cut (use them for every path or line built from outside data);
   - `printf` handles floating point, in software. Floating point is slow and makes code bigger;
     integer arithmetic (millivolts, tenths of a degree) is the habit here.
   - **The FPU** (R5.7): a program whose `float` arithmetic matters can build those files with
@@ -135,8 +178,9 @@ What eats the reserve, from experience in this tree:
 Unix permissions are the security model, including for hardware:
 
 - Apps started from the launcher run as `nobody` in group **`gui`**, which may use the screen,
-  buttons, LED, vibro, speaker, GPIO, infrared and iButton (`/dev/*` with mode 660, group
-  `gui`). An entry marked `root` in `/etc/apps` keeps root's rights.
+  buttons, LED, vibro, speaker, GPIO, ADC stream, infrared, iButton, RFID and Sub-GHz receive
+  (`/dev/*` with mode 660, group `gui`). The clock's alarm (`/dev/rtc`) and the timer spool
+  belong to group `timers`. An entry marked `root` in `/etc/apps` keeps root's rights.
 - Some devices are readable by everyone (`/dev/adc`, `/dev/power`).
 - Each package app gets its own uid and supplementary groups from its manifest (spec A.3,
   R4b.4) **(planned)**; until then, choose the user in `/etc/apps`.

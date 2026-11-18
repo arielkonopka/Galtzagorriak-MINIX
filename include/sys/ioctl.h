@@ -84,6 +84,8 @@
 #define DIOCEJECT	_IO ('d', 5)
 #define DIOCSETP	_IOW('d', 6, struct partition)
 #define DIOCGETP	_IOR('d', 7, struct partition)
+#define DIOCFAKECARD	_IOW('d', 8, int)	/* QEMU tests: SD card in/out (N.6) */
+#define DIOCDISCARD	_IOW('d', 9, struct part_range) /* R12.40: unused sectors */
 
 /* Keyboard ioctls. */
 #define KIOCSMAP	_IOW('k', 3, keymap_t)

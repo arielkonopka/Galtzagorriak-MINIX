@@ -47,6 +47,14 @@ testing every path. A HAL function that the emulator cannot do returns a "not pr
 5. Add the same node in `base.postinst` for cards made before your change (look at the
    `/dev/adc` block), and raise `BASE_VER` in `minix.mk`.
 
+A family of minors with its own rules can live in its own file that `flipdev.c` includes, as the
+USB HID files do (`hiddev.c`, minors 17-19, `IS_HID()` checked first in open/close, `do_rw`,
+the ioctl switch and `do_select`, `hid_check()` after every message and interrupt). Its numbers
+and ioctls go in a `<minix/*.h>` header that is the contract for every HAL backend
+(`<minix/hid.h>`: QEMU's `hal_hid_*` print console lines, the Flipper's drive the USB stack),
+and the backend tells the task about changes from its interrupt (`hid_event()`), never by
+the task polling it.
+
 ## 3.3 Interrupts
 
 - Register a handler with `put_irq_handler(irq, handler)` and `enable_irq(irq)` once, at the
@@ -56,7 +64,7 @@ testing every path. A HAL function that the emulator cannot do returns a "not pr
   then gets a `HARD_INT` message and does the rest in `do_hardint()`.
 - `cause_sig()`, replies and copies to users are task work, never handler work.
 - **Interrupt slots are full**: `NR_IRQ_HANDLERS` is 8 and all eight are used (clock, UART,
-  USB, buttons, IR receive, IR transmit, ms timer, SD DMA). A new handler means raising it
+  USB, buttons, RTC alarm, IR transmit, ms timer, SD DMA; IR receive moved to the pulse engine, which needs none). A new handler means raising it
   (+4 bytes) with a reason, or sharing a handler between lines as the buttons do.
 - Masking interrupts (`lock()`/`unlock()`) is allowed for at most **20 µs** (budget L4). The
   one measured exception is the iButton bit slot (≤ 70 µs). Anything longer must be restructured:
@@ -78,7 +86,29 @@ When the data arrives, usually in `do_hardint()`, the task copies it and sends
 - A revived process goes to the head of the user queue (R4b.3); budget L5 (REVIVE to running)
   is 100 µs.
 
-## 3.5 Time without busy waiting
+### poll(): DEV_SELECT and DEV_SELECTED (R4b.6)
+
+FS's `poll()` asks a character device with `DEV_SELECT`: `DEVICE` the minor, `PROC_NR` the
+poller (for checks and logs only), `COUNT` the ops (`SEL_RD`, `SEL_WR`, `SEL_ERR`, plus
+`SEL_NOTIFY`; `<minix/com.h>`). Reply `TASK_REPLY` with `REP_STATUS` = the ops ready now (>= 0).
+- With `SEL_NOTIFY`, remember the requested ops that are not ready, **as bits per minor, not
+  the poller** (FS keeps the pollers; ORs with an earlier registration). When one becomes
+  ready, send one `DEV_SELECTED` to FS (`DEVICE` the minor, `REP_STATUS` the ready ops) and
+  forget the bits; FS registers again if somebody still waits.
+- `COUNT` 0: forget the bits (FS sends it when the last poller of that minor is done).
+- A task that answers `DEV_SELECT` with an error (the `EINVAL` of an unknown request) counts
+  as always ready, so adding a minor without it never hangs a poller.
+- Send `DEV_SELECTED` with `send()` from the task's main loop, like `REVIVE`; FS accepts it
+  in its main loop and while it waits for a reply from the same task.
+- Trigger `DEV_SELECTED` on a *change*, not on a state that may stay: flipdev wakes button
+  pollers on a new event since the registration, not on "queue not empty", because with another
+  app owning the buttons (R4b.8) the queue stays full for the poller and FS and the task would
+  wake each other forever.
+- Examples: the TTY (`do_select`, `sel_retry` at the end of `handle_events`: input arrived or
+  output done; the state is 2 bytes in `tty_t`'s padding) and flipdev (`do_select`,
+  `sel_check`: buttons and speaker; IR, RFID and Sub-GHz raw capture only while a read waits,
+  so they answer "ready").
+
 
 - **The ms timer** (R4b.2, `mt_arm()` in `arm/klib.c`): a kernel client asks for a call of its
   function in 1–999 ms. It runs on LPTIM1, which keeps counting in Stop2, so it also ends things
@@ -90,7 +120,11 @@ When the data arrives, usually in `do_hardint()`, the task copies it and sends
 - **Busy waits** are only acceptable for microsecond protocol timing that no peripheral can do,
   bounded and measured (the 1-Wire slots). A wait of milliseconds in a task blocks every other
   kernel task and every user process: use the ms timer, or yield (`hal_disk_yield()` in the SD
-  driver shows how a long poll gives the CPU back).
+  driver shows how a long poll gives the CPU back). A wait of many milliseconds should sleep
+  instead: `hal_disk_nap()` (DISCARD, which keeps the card busy for long) sets a one-tick
+  watchdog with `clock_mess()` and waits in `receive(HARDWARE)`; the watchdog's
+  `interrupt(WINCHESTER)` wakes it. User processes run and the CPU may enter Stop2 meanwhile,
+  and the cycle counter stops then, so such a limit counts naps, not cycles.
 
 ## 3.6 Power: sleep blockers and on-demand hardware
 

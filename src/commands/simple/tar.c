@@ -198,6 +198,7 @@ _PROTOTYPE(void do_chown, (char *file));
 _PROTOTYPE(void timestamp, (char *file));
 _PROTOTYPE(void copy, (char *file, int from, int to, long bytes));
 _PROTOTYPE(long convert, (char str[], int type));
+_PROTOTYPE(time_t tconvert, (char str[], int type));
 _PROTOTYPE(int checksum, (void));
 _PROTOTYPE(int is_dir, (char *file));
 _PROTOTYPE(char *path_name, (char *file));
@@ -217,7 +218,7 @@ _PROTOTYPE(void mwrite, (int fd, char *address, int bytes));
 _PROTOTYPE(int bread, (int fd, char *address, int bytes));
 _PROTOTYPE(int bwrite, (int fd, char *address, int bytes));
 _PROTOTYPE(void print, (char *str));
-_PROTOTYPE(char *num_out, (long number));
+_PROTOTYPE(char *num_out, (unsigned long number));
 _PROTOTYPE(void string_print, (char *buffer, char *fmt,...));
 
 void error(s1, s2)
@@ -562,7 +563,7 @@ char *file;
 {
   struct utimbuf buf;
 
-  buf.modtime = buf.actime = convert(header.dbuf.mtime, LONG_TYPE);
+  buf.modtime = buf.actime = tconvert(header.dbuf.mtime, LONG_TYPE);
   utime(file, &buf);
 }
 
@@ -583,6 +584,21 @@ register long bytes;
 	mwrite(to, io_buffer, (to == tar_fd) ? TBLOCK_SIZE : rest);
 	bytes -= (long) rest;
   }
+}
+
+time_t tconvert(str, type)
+char str[];
+int type;
+{
+/* convert() for a time: the octal field holds up to 33 bits, past 2038
+ * (spec R2d.7); utime() refuses what the file system cannot store. */
+  time_t ac = 0;
+  register int i;
+
+  for (i = 0; i < type; i++) {
+	if (str[i] >= '0' && str[i] <= '7') ac = (ac << 3) + (str[i] - '0');
+  }
+  return ac;
 }
 
 long convert(str, type)
@@ -878,7 +894,9 @@ register struct stat *st;
 	string_print(header.member.m_size, "%L ", st->st_size);
   else
 	strncpy(header.dbuf.size, "0", (size_t) TSIZLEN);
-  string_print(header.member.m_time, "%L ", st->st_mtime);
+  /* stat times come from the file system: 32 bits unsigned (R2d.3) */
+  string_print(header.member.m_time, "%L ",
+		(long) (ftime32_t) st->st_mtime);	/* timecheck: ok */
   strncpy(header.dbuf.magic, TMAGIC, (size_t) TMAGLEN);
   header.dbuf.version[0] = 0;
   header.dbuf.version[1] = 0;
@@ -1018,7 +1036,8 @@ char *address;
   return n;
 }
 
-char output[TBLOCK_SIZE];
+#define OUT_SIZE	128	/* messages only (was TBLOCK_SIZE; R2a.5) */
+char output[OUT_SIZE];
 void print(str)			/* changed to use stderr rather than stdout
 			 * -Dal */
 register char *str;
@@ -1032,15 +1051,15 @@ register char *str;
   }
   while (*str) {
 	output[indx++] = *str++;
-	if (indx == TBLOCK_SIZE) {
-		write(2, output, TBLOCK_SIZE);
+	if (indx == OUT_SIZE) {
+		write(2, output, OUT_SIZE);
 		indx = 0;
 	}
   }
 }
 
 char *num_out(number)
-register long number;
+register unsigned long number;	/* unsigned: times to 2106 (R2d.7) */
 {
   static char num_buf[12];
   register int i;

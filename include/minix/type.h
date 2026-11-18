@@ -155,6 +155,32 @@ struct kstack {
 			 * install its text in flash (reply 1: call again
 			 * with m1_i3 4, one flash step each, until not 1),
 			 * 1: remove it, 2: bind, 3: count unbound */
+/* Swap to the SD card (Phase 12, R12.28).  MMSWAPON and MMSWAPRES are the
+ * spec's svrctl() names; here they are MEMINFO requests like the above. */
+#define MI_SWAPON	7	/* root: m1_i1 the partition (0: off), m1_i3
+			 * SW_PLAIN or SW_CRYPT (12b, not yet: ENOSYS) */
+#define MMSWAPON	MI_SWAPON
+#define MI_SWAPRES	8	/* root: m1_i1 the idle reserve, KB (0: off) */
+#define MMSWAPRES	MI_SWAPRES
+#define MI_SWAPINFO	9	/* struct swinfo to m1_p1 (free -v) */
+#define MI_SWAPTEST	10	/* root, tests: m1_i1 1: swap out pid m1_i3
+			 * now, 2: act as if the card were pulled */
+#define MI_FGEXEC	11	/* root: the next child's exec is the
+			 * foreground app: placed low (R12.22) */
+#define MI_MEMTEST	12	/* root (selftest, R7b.3.1): m1_i1 the address of
+			 * a 4 KB block of RAM; reply MT_* (MT_FAIL:
+			 * reply_i1 the failing word's address) */
+#define MI_BUILD	13	/* the system image's version and build id
+			 * ("0.1.1+12.g1a2b3c4", '\0'-ended) to m1_p1, at
+			 * most m1_i1 bytes (settings about, spec K.7) */
+#define MT_PASS		0	/* free: March C- passed (left zeroed) */
+#define MT_FAIL		1	/* free: a word did not hold its pattern */
+#define MT_INUSE	2	/* a process (or part of one) is there */
+#define MT_OWNED	3	/* not user RAM: kernel, servers, SRAM2 */
+#define MT_BLOCK	4096
+#define SW_OFF		0
+#define SW_PLAIN	1
+#define SW_CRYPT	2
 
 /* sys_flash() operations. */
 #define FL_INFO		0	/* cache region: base, size; with addr: */
@@ -181,6 +207,19 @@ struct fcinfo {
   unsigned long inst_used;	/* bytes in pages of installed programs */
   int inst_entries;		/* programs installed */
   unsigned long sfsa;		/* CPU2's flash starts here */
+};
+
+struct swinfo {			/* MI_SWAPINFO (R12.8) */
+  int mode;			/* SW_OFF, SW_PLAIN; 0x80: card lost */
+  int dev;			/* the swap partition, 0: none */
+  unsigned res_kb;		/* the idle reserve, KB */
+  unsigned short nout, nin;	/* swap-outs and swap-ins since boot */
+  int nproc;			/* swapped processes, in p[] */
+  struct {
+	int pid, slot;
+	char name[8];
+	unsigned long bytes;	/* RAM it gave back */
+  } p[16];
 };
 
 struct fccount {		/* MI_FCBUDGET (R2b.11) */

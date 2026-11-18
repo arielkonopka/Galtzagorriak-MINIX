@@ -35,7 +35,8 @@
 #define request       m.m1_i2
 #define sig	      m.m1_i2
 #define slot1	      m.m1_i1
-#define tp	      m.m2_l1
+#define tp	      m.m2_l1	/* stime: low 32 bits of the 64-bit time */
+#define tp_high	      m.m2_l2	/* and the high 32 bits (R2d.2) */
 #define utime_actime  m.m2_l1
 #define utime_modtime m.m2_l2
 #define utime_file    m.m2_p1
@@ -45,6 +46,7 @@
 /* The following names are synonyms for the variables in the output message. */
 #define reply_type    m1.m_type
 #define reply_l1      m1.m2_l1
+#define reply_l2      m1.m2_l2
 #define reply_i1      m1.m1_i1
 #define reply_i2      m1.m1_i2
 #define reply_t1      m1.m4_l1

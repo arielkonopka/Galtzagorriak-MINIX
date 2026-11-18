@@ -35,6 +35,8 @@
 	.equ	EXC_RETURN_PSP,	0xFFFFFFFD /* Thread mode, PSP, no FP state */
 	.equ	EXC_RETURN_NOFP, 0x10	/* clear: the frame has S0-S15, FPSCR */
 	.equ	CONTROL_FPCA,	0x4	/* in p_reg.control: an FP context */
+	.equ	CONTROL_FPLIVE,	0x8	/* p_reg.control only: its FP registers
+					 * are in the FPU (see fp_flush) */
 	.equ	FP_SAVE,	64	/* S16-S31, below the hardware frame */
 	.equ	FPCCR,		0xE000EF34
 	.equ	FPCCR_LSPACT,	0x1	/* a lazy S0-S15 save is pending */
@@ -104,12 +106,8 @@ user_ld_end:
 	tst	r11, #XPSR_STKALIGN
 	it	ne
 	subne	r0, r0, #4
-	orr	r1, r1, #CONTROL_FPCA
+	orr	r1, r1, #(CONTROL_FPCA | CONTROL_FPLIVE)
 	stmia	r12, {r0, r1}		/* -> sp, control */
-	ldr	r0, =proc_ptr
-	ldr	r0, [r0]
-	ldr	r1, =fp_live
-	str	r0, [r1]		/* its registers are in the FPU */
 4:	ldr	r0, =k_reenter
 	ldrb	r1, [r0]
 	adds	r1, r1, #1
@@ -219,7 +217,7 @@ handler_fault:
 	ldr	r2, =user_st_end
 	cmp	r1, r2
 	blo	4f
-5:	ldr	r2, =fp_st_begin	/* fp_flush: fp_live's stack */
+5:	ldr	r2, =fp_st_begin	/* fp_flush: mpu_proc's stack */
 	cmp	r1, r2
 	blo	kernel_fault
 	ldr	r2, =fp_st_end
@@ -255,8 +253,8 @@ frame_recover:
 	bl	user_frame_fault
 	b	restart
 
-/* The same for fp_flush: fp_live's stack was bad (the lazy S0-S15 save or
- * the S16-S31 stores).  fp_live gets the signal; the FPU is cleared. */
+/* The same for fp_flush: mpu_proc's stack was bad (the lazy S0-S15 save
+ * or the S16-S31 stores).  It gets the signal; the FPU is cleared. */
 	.thumb_func
 fp_frame_recover:
 	ldr	r0, =kernel_sp_top
@@ -265,7 +263,7 @@ fp_frame_recover:
 	ldr	r0, =k_reenter
 	movs	r1, #0
 	strb	r1, [r0]
-	ldr	r0, =fp_live
+	ldr	r0, =mpu_proc
 	ldr	r4, [r0]
 	bl	fp_drop
 	mov	r0, r4
@@ -286,12 +284,15 @@ restart:
 	bl	unhold
 	cpsid	i
 1:
-	ldr	r1, =fp_live		/* R5.7: another process's FP */
+	ldr	r1, =mpu_proc		/* R5.7: another process's FP */
 	ldr	r1, [r1]		/* registers are in the FPU: save */
 	cbz	r1, 2f			/* them before its MPU regions go */
-	ldr	r0, =proc_ptr
-	ldr	r0, [r0]
+	ldr	r0, =proc_ptr		/* (only the last user process run, */
+	ldr	r0, [r0]		/* mpu_proc, can have them) */
 	cmp	r0, r1
+	beq	2f
+	ldr	r0, [r1, #P_CONTROL]
+	tst	r0, #CONTROL_FPLIVE
 	it	ne
 	blne	fp_flush
 2:
@@ -339,16 +340,15 @@ user_st_begin:
 	strt	r11, [r0, #28]
 	/* R5.7: an FP process whose registers were saved (fp_flush):
 	 * S16-S31 back from its stack; the CPU reloads S0-S15 and FPSCR
-	 * from the frame on the way out.  Still in the FPU (fp_live,
+	 * from the frame on the way out.  Still in the FPU (FPLIVE,
 	 * nothing else ran): nothing to do, even the lazy save is skipped. */
 	tst	r3, #CONTROL_FPCA
 	beq	6f
-	ldr	r2, =fp_live
-	ldr	r4, [r2]
-	cmp	r4, r12
-	beq	6f
-	str	r12, [r2]		/* its registers from here on (also */
-	sub	r2, r0, #FP_SAVE	/* half loaded: fp_flush clears them) */
+	tst	r3, #CONTROL_FPLIVE
+	bne	6f
+	orr	r3, r3, #CONTROL_FPLIVE	/* its registers from here on (also */
+	str	r3, [r12, #P_CONTROL]	/* half loaded: fp_flush clears them) */
+	sub	r2, r0, #FP_SAVE
 	ldrt	r4, [r2, #0]
 	ldrt	r5, [r2, #4]
 	ldrt	r6, [r2, #8]
@@ -376,7 +376,7 @@ user_st_begin:
 	.global	user_st_end
 user_st_end:
 6:	msr	psp, r0
-	bic	r1, r3, #CONTROL_FPCA	/* set by the CPU on the way out */
+	bic	r1, r3, #(CONTROL_FPCA | CONTROL_FPLIVE) /* not CONTROL bits */
 	msr	control, r1
 	isb
 	ldmia	r12, {r4-r11}		/* callee-saved registers */
@@ -394,11 +394,13 @@ user_st_end:
 /*===========================================================================*
  *				fp_flush, fp_drop			     *
  *===========================================================================*/
-/* R5.7, lazy FP context switch.  The FPU holds the registers of fp_live
- * (r1), and another process is about to be entered.  Save S16-S31 at
- * fp_live's sp (save_ctx put it FP_SAVE bytes below the frame); the first
+/* R5.7, lazy FP context switch.  The FPU holds the registers of the
+ * process r1 points to (CONTROL_FPLIVE in its p_reg.control; it can only
+ * be mpu_proc, the last user process run, so no other variable is
+ * needed), and another process is about to be entered.  Save S16-S31 at
+ * its sp (save_ctx put it FP_SAVE bytes below the frame); the first
  * FP instruction here also makes the CPU do the pending lazy save of
- * S0-S15 and FPSCR into the frame, with fp_live's rights and MPU regions
+ * S0-S15 and FPSCR into the frame, with its rights and MPU regions
  * (still loaded: called before mpu_switch).  Then clear the FPU, so that
  * no process sees another's FP registers.  Stores with the process's
  * own rights (A1); a fault goes to fp_frame_recover.
@@ -408,6 +410,8 @@ user_st_end:
 fp_flush:
 	ldr	r0, [r1, #P_SP]
 	ldr	r3, [r1, #P_CONTROL]
+	bic	r3, r3, #CONTROL_FPLIVE
+	str	r3, [r1, #P_CONTROL]
 	tst	r3, #CONTROL_FPCA	/* the kernel dropped its FP context */
 	beq	fp_drop			/* (exec, bad stack): just clear */
 	.global	fp_st_begin
@@ -440,7 +444,7 @@ fp_st_begin:
 fp_st_end:
 	b	fp_zero
 
-/* fp_live's FP context is not to be saved: cancel a pending lazy save
+/* Its FP context is not to be saved: cancel a pending lazy save
  * (its frame may be gone), then clear the FPU. */
 	.global	fp_drop
 	.thumb_func
@@ -469,8 +473,6 @@ fp_zero:
 	vmov	d14, r2, r3
 	vmov	d15, r2, r3
 	vmsr	fpscr, r2
-	ldr	r0, =fp_live
-	str	r2, [r0]
 	mrs	r0, control		/* the vmovs made the kernel an FP */
 	bic	r0, r0, #CONTROL_FPCA	/* context: undo, so that a fault */
 	msr	control, r0		/* in it stacks no FP frame */

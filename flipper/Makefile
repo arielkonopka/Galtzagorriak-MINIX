@@ -8,7 +8,9 @@
 BOARD	?= qemu
 PROG	?= m0
 # LATTRACE=1: the latency trace build (spec R0.8e), in its own directory.
-BUILD	:= build/$(BOARD)$(if $(LATTRACE),-lat)
+# WRAPTEST=1: the uptime-wrap test build (R2d.6, AC2d.3): the tick counter
+# starts 10 s before it wraps at 2^32 (WRAPTEST=n: n s); its own directory.
+BUILD	:= build/$(BOARD)$(if $(LATTRACE),-lat)$(if $(WRAPTEST),-wrap)
 
 CROSS	?= arm-none-eabi-
 CC	:= $(CROSS)gcc
@@ -45,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean
+.PHONY: all run flash clean lfrfidtest modemtest hidtest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -62,6 +64,19 @@ $(BUILD)/$(PROG).elf: $(OBJ) ld/$(BOARD).ld ld/sections.ld
 
 $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 	$(OBJCOPY) -O binary $< $@
+
+# liblfrfid on the PC (spec R9.0.2): every LF RFID protocol round trip.
+lfrfidtest:
+	$(MAKE) -C tests/lfrfid test
+
+# libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
+# the RFID line code, the Sub-GHz presets, legal check and duty counter.
+modemtest:
+	$(MAKE) -C tests/modem test
+
+# libhid on the PC (spec R11.3.2): layouts, US and DE round trip, UTF-8.
+hidtest:
+	$(MAKE) -C tests/hid test
 
 run: $(BUILD)/$(PROG).elf
 	@test "$(BOARD)" = qemu || { echo "run needs BOARD=qemu"; exit 1; }

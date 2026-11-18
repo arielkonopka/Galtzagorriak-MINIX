@@ -180,11 +180,7 @@ extern	char	*elinep;
 /*
  * other functions
  */
-#ifdef __STDC__
-int (*inbuilt(char *s ))(void);
-#else
-int (*inbuilt())();
-#endif
+_PROTOTYPE(int inbuilt , (char *s ));
 _PROTOTYPE(char *rexecve , (char *c , char **v , char **envp ));
 _PROTOTYPE(char *space , (int n ));
 _PROTOTYPE(char *strsave , (char *s , int a ));
@@ -376,8 +372,27 @@ _PROTOTYPE(void setarea , (char *cp , int a ));
 _PROTOTYPE(int getarea , (char *cp ));
 _PROTOTYPE(void freearea , (int a ));
 _PROTOTYPE(void freecell , (char *cp ));
+_PROTOTYPE(void freeshared , (void));
 
 Extern	int	areanum;	/* current allocation area */
+/* Galtzagorriak: set in a vfork child (it runs in our memory): the heap
+ * must not grow there, MM would give the room to the child, not to us. */
+Extern	int	invfork;
+/* Galtzagorriak (#271): an exec that found no memory hole (EAGAIN) is
+ * tried again, 1 s apart, VFTRIES times.  vfquiet: set by us before a
+ * vfork while more tries are left: the child then says nothing, sets
+ * vfagain (our memory) and _exits, and we try again; vftries counts
+ * (globals: the child may reuse our frame's slots).
+ * MM makes a vfork a plain fork while another process shares our
+ * addresses (a subshell, "( ... ) &": a shadow group): then the child's
+ * vfagain is its own and we would not see it.  vfmark: the child sets it
+ * first; a real vfork child has run to its exec or _exit before we go
+ * on, so we see it set.  vfok: our last vfork was real and we have not
+ * forked since (a fork can make such a group): only then is the child
+ * quiet. */
+#define	VFTRIES	10
+Extern	int	vfquiet, vftries, vfok;
+Extern	volatile int	vfagain, vfmark;
 
 #define	NEW(type) (type *)getcell(sizeof(type))
 #define	DELETE(obj)	freecell((char *)obj)

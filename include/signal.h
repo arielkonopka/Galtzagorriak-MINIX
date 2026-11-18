@@ -40,7 +40,12 @@ typedef unsigned long sigset_t;
 #define SIGTERM           15	/* software termination signal from kill */
 
 #define SIGEMT             7	/* obsolete */
+#define SIGRTC             7	/* Galtzagorriak (spec F.2): an RTC alarm, or
+				 * the time was set; ignored unless caught */
 #define SIGBUS            10	/* obsolete */
+#define SIGPWR            16	/* Galtzagorriak (spec R6.1, N.5): low battery,
+				 * to INIT: orderly halt.  mp_sigact[] has
+				 * _NSIG + 1 slots, kill() takes 1 to _NSIG */
 
 /* POSIX requires the following signals to be defined, even if they are
  * not supported.  Here are the definitions, but they are not supported.

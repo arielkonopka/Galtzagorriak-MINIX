@@ -9,6 +9,32 @@ The same as for building the system in the
 driven from `flipper/` with `make`; the host tools are Python scripts in `flipper/tools/`, run
 with `python3 -I`.
 
+On Debian or Ubuntu:
+
+```
+sudo apt install gcc-arm-none-eabi make git python3 python3-pil xfonts-base \
+                 dfu-util screen qemu-system-arm
+```
+
+The build links no C library from the toolchain (`-nostdlib`, only `-lgcc`), so newlib is not
+needed. CI uses Ubuntu 24.04's package. Debian 13's `gcc-arm-none-eabi` 14.2.1 also builds
+cleanly: `ramcheck` stays in budget and QEMU says `M2 USER PASS` (checked 2026-11-18). GCC 14
+prints `-Wreturn-mismatch` warnings in `src/lib/ansi/ext_comp.c`; they are harmless. Debian 13's
+`dfu-util` brings its own udev rule (`60-dfu-util.rules`, `uaccess`), so a desktop user can flash
+without `sudo` or qFlipper's rule.
+
+A quick check of a new computer, with the Flipper on USB:
+
+```
+cd flipper
+make BOARD=flipper -j minix base-flash base ramcheck card
+make -j INIT=m2 minix disk && make INIT=m2 minix-run         # M2 USER PASS
+python3 -I tools/nightpower.py --selftest
+ls -l /dev/serial/by-id/                                    # the Flipper's console
+```
+
+Before you flash anything from the new computer, read **2.9, "A new computer or compiler"**.
+
 ## 2.2 Make targets
 
 Run in `flipper/`. `BOARD=qemu` is the default; `BOARD=flipper` builds for the device. Output
@@ -16,7 +42,9 @@ goes to `build/<board>/minix/`.
 
 | Target | Result |
 |---|---|
-| `minix` | `minix.bin`: kernel + MM + FS + INIT; fails above 192 KB |
+| `minix` | `minix.bin`: kernel + MM + FS + INIT (fails above 192 KB), then the shared libc at 192 KB and the shared libfuri + libapp at 240 KB |
+| `shlibc` | only the shared libc: `shlibc/libc.bin`, its stubs and `libc.json` for `elf2mnx.py` |
+| `shfuri` | only the shared libfuri + libapp: `shfuri/furi.bin`, its stubs and `furi.json` |
 | `base-flash` | `minix-base.bin`: `minix.bin` plus the boot programs in the installed region and the ROM settings image. This is what users flash. |
 | `base` | `pkgs/base_<BASE_VER>.tar`, the system programs as a package |
 | `pkgs` | the other packages (`hello`, `tests`) |
@@ -24,7 +52,7 @@ goes to `build/<board>/minix/`.
 | `disk` | `fs.img` and the QEMU `disk.img` |
 | `minix-run` | boot `minix.bin` in QEMU with `disk.img` (BOARD=qemu, 60 s limit) |
 | `minix-flash` | `dfu-util` the plain `minix.bin` (BOARD=flipper) |
-| `ramcheck` | static RAM of each image against `ram-budget.txt`, plus `versioncheck` |
+| `ramcheck` | static RAM of each image against `ram-budget.txt`, plus `versioncheck` and `bsscheck` (no base program above 4 KB `.bss` except those in `bss-exceptions.txt`) |
 | `versioncheck` | version numbers in `gzversion.h` agree with `CHANGELOG.md` |
 | `latcheck` | the same system with the latency trace compiled in (`build/<board>-lat/`) |
 | `INIT=m2 minix` | a system whose INIT runs the self-test and exits QEMU |
@@ -117,9 +145,35 @@ A red check means the PR is not ready for review. `powercut` can rarely time out
 - **Dev mode**: `reboot -d` also sets the dev bit. Until a normal `reboot` or `halt`, a watchdog
   reset (a hang longer than 2 s) goes back to DFU instead of rebooting, so a broken image returns
   to the loader by itself.
-- **Updating the userland** without rewriting the card: `flsend` the new `base_X.Y.tar`, then
-  flash the matching `minix-base.bin`. Raise `BASE_VER` in `minix.mk` whenever base content
+- **Updating the userland** without rewriting the card: `flsend` the new `base_X.Y.tar` **first**,
+  then flash the matching `minix-base.bin`. Raise `BASE_VER` in `minix.mk` whenever base content
   changes (a new program, `/etc` files, `postinst`); otherwise `pkg` sees nothing new.
+- **A new computer or compiler.** Programs on the card are linked against the shared libc
+  and libfuri in flash, and run only with the very build they were linked with. The id of that
+  build is a CRC of the library image (`tools/mkshlibc.py`), so it changes when the compiler
+  changes, even if the source does not. A card made on another computer (another GCC version)
+  does not run with a `minix-base.bin` built here. `init` then prints
+  `init: console: Exec format error` and there is no shell. The old system's `pkg` also refuses
+  the new base package ("pkg: base needs shared libc X"). So the first flash from a new
+  computer needs a new card from the same build. Back up the old card first, then write the new
+  one:
+
+  ```
+  lsblk -o NAME,SIZE,TRAN,MODEL              # the card, e.g. sda; never the system disk
+  sudo dd if=/dev/sdX of=$HOME/flipper-sd-$(date +%F).img bs=4M status=progress
+  sudo dd if=build/flipper/minix/card.img of=/dev/sdX bs=1M conv=fsync status=progress
+  ```
+
+  The first boot asks for the root password and makes `/usr` and `/home` again. After that, as
+  long as you stay on this computer and its compiler, the base-then-flash update above works.
+  Coming from a card made by CI with Ubuntu 24.04's GCC is a change of compiler too.
+- **`dfu-util` exits with 74** ("Error during download get_status") after `:leave` even when the
+  flash worked. The chip resets before it answers the last request. Look for
+  `File downloaded successfully` above it.
+- **Two Flippers on one computer** (MINIX and a reference one with stock or Unleashed firmware, for
+  chapter 6): `/dev/ttyACM0` and `ttyACM1` can swap at every reboot. Name the port by id:
+  `/dev/serial/by-id/usb-Galtzagorriak_*` is MINIX, `usb-Flipper_Devices_Inc.*` the reference.
+  Typing MINIX commands into the reference Flipper's CLI does nothing useful.
 - **The console** is `/dev/ttyACM0` at any baud rate. The debug UART on header pins 13/14
   (115200 8N1, 3.3 V) shows kernel messages before USB is up; it cannot wake the CPU from Stop2,
   so keep USB attached while using it.
@@ -127,3 +181,8 @@ A red check means the PR is not ready for review. `powercut` can rarely time out
   board then returns to DFU.
 - **Writing flash during development** wears the device: test with plain installs, and use
   `pkg install --flash` only for what you keep.
+- **Radios and readers against a partner**: a second Flipper with Unleashed firmware and
+  `tools/twoflip.py` test RFID, IR, iButton and Sub-GHz in both directions; see
+  [chapter 6](06-two-flipper-tests.md).
+- **A night on battery** (no reset, the clock, the Stop2 share, the current): `tools/nightpower.py`
+  and [chapter 7](07-overnight-power-test.md).

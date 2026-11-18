@@ -1,0 +1,7 @@
+# prerm of the remind package: off the launcher.  Its timers in /var/timers,
+# its data in /home/flipper/apps_data/remind and the user remind stay (pkg
+# install remind brings them back as they were; rm them by hand to forget).
+grep -v '^Remind:root:/usr/bin/remind$' /etc/apps | grep -v '^Kanpaia:root:@bell:/usr/bin/remind$' \
+	| grep -v '^Kanpaia:remind:@bell:=/usr/bin/remind$' > /etc/apps.new &&
+	cp /etc/apps.new /etc/apps
+rm -f /etc/apps.new

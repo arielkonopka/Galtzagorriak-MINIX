@@ -10,5 +10,36 @@
 # 2026-11-16 (R4b.8, #126): 4.  The cached program is m2test itself; its
 # new foreground test took its text from 8136 to 8436 B, past 8 KB, so it
 # fills one more 4 KB page.  Nothing changed in how often the cache writes.
-m2      cache   4
+# 2026-11-16 (Phase 2d, #99): 5.  m2test checks the 64-bit time functions
+# (gmtime, mktime, localtime with a TZ rule, utime, stime, alarm across
+# 2038): its text grew from 8.4 to 14.9 KB, one more 4 KB page.  Again
+# nothing changed in how often the cache writes.
+# 2026-11-16 (R2b.9, shared libc): 4 - the programs' text no longer carries
+# libc, so the cached copy needs fewer pages.
+# 2026-11-17 (R4b.6 poll() + Phase 3 tests together): 5.  m2test now holds
+# both the poll() checks (#169) and the sticky/snprintf checks (#168); with
+# both its text passes the next 4 KB page.  Each alone stayed at 4.  Nothing
+# changed in how often the cache writes.
+# 2026-11-17 (7b.3 part 2, #203): 6.  m2test's memtest checks took its text
+# from 16124 to 16576 B, past 16 KB: one more 4 KB page.  Nothing changed
+# in how often the cache writes.
+# 2026-11-17 (T21a launcher test, #234): 7.  m2test drives the launcher
+# with fake keys and checks its frames: its text grew from 18312 to
+# 20708 B, past 20 KB: one more 4 KB page.  Nothing changed in how often
+# the cache writes.
+# 2026-11-17 (T23b window_test + T24a settings test, #250): 8.  m2test's
+# text grew from 23104 to 25104 B, past 24 KB: one more 4 KB page.
+# Nothing changed in how often the cache writes.
+# 2026-11-18 (T23a desktop_test + T24d settings_test, #258): 9.  m2test's
+# text grew to 30592 B, past 28 KB: one more 4 KB page.  Nothing changed
+# in how often the cache writes.
+# 2026-11-18 (T28a hid_tests + libhid, #264): 10.  m2test's text grew from
+# 31104 to 34492 B, past 32 KB: one more 4 KB page.  Nothing changed in
+# how often the cache writes.
+# 2026-11-18 (#271 pkg_tests: postinst failure and exec EAGAIN under load,
+# on top of T28a): 11.  m2test's text grew from 34492 to 37444 B, past
+# 36 KB: one more 4 KB page.  The test itself sets the cache budget to 0
+# (pkg, tar, sh and sleep run more than twice there): nothing changed in
+# how often the cache writes.
+m2      cache   11
 m2      inst    0

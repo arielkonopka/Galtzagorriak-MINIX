@@ -42,6 +42,7 @@
 #define XOPEN  (-NR_TASKS-2)	/* used in fp_task when susp'd on open */
 #define XLOCK  (-NR_TASKS-3)	/* used in fp_task when susp'd on lock */
 #define XPOPEN (-NR_TASKS-4)	/* used in fp_task when susp'd on pipe open */
+#define XPOLL  (-NR_TASKS-5)	/* used in fp_task when susp'd in poll() */
 
 #define NO_BIT   ((bit_t) 0)	/* returned by alloc_bit() to signal failure */
 
@@ -54,6 +55,7 @@
 
 #define CLEAN              0	/* disk and memory copies identical */
 #define DIRTY              1	/* disk and memory copies differ */
+#define PIPE_DIRTY         2	/* b_dirt: pipe data, in the cache only (K.6) */
 #define ATIME            002	/* set if atime field needs updating */
 #define CTIME            004	/* set if ctime field needs updating */
 #define MTIME            010	/* set if mtime field needs updating */

@@ -10,8 +10,6 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <time.h>
-#include <sys/times.h>
 #include <sys/stat.h>
 #include <minix/minlib.h>
 #include <stdio.h>
@@ -73,6 +71,18 @@ void usage()
   exit(1);
 }
 
+/* getpass(), stopping if there is no terminal to ask on. */
+static char *askpass(char *prompt)
+{
+  char *p = getpass(prompt);
+
+  if (p == NULL) {
+	std_err("passwd: no terminal to ask the password on\n");
+	exit(1);
+  }
+  return p;
+}
+
 int goodchars(s)
 char *s;
 {
@@ -91,10 +101,9 @@ char *argv[];
   int uid, cn, n;
   int fd_pwd, fd_tmp;
   FILE *fp_tmp;
-  time_t salt;
   struct passwd *pwd;
   /* getpass() returns up to 32 characters; these were 9 bytes. */
-  char *name, pwname[9], oldpwd[33], newpwd[33], newcrypted[100], sl[20];
+  char *name, pwname[9], oldpwd[33], newpwd[33], newcrypted[100], sl[40];
   char *argn;
   int shadow = 0;
 
@@ -115,8 +124,12 @@ char *argv[];
   if (argc != n && argc != n + 1) usage();
 
   if (argc == n) {
-	pwd = getpwuid(uid);
-	strcpy(pwname, pwd->pw_name);
+	if ((pwd = getpwuid(uid)) == NULL) {
+		std_err(bad);
+		exit(1);
+	}
+	strncpy(pwname, pwd->pw_name, sizeof(pwname) - 1);
+	pwname[sizeof(pwname) - 1] = 0;
 	name = pwname;
   } else {
 	name = argv[1];
@@ -147,7 +160,7 @@ char *argv[];
 
 	oldpwd[0] = 0;
 	if (pwd->pw_passwd[0] != '\0' && uid != 0) {
-		strcpy(oldpwd, getpass("Old password:"));
+		strcpy(oldpwd, askpass("Old password:"));
 		if (strcmp(pwd->pw_passwd, crypt(oldpwd, pwd->pw_passwd)) != 0)
 		{
 			std_err(bad);
@@ -155,11 +168,11 @@ char *argv[];
 		}
 	}
 	for (;;) {
-		strcpy(newpwd, getpass("New password:"));
+		strcpy(newpwd, askpass("New password:"));
 
 		if (newpwd[0] == '\0')
 			std_err("Password cannot be null");
-		else if (strcmp(newpwd, getpass("Retype password:")) != 0)
+		else if (strcmp(newpwd, askpass("Retype password:")) != 0)
 			std_err("Passwords don't match");
 		else
 			break;
@@ -167,34 +180,40 @@ char *argv[];
 		std_err(", try again\n");
 	}
 	/* SHA-256-crypt ("$5$", see pwdauth.c) with a 16 character salt
-	 * from /dev/random (the hardware generator on the Flipper).  Where
-	 * there is none: the time, pid and clock ticks, stirred - a salt
-	 * only has to differ between users and systems.
+	 * from /dev/random (the hardware generator on the Flipper; spec
+	 * R3.2).  No other source: a salt from the clock would repeat.  The
+	 * generator may give a short read while the radio core holds it, so
+	 * a few tries.
 	 */
 	{
 		static char a64[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 					"abcdefghijklmnopqrstuvwxyz";
-		struct tms tms;
-		unsigned long x;
 		unsigned char rnd[16];
-		int fd, got = 0;
+		int fd, got = 0, tries;
 
-		if ((fd = open("/dev/random", O_RDONLY)) >= 0) {
-			got = read(fd, (char *) rnd, sizeof(rnd))
-							== sizeof(rnd);
-			close(fd);
+		if ((fd = open("/dev/random", O_RDONLY)) < 0)
+			fatal("/dev/random");
+		for (tries = 0; got < (int) sizeof(rnd) && tries < 20; tries++) {
+			n = read(fd, (char *) rnd + got, sizeof(rnd) - got);
+			if (n > 0) got += n;
 		}
-		time(&salt);
-		x = (unsigned long) salt ^ ((unsigned long) getpid() << 16)
-			^ ((unsigned long) times(&tms) << 7) ^ 0x9E3779B9UL;
+		close(fd);
+		if (got != (int) sizeof(rnd)) {
+			std_err("passwd: /dev/random gives no data\n");
+			exit(1);
+		}
+#ifdef BOARD_QEMU
+		/* QEMU runs SHA-256 about 50 times slower than the Flipper:
+		 * the fewest rounds there (1000, still a full $5$ hash), so
+		 * that login stays under its 60 s.  Never on the device. */
+		strcpy(sl, "$5$rounds=1000$");
+#else
 		strcpy(sl, "$5$");
-		for (cn = 0; cn < 16; cn++) {
-			x ^= x << 13; x &= 0xffffffffUL;
-			x ^= x >> 17;
-			x ^= x << 5; x &= 0xffffffffUL;
-			sl[3 + cn] = a64[(got ? rnd[cn] : x) & 63];
-		}
-		sl[19] = 0;
+#endif
+		n = strlen(sl);
+		for (cn = 0; cn < 16; cn++) sl[n + cn] = a64[rnd[cn] & 63];
+		sl[n + 16] = 0;
+		memset(rnd, 0, sizeof(rnd));
 	}
 	strncpy(newcrypted, crypt(newpwd, sl), sizeof(newcrypted) - 1);
 	newcrypted[sizeof(newcrypted) - 1] = 0;

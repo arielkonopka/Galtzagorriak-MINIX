@@ -135,6 +135,9 @@
  * S0-S15 and FPSCR, S16-S31 are at p_reg.sp (arm/mpx.S).  Set by the
  * kernel entry, not by the process; cleared by exec and signal delivery. */
 #define CONTROL_FPCA  0x4
+/* R5.7: in p_reg.control only, never in the CPU's CONTROL: the FPU holds
+ * this process's FP registers (arm/mpx.S, fp_flush). */
+#define CONTROL_FPLIVE 0x8
 #define INIT_CONTROL      CONTROL_NPRIV
 #define INIT_TASK_CONTROL 0
 
@@ -159,13 +162,20 @@
 #define MT_BUTTONS         0	/* a button is down: sample (flipdev.c) */
 #define MT_IDLE            1	/* the end of a Stop2 sleep (klib.c) */
 #define MT_VIBRO           2	/* a timed buzz ends (flipdev.c, R6.3) */
-#define MT_N               3
+#define MT_ADC             3	/* an ADC stream: done? (flipdev.c, R6.4) */
+#define MT_LED             4	/* the rainbow's next colour (flipdev.c, R7b.5) */
+#define MT_PULSE           5	/* an RFID read: done? (flipdev.c, R6.5) */
+#define MT_N               6
 
 /* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console
  * and USB are asked directly (flipdev_idle, bell_ticks, hal_usb_awake). */
 #define PM_DISK         0x01	/* an SD DMA transfer runs */
 #define PM_VBUS         0x02	/* power on VBUS, the USB bus asleep (pm_vbus) */
+#define PM_ADC          0x04	/* an ADC stream runs (TIM2, ADC, DMA) */
+#define PM_PULSE        0x08	/* the pulse engine captures (TIM2, DMA) */
+#define PM_GPIO         0x10	/* header pins watched for edges (R6.4) */
+#define PM_IBUTTON      0x20	/* a Dallas key emulated: 1-Wire slots (R6.7) */
 #define PM_LOWBAT  0x80000000	/* not a blocker: battery low, no new flash
 				 * erases (pm_minute) */
 #define PM_BLOCKERS 0x7FFFFFFF
@@ -194,5 +204,14 @@
  * the same as umap(proc_ptr, D, vir, sizeof(*vir)), but a lot less costly.
  */
 #define vir2phys(vir)	(data_base + (vir_bytes) (vir))
+
+/* Uptime in ticks wraps after 2^32 ticks (828 days at 60 Hz, spec I.3):
+ * two instants are compared only through their difference. */
+#define TDIFF(a, b)	((long) ((unsigned long) (a) - (unsigned long) (b)))
+#define TADD(a, d)	((clock_t) ((unsigned long) (a) + (unsigned long) (d)))
+#define DUE(t, now)	(TDIFF(t, now) <= 0)
+#ifndef REALTIME_WRAP
+#define REALTIME_WRAP	0	/* n: uptime starts n s before the wrap */
+#endif
 
 #define printf        printk	/* the kernel really uses printk, not printf */

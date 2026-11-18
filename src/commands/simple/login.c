@@ -136,7 +136,7 @@ int uid;			/* user id */
   if (entry.ut_pid == 0) entry.ut_pid = getpid();
 
   entry.ut_type = USER_PROCESS;		/* we are past login... */
-  time(&entry.ut_time);
+  entry.ut_time = (unsigned long) time((time_t *) 0);	/* timecheck: ok (utmp: 32 bits) */
 
   /* Write a WTMP record. */
   if (err == 0) {
@@ -266,6 +266,16 @@ char *argv[];
   if (tty_name == NULL)
   {
 	write(1, "Unable to lookup tty name\n", 26);
+	exit(1);
+  }
+
+  /* First boot (spec R3.4): while root has no password, nobody logs in;
+   * getty asks for it on the console first.
+   */
+  if ((pwd = getpwnam("root")) != NULL
+		&& strcmp(crypt("", pwd->pw_passwd), pwd->pw_passwd) == 0) {
+	write(1, "login: root has no password yet; set it on the console\n", 55);
+	sleep(2);
 	exit(1);
   }
 

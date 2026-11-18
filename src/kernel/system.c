@@ -106,6 +106,7 @@
 #include "proc.h"
 #if (CHIP == ARM_CM)
 #include "hal.h"
+#include <minix/shlibc.h>
 #endif
 #if (CHIP == INTEL)
 #include "protect.h"
@@ -138,6 +139,10 @@ FORWARD _PROTOTYPE( int do_getmap, (message *m_ptr) );
 #if (CHIP == ARM_CM)
 FORWARD _PROTOTYPE( int do_kstacks, (message *m_ptr) );
 FORWARD _PROTOTYPE( int do_flash, (message *m_ptr) );
+FORWARD _PROTOTYPE( int do_swap, (message *m_ptr) );
+FORWARD _PROTOTYPE( int shlib_in, (struct shlibc_hdr *h, unsigned long magic,
+		unsigned long base, unsigned long max, vir_bytes vir_addr,
+		vir_bytes bytes) );
 #endif
 
 #if (SHADOWING == 1)
@@ -163,6 +168,7 @@ PUBLIC void sys_task()
 #if (CHIP == ARM_CM)
 	    case SYS_KSTACKS:	r = do_kstacks(&m);	break;
 	    case SYS_FLASH:	r = do_flash(&m);	break;
+	    case SYS_SWAP:	r = do_swap(&m);	break;
 #endif
 	    case SYS_EXEC:	r = do_exec(&m);	break;
 	    case SYS_XIT:	r = do_xit(&m);		break;
@@ -320,7 +326,7 @@ message *m_ptr;
    * split (T4, L5); nor while an infrared frame goes out, whose marks
    * the stall would stretch (its writer waits, so it is not ready). */
   if ((m_ptr->m1_i1 & FL_BG) && (rdy_head[USER_Q] != NIL_PROC
-			|| get_uptime() - k_input < (clock_t) HZ
+			|| TDIFF(get_uptime(), k_input) < HZ
 			|| ir_busy()))
 	return(EAGAIN);
   if (op == FL_WRITE) {
@@ -456,6 +462,12 @@ register message *m_ptr;	/* pointer to request message */
   if (m_ptr->PROC2) cause_sig(m_ptr->PROC1, SIGTRAP);
   sp = (reg_t) m_ptr->STACK_PTR;
   rp = proc_addr(m_ptr->PROC1);
+#if (CHIP == ARM_CM)
+  /* The new program starts with no register of the old one: r0-r8 and
+   * r10-r12 kept the values of the program that called exec, e.g. a
+   * setuid program's (security review 2026-11-16, U1). */
+  memset(&rp->p_reg, 0, sizeof(rp->p_reg));
+#endif
   rp->p_reg.sp = sp;		/* set the stack pointer */
 #if (CHIP == M68000)
   rp->p_splow = sp;		/* set the stack pointer low water */
@@ -931,10 +943,15 @@ register message *m_ptr;	/* pointer to request message */
 
 	src_phys = umap(proc_addr(src_proc), src_space, src_vir,
 			(vir_bytes) bytes);
-	/* The source may be a constant in the text segment (S13). */
+	/* The source may be a constant in the text segment (S13), or in
+	 * the shared libc (R2b.9). */
 	if (src_phys == 0 && src_space == D)
 		src_phys = umap(proc_addr(src_proc), T, src_vir,
 			(vir_bytes) bytes);
+#if (CHIP == ARM_CM)
+	if (src_phys == 0 && src_space == D)
+		src_phys = shlibc_src(src_vir, (vir_bytes) bytes);
+#endif
 #if (SHADOWING == 0)
 	}
 #endif
@@ -1148,6 +1165,11 @@ register message *m_ptr;
 	    i == (int) &((struct proc *) 0)->p_reg.ss)
 		return(EIO);
 #endif
+#if (CHIP == ARM_CM)
+	/* CONTROL is the privilege level (and the FP state, R5.7): a
+	 * tracer must not make its child privileged. */
+	if (i == (int) &((struct proc *) 0)->p_reg.control) return(EIO);
+#endif
 	if (i == (int) &((struct proc *) 0)->p_reg.psw)
 		/* only selected bits are changeable */
 		SETPSW(rp, TR_DATA);
@@ -1247,6 +1269,36 @@ PUBLIC void inform()
 }
 
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				do_swap					     *
+ *===========================================================================*/
+PRIVATE int do_swap(m_ptr)
+message *m_ptr;			/* PROC1: the process, m1_i2: 1 out, 0 in */
+{
+/* MM moved a process's image to the swap device (R12.4) or back (R12.6).
+ * While P_SWAPPED is set the process is never scheduled (p_flags != 0),
+ * umap() gives 0 for it and nobody may send to it (R12.7).  Only for a
+ * user process that waits for MM's reply (RECEIVING), is not shadowed or
+ * doing physical I/O.  The reply clears mpu_proc: the MPU is reloaded.
+ */
+  struct proc *rp;
+
+  if (m_ptr->m_source != MM_PROC_NR || !isokusern(m_ptr->PROC1))
+	return(E_BAD_PROC);
+  rp = proc_addr(m_ptr->PROC1);
+  if (m_ptr->m1_i2 == 0) {
+	rp->p_flags &= ~P_SWAPPED;
+	return(OK);
+  }
+  if ((rp->p_flags & (P_SLOT_FREE | RECEIVING)) != RECEIVING
+		|| rp->p_shadow != 0 || rp->p_physio) return(EBUSY);
+  rp->p_flags |= P_SWAPPED;
+  return(OK);
+}
+#endif
+
+
 /*===========================================================================*
  *				umap					     *
  *===========================================================================*/
@@ -1273,6 +1325,9 @@ vir_bytes bytes;		/* # of bytes to be copied */
    */
 
   if (bytes <= 0) return( (phys_bytes) 0);
+#if (CHIP == ARM_CM)
+  if (rp->p_flags & P_SWAPPED) return( (phys_bytes) 0);	/* R12.7 */
+#endif
   vc = (vir_addr + bytes - 1) >> CLICK_SHIFT;	/* last click of data */
 
 #if (CHIP == ARM_CM)
@@ -1369,8 +1424,49 @@ vir_bytes bytes;		/* # of bytes required */
   phys_bytes p = umap(proc_addr(proc_nr), D, vir_addr, bytes);
 
   if (p == 0) p = umap(proc_addr(proc_nr), T, vir_addr, bytes);
+#if (CHIP == ARM_CM)
+  if (p == 0) p = shlibc_src(vir_addr, bytes);
+#endif
   return(p);
 }
+
+
+#if (CHIP == ARM_CM)
+/*==========================================================================*
+ *				shlibc_src				    *
+ *==========================================================================*/
+PUBLIC phys_bytes shlibc_src(vir_addr, bytes)
+vir_bytes vir_addr;		/* address in a shared library's flash */
+vir_bytes bytes;		/* # of bytes required */
+{
+/* The shared libraries in flash (spec R2b.9: the libc, and libfuri +
+ * libapp) are code and constants that every process may read (MPU region
+ * 0): their strings - error messages, "/bin/sh" of system(), libapp's
+ * file names - are passed to system calls like a program's own.  Only
+ * ever a source: the flash is never a copy's destination.
+ */
+  if (shlib_in(SHLIBC_HDR, SHLIBC_MAGIC, SHLIBC_BASE, SHLIBC_MAX,
+		vir_addr, bytes)
+      || shlib_in(SHFURI_HDR, SHFURI_MAGIC, SHFURI_BASE, SHFURI_MAX,
+		vir_addr, bytes))
+	return((phys_bytes) vir_addr);
+  return(0);
+}
+
+/*==========================================================================*
+ *				shlib_in				    *
+ *==========================================================================*/
+PRIVATE int shlib_in(h, magic, base, max, vir_addr, bytes)
+struct shlibc_hdr *h;		/* the library's header */
+unsigned long magic, base, max;	/* what it must be, where, how big */
+vir_bytes vir_addr;		/* the range asked for */
+vir_bytes bytes;
+{
+  if (h->sh_magic != magic || h->sh_size > max) return(0);
+  return(vir_addr >= base && bytes <= h->sh_size
+		&& vir_addr - base <= h->sh_size - bytes);
+}
+#endif
 
 
 #if (CHIP == INTEL)

@@ -20,25 +20,51 @@
 #include "inode.h"
 #include "param.h"
 
-PRIVATE int panicking;		/* inhibits recursive panics during sync */
-PRIVATE message clock_mess;
+PRIVATE char panicking;		/* inhibits recursive panics during sync */
+PRIVATE char time_full;		/* clock_time() saturated: said so once */
 
 /*===========================================================================*
  *				clock_time				     *
  *===========================================================================*/
-PUBLIC time_t clock_time()
+PUBLIC time_t wall_time()
 {
-/* This routine returns the time in seconds since 1.1.1970.  MINIX is an
+/* This routine returns the time in seconds since 1.1.1970 UTC.  MINIX is an
  * astrophysically naive system that assumes the earth rotates at a constant
- * rate and that such things as leap seconds do not exist.
+ * rate and that such things as leap seconds do not exist.  The clock task
+ * keeps it as an unsigned 32-bit value until the RTC driver (R6.2) gives
+ * more.  The message is on the stack: no static RAM for it.
  */
 
+  message cm;			/* not m: that is the request (param.h) */
   register int k;
 
-  clock_mess.m_type = GET_TIME;
-  if ( (k = sendrec(CLOCK, &clock_mess)) != OK) panic("clock_time err", k);
+  cm.m_type = GET_TIME;
+  if ( (k = sendrec(CLOCK, &cm)) != OK) panic("clock_time err", k);
 
-  return( (time_t) clock_mess.NEW_TIME);
+  return( (time_t) (ftime32_t) cm.NEW_TIME);
+}
+
+
+/*===========================================================================*
+ *				clock_time				     *
+ *===========================================================================*/
+PUBLIC ftime32_t clock_time()
+{
+/* The time to stamp a file with: as stored, unsigned 32-bit (R2d.3).  Past
+ * 2106-02-07 06:28:14 UTC it stays there instead of wrapping to 1970, and
+ * the console says so once. */
+
+  time_t t = wall_time();
+
+  if (t < 0) return(0);
+  if (t > (time_t) 0xFFFFFFFEUL) {
+	if (!time_full) {
+		time_full = TRUE;
+		printf("FS: the time is past 2106, file times stay at 2106\n");
+	}
+	return(0xFFFFFFFEUL);
+  }
+  return((ftime32_t) t);
 }
 
 
