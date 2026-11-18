@@ -11,7 +11,7 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest wintest
+TESTS	:= parttest usbtest ibemutest icontest wintest desktest
 
 all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem
 
@@ -80,6 +80,11 @@ $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winre
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
 	    $(MROOT)/src/lib/gm/gm.c -o $@
+
+# desktop.c: the desktop's module records, /var/run/gui (spec K.3, K.6, T23a).
+$(B)/desktest: desktest.c $(MROOT)/flipper/gui/desktop.c $(MROOT)/flipper/gui/desktop.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) desktest.c $(MROOT)/flipper/gui/desktop.c -o $@
 
 clean:
 	rm -rf $(B)
