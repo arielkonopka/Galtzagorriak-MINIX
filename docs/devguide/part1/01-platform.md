@@ -215,7 +215,7 @@ lower its priority (`nice` is not wired to anything useful yet; the interactive 
 ## 1.9 Flash wear
 
 Internal flash survives about 10,000 erases per page, and an erase stalls the CPU for about
-22 ms. The owner's rule is: **write internal flash as rarely as possible, and never at run time
+22 ms. The user's rule is: **write internal flash as rarely as possible, and never at run time
 if it can be avoided**. For programs this means:
 
 - settings, logs, data and anything else that changes go to **files on the SD card**; nothing a

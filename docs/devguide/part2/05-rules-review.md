@@ -1,6 +1,6 @@
 # 5. Rules and review
 
-Every change to Galtzagorriak MINIX is reviewed against the same rules. They come from the owner
+Every change to Galtzagorriak MINIX is reviewed against the same rules. They come from the user
 and are written down in the spec (section 0) and in the standing rules at the top of
 [`docs/spec/next-tasks.md`](../../spec/next-tasks.md); this chapter collects them with the
 reasons, and ends with a checklist for a PR.
@@ -8,7 +8,7 @@ reasons, and ends with a checklist for a PR.
 ## 5.1 Responsiveness first
 
 The device must feel at least as quick as the stock firmware. When RAM and responsiveness
-conflict, **responsiveness wins** (owner, 2026-11-14). The budgets (spec rule 0.8):
+conflict, **responsiveness wins** (user, 2026-11-14). The budgets (spec rule 0.8):
 
 | ID | Path | Budget |
 |---|---|---|
@@ -32,7 +32,7 @@ long copies into ≤ 4 KB chunks, R0.8b); flash writes only as idle work, one pa
 
 - **Static RAM** of kernel, MM, FS and INIT may not grow beyond the phase's budget (rule 0.1).
   `make ramcheck` enforces `flipper/ram-budget.txt`; raising a line needs the reason in the same
-  commit and normally the owner's acceptance.
+  commit and normally the user's acceptance.
 - **Per-process RAM** (data, bss, `chmem`) of system programs is measured (`free -t on`) and
   recorded in `minix.mk`. No base program above 4 KB of `.bss` (R2a.5): `make ramcheck` also runs
   `tools/bsscheck.py`; an exception needs a line with its reason in `flipper/bss-exceptions.txt`.
@@ -45,7 +45,7 @@ long copies into ≤ 4 KB chunks, R0.8b); flash writes only as idle work, one pa
 ## 5.3 Flash writes
 
 Internal flash wears (about 10,000 erases per page) and stalls the CPU while it is written. The
-owner's rule:
+user's rule:
 
 - **write it as rarely as possible, above all at run time**; build and install time writes are
   acceptable but should also be rare: compare before erase, append instead of rewrite, compact
@@ -100,7 +100,7 @@ when it is refused.
 
 - Work happens on a branch from `main`, one task per branch, and arrives as a PR naming the spec
   phase or task (R6.4, T15a, ...). PRs are reviewed and squash-merged.
-- Two implementers work in parallel: the owner's local agent (with the Flipper) and the cloud
+- Two implementers work in parallel: the user's local agent (with the Flipper) and the cloud
   worker in GitHub Actions (no hardware). The cloud worker takes only issues labelled
   `claude-task`; the local agent labels issues it takes `claimed:local`. Device-only checks in a
   cloud PR are listed under "Needs on-device test".

@@ -1,6 +1,6 @@
 # Power plan: analysis and PR proposals for T14 (2026-11-15)
 
-Owner request (2026-11-15, 22:42 Warsaw): "prepare a change proposal for the agent, with the
+User request (2026-11-15, 22:42 Warsaw): "prepare a change proposal for the agent, with the
 analysis, and propose the PRs; **the agent tests them**". Spec: R6.1, R6.8, R6.9, F.3, AC6.5,
 AC6.6, R20a.5. Task list: `next-tasks.md` T14a–d. This file gives the agent the reasoning, the
 code places to change, and the tests each PR must pass on the device.
@@ -125,7 +125,7 @@ Changes:
   VBUS appeared → start USB; below a low-voltage threshold no flash writes.
 - **Battery profiles** `full` (VREG 4.208 V) / `care` (~4.0 V), kept in a free RTC backup register
   (add it to the map in PORTING.md). **Do not touch ICHG, the input current limit or ICO**
-  (owner). Charging may only be paused: while Sub-GHz transmits (later, Phase 8 hook) and outside
+  (user). Charging may only be paused: while Sub-GHz transmits (later, Phase 8 hook) and outside
   0–45 °C by the gauge temperature.
 - Power-off (`ioctl`): RTC alarm output on PC13 (Alarm A, open-drain, active low), ext3.3V on,
   short vibro, BQ25896 ship mode. With VBUS present: stay in Stop2 with the screen off instead.
@@ -149,7 +149,7 @@ RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### PR 4 — T14d: screen-off state, SD rail, backlight dim stage (`t14d-screen-off`)
 Changes:
-- Backlight: default idle timeout **15 s** (owner; change the 300 fallback in `hal_bl_state()`),
+- Backlight: default idle timeout **15 s** (user; change the 300 fallback in `hal_bl_state()`),
   optional dim stage before off (off by default) by the LP5562 engine ramp (#81 code); also the
   short up-ramp on wake (open item from #81).
 - LCD power save (ST7567: display off + all points on; RAM kept) N minutes after the backlight
@@ -172,7 +172,7 @@ RAM: 0 B (flags in existing words). Flash ≈ +1 KB.
 - External meter on the battery leads (e.g. Nordic PPK2 or a µCurrent with a multimeter); the
   BQ27220 has 1 mA resolution, too coarse below 1 mA.
 - Without a meter: battery-SoC drop over 24 h idle (coarse) plus the Stop2 statistics.
-- On the Flipper itself (T15a, owner 2026-11-16): the `power` app's **Idle** line, the gauge's
+- On the Flipper itself (T15a, user 2026-11-16): the `power` app's **Idle** line, the gauge's
   AverageCurrent read after the backlight has been off for 30 s, on battery. Whole mA only, but
   enough to see T14a (~1.7 mA) and the step from several mA to ~1.5 mA. `cat /dev/power` gives
   the same values in the shell.

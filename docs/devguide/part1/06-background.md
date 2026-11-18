@@ -57,7 +57,7 @@ If you really need a resident daemon now:
 - **Handle `SIGTERM`**: finish the current step and exit. `halt` and `reboot` send it.
 - **Measure** with `free -t on` and `free -v` (chapter 2) and record the number in your PR.
 
-The owner's expected everyday load is about three things in the background at once: the alarm
+The user's expected everyday load is about three things in the background at once: the alarm
 clock, timed reminders, and one more (an irrigation scheduler, a USB canary, a jiggler). If each
 of those were a resident 4 KB daemon plus a shell, RAM for apps would shrink visibly; that is why
 the planned design starts them on demand.
@@ -143,7 +143,7 @@ manual chapter [Timers and alerts](../../manual/timers.md).
   in group `timers`.
 - The device can even be **off**: before power-off the RTC alarm is wired to the charger's
   power-on input, so an alarm boots the Flipper and `timed` rings (spec F.3).
-- **Planned timer kinds** (spec F.3, owner 2026-11-17, **(planned)**, task T14c):
+- **Planned timer kinds** (spec F.3, user 2026-11-17, **(planned)**, task T14c):
   - `After: off` (and `timed --then-off`): wake from power-off, run the job, power off again, for
     a weather log or a beacon. Off again only if this boot came from the alarm and nobody touched
     the Flipper; a job that hangs is ended after `Timeout:` (default 60 s); the boot for such a
