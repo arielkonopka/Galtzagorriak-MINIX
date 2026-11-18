@@ -3280,6 +3280,9 @@ void hal_rfid_capture_stop(void)
  * are physical addresses of n 32-bit words; the caller pins the memory. */
 int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 {
+	unsigned irq = n & HAL_RFID_REFILL;	/* R9.0.6: a ring, refilled */
+
+	n &= ~HAL_RFID_REFILL;
 	if (n == 0) return -1;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
@@ -3318,13 +3321,31 @@ int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 	DMA1_Channel6->CMAR = pulse;
 	DMA1_Channel6->CNDTR = n;
 	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
-		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
+		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+		| (irq ? DMA_CCR_HTIE | DMA_CCR_TCIE : 0) | DMA_CCR_EN;
 	DMA1_Channel6->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
 		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
 	TIM2->DIER = TIM_DIER_UDE;		/* every update takes the next pair */
 	TIM2->CNT = 0;
 	TIM2->CR1 = TIM_CR1_CEN;
 	return 0;
+}
+
+/* R9.0.6: the emulation ring's half/complete interrupt (channel 6 takes
+ * its pairs on the same trigger, so channel 5's tells for both): which
+ * halves have been played since the last call (bit 0 the first), acked. */
+int hal_rfid_emu_irq(void)
+{
+	return DMA1_Channel5_IRQn;
+}
+
+unsigned hal_rfid_emu_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF5 ? 1u : 0) | (isr & DMA_ISR_TCIF5 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF5 | DMA_IFCR_CTCIF5 | DMA_IFCR_CGIF5;
+	return r;
 }
 
 void hal_rfid_emulate_stop(void)

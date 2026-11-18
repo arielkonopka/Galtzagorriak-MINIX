@@ -68,4 +68,11 @@ int lfrfid_emu_segments(
     uint32_t* pulse,
     int max);
 
+/* The same frame as a run list for RFIDIOCEMURUN (R9.0.6): runs of equal
+ * segments, 4 uint16_t each (period - 1, loaded periods, count, 0), the
+ * layout of struct rfid_emu_run.  Returns the number of runs, -1 if more
+ * than max (or no period was found).  No big arrays: FSK and PSK frames
+ * of thousands of segments fit in a few hundred runs. */
+int lfrfid_emu_runs(ProtocolId p, const uint8_t* data, size_t size, uint16_t* runs, int max);
+
 #endif

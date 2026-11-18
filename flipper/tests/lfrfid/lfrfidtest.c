@@ -570,6 +570,34 @@ int main(int argc, char** argv) {
         printf("FAIL %s: its emulation (%d segments) does not read back\n",
                protocol_dict_get_name(dict, fixed[i].p), nseg);
     }
+    /* R9.0.6: the same frames as run lists for RFIDIOCEMURUN (512 runs at
+     * most): expanded, the runs are the segments, one for one */
+    printf("emulation runs per loop (RFIDIOCEMURUN takes 512; -1: none found):");
+    for(i = 0; i < COUNT_OF(fixed); i++) {
+        static uint16_t runs[4 * 512];
+        size_t sz = protocol_dict_get_data_size(dict, fixed[i].p);
+        int nr = lfrfid_emu_runs(fixed[i].p, fixed[i].data, sz, runs, 512);
+        int ns = lfrfid_emu_segments(fixed[i].p, fixed[i].data, sz, sdur, spulse, MAXSEG);
+        int k, c, j = 0, ok = 1;
+
+        printf(" %s %d%s", protocol_dict_get_name(dict, fixed[i].p), nr,
+               i + 1 < COUNT_OF(fixed) ? "," : "\n");
+        if(ns < 0) continue; /* FSK: no loop (above) */
+        cases++;
+        for(k = 0; ok && k < nr; k++)
+            for(c = 0; ok && c < runs[4 * k + 2]; c++, j++)
+                if(j >= ns || runs[4 * k] != sdur[j] || runs[4 * k + 1] != spulse[j]) ok = 0;
+        if(nr > 0 && ok && j == ns) continue;
+        if(nr < 0 && ns > 0) {
+            /* more than 512 runs: say so, not a failure of the runs */
+            printf("\n  note: %s needs more than 512 runs (%d segments)\n",
+                   protocol_dict_get_name(dict, fixed[i].p), ns);
+            continue;
+        }
+        fails++;
+        printf("FAIL %s: its runs (%d) do not expand to its %d segments\n",
+               protocol_dict_get_name(dict, fixed[i].p), nr, ns);
+    }
     /* rfid writes EM4100 as before (R6.5): Unleashed's blocks are the same */
     {
         LFRFIDWriteRequest req;

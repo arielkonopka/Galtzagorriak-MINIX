@@ -135,20 +135,26 @@ chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125
 | Jablotron | Jablotron | diphase RF/64 | yes | yes |
 | GProxII | Guardall | biphase RF/64 | yes | yes |
 | PAC/Stanley | | direct RF/32 | yes | yes |
-| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox, IoProxXSF | HID and others | FSK | **(planned)** | **(planned)** |
-| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | **(planned)** |
+| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox | HID and others | FSK | **(planned)** | yes (run list) |
+| IoProxXSF | Kantech | FSK | **(planned)** | **(planned)** |
+| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | yes (run list) |
 
 Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
 tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
-Reading and emulating the FSK and PSK ones waits for
-more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
-already there), and emulation longer than 512 segments (their frames are 540 to 3534).
+FSK and PSK frames are 540 to 3534 segments long, more than the 512 of the plain emulation;
+`rfid emulate` plays them as a run list instead (equal segments in a row are one run: 17 to 201
+runs), refilled into a small ring while the reader reads (`ioctl(RFIDIOCEMURUN)`). They have
+been checked on the PC, not yet with a reader. IoProxXSF's encoder never repeats exactly, so it
+has no loop to play yet. Reading the FSK and PSK ones waits for their decoders on the streaming
+capture (T19b).
 
 For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
 edges go round and round into a ring in the program's memory, `read` says which half is new, and
 falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
 tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
-a quick check that nothing is lost.
+a quick check that nothing is lost. Long frames are emulated the same way in reverse: `ioctl(RFIDIOCEMURUN)` takes a list of runs
+(segments of equal length and load) and the kernel refills a small ring from it while the reader's
+own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
