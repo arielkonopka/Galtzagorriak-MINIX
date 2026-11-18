@@ -1181,6 +1181,103 @@ static void __attribute__((noinline)) window_test(int b, int l)
 	(void) poll((struct pollfd *) NULL, 0, 200);	/* the launcher reaps it */
 }
 
+/* T24b / spec K.7: settings time and about from the launcher's SETTINGS
+ * page, each run once (more runs would make the run-time cache copy
+ * settings to flash: an erase over the M2 budget).  ACK7.2: opening and
+ * leaving the groups writes 0 sectors (QEMU's WINCHESTER counter,
+ * DIOCFAKECARD 3): a minute moved goes to the RTC only, a zone moved and
+ * moved back is no change, About changes nothing.  ACK7.4: free RAM
+ * while a group is open against the launcher alone (printed).  The clock
+ * is put back afterwards. */
+static int sectors_written(void)
+{
+	int fd, n;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDONLY)) < 0) return -1;
+	n = 3;
+	if (ioctl(fd, DIOCFAKECARD, &n) != 0) n = -1;
+	close(fd);
+	return n;
+}
+
+static long free_ram(void)
+{
+	message m;
+
+	m.m1_p1 = NULL;
+	m.m1_i1 = 0;
+	m.m1_i2 = 0;
+	return (long) _syscall(MM, MEMINFO, &m);
+}
+
+static void __attribute__((noinline)) settings_test(int b, int l)
+{
+	struct stat st;
+	struct tms tm;
+	clock_t c0;
+	time_t t0, t1, t2;
+	long f0, ft;
+	int z0, s0, s1, i, tz0, conf0, ok;
+
+	tz0 = stat("/etc/TZ", &st) == 0;
+	conf0 = stat("/etc/flipper/time.conf", &st) == 0;
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	f0 = free_ram();
+	z0 = sectors_written();			/* a sync of its own costs */
+	s0 = sectors_written();
+	wtap(b, 0x04);				/* SETTINGS */
+	for (i = 0; i < 3; i++) wtap(b, 0x02);	/* Display Sound LED Time */
+	wtap(b, 0x10);				/* OK: settings time */
+	(void) poll((struct pollfd *) NULL, 0, 800);
+	ft = free_ram();
+	lgrab(l, "time");
+	ok = lpix(0, 0) && lpix(0, 8) && lpix(0, 56);
+	check(ok, "settings time: title, the first row selected, hint line");
+	for (i = 0; i < 4; i++) wtap(b, 0x02);	/* to Minute */
+	c0 = times(&tm);
+	t0 = time((time_t *) 0);
+	wtap(b, 0x08);				/* Right: next minute, seconds 0 */
+	t1 = time((time_t *) 0);
+	wtap(b, 0x02);				/* Zone */
+	wtap(b, 0x08);				/* Right: another zone */
+	lgrab(l, "time-zone");
+	wtap(b, 0x04);				/* Left: the old one again */
+	wtap(b, 0x20);				/* Back: nothing to write */
+	(void) poll((struct pollfd *) NULL, 0, 500);
+	s1 = sectors_written();
+	t2 = t0 + (time_t) ((times(&tm) - c0) / CLK_TCK);
+	(void) stime(&t2);			/* the clock back */
+	wtap(b, 0x20);				/* SETTINGS -> list */
+	printf("  settings time: Right on Minute: %ld -> %ld\n", (long) t0,
+		(long) t1);
+	check(t1 % 60 <= 3 && t1 > t0 && t1 - t0 <= 66,
+		"settings time: Right on Minute sets the clock (next minute, seconds 0)");
+	printf("  ACK7.2 settings time, no saved change: %d sectors written"
+		" (the probe's own sync: %d)\n", s1 - s0, s0 - z0);
+	check(z0 >= 0 && s1 == s0,
+		"ACK7.2: a group opened and left without a change writes 0 sectors");
+	check((stat("/etc/TZ", &st) == 0) == tz0
+		&& (stat("/etc/flipper/time.conf", &st) == 0) == conf0,
+		"ACK7.2: no /etc/TZ, no time.conf written");
+	printf("  ACK7.4 free while settings time is open: %ld B more in use"
+		" than the launcher alone\n", f0 - ft);
+	{
+		message m;
+		char id[24];
+
+		m.m1_p1 = id;
+		m.m1_i1 = (int) sizeof id;
+		m.m1_i2 = MI_BUILD;
+		id[0] = 0;
+		ok = _syscall(MM, MEMINFO, &m) == 0;
+		id[sizeof id - 1] = 0;
+		printf("  MI_BUILD: %s\n", id);
+		check(ok && id[0] >= '0' && id[0] <= '9' && strchr(id, '.') != NULL,
+			"MI_BUILD: the image's version and build id (settings about)");
+	}
+}
+
 static void launcher_test(void)
 {
 	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
@@ -1312,6 +1409,7 @@ static void launcher_test(void)
 		if (fd >= 0) close(fd);
 		unlink("/etc/flipper/display.conf");
 	}
+	settings_test(b, l);			/* T24b, spec K.7 */
 	window_test(b, l);			/* T23b, spec K.8 */
 	kill(pid, SIGKILL);
 	(void) waitpid(pid, &st, 0);

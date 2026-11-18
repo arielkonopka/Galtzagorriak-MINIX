@@ -178,13 +178,16 @@ The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, a
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
 
-**The clock keeps UTC.** Local time comes from the `TZ` variable, a POSIX rule; put it into
-`~/.profile`, for example for Central Europe:
+**The clock keeps UTC.** Local time comes from the time zone in `/etc/TZ`, a POSIX rule; choose
+it on the launcher under SETTINGS > Time (see [The launcher](launcher.md)), or write it yourself,
+for example for Central Europe:
 
-    TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ
+    # Europe/Warsaw
+    CET-1CEST,M3.5.0,M10.5.0/3
 
-Without `TZ` the time shown is UTC. `date` prints local time, `date -u` UTC. To set the clock (as
-root): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
+INIT gives it as `TZ` to everything it starts, and `/etc/profile` reads it for login shells. A
+`TZ` set in `~/.profile` still wins for that user. Without `/etc/TZ` the time shown is UTC.
+`date` prints local time, `date -u` UTC. To set the clock (as root; or on SETTINGS > Time): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
 (`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
 use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
 
@@ -192,8 +195,7 @@ In `/tmp` and `/usr/tmp` (sticky directories, mode 1777) everybody may create fi
 file's owner (or root) may delete or rename it.
 
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
-date, time zone and location (spec Phase 18b), and `/etc/TZ` for the whole system. Until then the
-clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
+date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
 but MINIX reads it as UTC: set it once with `date -u ...Z`.
 
 ## 7. Installing apps and updating the system
@@ -274,7 +276,8 @@ a hang just reboots the Flipper, like the stock firmware.
   lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
   power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
   [Power and battery](power.md).
-- The time zone is set per user with `TZ` (section 6); there is no system-wide `/etc/TZ` yet.
+- A new time zone reaches programs started after the change; open shells keep the old one until
+  the next login (section 6).
 - The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).

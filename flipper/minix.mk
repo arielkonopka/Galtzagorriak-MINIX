@@ -356,7 +356,7 @@ SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
 		uname whoami yes printenv gpio beep ver rtc
 $(foreach c,$(SMALLCMDS),$(eval CHMEM_$(c) := 4096))
-CHMEM_settings := 3072	# K.7: a group screen; stdio for its one file
+CHMEM_settings := 2560	# K.7: a group screen; peak 1.5 KB (M2 trace, T24b), 2 KB too few for the save
 CHMEM_m2test := 16384
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
@@ -736,7 +736,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.12
+BASE_VER := 4.13
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
