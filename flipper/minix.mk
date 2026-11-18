@@ -635,8 +635,10 @@ $(MB)/cmd/win/lib/nat_core.o: apps/native/nat_core.c apps/native/nat.h
 	@$(CC) $(WIN_CFLAGS) -MMD -MP -c $< -o $@
 WIN_LIB	:= $(addprefix $(MB)/cmd/win/lib/,gm.o nat_core.o tspec.o io.o tune.o)
 OBJS_remind = $(MB)/cmd/win/remind/remind.o $(WIN_LIB)
-CHMEM_remind := 3072	# K.8: stack (records 128 B, events 192 B, a timer
-			# file 512 B in libapp), no heap, MM's 1.5 KB gap
+CHMEM_remind := 2304	# K.8 (ACK8.3: 4.0 KB open with ~1.8 KB data+bss):
+			# all stack, ~1.7 KB used (nattest memuse).  No heap:
+			# MM's 1.5 KB gap is checked only by brk() and a caught
+			# signal, and remind never calls brk and catches none.
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@

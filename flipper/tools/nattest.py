@@ -99,6 +99,9 @@ def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
 
+LOGF = "/home/flipper/apps_data/remind/log"
+
+
 def kanpaia(r):
 	"""ACK8.1, ACK8.3: Kanpaia through the launcher of /etc/rc.  It read
 	/etc/apps at boot; it reads it again when an app it ran ends, so an
@@ -158,11 +161,26 @@ def kanpaia(r):
 		r.out[mark:]) is not None,
 		"Kanpaia: OK on it opens its form, with Delete")
 	if fails: print(r.out[mark:].decode(errors="replace"))
-	for k in ("back", "back", "back"):
+	# Back, Back: main (sent again); Down x2: History, OK: its page
+	# (a line as alert writes it on OK, so this does not depend on the
+	# alert checks above)
+	r.sh("echo '%d remind-1' >> %s; chown remind %s"
+	     % (int(time.time()), LOGF, LOGF), 20)
+	mark = len(r.out)
+	for k in ("back", "back", "down", "down", "ok"):
+		tap(r, k)
+	check(re.search(rb"gui< win\thist\tlist\tHistory", r.out[mark:])
+		is not None and re.search(rb"gui< item\tremind-1\tDrink a glass "
+		rb"of watera\t", r.out[mark:]) is not None,
+		"Kanpaia: History lists the reminders marked done")
+	if fails: print(r.out[mark:].decode(errors="replace"))
+	for k in ("back", "back"):
 		tap(r, k)
 	r.sh("sleep 3", 20)
-	check(abs(freebytes(r) - base) < 256,
-		"Kanpaia: Back closes it, its RAM is free again")
+	after = freebytes(r)
+	check(after >= base - 256,	# (others may have ended meanwhile)
+		"Kanpaia: Back closes it, its RAM is free again (%d -> %d)"
+		% (base, after))
 	for m in re.finditer(rb"memuse: remind .*", r.out):
 		print("  " + m.group(0).decode().strip())
 	r.output("free -t off; cp /tmp/apps.bak /etc/apps; "

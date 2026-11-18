@@ -81,9 +81,9 @@ static char *two(char *p, int v)
 static char *when(char *b, time_t w)
 {
 	static const char wd[] = "SuMoTuWeThFrSa";
+	long d = (long) (w - nat_midnight(now, 0));	/* (localtime too) */
 	struct tm *tm = localtime(&w);
 	char *p = b;
-	long d = (long) (w - nat_midnight(now, 0));
 
 	if (d >= 7 * 86400L || d < 0) {
 		p = two(p, tm->tm_mon + 1);
@@ -221,32 +221,51 @@ static void w_sorted(char which, int first)
 	lfirst = (short) first;
 }
 
-/* History: the log newest first, a page at a time */
+/* History: the log newest first, a page at a time.  The page's times
+ * and ids first, then the texts: no timer file is read from inside the
+ * log reader (its 256 B and timer_read()'s 552 B never on the stack
+ * together). */
+struct page {
+	int n;
+	time_t at[PAGE];
+	unsigned char num[PAGE];
+};
+
 static void hist_cb(time_t at, const char *id, void *arg)
 {
-	char b[16];
-	int n = idnum(id);
+	struct page *pg = arg;
 
-	(void) arg;
-	when(b, at);
-	if (n != 0 && load(n) == 0) gm_item(id, t.text, b);
-	else gm_item(id, id, b);
+	if (pg->n < PAGE) {
+		pg->at[pg->n] = at;
+		pg->num[pg->n++] = (unsigned char) idnum(id);
+	}
 }
 
 static void w_hist(int first)
 {
-	int fd, total;
+	struct page pg;
+	char id[APP_ID_MAX + 1], b[16];
+	int fd, total, i;
 
 	now = time(NULL);
+	pg.n = 0;
 	fd = open(APP_DATA "/" APP "/log", O_RDONLY);
 	total = fd < 0 ? 0 : nat_log_back(fd, 0, HMAX, NULL, NULL);
 	if (total < 0) total = 0;
 	if (first < 0 || first >= total) first = 0;
+	if (total > 0) (void) nat_log_back(fd, first, PAGE, hist_cb, &pg);
+	if (fd >= 0) close(fd);
 	gm_win("hist", "list", "History", total > PAGE ? total : 0,
 		total > PAGE ? first : 0);
 	if (total == 0) gm_line("Nothing done yet.");
-	else (void) nat_log_back(fd, first, PAGE, hist_cb, NULL);
-	if (fd >= 0) close(fd);
+	for (i = 0; i < pg.n; i++) {
+		when(b, pg.at[i]);
+		if (pg.num[i] == 0) gm_item("x", "(another app)", b);
+		else if (load(pg.num[i]) == 0)
+			gm_item(idof(id, pg.num[i]), t.text, b);
+		else
+			gm_item(idof(id, pg.num[i]), "(deleted)", b);
+	}
 	gm_show();
 	cur = 'h';
 	lfirst = (short) first;
