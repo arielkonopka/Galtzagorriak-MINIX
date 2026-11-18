@@ -153,4 +153,4 @@ then
 fi
 # The sticky bit on /tmp and /usr/tmp (R3.7): chmod dropped it before.
 chmod 1777 /tmp
-test -d /usr/tmp && chmod 1777 /usr/tmp
+if test -d /usr/tmp; then chmod 1777 /usr/tmp; fi

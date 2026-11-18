@@ -88,26 +88,79 @@ static void die(const char *msg, const char *arg)
 	exit(1);
 }
 
-/* Run a program in a directory and wait for it; returns its exit status. */
+/* Run a program in a directory and wait for it.  Returns its exit status;
+ * -1 when it could not start (errno: why) or was killed (errno 0).
+ *
+ * vfork: the child runs in this frame and we wait until its exec or
+ * _exit, so what it stores in err we see here (as timed does, #253).  An
+ * exec that fails must not pass for a program that ran: under load MM
+ * has no memory hole for it (EAGAIN), and the child's _exit(127) alone
+ * said nothing - pkg install printed "installed" with no postinst run
+ * (#271).  EAGAIN passes once other programs end, so it is tried again,
+ * RETRIES times a second apart (sleep: no busy wait). */
+#define RETRIES	10
 static int run(const char *dir, char *const argv[])
 {
+	volatile int err;
 	pid_t pid;
-	int st;
+	int st, tries = 0;
 
-	fflush(stdout);
-	if ((pid = vfork()) < 0) die("cannot fork:", strerror(errno));
-	if (pid == 0) {			/* vfork: only chdir, open, dup, exec */
-		if (dir != NULL && chdir(dir) < 0) _exit(127);
-		if (strcmp(argv[0], "/bin/tar") == 0) {	/* "Made directory" */
-			close(1);
-			open("/dev/null", O_WRONLY);
-			dup2(1, 2);	/* (tar's status still reports errors) */
+	for (;;) {
+		fflush(stdout);
+		err = 0;
+		if ((pid = vfork()) < 0) {
+			if (errno == EAGAIN && tries++ < RETRIES) {
+				sleep(1);
+				continue;
+			}
+			return -1;
 		}
-		execv(argv[0], argv);
-		_exit(127);
+		if (pid == 0) {		/* vfork: only chdir, open, dup, exec */
+			if (dir != NULL && chdir(dir) < 0) {
+				err = errno != 0 ? errno : ENOENT;
+				_exit(127);
+			}
+			if (strcmp(argv[0], "/bin/tar") == 0) {
+				close(1);	/* "Made directory" */
+				open("/dev/null", O_WRONLY);
+				dup2(1, 2);	/* (tar's status still
+						 * reports errors) */
+			}
+			execv(argv[0], argv);
+			err = errno != 0 ? errno : ENOEXEC;
+			_exit(127);
+		}
+		while (waitpid(pid, &st, 0) < 0)
+			if (errno != EINTR) return -1;
+		if (err == 0) break;
+		if (err != EAGAIN || tries++ >= RETRIES) {
+			errno = err;
+			return -1;
+		}
+		sleep(1);
 	}
-	while (waitpid(pid, &st, 0) < 0) if (errno != EINTR) return -1;
-	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+	if (WIFEXITED(st)) return WEXITSTATUS(st);
+	errno = 0;
+	return -1;
+}
+
+/* Run a postinst or prerm with sh.  Returns 0 if it ran and ended with
+ * status 0; else says why on stderr and returns -1 (start failed) or 1. */
+static int script(const char *name, const char *what, char *path)
+{
+	char *argv[3];
+	int r;
+
+	argv[0] = "/bin/sh"; argv[1] = path; argv[2] = NULL;
+	if ((r = run(NULL, argv)) == 0) return 0;
+	if (r < 0 && errno != 0) {
+		fprintf(stderr, "pkg: %s: %s cannot start: %s\n", name, what,
+							strerror(errno));
+		return -1;
+	}
+	if (r < 0) fprintf(stderr, "pkg: %s: %s was killed\n", name, what);
+	else fprintf(stderr, "pkg: %s: %s failed: exit %d\n", name, what, r);
+	return 1;
 }
 
 static int rm_r(const char *path)
@@ -577,7 +630,7 @@ static int install(const char *file)
 	char abs[PATH_MAX], path[PATH_MAX], rel[PATH_MAX], buf[PATH_MAX];
 	char *argv[4];
 	char *dep, *p;
-	int upgrade;
+	int upgrade, r;
 
 	if (!exists(file)) die("no such file:", file);
 	if (file[0] == '/') fmt(abs, sizeof abs, "%s", file);
@@ -595,7 +648,13 @@ static int install(const char *file)
 			return 1;
 	}
 	argv[0] = "/bin/tar"; argv[1] = "xf"; argv[2] = abs; argv[3] = NULL;
-	if (run(tmp, argv) != 0) die("cannot unpack", file);
+	if ((r = run(tmp, argv)) != 0) {
+		if (r < 0 && errno != 0)	/* tar did not start (#271) */
+			fmt(buf, sizeof buf, "%s: tar cannot start: %s", file,
+							strerror(errno));
+		else fmt(buf, sizeof buf, "%s", file);
+		die("cannot unpack", buf);
+	}
 	fmt(path, sizeof path, "%s/CONTROL/control", tmp);
 	if (read_control(path) < 0) {
 		fprintf(stderr, "pkg: no valid CONTROL/control in %s\n", file);
@@ -660,18 +719,23 @@ static int install(const char *file)
 	dbpath(buf, ctl_name, "prerm"); unlink(buf);
 	fmt(path, sizeof path, "%s/CONTROL/postinst", tmp);
 	dbpath(buf, ctl_name, "postinst");
-	if (exists(path)) copy(path, buf);
+	if (exists(path) && copy(path, buf) < 0) die("cannot write", buf);
 	fmt(path, sizeof path, "%s/CONTROL/prerm", tmp);
 	dbpath(buf, ctl_name, "prerm");
-	if (exists(path)) copy(path, buf);
+	if (exists(path) && copy(path, buf) < 0) die("cannot write", buf);
 	cleanup();
 
+	/* A postinst that did not run or failed is not "installed": exit 1
+	 * with the reason (#271).  The files stay; pkg install again runs
+	 * it again (an upgrade to the same version). */
 	dbpath(buf, ctl_name, "postinst");
-	if (exists(buf)) {
-		argv[0] = "/bin/sh"; argv[1] = buf; argv[2] = NULL;
-		run(NULL, argv);
-	}
+	r = exists(buf) ? script(ctl_name, "postinst", buf) : 0;
 	sync();
+	if (r != 0) {
+		fprintf(stderr, "pkg: %s %s is not set up: pkg install %s "
+				"again\n", ctl_name, ctl_version, file);
+		return 1;
+	}
 	printf("%s %s installed\n", ctl_name, ctl_version);
 	return 0;
 }
@@ -679,7 +743,6 @@ static int install(const char *file)
 static int remove_pkg(const char *name)
 {
 	char buf[PATH_MAX], line[PATH_MAX], other[64];
-	char *argv[3];
 	DIR *d;
 	struct dirent *e;
 	FILE *list;
@@ -706,11 +769,11 @@ static int remove_pkg(const char *name)
 		closedir(d);
 	}
 
+	/* A prerm that cannot start: nothing is removed yet, stop here
+	 * (#271).  One that ran and failed is said (script()); the package
+	 * goes all the same. */
 	dbpath(buf, name, "prerm");
-	if (exists(buf)) {
-		argv[0] = "/bin/sh"; argv[1] = buf; argv[2] = NULL;
-		run(NULL, argv);
-	}
+	if (exists(buf) && script(name, "prerm", buf) < 0) return 1;
 	dbpath(buf, name, "list");
 	/* Only the paths the list recorded at install time, whole (R3.6). */
 	if ((list = fopen(buf, "r")) != NULL) {
