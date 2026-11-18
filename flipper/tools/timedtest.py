@@ -16,7 +16,8 @@ the timed package and checks:
   AC7b.1.4 a once timer two hours in the past: Missed: skip does not
            fire, fire-once does (timed -n, the test time override)
   F.2      Action: run starts the program as the file's owner with
-           --timer ID; a file that is not mode 600 is ignored
+           --timer ID, or says it cannot start it (#253); a file that is
+           not mode 600 is ignored
   F.2      a timer added by the shell is listed by the format timed reads
 
 QEMU's clock is the PC's (semihosting), in UTC: the times below come from
@@ -54,6 +55,15 @@ def timer(r, tid, lines, mode="600"):
 	return r.sh("chmod %s /var/timers/%s" % (mode, tid), 20) == 0
 
 
+def stop(r, out, tid):
+	"""End the alert timed -v started for tid ("tid: fired, pid N"): with
+	no key it would hold its RAM for its ring time (an alarm 10 min), and
+	the next step's alert or program might find no memory hole."""
+	m = re.search(rb"timed: %s: fired, pid (\d+)" % tid.encode(),
+		out or b"")
+	if m: r.sh("kill %s" % m.group(1).decode(), 20)
+
+
 def hm(t):
 	return time.strftime("%H:%M", time.gmtime(t))
 
@@ -70,6 +80,36 @@ def main():
 		check(out is not None and re.search(rb"drwxrwx--[^-x ] .*root +timers",
 			out) is not None, "/var/timers is root:timers 1770")
 		if fails: print(out)
+
+		# Action: run, as the owner (bin); a file of mode 644 ignored.
+		# First, before any alert: an alert (the steps below fire three)
+		# stays in RAM for its ring time with no key to end it (an alarm
+		# 10 min, a reminder 1), and with them up /bin/id finds no
+		# memory hole (exec: EAGAIN), which timed only said as "fired"
+		# (#253).  Now it says "cannot start it", as for a program
+		# that is not there (norun), and the steps below end their
+		# alerts once checked (stop()).
+		now = int(time.time())
+		timer(r, "runme", ["Kind: once", "At: %d" % now, "Action: run",
+			"Program: /bin/id"])
+		r.sh("chown bin /var/timers/runme", 20)
+		timer(r, "norun", ["Kind: once", "At: %d" % now, "Action: run",
+			"Program: /bin/nosuch"])
+		r.sh("chown bin /var/timers/norun", 20)
+		timer(r, "loose", ["Kind: once", "At: %d" % now], "644")
+		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
+		out = r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
+		check(out is not None and re.search(rb"uid=2\(bin\)", out)
+			is not None, "Action: run: the program runs as the owner")
+		check(out is not None and b"runme: fired, pid" in out
+			and b"norun: cannot start it: " in out
+			and b"norun: fired" not in out,
+			"Action: run: a program that cannot start is said so")
+		check(out is not None and b"loose: not a plain file of mode 600"
+			in out, "a timer file not of mode 600 is ignored")
+		if out is not None and fails: print(out.decode(errors="replace"))
+		# R7b.3 below is timed's first run (no .last) again.
+		r.sh("rm -f /var/timers/loose /var/timers/.last", 20)
 
 		# R7b.3: SIGRTC to INIT -> timed -> alert.
 		now = int(time.time())
@@ -106,6 +146,7 @@ def main():
 			"AC7b.1.3: a reminder is held back in do-not-disturb")
 		check(re.search(rb"alert: \d\d:\d\d alarm: Alm: loud", r.out)
 			is not None, "AC7b.1.3: an alarm rings in do-not-disturb")
+		stop(r, out, "alm")
 		r.sh("cp /tmp/nc /etc/notify.conf", 20)
 
 		# AC7b.1.4: two hours late (the clock moved, or it was off).
@@ -122,24 +163,11 @@ def main():
 		check(re.search(rb"alert: \d\d:\d\d reminder: M-once: late",
 			r.out[mark:]) is not None,
 			"AC7b.1.4: Missed: fire-once fires once")
-
-		# Action: run, as the owner (bin); a file of mode 644 ignored.
-		now = int(time.time())
-		timer(r, "runme", ["Kind: once", "At: %d" % now, "Action: run",
-			"Program: /bin/id"])
-		r.sh("chown bin /var/timers/runme", 20)
-		timer(r, "loose", ["Kind: once", "At: %d" % now], "644")
-		r.sh("echo %d > /var/timers/.last" % (now - 10), 20)
-		out = r.output("/usr/lib/timed -v -n %d; sleep 2" % (now + 1), 30)
-		check(out is not None and re.search(rb"uid=2\(bin\)", out)
-			is not None, "Action: run: the program runs as the owner")
-		check(out is not None and b"loose: not a plain file of mode 600"
-			in out, "a timer file not of mode 600 is ignored")
+		stop(r, out, "once")
 
 		# The next time: an interval timer every minute, all day.
 		timer(r, "tick", ["Kind: interval", "Start: 00:00", "End: 24:00",
 			"Every: 1", "Category: info", "Title: Tick", "Text: t"])
-		r.sh("rm -f /var/timers/loose", 20)
 		now = int(time.time())
 		out = r.output("/usr/lib/timed -v -n %d" % now, 30)
 		want = (now // 60 + 1) * 60
