@@ -404,6 +404,7 @@ table is about FAIL and BLOCKED rows and about the script not starting.
 | `ibutton-Dallas_dev_ibutton-u2m` FAIL "no ROM" | The wires: pin 17 to 17 and 18 to 18 (count from the printed numbers), pins pushed fully in. 5V on GPIO off on Unleashed. |
 | `ir-*` FAIL "received nothing" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder or encoder bug: report it. |
 | `subghz-level_*` BLOCKED | Unleashed may not transmit at that frequency with its region settings. Normal for 315 or 868 MHz in some regions. |
+| Every Sub-GHz row BLOCKED with `Device 0 failed to start` (`subghz chat` works) | A bug in Unleashed `unlshd-095`'s command line, not the radio: the internal CC1101's driver has no `begin()` (`cc1101_int_interconnect.c`), `subghz_devices_begin()` then returns false, and the new start check in `subghz_cli.c` takes that as a failure, so `subghz tx`, `rx` and `tx_from_file` on device 0 always stop there. Install another Unleashed release on the reference Flipper (the script was written against `53818b1`). The region is not the cause: Unleashed reports `hardware.region.provisioned : 00` even with a valid `/int/.region_data`. |
 | `subghz-level_*` FAIL with a small rise | Another transmitter nearby during the quiet reading; run that row again. |
 | A row hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun that row with `--log` and report the log. |
 

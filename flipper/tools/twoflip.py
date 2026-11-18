@@ -703,6 +703,16 @@ MX_SG = r"rssi=(-?\d+)(?: peak=(-?\d+))?"
 UL_TX_REFUSED = rb"restricted|only be used for RX|must be in|[Ee]rror|failed"
 
 
+def ul_refused(out):
+	"""Why Unleashed did not transmit, with the usual cause named."""
+	why = last(out)
+	if "failed to start" in why:
+		why += " (Unleashed unlshd-095 CLI bug: the internal CC1101 has " \
+			"no begin(), so every subghz tx/rx on device 0 fails; use " \
+			"another Unleashed release)"
+	return why
+
+
 def sg_level(mx):
 	rc, out = mx.run("cat /dev/subghz", 5)
 	m = re.search(MX_SG, out)
@@ -728,7 +738,7 @@ def subghz_rssi_u2m(ul, mx, opt, freq):
 		out = ul.stop()
 		mx.run("echo 0 > /dev/subghz")
 		return "BLOCKED", "Unleashed does not transmit at %d Hz here: %s" \
-			% (freq, last(out))
+			% (freq, ul_refused(out))
 	loud = [x for x in (sg_level(mx) for _ in range(6)) if x is not None]
 	if ul.wait(UL_PROMPT, 15) is None:
 		ul.stop()
@@ -793,7 +803,7 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
 	if re.search(UL_TX_REFUSED.decode(), uo):
 		mx.stop()
-		return "BLOCKED", "Unleashed: " + last(uo)
+		return "BLOCKED", "Unleashed: " + ul_refused(uo)
 	mx.wait(re.escape(f["proto"]).encode(), 3)
 	time.sleep(0.5)
 	out = mx.stop()
