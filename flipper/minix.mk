@@ -384,6 +384,7 @@ CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 			# fit, fsck shrinks its zone window) + 24 KB (stack:
@@ -764,7 +765,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake
+	   swaptime swaptime64 regtest hidfake alarmrace
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
