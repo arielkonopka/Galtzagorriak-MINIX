@@ -617,11 +617,10 @@ struct buf *bp;			/* block 1 of its device goes to the disk */
 {
 /* Block 1 written through the cache (fsck writing the device) carries the
  * flag bits: the in-core "CLEAN on the disk" follows them (spec N.1). */
-  struct super_block *sp, *dsp;
+  struct super_block *sp;
 
   if ((sp = rw_super(bp->b_dev)) == NIL_SUPER) return;
-  dsp = (struct super_block *) bp->b_data;
-  if (conv2(sp->s_native, (int) dsp->s_flags) & SF_CLEAN)
+  if (conv2(sp->s_native, (int) SB_FLAGS(sp, bp)) & SF_CLEAN)
 	sp->s_flags |= SF_DCLEAN;
   else
 	sp->s_flags &= ~SF_DCLEAN;

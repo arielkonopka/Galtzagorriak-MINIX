@@ -207,11 +207,14 @@ register struct super_block *sp; /* pointer to a superblock */
   dev_t dev;
   int magic;
   int version, native;
+  u16_t *w;
+  u32_t *l;
 
   dev = sp->s_dev;		/* save device (will be overwritten by copy) */
   bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
   memcpy( (char *) sp, bp->b_data, (size_t) SUPER_SIZE);
-  put_block(bp, ZUPER_BLOCK);
+  w = (u16_t *) bp->b_data;
+  l = (u32_t *) bp->b_data;
   sp->s_dev = NO_DEV;		/* restore later */
   magic = sp->s_magic;		/* determines file system type */
 
@@ -222,10 +225,42 @@ register struct super_block *sp; /* pointer to a superblock */
   } else if (magic == SUPER_V2 || magic == conv2(BYTE_SWAP, SUPER_V2)) {
 	version = V2;
 	native  = (magic == SUPER_V2);
+  } else if (w[12] == SUPER_V3) {
+	/* Spec O.4: MINIX V3 as util-linux mkfs.minix -3 writes it (native
+	 * byte order only).  Its own layout: 32-bit inode count, 16-bit
+	 * fields moved up by 2, the magic at 24, the block size at 28. */
+	if (w[14] != BLOCK_SIZE || w[6] != 0) {
+		printf("FS: V3 file system with %u-byte blocks, zone shift %u: "
+			"only 1024 and 0 work, not mounted\n",
+			(unsigned) w[14], (unsigned) w[6]);
+		put_block(bp, ZUPER_BLOCK);
+		return(EINVAL);
+	}
+	if (l[0] > (u32_t) MAX_INODE_NR) {
+		printf("FS: V3 file system with %lu inodes, at most %lu, "
+			"not mounted\n", (unsigned long) l[0],
+			(unsigned long) MAX_INODE_NR);
+		put_block(bp, ZUPER_BLOCK);
+		return(EINVAL);
+	}
+	sp->s_ninodes = (ino_t) l[0];
+	sp->s_nzones = 0;
+	sp->s_imap_blocks = w[3];
+	sp->s_zmap_blocks = w[4];
+	sp->s_firstdatazone = w[5];
+	sp->s_log_zone_size = 0;
+	sp->s_max_size = (off_t) l[4];
+	sp->s_zones = (zone_t) l[5];
+	sp->s_flags = (w[7] & SF_CLEAN) ? SF_DCLEAN : 0;
+	version = V3;
+	native = 1;
   } else {
+	put_block(bp, ZUPER_BLOCK);
 	return(EINVAL);
   }
+  put_block(bp, ZUPER_BLOCK);
 
+  if (version != V3) {
   /* If the super block has the wrong byte order, swap the fields; the magic
    * number doesn't need conversion. */
   sp->s_ninodes =       conv2(native, (int) sp->s_ninodes);
@@ -238,6 +273,7 @@ register struct super_block *sp; /* pointer to a superblock */
   sp->s_zones =         conv4(native, sp->s_zones);
   /* N.1: in core only whether CLEAN is on the disk; never the disk bits. */
   sp->s_flags = (conv2(native, (int) sp->s_flags) & SF_CLEAN) ? SF_DCLEAN : 0;
+  }
 
   /* In V1, the device size was kept in a short, s_nzones, which limited
    * devices to 32K zones.  For V2, it was decided to keep the size as a
@@ -256,10 +292,12 @@ register struct super_block *sp; /* pointer to a superblock */
 	sp->s_ndzones = V1_NR_DZONES;
 	sp->s_nindirs = V1_INDIRECTS;
   } else {
-	sp->s_inodes_per_block = V2_INODES_PER_BLOCK;
+	sp->s_inodes_per_block = V2_INODES_PER_BLOCK;	/* V3: same inode */
 	sp->s_ndzones = V2_NR_DZONES;
 	sp->s_nindirs = V2_INDIRECTS;
   }
+  if (version == V3 && sp->s_max_size > V2_MAX_FILE)
+	sp->s_max_size = V2_MAX_FILE;	/* no triple indirect zone yet */
 
   sp->s_isearch = 0;		/* inode searches initially start at 0 */
   sp->s_zsearch = 0;		/* zone searches initially start at 0 */
@@ -308,7 +346,6 @@ int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
  * other blocks later); CLEAN = 0 or CHECK = 1 stay dirty, the safe way.
  */
   register struct buf *bp;
-  struct super_block *dsp;
   unsigned old, new;
   int r;
 
@@ -317,10 +354,9 @@ int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
 	put_block(bp, ZUPER_BLOCK);
 	return(EIO);
   }
-  dsp = (struct super_block *) bp->b_data;
-  old = (unsigned) conv2(sp->s_native, (int) dsp->s_flags) & 0xFFFF;
+  old = (unsigned) conv2(sp->s_native, (int) SB_FLAGS(sp, bp)) & 0xFFFF;
   new = ((old | set) & ~clr) & SF_DISK;
-  dsp->s_flags = conv2(sp->s_native, (int) new);
+  SB_FLAGS(sp, bp) = conv2(sp->s_native, (int) new);
   r = dev_io(DEV_WRITE, FALSE, sp->s_dev, (off_t) SUPER_BLOCK * BLOCK_SIZE,
 					BLOCK_SIZE, FS_PROC_NR, bp->b_data);
   if (r == BLOCK_SIZE) {
@@ -330,7 +366,7 @@ int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
 	r = OK;
   } else {
 	if ((new & SF_CLEAN) && !(old & SF_CLEAN))
-		dsp->s_flags = conv2(sp->s_native, (int) old);
+		SB_FLAGS(sp, bp) = conv2(sp->s_native, (int) old);
 	else
 		bp->b_dirt = DIRTY;
 	if (r >= 0) r = EIO;

@@ -47,6 +47,16 @@ EXTERN struct super_block {
 
 #define NIL_SUPER (struct super_block *) 0
 
+/* Spec O.4: directory entry size, name offset and name length per file
+ * system, and where the N.1 flag bits live in block 1 (V1/V2 s_pad at 18;
+ * V3 at 14, the pad MINIX 3.3 uses for its s_flags; Linux ignores both). */
+#define IS_V3(sp)	((sp)->s_version == V3)
+#define DIR_ESIZE(sp)	(IS_V3(sp) ? V3_DIRENT_SIZE : V2_DIRENT_SIZE)
+#define DIR_NOFF(sp)	(IS_V3(sp) ? 4 : 2)
+#define DIR_NLEN(sp)	(IS_V3(sp) ? V3_DIRSIZ : V2_DIRSIZ)
+#define SB_FLAGS(sp, bp) \
+	(*(unsigned short *) &(bp)->b_data[IS_V3(sp) ? 14 : 18])
+
 /* s_flags (spec N.1).  On disk only bits 0-1, the values of Linux's minix
  * driver (MINIX_VALID_FS, MINIX_ERROR_FS) and MINIX 3's MFSFLAG_CLEAN.  The
  * FS keeps no copy of them: it changes them by read-modify-write of block 1
