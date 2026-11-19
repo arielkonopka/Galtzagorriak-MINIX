@@ -8,6 +8,12 @@ Usage:
 					[--report F.md]
 	python3 -I nightpower.py --selftest
 
+The room temperature (the 32 kHz crystal drifts with it) goes into the
+report next to the clock drift: `--ambient 21.5` at start and at end
+(degrees Celsius, from any thermometer), or `--ambient-cmd dht` to run a
+command on the MINIX console that prints `temp=23.4` (the AM2301 `dht`
+command, issue #358).  Neither is needed for the verdict.
+
 "start" reads the MINIX Flipper's version and reset cause, its clock
 against this computer's, /dev/power (charge, voltage, gauge currents, and
 since R6.8 the seconds up, in Stop2 and the wake-ups) and, on a latency
@@ -117,6 +123,23 @@ def parse_lat_stop2(text):
 		wother=int(m.group(5)))
 
 
+def parse_ambient(text):
+	"""A temperature in degrees Celsius from a command's output: the
+	`temp=23.4` of `dht`, or a bare number on a line.  None if there is
+	none."""
+	m = re.search(r"temp=(-?\d+(?:\.\d+)?)", text)
+	if not m:
+		m = re.search(r"^\s*(-?\d+(?:[.,]\d+)?)\s*(?:C|\xb0C)?\s*$", text,
+			re.M)
+	if not m:
+		return None
+	try:
+		v = float(m.group(1).replace(",", "."))
+	except ValueError:
+		return None
+	return v if -60.0 <= v <= 100.0 else None
+
+
 def clock_offset(mx, tries=40):
 	"""The device clock minus this computer's, in seconds, to about
 	+-0.1 s: `date +%s` is read until its second changes, and the change
@@ -140,8 +163,16 @@ def clock_offset(mx, tries=40):
 	return prev[0] + 0.5 - (prev[1] + prev[2]) / 2
 
 
-def snapshot(mx):
+def snapshot(mx, ambient=None, ambient_cmd=None):
 	snap = {"host_utc": time.time()}
+	if ambient_cmd:
+		rc, out = mx.run(ambient_cmd, 20)
+		snap["ambient"] = parse_ambient(out) if rc == 0 else None
+		if snap["ambient"] is None:
+			print("nightpower: `%s` gave no temperature (rc %s)"
+				% (ambient_cmd, rc))
+	if snap.get("ambient") is None and ambient is not None:
+		snap["ambient"] = ambient
 	rc, out = mx.run("ver", 10)
 	snap.update(parse_ver(out))
 	rc, out = mx.run("cat /dev/power", 10)
@@ -233,6 +264,21 @@ def judge(a, b):
 		L.append("  this computer's clock must be NTP-synchronised "
 			"for this to mean anything")
 		ok &= good
+	amb = (a.get("ambient"), b.get("ambient"))
+	if amb[0] is not None and amb[1] is not None:
+		L.append("Ambient: %.1f -> %.1f C (mean %.1f C, change %+.1f C)"
+			% (amb[0], amb[1], (amb[0] + amb[1]) / 2, amb[1] - amb[0]))
+		if drift is not None:
+			L.append("  drift %+.1f ppm at about %.1f C: the crystal "
+				"drifts with temperature (parabola of about "
+				"-0.034 ppm per degree squared from 25 C), so "
+				"compare runs at similar temperatures"
+				% (drift / (b["host_utc"] - a["host_utc"]) * 1e6,
+				(amb[0] + amb[1]) / 2))
+	elif amb[0] is not None or amb[1] is not None:
+		L.append("Ambient: %.1f C at the %s only"
+			% (amb[0] if amb[0] is not None else amb[1],
+			"start" if amb[0] is not None else "end"))
 
 	# 3. Stop2
 	pct = None
@@ -312,7 +358,7 @@ def judge(a, b):
 		"NOT PASSED: see the lines above"))
 	row = "| %s | %s | %s | overnight %.1f h on battery (nightpower.py): " \
 		"Stop2 %s, %d wake-ups other, clock %s, SoC %s -> %s %%, " \
-		"no reset: %s |" % (
+		"no reset: %s%s |" % (
 		time.strftime("%Y-%m-%d", time.gmtime(a["host_utc"])),
 		b.get("version", "?"),
 		"%.2f mA (SoC)" % ma if ma else "< gauge resolution",
@@ -320,7 +366,8 @@ def judge(a, b):
 		wo if src else -1,
 		"%+.1f s" % drift if drift is not None else "?",
 		pa.get("soc", "?"), pb.get("soc", "?"),
-		"yes" if reset_ok else "NO")
+		"yes" if reset_ok else "NO",
+		", ambient %.1f -> %.1f C" % amb if None not in amb else "")
 	return L, ok, row
 
 
@@ -335,7 +382,7 @@ def open_minix(port, log):
 
 def cmd_start(args):
 	mx = open_minix(args.port, args.log)
-	s = snapshot(mx)
+	s = snapshot(mx, args.ambient, args.ambient_cmd)
 	mx.close()
 	if s.get("power") is None:
 		sys.exit("nightpower: no /dev/power line (QEMU has no gauge)")
@@ -348,6 +395,8 @@ def cmd_start(args):
 		p.get("mv"), p.get("up", "?"), p.get("stop2", "?")))
 	print("  clock offset %s s" % ("%+.2f" % s["clock_offset"]
 		if s["clock_offset"] is not None else "?"))
+	if s.get("ambient") is not None:
+		print("  ambient %.1f C" % s["ambient"])
 	if s.get("lat"):
 		print("  lat: Stop2 %(stop2)d of %(up)d s" % s["lat"])
 	print("\nNow unplug the USB cable at once and leave the Flipper alone "
@@ -365,7 +414,7 @@ def cmd_end(args):
 			"judging since the last boot; the clock and the charge "
 			"cannot be judged\n" % args.state)
 	mx = open_minix(args.port, args.log)
-	b = snapshot(mx)
+	b = snapshot(mx, args.ambient, args.ambient_cmd)
 	mx.close()
 	b["usb_since"] = usb_since(args.port)
 	if a is None:
@@ -460,6 +509,22 @@ def selftest():
 	assert unwrap_wakes(0, 200000, 190000) == (0, 200000, False)	# u32
 	# #284 kernels: both readings past 65535, a plain difference
 	assert unwrap_wakes(2, 130000 - 100000, 29000) == (2, 30000, False)
+	assert parse_ambient("temp=23.4 rh=45.1\n") == 23.4
+	assert parse_ambient("temp=-5.7 rh=100.0") == -5.7
+	assert parse_ambient("\n 21,5\n") == 21.5
+	assert parse_ambient("dht: no sensor\n") is None
+	assert parse_ambient("temp=400.0") is None
+	a = dict(host_utc=0.0, reset="software", clock_offset=0.0, ambient=21.0,
+		power=dict(soc=80, up=10, stop2=0))
+	b = dict(host_utc=26 * 3600.0, reset="software", clock_offset=-2.1,
+		ambient=23.0, power=dict(soc=76, up=10 + 26 * 3600,
+		stop2=26 * 3600 - 300, wother=100000))
+	lines, ok, row = judge(a, b)
+	text = "\n".join(lines)
+	assert "Ambient: 21.0 -> 23.0 C" in text and "ambient 21.0 -> 23.0 C" in row
+	assert "ppm at about 22.0 C" in text
+	a2 = dict(a); a2["ambient"] = None
+	assert "Ambient: 23.0 C at the end only" in "\n".join(judge(a2, b)[0])
 	for i, (a, b, want) in enumerate(SELF):
 		lines, ok, row = judge(a or since_boot(b), b)
 		if ok != want:
@@ -481,6 +546,10 @@ def main():
 		help="where start keeps its readings (default nightpower.json)")
 	ap.add_argument("--report", default=None,
 		help="end: also write the report to this Markdown file")
+	ap.add_argument("--ambient", type=float, default=None,
+		help="room temperature in C now (start and end each)")
+	ap.add_argument("--ambient-cmd", default=None,
+		help="a MINIX command that prints temp=NN.N (the dht command)")
 	ap.add_argument("--log", default=None, help="log the console here")
 	ap.add_argument("--selftest", action="store_true",
 		help="check this script on canned text, no hardware")
