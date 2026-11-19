@@ -170,6 +170,9 @@ and `/etc/launcher.conf` is written when you go back to the app list.
   the page name at the top, three rows, the selected one in a black rounded box.
 - **Messages** ("not found", "unknown user", a notification) show in a small box over the list
   for 2 seconds or until the next key.
+- **Apps follow the style.** The launcher starts each app with `FURI_STYLE=stock` or
+  `FURI_STYLE=pine` in its environment, matching `Style:`, so apps built on libfuri draw their
+  menus and dialogs in the same look.
 - **Icons** are 10×10. The built-in `rfid`, `nfc`, `subghz`, `ir`, `ibutton`, `usb`, `file`,
   `settings`, `music` and `console` have the stock firmware's pictures; the other built-in icons
   and your own 8×6 ones are drawn in the middle of the cell. An app can bring a 10×10 icon of its
