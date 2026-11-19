@@ -444,6 +444,17 @@ fp_st_begin:
 fp_st_end:
 	b	fp_zero
 
+/* fp_save(rp): fp_flush for C, with interrupts off (unshadow: the image
+ * of rp, mpu_proc, is about to move; its FP registers must be saved into
+ * it first, not into whatever lies at its addresses later). */
+	.global	fp_save
+	.thumb_func
+fp_save:
+	push	{r3-r11, lr}
+	mov	r1, r0
+	bl	fp_flush
+	pop	{r3-r11, pc}
+
 /* Its FP context is not to be saved: cancel a pending lazy save
  * (its frame may be gone), then clear the FPU. */
 	.global	fp_drop
