@@ -1526,6 +1526,66 @@ static int raw_read(char *path, int secs, int carrier)
 	return r || over != 0;
 }
 
+/* rfid read, gapless (R9.0.5): when the short captures found nothing, the
+ * stream's edges go straight into the decoders for up to secs seconds, so
+ * frames longer than one capture are read too (RF/32 and RF/16, FDX-B,
+ * Gallagher, the FSK protocols: twoflip U->M saw "511 changes", not
+ * decoded).  Both polarities, as lf_capture: after an overrun the parity
+ * of the edges is lost.  Durations go into d[] (no stack).  The protocol
+ * (data in data[]), or -1. */
+static int stream_read(int fd, int secs, uint8_t *data)
+{
+	struct rfid_stream st;
+	unsigned long *ring = malloc(RS_WORDS * sizeof(unsigned long));
+	unsigned long prev = 0;
+	time_t end;
+	int h, i, n, first = 1, lv = 0, pol, p = -1;
+
+	if (ring == NULL) return -1;
+	st.ring = ring;
+	st.words = RS_WORDS;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		free(ring);
+		return -1;
+	}
+	lv = !st.level;			/* after the first edge */
+	rd_on = 0;
+	(void) lf_capture(0, data, &h);	/* both readers started */
+	end = time((time_t *) 0) + secs;
+	while (p < 0 && time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 500) != 1) continue;
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno != EOVERFLOW) break;
+			first = 1;		/* edges lost: start over */
+			for (pol = 0; pol < 2; pol++) lfrfid_reader_gap(&rd[pol]);
+			continue;
+		}
+		for (n = 0, i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2);
+									i++) {
+			if (!first && n < MAXD) d[n++] = ring[i] - prev;
+			prev = ring[i];
+			first = 0;
+		}
+		for (pol = 0; pol < 2 && p < 0; pol++) {
+			ProtocolId q = lfrfid_reader_feed_edges(&rd[pol],
+				(const uint32_t *) d, (size_t) n, lv ^ pol);
+
+			if (q != PROTOCOL_NO) {
+				memcpy(data, rd[pol].data, lf_size(q));
+				p = q;
+			}
+		}
+		lv ^= n & 1;
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	free(ring);
+	return p;
+}
+
 int main(int argc, char **argv)
 {
 	int carrier = RFID_CARRIER_125, stream = 0;
@@ -1685,8 +1745,7 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 		return 0;
 	}
 	if (p == -2) return 1;
-	if (n == 0) printf("no tag (no signal)\n");
-	else {
+	{
 		unsigned long lo = ~0UL, hi = 0, sum = 0;
 
 		for (i = 0; i < n; i++) {
@@ -1694,7 +1753,14 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 			if (d[i] > hi) hi = d[i];
 			sum += d[i];
 		}
-		printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
+		if (!raw && (p = stream_read(fd, 3, data)) >= 0) {
+			lf_print(p, data);
+			if (out != NULL && save_rfid(out, p, data) < 0)
+				return 1;
+			return 0;
+		}
+		if (n == 0) printf("no tag (no signal)\n");
+		else printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
 			"mean %lu us\n", n, lo, hi, sum / n);
 	}
 	return 1;

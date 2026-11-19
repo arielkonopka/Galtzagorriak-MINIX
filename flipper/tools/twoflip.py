@@ -626,9 +626,21 @@ def ib_dev_u2m(ul, mx, opt, p, key):
 	return "PASS", "MINIX read ROM " + got
 
 
+def ikey_knows(mx, p):
+	"""Whether MINIX's ikey names the key type p in its usage (Dallas
+	only until spec R6.7 part 3b brings Cyfral and Metakom), cached."""
+	k = "ikey:" + p
+	if k not in mx.have:
+		rc, out = mx.run("ikey 2>&1", 10)
+		mx.have[k] = p in out
+	return mx.have[k]
+
+
 def ib_u2m(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	if not ul.start("ikey emulate %s %s" % (p, key)):
 		return "BLOCKED", "Unleashed refused: " + last(ul.stop())
 	mx.start("ikey read")
@@ -657,10 +669,12 @@ def ul_read_key(ul):
 def ib_m2u(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	mx.start("ikey emulate %s %s" % (p, key),
-		rb"[Ee]mulat|[Uu]sage|not found|[Uu]nknown", 3)
+		rb"Emulating |so far|[Uu]sage|not found|[Uu]nknown", 3)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "so far" in txt:
 		mx.stop()
 		return "MISSING", "ikey emulate: " + last(txt)
 	m = ul_read_key(ul)
