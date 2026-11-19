@@ -812,12 +812,13 @@ def show(fb):
 
 
 def text_at(fb, x, y, s, inv=False):
-	"""Whether s is drawn at x, y (gui_text; inv: white on black)."""
+	"""Whether s is drawn at x, y (gui_text; inv: white on black).  The
+	glyphs' top 5 rows: the 6th is under the next row's selection bar."""
 	if fb is None or x < 0 or x + 4 * len(s) > 128:
 		return False
 	for i, c in enumerate(s):
 		g = FONT[ord(c) - 32]
-		for gy in range(6):
+		for gy in range(5):
 			for gx in range(4):
 				want = 1 if g[gy] & (0x80 >> gx) else 0
 				if lpix(fb, x + 4 * i + gx, y + gy) != want ^ inv:
@@ -852,8 +853,10 @@ def notes(r):
 	r.sh("sleep 1", 20)
 	now = freebytes(r)
 	print("  RAM: launcher with 8 notifications: %d bytes more (free %d "
-	      "-> %d; the table is in its heap gap)" % (base - now, base, now),
+	      "-> %d; the table is fixed, in its .bss)" % (base - now, base, now),
 	      flush=True)
+	check(base - now <= 0, "ACK.4: 8 notifications take no RAM beyond "
+	      "the launcher's fixed table")
 	tap(r, "right", lit=True)			# HOME
 	tap(r, "right", lit=True)			# NOTES
 	fb = lcd_frame(r)
@@ -891,7 +894,7 @@ def notes(r):
 	      and text_at(fb, 11, 43, "Note 3") and not text_at(fb, 11, 49, "Note 3")
 	      and text_in(fb, 1, "*6", True) and text_in(fb, 1, "2/7", True),
 	      "T23c: Back on the list clears one (7 left, *6)")
-	if not text_in(fb, 1, "2/7", True): show(fb)
+	if not text_at(fb, 11, 13, "Note 8", True): show(fb)
 	tap(r, "up", lit=True)
 	tap(r, "ok", lit=True)				# Note 10 again
 	tap(r, "back", lit=True)			# clear it from the view
