@@ -46,5 +46,9 @@
 # page.  Not the minor clash with subghzpkt: it stays 12 with /dev/mtpline
 # on minor 21 and both subghz checks ok.  Nothing changed in how often the
 # cache writes.
-m2      cache   12
+# 2026-11-19 (issue #157 spectrum_test): 13.  m2test's text grew by 1162 B
+# (the test, its strings) to 45308 B, past 44 KB (11 pages): one more 4 KB
+# page.  spectrum runs twice, below the cache's three runs, so it is not
+# cached.  Nothing changed in how often the cache writes.
+m2      cache   13
 m2      inst    0
