@@ -306,7 +306,8 @@ are the library `libsubghz` (`src/lib/subghz`, the Unleashed `lib/subghz`; see i
 - `/dev/subghzpkt` (minor 20): one packet (1–60 bytes) per write or read, through the chip's
   FIFO, as stock's `subghz chat`; a read with nothing heard gives `EAGAIN`.
 - Every transmit is checked by the kernel against the **region** (`SGIOCREGION`, set once per
-  boot by `/etc/rc` from `/etc/flipper/region`; `SGIOCGREGION` reads it) and the band's duty
+  boot by `/etc/rc` from `/etc/flipper/region`, by root only: any other user gets `EPERM`, even
+  while no region is set; `SGIOCGREGION` reads it) and the band's duty
   cycle for the hour (`SGIOCAIR`: used and allowed ms). Errors: `EIO` not tuned, `EPERM` no
   region or outside its bands, `EAGAIN` the hour's share used up, `EBUSY` a reader is listening,
   `EINVAL` a bad frame, `ENOTSUP` no transmitter (the Flipper, for now: the CC1101 transmit path
@@ -317,6 +318,12 @@ are the library `libsubghz` (`src/lib/subghz`, the Unleashed `lib/subghz`; see i
   `SG_FAKE_PKT` on `/dev/subghzpkt`) makes the next write a received frame or packet.
   `/usr/tests/sgfake FILE` (package `tests`) plays a `.sub` RAW capture into a running
   `subghz rx` this way; `tools/nattest.py subghz` uses it.
+- For whoever writes a transmit backend (the CC1101 path): `hal_subghz_tx(hz, src, n)` gets
+  the **writer's physical address**, valid only until the call returns. The writer may then
+  exit, be swapped out or shrink its memory. A backend that sends after it returns (from a
+  timer or DMA) must copy the frame into its own buffer first, or keep the writer suspended
+  and pinned until the last duration is out, as `/dev/rfid`'s ring is pinned (the reply then
+  comes from the completion). It must never keep `src` after it returns (`flipper/hal/hal.h`).
 
 ## 3.10c The clock's alarm: `/dev/rtc`
 

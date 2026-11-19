@@ -511,8 +511,9 @@ static int cmd_region(int argc, char **argv)
 	if (ioctl(fd, SGIOCREGION, &v) < 0) {
 		int e = errno;
 		close(fd);
-		return bad(argv[2], e == EPERM ? "the region is already set "
-			"(once per boot)" : e == EINVAL ? "no table for this "
+		return bad(argv[2], e == EPERM ? (geteuid() != 0 ?
+			"only root may set the region" : "the region is already "
+			"set (once per boot)") : e == EINVAL ? "no table for this "
 			"country; transmit stays off" : strerror(e));
 	}
 	close(fd);

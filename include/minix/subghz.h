@@ -22,9 +22,10 @@
  *
  * The region (an ISO 3166 country code with a table, spec section Q:
  * EU, PL, ES, FR, IE, FI, SE, NO, GB, AL, US, CA; others EINVAL) is set
- * once after boot (/etc/rc, from /etc/flipper/region): later SGIOCREGION
- * calls with another region fail with EPERM.  The band table is const in
- * the kernel until the flash record of T32b.
+ * once after boot (/etc/rc, from /etc/flipper/region), by the superuser
+ * only (FS checks the uid, issue #326): later SGIOCREGION calls with
+ * another region, and any call by another user, fail with EPERM.  The
+ * band table is const in the kernel until the flash record of T32b.
  */
 #ifndef _MINIX_SUBGHZ_H
 #define _MINIX_SUBGHZ_H

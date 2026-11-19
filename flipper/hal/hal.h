@@ -108,7 +108,19 @@ void hal_subghz_off(void);
  * -1 on the Flipper) makes the next frame or packet a received one
  * (HAL_SG_FAKE_RAW: /dev/subghzraw's reader gets it; HAL_SG_FAKE_PKT:
  * hal_subghz_pkt_rx gives it), and hal_subghz_fake_take tells whether
- * one was armed (and disarms it). */
+ * one was armed (and disarms it).
+ *
+ * The frame rule (issue #326): src is the writer's physical address,
+ * valid only until hal_subghz_tx returns; then the kernel replies and the
+ * writer may change, free or lose that memory (exit, swap-out, a shrinking
+ * brk).  A backend that sends asynchronously (the CC1101 path, which
+ * feeds the chip from a timer or DMA after the call returns) must either
+ * copy the frame into its own buffer before it returns, or not return
+ * until the frame is out, or make the kernel pin the writer as RFID's
+ * ring is pinned (the writer stays suspended, p_physio, until the last
+ * duration is sent; the reply comes from the interrupt's completion).
+ * Never keep src past the return.  QEMU's backend prints the frame
+ * before it returns. */
 #define HAL_SUBGHZ_PKT	60
 #define HAL_SG_FAKE_RAW	1
 #define HAL_SG_FAKE_PKT	2

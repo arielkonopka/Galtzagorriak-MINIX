@@ -43,7 +43,8 @@ Every frame and packet goes through the kernel, which checks it against the regi
 their duty cycle for the hour (spec R8.2). With no region set **nothing can be sent**. The
 region is the **country you are in**, as its ISO 3166 two-letter code. `/etc/rc` gives it to the
 kernel at boot from `/etc/flipper/region`; root sets it with `region set` (it shows the table
-and asks first):
+and asks first). Only root can write that file or set the region; another user gets "only root
+may set the region":
 
 ```
 region list              # the countries with a table
