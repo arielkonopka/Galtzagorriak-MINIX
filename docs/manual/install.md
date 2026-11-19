@@ -288,7 +288,8 @@ Rewriting the card (section 4) always works but erases `/home`. To keep your fil
 (Not across an ABI change: the new system cannot run the old programs and the old `pkg` refuses
 the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
 (64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
-you need from `/home` first. `ver` and the *About* app show the ABI.)
+you need from `/home` first. The step from ABI 2 to ABI 3 (32-bit inode numbers, T27a) is the
+same: rewrite the card. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
