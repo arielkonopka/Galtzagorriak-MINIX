@@ -21,8 +21,10 @@
  * checks on a write.  A read never waits: EAGAIN when none has come.
  *
  * The region (two letters, "EU", "US", "JP") is set once after boot
- * (/etc/rc, from /etc/flipper/region): later SGIOCREGION calls with
- * another region fail with EPERM.  The band table is const in the kernel.
+ * (/etc/rc, from /etc/flipper/region), by the superuser only (FS checks
+ * the uid, issue #326): later SGIOCREGION calls with another region, and
+ * any call by another user, fail with EPERM.  The band table is const in
+ * the kernel.
  */
 #ifndef _MINIX_SUBGHZ_H
 #define _MINIX_SUBGHZ_H
