@@ -326,7 +326,7 @@ UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello gmdemo fptest
+UPROGS	+= furitest furihello gmdemo fptest guiflood
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -378,6 +378,7 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
 CHMEM_fptest := 8192
+CHMEM_guiflood := 6144	# #324: all stack (sprintf), a 64 B record
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
@@ -435,6 +436,12 @@ $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+# guiflood (#324): ACK.3's four desktop modules, so they are not forks of
+# m2test (each needed a copy of m2test's data).
+OBJS_guiflood = $(MB)/cmd/guiflood.o
+$(MB)/cmd/guiflood.o: m2/guiflood.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # fptest (R5.7): the FPU checks; m2fpu.c and fpregs.S use the FPU.
 OBJS_fptest = $(MB)/cmd/fptest.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
 $(MB)/cmd/fptest.o: m2/fptest.c
@@ -966,7 +973,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.37
+BASE_VER := 4.38
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -1065,18 +1072,19 @@ QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 # socket with tools/mtphost.py on it; m2test's mtpd test serves it, and
 # its log follows QEMU's output.
 MTPSOCK	:= $(MB)/mtpline.sock
+M2TO	?= 240		# seconds QEMU gets for the M2 run
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
 ifeq ($(INIT),m2)
 	@rm -f $(MTPSOCK) $(MB)/mtphost.log
 	@python3 -I tools/mtphost.py test --unix $(MTPSOCK) --name-max 14 \
 	   --quick --wait 30 > $(MB)/mtphost.log 2>&1 & \
-	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0 \
+	timeout $(M2TO) $(QEMU_MINIX) -device loader,file=$<,addr=0 \
 	   -chardev socket,id=mtp,path=$(MTPSOCK),server=on,wait=off \
 	   -serial chardev:mtp; \
 	r=$$?; wait; cat $(MB)/mtphost.log; rm -f $(MTPSOCK); exit $$r
 else
-	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0
+	timeout $(M2TO) $(QEMU_MINIX) -device loader,file=$<,addr=0
 endif
 
 minix-flash: $(MB)/minix.bin
