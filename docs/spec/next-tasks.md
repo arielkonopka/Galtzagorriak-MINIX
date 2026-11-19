@@ -411,6 +411,20 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 - Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
 - Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
 
+## T34. A small database `kutxa` (spec section R; user request 2026-11-17/18): not scheduled, the user starts it
+Designed and its tests written first (2026-11-18); the implementation waits until the user asks for it. Works on today's V2 `/home` (files up to 64 MB); big files need T27.
+
+### T34a (`lane:cloud`, host + QEMU)
+- `src/lib/kutxa/` (`kutxa.c`, `krec.c`) behind the existing `kutxa.h` (RR.1–RR.6): pages, CRC, copy on write with spill, commit, open with tail truncation and rollback, catalog, indexes, cursors, bulk load, compaction. No `malloc`. The header may get additions; a change to an existing declaration needs a note in the PR.
+- FS: `fcntl(F_FSYNC)` + libc `fsync()` (RR.7a) and `O_NOCACHE` with `ONE_SHOT` (RR.7b). FS is exactly at its 27 392 B budget, so this must be truly 0 B (no new statics, no deeper stack; `ramcheck`).
+- `src/commands/kutxa/kutxa.c` (RR.8), `flipper/tools/kutxa.py` (same format, `build`/`dump`/`check`), base package (RR.10a), `pkg install --flash kutxa` checked (RR.10b). Manual pages `kutxa(1)`, `kutxa(3)` and a manual chapter (R.13).
+- **Make `flipper/tests/kutxa` pass as written** (`kutxatest.c`, `clitest.sh`, ACR.1–ACR.10); do not loosen a check, say in the PR if one is wrong and why. Add the directory to `tests/host` (CI) and `make kutxatest`; run `clitest.sh` in QEMU too (the M2 tests package).
+- Text sizes (library, command) and the RR.11 RAM numbers in the PR.
+
+### T34b (`lane:local`, Flipper)
+- ACR.11 on the device: a 1 million record file built with `kutxa.py` and copied to `/home`; lookup p99, scan rate, commit time; `lat` L1 during a compaction and a `kutxa dump` in the background; numbers in PORTING.md and R.11.
+- Later, with Phase 7c: the Berry module (RR.9). With the second app that uses the library: `KUTXA=shared` (RR.10c).
+
 ## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; user pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
 Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
 

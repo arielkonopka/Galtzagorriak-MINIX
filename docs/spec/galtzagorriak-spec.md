@@ -26,6 +26,10 @@ BLE: one link layer, four backends, the `gmodem` command; user request).
 Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
 its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
 the card and installed once into flash; user request).
+Addition (2026-11-18): section R (a small database `kutxa`: a copy-on-write B+tree appended
+to one file on `/home`, records without a schema, indexes added later, the `kutxa` command, no
+SQL; in the image, optionally in flash; tests written first; user request). Background: the
+project report `small-database-analysis.md` (Polish, not in the repo).
 Addition (2026-11-18): section S (signed update file `Galtzagorriak.update` over USB/MTP for
 Windows users: boot stage `atea`, Ed25519, staging on the swap partition, A/B switch of the SD
 files, rollback, CI signing; user request).
@@ -2468,6 +2472,233 @@ words: "remote buttons only", "short bursts with a pause"), why a transfer pause
 region is kept in internal flash and survives a card change, that changing it needs root and is
 logged, `#?` rows, custom tables and `-f`, and that the user is responsible for using the device
 legally (a note for travellers: set the region of the country you are in).
+
+## R. A small database: `kutxa` (user request, 2026-11-17/18)
+
+**Goal:** apps keep and query more data than fits in RAM (a diary and calendar, public holidays
+for the device's country, sensor logs, an IR code library) in one small library, safe against a
+power cut, with no internal flash writes and no harm to responsiveness. Analysis: project report
+`small-database-analysis.md` (Polish, not in the repo), which compares SQLite, LMDB, Berkeley
+DB 1.85, sdbm/ndbm, cdb, Bitcask, LSM and flash key-value stores and rejects them for size, the
+need for `mmap`, or no power-cut safety. **User decisions (2026-11-18):** a B+tree ("weźmy
+B-drzewa"); **no SQL** (Berry and the free console tools are enough); Berry only for special
+tasks, everyday apps use the C library; the command is in the image with an option to install
+it into flash (RR.10); tests for the discussed use cases are written first (RR.12).
+
+"Kutxa" is Basque for a chest. Swappable blocks (12h) are **not** the storage: they vanish with
+the process (R12.35). The database is a file on `/home` (MINIX V3, section O: files up to 4 GiB);
+blocks are only working memory for a bulk import (RR.8).
+
+### R.1 What goes in
+
+| Use | Key | Tree(s) | Notes |
+|---|---|---|---|
+| Diary and calendar | start time (`kt_key_i64`, UTC) + 4-byte id | `main`, index `main.id`, later `main.tag` | recurring events are stored as a rule and expanded for the visible window by the app; `.ics` import/export is the app's job |
+| Reminders and alarms | — | — | stay in `timed` timer files (spec F, #205); a reminder app with thousands of entries may keep them in `kutxa`, "next one" = first key ≥ now |
+| Logs (sensors H, canaries M, irrigation, Sub-GHz history) | time (+ source) | one file per month or `kt_delrange` | append path: only the right edge of the tree changes |
+| Public holidays | `CC/rule`, `CC-SUB/rule` (`PL/11-11`, `PL/E+60`, `DE-BY/01-06`) | `main` | read-only packed file built on the PC (from the MIT-licensed Python `holidays` data); the country comes from the region record (section Q), an optional subdivision from Settings; rules: fixed date, Easter ± n (Gregorian and Orthodox), n-th weekday, tables for lunar calendars |
+| Name days | `MM-DD` | second tree in the same file | per country |
+| Reference data | brand/model/button, OUI, BLE company id | `main` | IR codes, MIFARE dictionaries, vendors for the canaries; packed, read-only |
+
+Not in `kutxa`: the stock file formats (`.sub`, `.nfc`, `.ir`, `.rfid`) stay files for
+compatibility; secrets (no encryption here; `/home` is not encrypted).
+
+### R.2 The file (RR.1)
+
+- **RR.1 Format.** One file, pages of **1 KB** (= FS block), always written page-aligned and
+  never rewritten. Fields little-endian; keys compared with `memcmp` (big-endian helpers for
+  numbers and times, sign bit flipped). Each page starts with an 8-byte header: type (leaf,
+  branch, overflow, catalog, commit), entry count, CRC-32 of the page (hardware CRC unit, as
+  R12.28). Leaves hold key + value up to 400 B inline (longer values in overflow pages, a value
+  ≤ 64 KB), with prefix compression of keys; branches hold separator keys and 32-bit page
+  numbers. Height ≤ 6 (also the loop guard for damaged files).
+  - **Commit page:** magic `KTXA`, format version, commit number, page number of the catalog
+    root and of `main`'s root, page number of the previous commit, live bytes, CRC.
+  - **Catalog:** a tree "name → root page, kind (tree or index), source tree and field" (RR.5).
+    Any number of trees per file; up to 8 open per handle.
+  - **Open:** read the last page; if it is not a valid commit page, step back page by page
+    (at most to the previous commit's page) and **truncate** the torn tail (writer only).
+    Then verify every page the last commit wrote (the pages between the previous commit page
+    and it, usually a few KB; only when that span is ≤ 64 KB, so a bulk load is not re-read).
+    A bad page there means the card damaged it: open at the previous commit and report
+    `rollback` (`kt_stat`). Deeper damage is found when read (`EIO`) or by `kt_check`.
+  - Limit: file ≤ 4 GiB − 1 KB (`off_t`), ≈ 4 million pages; with small records that is
+    tens of millions of records per file.
+
+### R.3 Writes and commits (RR.2, RR.3)
+
+- **RR.2 Copy on write.** A change copies the path from the leaf to the root into the
+  handle's page cache (dirty). Later changes in the same transaction reuse those copies. When
+  the cache is full of dirty pages, the oldest are **spilled**: appended to the file now (they
+  are unreferenced, so harmless if no commit follows), so a transaction is not limited by RAM.
+- **RR.3 Commit** = append the dirty pages (one sequential write), `fsync`, append the commit
+  page, `fsync`. A power cut at any point leaves the last commit or the new one, nothing else
+  (ACR.1). Cost: (tree height + 1) pages per commit plus the changed leaves; a sensor log with
+  a commit every 10 minutes writes ≈ 0.6 MB a day, a reminder app ≈ 0.4 MB a day (12g puts swap
+  at ≈ 1 MB a day). Rule for app authors: group changes, do not commit per record unless needed.
+- **One writer per file**: a write lock on byte 0 (`fcntl(F_SETLK)`, FS lock table, 8 slots,
+  released when the process ends); a second writer gets `EBUSY` (the command waits up to 5 s).
+  **Readers** (`KT_RDONLY`) take no lock and see the commit that was newest when they opened
+  or last called `kt_refresh()`: old pages never change, so this is free.
+
+### R.4 Records and keys (RR.4)
+
+- **RR.4 No schema.** A value may be a record: fields `name → value`, each name length (1 B),
+  name, type (`s` UTF-8 text, `i` signed 64-bit, `t` UTC time, `b` bytes), value length
+  (LEB128), value. A field can be added to any record at any time; old records simply lack it.
+  Only the **key** (the order of the data) is chosen up front. `kr_next()` never reads past the
+  record (malformed → `EIO`, ACR.7). Plain byte values work too; records are a convention used
+  by indexes and the command.
+
+### R.5 Trees and indexes (RR.5)
+
+- **RR.5 Indexes added later.** `kt_index(db, t, name, field, steps)` creates tree `name`
+  (the command calls it `TREE.FIELD`) with one entry per record of tree `t` that has `field`:
+  key = type byte + the field value (numbers sign-flipped; text with `00` escaped as `00 FF`,
+  ended by `00 01`) + the primary key, value empty. It is built from the existing records in
+  steps (idle work), and from then on `kt_put`/`kt_del` on `t` keep it current (one extra read
+  of the old record per change). A query by field is then a range read, not a full scan.
+
+### R.6 Compaction (RR.6)
+
+- **RR.6** The file only grows; the commit page counts live bytes. When dead bytes pass 50 % and
+  the file is over 64 KB, the app (or the user with `kutxa compact`) copies the live trees of the
+  last commit **sequentially** into `PATH.new` (leaves 100 % full, the packed layout), `fsync`,
+  `rename` over `PATH`. Small steps (`kt_compact(db, steps)`, ≤ 16 pages a step), at idle
+  priority, paused for a second after any key (as R12.37). A power cut leaves the old file
+  intact; a stale `PATH.new` is removed when the next compaction starts. Needs free space ≈ the
+  live size.
+
+### R.7 Two small FS additions (RR.7)
+
+- FS is exactly at its RAM budget (27 392 B, `flipper/ram-budget.txt`, 2026-11-19), so both
+  additions must cost **0 B** of FS data, bss and stack growth, checked by `ramcheck`.
+- **RR.7a `fsync(fd)`.** MINIX 2.0 has only `sync()`. New `fcntl(fd, F_FSYNC)` (no new call
+  number) and libc `fsync()`: FS writes the dirty buffers of the file's device (at most 18) with
+  `rw_scattered` and the inode if dirty, then returns. RAM 0 B, text ≈ 0.2 KB. Until it exists
+  the library uses `sync()` (the same here, since the cache is 18 blocks).
+- **RR.7b `O_NOCACHE`.** A scan through a big file must not push other programs' directories
+  and inodes out of the shared 18-block cache. `F_SETFL` accepts a new flag `O_NOCACHE`
+  (010000); `rw_chunk` then releases that file's data blocks with `ONE_SHOT` (front of the LRU,
+  reused first; the flag already exists for the super block). RAM 0 B (a free bit of
+  `filp_flags`). The library sets it for range scans, imports and compaction, not for lookups
+  (the top of the tree is in the handle's own cache).
+
+### R.8 The `kutxa` command (RR.8)
+
+- **RR.8** One command for the console and scripts (`src/commands/kutxa`). Output is TSV:
+  the key, then `name=value` per field (`name#=` integer, `name@=` time, as the input), or with
+  `-f a,b` only those values as columns (empty when a record lacks one). Tab, newline and
+  backslash in values are written `\t`, `\n`, `\\` (as the TSV of section K). Times are
+  printed `2026-11-19T09:00:00Z` and read as `YYYY-MM-DD[THH:MM[:SS]][Z]`, always UTC.
+  Exit 0 ok, 1 not found, 2 error.
+
+```
+kutxa create FILE
+kutxa put FILE [-t TREE] [-k text|int|time] KEY [name=text] [name#=int] [name@=time]...
+kutxa get FILE [-t TREE] [-k ...] [-f FIELDS] KEY
+kutxa del FILE [-t TREE] [-k ...] KEY
+kutxa range FILE [-t TREE] [-k ...] [-f FIELDS] [-p PREFIX] [-r] [-n N] [LO [HI]]
+kutxa dump FILE [-t TREE] [-k ...] [-f FIELDS]
+kutxa delrange FILE [-t TREE] [-k ...] LO HI
+kutxa import FILE [-t TREE] [-k ...] <TSV        (first line: key, then field names)
+kutxa index FILE TREE FIELD                    (creates TREE.FIELD)
+kutxa find FILE [-k ...] [-f FIELDS] TREE FIELD VALUE
+kutxa trees FILE | info FILE | check FILE | compact FILE
+```
+
+  - `range` is `[LO, HI)`; `-r` newest (largest) first; `-n N` at most N lines; `-p` a key
+    prefix. `put` and `import` create a missing tree.
+  - `import` into an empty tree with ascending keys uses the bulk load (`kt_load`, packed);
+    otherwise it sorts in runs (in swappable blocks when 12h is on, else in `/tmp`) and loads.
+  - Examples (manual): `kutxa range cal.kutxa -k time -f title,tag 2026-11-19 2026-11-26`;
+    `kutxa dump cal.kutxa -k time -f title,tag | grep lana | cut -f2`.
+  - A PC twin `flipper/tools/kutxa.py` (same format) builds, dumps and checks files, so a
+    holiday or IR database can be made on the PC and copied to `/home` (Linux mounts it).
+- **No query language.** Conditions on several fields, joins and counts go to Berry (RR.9).
+
+### R.9 Berry (RR.9)
+
+- **RR.9** With Phase 7c, a module `kutxa` (C, ≈ 1.5 KB flash): `kutxa.open(path)`, `db[k]`,
+  `db.put(k, v)`, `db.commit()`, `db.range(lo, hi)` (an iterator), `db.select(fn)`. For special
+  tasks only (user, 2026-11-18): one-off reports, experiments. Apps with settled logic use the
+  C library.
+
+### R.10 In the image, optionally in flash (RR.10, user 2026-11-18)
+
+- **RR.10a In the base image.** Package `kutxa` is part of the base system on the card:
+  `/usr/bin/kutxa`, `/usr/lib/libkutxa.a`, `/usr/include/kutxa.h`, `kutxa(1)`, `kutxa(3)`.
+  Not in flash by default: the command runs rarely, and its text loads into RAM only while it
+  runs (or comes from the run-time cache, R1.4).
+- **RR.10b In flash on request.** `pkg install --flash kutxa` (R2b.5) puts the command's text in
+  the installed region: one install-time write, then it runs in place (0 B of text in RAM). The
+  launcher's package screen offers the same.
+- **RR.10c The library.** Apps link `libkutxa.a` statically (≈ 6–9 KB of text each, in flash
+  when the app is installed with `--flash`). When two or more installed apps use it, the build
+  option `KUTXA=shared` appends the `kt_*`/`kr_*` functions to the end of `furi.exports` (append
+  only, J.3), so every app calls one copy in the installed region; decided in the PR that adds
+  the second user.
+- **Data stays on the card** (L.1: no file data in internal flash), databases included, even
+  read-only ones such as the holidays.
+
+### R.11 RAM, flash, responsiveness (RR.11)
+
+- RAM: kernel and MM **0 B**, FS **0 B** (RR.7 uses free bits); per open handle `KT_MEM(n)` =
+  256 B + n × 1032 B, chosen by the app (minimum 3 pages; 4–8 recommended), stack ≈ 300 B.
+  No `malloc`.
+- Flash: library ≈ 6–9 KB, command ≈ 3 KB plus the library, Berry module ≈ 1.5 KB; **0
+  run-time writes** to internal flash (one install-time write only for RR.10b/c).
+- Times (SD, 64 MHz, estimates to be measured, ACR.11): a page ≈ 1.5–3 ms; a lookup in 1 million
+  records ≈ 5–12 ms (2–3 reads); a range scan ≈ 10 000–15 000 records/s; open O(1); a commit
+  ≈ 6–15 ms. A lookup fits inside L1, so an app may look up on a key press. Long scans are cut
+  into screen-sized pieces by the app; compaction and imports run at idle priority (R0.8a) in
+  ≤ 16-page steps. FS serves requests in order, so a foreground call waits for at most one
+  database block of a background scan.
+
+### R.12 Tests written first (RR.12, user 2026-11-18) and acceptance
+
+The tests for the use cases above are in the repo before the library: `flipper/tests/kutxa/`
+(`kutxatest.c` against `src/lib/kutxa/kutxa.h`, `clitest.sh` against the command; `make test`
+there says "not written yet" until T34a). T34a makes them pass without weakening them.
+
+- ACR.1 (host) Power cut at every write and every `fsync` of a random workload (puts, deletes,
+  values over 400 B, commits every 1–40 changes), with unsynced sectors kept, lost or torn
+  independently and the file size old or new: the file opens at the last commit or at the one
+  being made, `kt_check` passes and writing goes on. A damaged page of the last commit opens
+  at the commit before with `rollback` = 1.
+- ACR.2 (host) Calendar: 2 000 events over two years; "this week" by one seek and a short
+  scan; an event found by id through an index, moved, the index follows; an index on the tag
+  added later equals a full scan.
+- ACR.3 (host) Reminders: 10 000; "next one ≥ now" in at most (height) page reads; fired =
+  deleted; the next.
+- ACR.4 (host) Logs: 30 days, one reading a minute, a commit every 10 minutes; bytes written
+  ≤ commits × (height + 1) KB + 2 × data; the last 24 h read backwards; older than 7 days
+  deleted with `kt_delrange`; compaction to less than half, same contents.
+- ACR.5 (host) Holidays: a packed file with PL, DE, DE-BY and ES-PV rules; PL 2026 expands to
+  its 14 days (Easter 5 April, Corpus Christi 4 June); DE-BY = DE + its own; name days in a
+  second tree.
+- ACR.6 (host) IR library: 100 000 codes bulk loaded; with a 4-page cache a lookup reads ≤ 2.5
+  pages on average and never more than the height; the file ≤ 1.3 × the raw data.
+- ACR.7 (host) Records gain a field later; an index on it equals a scan; malformed records
+  never over-read (ASan).
+- ACR.8 (host) A reader keeps its snapshot until `kt_refresh`.
+- ACR.9 (host) 3 000 mutated, truncated and random files: no crash, no endless walk (ASan,
+  UBSan).
+- ACR.10 (host, QEMU) `clitest.sh`: calendar week with `-f`, `grep`/`cut`, an index and
+  `find`, reminders "next", holidays import and prefix, UTF-8, logs import/`-r -n`/`delrange`/
+  `compact`, TSV escapes, `check`, `info`, two writers one after the other.
+- ACR.11 (Flipper) On a 1 million record file on `/home`: lookup p99 ≤ 15 ms; L1 holds while
+  another process compacts a 10 MB file and while `kutxa dump` scans it; `ramcheck` 0 B for
+  kernel/MM/FS.
+
+### R.13 Notes for the system manual
+
+What `kutxa` is for and what not (R.1); keys and why the order matters; the command with the
+calendar, holidays and log examples; that a commit is the moment data is safe; that files grow
+until compacted; one writer, many readers; building a database on the PC with `kutxa.py`;
+`pkg install --flash kutxa`; the Berry module for special tasks.
+
+---
 
 ## S. Update file over USB: `Galtzagorriak.update` (user request, 2026-11-18)
 
@@ -6552,4 +6783,5 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (user request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (user request; no journaling) | section N, T17 |
 | Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (user request) | section P, T26; 8, 13, 15 |
+| Small database `kutxa`: B+tree file on `/home`, indexes, `kutxa` command, no SQL, tests first (user request) | section R, T34 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
