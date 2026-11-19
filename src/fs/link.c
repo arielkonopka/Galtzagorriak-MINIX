@@ -22,6 +22,8 @@
 
 #define SAME 1000
 
+FORWARD _PROTOTYPE( void free_ind, (struct inode *rip, zone_t z,
+							int depth)	);
 FORWARD _PROTOTYPE( int remove_dir, (struct inode *rldirp, struct inode *rip,
 			char dir_name[NAME_MAX])			);
 
@@ -326,6 +328,33 @@ PUBLIC int do_rename()
 
 
 /*===========================================================================*
+ *				free_ind				     *
+ *===========================================================================*/
+PRIVATE void free_ind(rip, z, depth)
+struct inode *rip;		/* the inode being truncated */
+zone_t z;			/* a double or triple indirect zone */
+int depth;			/* 1: double, 2: triple */
+{
+/* Free the indirect zones below 'z' and then 'z' itself (the data zones are
+ * freed already).  At most two blocks are held at a time. */
+  struct buf *bp;
+  zone_t z1;
+  int i;
+
+  if (z == NO_ZONE) return;
+  bp = get_block(rip->i_dev, (block_t) z << rip->i_sp->s_log_zone_size,
+								NORMAL);
+  for (i = 0; i < rip->i_nindirs; i++) {
+	z1 = rd_indir(bp, i);
+	if (depth > 1) free_ind(rip, z1, depth - 1);
+	else free_zone(rip->i_dev, z1);
+  }
+  put_block(bp, INDIRECT_BLOCK);
+  free_zone(rip->i_dev, z);
+}
+
+
+/*===========================================================================*
  *				truncate				     *
  *===========================================================================*/
 PUBLIC void truncate(rip)
@@ -334,10 +363,9 @@ register struct inode *rip;	/* pointer to inode to be truncated */
 /* Remove all the zones from the inode 'rip' and mark it dirty. */
 
   register block_t b;
-  zone_t z, zone_size, z1;
+  zone_t z, zone_size;
   off_t position;
-  int i, scale, file_type, waspipe, single, nr_indirects;
-  struct buf *bp;
+  int scale, file_type, waspipe, single;
   dev_t dev;
 
   file_type = rip->i_mode & I_TYPE;	/* check to see if file is special */
@@ -345,7 +373,6 @@ register struct inode *rip;	/* pointer to inode to be truncated */
   dev = rip->i_dev;		/* device on which inode resides */
   scale = rip->i_sp->s_log_zone_size;
   zone_size = (zone_t) BLOCK_SIZE << scale;
-  nr_indirects = rip->i_nindirs;
 
   /* Pipes can shrink, so adjust size to make sure all zones are removed. */
   waspipe = rip->i_pipe == I_PIPE;	/* TRUE is this was a pipe */
@@ -367,19 +394,9 @@ register struct inode *rip;	/* pointer to inode to be truncated */
   }
   single = rip->i_ndzones;
   free_zone(dev, rip->i_zone[single]);	/* single indirect zone */
-  if ( (z = rip->i_zone[single+1]) != NO_ZONE) {
-	/* Free all the single indirect zones pointed to by the double. */
-	b = (block_t) z << scale;
-	bp = get_block(dev, b, NORMAL);	/* get double indirect zone */
-	for (i = 0; i < nr_indirects; i++) {
-		z1 = rd_indir(bp, i);
-		free_zone(dev, z1);
-	}
-
-	/* Now free the double indirect zone itself. */
-	put_block(bp, INDIRECT_BLOCK);
-	free_zone(dev, z);
-  }
+  free_ind(rip, rip->i_zone[single+1], 1);	/* double indirect tree */
+  if (IS_V3(rip->i_sp))
+	free_ind(rip, rip->i_zone[single+2], 2);	/* triple (O.4) */
 
   /* Leave zone numbers for de(1) to recover file after an unlink(2).  */
 }

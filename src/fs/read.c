@@ -327,9 +327,9 @@ off_t position;			/* position in file whose blk wanted */
 
   register struct buf *bp;
   register zone_t z;
-  int scale, boff, dzones, nr_indirects, index, zind, ex;
+  int scale, boff, dzones, nr_indirects, index, zind;
   block_t b;
-  long excess, zone, block_pos;
+  long excess, zone, block_pos, span;
   
   scale = rip->i_sp->s_log_zone_size;	/* for block-zone conversion */
   block_pos = position/BLOCK_SIZE;	/* relative blk # in file */
@@ -347,31 +347,36 @@ off_t position;			/* position in file whose blk wanted */
 	return(b);
   }
 
-  /* It is not in the inode, so it must be single or double indirect. */
+  /* It is not in the inode: single, double or (V3, spec O.4) triple
+   * indirect.  Walk down from the inode.
+   */
   excess = zone - dzones;	/* first Vx_NR_DZONES don't count */
-
-  if (excess < nr_indirects) {
-	/* 'position' can be located via the single indirect block. */
-	z = rip->i_zone[dzones];
-  } else {
-	/* 'position' can be located via the double indirect block. */
-	if ( (z = rip->i_zone[dzones+1]) == NO_ZONE) return(NO_BLOCK);
-	excess -= nr_indirects;			/* single indir doesn't count*/
-	b = (block_t) z << scale;
-	bp = get_block(rip->i_dev, b, NORMAL);	/* get double indirect block */
-	index = (int) (excess/nr_indirects);
-	z = rd_indir(bp, index);		/* z= zone for single*/
-	put_block(bp, INDIRECT_BLOCK);		/* release double ind block */
-	excess = excess % nr_indirects;		/* index into single ind blk */
+  span = 1;			/* zones under one entry at this level */
+  zind = dzones;
+  if (excess >= nr_indirects) {
+	excess -= nr_indirects;
+	span = nr_indirects;
+	zind = dzones + 1;
+	if (excess >= (long) nr_indirects * nr_indirects) {
+		excess -= (long) nr_indirects * nr_indirects;
+		span = (long) nr_indirects * nr_indirects;
+		zind = dzones + 2;
+		if (!IS_V3(rip->i_sp) || excess / span >= nr_indirects)
+			return(NO_BLOCK);
+	}
   }
-
-  /* 'z' is zone num for single indirect block; 'excess' is index into it. */
-  if (z == NO_ZONE) return(NO_BLOCK);
-  b = (block_t) z << scale;			/* b is blk # for single ind */
-  bp = get_block(rip->i_dev, b, NORMAL);	/* get single indirect block */
-  ex = (int) excess;				/* need an integer */
-  z = rd_indir(bp, ex);				/* get block pointed to */
-  put_block(bp, INDIRECT_BLOCK);		/* release single indir blk */
+  z = rip->i_zone[zind];
+  for (;;) {
+	if (z == NO_ZONE) return(NO_BLOCK);
+	b = (block_t) z << scale;
+	bp = get_block(rip->i_dev, b, NORMAL);	/* an indirect block */
+	index = (int) (excess / span);
+	excess %= span;
+	z = rd_indir(bp, index);
+	put_block(bp, INDIRECT_BLOCK);
+	if (span == 1) break;
+	span /= nr_indirects;
+  }
   if (z == NO_ZONE) return(NO_BLOCK);
   b = ((block_t) z << scale) + boff;
   return(b);

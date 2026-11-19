@@ -27,8 +27,24 @@
 #define SUPER_V2      0x2468	/* magic # for V2 file systems */
 #define SUPER_V2_REV  0x6824	/* V2 magic written on PC, read on 68K or vv */
 
+#define SUPER_V3      0x4D5A	/* magic # for V3 file systems (spec O.4) */
+
 #define V1		   1	/* version number of V1 file systems */ 
 #define V2		   2	/* version number of V2 file systems */ 
+#define V3		   3	/* version number of V3 file systems (O.4) */
+
+/* Directory entries (spec O.4): V1/V2 16 B (16-bit inode, 14 chars), V3
+ * 64 B (32-bit inode, 60 chars).  The FS works on them as bytes. */
+#define V2_DIRENT_SIZE    16
+#define V3_DIRENT_SIZE    64
+#define V2_DIRSIZ         14
+#define V3_DIRSIZ         60
+
+/* Path components in FS are up to the longest name of any format. */
+#if NAME_MAX < V3_DIRSIZ
+#undef NAME_MAX
+#define NAME_MAX   V3_DIRSIZ
+#endif
 
 /* Miscellaneous constants */
 #define SU_UID 	 ((uid_t) 0)	/* super_user's uid_t */
