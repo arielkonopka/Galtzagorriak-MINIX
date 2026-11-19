@@ -118,6 +118,22 @@ void hal_ib_clear(void)
 	EXTI->PR1 = EXTI_PR1_PIF14;
 }
 
+/* R6.7 part 3b, Cyfral and Metakom: not here yet.  The device side (the
+ * comparator capture, the pulse playback on PB14 by a timer) comes after
+ * the first version (issue #318); until then /dev/ibutton says ENXIO and
+ * ikey says so. */
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	(void) src; (void) n; (void) level;
+	return n == 0 ? 0 : -1;
+}
+
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
+{
+	(void) dst; (void) n; (void) ms; (void) level;
+	return -1;
+}
+
 /*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/

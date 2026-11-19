@@ -307,6 +307,8 @@ FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ib_stop, (void)				);
 FORWARD _PROTOTYPE( void ib_edge, (void)				);
+FORWARD _PROTOTYPE( int ib_play, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int ib_capt, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
@@ -1169,6 +1171,7 @@ message *m_ptr;
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
   if (ie.st != IE_OFF && ie.proc != m_ptr->PROC_NR + 1) return(EBUSY);
+  if (ie.st == IE_PLAY) return(EBUSY);	/* our own Cyfral/Metakom key */
   if (!q.on) {
 	if (ie.st != IE_OFF) ib_stop();
   } else {
@@ -1191,7 +1194,12 @@ message *m_ptr;
 PRIVATE void ib_stop()
 {
   lock();
-  hal_ib_emu(0);
+  if (ie.st == IE_PLAY) {		/* R6.7 part 3b: a pulse list */
+	(void) hal_ib_play(0, 0, 0);
+	proc_addr(ie.proc - 1)->p_physio = FALSE;	/* unpinned */
+  } else {
+	hal_ib_emu(0);
+  }
   ie.st = IE_OFF;
   ie.proc = 0;
   pm_busy &= ~PM_IBUTTON;
@@ -1236,6 +1244,97 @@ PRIVATE void ib_edge()
 
 
 /*===========================================================================*
+ *				ib_play					     *
+ *===========================================================================*/
+PRIVATE int ib_play(m_ptr)
+message *m_ptr;
+{
+/* IBIOCPLAY (R6.7 part 3b): be a Cyfral or Metakom key, the pulse list
+ * that ikey built (src/lib/ibkey) played round and round by the HAL from
+ * the caller's memory, pinned meanwhile (p_physio, as RFIDIOCEMU).  Its
+ * state is ie's (st IE_PLAY, proc, served): 0 B more.  The list is checked
+ * a few words at a time on the stack.  Asked again by the player: a new
+ * list takes over. */
+  struct ib_play q;
+  phys_bytes user, dur;
+  u16_t w[16];
+  unsigned i, j, k;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (ie.st != IE_OFF && (ie.st != IE_PLAY
+		|| ie.proc != m_ptr->PROC_NR + 1)) return(EBUSY);
+  if (q.n == 0) {
+	if (ie.st == IE_PLAY) ib_stop();
+  } else {
+	if (q.n % 2 != 0 || q.n > IB_MAXPLAY) return(EINVAL);
+	dur = numap(m_ptr->PROC_NR, (vir_bytes) q.dur, (vir_bytes) q.n * 2);
+	if (dur == 0) return(EFAULT);
+	for (i = 0; i < q.n; i += k) {
+		k = q.n - i < 16 ? q.n - i : 16;
+		phys_copy(dur + (phys_bytes) i * 2, vir2phys(w), (phys_bytes) k * 2);
+		for (j = 0; j < k; j++) if (w[j] == 0) return(EINVAL);
+	}
+	lock();
+	if (hal_ib_play((u32_t) dur, q.n, q.level != 0) < 0) {
+		unlock();
+		return(ENXIO);			/* not on this board yet */
+	}
+	if (ie.st == IE_OFF) {
+		ie.st = IE_PLAY;
+		ie.served = 0;
+		ie.proc = m_ptr->PROC_NR + 1;
+		proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* pinned */
+		pm_busy |= PM_IBUTTON;
+	}
+	unlock();
+  }
+  q.served = ie.served;
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				ib_capt					     *
+ *===========================================================================*/
+PRIVATE int ib_capt(m_ptr)
+message *m_ptr;
+{
+/* IBIOCCAPT (R6.7 part 3b): the contact's levels as durations, straight
+ * into the caller's buffer; ikey decodes them (src/lib/ibkey).  QEMU's
+ * HAL returns at once (the loopback of a list being played).  The
+ * Flipper's capture is the device side's (ENXIO until then); a capture
+ * there that takes its `ms` must not hold this task that long (spec rule
+ * 0.8: a key press goes through it), so it gets the same SUSPEND and
+ * revive as /dev/rfid's read. */
+  struct ib_capt q;
+  phys_bytes user, dur;
+  int r, level = 1;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.n < 16 || q.n > IB_MAXCAPT || q.ms < 1 || q.ms > 1000)
+	return(EINVAL);
+  if (ie.st != IE_OFF && ie.st != IE_PLAY) return(EBUSY);
+  dur = numap(m_ptr->PROC_NR, (vir_bytes) q.dur, (vir_bytes) q.n * 2);
+  if (dur == 0) return(EFAULT);
+  r = hal_ib_capt((u32_t) dur, q.n, q.ms, &level);
+  if (r < 0) return(ENXIO);			/* not on this board yet */
+  if (r == 0) return(ENODEV);			/* the line did not move */
+  if (ie.st == IE_PLAY) ie.served++;		/* QEMU: our player was read */
+  q.got = (unsigned) r;
+  q.level = level;
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
+}
+
+
+/*===========================================================================*
  *				ow_run					     *
  *===========================================================================*/
 PRIVATE int ow_run(m_ptr)
@@ -1250,6 +1349,8 @@ message *m_ptr;
   int i, j, v;
 
   if (m_ptr->TTY_REQUEST == IBIOCEMU) return(ib_emu(m_ptr));
+  if (m_ptr->TTY_REQUEST == IBIOCPLAY) return(ib_play(m_ptr));
+  if (m_ptr->TTY_REQUEST == IBIOCCAPT) return(ib_capt(m_ptr));
   if (m_ptr->TTY_REQUEST != IBIOCRUN) return(ENOTTY);
   if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
@@ -2529,7 +2630,8 @@ int irq;
 /* An edge on a button (T14b): take it now, then turn the edges off; the
  * ms timer samples while any is down, which also debounces.
  */
-  if (ie.st != IE_OFF && hal_ib_edge()) {	/* R6.7: iButton line 14 */
+  if (ie.st != IE_OFF && ie.st != IE_PLAY && hal_ib_edge()) {
+					/* R6.7: iButton line 14 */
 	ib_edge();
 	if (!hal_btn_pending()) return 1;	/* no button's edge too */
   }

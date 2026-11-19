@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -68,6 +68,11 @@ $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 # liblfrfid on the PC (spec R9.0.2): every LF RFID protocol round trip.
 lfrfidtest:
 	$(MAKE) -C tests/lfrfid test
+
+# libibkey on the PC (spec R6.7 part 3b): Cyfral and Metakom iButton keys,
+# encoder -> the line -> decoders.
+ibkeytest:
+	$(MAKE) -C tests/ibkey test
 
 # libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
 # the RFID line code, the Sub-GHz presets, legal check and duty counter.
