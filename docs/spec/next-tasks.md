@@ -14,6 +14,7 @@ The user manual lives in `docs/manual/` (start: `install.md`). A PR that changes
 GitHub Actions runs these on every PR; a red check means the PR is not ready for review. Run them locally before pushing when you can.
 - `build`: Flipper images; `make BOARD=flipper ramcheck` (hard gate, `flipper/ram-budget.txt`); QEMU `M2 USER PASS`; **flashcheck**: the flash pages erased during the M2 run must not exceed `flipper/flash-budget.txt` (`python3 tools/flashcheck.py flash-budget.txt m2 m2.log`). The budget is a ratchet: lower it in the PR that saves erases, raise it only with the reason in the same commit (the flash-writes rule above). `make BOARD=flipper latcheck` must compile.
 - `powercut`: `tools/powercut.py` (AC2b.5) in QEMU, all cut points.
+- `swap`: `tools/swaptest.py -n 20` (Phase 12: AC12.1, AC12.5, AC12.6, AC12.10–AC12.13, rule 0.2) in QEMU on `minix-base.bin` (#335; the job is added to `build.yml` by the user).
 - `pr-rules`: code changes add a `CHANGELOG.md` `Unreleased` line (skip: label `no-changelog`); user-visible changes touch `docs/manual/` or the PR description has a line `Manual: <why no change is needed>` (skip: label `no-manual`).
 - L1–L10 are **not** measured in CI: QEMU's timing is not the Flipper's. `lat` numbers on the device stay in PORTING.md as before.
 
