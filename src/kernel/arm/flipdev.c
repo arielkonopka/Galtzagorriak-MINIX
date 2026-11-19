@@ -760,9 +760,12 @@ int count;
  * passes here first: the frequency is read back from the chip (not taken
  * from what was asked), it must lie in a band of the region set at boot,
  * and the band's duty cycle over the hour must allow the frame's air time.
- * The table is const (flash).  Bands as stock's region data for the three
- * regions; the EU duty cycles are ETSI EN 300 220's (as libmodem's P.4
- * table).  RAM: the region (1 B) and the hour's air time (8 B). */
+ * The table is const (flash).  The region is an ISO 3166 country code
+ * (spec section Q, issue #292), mapped to one of two band sets: "EU" (the
+ * EU members, NO, GB, AL: the ERC/REC 70-03 Annex 1 rows they all have)
+ * and "US" (US, CA), with the duty cycles of ETSI EN 300 220.  Any other
+ * code is refused.  The flash record of RQ.2 replaces both tables (T32b).
+ * RAM: the region (2 B) and the hour's air time (8 B). */
 #define SG_HOUR_S	3600
 PRIVATE const struct sg_band {
   char rg[2];
@@ -777,10 +780,26 @@ PRIVATE const struct sg_band {
   { "US", 500,  304100000, 321950000 },		/* stock: 50 % */
   { "US", 500,  433050000, 434790000 },
   { "US", 500,  915000000, 928000000 },
-  { "JP", 500,  312000000, 315250000 },
-  { "JP", 500,  920500000, 923500000 },
 };
 #define SG_NBANDS	(sizeof(sg_bands) / sizeof(sg_bands[0]))
+PRIVATE const char sg_countries[][4] = {	/* code, band set */
+  "EUEU", "PLEU", "ESEU", "FREU", "IEEU", "FIEU", "SEEU", "NOEU", "GBEU",
+  "ALEU", "USUS", "CAUS",
+};
+#define SG_NCOUNTRIES	(sizeof(sg_countries) / sizeof(sg_countries[0]))
+
+PRIVATE int sg_set(rg)
+int rg;					/* SG_REGION('P','L') */
+{
+/* The band set of a country code, SG_REGION('E','U') or ('U','S'); 0 for
+ * a code without a table. */
+  unsigned i;
+
+  for (i = 0; i < SG_NCOUNTRIES; i++)
+	if (SG_REGION(sg_countries[i][0], sg_countries[i][1]) == rg)
+		return(SG_REGION(sg_countries[i][2], sg_countries[i][3]));
+  return(0);
+}
 PRIVATE u32_t sg_air_ms, sg_hour;	/* air time since sg_hour (s) */
 
 PRIVATE int sg_tx_check(ms, hzp, limit)
@@ -790,12 +809,13 @@ u32_t *limit;				/* out: the band's ms per hour */
 {
   unsigned i;
   u32_t hz, now = (u32_t) (get_uptime() / HZ);
+  int set;
 
   if (!(sg_state & SG_ON) || hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF)
 	return(EIO);			/* not tuned (R8.1: read back) */
-  if (sg_region == 0) return(EPERM);
+  if ((set = sg_set(sg_region)) == 0) return(EPERM);
   for (i = 0; i < SG_NBANDS; i++) {
-	if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == sg_region
+	if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == set
 			&& hz >= sg_bands[i].lo && hz <= sg_bands[i].hi) break;
   }
   if (i == SG_NBANDS) return(EPERM);
@@ -888,7 +908,6 @@ message *m_ptr;
   struct sg_air a;
   u32_t hz, limit, st;
   int v, size, r;
-  unsigned i;
 
   switch (m_ptr->TTY_REQUEST) {
   case SGIOCREGION: case SGIOCGREGION: case SGIOCFAKE: size = sizeof(int); break;
@@ -901,9 +920,7 @@ message *m_ptr;
   switch (m_ptr->TTY_REQUEST) {
   case SGIOCREGION:
 	phys_copy(user, vir2phys(&v), (phys_bytes) size);
-	for (i = 0; i < SG_NBANDS; i++)
-		if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == v) break;
-	if (i == SG_NBANDS) return(EINVAL);
+	if (sg_set(v) == 0) return(EINVAL);	/* no table for it */
 	if (sg_region != 0 && sg_region != (u16_t) v) return(EPERM);
 	sg_region = (u16_t) v;		/* once: until the next boot */
 	return(OK);
@@ -1339,7 +1356,7 @@ int count;
 						: " wother="; *k != 0; k++)
 		line[n++] = *k;
 	u = i == 0 ? (unsigned long) get_uptime() / HZ
-	  : i == 1 ? (unsigned long) pm_stat.min * 60 + pm_stat.stop / 32768
+	  : i == 1 ? pm_stat_secs(&pm_stat)
 	  : i == 2 ? pm_stat.btn : pm_stat.other;
 	j = 0;
 	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);

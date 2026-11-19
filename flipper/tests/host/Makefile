@@ -12,7 +12,7 @@ CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
-	   spectest
+	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz \
      run-mtpd
@@ -144,6 +144,11 @@ $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
+
+# pmstat.h: the Stop2 counters of /dev/power (T14b, R6.8, #284).
+$(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) pmstattest.c -o $@
 
 clean:
 	rm -rf $(B)

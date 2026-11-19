@@ -657,6 +657,215 @@ static void test_arq_z(void)
 	close(sv[0]);
 }
 
+/* ---- radio regions (spec section Q, issue #292) ---- */
+#ifndef REGION_DIR
+#define REGION_DIR "../../rootfs/usr/share/region"
+#endif
+static const char rg_codes[][3] = {
+	"EU", "PL", "ES", "FR", "IE", "FI", "SE", "NO", "GB", "AL", "US", "CA"
+};
+
+static int rg_bad(const char *text, int want_line)
+{
+	/* a file that must be refused, at want_line */
+	struct mdm_region rg;
+	char line[160], err[64];
+	const char *p = text;
+	int ln = 0, n;
+
+	mdm_rg_init(&rg);
+	while (*p) {
+		for (n = 0; p[n] && p[n] != '\n'; n++) line[n] = p[n];
+		line[n] = 0;
+		p += n + (p[n] == '\n');
+		ln++;
+		if (mdm_rg_line(&rg, line, err, (int) sizeof(err)) < 0)
+			return ln == want_line;
+	}
+	return 0;
+}
+
+static void test_region_files(void)
+{
+	static struct mdm_region rg;
+	static const char hdr[] = "Filetype: Galtzagorriak region\nVersion: 1\n"
+		"Region: XX\n";
+	char t[512], err[96];
+	unsigned i;
+	int j, active;
+
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		CHECK(mdm_rg_load(REGION_DIR, rg_codes[i], &rg, err,
+			(int) sizeof(err)) == 0, "%s: %s", rg_codes[i], err);
+		CHECK(mdm_rg_bandset(rg_codes[i]) != NULL, "%s: no band set",
+			rg_codes[i]);
+		for (j = active = 0; j < rg.n; j++)
+			if (!(rg.row[j].flags & MDM_RG_UNCHECKED)) active++;
+		CHECK(active >= 5, "%s: %d active rows", rg_codes[i], active);
+		printf("region %s (%s): %d rows, %d active\n", rg_codes[i],
+			rg.name, rg.n, active);
+	}
+	/* PL = EU + 2 unchecked rows; FR = EU alone */
+	mdm_rg_load(REGION_DIR, "EU", &rg, err, (int) sizeof(err));
+	j = rg.n;
+	mdm_rg_load(REGION_DIR, "PL", &rg, err, (int) sizeof(err));
+	CHECK(rg.n == j + 2 && (rg.row[j].flags & MDM_RG_UNCHECKED)
+		&& strcmp(rg.base, "EU") == 0, "PL rows %d", rg.n);
+	mdm_rg_load(REGION_DIR, "FR", &rg, err, (int) sizeof(err));
+	CHECK(rg.n == j, "FR rows %d", rg.n);
+	/* unknown codes are refused (Q.6) */
+	CHECK(mdm_rg_load(REGION_DIR, "XX", &rg, err, (int) sizeof(err)) < 0
+		&& strstr(err, "no table for XX") != NULL, "XX: %s", err);
+	CHECK(mdm_rg_load(REGION_DIR, "pl", &rg, err, (int) sizeof(err)) < 0,
+		"lower case");
+	CHECK(mdm_rg_bandset("XX") == NULL && mdm_rg_bandset("JP") == NULL,
+		"unknown band set");
+	/* ACQ.1: bad rows refused with their line */
+#define BAD(row, why) do { snprintf(t, sizeof(t), "%s# c\n%s\n", hdr, row); \
+	CHECK(rg_bad(t, 5), "not refused: %s", why); } while (0)
+	snprintf(t, sizeof(t), "%s# c\n433.050\t434.790\t0\tnone\t0\tany\tok\n"
+		"200.000\t201.000\t0\tnone\t0\tany\tx\n", hdr);
+	CHECK(rg_bad(t, 6), "not refused: outside the CC1101 (line 6)");
+	BAD("348.000\t390.000\t0\tnone\t0\tany\tx", "across two CC1101 ranges");
+	BAD("433.050\t434.790\t11\tnone\t0\tany\tx", "dbm > 10");
+	BAD("433.050\t434.790\t0\tnone\t0\tdata\tx", "unknown use");
+	BAD("433.050\t434.790\t0\tnone\t0\tany", "no ref");
+	BAD("433.050\t434.790\t0\tnone\t0\tany\t", "empty ref");
+	BAD("434.790\t433.050\t0\tnone\t0\tany\tx", "lo > hi");
+	BAD("433.050\t434.790\t0\t100%\t0\tany\tx", "duty 100 %");
+	BAD("#?433.050\t434.790\t0\tnone\t0\tany", "unchecked, no ref");
+	BAD("Filetype zzz", "no colon");
+	snprintf(t, sizeof(t), "Filetype: Stock region\n");
+	CHECK(rg_bad(t, 1), "wrong filetype");
+}
+
+/* the rows a transmit can use, for the messages of the tests */
+static int rg_try(const struct mdm_region *rg, struct mdm_rgstate *st,
+	double mhz, unsigned long occ, int dbm, int mode, unsigned air,
+	unsigned long now, long *wait)
+{
+	int row;
+
+	return mdm_rg_tx(rg, st, (unsigned long) (mhz * 1e6 + 0.5), occ, dbm,
+		mode, air, now, &row, wait);
+}
+
+static void test_region_tx(void)
+{
+	static struct mdm_region rg;
+	static struct mdm_rgstate st;
+	const struct mdm_preset *std = mdm_preset("std");
+	struct mdm_cc1101 c;
+	unsigned long occ, half, now, sent;
+	char err[96];
+	unsigned i;
+	long w;
+	int us, rc, n;
+
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		const char *cc = rg_codes[i];
+
+		us = strcmp(mdm_rg_bandset(cc), "US") == 0;
+		CHECK(mdm_rg_load(REGION_DIR, cc, &rg, err, (int) sizeof(err))
+			== 0, "%s: %s", cc, err);
+		mdm_rg_state_init(&st);
+		CHECK(mdm_cc1101_regs(433920000UL, &std->phy, &c) == 0, "regs");
+		occ = mdm_occupied(&c);
+		/* 1. a frequency outside every band: EPERM, with the message */
+		rc = rg_try(&rg, &st, us ? 868.35 : 315.0, occ, -30, MDM_SG_CTL,
+			10, 0, &w);
+		CHECK(rc == MDM_SG_BAND && strstr(mdm_rg_msg(rc), "refused"),
+			"%s: out of band %d", cc, rc);
+		rc = rg_try(&rg, &st, 600.0, occ, -30, MDM_SG_CTL, 10, 0, &w);
+		CHECK(rc == MDM_SG_BAND, "%s: 600 MHz %d", cc, rc);
+		/* the 870/915 MHz rows are "#?": never used */
+		if (!us) {
+			rc = rg_try(&rg, &st, 871.5, occ, 0, MDM_SG_DATA, 10, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: unchecked 871.5 MHz", cc);
+		}
+		/* 2. the band edge with the occupied bandwidth and 2 x 20 ppm:
+		 * EU-style 433.05-434.79 (1 mW row), US/CA 902-928 (-2 dBm) */
+		{
+			double hi = us ? 928.0 : 434.79;
+			unsigned long f = (unsigned long) (hi * 1e6 + 0.5);
+
+			half = occ / 2 + f / 50000UL + 1;
+			rc = mdm_rg_tx(&rg, &st, f - half - 1000, occ, us ? -2 : 0,
+				MDM_SG_DATA, 1, 0, &n, &w);
+			CHECK(rc == MDM_SG_OK, "%s: inside the edge %d", cc, rc);
+			rc = mdm_rg_tx(&rg, &st, f - half + 1000, occ, us ? -2 : 0,
+				MDM_SG_DATA, 1, 0, &n, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: over the edge %d", cc, rc);
+			rc = mdm_rg_tx(&rg, &st, f - occ / 2 + 1000, occ, -30,
+				MDM_SG_CTL, 1, 0, &n, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: crystal error ignored", cc);
+		}
+		/* 3. the duty cycle (RP.7) / the pause (RQ.6) refuses the next
+		 * packet once its limit is reached */
+		mdm_rg_state_init(&st);
+		if (!us) {
+			/* 433.92 MHz at +10 dBm: only the 10 % row admits it */
+			sent = 0;
+			for (now = 0; ; now++) {
+				rc = rg_try(&rg, &st, 433.92, occ, 10, MDM_SG_DATA,
+					100, now, &w);
+				if (rc != MDM_SG_OK) break;
+				sent += 100;
+			}
+			CHECK(rc == MDM_SG_WAIT && w > 0 && sent == 36000,
+				"%s: 10 %% duty: %d after %lu x 10 ms (wait %ld)",
+				cc, rc, sent, w);
+			rc = rg_try(&rg, &st, 433.92, occ, 10, MDM_SG_DATA, 100,
+				now + (unsigned long) w, &w);
+			CHECK(rc == MDM_SG_OK, "%s: after the wait %d", cc, rc);
+			/* at 0 dBm the 1 mW row has no limit: never waits */
+			rc = rg_try(&rg, &st, 433.92, occ, 0, MDM_SG_DATA, 100,
+				now, &w);
+			CHECK(rc == MDM_SG_OK, "%s: 0 dBm waits", cc);
+			/* 868.3 MHz +10 dBm: 1 % */
+			mdm_rg_state_init(&st);
+			for (now = sent = 0; ; now++) {
+				rc = rg_try(&rg, &st, 868.3, occ, 10, MDM_SG_DATA,
+					100, now, &w);
+				if (rc != MDM_SG_OK) break;
+				sent += 100;
+			}
+			CHECK(rc == MDM_SG_WAIT && sent == 3600,
+				"%s: 1 %% duty at 868.3: %lu", cc, sent);
+		} else {
+			/* 433.92: data only under 15.231(e)/A.1.4, -30 dBm */
+			rc = rg_try(&rg, &st, 433.92, occ, -15, MDM_SG_DATA, 50, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: data at -15 dBm %d", cc, rc);
+			rc = rg_try(&rg, &st, 433.92, occ, -30, MDM_SG_DATA, 101, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: data burst > 1 s", cc);
+			rc = rg_try(&rg, &st, 433.92, occ, -30, MDM_SG_DATA, 100, 0, &w);
+			CHECK(rc == MDM_SG_OK, "%s: 1 s burst %d", cc, rc);
+			rc = rg_try(&rg, &st, 433.92, occ, -30, MDM_SG_DATA, 100, 29, &w);
+			CHECK(rc == MDM_SG_WAIT && w == 1, "%s: pause 30 s: %d %ld",
+				cc, rc, w);
+			rc = rg_try(&rg, &st, 433.92, occ, -30, MDM_SG_DATA, 100, 30, &w);
+			CHECK(rc == MDM_SG_OK, "%s: after the pause %d", cc, rc);
+			rc = rg_try(&rg, &st, 433.92, occ, -30, MDM_SG_DATA, 10, 31, &w);
+			CHECK(rc == MDM_SG_WAIT && w == 29, "%s: >= 10 s after 1 s"
+				" wait %ld", cc, w);
+			/* a remote's code (ctl): -15 dBm, up to 5 s */
+			rc = rg_try(&rg, &st, 433.92, occ, -15, MDM_SG_CTL, 500, 0, &w);
+			CHECK(rc == MDM_SG_OK, "%s: ctl 5 s %d", cc, rc);
+			rc = rg_try(&rg, &st, 433.92, occ, -15, MDM_SG_CTL, 501, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: ctl over 5 s", cc);
+			/* restricted band 322-335.4: nothing */
+			rc = rg_try(&rg, &st, 330.0, occ, -30, MDM_SG_CTL, 10, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "%s: restricted band", cc);
+		}
+		/* +12 dBm, as the stock data allows: refused everywhere */
+		rc = rg_try(&rg, &st, us ? 915.0 : 433.92, occ, 12, MDM_SG_CTL, 1,
+			1000000, &w);
+		CHECK(rc == MDM_SG_BAND, "%s: +12 dBm %d", cc, rc);
+	}
+	CHECK(mdm_pa_step(14) == 10 && mdm_pa_step(-2) == -6
+		&& mdm_pa_step(-21) == -30 && mdm_pa_step(6) == 5, "PA steps");
+}
+
 int main(int argc, char **argv)
 {
 	(void) argc; (void) argv;
@@ -674,6 +883,8 @@ int main(int argc, char **argv)
 	test_duty(100);
 	test_duty(10);
 	test_duty(1);
+	test_region_files();
+	test_region_tx();
 	test_fuzz();
 	test_z();
 	test_arq_z();

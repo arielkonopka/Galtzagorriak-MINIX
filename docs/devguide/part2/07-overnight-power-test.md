@@ -51,8 +51,10 @@ The details are in `flipper/PORTING.md`, "How the sleep works". The short versio
   At least **62 wake-ups a minute** of Stop2 from the timer (`wother`) are therefore normal and
   expected (the device showed 64); a button press adds one `wbtn`. Every sleep ends in a counted
   wake-up, so `wbtn + wother` is never below `stop2 / 0.967`.
-- `wbtn` and `wother` are 16-bit and wrap at 65536, about every 18 h (#284). `nightpower.py`
-  corrects a wrapped count with the rule above; by hand, add 65536 until it holds.
+- `wother` is 32-bit since #284 and does not wrap in a night. Older kernels kept it in 16 bits,
+  and it wrapped at 65536, about every 18 h. `wbtn` is still 16-bit (65536 presses). For readings
+  from an older kernel, `nightpower.py` corrects a wrapped count with the rule above; by hand, add
+  65536 until it holds.
 - Since R6.8 (#207, merged 2026-11-17) the kernel counts this in every build, and the last four
   fields of `/dev/power` show it:
 
