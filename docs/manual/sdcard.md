@@ -81,6 +81,13 @@ R12.40)** for memory blocks that apps have given back. For programmers: `ioctl(f
 &range)` on a partition device (root only), `struct part_range` in `<minix/partition.h>`
 (first sector and count, from the partition's start); `ENOTTY` if the card has no DISCARD.
 
+Raw sectors (R12.39): `bread(fd, sector, buf, count)` and `bwrite(...)` (`DIOCPRW`) read and
+write sectors anywhere in a partition, also past 4 GiB. A read needs `fd` open for reading, a
+write needs it open for writing (else `EBADF`), and a write to a partition that is mounted is
+refused (`EBUSY`). This check covers the partition device only: writing through `/dev/hd0`
+(the whole card, root only) still reaches a mounted partition behind the file system's back,
+as plain `write()` always could. Do not do that.
+
 ## Things that cannot save your data
 
 - The **Left + Back** reset, the battery running completely flat without the low-battery power

@@ -87,6 +87,8 @@
 #define DIOCFAKECARD	_IOW('d', 8, int)	/* QEMU tests: SD card in/out (N.6) */
 #define DIOCDISCARD	_IOW('d', 9, struct part_range) /* R12.40: unused sectors */
 #define DIOCERASE	_IOW('d', 10, struct part_range) /* R12.33: erase (setup) */
+#define DIOCGETPS	_IOR('d', 11, struct part_range) /* R12.39: in sectors */
+#define DIOCPRW		_IOW('d', 12, struct part_rw)	/* R12.39: raw sectors */
 
 /* Keyboard ioctls. */
 #define KIOCSMAP	_IOW('k', 3, keymap_t)

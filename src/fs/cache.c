@@ -337,7 +337,9 @@ int rw_flag;			/* READING or WRITING */
   dev_t dev;
 
   if ( (dev = bp->b_dev) != NO_DEV) {
-	pos = (off_t) bp->b_blocknr * BLOCK_SIZE;
+	/* R12.39: the byte position in 64 bits, the high half as HIGHPOS
+	 * (dev_io's nonblock field): partitions past 4 GiB (spec O.3). */
+	pos = (off_t) (bp->b_blocknr << BLOCK_SHIFT);
 	op = (rw_flag == READING ? DEV_READ : DEV_WRITE);
 	r = BLOCK_SIZE;
 	if (rw_flag == WRITING) {
@@ -345,7 +347,8 @@ int rw_flag;			/* READING or WRITING */
 		else r = before_write(dev);
 	}
 	if (r != ENXIO)
-	   r = dev_io(op, FALSE, dev, pos, BLOCK_SIZE, FS_PROC_NR, bp->b_data);
+	   r = dev_io(op, (int) (bp->b_blocknr >> (32 - BLOCK_SHIFT)), dev,
+				pos, BLOCK_SIZE, FS_PROC_NR, bp->b_data);
 	if (r == ENXIO && rw_flag == WRITING) {
 		/* N.6: the card is out.  The block stays dirty in the cache
 		 * until the same card is back (the driver checks), so
@@ -463,7 +466,8 @@ int rw_flag;			/* READING or WRITING */
   while (bufqsize > 0 && !out) {
 	for (j = 0, iop = iovec; j < NR_IOREQS && j < bufqsize; j++, iop++) {
 		bp = bufq[j];
-		iop->io_position = (off_t) bp->b_blocknr * BLOCK_SIZE;
+		iop->io_position = (off_t) (bp->b_blocknr << BLOCK_SHIFT);
+		iop->io_high = bp->b_blocknr >> (32 - BLOCK_SHIFT); /* R12.39 */
 		iop->io_buf = bp->b_data;
 		iop->io_nbytes = BLOCK_SIZE;
 		iop->io_request = rw_flag == WRITING ?
