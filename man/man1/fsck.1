@@ -36,7 +36,7 @@ fsck \- perform file system consistency check
 .EX "fsck \-c 2 3 /dev/hd3" "Check and list \fI/dev/hd3\fR i-nodes 2 & 3"
 .SH DESCRIPTION
 .PP
-\fIFsck\fR performs consistency checks on the MINIX V2 file systems which
+\fIFsck\fR performs consistency checks on the MINIX V2 and V3 file systems which
 reside on the specified devices.
 When either the \fB\-a\fR, \fB\-p\fR or \fB\-r\fR flags are given, the file
 system will be repaired if errors are found.
@@ -56,8 +56,15 @@ is set if the file system is not mounted.
 \fIFsck\fR keeps the computed zone map in memory only for a window of the
 zones as large as \fB\-m\fR allows; a larger file system is checked in
 several passes (shown as \fIn\fR/\fIN\fR).
-The disk's maps are compared one block at a time, and link counts are kept
-for the i-nodes up to the highest one in use.
+The disk's maps are compared one block at a time, and link counts and the
+i-node maps are kept for the i-nodes up to the highest one in use.
+Windows above the highest zone any file uses are only compared with the disk.
+.PP
+On a MINIX V3 file system (as util-linux \fImkfs.minix \-3\fR makes it, 1 KB
+blocks) directory entries are 64 bytes with names of up to 60 characters,
+i-node numbers are 32-bit, files may use the triple indirect zone, and the
+\fBclean\fR and \fBcheck\fR flags are at byte 14 of the super block (where
+MINIX 3.3 keeps its flags; Linux ignores them).
 \fIFsck\fR needs about 90 KB of memory: at boot it is free; later, close the
 apps first.
 .PP
@@ -80,7 +87,7 @@ The mounted root file system was repaired: reboot now.
 Errors are left (not repaired).
 .TP 5
 8
-The file system could not be checked (no memory, unreadable, not a V2 file
+The file system could not be checked (no memory, unreadable, not a V2 or V3 file
 system, or stopped with \fB\-k\fR).
 .SH FILES
 .TP 20
