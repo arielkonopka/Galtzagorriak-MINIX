@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdio.h>
 
 /* QEMU retranslates code on a page that is written: four loops whose
  * errno (EAGAIN, a full FIFO) sits next to their code would crawl.  This
@@ -37,25 +38,28 @@ static char *cpy(char *p, const char *s)
 	return p;
 }
 
-int main(void)
+static int __attribute__((noinline)) flood(void)
 {
 	char rec[64], *p, *q;
 	unsigned long k;
-	int i, fd;
+	int i, fd, n;
 
 	for (i = 0; i < 3; i++)
 		if (fork() == 0) break;
 	i = i < 3 ? i + 1 : 0;
-	if (pad[0] != 1 || (fd = open("/var/run/gui", O_WRONLY | O_NONBLOCK)) < 0)
+	if (pad[0] != 1 || (fd = open("/var/run/gui", O_WRONLY)) < 0)
 		return 1;
-	p = cpy(rec, "tile\tw");
-	*p++ = (char) ('0' + i);
-	p = cpy(p, "\t0\t");
-	p = num(p, (unsigned long) getpid());
-	p = cpy(p, "\tflood ");
 	for (k = 0; ; k++) {
-		q = num(p, k);
-		*q++ = '\n';
-		(void) write(fd, rec, (size_t) (q - rec));
+		n = sprintf(rec, "tile\tw%d\t0\t%d\tflood %ld\n", i,
+			    (int) getpid(), (long) k);
+		(void) write(fd, rec, (size_t) n);
 	}
+}
+
+int main(void)
+{
+	volatile char guard[2048];	/* the loop's stack 2 KB below the top */
+
+	guard[0] = 0;
+	return flood() + guard[0];
 }

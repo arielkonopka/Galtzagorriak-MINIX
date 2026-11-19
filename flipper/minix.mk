@@ -378,7 +378,7 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
 CHMEM_fptest := 8192
-CHMEM_guiflood := 1024	# #324: all stack, a 64 B record (no stdio)
+CHMEM_guiflood := 6144	# #324: all stack (sprintf), a 64 B record
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
