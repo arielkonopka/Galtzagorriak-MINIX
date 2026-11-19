@@ -134,11 +134,23 @@ static void compare(const char* name, const uint8_t* fb) {
     }
 }
 
+/* the module tests run three times (T22b): in the stock style
+ * (FURI_STYLE=stock, the references of R5.2), and in the Pine style
+ * (spec K.2) fullscreen ("pine_") and in the window frame under the
+ * Gui's title bar ("pinew_") */
+static const char* prefix = "";
+static bool in_window;
+
 static void render(const char* name, View* view) {
+    char full[64];
     canvas_reset(canvas);
-    canvas_frame_set(canvas, 0, 0, 128, 64);
+    if(in_window)
+        canvas_frame_set(canvas, GUI_WINDOW_X, GUI_WINDOW_Y, GUI_WINDOW_WIDTH, GUI_WINDOW_HEIGHT);
+    else
+        canvas_frame_set(canvas, 0, 0, 128, 64);
     view_draw(view, canvas);
-    compare(name, canvas_get_buffer(canvas));
+    snprintf(full, sizeof full, "%s%s", prefix, name);
+    compare(full, canvas_get_buffer(canvas));
 }
 
 static bool key(View* view, InputKey k, InputType type) {
@@ -514,6 +526,77 @@ static int32_t presser(void* context) {
     return 0;
 }
 
+static void pine_vp_draw(Canvas* c, void* context) {
+    view_draw(context, c);
+}
+
+/* Pine: 12 entries (AC5.7 of the launcher): the position, the scroll
+ * mark, the list scrolls only when the selection leaves it */
+static void test_pine_long_list(void) {
+    Submenu* submenu = submenu_alloc();
+    View* view = submenu_get_view(submenu);
+    submenu_set_header(submenu, "Long");
+    for(int i = 0; i < 12; i++) {
+        char label[16];
+        snprintf(label, sizeof label, "Entry %d", i + 1);
+        submenu_add_item(submenu, label, (uint32_t)i, submenu_cb, NULL);
+    }
+    for(int i = 0; i < 9; i++)
+        tap(view, InputKeyDown);
+    render("submenu_long", view);
+    tap(view, InputKeyOk);
+    CHECK(last_index == 9, "pine submenu: OK on the 10th entry");
+    tap(view, InputKeyUp); /* back to 9: stays on the same page */
+    tap(view, InputKeyUp);
+    tap(view, InputKeyUp);
+    tap(view, InputKeyOk);
+    CHECK(last_index == 6, "pine submenu: Up three times");
+    submenu_free(submenu);
+
+    VariableItemList* list = variable_item_list_alloc();
+    view = variable_item_list_get_view(list);
+    for(int i = 0; i < 10; i++) {
+        static const char* const names[] = {"Alpha", "Bravo", "Charlie", "Delta", "Echo",
+                                            "Foxtrot", "Golf", "Hotel", "India", "Juliett"};
+        VariableItem* item = variable_item_list_add(list, names[i], 2, vil_change, NULL);
+        variable_item_set_current_value_index(item, (uint8_t)(i & 1));
+        variable_item_set_current_value_text(item, on_off[i & 1]);
+    }
+    variable_item_list_set_selected_item(list, 8);
+    render("variable_item_list_long", view);
+    variable_item_list_free(list);
+}
+
+/* Pine (T22b): a Submenu in the window layer under the Gui's title bar,
+ * through gui_redraw(): the module draws the bar with the title and its
+ * position on the right, and the Gui does not draw over it */
+static void test_pine_window_gui(void) {
+    Gui* gui = gui_alloc_headless();
+    Submenu* submenu = submenu_alloc();
+    for(int i = 0; i < 12; i++) {
+        char label[16];
+        snprintf(label, sizeof label, "Entry %d", i + 1);
+        submenu_add_item(submenu, label, (uint32_t)i, submenu_cb, NULL);
+    }
+    submenu_set_selected_item(submenu, 9);
+    ViewPort* vp = view_port_alloc();
+    View* view = submenu_get_view(submenu);
+    view_port_draw_callback_set(vp, pine_vp_draw, view);
+    /* pine.c reads the title from the record's Gui: the gui thread's
+     * of test_gui_thread() (still running) */
+    Gui* service = furi_record_open(RECORD_GUI);
+    const char* old_title = service->title;
+    service->title = gui->title = "hello";
+    gui_add_view_port(gui, vp, GuiLayerWindow);
+    gui_redraw(gui);
+    compare("pine_gui_window", canvas_get_buffer(gui->canvas));
+    service->title = old_title;
+    furi_record_close(RECORD_GUI);
+    gui_remove_view_port(gui, vp);
+    view_port_free(vp);
+    submenu_free(submenu);
+}
+
 static void test_view_dispatcher(void) {
     Gui* gui = gui_alloc_headless();
     App* app = app_alloc();
@@ -634,6 +717,7 @@ int main(int argc, char** argv) {
     ref_dir = i < argc ? argv[i] : "tests/gui";
     canvas = canvas_init();
 
+    setenv("FURI_STYLE", "stock", 1);
     test_canvas();
     test_submenu();
     test_popup();
@@ -646,6 +730,26 @@ int main(int argc, char** argv) {
     test_gui_window_and_input();
     test_view_dispatcher();
     test_gui_thread();
+
+    unsetenv("FURI_STYLE"); /* Pine, the default (spec K.2, T22b) */
+    for(int w = 0; w < 2; w++) {
+        prefix = w ? "pinew_" : "pine_";
+        in_window = w;
+        last_index = 0;
+        text_done = 0;
+        popup_done = 0;
+        vil_changes = 0;
+        strcpy(text_buf, "flip");
+        test_submenu();
+        test_popup();
+        test_dialog_ex();
+        test_text_input();
+        test_variable_item_list();
+        test_pine_long_list();
+    }
+    prefix = "";
+    in_window = false;
+    test_pine_window_gui();
     report_ram();
     canvas_free(canvas);
     printf("test_gui: %d checks, %s\n", checks, fails ? "FAIL" : "PASS");

@@ -20,6 +20,7 @@ that brings them.
 13. [Sub-GHz remotes](subghz.md): `subghz` (receive and decode the Unleashed protocols, send),
     the radio region, rolling codes and your own key file.
 14. [Files to a PC over USB](usb-files.md): MTP, Windows and Linux copy files with their own drivers (`mtpd`; the USB side planned).
+15. [Desktop and modules](desktop.md): the desktop's pages (HOME, NOTES, RUNNING), notifications, writing a module in shell or C.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
