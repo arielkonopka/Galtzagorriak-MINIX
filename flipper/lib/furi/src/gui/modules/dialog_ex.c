@@ -43,8 +43,9 @@ static void dialog_ex_hint(char* h, size_t size, const char* key, FuriString* la
     size_t n = strlen(h);
     if(!furi_string_size(label)) return;
     if(n > 0 && n + 2 < size) {
-        strcpy(h + n, "  ");
-        n += 2;
+        h[n++] = ' ';
+        h[n++] = ' ';
+        h[n] = 0;
     }
     for(; *key && n + 1 < size; key++)
         h[n++] = *key;
@@ -57,13 +58,14 @@ static void dialog_ex_view_draw_callback(Canvas* canvas, void* _model) {
     DialogExModel* model = _model;
 
     if(pine_on()) { /* spec K.2: the header as the title, the hints */
-        char hints[33] = "";
+        char hints[33];
+        hints[0] = 0;
         pine_body(
             canvas, furi_string_get_cstr(model->header.text), furi_string_get_cstr(model->text.text),
             model->icon.icon, model->icon.x, model->icon.y);
-        dialog_ex_hint(hints, sizeof hints, "<", model->left_text);
-        dialog_ex_hint(hints, sizeof hints, "OK ", model->center_text);
-        dialog_ex_hint(hints, sizeof hints, ">", model->right_text);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyLeft), model->left_text);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyOk), model->center_text);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyRight), model->right_text);
         pine_hints(canvas, hints);
         return;
     }

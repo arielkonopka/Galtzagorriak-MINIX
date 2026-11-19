@@ -44,7 +44,7 @@ static void popup_view_draw_callback(Canvas* canvas, void* _model) {
         pine_body(
             canvas, model->header.text, model->text.text, model->icon.icon, model->icon.x,
             model->icon.y);
-        pine_hints(canvas, model->icon.has_callback ? "Any key Close" : "Back Close");
+        pine_hints(canvas, pine_str(model->icon.has_callback ? PineAnyKeyClose : PineBackClose));
         return;
     }
 

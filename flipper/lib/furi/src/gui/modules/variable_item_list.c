@@ -47,9 +47,10 @@ static void variable_item_list_process_ok(VariableItemList* variable_item_list);
 static void variable_item_list_draw_pine(Canvas* canvas, VariableItemListModel* model, bool ok) {
     const size_t n = VariableItemArray_size(model->items), vis = pine_rows(canvas);
     char pos[12];
-    char hints[32] = "";
+    char hints[32];
 
     canvas_clear(canvas);
+    hints[0] = 0;
     pine_title(canvas, NULL, n > 0 ? pine_pos(pos, model->position + 1, n) : NULL);
     model->window_position =
         (uint8_t)pine_scroll_top(model->window_position, model->position, vis, n);
@@ -61,9 +62,9 @@ static void variable_item_list_draw_pine(Canvas* canvas, VariableItemListModel* 
     }
     pine_scrollbar(canvas, model->window_position, vis, n, model->position);
     if(model->position < n && VariableItemArray_cget(model->items, model->position)->values_count > 1)
-        strcat(hints, "<>Change  ");
-    if(ok && n > 0) strcat(hints, "OK Select  ");
-    strcat(hints, "Back Done");
+        strcat(hints, pine_str(PineChange));
+    if(ok && n > 0) strcat(hints, pine_str(PineSelect));
+    strcat(hints, pine_str(PineDone));
     pine_hints(canvas, hints);
 }
 

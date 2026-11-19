@@ -31,6 +31,34 @@
                        * in Pine style: never scroll there, the draw
                        * callback keeps the selection visible */
 
+/* The strings of the Pine parts, in one const table in pine.c: in the
+ * shared library every string literal costs a GOT word of RAM in each
+ * app, the table costs one. */
+typedef enum {
+    PineSelectDone, /* "OK Select  Back Done" */
+    PineDone, /* "Back Done" */
+    PineChange, /* "<>Change  " */
+    PineSelect, /* "OK Select  " */
+    PineAnyKeyClose, /* "Any key Close" */
+    PineBackClose, /* "Back Close" */
+    PineKeyLeft, /* "<" */
+    PineKeyOk, /* "OK " */
+    PineKeyRight, /* ">" */
+    PineSave, /* "OK Save  Back Cancel" */
+    PineDelete, /* "OK Delete  Back Cancel" */
+    PineType, /* "OK Type  Back Cancel" */
+    PinePrompt, /* "> " */
+    PineDots, /* ".." */
+    PineCursor, /* "_" */
+    PineEnv, /* "FURI_STYLE" */
+    PineStock, /* "stock" */
+    PineOpen, /* "[" */
+    PineClose, /* "]" */
+    PineEmpty, /* "" */
+} PineStr;
+
+const char* pine_str(PineStr id);
+
 /* true: draw the modules in Pine style */
 bool pine_on(void);
 /* text in the 4x6 font at frame (x, y); inverse: white on black.

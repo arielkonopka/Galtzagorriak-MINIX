@@ -83,7 +83,7 @@ static void submenu_draw_pine(Canvas* canvas, SubmenuModel* model) {
             true);
     }
     pine_scrollbar(canvas, model->window_position, vis, n, model->position);
-    pine_hints(canvas, n > 0 ? "OK Select  Back Done" : "Back Done");
+    pine_hints(canvas, pine_str(n > 0 ? PineSelectDone : PineDone));
 }
 
 /* the rows the stock navigation code scrolls by */

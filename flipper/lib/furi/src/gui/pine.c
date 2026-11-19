@@ -12,9 +12,22 @@
 
 #include "../../../../hal/common/font4x6.c"
 
+/* in the order of PineStr */
+static const char pine_strs[] = "OK Select  Back Done\0Back Done\0<>Change  \0OK Select  \0"
+                                "Any key Close\0Back Close\0<\0OK \0>\0"
+                                "OK Save  Back Cancel\0OK Delete  Back Cancel\0"
+                                "OK Type  Back Cancel\0> \0..\0_\0FURI_STYLE\0stock\0[\0]\0";
+
+const char* pine_str(PineStr id) {
+    const char* p = pine_strs;
+    for(int i = 0; i < (int)id; i++)
+        p += strlen(p) + 1;
+    return p;
+}
+
 bool pine_on(void) {
-    const char* s = getenv("FURI_STYLE");
-    return !(s && strcmp(s, "stock") == 0);
+    const char* s = getenv(pine_str(PineEnv));
+    return !(s && strcmp(s, pine_str(PineStock)) == 0);
 }
 
 /* a pixel at frame (x, y); the buffer is u8g2's vertical_top_lsb */
@@ -104,7 +117,7 @@ void pine_title(Canvas* canvas, const char* name, const char* state) {
             name = gui->title;
             furi_record_close(RECORD_GUI);
         }
-        if(!name) name = "";
+        if(!name) name = pine_str(PineEmpty);
     }
     {
         pine_fill(canvas, 0, 0, GUI_DISPLAY_WIDTH - 1, bar_h - 1, true);
@@ -164,13 +177,13 @@ void pine_row(
         vn = strlen(value);
         if(vn > 12) vn = 12;
         vx = w - 3 - (int)(vn + 2) * FONT_W;
-        pine_text_n(canvas, vx, y, "[", 1, selected, false);
+        pine_text_n(canvas, vx, y, pine_str(PineOpen), 1, selected, false);
         pine_text_n(canvas, vx + FONT_W, y, value, vn, selected, false);
-        pine_text_n(canvas, vx + FONT_W * (int)(vn + 1), y, "]", 1, selected, false);
+        pine_text_n(canvas, vx + FONT_W * (int)(vn + 1), y, pine_str(PineClose), 1, selected, false);
     }
     room = (vx - FONT_W - 6) / FONT_W;
     if(room > 0) pine_text_n(canvas, 6, y, label, (size_t)room, selected, false);
-    if(selected && mark) pine_text_n(canvas, 1, y, ">", 1, true, false);
+    if(selected && mark) pine_text_n(canvas, 1, y, pine_str(PineKeyRight), 1, true, false);
 }
 
 void pine_scrollbar(Canvas* canvas, size_t top, size_t vis, size_t n, size_t sel) {

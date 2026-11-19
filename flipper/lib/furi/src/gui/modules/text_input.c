@@ -176,16 +176,16 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
         /* spec K.2: the header as the title, the text after "> " on the
          * first row, the keyboard above the hint line */
         const int max = (int)(canvas_width(canvas) / 4) - 4;
-        const char* t = text ? text : "";
+        const char* t = text ? text : pine_str(PineEmpty);
         int x = 1, len = (int)strlen(t);
         pine_title(canvas, model->header && *model->header ? model->header : NULL, NULL);
-        x += pine_text(canvas, x, pine_top(canvas), "> ", false);
+        x += pine_text(canvas, x, pine_top(canvas), pine_str(PinePrompt), false);
         if(len > max) {
-            x += pine_text(canvas, x, pine_top(canvas), "..", false);
+            x += pine_text(canvas, x, pine_top(canvas), pine_str(PineDots), false);
             t += len - max + 2;
         }
         x += pine_text(canvas, x, pine_top(canvas), t, model->clear_default_text);
-        if(!model->clear_default_text) pine_text(canvas, x, pine_top(canvas), "_", false);
+        if(!model->clear_default_text) pine_text(canvas, x, pine_top(canvas), pine_str(PineCursor), false);
         origin_y = (int)canvas_height(canvas) - 8 - 35;
     } else {
     canvas_draw_str(canvas, 2, 8, model->header);
@@ -295,9 +295,10 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
         const char key = get_row(model->selected_row)[model->selected_column].text;
         pine_hints(
             canvas,
-            key == ENTER_KEY     ? "OK Save  Back Cancel" :
-            key == BACKSPACE_KEY ? "OK Delete  Back Cancel" :
-                                   "OK Type  Back Cancel");
+            pine_str(
+                key == ENTER_KEY     ? PineSave :
+                key == BACKSPACE_KEY ? PineDelete :
+                                       PineType));
     }
 }
 
