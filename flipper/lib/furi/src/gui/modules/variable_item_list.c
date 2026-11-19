@@ -7,6 +7,8 @@
 #include <furi.h>
 #include "../m-array.h"
 #include <stdint.h>
+#include <string.h>
+#include "pine.h"
 
 struct VariableItem {
     const char* label;
@@ -29,6 +31,7 @@ typedef struct {
     VariableItemArray_t items;
     uint8_t position;
     uint8_t window_position;
+    bool has_enter; /* Pine hints: OK does something (in the padding) */
 } VariableItemListModel;
 
 static void variable_item_list_process_up(VariableItemList* variable_item_list);
@@ -37,8 +40,41 @@ static void variable_item_list_process_left(VariableItemList* variable_item_list
 static void variable_item_list_process_right(VariableItemList* variable_item_list);
 static void variable_item_list_process_ok(VariableItemList* variable_item_list);
 
+/* Pine style (spec K.2, R5.6a.7): "Name   [value]" rows, the position on
+ * the title bar, the scroll mark; the hints name what the selected row
+ * does (Left/Right only if it has values to step through, OK only with
+ * an enter callback). */
+static void variable_item_list_draw_pine(Canvas* canvas, VariableItemListModel* model, bool ok) {
+    const size_t n = VariableItemArray_size(model->items), vis = pine_rows(canvas);
+    char pos[12];
+    char hints[32];
+
+    canvas_clear(canvas);
+    hints[0] = 0;
+    pine_title(canvas, NULL, n > 0 ? pine_pos(pos, model->position + 1, n) : NULL);
+    model->window_position =
+        (uint8_t)pine_scroll_top(model->window_position, model->position, vis, n);
+    for(size_t i = 0; i < vis && model->window_position + i < n; i++) {
+        const size_t p = model->window_position + i;
+        const VariableItem* item = VariableItemArray_cget(model->items, p);
+        const char* value = furi_string_get_cstr(item->current_value_text);
+        pine_row(canvas, i, item->label, *value ? value : NULL, p == model->position, false);
+    }
+    pine_scrollbar(canvas, model->window_position, vis, n, model->position);
+    if(model->position < n && VariableItemArray_cget(model->items, model->position)->values_count > 1)
+        strcat(hints, pine_str(PineChange));
+    if(ok && n > 0) strcat(hints, pine_str(PineSelect));
+    strcat(hints, pine_str(PineDone));
+    pine_hints(canvas, hints);
+}
+
 static void variable_item_list_draw_callback(Canvas* canvas, void* _model) {
     VariableItemListModel* model = _model;
+
+    if(pine_on()) {
+        variable_item_list_draw_pine(canvas, model, model->has_enter);
+        return;
+    }
 
     const uint8_t item_height = 16;
     const uint8_t item_width = 123;
@@ -52,7 +88,7 @@ static void variable_item_list_draw_callback(Canvas* canvas, void* _model) {
     for(VariableItemArray_it(it, model->items); !VariableItemArray_end_p(it);
         VariableItemArray_next(it)) {
         uint8_t item_position = position - model->window_position;
-        uint8_t items_on_screen = 4;
+        uint8_t items_on_screen = pine_on() ? PINE_ANY : 4;
         uint8_t y_offset = 0;
 
         if(item_position < items_on_screen) {
@@ -111,11 +147,12 @@ void variable_item_list_set_selected_item(VariableItemList* variable_item_list, 
                 model->window_position -= 1;
             }
 
-            if(VariableItemArray_size(model->items) <= 4) {
+            const size_t on_screen = pine_on() ? PINE_ANY : 4;
+            if(VariableItemArray_size(model->items) <= on_screen) {
                 model->window_position = 0;
             } else {
-                if(model->window_position >= (VariableItemArray_size(model->items) - 4)) {
-                    model->window_position = (VariableItemArray_size(model->items) - 4);
+                if(model->window_position >= (VariableItemArray_size(model->items) - on_screen)) {
+                    model->window_position = (VariableItemArray_size(model->items) - on_screen);
                 }
             }
         },
@@ -190,7 +227,7 @@ void variable_item_list_process_up(VariableItemList* variable_item_list) {
         variable_item_list->view,
         VariableItemListModel * model,
         {
-            uint8_t items_on_screen = 4;
+            uint8_t items_on_screen = pine_on() ? PINE_ANY : 4;
             if(model->position > 0) {
                 model->position--;
 
@@ -212,7 +249,7 @@ void variable_item_list_process_down(VariableItemList* variable_item_list) {
         variable_item_list->view,
         VariableItemListModel * model,
         {
-            uint8_t items_on_screen = 4;
+            uint8_t items_on_screen = pine_on() ? PINE_ANY : 4;
             if(model->position < (VariableItemArray_size(model->items) - 1)) {
                 model->position++;
                 if((model->position - model->window_position) > (items_on_screen - 2) &&
@@ -307,6 +344,7 @@ VariableItemList* variable_item_list_alloc(void) {
             VariableItemArray_init(model->items);
             model->position = 0;
             model->window_position = 0;
+            model->has_enter = false;
         },
         true);
 
@@ -390,11 +428,11 @@ void variable_item_list_set_enter_callback(
         variable_item_list->view,
         VariableItemListModel * model,
         {
-            UNUSED(model);
+            model->has_enter = true;
             variable_item_list->callback = callback;
             variable_item_list->context = context;
         },
-        false);
+        true);
 }
 
 void variable_item_set_item_label(VariableItem* item, const char* label) {

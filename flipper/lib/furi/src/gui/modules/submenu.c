@@ -6,6 +6,7 @@
 #include <gui/elements.h>
 #include <furi.h>
 #include "../m-array.h"
+#include "pine.h"
 
 struct Submenu {
     View* view;
@@ -59,8 +60,45 @@ static void submenu_process_up(Submenu* submenu);
 static void submenu_process_down(Submenu* submenu);
 static void submenu_process_ok(Submenu* submenu, InputType input_type);
 
+/* Pine style (spec K.2, R5.6a.7): the header is the title, the position
+ * on its right; 8 rows (7 in a window), the scroll mark, the hints. */
+static void submenu_draw_pine(Canvas* canvas, SubmenuModel* model) {
+    const size_t n = SubmenuItemArray_size(model->items), vis = pine_rows(canvas);
+    char pos[12];
+
+    canvas_clear(canvas);
+    pine_title(
+        canvas,
+        furi_string_empty(model->header) ? NULL : furi_string_get_cstr(model->header),
+        n > 0 ? pine_pos(pos, model->position + 1, n) : NULL);
+    model->window_position = pine_scroll_top(model->window_position, model->position, vis, n);
+    for(size_t i = 0; i < vis && model->window_position + i < n; i++) {
+        const size_t p = model->window_position + i;
+        pine_row(
+            canvas,
+            i,
+            furi_string_get_cstr(SubmenuItemArray_cget(model->items, p)->label),
+            NULL,
+            p == model->position,
+            true);
+    }
+    pine_scrollbar(canvas, model->window_position, vis, n, model->position);
+    pine_hints(canvas, pine_str(n > 0 ? PineSelectDone : PineDone));
+}
+
+/* the rows the stock navigation code scrolls by */
+static size_t submenu_items_on_screen(const SubmenuModel* model) {
+    if(pine_on()) return PINE_ANY;
+    return furi_string_empty(model->header) ? 4 : 3;
+}
+
 static void submenu_view_draw_callback(Canvas* canvas, void* _model) {
     SubmenuModel* model = _model;
+
+    if(pine_on()) {
+        submenu_draw_pine(canvas, model);
+        return;
+    }
 
     const uint8_t item_height = 16;
     uint8_t item_width = canvas_width(canvas) - 5;
@@ -343,7 +381,7 @@ void submenu_set_selected_item(Submenu* submenu, uint32_t index) {
                 model->window_position -= 1;
             }
 
-            const size_t items_on_screen = furi_string_empty(model->header) ? 4 : 3;
+            const size_t items_on_screen = submenu_items_on_screen(model);
 
             if(items_size <= items_on_screen) {
                 model->window_position = 0;
@@ -362,7 +400,7 @@ void submenu_process_up(Submenu* submenu) {
         submenu->view,
         SubmenuModel * model,
         {
-            const size_t items_on_screen = furi_string_empty(model->header) ? 4 : 3;
+            const size_t items_on_screen = submenu_items_on_screen(model);
             const size_t items_size = SubmenuItemArray_size(model->items);
 
             if(model->position > 0) {
@@ -385,7 +423,7 @@ void submenu_process_down(Submenu* submenu) {
         submenu->view,
         SubmenuModel * model,
         {
-            const size_t items_on_screen = furi_string_empty(model->header) ? 4 : 3;
+            const size_t items_on_screen = submenu_items_on_screen(model);
             const size_t items_size = SubmenuItemArray_size(model->items);
 
             if(model->position < items_size - 1) {

@@ -2547,14 +2547,19 @@ static void furihello_test(void)
 		lseek(l, 0L, SEEK_SET);
 		if (i == 0 && l >= 0 && read(l, (char *) lcd, sizeof lcd)
 							== sizeof lcd) {
-			/* the popup: an empty top line, text in rows 20-27 */
-			int x, top = 0, text = 0;
+			/* the popup in the Pine style (spec K.2, T22b): the
+			 * black title bar (row 0), no selection bar at x = 127
+			 * (the menu has one under the title), its text in
+			 * rows 8-23, the hint line's rule at y = 56 */
+			int x, top = 1, text = 0, rule = 1;
 
 			for (x = 0; x < 128; x++) {
-				top |= lcd[x];
-				text |= lcd[2 * 128 + x] | lcd[3 * 128 + x];
+				top &= lcd[x];
+				rule &= lcd[7 * 128 + x];
+				text |= lcd[128 + x] | lcd[2 * 128 + x];
 			}
-			popup = top == 0 && text != 0;
+			popup = (top & 1) && (rule & 1) && text != 0
+				&& lcd[128 + 127] == 0;
 		}
 	}
 	for (i = 0; i < 40 && (r = waitpid(pid, &st, WNOHANG)) == 0; i++)
