@@ -101,7 +101,8 @@ Today the kernel still has its own short band list: for Europe 433.05–434.79 (
 868.0–868.6 (1 %), 868.7–869.2 (0.1 %), 869.4–869.65 (10 %) and 869.7–870.0 MHz; for the US and
 Canada the stock bands (304.1–321.95, 433.05–434.79, 915–928 MHz, 50 %). It checks band and duty
 cycle only; the power, the bandwidth and the remote/burst rules of the tables are checked by
-`gmodem` and `region check`. Later (planned, spec RQ.2, T32b) `region set` writes the table once into the Flipper's
+`region check` (`gmodem` still uses its own short list, spec P.4, until T32a moves it to the
+tables). Later (planned, spec RQ.2, T32b) `region set` writes the table once into the Flipper's
 internal flash, so it holds even without the card, and the first-boot wizard asks for the
 country. Transmit on the Flipper itself is still off until the CC1101 transmit path is written.
 
