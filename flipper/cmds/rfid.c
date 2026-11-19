@@ -196,7 +196,15 @@ static int em_decode(int nd, unsigned char id[5])
 				unsigned char b64[64];
 
 				for (j = 0; j < 64; j++) b64[j] = decbits[s + j] ^ inv;
-				if (em_frame(b64, 64, id)) return 1;
+				if (!em_frame(b64, 64, id)) continue;
+				/* An EM4100 tag sends the frame again at
+				 * once: its 9 header bits follow.  A longer
+				 * frame that begins with an EM4100 one
+				 * (Electra: two more blocks) is not this. */
+				if (s + 73 > nb) continue;
+				for (j = 0; j < 9; j++)
+					if ((decbits[s + 64 + j] ^ inv) != 1) break;
+				if (j == 9) return 1;
 			}
 	}
 	return 0;
@@ -1035,6 +1043,27 @@ static int lf_rate(uint32_t cfg)
  * the stock rule, validate_count + 1 in a row, across captures). */
 static LfrfidReader rd[2];
 static int rd_on;
+static uint32_t rd_feature = LFRFIDFeatureASK;	/* PSK in the PSK field */
+
+/* Glitches: a level of at most SPIKE_US is not the tag's (the stock reader
+ * drops such pulses too, LFRFID_WORKER_READ_MIN_TIME_US 16).  It and the
+ * levels on both sides of it are one level; a spike inside a PSK bit
+ * otherwise reads as two phase changes.  In place; the new count.  The
+ * first level's polarity stays. */
+#define SPIKE_US	16
+
+static int despike(unsigned long *v, int n)
+{
+	int i, k = 0;
+
+	for (i = 0; i < n; i++) {
+		if (k > 0 && i + 1 < n && v[i] <= SPIKE_US) {
+			v[k - 1] += v[i] + v[i + 1];
+			i++;
+		} else v[k++] = v[i];
+	}
+	return k;
+}
 
 /* One capture d[0..n-1] through liblfrfid: the protocol once validated
  * (its data in *data), else -1.  *half: a protocol is half validated. */
@@ -1044,8 +1073,8 @@ static int lf_capture(int n, uint8_t *data, int *half)
 	ProtocolId p;
 
 	if (!rd_on) {
-		lfrfid_reader_start(&rd[0], lf(), LFRFIDFeatureASK);
-		lfrfid_reader_start(&rd[1], lf(), LFRFIDFeatureASK);
+		lfrfid_reader_start(&rd[0], lf(), rd_feature);
+		lfrfid_reader_start(&rd[1], lf(), rd_feature);
 		rd_on = 1;
 	}
 	for (pol = 0; pol < 2; pol++) {
@@ -1689,17 +1718,31 @@ static int raw_read(char *path, int secs, int carrier)
 /* rfid read, gapless (R9.0.5): when the short captures found nothing, the
  * stream's edges go straight into the decoders for up to secs seconds, so
  * frames longer than one capture are read too (RF/32 and RF/16, FDX-B,
- * Gallagher, the FSK protocols: twoflip U->M saw "511 changes", not
- * decoded).  Both polarities, as lf_capture: after an overrun the parity
- * of the edges is lost.  Durations go into d[] (no stack).  The protocol
- * (data in data[]), or -1. */
+ * Gallagher, the FSK protocols).  Durations go into d[] (no stack).  The
+ * protocol (data in data[]), or -1.
+ *
+ * Two things a real FSK tag showed on the device (a T5577 written as
+ * HIDProx, #210):
+ * - the envelope settles for about 300 ms after the field comes on, and
+ *   until then the comparator gives long pulses, not the tag's cycles: the
+ *   first RS_SETTLE_US are not decoded (stock waits 450 ms too,
+ *   LFRFID_WORKER_READ_STABILIZE_TIME_MS);
+ * - FSK is about 27000 edges a second, a half of the ring every 19 ms, and
+ *   feeding every edge to the decoders in both polarities takes longer:
+ *   38 of 40 halves were lost (EOVERFLOW) and nothing was read.  So both
+ *   polarities are fed only until halves get lost; then one at a time, the
+ *   other after RS_SLICE_US.  (An overrun skips whole halves of 512 edges,
+ *   so the levels stay right.) */
+#define RS_SETTLE_US	450000UL
+#define RS_SLICE_US	600000UL
+
 static int stream_read(int fd, int secs, uint8_t *data)
 {
 	struct rfid_stream st;
 	unsigned long *ring = malloc(RS_WORDS * sizeof(unsigned long));
-	unsigned long prev = 0;
+	unsigned long prev = 0, us = 0, slice = 0;
 	time_t end;
-	int h, i, n, first = 1, lv = 0, pol, p = -1;
+	int h, i, n, first = 1, lv = 0, pol, p = -1, lost = 0, one = 0;
 
 	if (ring == NULL) return -1;
 	st.ring = ring;
@@ -1711,7 +1754,7 @@ static int stream_read(int fd, int secs, uint8_t *data)
 	lv = !st.level;			/* after the first edge */
 	rd_on = 0;
 	(void) lf_capture(0, data, &h);	/* both readers started */
-	end = time((time_t *) 0) + secs;
+	end = time((time_t *) 0) + secs + 1;	/* + the settling */
 	while (p < 0 && time((time_t *) 0) < end) {
 		struct pollfd pf;
 
@@ -1721,24 +1764,41 @@ static int stream_read(int fd, int secs, uint8_t *data)
 			if (errno != EOVERFLOW) break;
 			first = 1;		/* edges lost: start over */
 			for (pol = 0; pol < 2; pol++) lfrfid_reader_gap(&rd[pol]);
+			if (us >= RS_SETTLE_US && ++lost >= 2) one = 1;
 			continue;
 		}
 		for (n = 0, i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2);
 									i++) {
-			if (!first && n < MAXD) d[n++] = ring[i] - prev;
+			if (!first && n < MAXD) {
+				d[n] = ring[i] - prev;
+				us += d[n++];
+			}
 			prev = ring[i];
 			first = 0;
 		}
+		if (us < RS_SETTLE_US) {	/* the envelope still settles */
+			lv ^= n & 1;
+			continue;
+		}
+		h = n;				/* the levels that passed */
+		n = despike(d, n);
+		if (one && us - slice >= RS_SLICE_US) {	/* the other one now */
+			slice = us;
+			one = one == 1 ? 2 : 1;
+			for (pol = 0; pol < 2; pol++) lfrfid_reader_gap(&rd[pol]);
+		}
 		for (pol = 0; pol < 2 && p < 0; pol++) {
-			ProtocolId q = lfrfid_reader_feed_edges(&rd[pol],
-				(const uint32_t *) d, (size_t) n, lv ^ pol);
+			ProtocolId q;
 
+			if (one && pol != one - 1) continue;
+			q = lfrfid_reader_feed_edges(&rd[pol],
+				(const uint32_t *) d, (size_t) n, lv ^ pol);
 			if (q != PROTOCOL_NO) {
 				memcpy(data, rd[pol].data, lf_size(q));
 				p = q;
 			}
 		}
-		lv ^= n & 1;
+		lv ^= h & 1;
 	}
 	st.words = 0;
 	(void) ioctl(fd, RFIDIOCSTREAM, &st);
@@ -1905,6 +1965,7 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 		perror("rfid: carrier");
 		return 1;
 	}
+	if (carrier == RFID_CARRIER_PSK) rd_feature = LFRFIDFeaturePSK;
 	if ((p = read_any(fd, tries, raw, data, &n)) >= 0) {
 		lf_print(p, data);
 		if (out != NULL && save_rfid(out, p, data) < 0) return 1;
@@ -1924,6 +1985,21 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 			if (out != NULL && save_rfid(out, p, data) < 0)
 				return 1;
 			return 0;
+		}
+		/* no ASK or FSK tag: the PSK field and its decoders, as the
+		 * stock reader's turn-taking (Indala, Keri, Nexwatch, Idteck) */
+		if (!raw && carrier == RFID_CARRIER_125) {
+			int psk = RFID_CARRIER_PSK;
+
+			if (ioctl(fd, RFIDIOCCARRIER, &psk) == 0) {
+				rd_feature = LFRFIDFeaturePSK;
+				if ((p = stream_read(fd, 2, data)) >= 0) {
+					lf_print(p, data);
+					if (out != NULL && save_rfid(out, p, data) < 0)
+						return 1;
+					return 0;
+				}
+			}
 		}
 		if (n == 0) printf("no tag (no signal)\n");
 		else printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
