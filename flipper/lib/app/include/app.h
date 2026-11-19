@@ -83,6 +83,8 @@
 #define APP_DATA	APP_ROOT "/home/flipper/apps_data"	/* /ext (R5.3) */
 #define APP_ALERT	"/usr/lib/alert"
 #define APP_TIMED	"/usr/lib/timed"
+#define APP_DESK	APP_ROOT "/var/run/gui"	/* the desktop (spec K.6) */
+#define APP_DESK_LINE	128		/* one record there, '\n' included */
 
 #define APP_ID_MAX	14		/* NAME_MAX of the V2 file system */
 #define APP_FILE_MAX	512		/* a timer or settings file */
@@ -165,6 +167,8 @@ int notify_flags(const struct notify_policy *p, int cat, int want,
 								time_t now);
 int notify_post(int cat, const char *title, const char *text,
 				const struct app_timer *opts);	/* pid, 0, -1 */
+int notify_record(char *buf, int size, int cat, unsigned uid, int pid,
+				const char *title, const char *text);
 int notify_volume(const struct notify_policy *p, const struct app_timer *t,
 								int cat);
 int app_alert(const struct app_timer *t, int cat, int flags, int vol,

@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest modemtest hidtest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -69,6 +69,11 @@ $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 lfrfidtest:
 	$(MAKE) -C tests/lfrfid test
 
+# libibkey on the PC (spec R6.7 part 3b): Cyfral and Metakom iButton keys,
+# encoder -> the line -> decoders.
+ibkeytest:
+	$(MAKE) -C tests/ibkey test
+
 # libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
 # the RFID line code, the Sub-GHz presets, legal check and duty counter.
 modemtest:
@@ -77,6 +82,11 @@ modemtest:
 # libhid on the PC (spec R11.3.2): layouts, US and DE round trip, UTF-8.
 hidtest:
 	$(MAKE) -C tests/hid test
+
+# libsubghz on the PC (Phase 9, issue #302): the Unleashed Sub-GHz
+# captures decoded, encoder round trips, a decoder fuzz.
+subghztest:
+	$(MAKE) -C tests/subghz test
 
 run: $(BUILD)/$(PROG).elf
 	@test "$(BOARD)" = qemu || { echo "run needs BOARD=qemu"; exit 1; }

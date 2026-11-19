@@ -72,6 +72,14 @@ $(MB)/libc.a: $(LIBC_OBJ)
 PICFLAGS := -fpic -msingle-pic-base -mpic-register=r9 \
 	    -mno-pic-data-is-text-relative
 UCFLAGS	:= $(LIBCFLAGS) $(PICFLAGS)
+# R5.7: code that uses the FPU (float in hardware; double stays in software,
+# the FPU is single precision).  softfp keeps the soft-float calling
+# convention, so it links with the one libc.  The kernel saves such a
+# process's FP registers on its own stack (+136 B of stack, no other RAM).
+# Such a program must not use vfork: the child would run over the
+# parent's saved S16-S31.  Link it with $(UFPLDFLAGS) (vfork becomes fork).
+UFPFLAGS := -mfpu=fpv4-sp-d16 -mfloat-abi=softfp
+UFPLDFLAGS := -Wl,--defsym=vfork=fork -Wl,--defsym=_vfork=fork
 LIBCP_OBJ := $(LIBC_OBJ:$(MB)/libc/%=$(MB)/libcp/%)
 $(MB)/libcp/%.o: $(MROOT)/src/lib/%.c
 	@mkdir -p $(dir $@)
@@ -301,8 +309,8 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle
+PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
+	    swapon gmodem guimod jiggle region
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -310,12 +318,15 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
+GUIAPPS	:= launcher info lights console power lfrfid spectrum
+# mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
+DAEMONS	:= mtpd
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello gmdemo
+UPROGS	+= furitest furihello gmdemo fptest guiflood spinfifo
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -366,6 +377,9 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# MM gap: no malloc, no stdio, no signal handler);
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
+CHMEM_fptest := 8192
+CHMEM_guiflood := 6144	# #324: all stack (sprintf), a 64 B record
+CHMEM_spinfifo := 1024	# #331: EAGAIN spinners, all stack
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
@@ -375,19 +389,30 @@ CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_swapwear := 12288	# tests/swapwear: 20 KB of .bss + this: a 32 KB image (AC12.14)
+CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 			# fit, fsck shrinks its zone window) + 24 KB (stack:
 			# ~0.5 KB per directory level, stdio).  Runs at boot
 			# from /etc/rc, when the RAM is free; later it may need
 			# apps closed first.
+CHMEM_subghz := 16384	# every decoder's state (malloc'd once, ~5 KB),
+			# key files (<= 4 KB), stdio; the 2 KB frame buffer
+			# is bss
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
-CHMEM_rfid     := 8192	# emulate: the protocol dictionary (1.5 KB), a 2 KB
+CHMEM_spectrum := 2048	# issue #157: all stack (no malloc, no stdio, no
+			# handler); the frame buffer and the waterfall are bss
+CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
 			# pulse buffer and 3 encoder states for the period
 			# search; 6 KB aborted with "out of memory" (twoflip)
+CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
+			# all stack (no heap: its DIR is .bss, no stdio, no
+			# handler, so no MM gap); deepest a folder delete
+			# (rm_tree's 256 B path) or a move (two paths)
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -404,17 +429,48 @@ $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-HID_DIR	:= $(MROOT)/src/lib/hid
-$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h
+# libibkey (spec R6.7 part 3b, src/lib/ibkey): Cyfral and Metakom iButton
+# keys (Unleashed's line code), linked into ikey.
+IBKEY_DIR := $(MROOT)/src/lib/ibkey
+$(MB)/ibkey/ibkey.o: $(IBKEY_DIR)/ibkey.c $(IBKEY_DIR)/ibkey.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(HID_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/ibutton.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+HID_DIR	:= $(MROOT)/src/lib/hid
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 # libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
 # reports, the stock .kl layouts (US built in), static; m2test types with
 # it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
 $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o $(MB)/ibkey/ibkey.o
+# spinfifo (#331): processes spinning on EAGAIN, for m2test's L1 check.
+OBJS_spinfifo = $(MB)/cmd/spinfifo.o
+$(MB)/cmd/spinfifo.o: m2/spinfifo.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+# guiflood (#324): ACK.3's four desktop modules, so they are not forks of
+# m2test (each needed a copy of m2test's data).
+OBJS_guiflood = $(MB)/cmd/guiflood.o
+$(MB)/cmd/guiflood.o: m2/guiflood.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+# fptest (R5.7): the FPU checks; m2fpu.c and fpregs.S use the FPU.
+OBJS_fptest = $(MB)/cmd/fptest.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
+$(MB)/cmd/fptest.o: m2/fptest.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/m2fpu.o: m2/m2fpu.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) $(UFPFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/fpregs.o: m2/fpregs.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -c $< -o $@
 $(MB)/cmd/zmodem/%.o: $(MROOT)/src/commands/zmodem/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -DPOSIX -MMD -MP -c $< -o $@
@@ -429,10 +485,13 @@ OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
 OBJS_mined = $(MINED_SRC:%=$(MB)/cmd/mined/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
+OBJS_ikey += $(MB)/ibkey/ibkey.o	# libibkey (R6.7 part 3b), above
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
 OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/winrec.o \
-		 $(MB)/cmd/gui/desktop.o
+		 $(MB)/cmd/gui/desktop.o $(MB)/cmd/gui/launcher_stock.o
+# the Spectrum app's steps, scale and zoom (issue #157; tests/host spectest)
+OBJS_spectrum += $(MB)/cmd/gui/specmath.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
@@ -454,6 +513,18 @@ $(MB)/cmd/port/jiggle.o: cmds/jiggle.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
+# mtpd (spec R10.4, T29a): the MTP container parser and operations
+# (mtpcore.c), the files (mtpfs.c: handles = inode numbers, the parent
+# ring), the stream transport for tests (mtpfd.c); the same sources build
+# on the PC (make -C mtpd test, fuzz).  No stdio, no malloc but
+# opendir's DIR, no signal handler.  One .data/.bss/.rodata per object
+# (as the window apps, WIN_CFLAGS): its statics share GOT words.
+MTPD_SRC := mtpd mtpcore mtpfs mtpfd
+$(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
+	   -c $< -o $@
+OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -498,6 +569,25 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
+# libsubghz (Phase 9, issue #302, src/lib/subghz): the Unleashed Sub-GHz
+# protocols, linked into subghz (code in flash; the decoders' state is
+# malloc'd while it runs).  Third-party C11 code: built quietly (-w).
+SUBGHZ_DIR := $(MROOT)/src/lib/subghz
+SUBGHZ_C := $(shell cd $(SUBGHZ_DIR) && find . -name '*.c' | sort)
+SUBGHZ_OBJ := $(patsubst ./%.c,$(MB)/subghz/%.o,$(SUBGHZ_C))
+SUBGHZ_HDR := $(shell find $(SUBGHZ_DIR) -name '*.h')
+SUBGHZ_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(SUBGHZ_DIR) -I$(SUBGHZ_DIR)/shim -I$(SUBGHZ_DIR)/subghz
+$(MB)/subghz/%.o: $(SUBGHZ_DIR)/%.c $(SUBGHZ_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(SUBGHZ_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/port/subghz.o: cmds/subghz.c $(SUBGHZ_HDR) $(MROOT)/include/minix/subghz.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(SUBGHZ_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_subghz = $(MB)/cmd/port/subghz.o $(SUBGHZ_OBJ)
+# Its own package (subghz_1.0.tar, Flash: yes): 130 KB of text runs in
+# place from the installed region, never from RAM or the run-time cache.
+SGPROGS	:= subghz
 # libmodem (spec section P, src/lib/modem): the link layer, the RFID line
 # code and the Sub-GHz presets and legal tables, linked into gmodem (not
 # MINIX's modem(1), src/commands/simple/modem.c, which the port leaves out).
@@ -517,7 +607,14 @@ $(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
 OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
-$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h
+# region (spec section Q, issue #292): the radio region tables on the card.
+$(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
+OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/cc1101.o \
+	   $(MB)/modem/duty.o
+REGION_FILES := $(sort $(wildcard rootfs/usr/share/region/*.reg))
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
@@ -642,13 +739,17 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello timed alert
+FURIPROGS := furihello timed alert notepost
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
 OBJS_timed = $(MB)/cmd/timed/timed.o $(FURI_LINK)
+# notepost (tests package, T23c): notify_post() from the shell, for nattest
+$(MB)/cmd/test/notepost.o: tests/notepost.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
@@ -744,8 +845,10 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake
+	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
+	   notepost
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
 endif
@@ -790,7 +893,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
@@ -803,7 +906,7 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar 
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
-	   $(PKGDIR)/usbrem_1.0.tar
+	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -865,6 +968,13 @@ $(PKGDIR)/badusb_1.0.tar: $(MB)/bin/badusb $(MB)/bin/badusb-gui tools/mkpkg.py \
 	   /usr/bin/badusb-gui=$(MB)/bin/badusb-gui \
 	   /usr/share/hid/layouts/de-DE.kl=$(HID_DIR)/layouts/de-DE.kl$(COMMA)644 \
 	   $(foreach e,$(BU_EX),/home/flipper/badusb/$(notdir $(e))=$(e)$(COMMA)644)
+# Sub-GHz (spec Phase 9, issue #302): the subghz command with every
+# Unleashed protocol (libsubghz), in place in flash; the user's keystore
+# goes to /home/flipper/subghz/assets (D.3: none shipped).
+$(PKGDIR)/subghz_1.0.tar: $(MB)/bin/subghz tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n subghz -v 1.0 -o $(PKGDIR) --flash \
+	   -D "Sub-GHz remotes: rx, decode, tx, tx_from_file, chat (Unleashed protocols)" \
+	   /usr/bin/subghz=$(MB)/bin/subghz
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -892,16 +1002,17 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.25
+BASE_VER := 4.46
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
-	    rootfs/base.postinst
+	    rootfs/base.postinst $(REGION_FILES)
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
 	   --postinst rootfs/base.postinst \
 	   --os $(GZ_RELEASE) \
 	   -D "Galtzagorriak MINIX system programs" \
 	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
+	   $(foreach r,$(REGION_FILES),/usr/share/region/$(notdir $(r))=$(r)$(COMMA)644) \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
@@ -984,9 +1095,27 @@ libc: $(MB)/libc.a
 QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native,userspace=on
 
+# The M2 self-test took 97 s under QEMU 10.0 (Debian 13) once #152 added
+# the FPU checks: 90 s cut it off at its last test.  Slower hosts and a
+# growing test list need room; a real hang still ends.
+# INIT=m2: QEMU's second serial line (/dev/mtpline, spec R10.4) is a
+# socket with tools/mtphost.py on it; m2test's mtpd test serves it, and
+# its log follows QEMU's output.
+MTPSOCK	:= $(MB)/mtpline.sock
+M2TO	?= 240		# seconds QEMU gets for the M2 run
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
-	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
+ifeq ($(INIT),m2)
+	@rm -f $(MTPSOCK) $(MB)/mtphost.log
+	@python3 -I tools/mtphost.py test --unix $(MTPSOCK) --name-max 14 \
+	   --quick --wait 30 > $(MB)/mtphost.log 2>&1 & \
+	timeout $(M2TO) $(QEMU_MINIX) -device loader,file=$<,addr=0 \
+	   -chardev socket,id=mtp,path=$(MTPSOCK),server=on,wait=off \
+	   -serial chardev:mtp; \
+	r=$$?; wait; cat $(MB)/mtphost.log; rm -f $(MTPSOCK); exit $$r
+else
+	timeout $(M2TO) $(QEMU_MINIX) -device loader,file=$<,addr=0
+endif
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }

@@ -1,11 +1,11 @@
 # Work strategy: from 0.1.1 to parity and beyond (2026-11-15)
 
-Owner request (2026-11-15, 23:40 Warsaw): "plan a sensible work strategy to reach all the planned
+User request (2026-11-15, 23:40 Warsaw): "plan a sensible work strategy to reach all the planned
 goals". This file says **in what order** the phases of `galtzagorriak-spec.md` are done, **who**
 does each part, **when a release is cut**, what can go wrong, and how fast we have really been
 going. It changes no requirement; the spec stays the source of truth for *what* is built.
 
-Goals it serves (owner): feature parity with the stock firmware including its apps, and a useful
+Goals it serves (user): feature parity with the stock firmware including its apps, and a useful
 everyday gadget (reminders, alarm, camfind, sensors). Standing rules: responsiveness is a hard
 criterion and wins over RAM; RAM is tight; few flash writes, above all at run time; don't rewrite
 working MINIX core without need; docs follow behaviour; versioning per spec J.
@@ -42,7 +42,7 @@ Source: the GitHub PR list (#1–#94) and `git log`.
 | Throughput | **≈ 2 merged code PRs per active hour**, ≈ 22–25 per working day |
 | PR open → merge, median | ≈ 23 min (range 3 min – 2.5 h; #24 and #23 were the long ones) |
 | Rework rate | **≈ 15 %**: 2 PRs superseded + 5 follow-up PRs for review findings (#40 #44 #49 #51 #53), plus 2 fixes pushed by review (#12, #40). 85 % merged on the first pass |
-| Roadmap vs side work | ≈ 45 % of code PRs advanced a roadmap phase; ≈ 55 % were T-tasks (responsiveness, flash writes, editor, power) and owner requests |
+| Roadmap vs side work | ≈ 45 % of code PRs advanced a roadmap phase; ≈ 55 % were T-tasks (responsiveness, flash writes, editor, power) and user requests |
 | PRs per phase item | Phase 1: 7 items → 5 PRs. 2a: 5 items → 1 PR (+R2a.5 open). 2b: 12 items → ≈ 12 PRs, not closed yet. **≈ 0.7–1.0 PR per requirement item**, rising for kernel and driver work |
 | Spec growth | ≈ 40 spec PRs in 32 h added sections L and M, Phases 21 and 22, the power plan; requirements grew faster than they were closed |
 
@@ -101,7 +101,7 @@ Rules this graph implies:
 - **4b before every new driver.** No new device driver (Sub-GHz, NFC, iButton, sensors) is merged
   before R4b.2 (ms timer), R4b.6 (`poll()`) and R4b.8 (foreground ownership); otherwise each driver
   invents its own timing and is reworked later.
-- **Swap (12) before NFC and BLE.** Their RAM does not fit otherwise. Since 2026-11-16 (owner)
+- **Swap (12) before NFC and BLE.** Their RAM does not fit otherwise. Since 2026-11-16 (user)
   swap ships in two steps: plain swap as an option first (R12.28, needs only M1), encryption
   (12b) later. So the headroom arrives early and 12b is off the critical path.
 
@@ -109,7 +109,7 @@ Rules this graph implies:
 
 | Lane | Who | Strength | Takes |
 |---|---|---|---|
-| **H** hardware | owner's local agent | the only one with a Flipper; can measure current, latency, RF | kernel drivers, HAL, power, radios, anything with an on-device AC; device measurements for other lanes' PRs |
+| **H** hardware | user's local agent | the only one with a Flipper; can measure current, latency, RF | kernel drivers, HAL, power, radios, anything with an on-device AC; device measurements for other lanes' PRs |
 | **Q** QEMU/CI | CI Claude worker (GitHub Actions, issues labelled `claude-task`) | no hardware, unlimited QEMU and host tests | libc, MM/FS logic, commands, host tools, pure-logic cores of apps, tests, docs |
 | **R** review | review threads (standing squash-merge authorization) | spec, cross-PR view | reviews, spec/next-tasks updates, release PRs, this strategy |
 
@@ -154,7 +154,7 @@ Rules this graph implies:
 
 Version numbers follow spec J.1: the minor number goes up by one for each closed phase or
 sub-phase, patch for task-only releases. A release PR is cut by R when a milestone closes, or
-every ~2 working days with a patch release if no phase closed (as 0.1.1). The owner pushes the tag.
+every ~2 working days with a patch release if no phase closed (as 0.1.1). The user pushes the tag.
 
 | Milestone | Closes | Lanes in parallel | Version (approx.) | Done when |
 |---|---|---|---|---|
@@ -164,21 +164,21 @@ every ~2 working days with a patch release if no phase closed (as 0.1.1). The ow
 | **M4 Apps and scripting** | 5, 7, 7b.4, 7c, 12d park/hibernate + Running list, 12h swappable blocks | Q: `fam2pkg`, launcher (R5.6) with Running list (R12.20), Berry VM + TSV modules, `blk`/`libblk`/`vbytes` (T20a). H: sensor drivers (section H), iButton | 0.14.0 | first stock apps ported; a Berry gadget runs ≤ 4 at once within L1–L10 |
 | **M5 Radios I and USB** | 8, 9 (camfind v1 without Wi-Fi), 10, 11 | Q: protocol decoders, BadUSB parser, canary logic. H: CC1101, LF RFID, USB classes | ≈ 0.18 | stock Sub-GHz/RFID/BadUSB parity |
 | **M6 Headroom and NFC** | 12b (swap encryption, then `crypt` by default), 13, 14 | Q: AES-GCM glue in MM, software GCM for QEMU, NFC protocol stacks. H: AES1 driver (R12.9), ST25R3916 driver | ≈ 0.22 | NFC apps run without OOM |
-| **M7 Bluetooth** | 15, 16 (`sbctl`, `btbridge`, mobile app link R15.7) | Q: RPC protobuf (`libflipperpb`), GATT logic. H: CPU2 stack bring-up | ≈ 0.25 | phone app connects; `sbctl` drives the owner's Venty |
+| **M7 Bluetooth** | 15, 16 (`sbctl`, `btbridge`, mobile app link R15.7) | Q: RPC protobuf (`libflipperpb`), GATT logic. H: CPU2 stack bring-up | ≈ 0.25 | phone app connects; `sbctl` drives the user's Venty |
 | **M8 Trust and parity** | 17 (option bytes WRP/RDP1 after BLE), 18, 18b | Q: catalog, porting guide, wizard UI. H: U2F, updater, option bytes | **1.0.0** | Phase 18 ACs; rule 0.8 budgets met |
 | M9 After parity | 19, 21, 22, then 20 continuous | | 1.x | |
 
 Within each milestone the H lane works in this priority: **(1)** anything the other lane is
 waiting for (a device check, a timer API), **(2)** the milestone's critical-path item, **(3)**
-responsiveness regressions, **(4)** owner requests, **(5)** polish. T-tasks that are not on the
+responsiveness regressions, **(4)** user requests, **(5)** polish. T-tasks that are not on the
 milestone's path wait for a gap instead of interleaving (this is the main change from the first
 two days).
 
-**Requirements closed (owner, 2026-11-15 23:51 Warsaw):** the scope is the spec as merged at
+**Requirements closed (user, 2026-11-15 23:51 Warsaw):** the scope is the spec as merged at
 #95. The lanes are in use from M1: issues #99–#104, tracking issue #105, rules in `next-tasks.md`
 "Lanes and milestones".
 
-**Scope gate (R lane):** new ideas from the owner are welcome and still go into the spec at once,
+**Scope gate (R lane):** new ideas from the user are welcome and still go into the spec at once,
 but each one gets a milestone tag (M1–M9). Only ideas tagged with the current milestone become
 next-tasks; the rest wait. This keeps the backlog growing without moving the critical path.
 
@@ -187,7 +187,7 @@ next-tasks; the rest wait. This keeps the backlog growing without moving the cri
 Method: remaining requirement items on each path × 0.7–1.0 PR per item × 1.15 for rework, divided
 by the throughput that goes to the path. Assumptions: the agent keeps ≈ 11 active hours a day;
 kernel and driver PRs are slower than so far, so H's roadmap throughput is taken as **8–12 PRs a
-day** (half of today's total, because the rest stays for owner requests); Q adds **6–10 PRs a
+day** (half of today's total, because the rest stays for user requests); Q adds **6–10 PRs a
 day** once the CI worker runs.
 
 | Target | Items left on the path | PRs | With H alone | With H + Q in parallel |

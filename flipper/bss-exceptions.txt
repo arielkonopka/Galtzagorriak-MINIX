@@ -22,4 +22,14 @@ ir	4344
 # -1.3 KB, getgrnam()'s buffers (the gid of "gui" is read on the stack).
 # Data + bss: 6196 B, +1864 B above the launcher before the desktop
 # (4332 B at d704a5c), inside the K.6 budget of 3 KB.
-launcher	4788
+# T23c (K.6): +680 B, the last 8 notifications (8 x 88 B, in place of the
+# one 32 B text) and the opened one's index; .data +24 B (GOT slots).  A
+# malloc'd table does not fit: the launcher's 4 KB gap has no 704 B free
+# (nattest).  Data + bss: 6928 B (main 1cc7a8f: 6224 B), +2596 B above
+# the launcher before the desktop, inside the K.6 budget of 3 KB.
+launcher	5468
+# mtpd: files to a PC over MTP (spec R10.4, T29a).  The spec's parent ring
+# (256 x 8 B = 2 KB) and one-block buffer (1 KB), two 256 B paths, and its
+# one DIR (1 KB) kept here instead of opendir()'s malloc: no heap, so no
+# MM gap.  Running: data 684 + .bss + CHMEM 2048 = 7.4 KB (spec <= 8 KB).
+mtpd	4828

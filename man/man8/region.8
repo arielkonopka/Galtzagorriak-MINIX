@@ -1,0 +1,76 @@
+.TH REGION 8
+.SH NAME
+region \- the radio region: which country's Sub-GHz rules apply
+.SH SYNOPSIS
+.nf
+\fBregion\fR
+\fBregion list\fR
+\fBregion show\fR [\fICC\fR]
+\fBregion check\fR \fICC MHZ\fR [\fB\-p\fR \fIpreset\fR] [\fB\-P\fR \fIdbm\fR] [\fB\-c\fR] [\fB\-a\fR \fIms\fR]
+\fBregion set\fR [\fB\-y\fR] \fICC\fR
+.fi
+.SH DESCRIPTION
+Every Sub-GHz transmit is checked against the rules of one country, the
+radio region (Galtzagorriak MINIX, spec section Q).
+.I CC
+is its ISO 3166 two-letter code.
+The tables are text files,
+.BI /usr/share/region/ CC .reg ,
+one row per band with its power, duty cycle, bandwidth, kind of use and
+the legal source.
+.PP
+Without arguments,
+.B region
+prints the code in
+.B /etc/flipper/region
+and the one the kernel uses.
+.B list
+prints the countries with a table,
+.B show
+a country's table (default: the region set): the band, the power limit,
+the CC1101 step used (PA), the share of any hour that may be sent, the
+largest bandwidth and the kind of use.
+Rows marked
+.B ?
+are not checked against the national text yet and are never used.
+.PP
+.B check
+says whether one transmit at
+.I MHZ
+would be allowed, and in which row; it never sends.
+.B \-p
+is a
+.BR gmodem (1)
+preset (default std),
+.B \-P
+the power in dBm (default \-30),
+.B \-c
+a remote's code instead of data,
+.B \-a
+the airtime in ms (default 1000).
+.PP
+.B set
+(root only) checks the table, prints it, asks
+"I will use this device under the rules of CC" (\fB\-y\fR answers yes),
+and writes the code to
+.BR /etc/flipper/region ;
+.B /etc/rc
+gives it to the kernel at the next boot.
+A code without a table is refused: transmit stays off.
+.SH FILES
+.TP 25
+.B /usr/share/region/*.reg
+the tables (base package)
+.TP
+.B /etc/flipper/region
+the code set
+.SH "SEE ALSO"
+.BR gmodem (1),
+.BR subghz (1).
+.SH NOTES
+You are responsible for using the radio legally where you are: when you
+travel, set the region of the country you are in.
+The tables follow the law, not the stock firmware's region data, which
+allows more.
+Writing the table into internal flash, so it holds without the card, is
+planned (spec RQ.2).

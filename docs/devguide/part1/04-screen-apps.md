@@ -90,7 +90,7 @@ text console).
 
 ## 4.3 The look: the title bar
 
-The launcher and every app share one visual convention, and it is a rule (owner decision
+The launcher and every app share one visual convention, and it is a rule (user decision
 2026-11-16, spec K.2): **each screen starts with the title bar**, a black bar across the full
 width of the top text row with the screen's name in white, centred, in capitals. Call
 `gui_title("NAME")` first after `gui_clear()`, and draw your content below it (from y = 8 on).
@@ -111,7 +111,7 @@ written in.
 
 ### The rest of the screen: "Pine meets modern UX"
 
-Since 2026-11-17 the whole screen follows one style (owner decision, spec K.2 and R5.6a.7),
+Since 2026-11-17 the whole screen follows one style (user decision, spec K.2 and R5.6a.7),
 modelled on the Pine mail program: text first, every screen says what its buttons do, nothing
 hidden. New apps follow it from the start, and reviews check it:
 
@@ -137,7 +137,8 @@ parts for you, at no RAM cost, are **(planned)** in task T22: `gui_title2(title,
 Until they land, draw the parts with `gui_hline` and `gui_text` at the positions above, as the
 example in 4.2 does; switching to the helpers later is a few lines. The launcher has the full
 look since T21a; the other built-in apps (`info`, `lights`, `power`, `lfrfid`, `console`,
-`selftest`, `remind`, `alarm`) are being aligned in T22.
+`selftest`, `remind`, `alarm`) are being aligned in T22. The standard `libfuri` modules draw it
+since T22b (section 4.9, "Screen style").
 
 ## 4.4 The launcher and `/etc/apps`
 
@@ -310,6 +311,42 @@ library does not export yet goes at the end of `flipper/furi.exports`). `flipper
   `--gc-sections`, so only what it calls) plus the 8 KB core; RAM is the 1 KB frame, about 0.6 KB
   of GUI state, the gui thread's 2 KB stack and the views' models.
 
+### Screen style
+
+Since T22b the standard modules draw the Pine look of section 4.3 themselves (spec K.2,
+R5.6a.7), so a ported app looks like the launcher without changing a line:
+
+- **Submenu**: the header is the screen's name on the title bar (no header: the appid), the
+  position `3/12` is on its right, 8 rows of the 4x6 font (7 in `GuiLayerWindow`), a full-width
+  selection bar with `>`, the scroll mark at x = 127, hints `OK Select  Back Done`.
+- **VariableItemList**: `Name   [value]` rows (value right-aligned), the position on the title
+  bar, the scroll mark; the hints name what the selected row does: `<>Change` only if it has
+  more than one value, `OK Select` only with an enter callback, `Back Done`.
+- **Popup** and **DialogEx**: the header is the title, the text in lines of the 4x6 font below
+  it, the icon at its x (moved up to fit above the hint line). DialogEx's hints come from its
+  own button labels (`<Cancel  OK Info  >Delete`); a Popup says `Any key Close` with a callback,
+  else `Back Close`.
+- **TextInput**: the header is the title, the text after `> ` on the first row, the stock
+  keyboard above the hint line; the hints follow the selected key (`OK Save`, `OK Delete`,
+  `OK Type`, each with `Back Cancel`).
+
+A view in `GuiLayerFullscreen` gets a 7-pixel title bar, as the launcher; in `GuiLayerWindow`
+the module paints the Gui's 11-pixel bar (its name and state) itself. The window keeps its size
+(y = 13, 51 rows), so custom views and the stock `elements_button_*` helpers are unchanged:
+an app that draws its own screens keeps its layout (the "games and ported stock apps" exception
+of 4.3). The modules draw with the helpers in `src/gui/pine.c`; they need no RAM beyond the
+stack, and the strings are one const table (in the shared library each string literal would
+cost every app a GOT word): the library's per-app area grew by 8 B, its flash by 2.7 KB.
+
+The stock drawing is still there: with `FURI_STYLE=stock` in the environment the modules draw as
+the stock firmware does. The launcher's `Style: stock` (R5.6b, T31) exports it to the apps it
+starts; any program can set it for itself (`setenv()` before its first redraw).
+
+![furihello before and after T22b](../img/libfuri-pine-furihello.png)
+
+![The modules in the Pine look](../img/libfuri-pine-modules.png)
+
 Host tests: `make -C flipper/lib/furi test` renders every module and compares it with the PBM
 images in `flipper/lib/furi/tests/gui` (`make gui-ref` rewrites them; look at them before you
-commit). The QEMU self-test runs `furihello` with fake buttons.
+commit): in the stock style with `FURI_STYLE=stock` (the images of R5.2), and in the Pine style
+fullscreen (`pine_*`) and in the window frame (`pinew_*`, `pine_gui_window`). The QEMU self-test runs `furihello` with fake buttons.

@@ -8,6 +8,13 @@
 #include <unistd.h>
 #include "gui.h"
 #include "font4x6.c"
+/* The stock fonts (u8g2, BSD-2): libfuri's copy, one source for both.
+ * Only what a program calls is linked (--gc-sections). */
+#ifndef GUI_HOST_U8G2		/* the host test links libfuri's own */
+#include "../lib/furi/u8g2/u8g2_fonts.c"
+#else
+extern const unsigned char u8g2_font_helvB08_tr[], u8g2_font_haxrcorp4089_tr[];
+#endif
 
 static unsigned char fb[GUI_W * GUI_H / 8];
 static int lcd_fd = -1, btn_fd = -1, btn_nb_fd = -1;
@@ -83,6 +90,123 @@ int gui_glyph_row(int c, int row)
 {
 	if (c < 32 || c > 126) c = '?';
 	return font_4x6[c - 32][row];
+}
+
+/*===========================================================================*
+ *			The stock fonts (R5.6b.4)			     *
+ *===========================================================================*/
+/* The u8g2 font format: a 23-byte header, then per glyph its code, the
+ * jump to the next glyph and a bit stream (LSB first): width, height, x
+ * and y offset, the advance, then runs of background and foreground
+ * pixels.  As u8g2_font_decode_glyph() (u8g2_font.c), without rotation. */
+struct fdec {
+	const unsigned char *p;
+	int bit, w, x, y, lx, ly, on;
+};
+
+static unsigned fbits(struct fdec *d, int n)
+{
+	unsigned v = *d->p >> d->bit;
+	int b = d->bit + n;
+
+	if (b >= 8) {
+		d->p++;
+		v |= (unsigned) *d->p << (8 - d->bit);
+		b -= 8;
+	}
+	d->bit = b;
+	return v & ((1U << n) - 1);
+}
+
+static int fsbits(struct fdec *d, int n)
+{
+	return (int) fbits(d, n) - (1 << (n - 1));
+}
+
+static void frun(struct fdec *d, int cnt, int fg)
+{
+	int rem, cur;
+
+	for (;;) {
+		rem = d->w - d->lx;
+		cur = cnt < rem ? cnt : rem;
+		if (fg && cur > 0 && d->on >= 0)
+			gui_hline(d->x + d->lx, d->x + d->lx + cur - 1,
+				  d->y + d->ly, d->on);
+		if (cnt < rem) break;
+		cnt -= rem;
+		d->lx = 0;
+		d->ly++;
+	}
+	d->lx += cnt;
+}
+
+static const unsigned char *font_of(int font)
+{
+	return font == GUI_FONT_PRIMARY ? u8g2_font_helvB08_tr
+					: u8g2_font_haxrcorp4089_tr;
+}
+
+/* One glyph at x, baseline y (on < 0: only measure).  Its advance; *wx
+ * (if not NULL) its x offset + width, for the string's last glyph. */
+static int fglyph(const unsigned char *f, int c, int x, int y, int on,
+		  int *wx)
+{
+	const unsigned char *g = f + 23;
+	struct fdec d;
+	int h, gx, gy, dx, a, b;
+
+	if (c >= 'a') g += f[19] << 8 | f[20];
+	else if (c >= 'A') g += f[17] << 8 | f[18];
+	for (; g[1] != 0 && g[0] != c; g += g[1]) ;
+	if (g[1] == 0) return 0;
+	d.p = g + 2;
+	d.bit = 0;
+	d.w = (int) fbits(&d, f[4]);
+	h = (int) fbits(&d, f[5]);
+	gx = fsbits(&d, f[6]);
+	gy = fsbits(&d, f[7]);
+	dx = fsbits(&d, f[8]);
+	if (wx != NULL) *wx = gx + d.w;
+	if (d.w > 0 && on >= 0) {
+		d.x = x + gx;
+		d.y = y - (h + gy);
+		d.lx = d.ly = 0;
+		d.on = on;
+		for (;;) {
+			a = (int) fbits(&d, f[2]);
+			b = (int) fbits(&d, f[3]);
+			do {
+				frun(&d, a, 0);
+				frun(&d, b, 1);
+			} while (fbits(&d, 1) != 0);
+			if (d.ly >= h) break;
+		}
+	}
+	return dx;
+}
+
+int gui_text_font(int x, int y, int font, const char *s, int on)
+{
+	const unsigned char *f = font_of(font);
+	int x0 = x;
+
+	for (; *s != 0 && x < GUI_W; s++)
+		x += fglyph(f, (unsigned char) *s, x, y, on, (int *) 0);
+	return x - x0;
+}
+
+/* u8g2_GetStrWidth: the advances, but the last glyph's own width. */
+int gui_font_width(int font, const char *s)
+{
+	const unsigned char *f = font_of(font);
+	int w = 0, dx = 0, wx = 0;
+
+	for (; *s != 0; s++) {
+		dx = fglyph(f, (unsigned char) *s, 0, 0, -1, &wx);
+		w += dx;
+	}
+	return w > 0 ? w - dx + wx : 0;
 }
 
 int gui_text(int x, int y, const char *s, int inverse)

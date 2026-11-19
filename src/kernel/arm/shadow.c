@@ -27,6 +27,7 @@
 #include <string.h>
 
 FORWARD _PROTOTYPE( phys_clicks image_clicks, (struct proc *p)		);
+_PROTOTYPE( void fp_save, (struct proc *rp)				);
 _PROTOTYPE( void flipwords, (u32_t *a, u32_t *b, size_t bytes)		);
 FORWARD _PROTOTYPE( struct proc *other_member, (struct proc *p,
 							int resident)	);
@@ -151,6 +152,17 @@ struct proc *p;			/* a runnable, shadowed process */
   if (p_ready) lock_unready(p);
   if (r_ready) lock_unready(r);
 
+  /* The FP registers of the last user process run stay in the FPU until
+   * another one is entered (R5.7, fp_flush); they are saved to its stack.
+   * If that is r or p, save them now, while the stack at their addresses
+   * is r's: after the flip it is p's (#331: fptest's time-sliced pair). */
+  if ((mpu_proc == r || mpu_proc == p)
+		&& (mpu_proc->p_reg.control & CONTROL_FPLIVE)) {
+	lock();
+	fp_save(mpu_proc);
+	unlock();
+  }
+
 #if LATTRACE
   lat_flip(0, 0UL);
 #endif
@@ -162,8 +174,26 @@ struct proc *p;			/* a runnable, shadowed process */
   p->p_shadow = 0;
   p->p_nflips++;
 
-  if (p_ready) lock_ready(p);
-  if (r_ready) lock_ready(r);
+  if (r_ready) {
+	/* r was preempted: it waits behind the other ready members */
+	lock_ready(r);
+	lock();
+	if (rdy_head[SHADOW_Q] == r && r->p_nextready != NIL_PROC) {
+		rdy_head[SHADOW_Q] = r->p_nextready;
+		rdy_tail[SHADOW_Q]->p_nextready = r;
+		rdy_tail[SHADOW_Q] = r;
+		r->p_nextready = NIL_PROC;
+	}
+	unlock();
+  }
+  if (p_ready) {
+	/* #331: p takes r's turn at the tail of USER_Q.  ready() puts a user
+	 * process at the head, so every process that waited there (the
+	 * launcher with a key to draw, a parent back from fork()) would wait
+	 * again. */
+	lock_ready(p);
+	lock_sched();
+  }
 }
 
 

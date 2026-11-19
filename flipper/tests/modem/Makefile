@@ -1,6 +1,7 @@
 # make modemtest (spec section P, ACP.1, ACP.2): libmodem (src/lib/modem)
 # on the PC: frames, the ARQ stream through a lossy channel, the carousel,
 # the RFID line code P4, the CC1101 presets, the legal band check, the
+# radio region files (flipper/rootfs/usr/share/region, spec Q), the
 # duty-cycle counter and a fuzz run, under AddressSanitizer and UBSan.
 #
 #	make test	build modemtest with the host compiler and run it
@@ -11,14 +12,16 @@ MROOT	:= ../../..
 L	:= $(MROOT)/src/lib/modem
 CC	?= cc
 SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
-CFLAGS	:= -std=gnu11 -O2 -g -Wall -Wextra $(SAN)
+CFLAGS	:= -std=gnu11 -O2 -g -Wall -Wextra $(SAN) \
+	   -DREGION_DIR=\"$(abspath $(MROOT)/flipper/rootfs/usr/share/region)\"
 SRC	:= $(wildcard $(L)/*.c $(L)/heatshrink/*.c)
 B	:= build
 
 test: $(B)/modemtest
 	./$(B)/modemtest
 
-$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h $(L)/mdmz.h
+$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h $(L)/mdmz.h \
+	    $(wildcard $(MROOT)/flipper/rootfs/usr/share/region/*.reg)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -I$(L) -o $@ modemtest.c $(SRC)
 

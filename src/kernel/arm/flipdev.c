@@ -77,6 +77,7 @@
 #include <minix/rfid.h>
 #include <minix/ibutton.h>
 #include <minix/hid.h>
+#include <minix/subghz.h>
 #include <signal.h>
 #include "ibemu.c"		/* the Dallas key's 1-Wire slave (R6.7) */
 
@@ -94,10 +95,13 @@
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
 #define RTC_MINOR	13	/* the RTC alarm, calibration (R6.2, R7b.1) */
-#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
+#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7);
+				 * a write sends a frame (R8.2) */
 #define RFID_MINOR	16	/* a 125 kHz tag's signal, timed (R6.5) */
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
+#define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+/* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -198,6 +202,7 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define IR_HZ		38000
 #define IR_DUTY		33
 #define IR_GAP_MS	30		/* silence that ends a frame */
+#define PU_POLL_MS	10		/* a frame's full buffer, looked for */
 #define IR_ENC(us)	((us) < 0x8000 ? (u16_t) ((us) ? (us) : 1) \
 				: (u16_t) (0x8000 | ((us) >> 6)))
 /* IR_DEC uses v twice: never pass it an expression with side effects */
@@ -216,6 +221,15 @@ PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
 PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
 PRIVATE u8_t rf_carrier;		/* R9.0.4: the read field, RFID_CARRIER_* */
+PRIVATE u8_t rs_on;			/* R9.0.5: the streaming process + 1 */
+PRIVATE volatile u8_t rs_done;		/*   halves of its ring filled (mod 256) */
+PRIVATE u8_t rs_got;			/*   halves handed to its reads */
+PRIVATE u8_t rs_wait;			/*   a read waits (ir_caller/proc/buf) */
+#define SEL_RFID	8		/* sel_wait: a poller waits for a half */
+PRIVATE phys_bytes er_runs;		/* R9.0.6: the run list (0: none) */
+PRIVATE phys_bytes er_ring;		/*   the ring: ARR values, then CCR3 */
+PRIVATE u16_t er_nruns, er_n;		/*   runs; words in each half-ring x2 */
+PRIVATE u16_t er_i, er_left;		/*   the run playing, segments left */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -283,10 +297,18 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rs_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void rs_stop, (void)				);
+FORWARD _PROTOTYPE( int rs_take, (phys_bytes user)			);
+FORWARD _PROTOTYPE( int rs_int, (int irq)				);
+FORWARD _PROTOTYPE( int er_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void er_fill, (int half)				);
 FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ib_stop, (void)				);
 FORWARD _PROTOTYPE( void ib_edge, (void)				);
+FORWARD _PROTOTYPE( int ib_play, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int ib_capt, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
@@ -309,6 +331,10 @@ FORWARD _PROTOTYPE( int adc_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int sg_put, (char *line, int n, int v) );
+FORWARD _PROTOTYPE( int sg_tx_check, (u32_t ms, u32_t *hzp, u32_t *limit) );
+FORWARD _PROTOTYPE( int sg_raw_write, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_pkt_rw, (message *m_ptr, phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( int adcs_config, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int adcs_read, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void adcs_end, (int ok) );
@@ -320,6 +346,9 @@ PRIVATE u8_t sg_state;
 PRIVATE u8_t as_proc;		/* the reader + 1, 0: none */
 PRIVATE u8_t as_caller, as_done;
 PRIVATE u16_t as_count;
+PRIVATE u16_t sg_region;		/* R8.2: SG_REGION('E','U'); 0 none */
+PRIVATE u16_t sg_rev;			/* QEMU: a fake frame's reader to
+					 * revive, bytes + 1 (issue #302) */
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -344,6 +373,9 @@ FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 #include "hiddev.c"		/* USB HID, /dev/hidkbd... (R11.3.1) */
+#ifdef BOARD_QEMU
+#include "mtpline.c"		/* QEMU: /dev/mtpline, MTP tests (R10.4) */
+#endif
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
  * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
@@ -388,10 +420,23 @@ PUBLIC void flipdev_task()
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
   }
+  if ((r = hal_rfid_emu_irq()) >= 0) {	/* R9.0.6, the same way */
+	put_irq_handler(r, ir_tx_int);
+	enable_irq(r);
+  }
+  if ((r = hal_rfid_stream_irq()) >= 0) {	/* R9.0.5 */
+	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
+					 * new slot (all NR_IRQ_HANDLERS used);
+					 * it passes this vector to rs_int */
+	enable_irq(r);
+  }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
 	put_irq_handler(r, rtc_int);
 	enable_irq(r);
   }
+#ifdef BOARD_QEMU
+  line_init();				/* /dev/mtpline (R10.4 tests) */
+#endif
   if ((r = hal_ir_tx_irq()) >= 0) {
 	hal_ir_tx_stop();			/* whatever ran before us */
 	put_irq_handler(r, ir_tx_int);
@@ -419,15 +464,21 @@ PUBLIC void flipdev_task()
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
 				&& ie.proc == fm.PROC_NR + 1) ib_stop();
-		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
+			if (rs_on == fm.PROC_NR + 1) rs_stop();	/* R9.0.5 */
+		}
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
 		}
-		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
+		r = (unsigned) fm.DEVICE <= LAST_MINOR
+				|| fm.DEVICE == SGPKT_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
+#endif
+#ifdef BOARD_QEMU
+		if (fm.DEVICE == LINE_MINOR) r = OK;
 #endif
 		break;
 	case DEV_READ:
@@ -439,6 +490,8 @@ PUBLIC void flipdev_task()
 		  : fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
 		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
+		  : fm.DEVICE == SUBGHZ_MINOR || fm.DEVICE == SGRAW_MINOR
+		    || fm.DEVICE == SGPKT_MINOR ? sg_ioctl(&fm)
 		  : fg_ioctl(&fm);
 		break;
 	case DEV_SELECT:
@@ -446,8 +499,12 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+#ifdef BOARD_QEMU
+		if (ln_rd && ln_proc == fm.PROC_NR) ln_rd = FALSE;
+#endif
 		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
+		if (rs_wait && ir_proc == fm.PROC_NR) rs_wait = 0;	/* R9.0.5 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
@@ -470,9 +527,36 @@ PUBLIC void flipdev_task()
 		r = EINVAL;
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
+	if (sg_rev != 0) {		/* QEMU: a fake frame was read */
+		reply(REVIVE, ir_caller, ir_proc, (int) sg_rev - 1);
+		sg_rev = 0;
+	}
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
 	hid_check();			/* e.g. a persona let go */
   }
+}
+
+
+/*===========================================================================*
+ *				flipdev_xit				     *
+ *===========================================================================*/
+PUBLIC void flipdev_xit(proc_nr)
+int proc_nr;			/* the process that has exited */
+{
+/* Called by the SYSTEM task (do_xit) before MM gives the memory away.
+ * What the process owned stops now, not at the device's last close: a
+ * child from fork() may still hold the file, and a stream or emulation
+ * would go on reading or writing by DMA into memory that is no longer
+ * the process's (review of #214).  No replies: FS cancels the exiting
+ * process's own waits itself. */
+  if (rs_on == proc_nr + 1) {		/* R9.0.5: the stream */
+	rs_wait = 0;
+	rs_stop();
+  }
+  if (rf_emu == proc_nr + 1) rfid_emu_off();	/* R6.5 part 4 */
+  if (ie.proc == proc_nr + 1) ib_stop();	/* R6.7: a key emulated */
+  if (as_proc == proc_nr + 1) adcs_end(FALSE);	/* R4b.5: an ADC stream */
+  if (gp_proc == proc_nr + 1) gp_stop();	/* R6.4: a watched pin */
 }
 
 
@@ -508,6 +592,7 @@ message *m_ptr;
 	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
 	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
 	if (m_ptr->DEVICE == GPIO_MINOR) sel_wait &= ~SEL_GPIO;
+	if (m_ptr->DEVICE == RFID_MINOR) sel_wait &= ~SEL_RFID;
 	return(0);
   }
   switch (m_ptr->DEVICE) {
@@ -517,6 +602,10 @@ message *m_ptr;
 		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
 		sel_wait |= SEL_RD;
 	}
+	break;
+  case RFID_MINOR:		/* R9.0.5: streaming, a half to read */
+	if (rs_on != 0 && rs_done == rs_got) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) sel_wait |= SEL_RFID;
 	break;
   case GPIO_MINOR:		/* R6.4: with pins watched, an edge */
 	if (gp_watch != 0 && gp_chg == 0) r &= ~SEL_RD;
@@ -547,6 +636,10 @@ PRIVATE void sel_check()
   if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
 	sel_wait &= ~SEL_RD;
 	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_RFID) && rs_on != 0 && rs_done != rs_got) {
+	sel_wait &= ~SEL_RFID;
+	reply(DEV_SELECTED, FS_PROC_NR, RFID_MINOR, SEL_RD);
   }
   if ((sel_wait & SEL_GPIO) && gp_chg != 0) {
 	sel_wait &= ~SEL_GPIO;
@@ -663,6 +756,208 @@ int count;
 
 
 /*===========================================================================*
+ *				Sub-GHz transmit (R8.2)			     *
+ *===========================================================================*/
+/* Every transmit (a frame on /dev/subghzraw, a packet on /dev/subghzpkt)
+ * passes here first: the frequency is read back from the chip (not taken
+ * from what was asked), it must lie in a band of the region set at boot,
+ * and the band's duty cycle over the hour must allow the frame's air time.
+ * The table is const (flash).  The region is an ISO 3166 country code
+ * (spec section Q, issue #292), mapped to one of two band sets: "EU" (the
+ * EU members, NO, GB, AL: the ERC/REC 70-03 Annex 1 rows they all have)
+ * and "US" (US, CA), with the duty cycles of ETSI EN 300 220.  Any other
+ * code is refused.  The flash record of RQ.2 replaces both tables (T32b).
+ * RAM: the region (2 B) and the hour's air time (8 B). */
+#define SG_HOUR_S	3600
+PRIVATE const struct sg_band {
+  char rg[2];
+  u16_t duty_pm;		/* per mille of the hour; 1000: no limit */
+  u32_t lo, hi;			/* Hz */
+} sg_bands[] = {
+  { "EU", 100,  433050000, 434790000 },		/* 10 % */
+  { "EU",  10,  868000000, 868600000 },		/* 1 % */
+  { "EU",   1,  868700000, 869200000 },		/* 0.1 % */
+  { "EU", 100,  869400000, 869650000 },		/* 10 % */
+  { "EU", 1000, 869700000, 870000000 },
+  { "US", 500,  304100000, 321950000 },		/* stock: 50 % */
+  { "US", 500,  433050000, 434790000 },
+  { "US", 500,  915000000, 928000000 },
+};
+#define SG_NBANDS	(sizeof(sg_bands) / sizeof(sg_bands[0]))
+PRIVATE const char sg_countries[][4] = {	/* code, band set */
+  "EUEU", "PLEU", "ESEU", "FREU", "IEEU", "FIEU", "SEEU", "NOEU", "GBEU",
+  "ALEU", "USUS", "CAUS",
+};
+#define SG_NCOUNTRIES	(sizeof(sg_countries) / sizeof(sg_countries[0]))
+
+PRIVATE int sg_set(rg)
+int rg;					/* SG_REGION('P','L') */
+{
+/* The band set of a country code, SG_REGION('E','U') or ('U','S'); 0 for
+ * a code without a table. */
+  unsigned i;
+
+  for (i = 0; i < SG_NCOUNTRIES; i++)
+	if (SG_REGION(sg_countries[i][0], sg_countries[i][1]) == rg)
+		return(SG_REGION(sg_countries[i][2], sg_countries[i][3]));
+  return(0);
+}
+PRIVATE u32_t sg_air_ms, sg_hour;	/* air time since sg_hour (s) */
+
+PRIVATE int sg_tx_check(ms, hzp, limit)
+u32_t ms;				/* the frame's air time */
+u32_t *hzp;				/* out: the frequency */
+u32_t *limit;				/* out: the band's ms per hour */
+{
+  unsigned i;
+  u32_t hz, now = (u32_t) (get_uptime() / HZ);
+  int set;
+
+  if (!(sg_state & SG_ON) || hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF)
+	return(EIO);			/* not tuned (R8.1: read back) */
+  if ((set = sg_set(sg_region)) == 0) return(EPERM);
+  for (i = 0; i < SG_NBANDS; i++) {
+	if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == set
+			&& hz >= sg_bands[i].lo && hz <= sg_bands[i].hi) break;
+  }
+  if (i == SG_NBANDS) return(EPERM);
+  if (now - sg_hour >= SG_HOUR_S) {		/* a new hour */
+	sg_hour = now;
+	sg_air_ms = 0;
+  }
+  *hzp = hz;
+  *limit = (u32_t) sg_bands[i].duty_pm * SG_HOUR_S;
+  if (sg_air_ms + ms > *limit) return(EAGAIN);
+  return(OK);
+}
+
+PRIVATE int sg_raw_write(user, count)
+phys_bytes user;
+int count;
+{
+/* One frame: durations in us, carrier first.  Checked a few words at a
+ * time on the stack, then sent from the writer's memory. */
+  u32_t d[16], us = 0, hz, limit;
+  int i, j, k, n, r;
+
+  if (count % 4 != 0 || count > 0x7FFC) return(EINVAL);
+  n = count / 4;
+  if (hal_subghz_fake_take(HAL_SG_FAKE_RAW)) {
+	/* QEMU test hook: a received frame for the waiting reader */
+	if (!ir_rd || pu_input != 1) return(EAGAIN);
+	n = count > (int) ir_count ? ir_count : count;
+	phys_copy(user, ir_buf, (phys_bytes) n);
+	hal_pulse_stop();
+	lock();
+	pm_busy &= ~PM_PULSE;
+	unlock();
+	proc_addr(ir_proc)->p_physio = FALSE;
+	ir_rd = FALSE;
+	sg_rev = (u16_t) n + 1;		/* revived after this call's reply */
+	return(count);
+  }
+  for (i = 0; i < n; i += k) {
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(user + (phys_bytes) i * 4, vir2phys(d), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		if (d[j] == 0 || d[j] > SG_DURATION_MAX) return(EINVAL);
+		us += d[j];
+	}
+  }
+  if (ir_rd || tx_on) return(EBUSY);	/* one radio: a reader listens */
+  if ((r = sg_tx_check((us + 999) / 1000, &hz, &limit)) != OK) return(r);
+  if (hal_subghz_tx(hz, (u32_t) user, (unsigned) n) < 0) return(ENOTSUP);
+  sg_air_ms += (us + 999) / 1000;
+  return(count);
+}
+
+PRIVATE int sg_pkt_rw(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+/* /dev/subghzpkt: one packet.  The air time as stock chat's preset sends
+ * it (GFSK 9.99 kBd; preamble, sync, length and CRC: 12 bytes more). */
+  u8_t p[HAL_SUBGHZ_PKT];
+  u32_t hz, limit, ms;
+  int r;
+
+  if (m_ptr->m_type == DEV_READ) {
+	if (!(sg_state & SG_ON)) return(EIO);
+	if (count > HAL_SUBGHZ_PKT) count = HAL_SUBGHZ_PKT;
+	sg_state |= SG_READ;
+	if ((r = hal_subghz_pkt_rx(p, (unsigned) count)) < 0) return(ENOTSUP);
+	if (r == 0) return(EAGAIN);	/* none: poll again later */
+	phys_copy(vir2phys(p), user, (phys_bytes) r);
+	return(r);
+  }
+  if (count > HAL_SUBGHZ_PKT) return(EINVAL);
+  phys_copy(user, vir2phys(p), (phys_bytes) count);
+  if (hal_subghz_fake_take(HAL_SG_FAKE_PKT))	/* QEMU: a received one */
+	return(hal_subghz_pkt_fake(p, (unsigned) count) < 0 ? EINVAL : count);
+  ms = ((u32_t) count + 12) * 8 * 1000 / 9990 + 1;
+  if ((r = sg_tx_check(ms, &hz, &limit)) != OK) return(r);
+  if (hal_subghz_pkt_tx(hz, p, (unsigned) count) < 0) return(ENOTSUP);
+  sg_air_ms += ms;
+  return(count);
+}
+
+PRIVATE int sg_ioctl(m_ptr)
+message *m_ptr;
+{
+/* <minix/subghz.h>: the region, the hour's air time, the QEMU hooks. */
+  phys_bytes user;
+  struct sg_air a;
+  u32_t hz, limit, st;
+  int v, size, r;
+
+  switch (m_ptr->TTY_REQUEST) {
+  case SGIOCREGION: case SGIOCGREGION: case SGIOCFAKE: size = sizeof(int); break;
+  case SGIOCLINE: size = sizeof(long); break;
+  case SGIOCAIR: size = sizeof(a); break;
+  default: return(ENOTTY);
+  }
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) size);
+  if (user == 0) return(EFAULT);
+  switch (m_ptr->TTY_REQUEST) {
+  case SGIOCREGION:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	if (sg_set(v) == 0) return(EINVAL);	/* no table for it */
+	if (sg_region != 0 && sg_region != (u16_t) v) return(EPERM);
+	sg_region = (u16_t) v;		/* once: until the next boot */
+	return(OK);
+  case SGIOCGREGION:
+	v = sg_region;
+	break;
+  case SGIOCAIR:
+	r = sg_tx_check(0, &hz, &limit);
+	if (r != OK && r != EAGAIN) return(r);
+	a.used_ms = sg_air_ms;
+	a.limit_ms = limit;
+	phys_copy(vir2phys(&a), user, (phys_bytes) size);
+	return(OK);
+  case SGIOCFAKE:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	if (v != HAL_SG_FAKE_RAW && v != HAL_SG_FAKE_PKT) return(EINVAL);
+	if ((m_ptr->DEVICE == SGRAW_MINOR) != (v == HAL_SG_FAKE_RAW))
+		return(EINVAL);		/* the file it is for */
+	if (hal_subghz_fake(v) < 0) return(ENOTTY);
+	return(OK);
+  case SGIOCLINE: {
+	long h;
+
+	if (hal_subghz_line(&st) < 0) return(ENOTTY);
+	h = (long) st;
+	phys_copy(vir2phys(&h), user, (phys_bytes) size);
+	return(OK);
+  }
+  }
+  phys_copy(vir2phys(&v), user, (phys_bytes) size);
+  return(OK);
+}
+
+
+/*===========================================================================*
  *				ADC stream (R6.4 part 2)		     *
  *===========================================================================*/
 /* /dev/adcs: write "PIN RATE" (header pin number as gpio(1) counts them,
@@ -699,7 +994,7 @@ int count;
   unsigned ms;
 
   if (as_cfg == 0 || count < 2 || count > 8192 || (count & 1)) return(EINVAL);
-  if (as_proc != 0 || tx_on || ir_rd) return(EBUSY);	/* TIM2 */
+  if (as_proc != 0 || tx_on || ir_rd || rs_on) return(EBUSY);	/* TIM2 */
   if (hal_adc_stream(as_cfg & 15, as_cfg >> 4, user, (unsigned) count / 2)
 							< 0) return(EIO);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* no shadow swap now */
@@ -876,6 +1171,7 @@ message *m_ptr;
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
   if (ie.st != IE_OFF && ie.proc != m_ptr->PROC_NR + 1) return(EBUSY);
+  if (ie.st == IE_PLAY) return(EBUSY);	/* our own Cyfral/Metakom key */
   if (!q.on) {
 	if (ie.st != IE_OFF) ib_stop();
   } else {
@@ -898,7 +1194,12 @@ message *m_ptr;
 PRIVATE void ib_stop()
 {
   lock();
-  hal_ib_emu(0);
+  if (ie.st == IE_PLAY) {		/* R6.7 part 3b: a pulse list */
+	(void) hal_ib_play(0, 0, 0);
+	proc_addr(ie.proc - 1)->p_physio = FALSE;	/* unpinned */
+  } else {
+	hal_ib_emu(0);
+  }
   ie.st = IE_OFF;
   ie.proc = 0;
   pm_busy &= ~PM_IBUTTON;
@@ -943,6 +1244,97 @@ PRIVATE void ib_edge()
 
 
 /*===========================================================================*
+ *				ib_play					     *
+ *===========================================================================*/
+PRIVATE int ib_play(m_ptr)
+message *m_ptr;
+{
+/* IBIOCPLAY (R6.7 part 3b): be a Cyfral or Metakom key, the pulse list
+ * that ikey built (src/lib/ibkey) played round and round by the HAL from
+ * the caller's memory, pinned meanwhile (p_physio, as RFIDIOCEMU).  Its
+ * state is ie's (st IE_PLAY, proc, served): 0 B more.  The list is checked
+ * a few words at a time on the stack.  Asked again by the player: a new
+ * list takes over. */
+  struct ib_play q;
+  phys_bytes user, dur;
+  u16_t w[16];
+  unsigned i, j, k;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (ie.st != IE_OFF && (ie.st != IE_PLAY
+		|| ie.proc != m_ptr->PROC_NR + 1)) return(EBUSY);
+  if (q.n == 0) {
+	if (ie.st == IE_PLAY) ib_stop();
+  } else {
+	if (q.n % 2 != 0 || q.n > IB_MAXPLAY) return(EINVAL);
+	dur = numap(m_ptr->PROC_NR, (vir_bytes) q.dur, (vir_bytes) q.n * 2);
+	if (dur == 0) return(EFAULT);
+	for (i = 0; i < q.n; i += k) {
+		k = q.n - i < 16 ? q.n - i : 16;
+		phys_copy(dur + (phys_bytes) i * 2, vir2phys(w), (phys_bytes) k * 2);
+		for (j = 0; j < k; j++) if (w[j] == 0) return(EINVAL);
+	}
+	lock();
+	if (hal_ib_play((u32_t) dur, q.n, q.level != 0) < 0) {
+		unlock();
+		return(ENXIO);			/* not on this board yet */
+	}
+	if (ie.st == IE_OFF) {
+		ie.st = IE_PLAY;
+		ie.served = 0;
+		ie.proc = m_ptr->PROC_NR + 1;
+		proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* pinned */
+		pm_busy |= PM_IBUTTON;
+	}
+	unlock();
+  }
+  q.served = ie.served;
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				ib_capt					     *
+ *===========================================================================*/
+PRIVATE int ib_capt(m_ptr)
+message *m_ptr;
+{
+/* IBIOCCAPT (R6.7 part 3b): the contact's levels as durations, straight
+ * into the caller's buffer; ikey decodes them (src/lib/ibkey).  QEMU's
+ * HAL returns at once (the loopback of a list being played).  The
+ * Flipper's capture is the device side's (ENXIO until then); a capture
+ * there that takes its `ms` must not hold this task that long (spec rule
+ * 0.8: a key press goes through it), so it gets the same SUSPEND and
+ * revive as /dev/rfid's read. */
+  struct ib_capt q;
+  phys_bytes user, dur;
+  int r, level = 1;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.n < 16 || q.n > IB_MAXCAPT || q.ms < 1 || q.ms > 1000)
+	return(EINVAL);
+  if (ie.st != IE_OFF && ie.st != IE_PLAY) return(EBUSY);
+  dur = numap(m_ptr->PROC_NR, (vir_bytes) q.dur, (vir_bytes) q.n * 2);
+  if (dur == 0) return(EFAULT);
+  r = hal_ib_capt((u32_t) dur, q.n, q.ms, &level);
+  if (r < 0) return(ENXIO);			/* not on this board yet */
+  if (r == 0) return(ENODEV);			/* the line did not move */
+  if (ie.st == IE_PLAY) ie.served++;		/* QEMU: our player was read */
+  q.got = (unsigned) r;
+  q.level = level;
+  phys_copy(vir2phys(&q), user, (phys_bytes) sizeof(q));
+  return(OK);
+}
+
+
+/*===========================================================================*
  *				ow_run					     *
  *===========================================================================*/
 PRIVATE int ow_run(m_ptr)
@@ -957,6 +1349,8 @@ message *m_ptr;
   int i, j, v;
 
   if (m_ptr->TTY_REQUEST == IBIOCEMU) return(ib_emu(m_ptr));
+  if (m_ptr->TTY_REQUEST == IBIOCPLAY) return(ib_play(m_ptr));
+  if (m_ptr->TTY_REQUEST == IBIOCCAPT) return(ib_capt(m_ptr));
   if (m_ptr->TTY_REQUEST != IBIOCRUN) return(ENOTTY);
   if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
@@ -1063,7 +1457,7 @@ int count;
 						: " wother="; *k != 0; k++)
 		line[n++] = *k;
 	u = i == 0 ? (unsigned long) get_uptime() / HZ
-	  : i == 1 ? (unsigned long) pm_stat.min * 60 + pm_stat.stop / 32768
+	  : i == 1 ? pm_stat_secs(&pm_stat)
 	  : i == 2 ? pm_stat.btn : pm_stat.other;
 	j = 0;
 	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);
@@ -1125,6 +1519,9 @@ message *m_ptr;
 	: numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count);
   if (user == 0) return(EFAULT);
   if (IS_HID(m_ptr->DEVICE)) return(hid_rw(m_ptr, user, count));
+#ifdef BOARD_QEMU
+  if (m_ptr->DEVICE == LINE_MINOR) return(line_rw(m_ptr, user, count));
+#endif
 
   switch (m_ptr->DEVICE) {
 #if LATTRACE
@@ -1180,18 +1577,25 @@ message *m_ptr;
 		if (fg_pre != 0 && pre_rd == 0) pre_rd = m_ptr->PROC_NR + 1;
 		return(SUSPEND);
 	}
-	if (ev_head != ev_tail) {
-		LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
-		return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
+	/* The empty test and rd_waiting under lock: a press between them
+	 * would be queued without a wakeup (btn_sample sees rd_waiting
+	 * still FALSE), and the reader would sleep until the next key
+	 * (#332, as /dev/mtpline in #330). */
+	lock();
+	if (ev_head == ev_tail && !(m_ptr->TTY_FLAGS & O_NONBLOCK)) {
+		if (rd_waiting) { unlock(); return(EIO); }  /* one reader */
+		rd_waiting = TRUE;
+		unlock();
+		rd_caller = m_ptr->m_source;
+		rd_proc = m_ptr->PROC_NR;
+		rd_vir = (vir_bytes) m_ptr->ADDRESS;
+		rd_count = count;
+		return(SUSPEND);
 	}
-	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
-	if (rd_waiting) return(EIO);		/* one reader at a time */
-	rd_waiting = TRUE;
-	rd_caller = m_ptr->m_source;
-	rd_proc = m_ptr->PROC_NR;
-	rd_vir = (vir_bytes) m_ptr->ADDRESS;
-	rd_count = count;
-	return(SUSPEND);
+	unlock();
+	if (ev_head == ev_tail) return(EAGAIN);
+	LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
+	return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
 
   case VIBRO_MINOR: {
 	/* "0" off, "1" on (or a byte 0/1), "N" (2..999): on for N ms, ended
@@ -1260,12 +1664,18 @@ message *m_ptr;
 	if (m_ptr->m_type == DEV_READ) {
 		/* the levels; then (R6.4) '1' for each pin that changed
 		 * since the last read, which clears them */
+		unsigned chg;
+
 		if (count > 2 * HAL_GPIO_PINS) count = 2 * HAL_GPIO_PINS;
+		lock();		/* #332: an edge the tick records between
+				 * the look and the clear is not lost */
+		chg = gp_chg;
+		if (count > HAL_GPIO_PINS) gp_chg = 0;
+		unlock();
 		for (i = 0; i < HAL_GPIO_PINS; i++) {
 			gb[i] = '0' + hal_gpio_read(i);
-			gb[HAL_GPIO_PINS + i] = gp_chg & (1 << i) ? '1' : '0';
+			gb[HAL_GPIO_PINS + i] = chg & (1 << i) ? '1' : '0';
 		}
-		if (count > HAL_GPIO_PINS) gp_chg = 0;
 		phys_copy(vir2phys(gb), user, (phys_bytes) count);
 		return(count);
 	}
@@ -1327,7 +1737,7 @@ message *m_ptr;
 
   case RFID_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) {	/* field on/off times (T5577) */
-		if (ir_rd || tx_on) return(EBUSY);
+		if (ir_rd || tx_on || rs_on) return(EBUSY);
 		int rr;
 
 		if (rf_held) hal_rfid_pull(1);	/* a command: PA2 high (the
@@ -1339,10 +1749,14 @@ message *m_ptr;
 	}
 	return(rfid_read(m_ptr, user, count));
 
+  case SGPKT_MINOR:
+	return(sg_pkt_rw(m_ptr, user, count));
+
   case SGRAW_MINOR:
 	/* R4b.7 part 2: what the receiver demodulates, as /dev/ir's
-	 * durations, high (carrier) first; tune with /dev/subghz first */
-	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	 * durations, high (carrier) first; tune with /dev/subghz first.
+	 * A write sends such a frame (R8.2). */
+	if (m_ptr->m_type == DEV_WRITE) return(sg_raw_write(user, count));
 	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
 	sg_state |= SG_READ;			/* in use: it stays on */
 	return(pulse_read(m_ptr, user, count, 1));
@@ -1840,6 +2254,14 @@ PRIVATE void do_hardint()
 	r = deliver(rd_proc, rd_vir, rd_count);
 	reply(REVIVE, rd_caller, rd_proc, r);
   }
+#ifdef BOARD_QEMU
+  line_check();				/* /dev/mtpline */
+#endif
+  if (rs_wait && rs_done != rs_got) {	/* R9.0.5: a half for the read */
+	rs_wait = 0;
+	r = rs_take(ir_buf);
+	reply(REVIVE, ir_caller, ir_proc, r);
+  }
   if (sel_wait) sel_check();		/* poll(), R4b.6 */
   hid_check();
 }
@@ -2208,7 +2630,8 @@ int irq;
 /* An edge on a button (T14b): take it now, then turn the edges off; the
  * ms timer samples while any is down, which also debounces.
  */
-  if (ie.st != IE_OFF && hal_ib_edge()) {	/* R6.7: iButton line 14 */
+  if (ie.st != IE_OFF && ie.st != IE_PLAY && hal_ib_edge()) {
+					/* R6.7: iButton line 14 */
 	ib_edge();
 	if (!hal_btn_pending()) return 1;	/* no button's edge too */
   }
@@ -2483,7 +2906,7 @@ int count, input;
  * it ends after a silence, or when the buffer is full. */
   if (count < 4) return(EINVAL);
   if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
-  if (ir_rd) return(EBUSY);		/* one reader at a time (TIM2) */
+  if (ir_rd || rs_on) return(EBUSY);	/* one reader at a time (TIM2) */
   if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
   if (input != 0 && tx_on) return(EBUSY);
   ir_caller = m_ptr->m_source;
@@ -2526,12 +2949,10 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
 	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
 	else hal_rfid_stop();		/* the DMA first, then the memory */
-	lock();
-	mt_arm(MT_PULSE, 0);
-	unlock();
 	n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
+  mt_arm(MT_PULSE, 0);			/* no poll after the frame */
   if (!rf_held) pm_busy &= ~PM_PULSE;	/* a held field still needs them */
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
@@ -2561,6 +2982,27 @@ message *m_ptr;
 phys_bytes user;
 int count;
 {
+  if (rs_on) {				/* R9.0.5: a stream's half */
+	int r;
+
+	if (rs_on != m_ptr->PROC_NR + 1) return(EBUSY);
+	if (count < 4) return(EINVAL);
+	/* The empty test and rs_wait under lock: a half that rs_int
+	 * finished between them would not wake the reader (#332); it
+	 * would wait for the next half and then get EOVERFLOW. */
+	lock();
+	if (rs_done == rs_got && !(m_ptr->TTY_FLAGS & O_NONBLOCK)) {
+		if (rs_wait) { unlock(); return(EIO); }
+		rs_wait = 1;
+		unlock();
+		ir_caller = m_ptr->m_source;
+		ir_proc = m_ptr->PROC_NR;
+		ir_buf = user;
+		return(SUSPEND);
+	}
+	unlock();
+	return(rs_take(user));		/* a half, EOVERFLOW or EAGAIN */
+  }
   if (count < 8) return(EINVAL);
   if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
   ir_caller = m_ptr->m_source;
@@ -2592,7 +3034,14 @@ PUBLIC void flipdev_pulse_poll()
 {
 /* The ms timer (interrupt): a held read's field is settling, or the read's
  * buffer is full, or its time is up, or look again. */
-  if (!ir_rd || pu_input != 2) return;
+  if (!ir_rd || ir_done) return;
+  if (pu_input != 2) {			/* /dev/ir, /dev/subghzraw */
+	if (hal_pulse_left() == 0) {	/* the buffer is full: no gap */
+		ir_done = TRUE;
+		interrupt(PRINTER);
+	} else mt_arm(MT_PULSE, PU_POLL_MS);
+	return;
+  }
   if (rf_settle) {			/* field up, capture not yet armed */
 	if (--rf_settle == 0
 	    && hal_rfid_capture(ir_buf, (unsigned) ir_count / 4) < 0) {
@@ -2644,6 +3093,8 @@ message *m_ptr;
   int on;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCEMURUN) return(er_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
 	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(on));
@@ -2659,7 +3110,7 @@ message *m_ptr;
   phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
   if (on) {
 	if (rf_held) return(OK);		/* already ours */
-	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0)
+	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0 || rs_on)
 		return(EBUSY);			/* TIM1, TIM2 */
 	hal_rfid_field(1);
 	rf_held = TRUE;
@@ -2672,6 +3123,186 @@ message *m_ptr;
   }
   return(OK);
 }
+
+/*===========================================================================*
+ *				er_start				     *
+ *===========================================================================*/
+PRIVATE int er_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCEMURUN (R9.0.6): emulate a long frame from a run list.  The DMA
+ * plays the ring at the reader's clock as RFIDIOCEMU does; each half is
+ * refilled from the runs in the interrupt after it has been played. */
+  struct rfid_emu_runs q;
+  struct rfid_emu_run *ru;
+  phys_bytes user, runs, ring;
+  unsigned k;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.nruns < 1 || q.nruns > 512 || q.ring_n < 16 || q.ring_n > 512
+						|| (q.ring_n & 1))
+	return(EINVAL);
+  if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on) return(EBUSY);
+  runs = numap(m_ptr->PROC_NR, (vir_bytes) q.runs,
+		(vir_bytes) q.nruns * sizeof(struct rfid_emu_run));
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) q.ring, (vir_bytes) q.ring_n * 8);
+  if (runs == 0 || ring == 0) return(EFAULT);
+  ru = (struct rfid_emu_run *) runs;	/* privileged, flat map */
+  for (k = 0; k < q.nruns; k++)
+	if (ru[k].count == 0 || ru[k].period_m1 == 0
+				|| ru[k].pulse > ru[k].period_m1 + 1)
+		return(EINVAL);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA and we read it */
+  er_runs = runs;
+  er_ring = ring;
+  er_nruns = q.nruns;
+  er_n = q.ring_n;
+  er_i = 0;
+  er_left = ru[0].count;
+  er_fill(0);
+  er_fill(1);
+  if (hal_rfid_emulate(ring, ring + (phys_bytes) q.ring_n * 4,
+				q.ring_n | HAL_RFID_REFILL) < 0) {
+	er_runs = 0;
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  rf_emu = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timer and DMA need the clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				er_fill					     *
+ *===========================================================================*/
+PRIVATE void er_fill(half)
+int half;
+{
+/* One half of the emulation ring from the runs (in the DMA interrupt, or
+ * before the start): er_n / 2 pairs, so its time is bounded and small. */
+  struct rfid_emu_run *ru = (struct rfid_emu_run *) er_runs;
+  u32_t *dur = (u32_t *) er_ring, *pul = dur + er_n;
+  unsigned i = half ? er_n / 2 : 0, end = i + er_n / 2;
+
+  for (; i < end; i++) {
+	if (er_left == 0) {
+		if (++er_i >= er_nruns) er_i = 0;
+		er_left = ru[er_i].count;
+	}
+	dur[i] = ru[er_i].period_m1;
+	pul[i] = ru[er_i].pulse;
+	er_left--;
+  }
+}
+
+
+/*===========================================================================*
+ *				rs_start				     *
+ *===========================================================================*/
+PRIVATE int rs_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCSTREAM (R9.0.5): the field on, the comparator's edges into the
+ * caller's ring by circular DMA, an interrupt at each half (rs_int counts
+ * them).  No CPU work per edge.  words 0 stops it. */
+  struct rfid_stream st;
+  phys_bytes user, ring;
+  int lvl;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(st));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&st), (phys_bytes) sizeof(st));
+  if (st.words == 0) {				/* stop */
+	if (rs_on == m_ptr->PROC_NR + 1) rs_stop();
+	return(OK);
+  }
+  if (st.words < 64 || st.words > 65534 || (st.words & 1)) return(EINVAL);
+  if (rs_on != 0 || ir_rd || tx_on || as_proc != 0 || rf_held || rf_emu != 0)
+	return(EBUSY);				/* TIM1, TIM2, the DMA */
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) st.ring, (vir_bytes) st.words * 4);
+  if (ring == 0) return(EFAULT);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA writes it */
+  rs_done = rs_got = rs_wait = 0;
+  if ((lvl = hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  st.level = lvl;			/* (the RAW files need the polarity) */
+  phys_copy(vir2phys(&st), user, (phys_bytes) sizeof(st));
+  rs_on = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timers and the DMA need clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				rs_stop					     *
+ *===========================================================================*/
+PRIVATE void rs_stop()
+{
+/* The stream ends (words 0, close, exit): the DMA first, then the memory
+ * is the process's own again. */
+  hal_rfid_stop();
+  proc_addr(rs_on - 1)->p_physio = FALSE;
+  if (rs_wait) {			/* (its own read; not reachable now) */
+	rs_wait = 0;
+	reply(REVIVE, ir_caller, ir_proc, EINTR);
+  }
+  rs_on = 0;
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
+}
+
+
+/*===========================================================================*
+ *				rs_take					     *
+ *===========================================================================*/
+PRIVATE int rs_take(user)
+phys_bytes user;
+{
+/* The next full half for a read: 4 bytes, its number, or EAGAIN (none
+ * yet), or EOVERFLOW once if the reader is more than a half behind. */
+  u8_t d = (u8_t) (rs_done - rs_got);
+  u32_t h;
+
+  if (d == 0) return(EAGAIN);
+  if (d > 1) {
+	rs_got = rs_done;		/* skip what was overwritten */
+	return(EOVERFLOW);
+  }
+  h = rs_got & 1;
+  rs_got++;
+  phys_copy(vir2phys(&h), user, (phys_bytes) 4);
+  return(4);
+}
+
+
+/*===========================================================================*
+ *				rs_int					     *
+ *===========================================================================*/
+PRIVATE int rs_int(irq)
+int irq;
+{
+/* The stream's DMA: a half (or both, if late) of the ring is full. */
+  unsigned k = hal_rfid_stream_ack();
+
+  if (rs_on == 0) return(1);
+  rs_done += (k & 1) + (k >> 1 & 1);
+  if (rs_wait || (sel_wait & SEL_RFID)) interrupt(PRINTER);
+  return(1);
+}
+
 
 /*===========================================================================*
  *				rfid_emu_start				     *
@@ -2697,7 +3328,8 @@ message *m_ptr;
   }
   if (e.n > 512) return(EINVAL);
   if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
-  if (ir_rd || tx_on || as_proc != 0 || rf_held) return(EBUSY);	/* TIM2 */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on)
+	return(EBUSY);				/* TIM2 */
   dur = numap(m_ptr->PROC_NR, (vir_bytes) e.dur, (vir_bytes) (e.n * 4));
   pulse = numap(m_ptr->PROC_NR, (vir_bytes) e.pulse, (vir_bytes) (e.n * 4));
   if (dur == 0 || pulse == 0) return(EFAULT);
@@ -2720,6 +3352,8 @@ PRIVATE void rfid_emu_off()
 {
 /* Stop emulating and let the pattern's memory go (and Stop2 in again). */
   int pr;
+
+  er_runs = 0;				/* R9.0.6: no more refills */
 
   if (rf_emu == 0) return;
   hal_rfid_emulate_stop();
@@ -2773,7 +3407,7 @@ int count;
   if (tx_on) return(EIO);			/* one frame at a time */
   if (ir_rd && (ir_started || pu_input != 0))
 	return(EBUSY);				/* TIM2 takes a frame in */
-  if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
+  if (as_proc != 0 || rs_on) return(EBUSY);	/* TIM2: a stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
   if (n > IR_TX_MAX + 1) return(EINVAL);
@@ -2861,13 +3495,30 @@ PRIVATE int ir_tx_int(irq)
 int irq;
 {
 /* TIM2: a mark or space is over, the next one (already loaded) starts
- * now; or, receiving, the pulse engine's capture (R4b.7). */
+ * now; or, receiving, the pulse engine's capture (R4b.7).  Also the RFID
+ * stream's DMA vector (R9.0.5): one handler, one slot. */
   int update;
+
+  if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
+  if (irq == hal_rfid_emu_irq()) {	/* R9.0.6: a half played: refill */
+	unsigned k = hal_rfid_emu_ack();
+
+	if (er_runs != 0) {
+		if (k & 1) er_fill(0);
+		if (k & 2) er_fill(1);
+	}
+	return(1);
+  }
 
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();
 
-	if (f & HAL_PULSE_START) ir_started = TRUE;
+	if (f & HAL_PULSE_START) {
+		ir_started = TRUE;
+		/* a frame with no silence (a receiver's noise, a long
+		 * transmission) fills the buffer: the poll ends it */
+		mt_arm(MT_PULSE, PU_POLL_MS);
+	}
 	if ((f & HAL_PULSE_GAP) && ir_started) {
 		ir_done = TRUE;
 		interrupt(PRINTER);

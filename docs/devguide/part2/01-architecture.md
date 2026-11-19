@@ -67,12 +67,30 @@ Budget L10 (boot to launcher menu) is 3 s.
   be delayed are to sit above the kernel's lock level (R0.8a, R4a.1, with the radio drivers).
 - On entry, the whole register set goes into `proc_ptr->p_reg`; `restart` builds the hardware
   frame on the process stack again.
+- **FPU** (R5.7): lazy, and nothing in the process table. A process that used the FPU gets an
+  extended frame (S0-S15, FPSCR) from the CPU, written only when needed (lazy stacking);
+  `p_reg.control` gets `CONTROL_FPCA` and `p_reg.sp` points 64 bytes below the frame. Its
+  registers stay in the FPU (`CONTROL_FPLIVE`, only ever on `mpu_proc`) while the kernel runs and when it returns to the same
+  process. Only when `restart` enters another process does `fp_flush` store S16-S31 there (which
+  also makes the CPU do the lazy S0-S15 save) and clear the FPU, so nobody sees another
+  process's registers; `restart` loads S16-S31 back when the process runs again. All stores
+  and loads use the process's own rights (`strt`/`ldrt`, the lazy save with its MPU regions);
+  a bad stack gives it SIGSEGV (`fp_frame_recover`). The kernel, servers and libc are
+  soft-float and never use the FPU. Signal handlers start without an FP context; the
+  sigcontext keeps `CONTROL_FPCA`, so `sigreturn` finds the interrupted one again. Tests:
+  `/bin/fptest` (`m2/fptest.c`, run by `m2test`).
 - **MPU**: on every switch, `mpu_switch()` gives the process its own memory and read-only
   flash. Small or oddly aligned blocks are covered with several regions (`<minix/mpucover.h>`).
   There is no unprotected mode.
 - **Shadowing** (from the Atari ST port): after `fork` the child shares the parent's addresses;
   the kernel exchanges the two data images on a switch (`shadow.c`, `flip.S`). The idle task
   raises PendSV so a ready shadowed process is swapped in without waiting for the next tick.
+  Otherwise the clock swaps a group member in only at the end of a 100 ms quantum, because
+  each swap copies the images (#331). The swapped-in member goes to the tail of the user
+  queue, so processes already waiting there (the launcher with a key to draw) run first.
+  On the shadow queue a woken member (`ready()`) goes to the head and a preempted resident
+  goes to the tail. Before a flip, `unshadow()` saves the FP registers that are still live
+  in the FPU (`fp_save`), so that `fp_flush` cannot later write them into the other image.
 - **Scheduling**: MINIX's queues (tasks, servers, users, plus a shadow queue). Tasks are never
   preempted by tasks. The interactive queue for the foreground app is planned (R0.8a).
 - **Programs** are position-independent (`r9` = data base). MM places `exec` images at the top

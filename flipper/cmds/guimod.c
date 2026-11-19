@@ -4,8 +4,8 @@
  *						page (set or change it)
  *		guimod status NAME TEXT ...	a short text (6 characters) on
  *						the status line
- *		guimod notify NAME TEXT ...	a notification: the unread
- *						count, the text as a notice
+ *		guimod notify NAME TEXT ...	a notification on the NOTES
+ *						page (T23c), counted unread
  *		guimod close NAME		the module's tile and status go
  *
  * One record per call, one write() to the desktop's FIFO /var/run/gui.

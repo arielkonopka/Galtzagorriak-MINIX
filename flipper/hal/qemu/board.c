@@ -95,6 +95,48 @@ void hal_uart_rx_irq(int on)
 	}
 }
 
+/* The MTP test line (spec R10.4, T29a): CMSDK UART1 at 0x40005000, RX
+ * interrupt 2 (mps2-an385/386 map), QEMU's second -serial.  QEMU holds
+ * one received byte in the UART and gives the next only after it is
+ * read, so nothing is lost while the kernel's ring is full. */
+#define LINE_BASE	0x40005000u
+#define LINE(o)		(*(volatile uint32_t *) (LINE_BASE + (o)))
+#define LINE_RX_IRQ	2
+
+void hal_line_init(void)
+{
+	LINE(0x10) = CPU_HZ / 115200;
+	LINE(0x08) = 0x3 | CTRL_RXINT;	/* TX, RX, the RX interrupt */
+}
+
+int hal_line_irq(void)
+{
+	return LINE_RX_IRQ;
+}
+
+int hal_line_getc(void)
+{
+	LINE(0x0C) = INT_RX;
+	if (!(LINE(0x04) & STATE_RXFULL)) return -1;
+	return LINE(0x00) & 0xFF;
+}
+
+void hal_line_putc(int c)
+{
+	while (LINE(0x04) & STATE_TXFULL) ;
+	LINE(0x00) = (uint8_t) c;
+}
+
+void hal_line_rx_irq(int on)
+{
+	if (on) {
+		LINE(0x08) |= CTRL_RXINT;
+	} else {
+		LINE(0x08) &= ~CTRL_RXINT;
+		LINE(0x0C) = INT_RX;
+	}
+}
+
 void hal_lcd_init(void)
 {
 }
@@ -145,11 +187,182 @@ uint16_t hal_ow_now(void) { return 0; }
 void hal_ib_emu(int on) { (void) on; }		/* no reader in QEMU */
 int hal_ib_edge(void) { return 0; }
 void hal_ib_clear(void) { }
+
+/* R6.7 part 3b: no contact in QEMU, so a capture sees what is being
+ * played (a loopback, as if another Flipper emulated the key), from a
+ * point that moves on each time, with the reader's jitter of +-2 us on
+ * every level.  RAM: 12 B, QEMU only. */
+static uint32_t ib_src;
+static uint16_t ib_n, ib_at;
+static uint8_t ib_level;
+
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	ib_src = src;
+	ib_n = (uint16_t) n;
+	ib_level = (uint8_t) (level != 0);
+	return 0;
+}
+
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
+{
+	const uint16_t *s = (const uint16_t *) ib_src;
+	uint16_t *d = (uint16_t *) dst;
+	unsigned i, k;
+	int v;
+
+	(void) ms;
+	if (ib_n == 0) return 0;		/* nobody plays: no key */
+	ib_at = (uint16_t) ((ib_at + 7) % ib_n);
+	*level = (ib_level ^ ib_at) & 1;
+	for (i = 0; i < n; i++) {
+		k = (ib_at + i) % ib_n;
+		v = (int) s[k] + (int) ((i * 5u + k) % 5u) - 2;
+		d[i] = (uint16_t) (v < 1 ? 1 : v > 65535 ? 65535 : v);
+	}
+	return (int) n;
+}
 int hal_btn_pending(void) { return 1; }
 
-long hal_subghz_rx(uint32_t hz) { (void) hz; return -1; }
-int hal_subghz_rssi(uint32_t *hz) { *hz = 0; return HAL_SUBGHZ_OFF; }
-void hal_subghz_off(void) { }
+/* Sub-GHz, the QEMU backend (issue #302): a radio that tunes the stock
+ * bands, hears nothing by itself (RSSI -110 dBm), and prints what it
+ * sends: a frame as console lines
+ *	sg> tx 433920000 12
+ *	sg> 381 -296 671 -350 ...		(16 values a line, RAW_Data's form)
+ * and a packet as "sg> pkt 433920000 68 69".  sg_hash is the FNV-1a hash
+ * of the frame's text as one line without the "sg> " prefixes and line
+ * ends ("tx 433920000 12 381 -296 ..."), which m2test checks; a test
+ * arms sg_fake so that the next frame or packet is a received one
+ * instead (the pattern of hid< and HIDIOCFAKE).  RAM: 4 + 4 + 1 B, and
+ * the fake packet of at most 8 bytes (QEMU only, not in the Flipper's
+ * budget). */
+static uint32_t sg_hz;
+static uint32_t sg_hash;
+static uint8_t sg_fake;
+#define SG_FAKE_PKT_MAX	8		/* a test's packet: user RAM is
+					 * short in QEMU's M2 run as well */
+static uint8_t sg_pkt[SG_FAKE_PKT_MAX], sg_pkt_n;
+
+long hal_subghz_rx(uint32_t hz)
+{
+	if (!((hz >= 299999755u && hz <= 348000335u)
+	    || (hz >= 386999938u && hz <= 464000000u)
+	    || (hz >= 778999847u && hz <= 928000000u))) return -1;
+	sg_hz = hz;
+	return (long) hz;
+}
+
+int hal_subghz_rssi(uint32_t *hz)
+{
+	*hz = sg_hz;
+	return sg_hz != 0 ? -110 : HAL_SUBGHZ_OFF;
+}
+
+void hal_subghz_off(void) { sg_hz = 0; }
+
+static void sg_kputs(const char *s)	/* not hashed */
+{
+	while (*s) kputc(*s++);
+}
+
+static void sg_put(int c)
+{
+	sg_hash = (sg_hash ^ (uint8_t) c) * 16777619u;	/* FNV-1a */
+	kputc(c);
+}
+
+static void sg_puts(const char *s)
+{
+	while (*s) sg_put(*s++);
+}
+
+static void sg_num(long v)
+{
+	char b[12];
+	int i = 0;
+	unsigned long u;
+
+	if (v < 0) sg_put('-');
+	u = v < 0 ? (unsigned long) -v : (unsigned long) v;
+	do b[i++] = (char) ('0' + u % 10); while ((u /= 10) != 0);
+	while (i > 0) sg_put(b[--i]);
+}
+
+static void sg_head(const char *what, uint32_t hz)
+{
+	sg_kputs("sg> ");
+	sg_hash = 2166136261u;
+	sg_puts(what);
+	sg_put(' ');
+	sg_num((long) hz);
+}
+
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
+{
+	const uint32_t *d = (const uint32_t *) src;
+	unsigned i;
+
+	sg_head("tx", hz);
+	sg_put(' ');
+	sg_num((long) n);
+	for (i = 0; i < n; i++) {
+		if (i % 16 == 0) sg_kputs("\nsg>");
+		sg_put(' ');
+		sg_num(i & 1 ? -(long) d[i] : (long) d[i]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n)
+{
+	static const char hex[] = "0123456789abcdef";
+
+	sg_head("pkt", hz);
+	while (n-- > 0) {
+		sg_put(' ');
+		sg_put(hex[*p >> 4]);
+		sg_put(hex[*p++ & 15]);
+	}
+	kputc('\n');
+	return 0;
+}
+
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max)
+{
+	unsigned n = sg_pkt_n;
+
+	if (n > max) n = max;
+	for (sg_pkt_n = 0; sg_pkt_n < n; sg_pkt_n++) p[sg_pkt_n] = sg_pkt[sg_pkt_n];
+	sg_pkt_n = 0;
+	return (int) n;
+}
+
+int hal_subghz_fake(int what)
+{
+	sg_fake = (uint8_t) what;
+	return 0;
+}
+
+int hal_subghz_fake_take(int what)
+{
+	if (sg_fake != what) return 0;
+	sg_fake = 0;
+	return 1;
+}
+
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n)
+{
+	if (n > SG_FAKE_PKT_MAX) return -1;
+	for (sg_pkt_n = 0; sg_pkt_n < n; sg_pkt_n++) sg_pkt[sg_pkt_n] = p[sg_pkt_n];
+	return 0;
+}
+
+int hal_subghz_line(uint32_t *hash)
+{
+	*hash = sg_hash;
+	return 0;
+}
 
 /* With no button interrupt the kernel samples the buttons once a clock
  * tick (flipdev_tick, 1/HZ s).  A fake press (/dev/buttons write) and its
@@ -365,6 +578,40 @@ int hal_disk_discard(uint32_t first, uint32_t last)
 	return 0;
 }
 
+/* R12.33 in QEMU: a disk image has no ERASE, so the range gets the erased
+ * value, 0x00 (a card whose DATA_STAT_AFTER_ERASE is 0), which tests can
+ * see.  Only the 64 KB pieces holding something else are written: a fresh
+ * (sparse) image stays sparse and the first boot's /etc/setup costs reads
+ * only.  The pieces pass through SSRAM2/3 far above the 192 KB MINIX uses
+ * (QEMU only; no RAM of the Flipper's).  One nap first, as discard. */
+#define ERASE_BUF	((uint32_t *) 0x20200000u)
+#define ERASE_SECTS	128u			/* 64 KB */
+
+int hal_disk_erase(uint32_t first, uint32_t last)
+{
+	const uint32_t *w, *e;
+	uint32_t n;
+
+	if (disk_fake == 1) return -1;
+	if (last < first) return 0;
+	hal_disk_nap();
+	while (first <= last) {
+		n = last - first + 1;
+		if (n > ERASE_SECTS) n = ERASE_SECTS;
+		if (hal_disk_read(first, ERASE_BUF, n) != 0) return -1;
+		e = ERASE_BUF + n * (HAL_SECTOR_SIZE / 4);
+		for (w = ERASE_BUF; w < e; w += 8)
+			if ((w[0] | w[1] | w[2] | w[3] | w[4] | w[5] | w[6]
+							| w[7]) != 0) break;
+		if (w < e) {
+			memset(ERASE_BUF, 0, n * HAL_SECTOR_SIZE);
+			if (hal_disk_write(first, ERASE_BUF, n) != 0) return -1;
+		}
+		first += n;
+	}
+	return 0;
+}
+
 /* No USB in QEMU: the console stays on the UART. */
 int hal_usb_init(void) { return -1; }
 int hal_usb_irq(void) { return -1; }
@@ -446,12 +693,14 @@ unsigned hal_disk_mhz;
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
-	l[HAL_FL_SFSA] = 0x00090000;
+	l[HAL_FL_SFSA] = 0x000D0000;
 	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
 						 * 96 KB of shared libc and
 						 * libfuri (<minix/shlibc.h>) */
-	l[HAL_FL_INST_SIZE] = 0x00020000;
-	l[HAL_FL_CACHE] = 0x00068000;
+	/* 416 KB, near the Flipper's (its SFSA is higher still): a
+	 * --flash package as big as subghz (130 KB of text) fits */
+	l[HAL_FL_INST_SIZE] = 0x00068000;
+	l[HAL_FL_CACHE] = 0x000B0000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
 	l[HAL_FL_ROM] = 0x00048000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
@@ -480,7 +729,7 @@ void hal_flash_region(uint32_t *base, uint32_t *size)
  * then the machine resets.  CUT_CFG[2] = CUT_DONE afterwards, so the cut
  * happens once.  N = 0xFFFFFFFF: print every erase and directory write
  * with its number instead (to choose N). */
-#define CUT_CFG		((volatile uint32_t *) 0x0008FFF0)	/* unused */
+#define CUT_CFG		((volatile uint32_t *) 0x000CFFF0)	/* unused */
 #define CUT_DONE	0x43555421u	/* "!TUC" */
 static uint32_t cut_ops;
 
@@ -591,7 +840,7 @@ void hal_fc_budget(unsigned pages, unsigned upday) { fc_budget = pages & 0xFF; }
  * up to the made-up SFSA. */
 #define RAM_RANGES	{ 0x20000000u, 0x20030000u }
 #define ROM_SPANS \
-	sfsa = 0x00090000; /* hal_flash_layout's made-up SFSA */ \
+	sfsa = 0x000D0000; /* hal_flash_layout's made-up SFSA */ \
 	if ((n = span_in(addr, len, 0, sfsa)) != 0) return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
@@ -714,11 +963,16 @@ void hal_ir_tx_start(uint32_t a, uint32_t b) { (void) a; (void) b; }
 int hal_ir_tx_ack(void) { return 0; }
 void hal_ir_tx_next(uint32_t us) { (void) us; }
 void hal_ir_tx_stop(void) { }
-int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) i; (void) d; (void) n; (void) g; return -1; }
+/* /dev/subghzraw's reader waits for a fake frame (hal_subghz_fake) */
+int hal_pulse_rx(unsigned i, uint32_t d, unsigned n, unsigned g) { (void) d; (void) n; (void) g; return i == 1 && sg_hz != 0 ? 0 : -1; }
 int hal_pulse_ack(void) { return 0; }
 unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }
 int hal_rfid_read(uint32_t d, unsigned n, unsigned c) { (void) d; (void) n; (void) c; return -1; }
+int hal_rfid_stream_irq(void) { return -1; }
+int hal_rfid_emu_irq(void) { return -1; }
+unsigned hal_rfid_emu_ack(void) { return 0; }
+unsigned hal_rfid_stream_ack(void) { return 0; }
 void hal_rfid_stop(void) { }
 void hal_rfid_field(int on) { (void) on; }
 void hal_rfid_pull(int release) { (void) release; }
@@ -727,4 +981,18 @@ void hal_rfid_capture_stop(void) { }
 int hal_rfid_emulate(uint32_t d, uint32_t p, unsigned n)
 	{ (void) d; (void) p; (void) n; return -1; }
 void hal_rfid_emulate_stop(void) { }
-uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */
+/* Coarse cycles from the ms tick.  A kernel task that waits on this in a
+ * loop (the /dev/subghz read's 30 ms of RSSI samples, issue #157) runs
+ * with the lowest-priority SysTick unable to come in, so hal_ms alone
+ * stood still there and the loop never ended.  SysTick's COUNTFLAG (set at
+ * each reload, cleared by the read) counts the ms the handler missed;
+ * when the handler does run later the count only jumps forward. */
+uint32_t hal_cycles(void)
+{
+	static uint32_t missed, seen;
+	uint32_t ms = hal_ms;
+
+	if ((SYST_CSR & 0x10000u) && ms == seen) missed++;
+	seen = ms;
+	return (ms + missed) * 25000u;
+}

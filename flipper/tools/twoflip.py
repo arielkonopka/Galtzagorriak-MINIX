@@ -331,8 +331,32 @@ LF_PROTOCOLS = [("EM4100", 5), ("EM4100/32", 5), ("EM4100/16", 5),
 PATTERN = "1A2B3C4D5E6F708192A3B4C5D6E7F8091A2B3C4D5E6F708192A3B4C5D6E7F8"
 
 
+# Protocols that do not carry every bit of the pattern: the pattern's
+# canonical form, the bytes the Unleashed code itself gives back after
+# encoding and decoding it (found on the device 2026-11-19 and checked on
+# the host with the same code: Paradox drops the last nibble, Gallagher
+# bytes 2 and 5, Radio Key moves a parity bit, FDX-A needs its parity,
+# Keri sets bit 31, Idteck has the fixed "IDTK" prefix; HIDProx, AWID,
+# HIDExt and Indala26 do not send their last bits, which a reader leaves 0).
+# Computed by encoding with one protocol dictionary and decoding with a
+# fresh one: decoding with the encoder's own dictionary keeps the bits a
+# frame does not carry and hides that.  Nexwatch, GProxII,
+# Noralsy and Indala224 do not take the pattern at all (their checks
+# fail): they use the fixed vectors of flipper/tests/lfrfid/lfrfidtest.c,
+# which make lfrfidtest round-trips.
+LF_CANONICAL = {"Paradox": "1A2B3C4D5E60", "Gallagher": "1A003C4D006F7081",
+	"Radio Key": "1A693C4D5E6F", "FDX-A": "1AABBCCD5E",
+	"Keri": "9A2B3C4D", "Idteck": "4944544B5E6F7081",
+	"HIDProx": "1A2B3C4D5E60", "AWID": "1A2B3C4D5E6F708180",
+	"HIDExt": "1A2B3C4D5E6F708192A3B4C0", "Indala26": "1A2B3C48",
+	"Nexwatch": "00345678DC0365AA",
+	"GProxII": "FA0093200C421A161D080A00",
+	"Noralsy": "BB0456789000AC1B1EA80000",
+	"Indala224": "80000001B23EAEB0FFE8063AB156010F19D3457F5A3C96E12D4B78A5"}
+
+
 def lf_data(proto, n):
-	return PATTERN[:2 * n]
+	return LF_CANONICAL.get(proto, PATTERN[:2 * n])
 
 
 # IR: one message per protocol; values from Unleashed's own infrared unit
@@ -438,10 +462,12 @@ def ul_read_lf(ul):
 
 
 def rfid_m2u(ul, mx, opt, proto, data):
+	# the run list of a long PSK frame takes a few seconds to find
+	# (Nexwatch 3.9 s on the device)
 	ok = mx.start(mx_lf_cmd("emulate", proto, data),
-		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 3)
+		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 8)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "needs T19b" in txt:
 		mx.stop()
 		return "MISSING", "rfid emulate: " + last(txt)
 	if not ok:
@@ -617,9 +643,21 @@ def ib_dev_u2m(ul, mx, opt, p, key):
 	return "PASS", "MINIX read ROM " + got
 
 
+def ikey_knows(mx, p):
+	"""Whether MINIX's ikey names the key type p in its usage (Dallas
+	only until spec R6.7 part 3b brings Cyfral and Metakom), cached."""
+	k = "ikey:" + p
+	if k not in mx.have:
+		rc, out = mx.run("ikey 2>&1", 10)
+		mx.have[k] = p in out
+	return mx.have[k]
+
+
 def ib_u2m(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	if not ul.start("ikey emulate %s %s" % (p, key)):
 		return "BLOCKED", "Unleashed refused: " + last(ul.stop())
 	mx.start("ikey read")
@@ -648,10 +686,12 @@ def ul_read_key(ul):
 def ib_m2u(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	mx.start("ikey emulate %s %s" % (p, key),
-		rb"[Ee]mulat|[Uu]sage|not found|[Uu]nknown", 3)
+		rb"Emulating |so far|[Uu]sage|not found|[Uu]nknown", 3)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "so far" in txt:
 		mx.stop()
 		return "MISSING", "ikey emulate: " + last(txt)
 	m = ul_read_key(ul)
@@ -788,6 +828,16 @@ def judge_sub(f, out, who, nothing):
 		who, f["proto"])
 
 
+# A remote sends its frame several times; most decoders report a frame only
+# once they have seen it twice in a row (or after a first frame's guard
+# time), so one transmission is not enough.
+SUB_REPEAT = 10
+# Unleashed unlshd-093 says "Error transmitter" and then reboots (its USB
+# port goes away) on tx_from_file with these files.
+UL_TX_CRASH = {"Proteco": "Unleashed unlshd-093 reboots on tx_from_file of this file (its own bug)", "Freezer": "Unleashed unlshd-093 reboots on tx_from_file "
+	"of this file (its own bug)"}
+
+
 def subghz_decode_u2m(ul, mx, opt, f):
 	if not mx.exists("subghz"):
 		return "MISSING", "no subghz command (MINIX: subghz rx FREQ)"
@@ -800,7 +850,10 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	if missing(None, txt):
 		mx.stop()
 		return "MISSING", "subghz rx: " + last(txt)
-	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
+	if f["proto"] in UL_TX_CRASH:
+		mx.stop()
+		return "BLOCKED", UL_TX_CRASH[f["proto"]]
+	ok, uo = ul.run("subghz tx_from_file %s %d 0" % (path, SUB_REPEAT), 30)
 	if re.search(UL_TX_REFUSED.decode(), uo):
 		mx.stop()
 		return "BLOCKED", "Unleashed: " + ul_refused(uo)
@@ -984,6 +1037,27 @@ def rid(*parts):
 		for p in parts)
 
 
+# Sub-GHz: where the reference Flipper may transmit for a row.  The
+# Unleashed Flipper applies no region (it showed provisioned "00" with a
+# valid one), so the script must: by default only the EU short-range
+# bands (433.05-434.79, 868.0-868.6 MHz).  315 MHz is not allowed in the
+# EU; it ran once by mistake on 2026-11-18.  --region US or any to change.
+TX_BANDS = {"EU": [(433050000, 434790000), (868000000, 868600000)],
+	"US": [(304100000, 321950000), (433050000, 434790000),
+		(902000000, 928000000)]}
+
+
+def tx_allowed(opt, hz):
+	if opt.region == "any":
+		return True
+	return any(lo <= hz <= hi for lo, hi in TX_BANDS[opt.region])
+
+
+def tx_refused(ul, mx, opt, hz):
+	return "BLOCKED", "%.2f MHz is not a transmit band of region %s " \
+		"(--region)" % (hz / 1e6, opt.region)
+
+
 def build_rows(opt):
 	"""[(id, area, feature, dirn, fn, args)]: everything the Unleashed
 	Flipper can do with a partner."""
@@ -1016,12 +1090,16 @@ def build_rows(opt):
 		IB_VECTORS[0][1])
 	for fr in (315000000, 433920000, 868350000):
 		add("subghz", "level %.2f MHz" % (fr / 1e6), "u2m",
-			subghz_rssi_u2m, fr)
+			subghz_rssi_u2m if tx_allowed(opt, fr) else tx_refused, fr)
 	add("subghz", "raw timings", "u2m", subghz_raw_u2m)
 	add("subghz", "tx Princeton", "m2u", subghz_tx_m2u)
 	add("subghz", "chat", "u2m", subghz_chat, "u2m")
 	add("subghz", "chat", "m2u", subghz_chat, "m2u")
 	for f in sub_files():
+		if not tx_allowed(opt, f["freq"]):
+			for d in ("u2m", "m2u"):
+				add("subghz-decode", f["proto"], d, tx_refused, f["freq"])
+			continue
 		add("subghz-decode", f["proto"], "u2m", subghz_decode_u2m, f)
 		add("subghz-decode", f["proto"], "m2u", subghz_decode_m2u, f)
 	for f in nfc_files():
@@ -1225,6 +1303,8 @@ def main():
 	ap.add_argument("-u", "--unleashed", help="Unleashed Flipper's port")
 	ap.add_argument("-r", "--repeat", type=int, default=1)
 	ap.add_argument("--freq", type=int, default=433920000)
+	ap.add_argument("--region", choices=["EU", "US", "any"], default="EU",
+		help="Sub-GHz transmit bands the rows may use (default EU)")
 	ap.add_argument("--map")
 	ap.add_argument("--baseline")
 	ap.add_argument("--t5577", action="store_true")
@@ -1237,6 +1317,9 @@ def main():
 	ap.add_argument("--peer-minix", action="store_true")
 	ap.add_argument("patterns", nargs="*")
 	opt = ap.parse_args()
+	if not tx_allowed(opt, opt.freq):
+		ap.error("--freq %d is not a transmit band of region %s (use --region)"
+			% (opt.freq, opt.region))
 
 	rows = select_rows(build_rows(opt), opt.patterns)
 	if not rows:

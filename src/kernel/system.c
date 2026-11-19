@@ -530,6 +530,9 @@ message *m_ptr;			/* pointer to request message */
   rp->child_stime += rc->sys_time + rc->child_stime;
   unlock();
   rc->p_alarm = 0;		/* turn off alarm timer */
+#if (CHIP == ARM_CM)
+  flipdev_xit(proc_nr);		/* DMA and patterns it owned stop (#214) */
+#endif
   if (rc->p_flags == 0) lock_unready(rc);
 
 #if (SHADOWING == 1)
@@ -753,6 +756,9 @@ message *m_ptr;			/* pointer to request message */
   rp->p_reg.r1 = 0;
   rp->p_reg.r2 = (reg_t) scp;
   rp->p_reg.lr = (reg_t) smsg.sm_sigreturn;
+  /* The interrupted FP context (R5.7) stays below the old sp, recorded in
+   * the sigcontext; the handler starts without one. */
+  rp->p_reg.control &= ~CONTROL_FPCA;
 #endif
 
   return(OK);
@@ -762,14 +768,16 @@ message *m_ptr;			/* pointer to request message */
 /*===========================================================================*
  *				user_frame_ok				     *
  *===========================================================================*/
-PUBLIC int user_frame_ok(rp, sp)
+PUBLIC int user_frame_ok(rp, sp, fp)
 struct proc *rp;
 vir_bytes sp;
+int fp;				/* an FP context at sp (R5.7) */
 {
 /* Is sp a stack pointer the kernel may build a hardware exception frame
  * below (32 bytes)?  Word aligned, and [sp - 32, sp) inside the process's
  * own memory, from the start of D to the end of S (the gap between them
- * belongs to the process too).
+ * belongs to the process too).  With fp, restart reads S16-S31 at sp and
+ * the frame with S0-S15 above it: [sp, sp + 4 + 64 + 104) inside.
  */
   vir_bytes lo, hi;
 
@@ -777,6 +785,7 @@ vir_bytes sp;
   hi = (vir_bytes) (rp->p_map[S].mem_vir + rp->p_map[S].mem_len)
 							<< CLICK_SHIFT;
   if (sp & 3) return(FALSE);
+  if (fp) return(sp >= lo && sp <= hi && hi - sp >= 4 + 64 + 104);
   if (sp < lo + 32 || sp > hi) return(FALSE);
   return(TRUE);
 }
@@ -811,7 +820,8 @@ register message *m_ptr;
 #if (CHIP == ARM_CM)
   /* restart (mpx.S) writes the exception frame at sp - 32: the stack
    * pointer must be aligned and the frame inside the process (S1). */
-  if (!user_frame_ok(rp, (vir_bytes) sc.sc_sp)) return(EFAULT);
+  if (!user_frame_ok(rp, (vir_bytes) sc.sc_sp, (sc.sc_flags & SC_NOREGLOCALS)
+		? 0 : (sc.sc_regs.sr_control & CONTROL_FPCA))) return(EFAULT);
 #endif
 
   /* Fix up only certain key registers if the compiler doesn't use
@@ -826,6 +836,9 @@ register message *m_ptr;
 #endif
 	rp->p_reg.pc = sc.sc_pc;
 	rp->p_reg.sp = sc.sc_sp;
+#if (CHIP == ARM_CM)
+	rp->p_reg.control &= ~CONTROL_FPCA;	/* a jmp_buf sp: no FP frame */
+#endif
 	return (OK);
   }
   sc.sc_psw  = rp->p_reg.psw;
@@ -833,7 +846,11 @@ register message *m_ptr;
 #if (CHIP == ARM_CM)
   /* The CONTROL register decides the privilege level: a process must never
    * be able to set it through a forged sigcontext. */
-  sc.sc_regs.sr_control = rp->p_reg.control;
+  /* Except FPCA (R5.7): whether the context at sc_sp has an FP frame.  A
+   * forged one only loads the process's own memory into its own FP
+   * registers, with its own rights (mpx.S restart). */
+  sc.sc_regs.sr_control = (rp->p_reg.control & ~CONTROL_FPCA)
+			| (sc.sc_regs.sr_control & CONTROL_FPCA);
 #endif
 
 #if (CHIP == INTEL)
@@ -1150,6 +1167,11 @@ register message *m_ptr;
 #endif
 	    i == (int) &((struct proc *) 0)->p_reg.ss)
 		return(EIO);
+#endif
+#if (CHIP == ARM_CM)
+	/* CONTROL is the privilege level (and the FP state, R5.7): a
+	 * tracer must not make its child privileged. */
+	if (i == (int) &((struct proc *) 0)->p_reg.control) return(EIO);
 #endif
 	if (i == (int) &((struct proc *) 0)->p_reg.psw)
 		/* only selected bits are changeable */
