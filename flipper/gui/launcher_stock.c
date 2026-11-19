@@ -111,12 +111,14 @@ static void fit(char *s, int w)
 	strcpy(s + n, "...");
 }
 
-void stock_submenu(const char *header, int n, int pos, int top,
-		   stock_row_fn row)
+void stock_submenu(const char *header, int n, int pos, stock_row_fn row)
 {
 	struct stock_row r;
 	char t[40];
-	int i, y, w = GUI_W - 5;
+	int i, y, w = GUI_W - 5, top = pos > 0 ? pos - 1 : 0;
+
+	if (n <= STOCK_SUB_ROWS) top = 0;
+	else if (top > n - STOCK_SUB_ROWS) top = n - STOCK_SUB_ROWS;
 
 	gui_clear();
 	gui_text_font(4, 11, GUI_FONT_PRIMARY, header, 1);

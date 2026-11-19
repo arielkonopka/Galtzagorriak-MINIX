@@ -10,7 +10,11 @@
 #include "font4x6.c"
 /* The stock fonts (u8g2, BSD-2): libfuri's copy, one source for both.
  * Only what a program calls is linked (--gc-sections). */
+#ifndef GUI_HOST_U8G2		/* the host test links libfuri's own */
 #include "../lib/furi/u8g2/u8g2_fonts.c"
+#else
+extern const unsigned char u8g2_font_helvB08_tr[], u8g2_font_haxrcorp4089_tr[];
+#endif
 
 static unsigned char fb[GUI_W * GUI_H / 8];
 static int lcd_fd = -1, btn_fd = -1, btn_nb_fd = -1;

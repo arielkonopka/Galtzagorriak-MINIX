@@ -20,9 +20,9 @@ typedef void (*stock_row_fn)(int i, struct stock_row *r);
 /* The Apps page as the stock main menu (menu.c): the entry before, the
  * selected one in its frame, the one after; the scroll bar. */
 void stock_menu(int n, int pos, stock_row_fn row);
-/* Another page as a stock submenu with header: rows top.. of n. */
-void stock_submenu(const char *header, int n, int pos, int top,
-		   stock_row_fn row);
+/* Another page as a stock submenu with header; the rows shown follow pos
+ * as submenu_set_selected_item() places them (one row above it). */
+void stock_submenu(const char *header, int n, int pos, stock_row_fn row);
 /* A message over the frame: a stock-style popup box. */
 void stock_popup(const char *msg);
 /* The first-boot wizard's sample (spec R18b.2 step 6): a short list of

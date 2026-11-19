@@ -325,7 +325,7 @@ static void stock_draw(int pg, int sel, int top, const char *note)
 		stock_menu(n, sel, stock_app);
 		if (fsck_err) gui_title("CARD HAS ERRORS: RUN FSCK");
 	} else
-		stock_submenu(pages[pg].title, n, sel, top, pg == PG_SYS ? stock_sys
+		stock_submenu(pages[pg].title, n, sel, pg == PG_SYS ? stock_sys
 			      : pg == PG_SET ? stock_set : stock_home);
 	if (note != NULL) stock_popup(note);
 	gui_flush();

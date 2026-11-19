@@ -11,7 +11,7 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
+TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz \
      run-mtpd
@@ -100,6 +100,24 @@ $(B)/ibemutest: ibemutest.c $(MROOT)/src/kernel/arm/ibemu.c
 $(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/appline.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) icontest.c $(MROOT)/flipper/gui/appline.c -o $@
+
+# The launcher's Stock style (R5.6b, AC5.7): launcher_stock.c against the
+# stock menu.c and submenu as ported into libfuri, from the same entries.
+FURI	:= $(MROOT)/flipper/lib/furi
+FURI_SRC := $(FURI)/src/thread.c $(FURI)/src/sync.c $(FURI)/src/timer.c \
+	    $(FURI)/src/record.c $(FURI)/src/string.c $(FURI)/src/check.c \
+	    $(FURI)/src/fdwait.c $(FURI)/src/port_host.c \
+	    $(wildcard $(FURI)/src/gui/*.c $(FURI)/src/gui/modules/*.c \
+	    $(FURI)/src/gui/modules/widget_elements/*.c) $(wildcard $(FURI)/u8g2/*.c)
+$(B)/stocktest: stocktest.c $(MROOT)/flipper/gui/gui.c $(MROOT)/flipper/gui/launcher_stock.c \
+		$(MROOT)/flipper/gui/appline.c $(FURI_SRC)
+	@mkdir -p $(B)
+	$(CC) -O1 -g -Wall -Wno-unused-function -Wno-unused-parameter -std=gnu11 $(SAN) \
+	    -DFURI_HOST -I$(FURI)/include -I$(FURI)/include/gui \
+	    -I$(FURI)/include/gui/modules -I$(FURI)/u8g2 -I$(FURI)/src/gui -I$(FURI) \
+	    -I$(MROOT)/flipper/hal/common stocktest.c \
+	    $(MROOT)/flipper/gui/launcher_stock.c $(MROOT)/flipper/gui/appline.c \
+	    $(FURI_SRC) -lpthread -o $@
 
 # winrec.c and libgm: the window records of spec K.8 (T23b).
 $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
