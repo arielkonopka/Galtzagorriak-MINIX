@@ -57,7 +57,7 @@ EXAMPLE = b"Filetype: Flipper SubGhz Key File\nVersion: 1\n" \
 	b"Frequency: 433920000\nPreset: FuriHalSubGhzPresetOok650Async\n" \
 	b"Protocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"
 LONGNAME = "galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub"
-QUICK = False		# --quick: smaller files (QEMU's line is slow)
+QUICK = False		# --quick: the short M2 run (QEMU's line is slow)
 
 
 class Gone(Exception):
@@ -297,6 +297,30 @@ def check(cond, what):
 	print("  ok: " + what)
 
 
+def quick(m):
+	"""M2 under QEMU (--quick): one list, one send of etxea.sub, one get,
+	then the pulled cable; the full suite runs in make -C mtpd test."""
+	print("mtphost: quick: session, list, send, get, pulled cable")
+	m.ok(OP["GetDeviceInfo"])
+	t0 = time.time()		# (QEMU: mtpd has started now)
+	m.open()
+	ls = m.ls()
+	check(True, "the root lists %d objects" % len(ls))
+	if "galtzagorriak" in ls:
+		m.ok(OP["DeleteObject"], [ls["galtzagorriak"]])
+	top = m.mkdir("galtzagorriak")
+	h = m.put("etxea.sub", EXAMPLE, top)
+	check(m.get(h) == EXAMPLE, "etxea.sub: sent and got back, equal")
+	m.ok(OP["SendObjectInfo"], [STORAGE, top], m.objinfo("pulled.bin", 20000))
+	m.tid += 1
+	m.l.send(struct.pack("<IHHI", 12, CMD, OP["SendObject"], m.tid))
+	m.l.send(struct.pack("<IHHI", 12 + 20000, DATA, OP["SendObject"], m.tid)
+		+ os.urandom(2500))
+	m.l.close()
+	print("mtphost: %.1f s" % (time.time() - t0))
+	return top
+
+
 def test(m, root, name_max):
 	print("mtphost: GetDeviceInfo, sessions, storage")
 	m.ok(OP["GetDeviceInfo"])
@@ -334,7 +358,7 @@ def test(m, root, name_max):
 	sub = m.mkdir("azpi", top)
 	check(m.info(sub)["parent"] == top, "folder in a folder")
 	blobs = {"zero.bin": b"", "kilo.bin": os.urandom(1024),
-		"big.bin": os.urandom((6 if QUICK else 100) * 1024 + 7)}
+		"big.bin": os.urandom(100 * 1024 + 7)}
 	hs = {}
 	for name, data in blobs.items():
 		hs[name] = m.put(name, data, top)
@@ -551,7 +575,7 @@ def main():
 	p.add_argument("--wait", type=float, default=5)
 	p.add_argument("--record", help="write the stream sent to mtpd here")
 	p.add_argument("--quick", action="store_true",
-		help="a 6 KB big file instead of 100 KB (QEMU)")
+		help="M2 under QEMU: list, send, get, pulled cable only")
 	a = p.parse_args()
 	global QUICK
 	QUICK = a.quick
@@ -586,7 +610,10 @@ def main():
 		link.close()
 		return
 	try:
-		test(m, a.root, a.name_max)
+		if QUICK:
+			quick(m)
+		else:
+			test(m, a.root, a.name_max)
 		if hasattr(link, "proc"):
 			rc = link.proc.wait(10)
 			check(rc == 0, "mtpd ended on the pulled cable (status %d)" % rc)
