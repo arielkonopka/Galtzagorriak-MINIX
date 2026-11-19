@@ -139,9 +139,9 @@ void stock_popup(const char *msg)
 	int w = gui_font_width(GUI_FONT_SECONDARY, msg) + 12;
 
 	if (w > GUI_W - 8) w = GUI_W - 8;
-	rbox((GUI_W - w) / 2 - 1, 21, w + 2, 22, 1);	/* the frame */
-	rbox((GUI_W - w) / 2, 22, w, 20, 0);
-	gui_text_font((GUI_W - w) / 2 + 6, 35, GUI_FONT_SECONDARY, msg, 1);
+	rbox((GUI_W - w) / 2 - 1, 15, w + 2, 32, 1);	/* the frame */
+	rbox((GUI_W - w) / 2, 16, w, 30, 0);
+	gui_text_font((GUI_W - w) / 2 + 6, 34, GUI_FONT_SECONDARY, msg, 1);
 }
 
 /* The wizard's sample: three built-in icons of R5.6a.2. */

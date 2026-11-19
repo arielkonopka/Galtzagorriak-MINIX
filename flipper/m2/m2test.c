@@ -2360,6 +2360,97 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	}
 }
 
+/* T31 / AC5.7: the Stock style (spec R5.6b).  On the APPS list of
+ * launcher_test (on "Zaharra", whose /bin/true is not on the M2 disk: OK
+ * gives a message); ends there in Pine style. */
+static unsigned long fsum(void)
+{
+	unsigned long sum = 0;
+	int i;
+
+	for (i = 0; i < 1024; i++) sum = sum * 31 + lfb[i];
+	return sum;
+}
+
+static void style_toggle(int b, int l)		/* APPS -> its settings -> Style */
+{
+	int i;
+
+	furi_tap(b, 0x04);			/* SETTINGS */
+	lgrab(l, "style-sys");
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Launcher */
+	furi_tap(b, 0x10);
+	lgrab(l, "style-set");
+	for (i = 0; i < 3; i++) furi_tap(b, 0x02);	/* Style */
+	furi_tap(b, 0x10);			/* toggles, redrawn at once */
+}
+
+static void __attribute__((noinline)) stock_test(int b, int l)
+{
+	FILE *f;
+	char line[40];
+	unsigned long apps, s1;
+	int ok, n, x, frame;
+
+	style_toggle(b, l);
+	lgrab(l, "stock-settings");
+	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 51) && !lpix(127, 1),
+		"AC5.7: Style toggles to stock on the settings page, redrawn at once (submenu look)");
+	furi_tap(b, 0x20);			/* Back: SETTINGS */
+	furi_tap(b, 0x20);			/* Back: APPS, written */
+	lgrab(l, "stock-apps");
+	apps = fsum();
+	for (frame = 1, x = 2; x <= 121; x++) if (!lpix(x, 21) || !lpix(x + 1, 42)) frame = 0;
+	check(frame && !lpix(0, 0) && !lpix(64, 0) && lpix(126, 0) && !lpix(126, 1),
+		"AC5.7: the Apps page as the stock menu (frame at y 21, scroll bar, no title bar)");
+	n = 0;
+	if ((f = fopen("/tmp/lc", "r")) != NULL) {
+		while (fgets(line, sizeof line, f) != NULL)
+			if (strcmp(line, "Style: stock\n") == 0) n++;
+		fclose(f);
+	}
+	check(n == 1, "AC5.7: /etc/launcher.conf has Style: stock (written once)");
+	furi_tap(b, 0x10);			/* OK: "not found", the popup */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, "stock-popup");
+	s1 = fsum();
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	lgrab(l, "stock-popup-gone");
+	check(s1 != apps && fsum() == apps,
+		"AC5.7: a message is a stock-style popup, gone after 2 s");
+	f = fopen("/tmp/st.sh", "w");
+	fprintf(f, "echo started > /tmp/st.out\n");
+	fclose(f);
+	unlink("/tmp/st.out");
+	furi_tap(b, 0x20);			/* Back: the light on, no action */
+	for (n = 0; n < 3; n++) furi_tap(b, 0x02);	/* "L", the script */
+	lgrab(l, "stock-down");
+	s1 = fsum();
+	furi_tap(b, 0x10);			/* OK: runs it */
+	for (n = 0; n < 20 && access("/tmp/st.out", F_OK) < 0; n++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, "stock-ran");
+	check(access("/tmp/st.out", F_OK) == 0 && s1 != apps && fsum() == s1,
+		"AC5.7: OK starts the app, the menu is back");
+	unlink("/tmp/st.out");
+	unlink("/tmp/st.sh");
+	furi_tap(b, 0x08);			/* Right: HOME */
+	lgrab(l, "stock-home");
+	ok = fsum() != s1 && !lpix(0, 0);
+	furi_tap(b, 0x04);			/* Left: APPS */
+	lgrab(l, "stock-back");
+	check(ok && fsum() == s1, "AC5.7: Right and Left still change pages");
+	furi_tap(b, 0x20);
+	for (n = 0; n < 3; n++) furi_tap(b, 0x01);	/* where it was */
+	lgrab(l, "stock-inor");
+	style_toggle(b, l);			/* back to Pine */
+	furi_tap(b, 0x20);
+	furi_tap(b, 0x20);
+	lgrab(l, "pine-again");
+	check(lpix(0, 0) && lpix(127, 0), "AC5.7: Style: pine again, the title bar is back");
+}
+
 static void launcher_test(void)
 {
 	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
@@ -2377,7 +2468,7 @@ static void launcher_test(void)
 		"Txarra:root:#12XY:/bin/true\nGezi:root:>_:/bin/true\n"
 		"Bat:root:!:/bin/true\nZaharra:root:/bin/true\n"
 		"Inor:nosuchuser:@bell:/bin/true\n"
-		"K:root:@app:/bin/true\nL:root:@app:/bin/true\n");
+		"K:root:@app:/bin/true\nL:root:@app:/bin/sh /tmp/st.sh\n");
 	fclose(f);
 	f = fopen("/tmp/lc", "w");
 	fprintf(f, "Icons: on\nHints: on\n");
@@ -2453,6 +2544,7 @@ static void launcher_test(void)
 		fclose(f);
 	}
 	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	stock_test(b, l);			/* T31, spec R5.6b, AC5.7 */
 	/* ACK7.1 (K.7): SETTINGS -> Display -> Right on Brightness -> Back:
 	 * the backlight changes at once, display.conf is written once */
 	{
