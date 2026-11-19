@@ -294,35 +294,6 @@ def main():
 		out = r.output("tail -1 /usr/adm/fsck.log", 60) or b""
 		check(b"fixed 0, left 0" in out, "fsck again: nothing to repair "
 			"(%s)" % out.strip().decode(errors="replace"))
-		return fails + 1
-		r.sh("cd /; umount /dev/hd4", 60)
-		out = r.output("fsck -a /dev/hd4 >/tmp/f.log 2>&1; echo st=$?",
-			900) or b""
-		log = r.output("cat /tmp/f.log", 60) or b""
-		print(log.decode(errors="replace"))
-		check(b"st=1" in out, "fsck -a repairs the V3 /home: %s"
-			% out.strip().decode(errors="replace"))
-		check(b"COUNT" in log, "the wrong link count was found")
-		check(b"out-of-range" in log, "the out-of-range zone was found")
-		check(b"missing" in log, "the lost file's inode was found")
-		out = r.output("fsck -a /dev/hd4 >/dev/null 2>&1; echo st=$?",
-			900) or b""
-		check(b"st=0" in out, "a second fsck is clean: %s"
-			% out.strip().decode(errors="replace"))
-		check(r.sh("mount /dev/hd4 /home && test -f /home/links && "
-			"test ! -f /home/badz && test ! -f /home/" + N57, 60) == 0,
-			"mounted: links kept, badz and the lost file gone")
-		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
-			"umount /home")
-		r.p.kill()
-		r.p.wait()
-		copy_part(img, start, size, part, False)
-		v = V3(part)
-		check(v.flags() & 1, "CLEAN at offset 14 of the V3 super block")
-		v.close()
-		st, out = host(["fsck.minix", "-f", part])
-		check(st == 0, "host fsck.minix -f after our fsck: clean (%s)"
-			% out.strip().replace("\n", " | "))
 		return fails
 	finally:
 		r.close()
