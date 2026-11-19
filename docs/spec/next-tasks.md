@@ -455,7 +455,7 @@ Goal: Windows users update by dragging one signed file onto the Flipper and pres
 - Manual: `install.md` §7 "Updating with the update file" (S.11).
 
 ### T33b (`lane:local`, Flipper)
-- `atea` at 0x0800_0000 (≤ 16 KB): DFU checks as `hal_early_boot`, `BKP11R`, polled SD SPI, LCD progress, page compare/erase/program with first-page-last, epoch and downgrade press, trial counter and rollback question (RS.11–RS.16). System image linked at 0x0800_4000; shared libc, libfuri/libapp and the installed region move up 16 KB (libc 0x0803_4000, programs 0x0804_C000; S.8; one full DFU flash, as #201).
+- `atea` at 0x0800_0000 (≤ 16 KB): DFU checks as `hal_early_boot`, `BKP11R` (free on main; add it to the backup-register list in `board.c` and PORTING.md), polled SD SPI, LCD progress, page compare/erase/program with first-page-last, epoch and downgrade press, trial counter and rollback question (RS.11–RS.16). System image linked at 0x0800_4000; shared libc, libfuri/libapp and the installed region move up 16 KB (libc 0x0803_4000, programs 0x0804_C000; S.8; one full DFU flash, as #201).
 - `mtpd` hook (RS.7) and the confirmation window (RS.8, K.2 style).
 - ACS.4–ACS.8 on the device; measure verify time, `atea` size and stack, update time for a full and a one-program change; report page erases.
 

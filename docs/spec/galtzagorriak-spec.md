@@ -2606,7 +2606,8 @@ sector 1..   section table: up to 16 entries of 32 B
   `/.gzupdate/<new epoch>/MANIFEST` and switches the trees: for each manifest entry (`/` entries,
   then `/usr` entries): `rename(file, /.gzupdate/<old epoch>/file)`, then
   `rename(/.gzupdate/<new>/file, file)`; then it writes `/etc/gz-tree` by temp file + `rename`,
-  `sync`s and exits; INIT continues the boot. Each step can be repeated after a power cut (a file
+  `sync`s and exits; INIT continues the boot. If `gztree` cannot start or fails, INIT logs it
+on the console and boots anyway (the next boot tries again; RS.16 counts the starts). Each step can be repeated after a power cut (a file
   already in place with the right SHA-256 is skipped), so the switch simply finishes at the next
   boot. The old base files stay in `/.gzupdate/<old epoch>/` for one rollback. INIT's only
   addition is the epoch compare and one `fork`/`exec`/`wait` (+0 B static RAM).
@@ -2679,10 +2680,13 @@ disconnected), the incomplete first page still tells `atea` to look on the card.
 
 `atea` takes the first 16 KB, so the system image starts at 0x0800_4000 (VTOR is set by `atea`)
 and keeps its 192 KB budget (it ends at 0x0803_4000). Everything with a fixed address above it
-moves up 16 KB with it: the shared libc from 0x0803_0000 to 0x0803_4000 (#167), libfuri and
+moves up 16 KB with it: the shared libc from 0x0803_0000 to 0x0803_4000 (#167), libfuri from 0x0803_C000 to 0x0804_0000 and
 libapp by the same 16 KB (#201), and the start of installed programs from 0x0804_8000 to
 0x0804_C000. The image is not shrunk: the drivers of Phases 4b–15 need the 192 KB (Phase 2b
-table). Moving libc changes its id, which is one more reason for the one-time full flash below. Like #201, the first build with `atea` needs a full
+table). Constants that change: `HAL_SYS_IMAGE` 0x30000 → 0x34000 (`hal/flipper/board.c` and its layout
+comment), the libc address in `<minix/shlibc.h>` and `shlibc.ld`, the libfuri/libapp addresses
+(`shfuri.ld`, `user-shfuri.ld`), the installed-region start, and `flipper.ld` (FLASH origin
+0x0800_4000; `atea` gets its own linker script). Moving libc changes its id, which is one more reason for the one-time full flash below. Like #201, the first build with `atea` needs a full
 DFU flash of `minix-base.bin` and the apps installed again; from then on, updates go through
 the file. Its `from_min` is that release.
 
