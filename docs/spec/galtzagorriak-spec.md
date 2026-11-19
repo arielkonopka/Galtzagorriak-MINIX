@@ -36,6 +36,9 @@ files, rollback, CI signing; user request).
 Addition (2026-11-19): M.0 (intent and boundaries of the canaries, guidance for implementing
 agents), new canaries `beacon` (R16.5.7) and `gpio` (R7b.4.4), USB power quality (R11.2.10); a CAN
 bus canary is out of scope (user request 2026-11-17, user decision 2026-11-19).
+Addition (2026-11-19): 12i (hibernation: the whole RAM in an encrypted image on the card, resume
+in ≈ 2 s) and F.3 `After: off` both moved to milestone M9, the end of the queue (task T36; user
+request). Background: the project report `hibernation-analysis.md` (Polish, not in the repo).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -504,7 +507,8 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (user, 2026-11-15). Details in next-tasks T14c.
-- **Wake, do the job, off again (user, 2026-11-17).** A timer file may say `After: off` (and
+- **Wake, do the job, off again (user, 2026-11-17; milestone M9, end of the queue, task T36a,
+  user 2026-11-19).** A timer file may say `After: off` (and
   `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
   log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
   and the Flipper goes back to ship mode. The rules:
@@ -5318,9 +5322,8 @@ the foreground path (the AmigaOS feel: the UI always answers, whatever the rest 
   and a daily reserve budget (≈ 4 B in MM, within R12.26's budget but not 0 B), and rotating the
   slots over the 64 MB partition per boot (needs a stored offset; helps only very primitive FTLs).
   They can come back with the user's yes.
-- **Hibernation.** If a whole-RAM hibernation image is ever added (analysis
-  `reports/hibernation-analysis.md`, level 2), R12.29, R12.31 and R12.32 apply to it too; frequent
-  cycles should use the cold-boot level 1, which writes nothing.
+- **Hibernation** (12i): R12.29, R12.31 and R12.32 apply to the hibernation image too; frequent
+  wake-and-off cycles use F.3 `After: off` (cold boot), which writes no image.
 
 Acceptance criteria:
 - AC12.14 QEMU (`tests/swapwear`, counting sectors written through the WINCHESTER task): swap a
@@ -5608,8 +5611,85 @@ RAM budget (12h):
   −4…12 KB, Sub-GHz −3…6 KB, IR −2…4 KB, ports with history −2…8 KB), and parked images get
   smaller (faster L6, fewer swap writes).
 
+### 12i. Hibernation: the whole RAM on the card (user request 2026-11-19; milestone M9, end of the queue)
+
+The user's idea (2026-11-16): swap can give hibernation. Save the state on the card, power off in
+ship mode (F.3), and come back to the same place. Background: the project report
+`hibernation-analysis.md` (Polish, not in the repo). The user put it at the **end of the queue**
+(task T36b), after F.3 `After: off` (T36a). Jobs that wake the Flipper from off (alarms, beacons,
+weather logs) do **not** need hibernation: they are tier 0 and run after a cold boot. Hibernation
+adds one thing: the user's session (open apps, parked apps, stock ports) comes back, in about
+1.5–2.5 s instead of a 3–4 s cold boot.
+
+- **R12.41 One image of the whole RAM, not per-process swap.** Every process in its own slot is
+  not possible before 12c (the app in front waits in FS), and the kernel, MM and FS state must be
+  saved anyway. So the kernel writes the used RAM of CPU1 (kernel, MM, FS, INIT, all user
+  processes; MM's free holes and CPU2's shared tables in SRAM2a left out) to a raw **hibernation
+  partition** on the card (256 KB, its own partition, `/etc/rc.conf` `hibernate=`). It comes back
+  **at the same addresses**, so the missing MMU is no problem here. Swapped processes stay in
+  their swap slots and stay `P_SWAPPED`. Typical image 100–150 KB.
+- **R12.42 Entering.** INIT (power menu "Hibernate", `halt -h`, or the `power` app's idle ladder
+  instead of Stop2) runs the `RBT_HALT` path of N.5 **without** `SIGTERM` to processes: FS syncs,
+  sets the clean flags (N.2) and **drops its clean buffers** (smaller image, fewer file contents
+  on the card), then MM calls the new `SYS_HIBERNATE`. The kernel writes the image with interrupts
+  off, polled multi-block writes (R12.31), on a ≤ 512 B scratch stack that overlays a buffer that
+  is dead at that moment (0 B net), writes the header last, sets an "image valid" bit in an RTC
+  backup register, and enters ship mode as F.3. 0 internal flash writes.
+- **R12.43 Blockers.** `SYS_HIBERNATE` returns `EBUSY` with a reason, shown by INIT, when:
+  `pm_busy ≠ 0`; a radio, NFC, RFID or USB stream is open (tier 3); USB is attached (ship mode
+  cannot cut power: Stop2 instead, no error); no hibernation partition; a `Secret: yes` or
+  set-uid/set-gid process runs while no device key exists (R12.48): INIT asks to end it first.
+- **R12.44 Resuming.** The reset handler, **before** clearing `.bss`, reads the backup bit. Not
+  set: normal cold boot, no card access. Set: clocks, a small polled SD reader (≈ 1–2 KB flash),
+  header checks (R12.46), image read straight to its addresses, CRC-32 (CRC unit) and the
+  AES-GCM tag (R12.48), then **the bit is cleared before jumping** (one-shot: an image never
+  resumes twice, 0 card writes), then the kernel returns from `SYS_HIBERNATE`. Any failed check
+  → a normal cold boot; tier 0 jobs still run, only the session is lost.
+- **R12.45 Time and randomness.** Resume is a very long tickless sleep (T14b): the kernel moves
+  `realtime` on by the RTC difference since the header's time stamp and fires due timers;
+  INIT sends `SIGRTC` to `timed` (F.2, `Missed:` applies) and the new `SIGRESUME` (default:
+  ignore) to every process. The RNG state is reseeded from the RNG.
+- **R12.46 The image must match.** The header holds: format version; the build id of the system
+  region (CRC computed at build time); the installed region's generation and the ABI; the card
+  CID; a random stamp also written into a spare super block field (a cold-boot mount clears it, so
+  the image dies with any cold boot); a CRC-32 of the inode and zone bitmaps (catches the card
+  edited on a PC); the list of RAM ranges; the RTC time; CRC-32 and the GCM tag. Any mismatch →
+  cold boot (DFU update, `pkg` change, other card, edited card).
+- **R12.47 Hardware comes back through `resume()` hooks.** Every driver gets `resume()`: its boot
+  init plus the current settings from RAM. LCD from the kernel frame buffer (`fbcon`); LP5562 level
+  and patterns reloaded; CC1101 to SLEEP; charger profile re-written (R6.1, never above stock);
+  USB re-enumerates (`ttyACM` sessions get `SIGHUP`); **CPU2 restarts** (its RAM can't be saved:
+  BLE links drop, bonds stay; `bled` treats it as link loss); FPU state flushed before the write
+  (R5.7); MPU reloaded on the first switch; IWDG started again. Wake by the RTC with a due
+  `After: off` job → **quiet resume** (screen and backlight off, CPU2 only if a process needs it),
+  the job runs, and the Flipper hibernates again (a new image); a button press → normal.
+- **R12.48 The image is encrypted and authenticated with a device key.** The image holds kernel
+  RAM, so a changed image would run code with full privilege; a CRC can't stop that, and the
+  12b swap key dies at power-off. So: a device key made from the RNG **once** (first-boot setup
+  or the first `hibernate=on`) and stored once in internal flash or in CPU2's customer key storage
+  (one install-time write), loaded into AES1; AES-GCM over the image (R12.9 driver, ≈ 10 ms),
+  random 96-bit nonce in the header. With the key, `Secret: yes` processes may stay in the image.
+  `hibernate=plain` (no key, CRC only) exists only for development and prints a warning at
+  every hibernation.
+- **R12.49 Cost.** RAM resident ≈ 0 B (backup register bit, header on the card, scratch overlays a
+  dead buffer); flash ≈ 3–5 KB (writer + stub ≈ 2 KB, `resume()` hooks ≈ 1–2 KB, INIT/MM/FS a few
+  hundred bytes); card: 256 KB partition, ≈ 150 KB written per hibernation.
+
+Acceptance criteria:
+- AC12.20 Device: hibernate with the launcher, `alarm` and one parked app; power on with Back →
+  the same screen within 2.5 s of the QON; `lat` shows L1 unchanged after resume.
+- AC12.21 Device: 100 hibernate/resume cycles by RTC (`After: off` job every 5 min) with no lost
+  file data; `fsck -n` clean afterwards.
+- AC12.22 One byte of the image changed on a PC → cold boot, a console line says why; same for a
+  DFU update of the system region, a `pkg` install, another card, and a file added on a PC.
+- AC12.23 Power cut right after a resume, then power on → cold boot (the image never resumes twice).
+- AC12.24 Blockers: USB attached → Stop2, no image; a radio stream open → "Hibernate: radio in use".
+
 ### 12f. Notes for the system manual
 
+- Hibernation (12i): "Power off" ends programs, "Hibernate" keeps everything on the card and
+  comes back in about 2 s; why it sometimes starts from zero (system update, other card, card
+  edited on a PC) while alarms still work; that the Flipper may wake silently for a job.
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
   "parked" (2) and "runs in the radio chip or USB driver" (3). Which built-in apps use which tier.
 - The Running list: what `in RAM`, `on SD` and `waiting for memory` mean, and how to end an app.
@@ -6765,6 +6845,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Swap (Part 4), A13 | 12 |
 | Background apps: tiers, park/hibernate API, Running list (user request) | 12d–12f (R12.18 may land with 7b) |
 | Swappable memory blocks for apps: `blk`, `libblk`, Berry `vbytes` (user request) | 12h |
+| Hibernation, whole RAM on the card (user request 2026-11-19, end of the queue) | 12i (task T36b, after F.3 `After: off`, T36a) |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
