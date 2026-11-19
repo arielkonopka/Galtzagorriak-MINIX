@@ -378,11 +378,7 @@ static void test_gui_window_and_input(void) {
     ViewPort* vp = view_port_alloc();
     view_port_draw_callback_set(vp, draw_hello, NULL);
     view_port_input_callback_set(vp, record_input, NULL);
-    /* pine.c reads the title from the record's Gui: the gui thread's
-     * of test_gui_thread() (still running) */
-    Gui* service = furi_record_open(RECORD_GUI);
-    const char* old_title = service->title;
-    service->title = gui->title = "hello";
+    gui->title = "hello";
     gui_add_view_port(gui, vp, GuiLayerWindow);
     gui_redraw(gui);
     compare("gui_window", canvas_get_buffer(gui->canvas));
@@ -753,7 +749,7 @@ int main(int argc, char** argv) {
     }
     prefix = "";
     in_window = false;
-    //test_pine_window_gui();
+    test_pine_window_gui();
     report_ram();
     canvas_free(canvas);
     printf("test_gui: %d checks, %s\n", checks, fails ? "FAIL" : "PASS");

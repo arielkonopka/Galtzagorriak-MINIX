@@ -176,7 +176,7 @@ void popup_set_callback(Popup* popup, PopupCallback callback) {
     furi_check(popup);
     popup->callback = callback;
     with_view_model(
-        popup->view, PopupModel * model, { model->icon.has_callback = callback != NULL; }, true);
+        popup->view, PopupModel * model, { model->icon.has_callback = callback != NULL; }, false);
 }
 
 void popup_set_context(Popup* popup, void* context) {
