@@ -56,4 +56,49 @@ struct rfid_emu {
 #define RFID_CARRIER_134	2	/* 134.2 kHz, 50 %: FDX-B */
 #define RFIDIOCCARRIER	_IOW('r', 3, int)
 
+/* RFIDIOCSTREAM (spec R9.0.5): capture without end.  The field comes on
+ * (RFIDIOCCARRIER's) and the DMA writes the tag signal's edges as 32-bit
+ * timestamps (us, a free-running counter) round and round into `ring`,
+ * `words` long (even, 64..65534), in the caller's memory, pinned and not
+ * to be freed while it runs.  read() then blocks until a half of the ring
+ * is full and returns 4 bytes: 0 (words 0..words/2-1 are new) or 1 (the
+ * second half).  Use the half before the next one is full (a ring of
+ * 4096 words gives at least 32 ms at FSK's fastest).  A reader that fell
+ * more than a half behind gets -1 with EOVERFLOW once, and the next whole
+ * half after it: an edge is never lost silently.  poll() is readable when
+ * a half is waiting.  words 0, close or the caller's exit stop it.  The
+ * durations are the differences of the timestamps (mod 2^32). */
+struct rfid_stream {
+	void *ring;		/* 32-bit timestamps, us */
+	unsigned words;		/* even, 64..65534; 0 stops */
+	int level;		/* out: the comparator's level before the
+				 * first edge (1 high: that edge falls);
+				 * the edges alternate from there */
+};
+#define RFIDIOCSTREAM	_IOW('r', 4, struct rfid_stream)
+
+/* RFIDIOCEMURUN (spec R9.0.6): emulation of long frames (FSK, PSK) as a
+ * run list.  A run is `count` equal segments of `period_m1` + 1 carrier
+ * periods with the antenna loaded for `pulse` of them (an FSK bit is one
+ * run, a PSK bit one or two); the list repeats.  `ring` is room for
+ * 2 * ring_n words in the caller's memory (ring_n even, 16..512; 128 is a
+ * good size), pinned while it runs: the DMA plays it at the reader's clock
+ * and the kernel refills each half from the runs as soon as it has been
+ * played (a short interrupt, no work per carrier period).  The run list
+ * stays the caller's too and must not change meanwhile.  Stop as
+ * RFIDIOCEMU (n = 0 there, a close or a cancel).  At most 512 runs. */
+struct rfid_emu_run {
+	unsigned short period_m1;	/* segment length, carrier periods - 1 */
+	unsigned short pulse;		/* periods loaded (0 .. period_m1 + 1) */
+	unsigned short count;		/* segments in a row (>= 1) */
+	unsigned short pad;
+};
+struct rfid_emu_runs {
+	struct rfid_emu_run *runs;
+	unsigned nruns;			/* 1..512 */
+	void *ring;			/* 2 * ring_n 32-bit words */
+	unsigned ring_n;		/* even, 16..512 */
+};
+#define RFIDIOCEMURUN	_IOW('r', 5, struct rfid_emu_runs)
+
 #endif /* _MINIX_RFID_H */

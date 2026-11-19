@@ -13,7 +13,7 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem run-hid \
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid \
      run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
@@ -48,6 +48,14 @@ run-mtpd:
 	if command -v clang >/dev/null; then \
 	  $(MAKE) -C $(MROOT)/flipper/mtpd fuzz FUZZTIME=60; \
 	else echo "mtpd fuzz: no clang, skipped"; fi
+
+# test(1) (src/commands/simple/test.c, #118): the POSIX file tests.
+run-testcmd: $(B)/testcmd testcmd.sh
+	sh testcmd.sh $(B)/testcmd
+
+$(B)/testcmd: $(MROOT)/src/commands/simple/test.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-unused-result '-D_PROTOTYPE(f,a)=f a' $< -o $@
 
 run-%: $(B)/%
 	./$<

@@ -67,6 +67,18 @@ Budget L10 (boot to launcher menu) is 3 s.
   be delayed are to sit above the kernel's lock level (R0.8a, R4a.1, with the radio drivers).
 - On entry, the whole register set goes into `proc_ptr->p_reg`; `restart` builds the hardware
   frame on the process stack again.
+- **FPU** (R5.7): lazy, and nothing in the process table. A process that used the FPU gets an
+  extended frame (S0-S15, FPSCR) from the CPU, written only when needed (lazy stacking);
+  `p_reg.control` gets `CONTROL_FPCA` and `p_reg.sp` points 64 bytes below the frame. Its
+  registers stay in the FPU (`CONTROL_FPLIVE`, only ever on `mpu_proc`) while the kernel runs and when it returns to the same
+  process. Only when `restart` enters another process does `fp_flush` store S16-S31 there (which
+  also makes the CPU do the lazy S0-S15 save) and clear the FPU, so nobody sees another
+  process's registers; `restart` loads S16-S31 back when the process runs again. All stores
+  and loads use the process's own rights (`strt`/`ldrt`, the lazy save with its MPU regions);
+  a bad stack gives it SIGSEGV (`fp_frame_recover`). The kernel, servers and libc are
+  soft-float and never use the FPU. Signal handlers start without an FP context; the
+  sigcontext keeps `CONTROL_FPCA`, so `sigreturn` finds the interrupted one again. Tests:
+  `/bin/fptest` (`m2/fptest.c`, run by `m2test`).
 - **MPU**: on every switch, `mpu_switch()` gives the process its own memory and read-only
   flash. Small or oddly aligned blocks are covered with several regions (`<minix/mpucover.h>`).
   There is no unprotected mode.

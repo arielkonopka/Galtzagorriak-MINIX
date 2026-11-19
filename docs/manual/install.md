@@ -77,6 +77,12 @@ included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg:
 shared libc ..., this system has ..."; the same for the GUI apps' library, "needs shared
 libfuri ..."), and `free -v` shows both libraries (`shared libc:`, `shared libfuri:`) and their ids.
 
+**A download and your own build are two different builds**, even from the same commit: the
+library's id is a checksum of the compiled code, so it changes with the compiler. The images on
+GitHub are built with Ubuntu 24.04's GCC; a build on your computer (or on another computer with
+another GCC version) has another id. Pick one source and stay with it. Switching sources means
+writing a new card, which erases `/home`: back it up first (section 7, *Backing up your files*).
+
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
 
@@ -118,7 +124,10 @@ Put the card back into the Flipper.
        dfu-util -a 0 -s 0x08000000:leave -D build/flipper/minix/minix-base.bin
 
    (`make BOARD=flipper minix-flash` does the same with the bare `minix.bin`.)
-   When `dfu-util` finishes, the Flipper starts MINIX by itself.
+   When `dfu-util` finishes, the Flipper starts MINIX by itself. `dfu-util` may end with
+   "Error during download get_status" (exit code 74) even though the flash worked: the chip
+   restarts before it answers the last request. If `File downloaded successfully` is printed
+   above it, all is well.
 
 If the Flipper does not reach DFU mode with Left + Back (for example a broken image that crashes
 very early), use the hardware combination: hold **Left + Back + OK**, release **Back** and
@@ -138,6 +147,9 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    | `/dev/hd3` | (swap) | 64 MB | swap for idle programs, off by default ([Swap](swap.md)) |
    | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
 
+   **(planned)** `/home` as a MINIX V3 file system that fills the whole card, also past 4 GB
+   (spec section O).
+
 2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
    Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
    the launcher. The boot never waits for the console, so a Flipper with no USB host comes up as
@@ -156,8 +168,11 @@ Once booted, the LCD shows the **launcher**: Up/Down select an app, OK starts it
 An app that does not react to Back can still be closed: **hold Back for a second**. The app is
 asked to end (SIGTERM), and stopped for good 3 seconds later if it has not. While an app runs it
 owns the screen and the buttons; other programs cannot draw over it.
-Today it offers *Console* (the system console on the LCD, 32x10 characters), *About* and
-*Lights*. *About* shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
+The launcher is a small desktop with three pages side by side, SETTINGS, APPS and HOME;
+a short Left or Right moves between them. [The launcher](launcher.md) describes it in full.
+Among the apps is *Console* (the system console on the LCD, 31x10 characters in a frame; it shows
+what the USB console prints from the moment you open it, and says "USB console: waiting for
+text" until then). *About*, on the SETTINGS page, shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
 based on, the machine and ABI number, the host name and the uptime; `uname -a` and `ver` print
 the same on the console. After 5 minutes without a key the backlight fades out; the next key only turns it on.
 
@@ -174,6 +189,21 @@ their own). Do not turn on "add carriage return" in the terminal program, or you
 
 Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
 it. A wrong password is refused after 2 seconds, to make guessing slow.
+
+The keys are those of a Linux terminal: **Ctrl-C** stops the running command, **Backspace**
+rubs out a character (whether the terminal sends DEL or Ctrl-H), **Ctrl-U** clears the line,
+**Ctrl-D** at the start of a line ends the input, Ctrl-\\ quits with a core dump. (MINIX 2.0
+used DEL to stop a command, which is what Backspace sends today; `stty erase ^H intr ^?` brings
+that back for the session.)
+
+To see on the Flipper when the computer talks to it (handy when a script drives it, or to tell a
+slow command from a dead cable), let the status LED flash with the USB console's traffic:
+
+    echo console cyan >/dev/led     # any colour; on until "echo off >/dev/led" or a reboot
+
+Each burst of traffic, in either direction, gives a short flash; no traffic, no light. Add the
+line to `/etc/rc.conf` to have it at every boot. Details: [Devices](devices.md), the status LED.
+
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
@@ -226,6 +256,26 @@ again (1 s apart, up to 10 s) before they give up. While a subshell of yours run
 background (for example `( ... ) &`), the shell cannot wait this way: it says
 `NAME: no memory to start it` at once; run the command again a moment later.
 
+### Backing up your files
+
+Your files live in `/home` on the SD card. Before anything that rewrites the card (a new card
+image, switching between downloaded and self-built images, an ABI change), copy them off:
+
+- **The whole card**, to restore it exactly as it was (any Linux PC with a card reader):
+
+      lsblk -o NAME,SIZE,TRAN,MODEL       # find the card, e.g. sdb; never the system disk
+      sudo dd if=/dev/sdX of=flipper-sd-$(date +%F).img bs=4M status=progress
+
+- **Only the files**: Linux reads MINIX file systems. `/home` is the card's 4th partition:
+
+      sudo mount -t minix -o ro /dev/sdX4 /mnt && cp -a /mnt ~/flipper-home && sudo umount /mnt
+
+  (`/dev/mmcblk0p4` on a built-in reader.) Copy them back the same way after the new card's
+  first boot (mount without `-o ro`), or send them over the console.
+
+**(planned)** Files to and from a PC over USB with no card reader and no drivers (MTP, spec
+R10.4), also from Windows and macOS.
+
 ### Updating to a newer build without erasing the card
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
@@ -277,20 +327,30 @@ a hang just reboots the Flipper, like the stock firmware.
 4. The stock clock may now show UTC instead of local time until you set it again (for example by
    connecting the mobile app).
 
-## 9. Known limitations (today)
+## 9. What works and known limitations (today)
 
-- Hardware that works: LCD, backlight, RGB LED, buttons, vibration, speaker (`beep`), GPIO
-  header (`gpio`), infrared send and receive (`ir`), USB serial console, SD card.
-- Not yet: Sub-GHz radio, NFC, 125 kHz RFID, iButton, Bluetooth, U2F, BadUSB and the other stock
-  apps; the menu interface is a first launcher with three apps. These come in the later phases of
+What works on the Flipper (details in [Hardware devices](devices.md) and the other chapters):
+
+- Screen, backlight with fade-out, RGB status LED, buttons, vibration, speaker.
+- The launcher desktop with settings, reminders and an alarm clock, timers and alerts ([Timers and alerts](timers.md)).
+- 125 kHz RFID: read, write T5577 cards and emulate, all 25 LF protocols (`rfid`).
+- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`).
+- Infrared send and receive with the stock protocols (`ir`).
+- Sub-GHz: receiving and tuning only so far (`/dev/subghz`, `/dev/subghzraw`).
+- USB: the serial console, and the Flipper as a keyboard, mouse or media keys
+  ([USB gadgets](usb-gadgets.md), Bad USB).
+- GPIO header (`gpio`), the hardware self test ([The self test](selftest.md)).
+- Power: deep sleep when idle (with no USB cable), real power-off with `halt` (hold **Back** or
+  plug in USB to start again), battery readings in the *Power* app ([Power and battery](power.md)).
+
+Not yet:
+
+- Sub-GHz sending, NFC, Bluetooth, U2F and the other stock apps. They come in the later phases of
   the spec (`docs/spec/galtzagorriak-spec.md`).
-- Power management is not done yet: the Flipper uses several mA even when idle, so the battery
-  lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
-  power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
-  [Power and battery](power.md).
 - A new time zone reaches programs started after the change; open shells keep the old one until
   the next login (section 6).
-- The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
+- There is no on-screen keyboard yet; for typing use the USB console.
+- `/home` ends at 4 GB of the card (see section 6).
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).
 - **(planned)** Installing MINIX on a second Flipper from a MINIX Flipper over Bluetooth, without a

@@ -216,6 +216,15 @@ PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
 PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
 PRIVATE u8_t rf_carrier;		/* R9.0.4: the read field, RFID_CARRIER_* */
+PRIVATE u8_t rs_on;			/* R9.0.5: the streaming process + 1 */
+PRIVATE volatile u8_t rs_done;		/*   halves of its ring filled (mod 256) */
+PRIVATE u8_t rs_got;			/*   halves handed to its reads */
+PRIVATE u8_t rs_wait;			/*   a read waits (ir_caller/proc/buf) */
+#define SEL_RFID	8		/* sel_wait: a poller waits for a half */
+PRIVATE phys_bytes er_runs;		/* R9.0.6: the run list (0: none) */
+PRIVATE phys_bytes er_ring;		/*   the ring: ARR values, then CCR3 */
+PRIVATE u16_t er_nruns, er_n;		/*   runs; words in each half-ring x2 */
+PRIVATE u16_t er_i, er_left;		/*   the run playing, segments left */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -248,6 +257,16 @@ FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 #define RB_COLOUR(r)	((r) >> 8 & 7)
 #define RB_STEPOF(r)	((r) & 0x7F)
 #define RB_MS		40
+/* The console-activity mode ("echo console COLOUR >/dev/led", owner
+ * 2026-11-18): a short flash in rb_user[0] for USB console traffic.  It
+ * uses rb's free bits, not RB_ON, so the sequences' code never sees it:
+ * RB_CONS the mode, RB_LIT the flash is on, RB_REST the pause after it
+ * (so steady traffic blinks instead of glowing).  0 B RAM. */
+#define RB_CONS		0x0800
+#define RB_LIT		0x0080
+#define RB_REST		0x0040
+#define CA_ON_MS	40
+#define CA_OFF_MS	60
 PRIVATE const struct {
 	char name[9];
 	u8_t ncol, glide;		/* colours; steps of RB_MS to the next */
@@ -266,12 +285,19 @@ PRIVATE const u8_t rb_col[6][3] = {	/* PWM, white = 200:128:96 */
  * there it fills their padding, 0 B) */
 PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
+FORWARD _PROTOTYPE( void ca_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
 FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rs_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void rs_stop, (void)				);
+FORWARD _PROTOTYPE( int rs_take, (phys_bytes user)			);
+FORWARD _PROTOTYPE( int rs_int, (int irq)				);
+FORWARD _PROTOTYPE( int er_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void er_fill, (int half)				);
 FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ib_stop, (void)				);
@@ -283,6 +309,7 @@ FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
 FORWARD _PROTOTYPE( void sel_check, (void)				);
 FORWARD _PROTOTYPE( void sp_play, (void)				);
 FORWARD _PROTOTYPE( void lc_newline, (void)				);
+FORWARD _PROTOTYPE( void lc_frame, (void)				);
 FORWARD _PROTOTYPE( int ir_tx_int, (int irq)				);
 FORWARD _PROTOTYPE( int ir_write, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void bl_apply, (void) );
@@ -342,8 +369,13 @@ FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
  * shifting the pixel columns.  A one-byte write of 'C' to /dev/lcd turns
  * it on, any other write (an app drawing) off.  The task pushes the
  * screen out at most every LC_TICKS clock ticks. */
-#define LC_COLS		(LCD_W / 4)
-#define LC_ROWS		(LCD_H / 6)
+/* The console view has a 1-pixel frame with a 1-pixel gap inside (owner
+ * 2026-11-18: not an empty screen): text from (LC_X0, LC_Y0), 31 x 10. */
+#define LC_X0		2
+#define LC_Y0		2
+#define LC_COLS		((LCD_W - 2 * LC_X0) / 4)
+#define LC_ROWS		((LCD_H - 2 * LC_Y0) / 6)
+#define LC_TEXT		(((1ULL << (LC_ROWS * 6)) - 1) << LC_Y0)	/* rows */
 #define LC_TICKS	(HZ / 15)
 extern const unsigned char font_4x6[95][6];	/* hal/common/font4x6.c */
 PRIVATE u8_t lc_on, lc_x, lc_y, lc_esc, lc_wait;
@@ -373,6 +405,16 @@ PUBLIC void flipdev_task()
 
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
+  }
+  if ((r = hal_rfid_emu_irq()) >= 0) {	/* R9.0.6, the same way */
+	put_irq_handler(r, ir_tx_int);
+	enable_irq(r);
+  }
+  if ((r = hal_rfid_stream_irq()) >= 0) {	/* R9.0.5 */
+	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
+					 * new slot (all NR_IRQ_HANDLERS used);
+					 * it passes this vector to rs_int */
+	enable_irq(r);
   }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
 	put_irq_handler(r, rtc_int);
@@ -408,8 +450,10 @@ PUBLIC void flipdev_task()
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
 				&& ie.proc == fm.PROC_NR + 1) ib_stop();
-		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR)
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
+			if (rs_on == fm.PROC_NR + 1) rs_stop();	/* R9.0.5 */
+		}
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
@@ -443,6 +487,7 @@ PUBLIC void flipdev_task()
 #endif
 		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
+		if (rs_wait && ir_proc == fm.PROC_NR) rs_wait = 0;	/* R9.0.5 */
 		if (ir_rd && ir_proc == fm.PROC_NR) ir_rx_end(1);
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
@@ -468,6 +513,29 @@ PUBLIC void flipdev_task()
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
 	hid_check();			/* e.g. a persona let go */
   }
+}
+
+
+/*===========================================================================*
+ *				flipdev_xit				     *
+ *===========================================================================*/
+PUBLIC void flipdev_xit(proc_nr)
+int proc_nr;			/* the process that has exited */
+{
+/* Called by the SYSTEM task (do_xit) before MM gives the memory away.
+ * What the process owned stops now, not at the device's last close: a
+ * child from fork() may still hold the file, and a stream or emulation
+ * would go on reading or writing by DMA into memory that is no longer
+ * the process's (review of #214).  No replies: FS cancels the exiting
+ * process's own waits itself. */
+  if (rs_on == proc_nr + 1) {		/* R9.0.5: the stream */
+	rs_wait = 0;
+	rs_stop();
+  }
+  if (rf_emu == proc_nr + 1) rfid_emu_off();	/* R6.5 part 4 */
+  if (ie.proc == proc_nr + 1) ib_stop();	/* R6.7: a key emulated */
+  if (as_proc == proc_nr + 1) adcs_end(FALSE);	/* R4b.5: an ADC stream */
+  if (gp_proc == proc_nr + 1) gp_stop();	/* R6.4: a watched pin */
 }
 
 
@@ -503,6 +571,7 @@ message *m_ptr;
 	if (m_ptr->DEVICE == BTN_MINOR) sel_wait &= ~SEL_RD;
 	if (m_ptr->DEVICE == SPK_MINOR) sel_wait &= ~SEL_WR;
 	if (m_ptr->DEVICE == GPIO_MINOR) sel_wait &= ~SEL_GPIO;
+	if (m_ptr->DEVICE == RFID_MINOR) sel_wait &= ~SEL_RFID;
 	return(0);
   }
   switch (m_ptr->DEVICE) {
@@ -512,6 +581,10 @@ message *m_ptr;
 		if (!(sel_wait & SEL_RD)) sel_head = (u8_t) ev_head;
 		sel_wait |= SEL_RD;
 	}
+	break;
+  case RFID_MINOR:		/* R9.0.5: streaming, a half to read */
+	if (rs_on != 0 && rs_done == rs_got) r &= ~SEL_RD;
+	if ((ops & SEL_NOTIFY) && (want & ~r & SEL_RD)) sel_wait |= SEL_RFID;
 	break;
   case GPIO_MINOR:		/* R6.4: with pins watched, an edge */
 	if (gp_watch != 0 && gp_chg == 0) r &= ~SEL_RD;
@@ -542,6 +615,10 @@ PRIVATE void sel_check()
   if ((sel_wait & SEL_RD) && (u8_t) ev_head != sel_head) {
 	sel_wait &= ~SEL_RD;
 	reply(DEV_SELECTED, FS_PROC_NR, BTN_MINOR, SEL_RD);
+  }
+  if ((sel_wait & SEL_RFID) && rs_on != 0 && rs_done != rs_got) {
+	sel_wait &= ~SEL_RFID;
+	reply(DEV_SELECTED, FS_PROC_NR, RFID_MINOR, SEL_RD);
   }
   if ((sel_wait & SEL_GPIO) && gp_chg != 0) {
 	sel_wait &= ~SEL_GPIO;
@@ -694,7 +771,7 @@ int count;
   unsigned ms;
 
   if (as_cfg == 0 || count < 2 || count > 8192 || (count & 1)) return(EINVAL);
-  if (as_proc != 0 || tx_on || ir_rd) return(EBUSY);	/* TIM2 */
+  if (as_proc != 0 || tx_on || ir_rd || rs_on) return(EBUSY);	/* TIM2 */
   if (hal_adc_stream(as_cfg & 15, as_cfg >> 4, user, (unsigned) count / 2)
 							< 0) return(EIO);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* no shadow swap now */
@@ -1146,6 +1223,7 @@ message *m_ptr;
 		memset(fbuf, 0, sizeof(fbuf));	/* the console from now on */
 		lc_x = lc_y = lc_esc = 0;
 		lc_on = TRUE;
+		lc_frame();
 		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	} else {
 		if (lc_on) {	/* a short frame must not leave console text
@@ -1324,7 +1402,7 @@ message *m_ptr;
 
   case RFID_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) {	/* field on/off times (T5577) */
-		if (ir_rd || tx_on) return(EBUSY);
+		if (ir_rd || tx_on || rs_on) return(EBUSY);
 		int rr;
 
 		if (rf_held) hal_rfid_pull(1);	/* a command: PA2 high (the
@@ -1502,10 +1580,62 @@ int irq;
 PUBLIC void flipdev_led_tick()
 {
 /* The ms timer: the rainbow's next step is due (R7b.5). */
-  if (rb & RB_ON) {
+  if (rb & (RB_ON | RB_CONS)) {
 	rb |= RB_DUE;
 	interrupt(PRINTER);
   }
+}
+
+
+/*===========================================================================*
+ *				flipdev_cons_act			     *
+ *===========================================================================*/
+PUBLIC void flipdev_cons_act()
+{
+/* The TTY task saw USB console traffic.  In the console-activity mode,
+ * a flash is due unless one is on or resting: the ms timer wakes this
+ * task for the I2C writes (never the TTY task's own work).  Otherwise
+ * one test, nothing more. */
+  unsigned bp;
+
+  if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) != RB_CONS) return;
+  /* lock() does not nest: unlock() would open a locked section of a
+   * caller that prints (usb_out from a kernel printf).  There, no flash:
+   * one missed flash does not matter (review of #297). */
+  __asm volatile ("mrs %0, basepri" : "=r" (bp));
+  if (bp != 0) return;
+  lock();
+  if ((rb & (RB_CONS | RB_LIT | RB_REST | RB_DUE)) == RB_CONS)
+	mt_arm(MT_LED, 1);
+  unlock();
+}
+
+
+/*===========================================================================*
+ *				ca_step					     *
+ *===========================================================================*/
+PRIVATE void ca_step()
+{
+/* Console activity, task work: dark -> flash for CA_ON_MS -> dark for
+ * CA_OFF_MS -> ready for the next traffic. */
+  unsigned v;
+
+  lock();
+  v = rb;
+  rb &= ~(RB_DUE | RB_LIT | RB_REST);
+  if (!(v & RB_CONS)) { unlock(); return; }
+  if (!(v & (RB_LIT | RB_REST))) {		/* traffic: on */
+	rb |= RB_LIT;
+	mt_arm(MT_LED, CA_ON_MS);
+  } else if (v & RB_LIT) {			/* the flash ends */
+	rb |= RB_REST;
+	mt_arm(MT_LED, CA_OFF_MS);
+  }					/* rest over: dark, ready */
+  unlock();
+  if ((v & (RB_LIT | RB_REST)) == 0)
+	hal_led_pwm(rb_user[0][0], rb_user[0][1], rb_user[0][2]);
+  else if (v & RB_LIT)
+	hal_led_pwm(0, 0, 0);
 }
 
 
@@ -1571,6 +1701,21 @@ int count;
 	if (led_colour(wd[i], &rgb[i-1]) < 0) return(EINVAL);
   if (nw == 1 && led_streq(wd[0], "off")) {
 	hal_led(0, 0, 0);
+	return(count);
+  }
+  if (led_streq(wd[0], "console")) {	/* flash on USB console traffic */
+	if (nw != 2) return(EINVAL);
+	for (i = 0; i < 3; i++) {
+		unsigned long v = rgb[0] >> (16 - 8 * i) & 0xFF;
+
+		rb_user[0][i] = (u8_t) ((v * v * white[i] + 32512) / 65025);
+	}
+	if ((rb_user[0][0] | rb_user[0][1] | rb_user[0][2]) == 0)
+		return(EINVAL);
+	hal_led(0, 0, 0);			/* engines off, direct */
+	lock();
+	rb = RB_CONS;
+	unlock();
 	return(count);
   }
   for (m = 0; m < 4 && !led_streq(wd[0], rb_mode[m].name); m++) ;
@@ -1741,7 +1886,7 @@ PRIVATE void do_hardint()
 	rtc_fired = FALSE;
 	cause_sig(INIT_PROC_NR, SIGRTC);
   }
-  if (rb & RB_DUE) rb_step();
+  if (rb & RB_DUE) { if (rb & RB_CONS) ca_step(); else rb_step(); }
   if (lc_dirty) {		/* console text, or a frame the SD held up */
 	lc_dirty = FALSE;
 	if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;
@@ -1773,6 +1918,11 @@ PRIVATE void do_hardint()
 #ifdef BOARD_QEMU
   line_check();				/* /dev/mtpline */
 #endif
+  if (rs_wait && rs_done != rs_got) {	/* R9.0.5: a half for the read */
+	rs_wait = 0;
+	r = rs_take(ir_buf);
+	reply(REVIVE, ir_caller, ir_proc, r);
+  }
   if (sel_wait) sel_check();		/* poll(), R4b.6 */
   hid_check();
 }
@@ -2341,9 +2491,9 @@ int c;
 	}
 	g = font_4x6[c - ' '];
 	for (row = 0; row < 6; row++) {
-		py = lc_y * 6 + row;
+		py = LC_Y0 + lc_y * 6 + row;
 		for (col = 0; col < 4; col++) {
-			px = lc_x * 4 + col;
+			px = LC_X0 + lc_x * 4 + col;
 			if (g[row] & (0x80 >> col))
 				fbuf[(py >> 3) * LCD_W + px] |= 1 << (py & 7);
 			else
@@ -2356,9 +2506,32 @@ int c;
 }
 
 
+PRIVATE void lc_frame()
+{
+/* The console view's frame, and a line saying what it is, on the LCD only
+ * (the USB host does not see it). */
+  static const char hint[] = "USB console: waiting for text";
+  const char *s;
+  int i;
+
+  for (i = 0; i < LCD_W; i++) {
+	fbuf[i] |= 1;				/* top: y 0 */
+	fbuf[(LCD_H / 8 - 1) * LCD_W + i] |= 0x80;	/* bottom: y 63 */
+  }
+  for (i = 0; i < LCD_H / 8; i++) {
+	fbuf[i * LCD_W] = 0xFF;			/* left: x 0 */
+	fbuf[i * LCD_W + LCD_W - 1] = 0xFF;	/* right */
+  }
+  for (s = hint; *s != 0; s++) lcd_cons_putc(*s);
+  lcd_cons_putc('\r');
+  lcd_cons_putc('\n');
+}
+
+
 PRIVATE void lc_newline()
 {
-/* Next line; at the bottom, move every pixel column up by one text row. */
+/* Next line; at the bottom, move the text up by one row inside the frame
+ * (the frame's pixels stay where they are). */
   unsigned long long colbits;
   int x, p;
 
@@ -2367,11 +2540,11 @@ PRIVATE void lc_newline()
 	lc_y++;
 	return;
   }
-  for (x = 0; x < LCD_W; x++) {
+  for (x = LC_X0; x < LC_X0 + LC_COLS * 4; x++) {
 	colbits = 0;
 	for (p = LCD_H / 8 - 1; p >= 0; p--)
 		colbits = colbits << 8 | fbuf[p * LCD_W + x];
-	colbits >>= 6;
+	colbits = (colbits & ~LC_TEXT) | ((colbits & LC_TEXT) >> 6 & LC_TEXT);
 	for (p = 0; p < LCD_H / 8; p++) {
 		fbuf[p * LCD_W + x] = colbits;
 		colbits >>= 8;
@@ -2393,7 +2566,7 @@ int count, input;
  * it ends after a silence, or when the buffer is full. */
   if (count < 4) return(EINVAL);
   if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);  /* no frame kept */
-  if (ir_rd) return(EBUSY);		/* one reader at a time (TIM2) */
+  if (ir_rd || rs_on) return(EBUSY);	/* one reader at a time (TIM2) */
   if (as_proc != 0) return(EBUSY);	/* TIM2: an ADC stream's */
   if (input != 0 && tx_on) return(EBUSY);
   ir_caller = m_ptr->m_source;
@@ -2471,6 +2644,20 @@ message *m_ptr;
 phys_bytes user;
 int count;
 {
+  if (rs_on) {				/* R9.0.5: a stream's half */
+	int r;
+
+	if (rs_on != m_ptr->PROC_NR + 1) return(EBUSY);
+	if (count < 4) return(EINVAL);
+	if ((r = rs_take(user)) != EAGAIN) return(r);
+	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
+	if (rs_wait) return(EIO);
+	rs_wait = 1;
+	ir_caller = m_ptr->m_source;
+	ir_proc = m_ptr->PROC_NR;
+	ir_buf = user;
+	return(SUSPEND);
+  }
   if (count < 8) return(EINVAL);
   if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
   ir_caller = m_ptr->m_source;
@@ -2554,6 +2741,8 @@ message *m_ptr;
   int on;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCEMURUN) return(er_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
 	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(on));
@@ -2569,7 +2758,7 @@ message *m_ptr;
   phys_copy(user, vir2phys(&on), (phys_bytes) sizeof(on));
   if (on) {
 	if (rf_held) return(OK);		/* already ours */
-	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0)
+	if (ir_rd || tx_on || as_proc != 0 || rf_emu != 0 || rs_on)
 		return(EBUSY);			/* TIM1, TIM2 */
 	hal_rfid_field(1);
 	rf_held = TRUE;
@@ -2582,6 +2771,186 @@ message *m_ptr;
   }
   return(OK);
 }
+
+/*===========================================================================*
+ *				er_start				     *
+ *===========================================================================*/
+PRIVATE int er_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCEMURUN (R9.0.6): emulate a long frame from a run list.  The DMA
+ * plays the ring at the reader's clock as RFIDIOCEMU does; each half is
+ * refilled from the runs in the interrupt after it has been played. */
+  struct rfid_emu_runs q;
+  struct rfid_emu_run *ru;
+  phys_bytes user, runs, ring;
+  unsigned k;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.nruns < 1 || q.nruns > 512 || q.ring_n < 16 || q.ring_n > 512
+						|| (q.ring_n & 1))
+	return(EINVAL);
+  if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on) return(EBUSY);
+  runs = numap(m_ptr->PROC_NR, (vir_bytes) q.runs,
+		(vir_bytes) q.nruns * sizeof(struct rfid_emu_run));
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) q.ring, (vir_bytes) q.ring_n * 8);
+  if (runs == 0 || ring == 0) return(EFAULT);
+  ru = (struct rfid_emu_run *) runs;	/* privileged, flat map */
+  for (k = 0; k < q.nruns; k++)
+	if (ru[k].count == 0 || ru[k].period_m1 == 0
+				|| ru[k].pulse > ru[k].period_m1 + 1)
+		return(EINVAL);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA and we read it */
+  er_runs = runs;
+  er_ring = ring;
+  er_nruns = q.nruns;
+  er_n = q.ring_n;
+  er_i = 0;
+  er_left = ru[0].count;
+  er_fill(0);
+  er_fill(1);
+  if (hal_rfid_emulate(ring, ring + (phys_bytes) q.ring_n * 4,
+				q.ring_n | HAL_RFID_REFILL) < 0) {
+	er_runs = 0;
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  rf_emu = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timer and DMA need the clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				er_fill					     *
+ *===========================================================================*/
+PRIVATE void er_fill(half)
+int half;
+{
+/* One half of the emulation ring from the runs (in the DMA interrupt, or
+ * before the start): er_n / 2 pairs, so its time is bounded and small. */
+  struct rfid_emu_run *ru = (struct rfid_emu_run *) er_runs;
+  u32_t *dur = (u32_t *) er_ring, *pul = dur + er_n;
+  unsigned i = half ? er_n / 2 : 0, end = i + er_n / 2;
+
+  for (; i < end; i++) {
+	if (er_left == 0) {
+		if (++er_i >= er_nruns) er_i = 0;
+		er_left = ru[er_i].count;
+	}
+	dur[i] = ru[er_i].period_m1;
+	pul[i] = ru[er_i].pulse;
+	er_left--;
+  }
+}
+
+
+/*===========================================================================*
+ *				rs_start				     *
+ *===========================================================================*/
+PRIVATE int rs_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCSTREAM (R9.0.5): the field on, the comparator's edges into the
+ * caller's ring by circular DMA, an interrupt at each half (rs_int counts
+ * them).  No CPU work per edge.  words 0 stops it. */
+  struct rfid_stream st;
+  phys_bytes user, ring;
+  int lvl;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(st));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&st), (phys_bytes) sizeof(st));
+  if (st.words == 0) {				/* stop */
+	if (rs_on == m_ptr->PROC_NR + 1) rs_stop();
+	return(OK);
+  }
+  if (st.words < 64 || st.words > 65534 || (st.words & 1)) return(EINVAL);
+  if (rs_on != 0 || ir_rd || tx_on || as_proc != 0 || rf_held || rf_emu != 0)
+	return(EBUSY);				/* TIM1, TIM2, the DMA */
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) st.ring, (vir_bytes) st.words * 4);
+  if (ring == 0) return(EFAULT);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA writes it */
+  rs_done = rs_got = rs_wait = 0;
+  if ((lvl = hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  st.level = lvl;			/* (the RAW files need the polarity) */
+  phys_copy(vir2phys(&st), user, (phys_bytes) sizeof(st));
+  rs_on = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timers and the DMA need clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				rs_stop					     *
+ *===========================================================================*/
+PRIVATE void rs_stop()
+{
+/* The stream ends (words 0, close, exit): the DMA first, then the memory
+ * is the process's own again. */
+  hal_rfid_stop();
+  proc_addr(rs_on - 1)->p_physio = FALSE;
+  if (rs_wait) {			/* (its own read; not reachable now) */
+	rs_wait = 0;
+	reply(REVIVE, ir_caller, ir_proc, EINTR);
+  }
+  rs_on = 0;
+  lock();
+  pm_busy &= ~PM_PULSE;
+  unlock();
+}
+
+
+/*===========================================================================*
+ *				rs_take					     *
+ *===========================================================================*/
+PRIVATE int rs_take(user)
+phys_bytes user;
+{
+/* The next full half for a read: 4 bytes, its number, or EAGAIN (none
+ * yet), or EOVERFLOW once if the reader is more than a half behind. */
+  u8_t d = (u8_t) (rs_done - rs_got);
+  u32_t h;
+
+  if (d == 0) return(EAGAIN);
+  if (d > 1) {
+	rs_got = rs_done;		/* skip what was overwritten */
+	return(EOVERFLOW);
+  }
+  h = rs_got & 1;
+  rs_got++;
+  phys_copy(vir2phys(&h), user, (phys_bytes) 4);
+  return(4);
+}
+
+
+/*===========================================================================*
+ *				rs_int					     *
+ *===========================================================================*/
+PRIVATE int rs_int(irq)
+int irq;
+{
+/* The stream's DMA: a half (or both, if late) of the ring is full. */
+  unsigned k = hal_rfid_stream_ack();
+
+  if (rs_on == 0) return(1);
+  rs_done += (k & 1) + (k >> 1 & 1);
+  if (rs_wait || (sel_wait & SEL_RFID)) interrupt(PRINTER);
+  return(1);
+}
+
 
 /*===========================================================================*
  *				rfid_emu_start				     *
@@ -2607,7 +2976,8 @@ message *m_ptr;
   }
   if (e.n > 512) return(EINVAL);
   if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
-  if (ir_rd || tx_on || as_proc != 0 || rf_held) return(EBUSY);	/* TIM2 */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on)
+	return(EBUSY);				/* TIM2 */
   dur = numap(m_ptr->PROC_NR, (vir_bytes) e.dur, (vir_bytes) (e.n * 4));
   pulse = numap(m_ptr->PROC_NR, (vir_bytes) e.pulse, (vir_bytes) (e.n * 4));
   if (dur == 0 || pulse == 0) return(EFAULT);
@@ -2630,6 +3000,8 @@ PRIVATE void rfid_emu_off()
 {
 /* Stop emulating and let the pattern's memory go (and Stop2 in again). */
   int pr;
+
+  er_runs = 0;				/* R9.0.6: no more refills */
 
   if (rf_emu == 0) return;
   hal_rfid_emulate_stop();
@@ -2683,7 +3055,7 @@ int count;
   if (tx_on) return(EIO);			/* one frame at a time */
   if (ir_rd && (ir_started || pu_input != 0))
 	return(EBUSY);				/* TIM2 takes a frame in */
-  if (as_proc != 0) return(EBUSY);		/* TIM2: an ADC stream's */
+  if (as_proc != 0 || rs_on) return(EBUSY);	/* TIM2: a stream's */
   if (sp_waiting) return(EBUSY);		/* sbuf: the speaker's */
   n = count / 4;
   if (n > IR_TX_MAX + 1) return(EINVAL);
@@ -2771,8 +3143,20 @@ PRIVATE int ir_tx_int(irq)
 int irq;
 {
 /* TIM2: a mark or space is over, the next one (already loaded) starts
- * now; or, receiving, the pulse engine's capture (R4b.7). */
+ * now; or, receiving, the pulse engine's capture (R4b.7).  Also the RFID
+ * stream's DMA vector (R9.0.5): one handler, one slot. */
   int update;
+
+  if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
+  if (irq == hal_rfid_emu_irq()) {	/* R9.0.6: a half played: refill */
+	unsigned k = hal_rfid_emu_ack();
+
+	if (er_runs != 0) {
+		if (k & 1) er_fill(0);
+		if (k & 2) er_fill(1);
+	}
+	return(1);
+  }
 
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();

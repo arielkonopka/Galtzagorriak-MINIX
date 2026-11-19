@@ -203,7 +203,7 @@ map block counts) and in zone lookups. 0 RAM.
 
 **Simpler alternative adopted in the spec (R1.4):** put the **owner uid of the program file** into
 the cache key and only cache files that only their owner (or root) can write. A forged CRC can then
-alias text only among one owner's own files, so no read-back comparison is needed. Programs
+alias text only among one user's own files, so no read-back comparison is needed. Programs
 installed into flash at install time (spec Phase 4b) never use the run-time cache at all.
 
 ### S11. Physical access (informational)
@@ -328,7 +328,7 @@ list) give 4 to 8 times the speed. **RAM 0, flash about +150 B.**
 - No data CRC: enable `CMD59` and the SPI peripheral's hardware CRC16 for integrity at 0
   cost (the hardware computes it while shifting).
 - Polled byte-by-byte SPI → DMA. With DMA, the WINCHESTER task can block during a transfer and let user
-  processes run. Then SPI2 needs an owner flag, because LCD (flipdev) and SD share it; today it's safe
+  processes run. Then SPI2 needs an user flag, because LCD (flipdev) and SD share it; today it's safe
   only because tasks never preempt each other. 0 RAM.
 
 ### M10. Power: tickless idle and interrupt-driven buttons
@@ -524,7 +524,7 @@ The PKA also does the point-on-curve check, which is what makes verification saf
 Caution: all of these live in option bytes, which PORTING.md says the project never touches,
 and on the STM32WB they share the area with CPU2/FUS settings (`SFSA`, `SBRV`).
 
-**Decision (2026-11-14, by the project owner):** enable flash ECC handling now; it needs no
+**Decision (2026-11-14, by the project user):** enable flash ECC handling now; it needs no
 option-byte change. Defer WRP, PCROP and RDP level 1 until Bluetooth (milestone 12) works,
 then revisit with the CPU2/FUS layout known.
 
@@ -681,7 +681,7 @@ Swapped images contain whatever the process held, including passwords typed into
 - **M1 (vfork)** removes most transient shadow copies. Swap then mainly targets idle parents
   (shells, the launcher), and later (5c) long-lived shadow copies from real forks.
 - **A12 (RNG)** and **A13 (AES1)** are prerequisites. **A16 (HSEM)** applies to the RNG once CPU2 runs.
-- **M9 (multi-block SD)** makes swap 2–4 times faster. If SD moves to DMA, the SPI2 owner flag must
+- **M9 (multi-block SD)** makes swap 2–4 times faster. If SD moves to DMA, the SPI2 user flag must
   cover swap I/O too.
 - **S12** must be fixed first: a swapped-in process trusts its cached text.
 

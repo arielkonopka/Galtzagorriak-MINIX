@@ -90,7 +90,7 @@ text console).
 
 ## 4.3 The look: the title bar
 
-The launcher and every app share one visual convention, and it is a rule (owner decision
+The launcher and every app share one visual convention, and it is a rule (user decision
 2026-11-16, spec K.2): **each screen starts with the title bar**, a black bar across the full
 width of the top text row with the screen's name in white, centred, in capitals. Call
 `gui_title("NAME")` first after `gui_clear()`, and draw your content below it (from y = 8 on).
@@ -111,7 +111,7 @@ written in.
 
 ### The rest of the screen: "Pine meets modern UX"
 
-Since 2026-11-17 the whole screen follows one style (owner decision, spec K.2 and R5.6a.7),
+Since 2026-11-17 the whole screen follows one style (user decision, spec K.2 and R5.6a.7),
 modelled on the Pine mail program: text first, every screen says what its buttons do, nothing
 hidden. New apps follow it from the start, and reviews check it:
 

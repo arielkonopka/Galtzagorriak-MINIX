@@ -61,7 +61,12 @@
 # and its holder, the LED reader's slot and buffer: 9 B, padded).  The
 # spec allows <= 32 B for the QEMU backend; the QEMU board's own 8 B (its
 # state and the last line's hash) are not in the Flipper image.
-kernel    160    14692  14852
+# T19b R9.0.5 (RFID streaming capture): kernel +4 B: who streams, halves
+# filled and handed out, a waiting read (spec: <= +8 B).
+# T19b R9.0.6 (RFID long emulation from a run list): kernel +16 B: the run
+# list and the ring (physical addresses), their sizes, the run playing and
+# its segments left (spec: <= +16 B; R9.0.4-R9.0.6 together +24 of 32 B).
+kernel    160    14712  14872
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows
