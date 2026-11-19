@@ -25,14 +25,10 @@ Addition (2026-11-17): section P (data modems between two Flippers over RFID, NF
 BLE: one link layer, four backends, the `gmodem` command; user request).
 Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
 its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
-<<<<<<< HEAD
-the card and installed once into flash; owner request).
+the card and installed once into flash; user request).
 Addition (2026-11-18): section S (signed update file `Galtzagorriak.update` over USB/MTP for
 Windows users: boot stage `atea`, Ed25519, staging on the swap partition, A/B switch of the SD
 files, rollback, CI signing; user request).
-=======
-the card and installed once into flash; user request).
->>>>>>> origin/main
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -6416,17 +6412,10 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 
 ## Deferred (decided 2026-11-14)
 
-<<<<<<< HEAD
 - WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4; WRP covers `atea` (RS.12) too.
-- nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the owner confirms.
-- Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the owner (2026-11-14), installed at the start of Phase 16, after Phase 15.
-- Thread or Zigbee on CPU2 (R19.13): owner decision, after Phase 15.
-=======
-- WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the user confirms.
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the user (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.13): user decision, after Phase 15.
->>>>>>> origin/main
 - A FAP binary loader: not planned; apps are ported from source (D.2).
 - External USB host chip (e.g. MAX3421E, SPI on GPIO pins 2/3/5, CS 4, INT 7; user idea
   2026-11-15): would let the Flipper enumerate a device plugged into it (a pendrive or a cable
@@ -6471,19 +6460,6 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | TCP/IP over USB, Wi-Fi module, BLE, CC1101 (FHSS); IrDA + PPP as an optional SD package (user decision) | 19, R19.9 |
 | M8, A6, A8, M9, A11, M10, A5 | 20a (parts pulled into 4b and 6) |
 | M6, M7, M13, M12, A4 | 20b |
-<<<<<<< HEAD
-| Responsiveness (owner goal): rule 0.8, L1–L10 | every phase (AC*.R) |
-| Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (owner request) | 2d, R6.2, section I |
-| First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (owner request) | 18b, section I |
-| Own versioning: name, semver 0.x → 1.0 at parity, ABI number, tags, CHANGELOG (owner decision) | section J, T7 |
-| Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (owner discussion) | section K, T10 |
-| `mined` as default editor, safe and VT100-complete (owner decision) | K.5, T8 |
-| Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (owner request) | R15.7, 21 |
-| Signed update file over USB for Windows users: `atea`, Ed25519, CI-signed release file, rollback (user request) | section S, T33 |
-| Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (owner request) | 21 |
-| SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (owner request; no journaling) | section N, T17 |
-| Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (owner request) | section P, T26; 8, 13, 15 |
-=======
 | Responsiveness (user goal): rule 0.8, L1–L10 | every phase (AC*.R) |
 | Time in UTC, Year 2038 (64-bit `time_t`, 32-bit unsigned storage), uptime wrap (user request) | 2d, R6.2, section I |
 | First-boot wizard, location, sunrise/sunset, celestial-navigation groundwork (user request) | 18b, section I |
@@ -6491,8 +6467,8 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (user discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (user decision) | K.5, T8 |
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (user request) | R15.7, 21 |
+| Signed update file over USB for Windows users: `atea`, Ed25519, CI-signed release file, rollback (user request) | section S, T33 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (user request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (user request; no journaling) | section N, T17 |
 | Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (user request) | section P, T26; 8, 13, 15 |
->>>>>>> origin/main
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
