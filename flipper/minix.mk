@@ -429,17 +429,26 @@ $(MB)/cmd/sh/%.o: $(MROOT)/src/commands/sh/%
 $(MB)/cmd/reboot/%.o: $(MROOT)/src/commands/reboot/%
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-HID_DIR	:= $(MROOT)/src/lib/hid
-$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h
+# libibkey (spec R6.7 part 3b, src/lib/ibkey): Cyfral and Metakom iButton
+# keys (Unleashed's line code), linked into ikey.
+IBKEY_DIR := $(MROOT)/src/lib/ibkey
+$(MB)/ibkey/ibkey.o: $(IBKEY_DIR)/ibkey.c $(IBKEY_DIR)/ibkey.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(HID_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/ibutton.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+HID_DIR	:= $(MROOT)/src/lib/hid
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 # libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
 # reports, the stock .kl layouts (US built in), static; m2test types with
 # it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
 $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
-OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o $(MB)/ibkey/ibkey.o
 # spinfifo (#331): processes spinning on EAGAIN, for m2test's L1 check.
 OBJS_spinfifo = $(MB)/cmd/spinfifo.o
 $(MB)/cmd/spinfifo.o: m2/spinfifo.c
@@ -476,6 +485,7 @@ OBJS_sh	 = $(SH_SRC:%=$(MB)/cmd/sh/%.o)
 OBJS_mined = $(MINED_SRC:%=$(MB)/cmd/mined/%.o)
 OBJS_halt = $(MB)/cmd/reboot/halt.c.o $(MB)/cmd/reboot/log.c.o
 $(foreach c,$(PORTCMDS),$(eval OBJS_$(c) = $(MB)/cmd/port/$(c).o))
+OBJS_ikey += $(MB)/ibkey/ibkey.o	# libibkey (R6.7 part 3b), above
 $(foreach c,$(ZMODEM),$(eval OBJS_$(c) = $(MB)/cmd/zmodem/$(c).o))
 $(foreach c,$(GUIAPPS),$(eval OBJS_$(c) = $(MB)/cmd/gui/$(c).o $(MB)/cmd/gui/gui.o))
 OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/winrec.o \
@@ -992,7 +1002,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.45
+BASE_VER := 4.46
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

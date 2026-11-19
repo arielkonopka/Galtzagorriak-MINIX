@@ -145,6 +145,15 @@ uint16_t hal_ow_now(void);		/* a us clock, mod 2^16 */
 void hal_ib_emu(int on);
 int hal_ib_edge(void);
 void hal_ib_clear(void);
+/* R6.7 part 3b, Cyfral and Metakom (<minix/ibutton.h> IBIOCPLAY and
+ * IBIOCCAPT).  hal_ib_play: play n durations (16-bit, us) at physical
+ * address src round and round on the contact, the first at `level`
+ * (1 released), the rest alternating; n = 0 stops.  hal_ib_capt: up to n
+ * durations of the contact's levels into dst within about ms ms; returns
+ * how many (0: the line did not move), *level that of the first.  Both
+ * -1: not on this board (the Flipper until the device side is done). */
+int hal_ib_play(uint32_t src, unsigned n, int level);
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level);
 int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,

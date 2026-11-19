@@ -339,7 +339,7 @@ What works on the Flipper (details in [Hardware devices](devices.md) and the oth
 - Screen, backlight with fade-out, RGB status LED, buttons, vibration, speaker.
 - The launcher desktop with settings, reminders and an alarm clock, timers and alerts ([Timers and alerts](timers.md)).
 - 125 kHz RFID: read, write T5577 cards and emulate, all 25 LF protocols (`rfid`).
-- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`).
+- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`). Cyfral and Metakom: in QEMU only for now (device part pending).
 - Infrared send and receive with the stock protocols (`ir`).
 - Sub-GHz: receiving and tuning only so far (`/dev/subghz`, `/dev/subghzraw`).
 - USB: the serial console, and the Flipper as a keyboard, mouse or media keys
