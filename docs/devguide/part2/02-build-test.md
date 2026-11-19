@@ -176,7 +176,8 @@ A red check means the PR is not ready for review. `powercut` can rarely time out
   Typing MINIX commands into the reference Flipper's CLI does nothing useful.
 - **The console** is `/dev/ttyACM0` at any baud rate. The debug UART on header pins 13/14
   (115200 8N1, 3.3 V) shows kernel messages before USB is up; it cannot wake the CPU from Stop2,
-  so keep USB attached while using it.
+  so keep USB attached while using it. Wiring and a second Flipper as the bridge:
+  [chapter 8](08-debug-uart.md).
 - **Panics** print on the console and the UART and stop kicking the watchdog; with dev mode the
   board then returns to DFU.
 - **Writing flash during development** wears the device: test with plain installs, and use

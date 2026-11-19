@@ -17,7 +17,9 @@ that brings them.
 10. [The launcher](launcher.md): the app list, icons, the settings page, `/etc/apps`, window apps, the desktop (HOME, status line, modules, `guimod`).
 11. [Data modems](modem.md): files between two Flippers over RFID (Sub-GHz, NFC and BLE planned), `gmodem`.
 12. [USB gadgets](usb-gadgets.md): the Flipper as a USB keyboard, mouse and media keys (`/dev/hidkbd`, `/dev/hidmouse`, `/dev/hidcons`, layouts); Bad USB and Teklatua planned.
-13. [Files to a PC over USB](usb-files.md): MTP, Windows and Linux copy files with their own drivers (`mtpd`; the USB side planned).
+13. [Sub-GHz remotes](subghz.md): `subghz` (receive and decode the Unleashed protocols, send),
+    the radio region, rolling codes and your own key file.
+14. [Files to a PC over USB](usb-files.md): MTP, Windows and Linux copy files with their own drivers (`mtpd`; the USB side planned).
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in

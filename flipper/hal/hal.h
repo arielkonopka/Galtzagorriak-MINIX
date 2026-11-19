@@ -93,6 +93,33 @@ long hal_subghz_rx(uint32_t hz);
 int hal_subghz_rssi(uint32_t *hz);
 void hal_subghz_off(void);
 
+/* Sub-GHz transmit (R8.2, issue #302), behind the kernel's band and
+ * duty-cycle check (flipdev.c), at the frequency hal_subghz_rx tuned:
+ * - hal_subghz_tx: a frame of n durations in us, carrier on first, then
+ *   off, on, ... (the /dev/subghzraw format), in memory at src;
+ * - hal_subghz_pkt_tx / _pkt_rx: one packet (at most HAL_SUBGHZ_PKT
+ *   bytes) through the chip's FIFO, as stock's `subghz chat`; _pkt_rx
+ *   gives a received one (its length) or 0 when none has come.
+ * All return -1 when there is no such path: on the Flipper until the
+ * CC1101 TX and packet paths are written (local agent; off by default,
+ * the Autonomy rule).  QEMU's backend prints each frame or packet as
+ * console lines ("sg> tx ...", "sg> pkt ..."); hal_subghz_line gives the
+ * FNV-1a hash of what the last one printed, hal_subghz_fake (QEMU tests,
+ * -1 on the Flipper) makes the next frame or packet a received one
+ * (HAL_SG_FAKE_RAW: /dev/subghzraw's reader gets it; HAL_SG_FAKE_PKT:
+ * hal_subghz_pkt_rx gives it), and hal_subghz_fake_take tells whether
+ * one was armed (and disarms it). */
+#define HAL_SUBGHZ_PKT	60
+#define HAL_SG_FAKE_RAW	1
+#define HAL_SG_FAKE_PKT	2
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n);
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n);
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max);
+int hal_subghz_fake(int what);
+int hal_subghz_fake_take(int what);
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n);
+int hal_subghz_line(uint32_t *hash);
+
 /* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
  * it, wait some microseconds (busy: only for the slot timing). */
 void hal_ow_line(int low);

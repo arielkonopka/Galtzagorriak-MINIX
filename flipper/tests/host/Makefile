@@ -13,7 +13,7 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid \
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz \
      run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
@@ -39,6 +39,11 @@ run-modem:
 # DE, UTF-8, the report builders (make hidtest).
 run-hid:
 	$(MAKE) -C $(MROOT)/flipper/tests/hid test
+# libsubghz (Phase 9, issue #302): the Unleashed Sub-GHz protocols; every
+# RAW capture of the Unleashed unit tests, encoder round trips, a fuzz
+# (make subghztest).
+run-subghz:
+	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
 
 # mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
 # pipe, then a short libFuzzer run of the container parser (AC10.4.6;
@@ -119,4 +124,4 @@ $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz

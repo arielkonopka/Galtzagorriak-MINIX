@@ -76,6 +76,8 @@ extern int errno;		  /* place where the error numbers go */
 #define EOVERFLOW     (_SIGN 40)  /* data lost: a stream overran its reader
 				   * (/dev/rfid, R9.0.5; header only: libc's
 				   * strerror() says "unknown error") */
+#define ENOTSUP       ENOSYS      /* not supported (yet): the same number,
+				   * no new errlist entry (issue #302) */
 
 /* The following errors relate to networking. */
 #define EPACKSIZE     (_SIGN 50)  /* invalid packet size for some protocol */
