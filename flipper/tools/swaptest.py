@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """swaptest - plain swap to the SD card (spec Phase 12, R12.28) in QEMU.
 
-Usage: swaptest.py [-n CYCLES]
+Usage: swaptest.py [-n CYCLES] [--image minix-base.bin]
 
-Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
-qemu) like tools/powercut.py, through the first boot (which makes the swap
-partition /dev/hd3, type 82), logs in as root and checks:
+Boots minix-base.bin with a fresh copy of build/qemu/minix/disk.img (make
+minix disk base-flash, BOARD qemu) like tools/powercut.py, through the first
+boot (which makes the swap partition /dev/hd3, type 82), logs in as root
+and checks the list below.  minix-base.bin, as on the Flipper: the
+launcher, sh and the other boot programs run their text from the installed
+region.  With plain minix.bin (--image minix.bin) their text is in RAM,
+about 27 KB more for the launcher alone, and a second 35 KB test image no
+longer fits (#335).
 
   AC12.11  swapon refuses what is not an SD card partition of type 82
            (/dev/hd1 the root file system, /dev/rom, /dev/ram) and crypt
@@ -17,11 +22,12 @@ partition /dev/hd3, type 82), logs in as root and checks:
            set-uid images never swapped, programs started past the free
            RAM
   AC12.1   a shell is swapped on demand while big programs start, and
-           keeps its variables (a copy of sh with its text in flash,
-           /tmp/swsh: QEMU's own programs run their text from RAM, which
-           is never swapped, R12.3; on the Flipper they are in flash).
-           The launcher part needs parking (M4): today it waits in FS,
-           not in MM, so it is not swapped.
+           keeps its variables (/tmp/swsh: a copy of sh with a 40 KB
+           image, tests/swsh, so that it, not one of swapper's 35 KB idle
+           copies, is the victim that makes the largest hole; its text
+           is installed in flash, R12.3).  The launcher part needs
+           parking (M4): today it waits in FS, not in MM, so it is not
+           swapped.
   AC12.10  placement: tests/swapper -c 50 (two parked apps, a foreground
            app placed low)
   R12.5 b  the idle reserve swaps out a process idle for 10 s
@@ -68,7 +74,8 @@ def flash_counts(r):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("-n", type=int, default=100, help="kill cycles")
-	ap.add_argument("--image", default="minix-base.bin")
+	ap.add_argument("--image", default="minix-base.bin",
+		help="system image in build/qemu/minix (default minix-base.bin)")
 	a = ap.parse_args()
 	r = powercut.Run(0, 0, a.image)
 	try:
@@ -82,7 +89,7 @@ def main():
 		# (short lines: the console's line buffer takes 256 bytes)
 		check(r.sh("pkg budget 0 && cp /usr/tests/swapper /tmp/swplain "
 			"&& cp /usr/tests/swapper /tmp/swsuid && chmod 4755 "
-			"/tmp/swsuid && cp /bin/sh /tmp/swsh && sync", 120) == 0
+			"/tmp/swsuid && cp /usr/tests/swsh /tmp/swsh && sync", 120) == 0
 			and r.sh("pkg flash /usr/tests/swapper && "
 			"pkg flash /usr/tests/swapsecret && "
 			"pkg flash /usr/tests/swapsmall", 300) == 0

@@ -817,7 +817,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake sgfake alarmrace notepost
+	   swaptime swaptime64 regtest hidfake sgfake alarmrace notepost swsh
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
@@ -827,6 +827,11 @@ endif
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
+# swsh: sh with a 40 KB image, the idle shell of AC12.1 (tools/swaptest.py):
+# larger than swapper's 35 KB images, so on-demand swap-out (the largest
+# hole first, mm/swap.c) takes it and not swapper's own idle copies (#335).
+OBJS_swsh = $(OBJS_sh)
+CHMEM_swsh := 40960
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
 OBJS_swaptime64 = $(MB)/cmd/test/swaptime.o
 # regchild (issue #160): regtest's child, its own entry before crtso so
