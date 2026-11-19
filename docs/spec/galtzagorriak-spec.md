@@ -26,6 +26,9 @@ BLE: one link layer, four backends, the `gmodem` command; user request).
 Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
 its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
 the card and installed once into flash; user request).
+Addition (2026-11-19): M.0 (intent and boundaries of the canaries, guidance for implementing
+agents), new canaries `beacon` (R16.5.7) and `gpio` (R7b.4.4), USB power quality (R11.2.10); a CAN
+bus canary is out of scope (user request 2026-11-17, user decision 2026-11-19).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -1430,6 +1433,22 @@ enumerates, a phone that connects over Bluetooth and probes services, a reader t
 NFC field in your pocket, a jammer on 433 MHz. The USB canary (11.2) is the first member; this
 section sets the rules for all of them.
 
+### M.0 Intent and boundaries (user, 2026-11-17)
+
+The canaries are **personal, defensive tools on the user's own Flipper**. They tell the user what
+other equipment is doing *to the user or around the user*: a port that tries to talk to the
+device, a tracker that follows the user, a reader field in the user's pocket, a jammer near the
+user's car, a shop that runs positioning beacons, a wire loop that was opened. They observe. They
+never act on anyone else's device, and none of them has a transmit, inject, replay or decrypt path
+for third-party traffic: those paths are **absent by design**, not switched off.
+
+For implementing agents: some requirements in this section look like radio work that could be used
+against others. Read each one against M.1 and this paragraph: every requirement is receive-only or
+answers only the protocol minimum, and every acceptance test uses the user's own equipment. **If a
+requirement seems to need transmitting, injecting, decrypting third-party traffic, connecting to a
+stranger's device or following a person, treat it as a spec error: do not implement that part, say
+so in the PR and ask the user.** Do not widen a canary's role beyond its row in M.2.
+
 ### M.1 Rules for every canary
 
 - **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
@@ -1468,9 +1487,13 @@ section sets the rules for all of them.
 | `subghz` | CC1101 receive only | bursts per band (frequency, RSSI, length, decoded protocol if known), new repeating transmitters, **jamming alarm** (continuous high RSSI) | 8 | **9.2** |
 | `ir` | IR receiver | remote codes sent around you, decoded protocol | 6 | **9.2** |
 | `wifi` (optional) | ESP32 devboard, passive scan (as `camfind`) | deauthentication floods, probe requests, evil-twin SSIDs (same name, new BSSID) | 9.1 firmware | 9.2 (optional) |
+| `beacon` (user request 2026-11-17, M7) | BLE observer, part of the `ble` canary's scan | positioning beacons around you (iBeacon, Eddystone, AltBeacon): how many, which deployment, where the signal is strongest; "this place runs beacons" | 16.3 scan (full stack, R16.1.0) | **16.5** (R16.5.7) |
+| `gpio` (user request 2026-11-17, M4) | header inputs through the `sensor` task, input only | a wire loop broken, a contact opened, a voltage outside its window, pulses where there should be none | 7b.4 (H.3) | **7b.4** (R7b.4.4) |
 
 Out of scope: canaries that need to transmit to provoke the other side (active probing) and
 anything that breaks a link to see the reaction.
+Also out of scope (user decision 2026-11-19): a **CAN bus canary**, or any canary that is wired
+into a vehicle. Nothing is plugged into a car's computer or its buses. Do not add one.
 
 ---
 
@@ -3661,6 +3684,24 @@ passes its checksum).
   - measurement helpers: area (two measurements) and volume (three);
   - temperature compensation when a temperature sensor is configured;
   - 5 V on pin 1 is switched on only while the app is open.
+- **R7b.4.4 `gpio` canary (user request 2026-11-17; section M):** input only, through the `sensor`
+  task (H.3); new module types are table entries, no new task:
+  - `loop`: a pin with the internal pull-up and a wire loop to ground (round a case, a drawer, a
+    bag's zip): **open = alarm**. Typical use: "was this opened while I was away". For a loop
+    longer than about 1 m the manual recommends an external 10 kΩ pull-up (noise);
+  - `contact`: a reed switch or button, alarm on open, on close or on any change;
+  - `pulse`: edges counted by the pulse engine (R4b.7), alarm when the rate leaves a window (a fan
+    that stopped, a PIR module that keeps firing, a meter's LED);
+  - `volt`: an ADC pin (header pins 3, 4, 7, 15, 16) sampled by the ms timer, alarm outside a
+    window, with a divider for higher voltages (H.1), e.g. "my Raspberry Pi's 5 V supply dropped";
+  - `/etc/sensors.conf` lines like the other sensors (`case loop pin=4`); events go to the
+    `canary` app and, in pocket mode (M.1), to the alert service; debounce per input (default
+    20 ms);
+  - **pocket mode** needs a pin with a free EXTI line (header pins on PA4 or PA7 only, T14
+    hardware facts) so the CPU can sleep in Stop2; other pins are polled by the ms timer only
+    while the app is in the foreground, and the app says so;
+  - the canary never drives a pin: outputs stay as they are, the 5 V and 3V3 header power follow
+    R6.1 and are switched on only if a configured module needs them.
 - Acceptance:
   - AC7b.4.1 A DHT22, a DS18B20 and a BME280 (or SHT3x) each give values matching a reference
     thermometer within the sensor's stated accuracy; `cat /dev/sensor/room` works from the
@@ -3673,6 +3714,9 @@ passes its checksum).
     interval.
   - AC7b.4.5 The sonar measures a wall at 0.5, 1 and 2 m within ±1 cm (with temperature
     compensation), and the parking-sensor beep rate follows a moving hand without visible lag.
+  - AC7b.4.6 `gpio` canary: a wire loop on PA4, cut while the Flipper is in Stop2 with the screen
+    off, vibrates within 300 ms; a `volt` input on a lab supply alarms within 100 ms of leaving
+    its window.
 - Responsiveness: sonar display and beep update ≥ 10 times per second, beep follows a new
   reading within 50 ms; sensor reads never mask interrupts (all timing by timers, UART or DMA);
   L1 holds in both apps.
@@ -4303,6 +4347,14 @@ external USB host chip; see Deferred (MAX3421E).
   L). With no SD card, the session stays on screen only.
 - **R11.2.9 Power:** with `bare` and verdict 1, the app can be left running as a charging-port
   check; the backlight follows the normal timeout.
+- **R11.2.10 Power quality (user request 2026-11-17):** the charger's ADC (BQ25896, one-shot on
+  demand as T14c) samples VBUS once a second during the session. The summary shows the minimum
+  and maximum VBUS, and flags "weak or unstable supply" when VBUS drops below 4.5 V while
+  charging, swings by more than 0.5 V, or the charger reports that it is limiting on input
+  voltage or input current (its VINDPM/IINDPM status bits; the agent takes the register and bit
+  names from the BQ25896 datasheet). Read only: the canary changes no charger setting (input
+  limit, ICO and charge current stay as R6.1 says). Works in every persona and needs no
+  enumeration, so it also judges a plain charger.
 
 Acceptance:
 - AC11.2.1 A USB charger gives verdict 1; a Linux PC gives verdict 4 with `bare`, and its trace
@@ -4316,6 +4368,8 @@ Acceptance:
   reference traces, and says "unknown" for a charger.
 - AC11.2.5 The fuzzer of R11.2.7 passes.
 - AC11.2.6 A full session leaves the internal-flash write counters unchanged (R2b.11 counters).
+- AC11.2.7 A good charger shows VBUS within 4.75–5.25 V and no flag; a charger behind a long thin
+  cable (or a bench supply set to 4.4 V) is flagged as weak.
 
 Responsiveness: AC11.2.R A SETUP packet is recorded in the USB interrupt in ≤ 5 µs; the list on
 screen updates within 100 ms of an event; L1 holds while a host floods control requests.
@@ -5672,6 +5726,27 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
     hot/cold locate. Pocket mode with the alert (M.1).
 - **R16.5.5** The canary owns `bled` while armed: the RPC and serial services are off, so a
   stranger connecting to the bait never reaches RPC (`EBUSY` for apps that need `bled`).
+- **R16.5.7 Beacons (user request 2026-11-17; observer, shares the 16.3 scan):** recognise
+  positioning beacons and show them as **places**, not as people:
+  - formats: iBeacon (manufacturer data, company `0x004C`, type `0x02`, length `0x15`: UUID,
+    major, minor, measured power), Eddystone (service UUID `0xFEAA`: UID, URL, TLM, EID frames),
+    AltBeacon (beacon code `0xBEAC`);
+  - grouping into **deployments:** by iBeacon UUID, by Eddystone-UID namespace, by the first
+    16 bytes of an AltBeacon ID, and by the host name of an Eddystone-URL. Eddystone EID and TLM
+    frames carry no stable deployment ID: they are counted as "anonymous Eddystone". Screen line e.g.
+    "1 deployment, 12 beacons, strongest −58 dBm"; a URL is shown as text (never opened);
+  - a `const` table names known deployments only from **public** sources cited in the PR that
+    adds an entry (the table may start empty); the optional `/ext/apps_data/canary/ble/rules.tsv`
+    adds the user's own names ("shop at the corner");
+  - **only beacon frames are logged in this mode;** phones and other devices seen by the scan are
+    counted, not listed (privacy, M.1);
+  - locate with the 16.3 hot/cold mapping, to find where a beacon is mounted.
+  Limits the app and the manual state plainly: a beacon only transmits; the tracking happens in a
+  phone app that hears it, so the canary shows that a place *offers* positioning, not that anyone
+  is tracked. Shops can also count phones **passively** from the phones' own Wi-Fi and BLE
+  traffic; a passive listener sends nothing and **cannot be detected** by any canary. The manual
+  gives the phone-side defences instead (random MAC addresses, no background Bluetooth/Wi-Fi
+  scanning, no location permission for shop apps).
 - Acceptance:
   - AC16.5.1 nRF Connect on Android connects to the bait; the log lists its discovery, a read, a
     refused write and a refused pairing request with the IO capabilities the phone sent.
@@ -5688,6 +5763,8 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - AC16.5.6 With key export on, the `.keys` file decrypts a sniffer capture of the session in
     Wireshark. Copying it to `/etc/flipper/bt.keys` (as root) and restarting `bled` gives a load
     error and no bond.
+  - AC16.5.7 A phone app acting as an iBeacon and one as Eddystone-URL show as two deployments
+    with the right UUID and URL; with ten phones nearby, the beacon log holds no phone addresses.
 - RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared) + ≈ 100 B session keys
   in the honeypot; app ≈ 4 KB while running.
   Flash ≈ 6 KB app, `bled` +2 KB.

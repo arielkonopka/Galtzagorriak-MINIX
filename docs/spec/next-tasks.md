@@ -500,6 +500,13 @@ User request outside the milestone order (like T19). Analysis and design: spec s
 ### T26c NFC (M6, after Phase 13) and T26d BLE (M7, after Phase 15)
 - P.6: ISO 14443-4 frames between an NFC-A initiator and a card-emulating target, S(WTX) answered by the driver. P.7: one L2CAP CoC, bonded and encrypted, `gmodem pair -m ble`.
 
+## T35. Canary cores for beacons and GPIO (spec M.0, R16.5.7, R7b.4.4; user request 2026-11-17): `lane:cloud`, when a cloud slot is free
+The drivers wait for their milestones (BLE M7, `sensor` task M4), but the logic needs no hardware, so it is written now and tested on the host, as T6 (`sbctl`) and T13 (`camfind`). Read spec M.0 first: both are observe-only; no transmit path anywhere. No CAN canary (out of scope, spec M.2).
+- `flipper/apps/canary/beacon.c/.h`: parser for one BLE advertising payload (AD structures) → iBeacon / Eddystone (UID, URL, TLM, EID) / AltBeacon or "not a beacon"; deployment grouping table as R16.5.7 (caller-owned, fixed size, LRU when full). Bounds-checked on every length byte (I2).
+- `flipper/apps/canary/gpiorules.c/.h`: debounce and the `loop` / `contact` / `pulse` / `volt` rules of R7b.4.4 on a stream of samples.
+- Host tests (`make -C flipper/apps/canary test`): beacon golden vectors (iBeacon, each Eddystone frame, AltBeacon, malformed lengths, a truncated packet); GPIO bounce and window cases.
+- No UI, no drivers. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
+
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)
 - T3 (#27): L1 p99/max still ~0.75–0.92 s; long-press and repeat events (stock Press/Short/Long/Repeat) when R4b.8 lands.
