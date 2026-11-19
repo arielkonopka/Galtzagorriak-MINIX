@@ -191,8 +191,10 @@ static int cmd_rx(int argc, char **argv)
 		}
 		for (i = 0; i < n / 4; i++)
 			subghz_receiver_decode(rx, !(i & 1), frame[i]);
-		/* the frame ended in a silence */
-		subghz_receiver_decode(rx, false, GAP_US);
+		/* the frame ended in a silence; a full one did not (the
+		 * kernel ends it there): its packet goes on in the next */
+		if (n < (int) sizeof(frame))
+			subghz_receiver_decode(rx, false, GAP_US);
 	}
 	close(fd);
 	untune();

@@ -55,8 +55,14 @@ static int grow(size_t len)
   ASSERT(NextSlot((char *)_top) == 0);
   errno = ENOMEM;
   if ((char *) _top + len < (char *) _top
-      || (p = (char *)Align((ptrint)_top + len, BRKSIZE)) < (char *) _top 
-      || _brk(p) != 0)
+      || (p = (char *)Align((ptrint)_top + len, BRKSIZE)) < (char *) _top)
+	return(0);
+  /* The heap ends where MM's safety margin below sp starts, not at a
+   * BRKSIZE boundary: when the rounded break does not fit, take only
+   * what this request needs (#331: the launcher's 12 apps fitted or not
+   * depending on where its image happened to lie). */
+  if (_brk(p) != 0 && (p = (char *)Align((ptrint)_top + len, PTRSIZE),
+		_brk(p) != 0))
 	return(0);
   NextSlot((char *)_top) = p;
   NextSlot(p) = 0;

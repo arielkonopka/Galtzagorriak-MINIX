@@ -383,13 +383,14 @@ register struct proc *rp;	/* this process is now runnable */
 	return;
   }
 #if (SHADOWING == 1)
-  if (isshadowp(rp)) {		/* others are similar */
-	if (rdy_head[SHADOW_Q] != NIL_PROC)
-		rdy_tail[SHADOW_Q]->p_nextready = rp;
-	else
-		rdy_head[SHADOW_Q] = rp;
-	rdy_tail[SHADOW_Q] = rp;
-	rp->p_nextready = NIL_PROC;
+  if (isshadowp(rp)) {
+	/* At the head, as on USER_Q: a woken member (the launcher with a
+	 * key) is swapped in next; unshadow() puts a preempted one at the
+	 * tail (#331). */
+	if (rdy_head[SHADOW_Q] == NIL_PROC)
+		rdy_tail[SHADOW_Q] = rp;
+	rp->p_nextready = rdy_head[SHADOW_Q];
+	rdy_head[SHADOW_Q] = rp;
 	return;
   }
 #endif
