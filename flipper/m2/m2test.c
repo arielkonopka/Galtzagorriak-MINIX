@@ -484,8 +484,7 @@ static void finish(void)
  * with status 0, it ran as the owner of its root (bin), the example file
  * is there and the half-sent one is not. */
 /* The test's strings in one const struct (flash), as the subghz and pkg
- * tests': each literal would cost a GOT word in every copy of m2test, and
- * ACK.3's 4 flooders fork it with a few bytes to spare.  The paths under
+ * tests': each literal would cost a GOT word in every copy of m2test.  The paths under
  * the root are built once into a stack buffer. */
 static const struct {
 	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
@@ -835,7 +834,7 @@ static void hid_tests(void)
  * once; every transmit is checked against its bands and duty cycle. */
 /* The test's strings in one const struct (flash), as the pkg test's
  * (PK_STRINGS below): each literal would cost a GOT word in every copy
- * of m2test, and ACK.3's 4 flooders fork it with a few bytes to spare. */
+ * of m2test. */
 static const struct {
 	char s0[sizeof "/dev/subghz"];
 	char s1[sizeof "%lu"];
@@ -1654,7 +1653,7 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	unsigned long apps, s1;
 	int p[2], i, st, ok;
 	long ms, worst = 0;
-	pid_t mod, w[4];
+	pid_t mod, w;
 	struct stat sb;
 	int s0;
 
@@ -1718,32 +1717,22 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	check(ms >= 0 && !lpix(0, 7) && kill(lpid, 0) == 0,
 		"ACK.2: the killed module's tile goes, the desktop keeps working");
 
-	/* ACK.3: four modules as fast as they can, keys on APPS.  Each
-	 * process writes two of them (w[i] and w[i + 2 mod 4]): a fork is a
-	 * 24.5 KB copy of m2test, and in QEMU, where the programs' text is
-	 * in RAM, the fourth may not fit (ENOMEM, T23c: the launcher's text
-	 * +1.3 KB); the four tiles still come, and the FIFO is as full. */
+	/* ACK.3: four modules as fast as they can, keys on APPS */
 	wtap(b, 0x04);					/* Left: APPS */
 	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
 	s0 = sectors_written();
 	printf("  ACK.3 free RAM before the flood modules: %ld bytes\n", free_ram());
 	fflush(stdout);
-	for (i = 0; i < 4; i++)
-		if ((w[i] = fork()) == 0) {
-			char rec[64];
-			int fd = open("/var/run/gui", O_WRONLY | O_NONBLOCK), n;
-			long k;
-
-			for (k = 0; fd >= 0; k++) {
-				n = sprintf(rec, "tile\tw%d\t0\t%d\tflood %ld\n",
-					    k & 1 ? (i + 2) % 4 : i, (int) getpid(), k);
-				(void) write(fd, rec, (size_t) n);
-			}
-			_exit(0);
-		}
-	for (i = 0; i < 4; i++)
-		if (w[i] < 0) printf("  ACK.3 flood process %d: fork failed (errno %d)"
-				     ", the others write its module\n", i, errno);
+	/* #324: one vfork (no copy of m2test's data), exec'd at once into
+	 * guiflood, which forks the other three: the flooders are
+	 * guiflood's small image, not copies of m2test, so m2test's size
+	 * does not decide whether they fork.  Their own process group
+	 * (setsid): killed and reaped by it. */
+	if ((w = vfork()) == 0) {
+		(void) setsid();
+		execl("/bin/guiflood", "guiflood", (char *) NULL);
+		_exit(99);
+	}
 	(void) poll((struct pollfd *) NULL, 0, 200);
 	for (i = 0; i < 4; i++) {
 		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);
@@ -1758,9 +1747,13 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	lgrab(l, "ack3-home");
 	check(ms >= 0 && ms < 500 && row_text(0) && row_text(3) && !row_text(4),
 		"ACK.3: HOME has the 4 modules' tiles, keys still move");
-	for (i = 0; i < 4; i++)		/* not kill(-1): a fork that failed */
-		if (w[i] > 0) kill(w[i], SIGKILL);
-	for (i = 0; i < 4; i++) if (w[i] > 0) (void) waitpid(w[i], &st, 0);
+	if (w > 0) {	/* not kill(-1): the fork may have failed */
+		(void) kill(-w, SIGKILL);
+		(void) kill(w, SIGKILL);	/* before its setsid() */
+		/* the three forks of guiflood are now m2test's (it is
+		 * init here): the group's, all four */
+		while (waitpid(-w, &st, 0) > 0 || errno == EINTR) ;
+	}
 	(void) poll((struct pollfd *) NULL, 0, 100);
 	s0 = sectors_written() - s0;
 	printf("  ACK.5 4 modules flooding /var/run/gui, then sync: %d sectors"
