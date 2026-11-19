@@ -846,7 +846,7 @@ static const struct {
 	char s3[sizeof "/dev/subghzpkt"];
 	char s4[sizeof "subghz: open the 3 files (pkt: minor 20)"];
 	char s5[sizeof "subghz: untuned EIO; tuned, no region: EPERM"];
-	char s6[sizeof "subghz: region XX EINVAL, EU set once (US: EPERM)"];
+	char s6[sizeof "subghz: region XX, JP EINVAL; PL set once (US: EPERM)"];
 	char s7[sizeof "tx 433920000 3 350 -700 350"];
 	char s8[sizeof "subghz: a frame goes out, its console line (sg> tx)"];
 	char s9[sizeof "yo"];
@@ -866,7 +866,7 @@ static const struct {
 	"/dev/subghzpkt",
 	"subghz: open the 3 files (pkt: minor 20)",
 	"subghz: untuned EIO; tuned, no region: EPERM",
-	"subghz: region XX EINVAL, EU set once (US: EPERM)",
+	"subghz: region XX, JP EINVAL; PL set once (US: EPERM)",
 	"tx 433920000 3 350 -700 350",
 	"subghz: a frame goes out, its console line (sg> tx)",
 	"yo",
@@ -922,14 +922,20 @@ static void subghz_tests(void)
 	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
 		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
 	check(e, sg.s5);
+	/* a country code without a table is refused (spec Q.6, #292);
+	 * PL uses the EU bands below */
 	v = SG_REGION('X', 'X');
 	e = ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
-	v = SG_REGION('E', 'U');
+	v = SG_REGION('J', 'P');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	v = SG_REGION('P', 'L');
 	e = e && ioctl(s, SGIOCREGION, &v) == 0;
 	v = SG_REGION('U', 'S');
 	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
+	v = SG_REGION('E', 'U');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
 	v = 0;
-	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('E', 'U'),
+	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('P', 'L'),
 		sg.s6);
 	check(write(r, (char *) f, 12) == 12
 		&& sg_line(r, sg.s7),
@@ -940,7 +946,7 @@ static void subghz_tests(void)
 	e = e && write(r, (char *) f, 12) < 0 && errno == EINVAL;
 	f[1] = 700;
 	e = e && write(r, (char *) f, 10) < 0 && errno == EINVAL;
-	/* 315 MHz is not EU's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
+	/* 315 MHz is not PL's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
 	e = e && sg_tune(315000000UL) && write(r, (char *) f, 12) < 0
 		&& errno == EPERM && write(k, sg.s9, 2) < 0 && errno == EPERM;
 	f[0] = f[1] = f[2] = f[3] = 1000000;

@@ -358,12 +358,16 @@ static void info_subghz(void)
 	const struct mdm_band *b;
 	struct mdm_cc1101 c;
 	char reg[8];
+	const char *set;
 	unsigned long f;
 	long air, bps;
 	int rc;
 
 	region(reg, (int) sizeof(reg));
-	f = freq ? freq : strcmp(reg, "US") == 0 ? 915000000UL : 433920000UL;
+	/* the country's band set (spec section Q): PL -> EU, CA -> US */
+	set = mdm_rg_bandset(reg);
+	if (set == NULL) set = "none";
+	f = freq ? freq : strcmp(set, "US") == 0 ? 915000000UL : 433920000UL;
 	printf("subghz: region %s, ", reg);
 	pmhz(f);
 	printf("; sending needs /dev/subghz transmit (spec RP.8, T26b)\n");
@@ -380,24 +384,25 @@ static void info_subghz(void)
 		printf("  %-7s  %6lu Bd  %6lu Hz  %6lu Hz  %6lu Hz  %3ld ms  "
 			"%5ld B/s  ", p->name, c.baud, c.dev, c.bw, mdm_occupied(&c),
 			air, bps);
-		rc = mdm_sg_check(reg, &c, &b);
+		rc = mdm_sg_check(set, &c, &b);
 		if (rc == MDM_SG_OK)
 			printf("ok, %d dBm, %s\n", mdm_sg_dbm(b), b->note);
 		else if (rc == MDM_SG_BAND)
 			printf("not allowed: leaves the region's bands\n");
 		else printf("not allowed: no data bands for this region\n");
 	}
-	printf("  bands for %s:", reg);
+	printf("  bands for %s (%s):", reg, set);
 	for (b = mdm_bands; b->region[0]; b++)
-		if (strcmp(b->region, reg) == 0) {
+		if (strcmp(b->region, set) == 0) {
 			printf("\n    ");
 			pmhz(b->lo);
 			printf(" - ");
 			pmhz(b->hi);
 			printf("  %s", b->note);
 		}
-	if (strcmp(reg, "EU") != 0 && strcmp(reg, "US") != 0)
-		printf(" none; root writes EU or US to /etc/flipper/region");
+	if (strcmp(set, "EU") != 0 && strcmp(set, "US") != 0)
+		printf(" none; root writes the country code (PL, US, ...) to "
+			"/etc/flipper/region");
 	printf("\n  nothing sent over Sub-GHz is encrypted\n");
 }
 

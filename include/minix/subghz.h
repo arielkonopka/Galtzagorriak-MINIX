@@ -20,9 +20,11 @@
  * or read, through the chip's FIFO, as stock's `subghz chat`; the same
  * checks on a write.  A read never waits: EAGAIN when none has come.
  *
- * The region (two letters, "EU", "US", "JP") is set once after boot
- * (/etc/rc, from /etc/flipper/region): later SGIOCREGION calls with
- * another region fail with EPERM.  The band table is const in the kernel.
+ * The region (an ISO 3166 country code with a table, spec section Q:
+ * EU, PL, ES, FR, IE, FI, SE, NO, GB, AL, US, CA; others EINVAL) is set
+ * once after boot (/etc/rc, from /etc/flipper/region): later SGIOCREGION
+ * calls with another region fail with EPERM.  The band table is const in
+ * the kernel until the flash record of T32b.
  */
 #ifndef _MINIX_SUBGHZ_H
 #define _MINIX_SUBGHZ_H
@@ -31,7 +33,7 @@
 
 #define SG_PKT_MAX	60		/* bytes in one packet */
 #define SG_DURATION_MAX	1000000UL	/* us, one level of a frame */
-#define SG_REGION(a, b)	((a) << 8 | (b))	/* SG_REGION('E', 'U') */
+#define SG_REGION(a, b)	((a) << 8 | (b))	/* SG_REGION('P', 'L') */
 
 #define SGIOCREGION	_IOW('Q', 1, int)	/* set the region (once) */
 #define SGIOCGREGION	_IOR('Q', 2, int)	/* the region, 0 none */
