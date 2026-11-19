@@ -109,6 +109,7 @@ struct layout {			/* where a swapped image lives in RAM */
   phys_bytes d, dl;		/* data part: [d, d + dl) */
   phys_bytes s, sl;		/* stack part: [s, s + sl) */
   phys_clicks base, clicks;	/* [D.start, S.end) */
+  phys_bytes glo, ghi;		/* the gap [brk, sp): zeroed on swap-in */
 };
 
 /* All of MM's swap state (R12.26: at most 96 B). */
@@ -130,6 +131,8 @@ FORWARD _PROTOTYPE( unsigned short sw_now, (void)			);
 FORWARD _PROTOTYPE( int sw_layout, (struct mproc *rmp, struct layout *l));
 FORWARD _PROTOTYPE( int sw_io, (int op, int proc, unsigned long pos,
 					phys_bytes addr, phys_bytes n)	);
+FORWARD _PROTOTYPE( unsigned long sw_crc, (struct layout *l,
+			unsigned long v, phys_bytes a, phys_bytes n)	);
 FORWARD _PROTOTYPE( int sw_chunk, (struct mproc *rmp, struct layout *l,
 				int op, unsigned c, unsigned long *crc)	);
 FORWARD _PROTOTYPE( int sw_hdrread, (struct mproc *rmp, struct layout *l));
@@ -207,6 +210,8 @@ struct layout *l;
   if (l->s > sp || (l->s > l->d + l->dl && l->d + l->dl < dend))
 	return(EINVAL);
   if (SW_SECT * (1 + nsect(l)) > SW_SLOT) return(EINVAL);
+  l->glo = dend;
+  l->ghi = sp > dend ? (phys_bytes) sp : dend;
   return(OK);
 }
 
@@ -233,6 +238,27 @@ phys_bytes n;			/* bytes, whole sectors */
   m.COUNT = (int) n;
   if (sendrec(WINCHESTER, &m) != OK || m.REP_STATUS != (int) n) return(EIO);
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				sw_crc					     *
+ *===========================================================================*/
+PRIVATE unsigned long sw_crc(l, v, a, n)
+struct layout *l;
+unsigned long v;		/* CRC so far */
+phys_bytes a, n;		/* [a, a + n) */
+{
+/* CRC-32 of [a, a + n) without the gap: whole sectors reach past brk and
+ * below sp, and what lies there (a signal handler's frame below sp) is
+ * zeroed on swap-in, never used, so it is no reason to write a chunk. */
+  phys_bytes e = a + n, lo = l->glo, hi = l->ghi;
+
+  if (lo < a) lo = a;
+  if (hi > e) hi = e;
+  if (lo >= hi) return(crc32_more(v, (unsigned char *) a, n));
+  v = crc32_more(v, (unsigned char *) a, lo - a);
+  return(crc32_more(v, (unsigned char *) hi, e - hi));
 }
 
 
@@ -268,8 +294,7 @@ unsigned long *crc;		/* its CRC-32 (not for DEV_WRITE) */
 			slotpos(rmp) + (1UL + i) * SW_SECT, addr,
 			(phys_bytes) n * SW_SECT) != OK) return(EIO);
 	if (op != DEV_WRITE)
-		v = crc32_more(v, (unsigned char *) addr,
-					(unsigned long) n * SW_SECT);
+		v = sw_crc(l, v, addr, (phys_bytes) n * SW_SECT);
   }
   *crc = ~v;
   return(OK);
@@ -515,7 +540,6 @@ struct mproc *rmp;
   struct layout l;
   struct swhdr *h = HDR;
   unsigned long crc;
-  phys_bytes dend;
   unsigned c;
   int slot = (int) (rmp - mproc);
 
@@ -559,14 +583,9 @@ struct mproc *rmp;
 		goto bad;
 	}
   }
-  /* R12.6: the gap gets zeroes, never what the RAM held meanwhile. */
-  dend = l.d + ((phys_bytes) rmp->mp_seg[D].mem_len << CLICK_SHIFT);
-  {
-	vir_bytes sp;
-
-	sys_getsp(slot, &sp);
-	if (sp > dend) memset((char *) dend, 0, (size_t) (sp - dend));
-  }
+  /* R12.6: the gap gets zeroes, never what the RAM held meanwhile (nor
+   * what the card holds there: the CRCs leave it out). */
+  if (l.ghi > l.glo) memset((char *) l.glo, 0, (size_t) (l.ghi - l.glo));
   /* The card holds what is in RAM now (SWAPHDR stays); R12.30: woken
    * from the card, so the reserve leaves it alone for a while. */
   rmp->mp_flags = (rmp->mp_flags & ~SWAPPED) | SWAPHOT;

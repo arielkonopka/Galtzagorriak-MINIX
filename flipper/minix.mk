@@ -388,6 +388,7 @@ CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_swapwear := 12288	# tests/swapwear: 20 KB of .bss + this: a 32 KB image (AC12.14)
 CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
@@ -817,7 +818,8 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake sgfake alarmrace notepost
+	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
+	   notepost
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)

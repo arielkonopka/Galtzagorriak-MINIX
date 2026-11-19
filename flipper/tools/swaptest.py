@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """swaptest - plain swap to the SD card (spec Phase 12, R12.28) in QEMU.
 
-Usage: swaptest.py [-n CYCLES]
+Usage: swaptest.py [-n CYCLES] [--hot SECONDS]
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu) like tools/powercut.py, through the first boot (which makes the swap
@@ -25,6 +25,14 @@ partition /dev/hd3, type 82), logs in as root and checks:
   AC12.10  placement: tests/swapper -c 50 (two parked apps, a foreground
            app placed low)
   R12.5 b  the idle reserve swaps out a process idle for 10 s
+  AC12.14, AC12.13 (12g)
+           /usr/tests/swapwear (see tests/swapwear.c): a swap-out of an
+           unchanged image writes 0 sectors, one changed heap byte writes
+           the header and one chunk; a byte flipped in a skipped chunk
+           kills on swap-in
+  AC12.15  /usr/tests/swapwear -r SECONDS (--hot, default 600 as the
+           spec): a parked app with a 30 s timer is not swapped out by the
+           reserve again once its timer brought it back; on demand it is
   R12.8    free -v shows the mode, the slots and the swapped processes
   AC12.12  "card pulled" (swapon -X, the test hook) with two programs
            swapped: both reported lost, the shell goes on
@@ -68,6 +76,8 @@ def flash_counts(r):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("-n", type=int, default=100, help="kill cycles")
+	ap.add_argument("--hot", type=int, default=600,
+		help="AC12.15: seconds to watch the woken app")
 	a = ap.parse_args()
 	r = powercut.Run(0, 0)
 	try:
@@ -86,7 +96,8 @@ def main():
 			"pkg flash /usr/tests/swapsecret && "
 			"pkg flash /usr/tests/swapsmall", 300) == 0
 			and r.sh("pkg flash /tmp/swplain && pkg flash /tmp/swsuid "
-			"&& pkg flash /tmp/swsh", 300) == 0,
+			"&& pkg flash /tmp/swsh", 300) == 0
+			and r.sh("pkg flash /usr/tests/swapwear", 300) == 0,
 			"run-time cache off, test programs installed in flash")
 		before = flash_counts(r)
 
@@ -150,6 +161,20 @@ def main():
 		check(out is not None and b"st=0" in out,
 			"R12.5 b: it comes back intact on a signal")
 
+		# 12g: AC12.14 (and AC12.13 for a skipped chunk), AC12.15
+		mark = len(r.out)
+		st = r.sh("/usr/tests/swapwear", 600)
+		sys.stdout.write(r.out[mark:].decode(errors="replace")
+			.replace("\r", ""))
+		check(st == 0, "tests/swapwear: only changed chunks written "
+			"(AC12.14, AC12.13)")
+		mark = len(r.out)
+		st = r.sh("/usr/tests/swapwear -r %d" % a.hot, a.hot + 600)
+		sys.stdout.write(r.out[mark:].decode(errors="replace")
+			.replace("\r", ""))
+		check(st == 0, "tests/swapwear -r %d: the reserve leaves a "
+			"woken app alone (AC12.15)" % a.hot)
+
 		# AC12.12: two programs swapped, the card "pulled"
 		mark = len(r.out)
 		r.sh("/usr/tests/swapper -p & p1=$!; sleep 2; swapon -o $p1; "
@@ -174,7 +199,8 @@ def main():
 		# "damaged" is expected: the CRC test's console message and
 		# its PASS/FAIL line
 		bad = powercut.BAD.search(re.sub(
-			rb"lost: swap image damaged|(PASS|FAIL) damaged slot", b"",
+			rb"lost: swap image damaged|(PASS|FAIL) damaged slot"
+			rb"|(PASS|FAIL) a byte flipped", b"",
 			r.out))
 		check(bad is None and b"panic" not in r.out,
 			"console: no panic")
