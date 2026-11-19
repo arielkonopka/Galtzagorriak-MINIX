@@ -21,6 +21,7 @@
 #include <minix/fg.h>
 #include <minix/ibutton.h>
 #include <minix/hid.h>
+#include <minix/subghz.h>
 #include "libhid.h"
 #include <minix/partition.h>
 #include <time.h>
@@ -475,6 +476,109 @@ static void finish(void)
 }
 
 #ifdef BOARD_QEMU
+/* mtpd (spec R10.4, T29a) on QEMU's second serial line (/dev/mtpline):
+ * minix-run puts tools/mtphost.py on its other end, which runs the whole
+ * MTP test (list, get, send, delete, rename, move, NAME_MAX + 1, cancel,
+ * broken containers) against this mtpd, leaves galtzagorriak/etxea.sub
+ * and then pulls the cable in the middle of a send.  Here: mtpd ends
+ * with status 0, it ran as the owner of its root (bin), the example file
+ * is there and the half-sent one is not. */
+/* The test's strings in one const struct (flash), as the subghz and pkg
+ * tests': each literal would cost a GOT word in every copy of m2test, and
+ * ACK.3's 4 flooders fork it with a few bytes to spare.  The paths under
+ * the root are built once into a stack buffer. */
+static const struct {
+	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"];
+	char wait[sizeof "mtpd: waiting for tools/mtphost.py on /dev/mtpline\n"];
+	char root[sizeof "/tmp/mtpd"];
+	char bin[sizeof "/bin/mtpd"];
+	char name[sizeof "mtpd"];
+	char r[sizeof "-r"];
+	char l[sizeof "-l"];
+	char line[sizeof "/dev/mtpline"];
+	char dir[sizeof "/galtzagorriak"];
+	char sub[sizeof "/etxea.sub"];
+	char pulled[sizeof "/pulled.bin"];
+	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
+	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
+	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+} mt = {
+	"Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n",
+	"mtpd: waiting for tools/mtphost.py on /dev/mtpline\n",
+	"/tmp/mtpd",
+	"/bin/mtpd",
+	"mtpd",
+	"-r",
+	"-l",
+	"/dev/mtpline",
+	"/galtzagorriak",
+	"/etxea.sub",
+	"/pulled.bin",
+	"mtpd served mtphost and ended on the pulled cable",
+	"mtpd: etxea.sub sent from the PC, owned by bin",
+	"mtpd: the half-sent file is gone, nothing else left",
+};
+
+static void mtpd_test(void)
+{
+	char buf[256], path[sizeof mt.root + sizeof mt.dir + sizeof mt.pulled];
+	char *leaf;
+	struct stat st;
+	DIR *d;
+	struct dirent *e;
+	int fd, n, entries = 0, status = -1;
+	pid_t pid;
+
+	printf(mt.wait);
+	fflush(stdout);
+	mkdir(mt.root, 0755);
+	chown(mt.root, 2, 2);			/* bin: mtpd becomes it */
+	pid = fork();
+	if (pid == 0) {
+		execl(mt.bin, mt.name, mt.r, mt.root, mt.l, mt.line,
+			(char *) NULL);
+		_exit(99);
+	}
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(60);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		status = -1;
+	}
+	alarm(0);
+	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0, mt.c1);
+	strcpy(path, mt.root);
+	strcat(path, mt.dir);			/* <root>/galtzagorriak */
+	leaf = path + strlen(path);
+	strcpy(leaf, mt.sub);
+	n = -1;
+	if ((fd = open(path, O_RDONLY)) >= 0) {
+		n = read(fd, buf, sizeof(buf));
+		close(fd);
+	}
+	check(n == (int) strlen(mt.ex)
+		&& memcmp(buf, mt.ex, n) == 0
+		&& stat(path, &st) == 0
+		&& st.st_uid == 2, mt.c2);
+	*leaf = '\0';
+	if ((d = opendir(path)) != NULL) {
+		while ((e = readdir(d)) != NULL)
+			if (e->d_name[0] != '.') entries++;
+		closedir(d);
+	}
+	strcpy(leaf, mt.pulled);
+	check(entries == 1 && stat(path, &st) < 0, mt.c3);
+}
+
 /* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
  * and a Popup, driven with fake buttons (QEMU only).  Its frames go to
  * /dev/lcd (dumped to the console).  OK on "Say hello" -> the popup;
@@ -720,6 +824,163 @@ static void hid_tests(void)
 	close(k);
 	close(m);
 	close(c);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* Issue #302 (spec R8.2): Sub-GHz transmit with QEMU's backend, which
+ * prints each frame or packet as console lines ("sg> tx ..."); SGIOCLINE
+ * gives the hash of that text, SGIOCFAKE makes the next write a received
+ * frame or packet (the hid< / HIDIOCFAKE pattern).  The region is set
+ * once; every transmit is checked against its bands and duty cycle. */
+/* The test's strings in one const struct (flash), as the pkg test's
+ * (PK_STRINGS below): each literal would cost a GOT word in every copy
+ * of m2test, and ACK.3's 4 flooders fork it with a few bytes to spare. */
+static const struct {
+	char s0[sizeof "/dev/subghz"];
+	char s1[sizeof "%lu"];
+	char s2[sizeof "/dev/subghzraw"];
+	char s3[sizeof "/dev/subghzpkt"];
+	char s4[sizeof "subghz: open the 3 files (pkt: minor 20)"];
+	char s5[sizeof "subghz: untuned EIO; tuned, no region: EPERM"];
+	char s6[sizeof "subghz: region XX EINVAL, EU set once (US: EPERM)"];
+	char s7[sizeof "tx 433920000 3 350 -700 350"];
+	char s8[sizeof "subghz: a frame goes out, its console line (sg> tx)"];
+	char s9[sizeof "yo"];
+	char s10[sizeof "subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)"];
+	char s11[sizeof "/bin/m2test"];
+	char s12[sizeof "m2test"];
+	char s13[sizeof "sg-read"];
+	char s14[sizeof "subghz: SGIOCFAKE: the reader gets the frame"];
+	char s15[sizeof "pkt 433920000 79 6f"];
+	char s16[sizeof "subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit"];
+} sg = {
+	"/dev/subghz",
+	"%lu",
+	"/dev/subghzraw",
+	"/dev/subghzpkt",
+	"subghz: open the 3 files (pkt: minor 20)",
+	"subghz: untuned EIO; tuned, no region: EPERM",
+	"subghz: region XX EINVAL, EU set once (US: EPERM)",
+	"tx 433920000 3 350 -700 350",
+	"subghz: a frame goes out, its console line (sg> tx)",
+	"yo",
+	"subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)",
+	"/bin/m2test",
+	"m2test",
+	"sg-read",
+	"subghz: SGIOCFAKE: the reader gets the frame",
+	"pkt 433920000 79 6f",
+	"subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit",
+};
+
+static int sg_tune(unsigned long hz)
+{
+	char t[12];
+	int fd = open(sg.s0, O_WRONLY), n, ok;
+
+	if (fd < 0) return 0;
+	n = sprintf(t, sg.s1, hz);
+	ok = write(fd, t, n) == n;
+	close(fd);
+	return ok;
+}
+
+static int sg_line(int fd, const char *want)
+{
+	long h = 0;
+
+	return ioctl(fd, SGIOCLINE, &h) == 0
+			&& ((unsigned long) h & 0xFFFFFFFFUL) == fnv(want);
+}
+
+static void subghz_tests(void)
+{
+	unsigned long f[4];
+	struct sg_air air;
+	struct stat sb;
+	int s, r, k, v, e, st, n;
+	pid_t pid;
+	char b[8];
+
+	s = open(sg.s0, O_RDWR);
+	r = open(sg.s2, O_RDWR);
+	k = open(sg.s3, O_RDWR);
+	check(s >= 0 && r >= 0 && k >= 0 && stat(sg.s3, &sb) == 0
+		&& (sb.st_rdev & 0xFF) == 20, sg.s4);
+	if (s < 0 || r < 0 || k < 0) return;
+	f[0] = 350; f[1] = 700; f[2] = 350;
+	e = write(r, (char *) f, 12) < 0 && errno == EIO && sg_tune(433920000UL);
+	v = -1;
+	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
+		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
+	check(e, sg.s5);
+	v = SG_REGION('X', 'X');
+	e = ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	v = SG_REGION('E', 'U');
+	e = e && ioctl(s, SGIOCREGION, &v) == 0;
+	v = SG_REGION('U', 'S');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
+	v = 0;
+	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('E', 'U'),
+		sg.s6);
+	check(write(r, (char *) f, 12) == 12
+		&& sg_line(r, sg.s7),
+		sg.s8);
+	f[1] = 0;
+	e = write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 2000000;
+	e = e && write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 700;
+	e = e && write(r, (char *) f, 10) < 0 && errno == EINVAL;
+	/* 315 MHz is not EU's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
+	e = e && sg_tune(315000000UL) && write(r, (char *) f, 12) < 0
+		&& errno == EPERM && write(k, sg.s9, 2) < 0 && errno == EPERM;
+	f[0] = f[1] = f[2] = f[3] = 1000000;
+	e = e && sg_tune(868800000UL) && ioctl(r, SGIOCAIR, &air) == 0
+		&& air.limit_ms == 3600;
+	check(e && write(r, (char *) f, 16) < 0 && errno == EAGAIN,
+		sg.s10);
+
+	/* a received frame for a waiting reader: another program (a reader
+	 * is pinned while it waits, R4b.5, so a forked copy sharing our
+	 * memory could not run beside it) */
+	(void) sg_tune(433920000UL);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(sg.s11, sg.s12, sg.s13, (char *) NULL);
+		_exit(99);
+	}
+	f[0] = 500; f[1] = 1000; f[2] = 500; f[3] = 2000;
+	for (n = 0, e = -1; n < 25 && e < 0; n++) {	/* until it reads */
+		(void) poll((struct pollfd *) NULL, 0, 200);
+		v = SG_FAKE_RAW;
+		if (ioctl(r, SGIOCFAKE, &v) < 0) break;
+		e = write(r, (char *) f, 16);
+		if (e < 0 && errno != EAGAIN) break;
+	}
+	check(e == 16 && pid > 0 && waitpid(pid, &st, 0) == pid
+		&& WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		sg.s14);
+
+	/* packets */
+	v = SG_FAKE_PKT;
+	e = ioctl(r, SGIOCFAKE, &v) < 0 && errno == EINVAL
+		&& write(k, sg.s9, 2) == 2 && sg_line(k, sg.s15)
+		&& read(k, b, sizeof(b)) < 0 && errno == EAGAIN;
+	check(e && ioctl(k, SGIOCFAKE, &v) == 0 && write(k, sg.s9, 2) == 2
+		&& read(k, b, sizeof(b)) == 2 && b[0] == 'y' && b[1] == 'o'
+		&& ioctl(r, SGIOCAIR, &air) == 0 && air.limit_ms == 360000
+		&& air.used_ms > 0 && air.used_ms < 100,
+		sg.s16);
+	(void) sg_tune(0UL);
+	close(s);
+	close(r);
+	close(k);
 }
 #endif
 
@@ -2315,6 +2576,16 @@ int main(int argc, char **argv)
 	if (argc == 2 && strcmp(argv[1], "warm") == 0) {	/* see init.c */
 		for (;;) pause();
 	}
+#ifdef BOARD_QEMU
+	if (argc == 2 && strcmp(argv[1], "sg-read") == 0) {	/* #302 */
+		unsigned long got[8];
+		int c = open("/dev/subghzraw", O_RDONLY);
+
+		n = read(c, (char *) got, sizeof(got));
+		return n == 16 && got[0] == 500 && got[1] == 1000
+			&& got[2] == 500 && got[3] == 2000 ? 0 : 1;
+	}
+#endif
 	if (argc == 2 && strcmp(argv[1], "child-exec") == 0) {
 		printf("  [exec'd child pid %d running]\n", getpid());
 		return 7;
@@ -2633,6 +2904,7 @@ int main(int argc, char **argv)
 	devpoll_tests();
 	ibutton_tests();
 	hid_tests();
+	subghz_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();
@@ -2640,6 +2912,7 @@ int main(int argc, char **argv)
 	preempt_tests();
 	testop_tests();
 	pkg_tests();
+	mtpd_test();
 #endif
 	time_tests();
 	fpu_tests();

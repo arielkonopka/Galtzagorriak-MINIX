@@ -61,6 +61,9 @@ For people changing the kernel, the servers, the drivers and the build.
 7. [The overnight battery test](part2/07-overnight-power-test.md): AC6.6 (no reset, clock,
    more than 99 % in Stop2) and the night's current, set up from a fresh computer, `nightpower.py`,
    reading and recording the result, and the nights measured so far.
+8. [Dev mode and the debug serial line](part2/08-debug-uart.md): `reboot -d` and what dev mode
+   changes, the debug UART on pins 13/14, reading it through a second Flipper's USB-UART Bridge or
+   a USB-serial adapter, and a debugging session with both lines.
 
 ## Where else to look
 

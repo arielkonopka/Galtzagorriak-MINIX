@@ -446,7 +446,8 @@ The map already names the MINIX version (`ver`) and the Unleashed version (`info
 
 ## 6.10 For developers: the commands MINIX is expected to have
 
-The rows for features MINIX does not have yet use these commands. They mirror the stock
+The rows for features MINIX does not have yet use these commands; the ones marked
+**present** exist on main. They mirror the stock
 command line (spec 4.x "cli commands → Unix commands", and R9.0.3 for `rfid`), so the stock
 apps' habits carry over. A different syntax is fine, but then change the row in `twoflip.py`
 in the same PR.
@@ -457,9 +458,9 @@ in the same PR.
 | `rfid emulate PROTOCOL HEX`, `rfid write PROTOCOL HEX` | emulate prints a line with "emulating" and runs until Ctrl-C; the name is quoted when it has a space (`"Radio Key"`). EM4100 keeps `rfid emulate EM B0 B1 B2 B3 B4` |
 | `ikey read` | `Dallas HEX`, `Cyfral HEX`, `Metakom HEX` (as stock) |
 | `ikey emulate TYPE HEX`, `ikey write Dallas HEX` | emulate prints "Emulating..." and runs until Ctrl-C |
-| `subghz rx FREQ` | each decoded packet with the protocol name and its key in hex (as stock) |
-| `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` | sends, then exits 0 |
-| `subghz chat FREQ` | lines typed are sent, lines received are printed |
+| `subghz rx FREQ` (**present**, #302) | each decoded packet with the protocol name and its key in hex (as stock): `Princeton 24bit Key:7C5703` |
+| `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` (**present**, #302; on the Flipper they say "no transmitter on this device yet" until the CC1101 transmit path exists) | sends, then exits 0 |
+| `subghz chat FREQ` (**present**, #302; transmit as above) | lines typed are sent, lines received are printed |
 | `nfc scanner` | the detected protocol names as stock (`ISO14443-3A`, `NTAG/Ultralight`, `FeliCa`, `SLIX`) |
 | `nfc emulate -f FILE` | prints "Emulating..." and runs until Ctrl-C |
 

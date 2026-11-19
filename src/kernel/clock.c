@@ -467,7 +467,18 @@ PRIVATE void cause_alarm()
   message mess;
 
   syn_bits |= (u32_t) 1 << (watchdog_proc + NR_TASKS);
-  if (!syn_al_alive) send (SYN_ALRM_TASK, &mess);
+  /* syn_al_alive is FALSE only while SYN_AL waits in receive(CLOCK) (tasks
+   * never preempt each other), so this send never blocks.  Set it here, not
+   * only when SYN_AL runs: a second alarm in the same pass (MM's and FS's,
+   * or a tick that catches up after tickless idle) would otherwise send
+   * again before SYN_AL ran, and CLOCK would block on it.  With SYN_AL
+   * itself blocked sending CLOCK_INT to a busy MM, MM's next sendrec(CLOCK)
+   * then failed with ELOCKED: "alarm er" (issue #308).  SYN_AL looks at all
+   * of syn_bits after the wakeup, so no alarm is lost. */
+  if (!syn_al_alive) {
+	syn_al_alive = TRUE;
+	send (SYN_ALRM_TASK, &mess);
+  }
 }
 
 

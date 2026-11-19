@@ -1,0 +1,113 @@
+.TH MTPD 8
+.SH NAME
+mtpd \- files to a PC over MTP (Media Transfer Protocol)
+.SH SYNOPSIS
+.nf
+\fBmtpd\fR [\fB\-r\fR \fIroot\fR] [\fB\-l\fR \fIline\fR]
+.fi
+.SH DESCRIPTION
+.B Mtpd
+offers the folder
+.I root
+(default
+.BR /home/flipper ,
+the same tree as
+.BR /ext )
+to a computer as one MTP storage, so that Windows and Linux copy files
+to and from the Flipper with their own drivers (Galtzagorriak MINIX, spec
+R10.4).
+.B /home
+stays mounted: MTP works file by file, through the file system.
+.PP
+On the Flipper,
+.B devd
+starts
+.B mtpd
+when the computer configures the USB device and it ends on detach (the
+USB side is planned, T29b).
+Without
+.BR \-l ,
+it speaks on standard input and output; with
+.B \-l
+on
+.I line
+(in QEMU,
+.BR /dev/mtpline ,
+the second serial line).
+It ends when the computer goes, with status 0.
+.TP
+.B \-r \fIroot\fR
+the storage's folder.
+.TP
+.B \-l \fIline\fR
+the device to speak on.
+.SH "WHAT THE COMPUTER SEES"
+Folders and plain files under
+.I root
+only: no device files, FIFOs, or anything on another file system.
+An object handle is the file's inode number, so it stays valid while the
+file is renamed on the Flipper.
+Started as root,
+.B mtpd
+runs as the owner of
+.I root
+(user
+.BR flipper ),
+never as root; it refuses to run when root owns
+.IR root .
+New files get that user's
+.BR umask .
+.PP
+A name longer than the file system takes (14 characters on MINIX V2, 60
+on V3), or with
+.BR / ,
+a control character,
+.B .
+or
+.BR .. ,
+is refused with an error, never cut.
+A file the computer was sending when it cancelled or the cable came out
+is removed.
+Files are at most 4 GiB \- 1 byte.
+Dates are UTC.
+.SH OPERATIONS
+GetDeviceInfo, OpenSession, CloseSession, GetStorageIDs, GetStorageInfo,
+GetNumObjects, GetObjectHandles, GetObjectInfo, GetObject,
+GetPartialObject, SendObjectInfo, SendObject, DeleteObject (a folder with
+everything in it), MoveObject, GetObjectPropsSupported, GetObjectPropDesc,
+GetObjectPropValue, SetObjectPropValue (the file name: rename),
+GetObjectPropList (depth 0), GetDevicePropDesc and GetDevicePropValue
+(the friendly name).
+Anything else gets Operation_Not_Supported.
+Events: ObjectAdded and ObjectRemoved for changes made over MTP,
+StorageInfoChanged (at most one per 2 s) and StoreAdded.
+.SH "THE STREAM"
+Without USB, MTP's three paths travel in frames on one byte stream, each
+a 2-byte little-endian header and its bytes.
+From the computer: 1 to 1024, that many bytes of bulk OUT; 0xFFFF, cancel
+(USB's Cancel request); 0, hang up (the cable pulled).
+From
+.BR mtpd :
+1 to 1024, bulk IN; 0x8000 plus the length, an event (USB's interrupt IN).
+The containers inside are exactly USB's.
+.B tools/mtphost.py
+speaks it.
+.SH MEMORY
+About 7.4 KB while it runs (the 1 KB data buffer, the 2 KB parent ring,
+paths, one directory buffer; no heap), 0 when it does not.
+.SH FILES
+.TP 20
+.B /home/flipper
+the storage.
+.TP
+.B /dev/mtpline
+QEMU only: the test line.
+.SH "SEE ALSO"
+.BR jiggle (1).
+.br
+The manual's chapter "Files to a PC over USB" (docs/manual/usb-files.md).
+.SH BUGS
+Until the free-space counters of spec O.5 exist, the free space is
+reported as unknown.
+The desktop PIN lock does not exist yet; when it does, the storage is
+hidden while it is on.
