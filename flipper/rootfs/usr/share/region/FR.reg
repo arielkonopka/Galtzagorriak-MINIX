@@ -1,0 +1,8 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: FR
+Name: France
+Base: EU
+Checked: 2026-11-19
+Source: Decision 2006/771/EC ((EU) 2022/180); ERC/REC 70-03 (03.2024) App. 1; Decision (EU) 2018/1538
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref

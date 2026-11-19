@@ -1,0 +1,21 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: CA
+Name: Canada
+Checked: 2026-11-19
+Source: ISED RSS-210 Issue 10 (Amendment 04.2020), RSS-247 Issue 3, RSS-Gen Issue 6 7.5
+# the numbers are those of US.reg (Q.4); the sources differ
+# restricted bands (RSS-Gen 7.5) 322-335.4 and 399.9-410 MHz: no row touches them
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+902.000	928.000	-2	none	0	any	RSS-210 Annex B Table B2
+902.000	928.000	10	none	250	fhss	RSS-247 5.1 c), 5.4 a)
+300.000	308.560	-21	none	750	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
+308.560	322.000	-20	none	771	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
+335.400	348.000	-19	none	838	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
+387.000	399.900	-17	none	967	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
+410.000	416.400	-16	none	1025	ctl	RSS-210 A.1.1-A.1.3 Table A1
+416.400	464.000	-15	none	1041	ctl	RSS-210 A.1.1-A.1.3 Table A1
+300.000	322.000	-29	none	750	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
+335.400	348.000	-27	none	838	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
+387.000	399.900	-25	none	967	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
+410.000	464.000	-24	none	1025	per	RSS-210 A.1.4 Table A2

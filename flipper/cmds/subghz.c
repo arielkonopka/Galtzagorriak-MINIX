@@ -69,7 +69,7 @@ static int usage(void)
 		"       subghz tx KEY FREQ TE REPEAT\n"
 		"       subghz tx_from_file FILE [REPEAT]\n"
 		"       subghz chat FREQ\n"
-		"       subghz region [EU|US|JP]\n"
+		"       subghz region [CC]\n"
 		"       subghz list\n"
 		"       subghz heap\n");
 	return 2;
@@ -505,15 +505,16 @@ static int cmd_region(int argc, char **argv)
 		close(fd);
 		return 0;
 	}
-	if (strlen(argv[2]) != 2) return bad(argv[2], "two letters: EU, US, JP");
+	if (strlen(argv[2]) != 2)
+		return bad(argv[2], "a country code: PL, US, ... (region list)");
 	v = SG_REGION(argv[2][0] & ~0x20, argv[2][1] & ~0x20);
 	if (ioctl(fd, SGIOCREGION, &v) < 0) {
 		int e = errno;
 		close(fd);
 		return bad(argv[2], e == EPERM ? (geteuid() != 0 ?
 			"only root may set the region" : "the region is already "
-			"set (once per boot)") : e == EINVAL ? "not a known region "
-			"(EU, US, JP)" : strerror(e));
+			"set (once per boot)") : e == EINVAL ? "no table for this "
+			"country; transmit stays off" : strerror(e));
 	}
 	close(fd);
 	return 0;

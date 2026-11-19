@@ -400,6 +400,7 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 
 ### T32a (`lane:cloud`, host + QEMU)
 - The `.reg` files of Q.4/Q.5 in `flipper/rootfs/usr/share/region/`: `EU`, the 27 member states (`Base: EU` + their `#?` rows), `US`, `CA`, `AL`, `BA`, `MK`; every row with its `ref`.
+  - Done first for the countries of #292: `EU`, PL, ES, FR, IE, FI, SE, NO, GB, AL, US, CA, with the parser, the row choice and the host tests in `libmodem` (`src/lib/modem/region.c`), the `region` command without the flash record (it writes `/etc/flipper/region`), and the kernel's country → band set map. Open: the other 21 member states, BA, MK, the RQ.2 blob, RQ.5's hash list.
 - `src/lib/modem` (or a small `libregion` shared with the kernel): parser (Q.2), compiler to the RQ.2 blob, the row choice of Q.2 (first admitting row, `SG_DATA`/`SG_CTL`, `per` 1 s / 30x / 10 s, `ctl` 5 s), replacing today's `const mdm_bands[]`. Host tests ACQ.1, ACQ.2.
 - `region list|show|set` (RQ.1, RQ.5: build-time SHA-256 list, `-f`, log line); manual page `region(1)` and a manual section (Q.7).
 - RAM: 0 B resident; `region` runs and exits. Flash: the blob, once per `region set`; say so in the PR.

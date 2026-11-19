@@ -213,4 +213,68 @@ long mdm_duty_wait(struct mdm_duty *d, unsigned long now_s, int duty_pm,
 void mdm_duty_add(struct mdm_duty *d, unsigned long now_s, unsigned air_10ms);
 unsigned long mdm_duty_used(struct mdm_duty *d, unsigned long now_s);
 
+/* ---- radio regions (spec section Q) ----
+ * A region file /usr/share/region/<CC>.reg (Q.2): a "Key: value" header,
+ * then one row per band, tab-separated:
+ *	lo_mhz hi_mhz dbm duty bw_khz use ref
+ * "Base: EU" puts the rows of EU.reg first (one level).  A row starting
+ * "#?" is known but not checked: kept (MDM_RG_UNCHECKED) and never used.
+ * mdm_rg_tx() is the check of RP.6/RP.7/RQ.6 the kernel will make on the
+ * flash record (T32b): the first row, in file order, that admits the
+ * transmit; the library uses it to tell the user why and how long. */
+#define MDM_RG_ROWS	32
+#define MDM_RG_REF	64
+#define MDM_USE_ANY	0
+#define MDM_USE_CTL	1		/* remote's code only, <= 5 s */
+#define MDM_USE_PER	2		/* <= 1 s, then >= 30x and >= 10 s */
+#define MDM_USE_FHSS	3		/* the hopping link only (R19.11) */
+#define MDM_RG_UNCHECKED 1		/* row flag: "#?" */
+#define MDM_SG_DATA	0		/* RQ.6: gmodem, the IP link */
+#define MDM_SG_CTL	1		/* the subghz app sending a remote's code */
+
+struct mdm_rgrow {
+	unsigned long lo, hi;		/* Hz */
+	int dbm;			/* e.r.p./e.i.r.p., at most +10 */
+	int duty_pm;			/* per mille of any hour; 1000 none */
+	unsigned bw_khz;		/* largest occupied bandwidth; 0 any */
+	int use, flags;
+	char ref[MDM_RG_REF];
+};
+struct mdm_region {
+	char code[3], base[3];
+	char name[32];
+	int n;
+	struct mdm_rgrow row[MDM_RG_ROWS];
+};
+struct mdm_rgstate {
+	struct mdm_duty duty[MDM_RG_ROWS];	/* per row (RP.7) */
+	unsigned long t_s;		/* the last per/ctl transmit's start */
+	unsigned len_10ms;		/* and its length; 0 none yet */
+};
+
+/* Parse one line of a file (lineno from 1) into rg (mdm_rg_init first):
+ * 0, or -1 with a message in err (the caller adds the line number). */
+void mdm_rg_init(struct mdm_region *rg);
+int mdm_rg_line(struct mdm_region *rg, const char *line, char *err, int max);
+/* Load dir/CC.reg and its base: 0, or -1 with "FILE:LINE: why" in err. */
+int mdm_rg_load(const char *dir, const char *cc, struct mdm_region *rg,
+	char *err, int max);
+/* The kernel's band set for a country code (the const table of R8.2 until
+ * the flash record of T32b): "EU" or "US", or 0 for an unknown code. */
+const char *mdm_rg_bandset(const char *cc);
+
+#define MDM_SG_WAIT	(-3)		/* the band's budget is spent: *wait s */
+void mdm_rg_state_init(struct mdm_rgstate *st);
+/* A transmit at freq Hz occupying occ Hz (mdm_occupied), dbm, mode, of
+ * air_10ms: MDM_SG_OK (*row = the row used, the time counted),
+ * MDM_SG_BAND (EPERM: no row admits it), MDM_SG_WAIT (EAGAIN, *wait = s
+ * until a row has room).  It never sends and never waits. */
+int mdm_rg_tx(const struct mdm_region *rg, struct mdm_rgstate *st,
+	unsigned long freq, unsigned long occ, int dbm, int mode,
+	unsigned air_10ms, unsigned long now_s, int *row, long *wait);
+/* The user's message for a result of mdm_rg_tx or mdm_sg_check. */
+const char *mdm_rg_msg(int rc);
+/* The highest CC1101 PATABLE step <= dbm. */
+int mdm_pa_step(int dbm);
+
 #endif /* _MODEM_H */
