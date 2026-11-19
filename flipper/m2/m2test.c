@@ -2394,7 +2394,7 @@ static const struct {
 	char s13[sizeof "AC5.7: a message is a stock-style popup, gone after 2 s"];
 	char s14[sizeof "/tmp/st.sh"];
 	char s15[sizeof "w"];
-	char s16[sizeof "echo started > /tmp/st.out\n"];
+	char s16[sizeof "echo $FURI_STYLE > /tmp/st.out\n"];
 	char s17[sizeof "/tmp/st.out"];
 	char s18[sizeof "L"];
 	char s19[sizeof "stock-down"];
@@ -2406,6 +2406,8 @@ static const struct {
 	char s25[sizeof "stock-inor"];
 	char s26[sizeof "pine-again"];
 	char s27[sizeof "AC5.7: Style: pine again, the title bar is back"];
+	char s28[sizeof "stock\n"];
+	char s29[sizeof "AC5.7: an app started in the Stock style sees FURI_STYLE=stock"];
 } st = {
 	"style-sys",
 	"style-set",
@@ -2423,7 +2425,7 @@ static const struct {
 	"AC5.7: a message is a stock-style popup, gone after 2 s",
 	"/tmp/st.sh",
 	"w",
-	"echo started > /tmp/st.out\n",
+	"echo $FURI_STYLE > /tmp/st.out\n",
 	"/tmp/st.out",
 	"L",
 	"stock-down",
@@ -2435,6 +2437,8 @@ static const struct {
 	"stock-inor",
 	"pine-again",
 	"AC5.7: Style: pine again, the title bar is back",
+	"stock\n",
+	"AC5.7: an app started in the Stock style sees FURI_STYLE=stock",
 };
 
 static void style_toggle(int b, int l)		/* APPS -> its settings -> Style */
@@ -2498,6 +2502,12 @@ static void __attribute__((noinline)) stock_test(int b, int l)
 	lgrab(l, st.s20);
 	check(access(st.s17, F_OK) == 0 && s1 != apps && fsum() == s1,
 		st.s21);
+	n = 0;
+	if ((f = fopen(st.s17, st.s7)) != NULL) {
+		n = fgets(line, sizeof line, f) != NULL && strcmp(line, st.s28) == 0;
+		fclose(f);
+	}
+	check(n, st.s29);
 	unlink(st.s17);
 	unlink(st.s14);
 	furi_tap(b, 0x08);			/* Right: HOME */

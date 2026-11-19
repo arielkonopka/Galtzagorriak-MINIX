@@ -618,10 +618,28 @@ static int gui_gid(void)
 	return field == 2 && match && digits > 0 ? (int) gid : -1;
 }
 
+/* The child's environment (R5.6b, K.2): the launcher's own, with
+ * FURI_STYLE set to the current Style, so libfuri apps draw in it.  Built
+ * on the stack, no heap and no putenv (the shared libc does not export it);
+ * entries past ENVMAX - 2 are dropped. */
+#define ENVMAX	16
+extern char **environ;
+
+static void style_env(char **env)
+{
+	char **e;
+	int n = 0;
+
+	for (e = environ; e != NULL && *e != NULL && n < ENVMAX - 2; e++)
+		if (strncmp(*e, "FURI_STYLE=", 11) != 0) env[n++] = *e;
+	env[n++] = opt & OPT_STOCK ? "FURI_STYLE=stock" : "FURI_STYLE=pine";
+	env[n] = NULL;
+}
+
 /* Run an app as its user and wait for it.  NULL, or a notice to show. */
 static char *run(struct app *ap)
 {
-	char cmd[CMDMAX], *argv[MAXARGS + 1], *p;
+	char cmd[CMDMAX], *argv[MAXARGS + 1], *env[ENVMAX], *p;
 	struct passwd *pw;
 	int argc = 0, st, fg, gid;
 	pid_t pid;
@@ -647,6 +665,7 @@ static char *run(struct app *ap)
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
 	gid = gui_gid();		/* before: the child only execs */
+	style_env(env);
 	{	/* R12.22: the app goes low in RAM, idle images stay high, so a
 		 * swapped one finds its addresses free again; never swapped */
 		message m;
@@ -662,7 +681,7 @@ static char *run(struct app *ap)
 				_exit(126);	/* never run with root rights */
 		}
 		chdir(pw->pw_dir[0] != 0 ? pw->pw_dir : "/");
-		execv(argv[0], argv);
+		execve(argv[0], argv, env);
 		_exit(127);
 	}
 	/* The app owns the screen and buttons now: long Back ends it.  (Its
