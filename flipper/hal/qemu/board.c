@@ -981,4 +981,18 @@ void hal_rfid_capture_stop(void) { }
 int hal_rfid_emulate(uint32_t d, uint32_t p, unsigned n)
 	{ (void) d; (void) p; (void) n; return -1; }
 void hal_rfid_emulate_stop(void) { }
-uint32_t hal_cycles(void) { return hal_ms * 25000u; }	/* coarse */
+/* Coarse cycles from the ms tick.  A kernel task that waits on this in a
+ * loop (the /dev/subghz read's 30 ms of RSSI samples, issue #157) runs
+ * with the lowest-priority SysTick unable to come in, so hal_ms alone
+ * stood still there and the loop never ended.  SysTick's COUNTFLAG (set at
+ * each reload, cleared by the read) counts the ms the handler missed;
+ * when the handler does run later the count only jumps forward. */
+uint32_t hal_cycles(void)
+{
+	static uint32_t missed, seen;
+	uint32_t ms = hal_ms;
+
+	if ((SYST_CSR & 0x10000u) && ms == seen) missed++;
+	seen = ms;
+	return (ms + missed) * 25000u;
+}

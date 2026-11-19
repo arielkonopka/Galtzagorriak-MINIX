@@ -49,6 +49,12 @@ grep '^RFID:' /etc/apps >/dev/null || {
 	echo 'RFID:nobody:@rfid:/bin/lfrfid' >> /etc/apps
 	echo "base: the launcher now has RFID"
 }
+# Issue #157: the Sub-GHz spectrum app on the launcher (a card without
+# its own /etc/apps uses /rom's, which has it).
+test -f /etc/apps && grep '^Spectrum:' /etc/apps >/dev/null || test ! -f /etc/apps || {
+	echo 'Spectrum:nobody:@subghz:/bin/spectrum' >> /etc/apps
+	echo "base: the launcher now has Spectrum"
+}
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
 test -f /etc/apps &&	# a card without its own copy keeps using /rom's

@@ -12,7 +12,7 @@ CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
-	   pmstattest
+	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey \
      run-mtpd
@@ -123,6 +123,11 @@ $(B)/stocktest: stocktest.c $(MROOT)/flipper/gui/gui.c $(MROOT)/flipper/gui/laun
 	    -I$(MROOT)/flipper/hal/common stocktest.c \
 	    $(MROOT)/flipper/gui/launcher_stock.c $(MROOT)/flipper/gui/appline.c \
 	    $(FURI_SRC) -lpthread -o $@
+
+# specmath.c: the Spectrum app's steps, scale, zoom and greys (issue #157).
+$(B)/spectest: spectest.c $(MROOT)/flipper/gui/specmath.c $(MROOT)/flipper/gui/specmath.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wextra spectest.c $(MROOT)/flipper/gui/specmath.c -o $@
 
 # winrec.c and libgm: the window records of spec K.8 (T23b).
 $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \

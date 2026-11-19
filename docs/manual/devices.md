@@ -114,8 +114,8 @@ is refused. `peak` is the strongest of the samples taken during the read (about 
 remote are not missed. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
 signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
 radio keeps listening until `echo 0`, or until nobody has read it for about a minute (it draws
-about 15 mA while listening). A spectrum view and
-recording will build on this.
+about 15 mA while listening). The **Spectrum** app on the launcher sweeps it across a band
+([Sub-GHz](subghz.md#spectrum-what-is-on-the-air-launcher-app)).
 
 ## 125 kHz RFID tags (`rfid`, `/dev/rfid`)
 

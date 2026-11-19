@@ -11,3 +11,4 @@ About:nobody:@info:/bin/info
 Lights:nobody:@light:/bin/lights
 Power:nobody:@power:/bin/power
 RFID:nobody:@rfid:/bin/lfrfid
+Spectrum:nobody:@subghz:/bin/spectrum
