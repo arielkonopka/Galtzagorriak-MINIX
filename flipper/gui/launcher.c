@@ -321,6 +321,9 @@ static void stock_draw(int pg, int sel, int top, const char *note)
 {
 	int n = page_rows(pg);
 
+	clock_shown = 0;		/* no time on this frame: else the main
+					 * loop redraws it for ever once the
+					 * light goes off */
 	if (pg == PG_APPS) {
 		stock_menu(n, sel, stock_app);
 		if (fsck_err) gui_title("CARD HAS ERRORS: RUN FSCK");
