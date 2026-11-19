@@ -2737,6 +2737,137 @@ static void launcher_test(void)
 	unlink("/tmp/lc");
 }
 
+/* The Spectrum app (issue #157) with fake buttons.  First "spectrum
+ * /dev/null": no line from the "radio", so the "no radio" screen (the
+ * title bar, the hint rule, no selection bar), and Back ends it with 0.
+ * Then on /dev/subghz (QEMU's: in tune, a flat -110 dBm): the band list
+ * (a selection bar), OK sweeps the first band (433.05-434.79), the
+ * device is tuned there, the view has its cursor mark at step 16 (x 64,
+ * y 8); Back writes "0" (the radio is off again) and shows the list, a
+ * second Back ends it with 0. */
+static const struct {
+	char bin[sizeof "/bin/spectrum"];
+	char name[sizeof "spectrum"];
+	char null[sizeof "/dev/null"];
+	char dev[sizeof "/dev/subghz"];
+	char c0[sizeof "spectrum: open lcd/buttons"];
+	char c1[sizeof "spectrum: no radio (/dev/null): the notice, Back -> exit 0"];
+	char c2[sizeof "spectrum: the band list, OK sweeps 433 MHz (tuned, cursor)"];
+	char c3[sizeof "spectrum: Back writes 0 (radio off), Back again -> exit 0"];
+} spt = {
+	"/bin/spectrum", "spectrum", "/dev/null", "/dev/subghz",
+	"spectrum: open lcd/buttons",
+	"spectrum: no radio (/dev/null): the notice, Back -> exit 0",
+	"spectrum: the band list, OK sweeps 433 MHz (tuned, cursor)",
+	"spectrum: Back writes 0 (radio off), Back again -> exit 0",
+};
+
+/* Wait (up to 5 s) for a frame with the title bar; 1 if it came. */
+static int spt_frame(int l, unsigned char *lcd)
+{
+	int i, x, top;
+
+	for (i = 0; i < 50; i++) {
+		(void) poll((struct pollfd *) NULL, 0, 100);
+		lseek(l, 0L, SEEK_SET);
+		if (read(l, (char *) lcd, 1024) != 1024) return 0;
+		for (x = 0, top = 1; x < 128; x++) top &= lcd[x] & 1;
+		if (top) return 1;
+	}
+	return 0;
+}
+
+/* The hint line's rule at y = 56 (page 7, bit 0) across the width. */
+static int spt_rule(const unsigned char *lcd)
+{
+	int x, r = 1;
+
+	for (x = 0; x < 128; x++) r &= lcd[7 * 128 + x] & 1;
+	return r;
+}
+
+static int spt_exit(pid_t pid)
+{
+	pid_t r = 0;
+	int i, st = 0;
+
+	for (i = 0; i < 50 && (r = waitpid(pid, &st, WNOHANG)) == 0; i++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	if (r == 0) {
+		kill(pid, SIGKILL);
+		(void) waitpid(pid, &st, 0);
+		return 0;
+	}
+	return r == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+/* What /dev/subghz says now starts with want. */
+static int spt_radio(const char *want)
+{
+	char line[48];
+	int fd = open(spt.dev, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, line, sizeof line - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	line[n] = 0;
+	return strncmp(line, want, strlen(want)) == 0;
+}
+
+static void __attribute__((noinline)) spectrum_test(void)
+{
+	unsigned char lcd[1024];
+	int b, l, ok, menu, view, tuned, off, x, text;
+	pid_t pid;
+
+	b = open("/dev/buttons", O_WRONLY);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || l < 0) {
+		check(0, spt.c0);
+		if (b >= 0) close(b);
+		if (l >= 0) close(l);
+		return;
+	}
+	furi_tap(b, 0x04);		/* the backlight on, if it was off */
+	memset(lcd, 0, sizeof lcd);
+	(void) write(l, (char *) lcd, sizeof lcd);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(spt.bin, spt.name, spt.null, (char *) NULL);
+		_exit(99);
+	}
+	ok = spt_frame(l, lcd) && spt_rule(lcd) && (lcd[128 + 127] & 0x1F) == 0;
+	for (x = 0, text = 0; x < 128; x++)
+		text |= lcd[2 * 128 + x] | lcd[3 * 128 + x] | lcd[4 * 128 + x];
+	furi_tap(b, 0x20);
+	check(pid > 0 && ok && text != 0 && spt_exit(pid), spt.c1);
+
+	memset(lcd, 0, sizeof lcd);
+	(void) write(l, (char *) lcd, sizeof lcd);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(spt.bin, spt.name, (char *) NULL);
+		_exit(99);
+	}
+	menu = spt_frame(l, lcd) && spt_rule(lcd) && (lcd[128 + 127] & 0x1F) != 0;
+	furi_tap(b, 0x10);		/* OK: 433.05-434.79 */
+	(void) poll((struct pollfd *) NULL, 0, 1500);
+	tuned = spt_radio("rssi=");
+	lseek(l, 0L, SEEK_SET);
+	view = read(l, (char *) lcd, sizeof lcd) == sizeof lcd
+		&& (lcd[0] & 1) && spt_rule(lcd)
+		&& (lcd[128 + 64] & 1) && (lcd[128 + 65] & 2)	/* the v */
+		&& (lcd[128 + 127] & 0x1F) == 0;		/* no list */
+	check(pid > 0 && menu && tuned && view, spt.c2);
+	furi_tap(b, 0x20);		/* Back: the list, the radio off */
+	off = spt_radio("off");
+	furi_tap(b, 0x20);		/* Back: quit */
+	check(off && spt_exit(pid), spt.c3);
+	close(b);
+	close(l);
+}
+
 static void furihello_test(void)
 {
 	static const unsigned char keys[4] = { 0x10, 0x20, 0x02, 0x10 };
@@ -3107,6 +3238,7 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	spectrum_test();
 	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of

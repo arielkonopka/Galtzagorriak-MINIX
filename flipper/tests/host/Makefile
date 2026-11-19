@@ -11,7 +11,8 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest
+TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
+	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz \
      run-mtpd
@@ -119,6 +120,11 @@ $(B)/stocktest: stocktest.c $(MROOT)/flipper/gui/gui.c $(MROOT)/flipper/gui/laun
 	    $(MROOT)/flipper/gui/launcher_stock.c $(MROOT)/flipper/gui/appline.c \
 	    $(FURI_SRC) -lpthread -o $@
 
+# specmath.c: the Spectrum app's steps, scale, zoom and greys (issue #157).
+$(B)/spectest: spectest.c $(MROOT)/flipper/gui/specmath.c $(MROOT)/flipper/gui/specmath.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wextra spectest.c $(MROOT)/flipper/gui/specmath.c -o $@
+
 # winrec.c and libgm: the window records of spec K.8 (T23b).
 $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
 		$(MROOT)/src/lib/gm/gm.c $(MROOT)/src/lib/gm/gm.h
@@ -138,6 +144,11 @@ $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
+
+# pmstat.h: the Stop2 counters of /dev/power (T14b, R6.8, #284).
+$(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) pmstattest.c -o $@
 
 clean:
 	rm -rf $(B)
