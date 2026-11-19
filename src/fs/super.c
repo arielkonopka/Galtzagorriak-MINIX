@@ -296,8 +296,8 @@ register struct super_block *sp; /* pointer to a superblock */
 	sp->s_ndzones = V2_NR_DZONES;
 	sp->s_nindirs = V2_INDIRECTS;
   }
-  if (version == V3 && sp->s_max_size > V2_MAX_FILE)
-	sp->s_max_size = V2_MAX_FILE;	/* no triple indirect zone yet */
+  if (sp->s_max_size < 0)		/* V3: a u32; files stay below 2 GiB */
+	sp->s_max_size = 0x7FFFFFFFL;
 
   sp->s_isearch = 0;		/* inode searches initially start at 0 */
   sp->s_zsearch = 0;		/* zone searches initially start at 0 */

@@ -103,7 +103,5 @@
 #define V2_INODE_SIZE             usizeof (d2_inode)  /* bytes in V2 dsk ino */
 #define V2_INDIRECTS   (BLOCK_SIZE/V2_ZONE_NUM_SIZE)  /* # zones/indir block */
 #define V2_INODES_PER_BLOCK (BLOCK_SIZE/V2_INODE_SIZE)/* # V2 dsk inodes/blk */
-#define V2_MAX_FILE ((off_t) (V2_NR_DZONES + V2_INDIRECTS \
-		+ (long) V2_INDIRECTS * V2_INDIRECTS) * BLOCK_SIZE)
 
 #define printf printk

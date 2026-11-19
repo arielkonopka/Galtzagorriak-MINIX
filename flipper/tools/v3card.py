@@ -14,7 +14,10 @@ Usage: v3card.py
        a 15-character name is still cut at 14 (existing cards rely on it)
        ls (readdir) shows the long names
        a file written to /home reads back the same after a remount
+       a file with data past 100 MB and one past 200 MB (triple indirect
+       zone, ACO.5 in part) read back; the second is removed
   4. QEMU is stopped; on the host 'fsck.minix -3 -f' finds /home clean
+     (the triple indirect tree of the first, nothing leaked by the second)
      and 'fsck.minix -l' lists the long names.
 Exit status: the number of failures.
 """
@@ -139,6 +142,26 @@ def main():
 			== 0, "remount /home")
 		check(cksum(r, "/home/" + N57) == a, "the file again after mount")
 		check(r.sh("rm /home/" + N60, 30) == 0, "rm the 60-character name")
+		# ACO.5 in part: blocks past 100 MB go through the triple
+		# indirect zone (sparse: the copy is QEMU-slow otherwise).
+		a = cksum(r, "/etc/rc")
+		check(r.sh("dd if=/etc/rc of=/home/big bs=1k seek=102400 "
+			"2>/dev/null && dd if=/etc/rc of=/home/big2 bs=1k "
+			"seek=204800 2>/dev/null && sync", 120) == 0,
+			"write past 100 MB and past 200 MB (triple indirect)")
+		out = (r.output("ls -l /home/big", 30) or b"") + b" " + \
+			(r.output("ls -l /home/big2", 30) or b"")
+		check(b" 104861" in out and b" 209719" in out, "sizes: %s" % out.decode(
+			errors="replace").replace("\n", " | "))
+		b = r.output("dd if=/home/big bs=1k "
+			"skip=102400 2>/dev/null | cksum", 60)
+		check(b is not None and b.split()[0] == a,
+			"the data past 100 MB reads back the same")
+		out = r.output("dd if=/home/big bs=1k skip=70000 count=1 "
+			"2>/dev/null | od -c | head -2", 60) or b""
+		check(out.startswith(b"0000000  \\0  \\0"),
+			"a hole in the triple range reads as zeros")
+		check(r.sh("rm /home/big2", 60) == 0, "rm the 200 MB file")
 		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
 			"sync, umount /home")
 		r.p.kill()
