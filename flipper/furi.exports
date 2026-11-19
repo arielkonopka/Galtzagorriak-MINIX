@@ -88,3 +88,4 @@ view_port_free
 view_port_input_callback_set
 view_port_update
 view_set_previous_callback
+notify_post

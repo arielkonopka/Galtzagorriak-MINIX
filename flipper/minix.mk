@@ -704,13 +704,17 @@ $(SHF)/stubs.o: $(SHF)/stubs.S
 .PHONY: shfuri
 shfuri: $(SHF)/furi.bin
 # Programs linked against it; with SHLIBC=0 they link both statically.
-FURIPROGS := furihello timed alert
+FURIPROGS := furihello timed alert notepost
 FURI_LINK := $(if $(filter 1,$(SHLIBC)),,$(SHFURI_LIBOBJ))
 TIMEDPROGS := timed alert
 $(MB)/cmd/timed/%.o: apps/timed/%.c $(APP_DIR)/include/app.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(APP_CFLAGS) -Igui -MMD -MP -c $< -o $@
 OBJS_timed = $(MB)/cmd/timed/timed.o $(FURI_LINK)
+# notepost (tests package, T23c): notify_post() from the shell, for nattest
+$(MB)/cmd/test/notepost.o: tests/notepost.c $(APP_DIR)/include/app.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(APP_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_alert = $(MB)/cmd/timed/alert.o $(MB)/cmd/gui/gui.o $(FURI_LINK)
 CHMEM_timed := 5120	# R7b.4: about 3 KB while it runs; 7b: struct app_timer
 			# grew (Tone:, Log:), 4 KB left opendir() no heap under INIT
@@ -806,8 +810,9 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake sgfake alarmrace
+	   swaptime swaptime64 regtest hidfake sgfake alarmrace notepost
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
+OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
 endif
@@ -961,7 +966,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.35
+BASE_VER := 4.36
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
