@@ -22,10 +22,9 @@ ir	4344
 # -1.3 KB, getgrnam()'s buffers (the gid of "gui" is read on the stack).
 # Data + bss: 6196 B, +1864 B above the launcher before the desktop
 # (4332 B at d704a5c), inside the K.6 budget of 3 KB.
-# T23c (K.6): the last 8 notifications (8 x 88 B) are malloc'd at the
-# first one and freed when the last is cleared (0 B while there are
-# none; +704 B of heap with 8): .bss -16 B (one 32 B text gone, the table
-# pointer, the opened one's index), .data +24 B (GOT slots).  Data + bss
-# 6232 B (main 1cc7a8f: 6224 B); with 8 notifications +2604 B above the
-# launcher before the desktop, inside the K.6 budget of 3 KB.
-launcher	4772
+# T23c (K.6): +680 B, the last 8 notifications (8 x 88 B, in place of the
+# one 32 B text) and the opened one's index; .data +24 B (GOT slots).  A
+# malloc'd table does not fit: the launcher's 4 KB gap has no 704 B free
+# (nattest).  Data + bss: 6928 B (main 1cc7a8f: 6224 B), +2596 B above
+# the launcher before the desktop, inside the K.6 budget of 3 KB.
+launcher	5468

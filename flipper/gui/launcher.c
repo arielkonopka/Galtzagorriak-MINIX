@@ -661,10 +661,8 @@ static int desk_read(void)
 				dk_skip = 0;
 			else if (dk_parse(p, &r) > 0 && (r.verb == DV_NOTIFY
 				 || r.verb == DV_CLOSE || alive(r.pid))) {
-				if (r.verb == DV_NOTIFY && desk.n == NULL)
-					desk.n = malloc(DK_NNOTES * sizeof *desk.n);
 				c |= dk_apply(&desk, &r);	/* else dropped */
-				if (r.verb == DV_NOTIFY && desk.n != NULL) {
+				if (r.verb == DV_NOTIFY) {	/* its time */
 					time_t now = time((time_t *) NULL);
 					struct tm *tm = localtime(&now);
 
@@ -684,17 +682,6 @@ static int desk_read(void)
 		if (len == 0 && ++reads >= 4) break;
 	}
 	return c & ~DC_FULL;
-}
-
-/* Clear notification i; with the last one its table goes (0 B while
- * there are none). */
-static void note_clear(int i)
-{
-	dk_clear(&desk, i);
-	if (desk.notes == 0) {
-		free(desk.n);
-		desk.n = NULL;
-	}
 }
 
 /* ms until the clock's next minute: only while it is on the screen and
@@ -838,10 +825,10 @@ int main(int argc, char **argv)
 				pg = PG_NOTE;
 				top = 0;
 			} else if (k == KEY_BACK && desk.notes > 0)
-				note_clear(sel);
+				dk_clear(&desk, sel);
 		} else if (pg == PG_NOTE) {	/* OK keeps it, Back clears it */
 			if (k == KEY_OK || k == KEY_BACK) {
-				if (k == KEY_BACK) note_clear(nsel);
+				if (k == KEY_BACK) dk_clear(&desk, nsel);
 				pg = PG_NOTES;
 				sel = nsel;
 				top = 0;

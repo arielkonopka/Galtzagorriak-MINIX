@@ -26,13 +26,9 @@ static int feed(struct desk *d, const char *text)
 	return dk_apply(d, &r);
 }
 
-static struct dk_note note_buf[DK_NNOTES];
-
 static void init(struct desk *d)
 {
 	memset(d, 0, sizeof *d);
-	memset(note_buf, 0x55, sizeof note_buf);
-	d->n = note_buf;
 	d->st = -1;
 }
 
@@ -260,8 +256,6 @@ static void notes(void)
 	T(strcmp(d.n[0].title, "a b") == 0 && strcmp(d.n[0].body, "c d") == 0,
 		"notes: escapes undone");
 	T(sizeof(struct dk_note) == 88, "notes: 88 B an entry");
-	d.n = NULL;
-	T(feed(&d, "notify\tm\t1\t2\tx") == 0, "notes: no table: dropped");
 }
 
 int main(void)
