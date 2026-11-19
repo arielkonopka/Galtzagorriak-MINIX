@@ -1453,6 +1453,13 @@ static int emulate_lf(int p, uint8_t *data)
 	if (nseg < 0) {			/* a long frame: runs */
 		runs = (uint16_t *) pulse;	/* the same 2 KB */
 		n = lfrfid_emu_runs(p, data, lf_size(p), runs, (int) MAXRUNS);
+		if (n == -1) {
+			fprintf(stderr, "rfid: a %s frame never repeats exactly (%s): "
+				"there is nothing to play round and round\n",
+				protocol_dict_get_name(lf(), p),
+				lf_modulation(lf_config(p, data)));
+			return 1;
+		}
 		if (n < 0) {
 			fprintf(stderr, "rfid: a %s frame is more than %d runs "
 				"(%s)\n", protocol_dict_get_name(lf(), p), (int) MAXRUNS,

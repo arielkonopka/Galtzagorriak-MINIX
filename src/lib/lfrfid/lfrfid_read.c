@@ -201,7 +201,7 @@ int lfrfid_emu_runs(
             runs[4 * (n - 1) + 2]++;
         } else {
             if(n >= max || dur > 0xFFFF) {
-                n = -1;
+                n = -2;
                 break;
             }
             runs[4 * n] = (uint16_t)dur;
