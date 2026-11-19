@@ -101,6 +101,7 @@
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
 #define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+/* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -369,6 +370,9 @@ FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 #include "hiddev.c"		/* USB HID, /dev/hidkbd... (R11.3.1) */
+#ifdef BOARD_QEMU
+#include "mtpline.c"		/* QEMU: /dev/mtpline, MTP tests (R10.4) */
+#endif
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
  * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
@@ -427,6 +431,9 @@ PUBLIC void flipdev_task()
 	put_irq_handler(r, rtc_int);
 	enable_irq(r);
   }
+#ifdef BOARD_QEMU
+  line_init();				/* /dev/mtpline (R10.4 tests) */
+#endif
   if ((r = hal_ir_tx_irq()) >= 0) {
 	hal_ir_tx_stop();			/* whatever ran before us */
 	put_irq_handler(r, ir_tx_int);
@@ -467,6 +474,9 @@ PUBLIC void flipdev_task()
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
 #endif
+#ifdef BOARD_QEMU
+		if (fm.DEVICE == LINE_MINOR) r = OK;
+#endif
 		break;
 	case DEV_READ:
 	case DEV_WRITE:
@@ -486,6 +496,9 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+#ifdef BOARD_QEMU
+		if (ln_rd && ln_proc == fm.PROC_NR) ln_rd = FALSE;
+#endif
 		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
 		if (rs_wait && ir_proc == fm.PROC_NR) rs_wait = 0;	/* R9.0.5 */
@@ -1387,6 +1400,9 @@ message *m_ptr;
 	: numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count);
   if (user == 0) return(EFAULT);
   if (IS_HID(m_ptr->DEVICE)) return(hid_rw(m_ptr, user, count));
+#ifdef BOARD_QEMU
+  if (m_ptr->DEVICE == LINE_MINOR) return(line_rw(m_ptr, user, count));
+#endif
 
   switch (m_ptr->DEVICE) {
 #if LATTRACE
@@ -2106,6 +2122,9 @@ PRIVATE void do_hardint()
 	r = deliver(rd_proc, rd_vir, rd_count);
 	reply(REVIVE, rd_caller, rd_proc, r);
   }
+#ifdef BOARD_QEMU
+  line_check();				/* /dev/mtpline */
+#endif
   if (rs_wait && rs_done != rs_got) {	/* R9.0.5: a half for the read */
 	rs_wait = 0;
 	r = rs_take(ir_buf);

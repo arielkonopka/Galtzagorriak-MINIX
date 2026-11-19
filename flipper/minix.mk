@@ -319,7 +319,10 @@ EDITCMDS := mined
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS)
+# mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
+DAEMONS	:= mtpd
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
@@ -401,6 +404,10 @@ CHMEM_console  := 4096
 CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
 			# pulse buffer and 3 encoder states for the period
 			# search; 6 KB aborted with "out of memory" (twoflip)
+CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
+			# all stack (no heap: its DIR is .bss, no stdio, no
+			# handler, so no MM gap); deepest a folder delete
+			# (rm_tree's 256 B path) or a move (two paths)
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -478,6 +485,18 @@ $(MB)/cmd/port/jiggle.o: cmds/jiggle.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
+# mtpd (spec R10.4, T29a): the MTP container parser and operations
+# (mtpcore.c), the files (mtpfs.c: handles = inode numbers, the parent
+# ring), the stream transport for tests (mtpfd.c); the same sources build
+# on the PC (make -C mtpd test, fuzz).  No stdio, no malloc but
+# opendir's DIR, no signal handler.  One .data/.bss/.rodata per object
+# (as the window apps, WIN_CFLAGS): its statics share GOT words.
+MTPD_SRC := mtpd mtpcore mtpfs mtpfd
+$(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
+	   -c $< -o $@
+OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -942,7 +961,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.32
+BASE_VER := 4.34
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -1037,9 +1056,23 @@ QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 # The M2 self-test took 97 s under QEMU 10.0 (Debian 13) once #152 added
 # the FPU checks: 90 s cut it off at its last test.  Slower hosts and a
 # growing test list need room; a real hang still ends.
+# INIT=m2: QEMU's second serial line (/dev/mtpline, spec R10.4) is a
+# socket with tools/mtphost.py on it; m2test's mtpd test serves it, and
+# its log follows QEMU's output.
+MTPSOCK	:= $(MB)/mtpline.sock
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
+ifeq ($(INIT),m2)
+	@rm -f $(MTPSOCK) $(MB)/mtphost.log
+	@python3 -I tools/mtphost.py test --unix $(MTPSOCK) --name-max 14 \
+	   --quick --wait 30 > $(MB)/mtphost.log 2>&1 & \
+	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0 \
+	   -chardev socket,id=mtp,path=$(MTPSOCK),server=on,wait=off \
+	   -serial chardev:mtp; \
+	r=$$?; wait; cat $(MB)/mtphost.log; rm -f $(MTPSOCK); exit $$r
+else
 	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0
+endif
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }

@@ -316,6 +316,19 @@ int hal_hid_fake(uint32_t st);
 int hal_hid_line(uint32_t *hash);
 void hid_event(unsigned what);		/* the kernel's; interrupt level */
 
+#ifdef BOARD_QEMU
+/* The MTP test line (spec R10.4, T29a), QEMU only: CMSDK UART1, QEMU's
+ * second -serial, raw bytes for mtpd's stream transport (/dev/mtpline,
+ * kernel/arm/mtpline.c).  Not on the Flipper (USB is its MTP, T29b).
+ * hal_line_getc(): a received byte or -1; hal_line_rx_irq(): the receive
+ * interrupt on/off (off also clears a pending one). */
+void hal_line_init(void);
+int hal_line_irq(void);
+int hal_line_getc(void);
+void hal_line_putc(int c);
+void hal_line_rx_irq(int on);
+#endif
+
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
  * All return 0 on success, -1 on error. */

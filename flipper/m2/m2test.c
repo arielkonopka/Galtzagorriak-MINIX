@@ -476,6 +476,109 @@ static void finish(void)
 }
 
 #ifdef BOARD_QEMU
+/* mtpd (spec R10.4, T29a) on QEMU's second serial line (/dev/mtpline):
+ * minix-run puts tools/mtphost.py on its other end, which runs the whole
+ * MTP test (list, get, send, delete, rename, move, NAME_MAX + 1, cancel,
+ * broken containers) against this mtpd, leaves galtzagorriak/etxea.sub
+ * and then pulls the cable in the middle of a send.  Here: mtpd ends
+ * with status 0, it ran as the owner of its root (bin), the example file
+ * is there and the half-sent one is not. */
+/* The test's strings in one const struct (flash), as the subghz and pkg
+ * tests': each literal would cost a GOT word in every copy of m2test, and
+ * ACK.3's 4 flooders fork it with a few bytes to spare.  The paths under
+ * the root are built once into a stack buffer. */
+static const struct {
+	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"];
+	char wait[sizeof "mtpd: waiting for tools/mtphost.py on /dev/mtpline\n"];
+	char root[sizeof "/tmp/mtpd"];
+	char bin[sizeof "/bin/mtpd"];
+	char name[sizeof "mtpd"];
+	char r[sizeof "-r"];
+	char l[sizeof "-l"];
+	char line[sizeof "/dev/mtpline"];
+	char dir[sizeof "/galtzagorriak"];
+	char sub[sizeof "/etxea.sub"];
+	char pulled[sizeof "/pulled.bin"];
+	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
+	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
+	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+} mt = {
+	"Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n",
+	"mtpd: waiting for tools/mtphost.py on /dev/mtpline\n",
+	"/tmp/mtpd",
+	"/bin/mtpd",
+	"mtpd",
+	"-r",
+	"-l",
+	"/dev/mtpline",
+	"/galtzagorriak",
+	"/etxea.sub",
+	"/pulled.bin",
+	"mtpd served mtphost and ended on the pulled cable",
+	"mtpd: etxea.sub sent from the PC, owned by bin",
+	"mtpd: the half-sent file is gone, nothing else left",
+};
+
+static void mtpd_test(void)
+{
+	char buf[256], path[sizeof mt.root + sizeof mt.dir + sizeof mt.pulled];
+	char *leaf;
+	struct stat st;
+	DIR *d;
+	struct dirent *e;
+	int fd, n, entries = 0, status = -1;
+	pid_t pid;
+
+	printf(mt.wait);
+	fflush(stdout);
+	mkdir(mt.root, 0755);
+	chown(mt.root, 2, 2);			/* bin: mtpd becomes it */
+	pid = fork();
+	if (pid == 0) {
+		execl(mt.bin, mt.name, mt.r, mt.root, mt.l, mt.line,
+			(char *) NULL);
+		_exit(99);
+	}
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(60);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		status = -1;
+	}
+	alarm(0);
+	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0, mt.c1);
+	strcpy(path, mt.root);
+	strcat(path, mt.dir);			/* <root>/galtzagorriak */
+	leaf = path + strlen(path);
+	strcpy(leaf, mt.sub);
+	n = -1;
+	if ((fd = open(path, O_RDONLY)) >= 0) {
+		n = read(fd, buf, sizeof(buf));
+		close(fd);
+	}
+	check(n == (int) strlen(mt.ex)
+		&& memcmp(buf, mt.ex, n) == 0
+		&& stat(path, &st) == 0
+		&& st.st_uid == 2, mt.c2);
+	*leaf = '\0';
+	if ((d = opendir(path)) != NULL) {
+		while ((e = readdir(d)) != NULL)
+			if (e->d_name[0] != '.') entries++;
+		closedir(d);
+	}
+	strcpy(leaf, mt.pulled);
+	check(entries == 1 && stat(path, &st) < 0, mt.c3);
+}
+
 /* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
  * and a Popup, driven with fake buttons (QEMU only).  Its frames go to
  * /dev/lcd (dumped to the console).  OK on "Say hello" -> the popup;
@@ -2804,6 +2907,7 @@ int main(int argc, char **argv)
 	preempt_tests();
 	testop_tests();
 	pkg_tests();
+	mtpd_test();
 #endif
 	time_tests();
 	fpu_tests();
