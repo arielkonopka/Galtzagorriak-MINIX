@@ -360,6 +360,11 @@ int hal_disk_fake(int state);
  * init).  The card is busy meanwhile; the HAL waits by hal_disk_nap() (the
  * kernel's: the disk task sleeps one clock tick). */
 int hal_disk_discard(uint32_t first, uint32_t last);
+/* R12.33: ERASE sectors first..last (CMD32/CMD33/CMD38; install time only,
+ * never at run time).  0, -1 error, -2 no erase in this HAL (the Flipper
+ * until T18b).  QEMU fills the range with the erased value, 0x00.  Waits
+ * like hal_disk_discard(). */
+int hal_disk_erase(uint32_t first, uint32_t last);
 void hal_disk_nap(void);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of

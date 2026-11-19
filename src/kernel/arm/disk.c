@@ -57,7 +57,7 @@ FORWARD _PROTOTYPE( int w_init, (void)					);
 FORWARD _PROTOTYPE( int w_card, (void)					);
 FORWARD _PROTOTYPE( void w_tell, (char *what)				);
 FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
-FORWARD _PROTOTYPE( int w_discard, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int w_discard, (message *m_ptr, int erase)		);
 FORWARD _PROTOTYPE( void w_nap_end, (void)				);
 #define DISCARD_STEP	0x20000UL	/* sectors per DISCARD: 64 MB */
 
@@ -320,11 +320,13 @@ message *m_ptr;
 {
 /* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another;
  * 3 puts the number of sectors written since boot in its int (K.7 ACK7.2).
- * DIOCDISCARD (R12.40): tell the card a range of the partition is unused. */
+ * DIOCDISCARD (R12.40): tell the card a range of the partition is unused.
+ * DIOCERASE (R12.33): erase a range of the partition (install time). */
   int state, r;
   phys_bytes user;
 
-  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr));
+  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr, FALSE));
+  if (m_ptr->REQUEST == DIOCERASE) return(w_discard(m_ptr, TRUE));
   if (m_ptr->REQUEST != DIOCFAKECARD) return(do_diocntl(dp, m_ptr));
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
   if (user == 0) return(EFAULT);
@@ -339,11 +341,15 @@ message *m_ptr;
 /*===========================================================================*
  *				w_discard				     *
  *===========================================================================*/
-PRIVATE int w_discard(m_ptr)
+PRIVATE int w_discard(m_ptr, erase)
 message *m_ptr;
+int erase;			/* ERASE (R12.33) instead of DISCARD */
 {
 /* R12.40: DISCARD (SD 5.1) a sector range of the partition: the card marks
  * it unused, nothing is erased or written.  ENOTTY if the card has none.
+ * R12.33, erase: ERASE the range instead (first-boot setup, through the
+ * erase command; never at run time).  ENOTTY while the HAL has none
+ * (the Flipper until T18b).
  * Done in steps of DISCARD_STEP sectors with the other tasks between them;
  * the HAL waits for the busy card by naps (hal_disk_nap), never a loop.
  * Only MM (swap, at idle) and root reach it: /dev/hd* are root's. */
@@ -363,14 +369,16 @@ message *m_ptr;
   sector = (w_dv->dv_base >> SECTOR_SHIFT) + rg.first;
   while (rg.count > 0) {
 	n = rg.count < DISCARD_STEP ? rg.count : DISCARD_STEP;
-	r = hal_disk_discard(sector, sector + n - 1);
+	r = erase ? hal_disk_erase(sector, sector + n - 1)
+		  : hal_disk_discard(sector, sector + n - 1);
 	if (r == -2) return(ENOTTY);
 	if (r != 0) {
 		if (!(wini[0].present & W_NODET) && !hal_disk_present()) {
 			(void) w_card();
 			return(ENXIO);
 		}
-		printf("%s: discard failed at sector %lu\n", w_name(), sector);
+		printf("%s: %s failed at sector %lu\n", w_name(),
+				erase ? "erase" : "discard", sector);
 		return(EIO);
 	}
 	sector += n;

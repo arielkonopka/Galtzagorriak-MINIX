@@ -66,5 +66,10 @@ EXTERN struct mproc {
 #define FGAPP	       040000	/* the foreground app or a child of it: placed
 				 * low, never swapped (R12.22, AC12.R3) */
 #define SWAPBAD	      0100000	/* swap-in failed: to be killed (R12.25) */
+#define SWAPHOT	      0200000	/* woken from the card: the reserve waits
+				 * 120 s, not 10 s, once (R12.30) */
+#define SWAPHDR	      0400000	/* its slot's header on the card describes
+				 * the chunks there: compare, write only the
+				 * changed ones (R12.29) */
 
 #define NIL_MPROC ((struct mproc *) 0)
