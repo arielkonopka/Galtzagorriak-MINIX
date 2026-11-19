@@ -202,6 +202,7 @@ PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define IR_HZ		38000
 #define IR_DUTY		33
 #define IR_GAP_MS	30		/* silence that ends a frame */
+#define PU_POLL_MS	10		/* a frame's full buffer, looked for */
 #define IR_ENC(us)	((us) < 0x8000 ? (u16_t) ((us) ? (us) : 1) \
 				: (u16_t) (0x8000 | ((us) >> 6)))
 /* IR_DEC uses v twice: never pass it an expression with side effects */
@@ -2829,12 +2830,10 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
 	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
 	else hal_rfid_stop();		/* the DMA first, then the memory */
-	lock();
-	mt_arm(MT_PULSE, 0);
-	unlock();
 	n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
+  mt_arm(MT_PULSE, 0);			/* no poll after the frame */
   if (!rf_held) pm_busy &= ~PM_PULSE;	/* a held field still needs them */
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
@@ -2916,7 +2915,14 @@ PUBLIC void flipdev_pulse_poll()
 {
 /* The ms timer (interrupt): a held read's field is settling, or the read's
  * buffer is full, or its time is up, or look again. */
-  if (!ir_rd || pu_input != 2) return;
+  if (!ir_rd || ir_done) return;
+  if (pu_input != 2) {			/* /dev/ir, /dev/subghzraw */
+	if (hal_pulse_left() == 0) {	/* the buffer is full: no gap */
+		ir_done = TRUE;
+		interrupt(PRINTER);
+	} else mt_arm(MT_PULSE, PU_POLL_MS);
+	return;
+  }
   if (rf_settle) {			/* field up, capture not yet armed */
 	if (--rf_settle == 0
 	    && hal_rfid_capture(ir_buf, (unsigned) ir_count / 4) < 0) {
@@ -3388,7 +3394,12 @@ int irq;
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();
 
-	if (f & HAL_PULSE_START) ir_started = TRUE;
+	if (f & HAL_PULSE_START) {
+		ir_started = TRUE;
+		/* a frame with no silence (a receiver's noise, a long
+		 * transmission) fills the buffer: the poll ends it */
+		mt_arm(MT_PULSE, PU_POLL_MS);
+	}
 	if ((f & HAL_PULSE_GAP) && ir_started) {
 		ir_done = TRUE;
 		interrupt(PRINTER);
