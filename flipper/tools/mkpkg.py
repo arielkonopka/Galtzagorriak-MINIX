@@ -17,6 +17,12 @@ charging).
 built-in icon (e.g. @bell), # and 12 hex digits (8x6 pixels, one byte a
 row, top first, MSB left), or 1-2 characters.  Until the launcher reads
 manifests, the package's postinst writes it into its /etc/apps line.
+--icon10 ICON10: Icon10: line, a 10x10 icon of the app's own for the
+launcher's Stock style (spec R5.6b.3): a 10x10 PNG (as a .fam's fap_icon,
+copied without downscaling; needs PIL) or "##" and 40 hex digits (2 bytes a
+row, top first, MSB left).  The /etc/apps icon field takes the same "##"
+form, optionally followed by the 8x6 icon for the Pine style.  fam2pkg
+(R5.5) passes the .fam's fap_icon here.
 --window: Type: window, a window app (spec K.8): the launcher starts it
 with its event and record pipes on fd 3 and 4 and draws its windows; its
 postinst writes "=" before the program in its /etc/apps line.
@@ -56,6 +62,28 @@ def add(tar, name, data, mode):
     tar.addfile(info, io.BytesIO(data))
 
 
+def icon10_field(v):
+    """The Icon10: value, "##" and 40 hex digits, from that form or a
+    10x10 PNG (dark, opaque pixels are set; no downscaling)."""
+    if v.startswith("##"):
+        if len(v) != 42 or any(c not in "0123456789abcdefABCDEF" for c in v[2:]):
+            sys.exit("mkpkg: --icon10: ## and 40 hex digits")
+        return v.upper()
+    from PIL import Image
+    im = Image.open(v).convert("RGBA")
+    if im.size != (10, 10):
+        sys.exit(f"mkpkg: --icon10: {v} is {im.size[0]}x{im.size[1]}, not 10x10")
+    out = []
+    for y in range(10):
+        bits = 0
+        for x in range(10):
+            r, g, b, al = im.getpixel((x, y))
+            if al > 127 and r + g + b < 384:
+                bits |= 0x8000 >> x
+        out.append(f"{bits:04X}")
+    return "##" + "".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--name", required=True)
@@ -71,6 +99,7 @@ def main():
     ap.add_argument("--deskmode", action="store_true", help="DeskMode: yes")
     ap.add_argument("--flash", action="store_true", help="Flash: yes")
     ap.add_argument("-i", "--icon", help="Icon: the launcher icon (R5.6a.1)")
+    ap.add_argument("--icon10", help="Icon10: 10x10 PNG or ##+40 hex (R5.6b.3)")
     ap.add_argument("--window", action="store_true", help="Type: window (K.8)")
     ap.add_argument("--background", choices=("event", "hibernate", "park",
                                              "stream", "exit"))
@@ -103,6 +132,7 @@ def main():
     if len(furis) > 1:
         sys.exit("mkpkg: programs for different shared libfuri builds: "
                  + " ".join(f"{x:08x}" for x in sorted(furis)))
+    icon10 = icon10_field(a.icon10) if a.icon10 else None
     control = (f"Package: {a.name}\nVersion: {a.version}\n"
                + (f"Depends: {a.depends}\n" if a.depends else "")
                + f"Abi: {abis.pop() if abis else 'any'}\n"
@@ -115,6 +145,7 @@ def main():
                + ("DeskMode: yes\n" if a.deskmode else "")
                + ("Flash: yes\n" if a.flash else "")
                + (f"Icon: {a.icon}\n" if a.icon else "")
+               + (f"Icon10: {icon10}\n" if icon10 else "")
                + ("Type: window\n" if a.window else "")
                + (f"Background: {a.background}\n" if a.background else "")
                + (f"Description: {a.description}\n" if a.description else ""))

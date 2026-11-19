@@ -59,6 +59,14 @@ int gui_click(void);			/* the next click of any key */
 /* An 8-pixel-wide bitmap, n rows of one byte (MSB left) at x, y. */
 void gui_bits8(int x, int y, const unsigned char *rows, int n, int inverse);
 int gui_glyph_row(int c, int row);	/* the font's row of a character */
+/* The two stock fonts (spec R5.6b.4; u8g2 helvB08 and haxrcorp 4089, as
+ * the stock Canvas's FontPrimary and FontSecondary): s with its baseline
+ * at y, the font's pixels set to `on` (the others untouched, as the
+ * Canvas's transparent font mode).  The pixels moved right. */
+#define GUI_FONT_PRIMARY	0
+#define GUI_FONT_SECONDARY	1
+int gui_text_font(int x, int y, int font, const char *s, int on);
+int gui_font_width(int font, const char *s);	/* as canvas_string_width */
 void gui_led(int r, int g, int b);
 void gui_backlight(int level);
 

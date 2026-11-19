@@ -504,6 +504,7 @@ static const struct {
 	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
 	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
 	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+	char st[sizeof "  mtpd: pid %d, status %#x, alarm %d, errno %d\n"];
 } mt = {
 	"Filetype: Flipper SubGhz Key File\n"
 		"Version: 1\nFrequency: 433920000\n"
@@ -522,6 +523,7 @@ static const struct {
 	"mtpd served mtphost and ended on the pulled cable",
 	"mtpd: etxea.sub sent from the PC, owned by bin",
 	"mtpd: the half-sent file is gone, nothing else left",
+	"  mtpd: pid %d, status %#x, alarm %d, errno %d\n",
 };
 
 static void mtpd_test(void)
@@ -553,8 +555,10 @@ static void mtpd_test(void)
 		status = -1;
 	}
 	alarm(0);
-	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
-		&& WEXITSTATUS(status) == 0, mt.c1);
+	n = pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0;
+	if (!n) printf(mt.st, (int) pid, status, got_sig, errno);
+	check(n, mt.c1);
 	strcpy(path, mt.root);
 	strcat(path, mt.dir);			/* <root>/galtzagorriak */
 	leaf = path + strlen(path);
@@ -2362,6 +2366,170 @@ static void __attribute__((noinline)) settings_test(int b, int l)
 	}
 }
 
+/* T31 / AC5.7: the Stock style (spec R5.6b).  On the APPS list of
+ * launcher_test (on "Zaharra", whose /bin/true is not on the M2 disk: OK
+ * gives a message); ends there in Pine style. */
+static unsigned long fsum(void)
+{
+	unsigned long sum = 0;
+	int i;
+
+	for (i = 0; i < 1024; i++) sum = sum * 31 + lfb[i];
+	return sum;
+}
+
+/* stock_test's strings in one const struct (flash): each literal would
+ * cost a GOT word in every copy of m2test, and ACK.3's 4 flooders fork
+ * it with a few bytes to spare (as sg above). */
+static const struct {
+	char s0[sizeof "style-sys"];
+	char s1[sizeof "style-set"];
+	char s2[sizeof "stock-settings"];
+	char s3[sizeof "AC5.7: Style toggles to stock on the settings page, redrawn at once (submenu look)"];
+	char s4[sizeof "stock-apps"];
+	char s5[sizeof "AC5.7: the Apps page as the stock menu (frame at y 21, scroll bar, no title bar)"];
+	char s6[sizeof "/tmp/lc"];
+	char s7[sizeof "r"];
+	char s8[sizeof "Style: stock\n"];
+	char s9[sizeof "AC5.7: /etc/launcher.conf has Style: stock (written once)"];
+	char s10[sizeof "not found"];
+	char s11[sizeof "stock-popup"];
+	char s12[sizeof "stock-popup-gone"];
+	char s13[sizeof "AC5.7: a message is a stock-style popup, gone after 2 s"];
+	char s14[sizeof "/tmp/st.sh"];
+	char s15[sizeof "w"];
+	char s16[sizeof "echo $FURI_STYLE > /tmp/st.out\n"];
+	char s17[sizeof "/tmp/st.out"];
+	char s18[sizeof "L"];
+	char s19[sizeof "stock-down"];
+	char s20[sizeof "stock-ran"];
+	char s21[sizeof "AC5.7: OK starts the app, the menu is back"];
+	char s22[sizeof "stock-home"];
+	char s23[sizeof "stock-back"];
+	char s24[sizeof "AC5.7: Right and Left still change pages"];
+	char s25[sizeof "stock-inor"];
+	char s26[sizeof "pine-again"];
+	char s27[sizeof "AC5.7: Style: pine again, the title bar is back"];
+	char s28[sizeof "stock\n"];
+	char s29[sizeof "AC5.7: an app started in the Stock style sees FURI_STYLE=stock"];
+} st = {
+	"style-sys",
+	"style-set",
+	"stock-settings",
+	"AC5.7: Style toggles to stock on the settings page, redrawn at once (submenu look)",
+	"stock-apps",
+	"AC5.7: the Apps page as the stock menu (frame at y 21, scroll bar, no title bar)",
+	"/tmp/lc",
+	"r",
+	"Style: stock\n",
+	"AC5.7: /etc/launcher.conf has Style: stock (written once)",
+	"not found",
+	"stock-popup",
+	"stock-popup-gone",
+	"AC5.7: a message is a stock-style popup, gone after 2 s",
+	"/tmp/st.sh",
+	"w",
+	"echo $FURI_STYLE > /tmp/st.out\n",
+	"/tmp/st.out",
+	"L",
+	"stock-down",
+	"stock-ran",
+	"AC5.7: OK starts the app, the menu is back",
+	"stock-home",
+	"stock-back",
+	"AC5.7: Right and Left still change pages",
+	"stock-inor",
+	"pine-again",
+	"AC5.7: Style: pine again, the title bar is back",
+	"stock\n",
+	"AC5.7: an app started in the Stock style sees FURI_STYLE=stock",
+};
+
+static void style_toggle(int b, int l)		/* APPS -> its settings -> Style */
+{
+	int i;
+
+	furi_tap(b, 0x04);			/* SETTINGS */
+	lgrab(l, st.s0);
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Launcher */
+	furi_tap(b, 0x10);
+	lgrab(l, st.s1);
+	for (i = 0; i < 3; i++) furi_tap(b, 0x02);	/* Style */
+	furi_tap(b, 0x10);			/* toggles, redrawn at once */
+}
+
+static void __attribute__((noinline)) stock_test(int b, int l)
+{
+	FILE *f;
+	char line[40];
+	unsigned long apps, s1;
+	int ok, n, x, frame;
+
+	style_toggle(b, l);
+	lgrab(l, st.s2);
+	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 51) && !lpix(127, 1),
+		st.s3);
+	furi_tap(b, 0x20);			/* Back: SETTINGS */
+	furi_tap(b, 0x20);			/* Back: APPS, written */
+	lgrab(l, st.s4);
+	apps = fsum();
+	for (frame = 1, x = 2; x <= 121; x++) if (!lpix(x, 21) || !lpix(x + 1, 42)) frame = 0;
+	check(frame && !lpix(0, 0) && !lpix(64, 0) && lpix(126, 0) && !lpix(126, 1),
+		st.s5);
+	n = 0;
+	if ((f = fopen(st.s6, st.s7)) != NULL) {
+		while (fgets(line, sizeof line, f) != NULL)
+			if (strcmp(line, st.s8) == 0) n++;
+		fclose(f);
+	}
+	check(n == 1, st.s9);
+	furi_tap(b, 0x10);			/* OK: st.s10, the popup */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, st.s11);
+	s1 = fsum();
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	lgrab(l, st.s12);
+	check(s1 != apps && fsum() == apps,
+		st.s13);
+	f = fopen(st.s14, st.s15);
+	fprintf(f, st.s16);
+	fclose(f);
+	unlink(st.s17);
+	furi_tap(b, 0x20);			/* Back: the light on, no action */
+	for (n = 0; n < 3; n++) furi_tap(b, 0x02);	/* st.s18, the script */
+	lgrab(l, st.s19);
+	s1 = fsum();
+	furi_tap(b, 0x10);			/* OK: runs it */
+	for (n = 0; n < 20 && access(st.s17, F_OK) < 0; n++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, st.s20);
+	check(access(st.s17, F_OK) == 0 && s1 != apps && fsum() == s1,
+		st.s21);
+	n = 0;
+	if ((f = fopen(st.s17, st.s7)) != NULL) {
+		n = fgets(line, sizeof line, f) != NULL && strcmp(line, st.s28) == 0;
+		fclose(f);
+	}
+	check(n, st.s29);
+	unlink(st.s17);
+	unlink(st.s14);
+	furi_tap(b, 0x08);			/* Right: HOME */
+	lgrab(l, st.s22);
+	ok = fsum() != s1 && !lpix(0, 0);
+	furi_tap(b, 0x04);			/* Left: APPS */
+	lgrab(l, st.s23);
+	check(ok && fsum() == s1, st.s24);
+	furi_tap(b, 0x20);
+	for (n = 0; n < 3; n++) furi_tap(b, 0x01);	/* where it was */
+	lgrab(l, st.s25);
+	style_toggle(b, l);			/* back to Pine */
+	furi_tap(b, 0x20);
+	furi_tap(b, 0x20);
+	lgrab(l, st.s26);
+	check(lpix(0, 0) && lpix(127, 0), st.s27);
+}
+
 static void launcher_test(void)
 {
 	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
@@ -2379,7 +2547,7 @@ static void launcher_test(void)
 		"Txarra:root:#12XY:/bin/true\nGezi:root:>_:/bin/true\n"
 		"Bat:root:!:/bin/true\nZaharra:root:/bin/true\n"
 		"Inor:nosuchuser:@bell:/bin/true\n"
-		"K:root:@app:/bin/true\nL:root:@app:/bin/true\n");
+		"K:root:@app:/bin/true\nL:root:@app:/bin/sh /tmp/st.sh\n");
 	fclose(f);
 	f = fopen("/tmp/lc", "w");
 	fprintf(f, "Icons: on\nHints: on\n");
@@ -2455,6 +2623,7 @@ static void launcher_test(void)
 		fclose(f);
 	}
 	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	stock_test(b, l);			/* T31, spec R5.6b, AC5.7 */
 	/* ACK7.1 (K.7): SETTINGS -> Display -> Right on Brightness -> Back:
 	 * the backlight changes at once, display.conf is written once */
 	{
