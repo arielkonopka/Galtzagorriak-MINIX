@@ -1,8 +1,11 @@
 # /etc/setup - first-boot setup of the SD card, run by /etc/rc.
 #
 # The card arrives with only the root file system (partition 1, /dev/hd1).
-# Stage 1 adds the other partitions after it, below 4 GB, and reboots so the
-# kernel sees them; stage 2 makes the file systems.
+# Stage 1 adds the other partitions after it, below 4 GB, each on a 4 MiB
+# boundary (the card's erase unit, R12.32), and reboots so the kernel sees
+# them; stage 2 tells the card the new partitions are empty (erase, R12.33:
+# a card that was once full gets its free pool back for wear levelling)
+# and makes the file systems.
 #	/dev/hd2  /usr   2 GB	programs and packages
 #	/dev/hd3  swap   64 MB	reserved
 #	/dev/hd4  /home  rest	your files
@@ -21,6 +24,17 @@ then
 	exit 0
 fi
 
+echo "Preparing the card..."
+for p in /dev/hd2 /dev/hd3 /dev/hd4
+do
+	erase -q $p
+	case $? in
+	0)	;;
+	2)	echo "setup: this card or driver cannot erase, going on"
+		break ;;
+	*)	echo "setup: erase $p failed, going on" ;;
+	esac
+done
 echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
 mkfs /dev/hd2 && mkfs /dev/hd4 || {
 	echo "setup: mkfs failed"
