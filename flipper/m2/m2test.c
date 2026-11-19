@@ -1722,11 +1722,12 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
 	s0 = sectors_written();
 	fflush(stdout);
-	/* #324: one fork, exec'd at once into guiflood, which forks the
-	 * other three: the flooders are guiflood's small image, not copies
-	 * of m2test, so m2test's size does not decide whether they fork.
-	 * Their own process group (setsid): killed and reaped by it. */
-	if ((w = fork()) == 0) {
+	/* #324: one vfork (no copy of m2test's data), exec'd at once into
+	 * guiflood, which forks the other three: the flooders are
+	 * guiflood's small image, not copies of m2test, so m2test's size
+	 * does not decide whether they fork.  Their own process group
+	 * (setsid): killed and reaped by it. */
+	if ((w = vfork()) == 0) {
 		(void) setsid();
 		execl("/bin/guiflood", "guiflood", (char *) NULL);
 		_exit(99);

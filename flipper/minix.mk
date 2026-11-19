@@ -1067,6 +1067,7 @@ QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 # socket with tools/mtphost.py on it; m2test's mtpd test serves it, and
 # its log follows QEMU's output.
 MTPSOCK	:= $(MB)/mtpline.sock
+M2TO	?= 240		# seconds QEMU gets for the M2 run
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
 ifeq ($(INIT),m2)
