@@ -44,7 +44,7 @@
 #define LDIR2	SDIR "/assets/layouts"
 #define CONF	"/etc/flipper/badusb.conf"
 #define BADUSB	"/usr/bin/badusb"
-#define NAMEMAX	14				/* V2 directory entries */
+#define NAMEMAX	60				/* V3 entries (spec O.4) */
 #define PAGE	16				/* rows of a list window */
 #define MAXDELAY 1000				/* the Default delay row, ms */
 #define SHOW_MS	250				/* "Line n" at most this often */
@@ -90,22 +90,29 @@ static char *num(char *t, long v)		/* t[12] */
 	return p;
 }
 
-/* ---- directories, read in V2 entries (no opendir: its 1 KB malloc) ---- */
+/* ---- directories, read as raw entries (no opendir: its 1 KB malloc) ---- */
 
 /* The n-th file (from 0) in dir whose name ends in ext, into name, or the
- * count of them when n < 0.  The count, 1 found, 0 not found, -1 no dir. */
+ * count of them when n < 0.  The count, 1 found, 0 not found, -1 no dir.
+ * Entries are 16 B (V1/V2: 2-byte inode, 14 characters) or 64 B (a MINIX
+ * V3 /home: 4-byte inode, 60 characters, spec O.4), told apart as libc's
+ * readdir does: the first entry is ".", whose name is at byte 4 on V3. */
 static int dir_scan(const char *dir, const char *ext, int n, char *name)
 {
-	struct _v7_direct e[8];
-	int fd, i, k, len, el = (int) strlen(ext), count = 0;
+	char b[256];				/* 16 V2 or 4 V3 entries */
+	int fd, i, k, len, el = (int) strlen(ext), count = 0, esz = 0, nl;
 	char nm[NAMEMAX + 1];
 
 	if ((fd = open(dir, O_RDONLY)) < 0) return -1;
-	while ((k = (int) read(fd, (char *) e, sizeof e)) > 0) {
-		for (i = 0; i < k / (int) sizeof *e; i++) {
-			if (e[i].d_ino == 0) continue;
-			memcpy(nm, e[i].d_name, NAMEMAX);
-			nm[NAMEMAX] = 0;
+	while ((k = (int) read(fd, b, sizeof b)) > 0) {
+		if (esz == 0) esz = k >= 6 && b[4] == '.' && b[5] == 0 ? 64 : 16;
+		nl = esz - (esz == 64 ? 4 : 2);
+		for (i = 0; i + esz <= k; i += esz) {
+			if (b[i] == 0 && b[i + 1] == 0 && (esz == 16
+					|| (b[i + 2] == 0 && b[i + 3] == 0)))
+				continue;		/* inode 0: free */
+			memcpy(nm, b + i + esz - nl, nl);
+			nm[nl] = 0;
 			len = (int) strlen(nm);
 			if (len <= el || strcmp(nm + len - el, ext) != 0
 			    || nm[0] == '.')
