@@ -174,7 +174,18 @@ struct proc *p;			/* a runnable, shadowed process */
   p->p_shadow = 0;
   p->p_nflips++;
 
-  if (r_ready) lock_ready(r);
+  if (r_ready) {
+	/* r was preempted: it waits behind the other ready members */
+	lock_ready(r);
+	lock();
+	if (rdy_head[SHADOW_Q] == r && r->p_nextready != NIL_PROC) {
+		rdy_head[SHADOW_Q] = r->p_nextready;
+		rdy_tail[SHADOW_Q]->p_nextready = r;
+		rdy_tail[SHADOW_Q] = r;
+		r->p_nextready = NIL_PROC;
+	}
+	unlock();
+  }
   if (p_ready) {
 	/* #331: p takes r's turn at the tail of USER_Q.  ready() puts a user
 	 * process at the head, so every process that waited there (the
