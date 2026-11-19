@@ -1862,6 +1862,14 @@ long for `df` or the launcher's storage line.
 
 ### O.6 `fsck` on a big `/home`
 
+*Done in T27a part 4 (#306, 2026-11-19):* V3 check and repair (offset-14 flags, 64 B entries,
+32-bit inodes, triple indirect, `bread()` past 2 GiB); `imap`/`dirmap` up to the highest inode in
+use; windows above the high-water mark are compared but not walked (`-p` does not skip them yet:
+the comparison reads the zone map, ≈ 12.6 MB at 100 GiB). **Not done yet:** the 2-byte window
+record (the byte with 8 window bits stays: correct, more reads past 8 windows), the swap scratch
+past ≈ 30 000 inodes, and the idle leak sweep. That sweep cannot be `fsck -L`, which is the N.3
+log file option; it gets another letter.
+
 N.4's zone windows grow with the partition (100 GiB: ≈ 200 windows of 64 KB). Because the FS
 allocates from the bottom, the used zones lie below a **high-water mark** (the highest zone any
 inode owns, found in pass 1).

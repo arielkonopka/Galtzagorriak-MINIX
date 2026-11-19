@@ -184,7 +184,6 @@ char rwbuf[BLOCK_SIZE];		/* one block buffer cache */
 block_nr thisblk;		/* block in buffer cache */
 char nullbuf[BLOCK_SIZE];	/* null buffer */
 bitchunk_t mapbuf[WORDS_PER_BLOCK];	/* one disk map block (spec N.4) */
-bitchunk_t zerobuf[WORDS_PER_BLOCK];	/* past the end of a computed map */
 int imblk;			/* blocks in imap and dirmap (spec O.6) */
 bit_nr hwm;			/* highest zone bit any inode owns (O.6) */
 nlink_t *count;			/* inode count */
@@ -971,7 +970,7 @@ char *type;
  * past the end of the map are what the disk has (mkfs and mkfsimg.py
  * differ there); a wrong block is written from the computed map.
  */
-  bitchunk_t *dmap = mapbuf, *cblock;
+  bitchunk_t *dmap = mapbuf, *cblock, *zerobuf = 0;
   register bitchunk_t *p, *q;
   bitchunk_t mask;
   bit_nr b0;
@@ -987,8 +986,10 @@ char *type;
 	if (i < cblk) {
 		cblock = cmap + i * WORDS_PER_BLOCK;
 	} else {
+		/* past the computed map: zeros (heap, not .bss) */
+		if (zerobuf == 0) zerobuf = (bitchunk_t *) alloc(1, BLOCK_SIZE);
 		cblock = zerobuf;
-		memset((void *) zerobuf, 0, sizeof(zerobuf));
+		memset((void *) zerobuf, 0, BLOCK_SIZE);
 	}
 	for (w = 0, p = dmap, q = cblock;
 				w < WORDS_PER_BLOCK; w++, p++, q++) {
@@ -1015,6 +1016,7 @@ char *type;
 	vdone++;
   }
 
+  if (zerobuf != 0) free((char *) zerobuf);
   if ((!repair || automatic) && !report) printf("etc. ");
   if (nerr > MAXPRINT || nerr > 10) printf("%d errors found. ", nerr);
   if (nerr > 0) printf("\n");

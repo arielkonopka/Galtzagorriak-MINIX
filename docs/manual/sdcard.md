@@ -105,4 +105,10 @@ The file systems are MINIX v2 file systems, which Linux understands. With the ca
 
     sudo fsck.minix -av /dev/sdX4      # /home; sdX1 is /, sdX2 is /usr
 
+A `/home` made as MINIX V3 on a computer (`mkfs.minix -3`, 1 KB blocks; names up to 60
+characters) is checked and repaired by the Flipper's `fsck` too, at boot like the others, and
+`fsck.minix -f` checks it on the computer. The Flipper keeps its clean mark at byte 14 of the V3
+super block. Linux does not know it and leaves it as it is, so after writing to a V3 `/home` on a
+computer, check it there with `fsck.minix -f` before you put the card back.
+
 `fsck.minix` (from util-linux) uses the same clean mark as the Flipper.
