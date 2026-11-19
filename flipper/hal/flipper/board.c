@@ -1525,6 +1525,17 @@ out:
 	return r;
 }
 
+/* R12.33: ERASE comes with the disk driver work of T18b (CMD38 with
+ * argument 0, the card's erase timeout from its SD Status, card-detect
+ * checks as N.6).  Until then DIOCERASE answers ENOTTY and /etc/setup goes
+ * on without it. */
+int hal_disk_erase(uint32_t first, uint32_t last)
+{
+	(void) first;
+	(void) last;
+	return -2;
+}
+
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
  * no select toggle or ready wait first; a stuff byte, R1, then busy. */
 static int sd_stop(void)

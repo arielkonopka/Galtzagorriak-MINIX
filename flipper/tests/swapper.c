@@ -5,6 +5,7 @@
  *   swapper -n N	the same with N kill cycles
  *   swapper -f		fill: start programs until more than RAM is in use
  *   swapper -p		(helper) wait in pause(), check memory on SIGUSR1
+ *   swapper -q		(helper) as -p; the gap may also be untouched
  *   swapper -w		(helper) wait for a child, check memory after
  *   swapper -c N	placement (AC12.10): N cycles, see test_place()
  *   swapper -P		(helper) a parked app: pause, check memory on
@@ -171,6 +172,20 @@ static int do_pause(void)
 	return check(stk, sizeof stk, 1);
 }
 
+/* Helper -q: as -p, for the fill test, where not every helper is swapped
+ * out: the gap is all junk (never swapped) or all 0 (swapped), not a mix. */
+static int do_quiet(void)
+{
+	unsigned char stk[512];
+	unsigned char *sp = (unsigned char *) &stk[0];
+
+	signal(SIGUSR1, catch);
+	fill(stk, sizeof stk);
+	while (!woke) pause();
+	if (!gap_bytes(sp - JUNK, sp - 2048, 0)) return check(stk, sizeof stk, 1);
+	return check(stk, sizeof stk, 0);
+}
+
 /* Helper -w: fill, wait for a child that sleeps 3 s, check.  The child
  * execs (vfork): a forked child that does not would share the parent's
  * addresses, and such a parent is never swapped (swap.c).  It is the
@@ -333,8 +348,11 @@ static void test_never(void)
 }
 
 /* Start programs until more than the free RAM is in use (AC12.1).  With
- * -f (want_parent) go on until the parent, a shell waiting for us, has
- * been swapped out on demand as well (or 12 programs run). */
+ * -f (want_parent) the programs are the set-uid copy /tmp/swsuid, never
+ * swapped (R12.28): go on until the parent, a shell waiting for us, is
+ * swapped out on demand, the only process that can make room (or 12
+ * programs run; with swappable ones and the launcher in flash the 16
+ * process slots ran out before sw_room chose the shell). */
 static int test_fill(int want_parent)
 {
 	int pid[12], st, n, i, ok, back = 0, swapped = 0;
@@ -342,15 +360,16 @@ static int test_fill(int want_parent)
 	struct swinfo si;
 
 	for (n = 0; n < 12; ) {
-		if ((pid[n] = start(me, "-p")) < 0) break;
+		if ((pid[n] = start(want_parent ? "/tmp/swsuid" : me, "-q")) < 0)
+			break;
 		sleep(2);		/* waited 1 s: may be swapped */
 		if (waitpid(pid[n], &st, WNOHANG) != 0) {	/* exec failed */
 			printf("  start %d: %s\n", n, t_status(st));
 			break;
 		}
 		if (n++ == 0) img = f - free_bytes();
-		if (img > 0 && (long) n * img > f + f / 2
-			&& (!want_parent || is_swapped(getppid(), NULL))) break;
+		if (want_parent ? is_swapped(getppid(), NULL)
+			: img > 0 && (long) n * img > f + f / 2) break;
 	}
 	if (want_parent)
 		t_result("the waiting parent shell swapped on demand (AC12.1)",
@@ -359,7 +378,7 @@ static int test_fill(int want_parent)
 	swapped = si.nproc;
 	printf("  %d programs of %ld bytes started, %ld bytes were free; "
 		"%d swapped\n", n, img, f, swapped);
-	ok = n >= 3 && swapped >= 1;
+	ok = n >= (want_parent ? 1 : 3) && swapped >= 1;
 	t_result("start more than fits: the idle ones swapped (AC12.1)", ok,
 								NULL);
 	for (i = 0; i < n; i++) kill(pid[i], SIGUSR1);
@@ -425,6 +444,7 @@ int main(int argc, char **argv)
 
 	me = argv[0];
 	if (argc == 2 && strcmp(argv[1], "-p") == 0) return do_pause();
+	if (argc == 2 && strcmp(argv[1], "-q") == 0) return do_quiet();
 	if (argc == 2 && strcmp(argv[1], "-w") == 0) return do_wait();
 	if (argc == 2 && strcmp(argv[1], "-P") == 0) return do_park();
 	if (argc == 2 && strcmp(argv[1], "-x") == 0) {

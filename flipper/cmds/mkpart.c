@@ -5,8 +5,10 @@
  *
  * Keeps the partitions already in the MBR (in particular the root file
  * system the system is running from) and fills the following empty slots
- * with new partitions, one per argument, each starting on a 1 MiB boundary
- * after the previous one.  type is hex (81 MINIX, 82 swap); size is in MB,
+ * with new partitions, one per argument, each starting on a 4 MiB boundary
+ * after the previous one (spec R12.32: the usual SD allocation unit, so
+ * the card erases and rewrites whole units; sizes stay in MB).
+ * type is hex (81 MINIX, 82 swap); size is in MB,
  * or "*" for everything that is left.  Everything is kept below 4 GiB:
  * MINIX 2.0 addresses partitions with 32-bit byte offsets.  The kernel
  * reads the new table at the next boot.
@@ -24,7 +26,8 @@
 #include <ibm/partition.h>
 
 #define SECTOR		512
-#define ALIGN		2048UL			/* 1 MiB in sectors */
+#define ALIGN		8192UL			/* 4 MiB in sectors */
+#define MB		2048UL			/* 1 MiB in sectors */
 #define LIMIT_SECS	(0xFFFFFFFFUL / SECTOR)	/* 4 GiB - 1 byte */
 
 static unsigned char mbr[SECTOR];
@@ -104,10 +107,10 @@ int main(int argc, char **argv)
 		next = (next + ALIGN - 1) / ALIGN * ALIGN;
 		if (next >= disk_secs) die("no space left on the device");
 		if (strcmp(colon + 1, "*") == 0) {
-			size = (disk_secs - next) / ALIGN * ALIGN;
+			size = (disk_secs - next) / MB * MB;
 		} else {
 			mb = strtoul(colon + 1, NULL, 10);
-			size = mb * ALIGN;
+			size = mb * MB;
 			if (size > disk_secs - next) die("partition does not fit");
 		}
 		if (size == 0) die("partition would be empty");
