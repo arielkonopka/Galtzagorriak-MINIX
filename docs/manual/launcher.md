@@ -189,6 +189,12 @@ The built-in icons:
 system adds icons to the base apps' lines as they were shipped; lines you changed stay as they
 are.
 
+Installing or removing a package that has a launcher line never rewrites `/etc/apps` in place:
+its script writes the new list to `/etc/apps.new`, puts it on the card with `sync` and renames it
+over `/etc/apps`. If the power goes off in the middle, the launcher has the old list or the new
+one; a leftover `/etc/apps.new` can be deleted. If a script could not write the new list it says
+so, and the package's line stays: delete it by hand.
+
 ## Window apps
 
 Some apps do not draw on their own: they only describe their screens, and the launcher draws

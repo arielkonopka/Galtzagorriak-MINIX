@@ -46,6 +46,9 @@
  *					FDX-B's 134.2 kHz (R9.0.4); the
  *					decoders run on 125 kHz captures,
  *					so -r shows the timings (T19b)
+ *		rfid -s SECS [-c MODE]	capture without a gap (R9.0.5) for
+ *					SECS and report halves, edges,
+ *					overruns and the durations' range
  *		rfid dump [-with HEX] [BLOCK]
  *					read one T5577 block (0 by default) and
  *					print its 32-bit word (block 0 is the
@@ -84,9 +87,12 @@
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <errno.h>
+#include <time.h>
 #include <minix/rfid.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1149,28 +1155,118 @@ static int copy_any(int tries)
 	return write_lf(p, data, tries, 0);
 }
 
-/* rfid emulate PROTO HEX...: one frame of the protocol's Unleashed encoder
- * as RFIDIOCEMU segments (lfrfid_emu_segments: as stock's pulse_glue),
- * played round and round by the kernel at the reader's clock.  At most 512
- * segments today (FSK and PSK frames are longer: T19b, R9.0.6). */
+/* rfid emulate -runs EM ...: the EM4100, played from a run list
+ * (RFIDIOCEMURUN, R9.0.6) through the smallest ring (16 pairs: a refill
+ * every 8 segments, ~2 ms), so a reader that reads it proves the refill
+ * path the FSK and PSK frames use. */
+static int emulate_em_runs(unsigned char id[5])
+{
+	unsigned char b[64], h[128];
+	struct rfid_emu_run *ru = (struct rfid_emu_run *) &d[0];  /* <= 1 KB */
+	unsigned long *ring = &d[256];
+	struct rfid_emu_runs q;
+	int k, n = 0, fd;
+
+	em_bits(id, b);
+	for (k = 0; k < 64; k++) {		/* half bits: loaded or not */
+		h[2 * k] = b[k] != 0;
+		h[2 * k + 1] = b[k] == 0;
+	}
+	for (k = 0; k < 128; k++) {		/* equal neighbours: one run */
+		if (n > 0 && (ru[n - 1].pulse != 0) == h[k]) {
+			ru[n - 1].count++;
+			continue;
+		}
+		ru[n].period_m1 = 31;
+		ru[n].pulse = h[k] ? 32 : 0;
+		ru[n].count = 1;
+		ru[n].pad = 0;
+		n++;
+	}
+	q.runs = ru;
+	q.nruns = n;
+	q.ring = ring;
+	q.ring_n = 16;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMURUN, &q) < 0) {
+		perror("rfid: emulate (runs)");
+		close(fd);
+		return 1;
+	}
+	printf("emulating EM4100 %02X %02X %02X %02X %02X from %d runs; hold to "
+		"a reader, Ctrl-C to stop\n", id[0], id[1], id[2], id[3], id[4], n);
+	for (;;) sleep(60);
+	return 0;
+}
+
+
+/* Play a run list (4 uint16_t a run, struct rfid_emu_run) through a ring
+ * of ring_n pairs until Ctrl-C. */
+static int play_runs(uint16_t *runs, int n, int ring_n, const char *what)
+{
+	struct rfid_emu_runs q;
+	unsigned long *ring;
+	int fd;
+
+	if ((ring = malloc(2 * ring_n * sizeof(*ring))) == NULL) {
+		fprintf(stderr, "rfid: no memory for the ring\n");
+		return 1;
+	}
+	q.runs = (struct rfid_emu_run *) runs;
+	q.nruns = n;
+	q.ring = ring;
+	q.ring_n = ring_n;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMURUN, &q) < 0) {
+		perror("rfid: emulate (runs)");
+		close(fd);
+		return 1;
+	}
+	printf("%s(%d runs); hold to a reader, Ctrl-C to stop\n", what, n);
+	for (;;) sleep(60);		/* Ctrl-C ends it; close stops it */
+	return 0;			/* not reached */
+}
+
+/* rfid emulate PROTO HEX...: one frame of the protocol's Unleashed encoder,
+ * played round and round by the kernel at the reader's clock: as
+ * RFIDIOCEMU segments (lfrfid_emu_segments, as stock's pulse_glue) when
+ * the frame has at most 512, else (FSK and PSK frames: 540 to 3534) as a
+ * run list of equal segments through a refilled ring (RFIDIOCEMURUN,
+ * R9.0.6). */
+/* The runs go into the segment buffer, which the segments did not fit:
+ * 2 KB hold 256 runs of 8 B, the longest frame needs 201 (Indala224,
+ * make lfrfidtest).  A separate 4 KB list ran rfid out of memory once the
+ * freed 2 KB could not hold it (twoflip: "lfrfid: out of memory"). */
+#define MAXRUNS	(MAXD * sizeof(unsigned long) / (4 * sizeof(uint16_t)))
+
 static int emulate_lf(int p, uint8_t *data)
 {
 	unsigned long *pulse;
 	struct rfid_emu e;
-	int nseg, fd;
+	uint16_t *runs;
+	int nseg, n, fd;
 
-	/* FSK and PSK loops are 540 to 3534 segments (make lfrfidtest) */
-	nseg = -1;
-	if (lf_readable(lf_config(p, data))) {
-		if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
-		nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
+	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
+	nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
 					(uint32_t *) pulse, MAXD);
-	}
-	if (nseg < 0) {
-		fprintf(stderr, "rfid: a %s frame is more than %d segments (%s): "
-			"emulating it needs T19b\n", protocol_dict_get_name(lf(), p),
-			MAXD, lf_modulation(lf_config(p, data)));
-		return 1;
+	if (nseg < 0) {			/* a long frame: runs */
+		runs = (uint16_t *) pulse;	/* the same 2 KB */
+		n = lfrfid_emu_runs(p, data, lf_size(p), runs, (int) MAXRUNS);
+		if (n < 0) {
+			fprintf(stderr, "rfid: a %s frame is more than %d runs "
+				"(%s)\n", protocol_dict_get_name(lf(), p), (int) MAXRUNS,
+				lf_modulation(lf_config(p, data)));
+			return 1;
+		}
+		printf("emulating ");
+		lf_print(p, data);
+		return play_runs(runs, n, 128, "");
 	}
 	e.dur = d;
 	e.pulse = pulse;
@@ -1219,9 +1315,76 @@ static int list(void)
 }
 
 
+/* ---- streaming capture (R9.0.5) ----
+ * rfid -s SECONDS [-c MODE]: capture without a gap for that long and say
+ * how it went (halves, edges, overruns, the range of the durations): the
+ * device check of AC9.0.3, and the front end the T19 decoders will use. */
+#define RS_WORDS	1024		/* halves of 512 edges: >= 16 ms of FSK */
+
+static int stream_test(int secs, int carrier)
+{
+	struct rfid_stream st;
+	unsigned long *rs_ring = malloc(RS_WORDS * sizeof(unsigned long));
+	unsigned long prev = 0, d, lo = ~0UL, hi = 0, edges = 0;
+	unsigned long halves = 0, over = 0;
+	time_t end;
+	int fd, h, i, first = 1;
+
+	if (rs_ring == NULL) {
+		fprintf(stderr, "rfid: no memory for the ring\n");
+		return 1;
+	}
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
+		return 1;
+	}
+	st.ring = rs_ring;
+	st.words = RS_WORDS;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		perror("rfid: stream");
+		return 1;
+	}
+	end = time((time_t *) 0) + secs;
+	while (time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 1000) != 1) continue;	/* no tag: few edges */
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno == EOVERFLOW) { over++; first = 1; continue; }
+			perror("rfid: read");
+			break;
+		}
+		halves++;
+		for (i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2); i++) {
+			if (!first) {
+				d = rs_ring[i] - prev;
+				if (d < lo) lo = d;
+				if (d > hi) hi = d;
+				edges++;
+			}
+			prev = rs_ring[i];
+			first = 0;
+		}
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	close(fd);
+	printf("stream %d s: %lu halves, %lu edges, %lu overruns", secs,
+		halves, edges, over);
+	if (edges) printf(", %lu-%lu us", lo, hi);
+	printf("\n");
+	return over != 0;
+}
+
 int main(int argc, char **argv)
 {
-	int carrier = RFID_CARRIER_125;
+	int carrier = RFID_CARRIER_125, stream = 0;
 	int fd, n, i, tries = 4, raw = 0, p;
 	unsigned char id[5];
 	uint8_t data[LFRFID_DATA_MAX];
@@ -1233,9 +1396,13 @@ int main(int argc, char **argv)
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
-		if ((p = tag_args(argc, argv, 2, data)) < 0) goto use;
-		/* EM4100 at RF/64 keeps its own waveform (R6.5 part 4) */
-		if (p == LFRFIDProtocolEM4100) return emulate_em(data);
+		int runs = argc >= 3 && strcmp(argv[2], "-runs") == 0;
+
+		if ((p = tag_args(argc, argv, 2 + runs, data)) < 0) goto use;
+		/* EM4100 at RF/64 keeps its own waveform (R6.5 part 4); -runs
+		 * plays it from a run list instead (the R9.0.6 check) */
+		if (p == LFRFIDProtocolEM4100)
+			return runs ? emulate_em_runs(data) : emulate_em(data);
 		return emulate_lf(p, data);
 	}
 
@@ -1311,6 +1478,8 @@ int main(int argc, char **argv)
 		if (strcmp(argv[i], "-r") == 0) raw = 1;
 		else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 			tries = atoi(argv[++i]);
+		else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc)
+			stream = atoi(argv[++i]);
 		else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			out = argv[++i];
 		else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -1324,18 +1493,19 @@ int main(int argc, char **argv)
 			else goto use;
 		} else {
 use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
-				"[-c 125|psk|134]\n"
+				"[-c 125|psk|134] [-s SECS]\n"
 				"       rfid write [-n N] [-pass HEX] [-with HEX] "
 				"[-lock] [-em4305] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
-				"       rfid emulate PROTO HEX...|-f FILE\n"
+				"       rfid emulate [-runs] PROTO HEX...|-f FILE\n"
 				"       rfid list\n");
 			return 2;
 		}
 	}
+	if (stream > 0) return stream_test(stream, carrier);
 	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
 		perror("rfid: /dev/rfid");
 		return 1;

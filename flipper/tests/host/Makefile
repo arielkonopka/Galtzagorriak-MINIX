@@ -13,7 +13,7 @@ B	:= build
 
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -43,6 +43,14 @@ run-hid:
 # (make subghztest).
 run-subghz:
 	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
+
+# test(1) (src/commands/simple/test.c, #118): the POSIX file tests.
+run-testcmd: $(B)/testcmd testcmd.sh
+	sh testcmd.sh $(B)/testcmd
+
+$(B)/testcmd: $(MROOT)/src/commands/simple/test.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-unused-result '-D_PROTOTYPE(f,a)=f a' $< -o $@
 
 run-%: $(B)/%
 	./$<

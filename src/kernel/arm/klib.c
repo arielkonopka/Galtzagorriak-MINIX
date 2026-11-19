@@ -207,6 +207,16 @@ PUBLIC void cstart()
   SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;
   SCB_SHCSR |= SHCSR_ENABLES;
 
+  /* R5.7: the FPU, for programs built with -mfloat-abi=softfp (the kernel,
+   * the servers and the libc stay soft-float and never touch it).  The
+   * CPU then stacks S0-S15 and FPSCR only for a process that used the FPU
+   * (ASPEN), and only lazily, when the registers are really needed
+   * (LSPEN); arm/mpx.S saves S16-S31 on that process's own stack when
+   * another process is entered.  No RAM in the process table. */
+  FPU_FPCCR |= FPCCR_ASPEN | FPCCR_LSPEN;
+  SCB_CPACR |= CPACR_CP10_CP11;
+  __asm volatile ("dsb; isb");
+
   /* MPU: code (flash) is read-only (and executable) for everyone, so stray
    * writes fault (on QEMU the "flash" is RAM and would silently be
    * overwritten).  Privileged code - kernel, tasks, MM, FS - uses the
@@ -986,21 +996,25 @@ unsigned exc;
 /*===========================================================================*
  *				user_frame_fault			     *
  *===========================================================================*/
-PUBLIC void user_frame_fault()
+PUBLIC void user_frame_fault(rp)
+struct proc *rp;
 {
 /* The unprivileged load or store of proc_ptr's exception frame faulted
- * (mpx.S, frame_recover): its stack pointer is not in its memory.  It gets
+ * (mpx.S, frame_recover), or the save of its FP registers (fp_flush,
+ * fp_frame_recover): its stack pointer is not in its memory.  It gets
  * SIGSEGV (a kernel SIGKILL would mean "everybody", do_ksig in MM); until
  * MM has handled that it is not runnable (cause_sig unreadies it).  Its
  * stack pointer is set to the top of its own stack, so the signal frame
  * and any later restart are inside its memory.
  */
-  struct proc *rp = proc_ptr;
-
   printf("%s[%d]: bad stack pointer %08lx, signal 11\n", rp->p_name,
 		proc_number(rp), (unsigned long) rp->p_reg.sp);
   rp->p_reg.sp = (reg_t) ((rp->p_map[S].mem_vir + rp->p_map[S].mem_len)
 							<< CLICK_SHIFT);
+  /* Its FP context (R5.7) is lost with the stack; a lazy save still
+   * pending would go to the bad stack. */
+  rp->p_reg.control &= ~CONTROL_FPCA;
+  if (rp->p_reg.control & CONTROL_FPLIVE) FPU_FPCCR &= ~FPCCR_LSPACT;
   /* The frame could not be stacked, so an SVC this process made is still
    * pending: it would be taken later in whatever process runs next. */
   SCB_SHCSR &= ~SHCSR_SVCALLPENDED;

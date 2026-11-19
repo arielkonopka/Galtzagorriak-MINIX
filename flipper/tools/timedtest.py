@@ -118,7 +118,10 @@ def main():
 			"Text: R7b.3 test"])
 		mark = len(r.out)
 		r.sh("kill -7 1", 20)
-		m = r.wait(rb"alert: \d\d:\d\d reminder: Kaixo: R7b.3 test", 30)
+		# timed's alert may come before the shell's @@0@@ of kill: then
+		# r.sh() has already read past it, so look from mark first
+		pat = rb"alert: \d\d:\d\d reminder: Kaixo: R7b.3 test"
+		m = re.search(pat, r.out[mark:]) or r.wait(pat, 30)
 		check(m is not None and r.out.find(b"alert:", mark) >= 0,
 			"kill -7 1: INIT ran timed, which fired the due timer")
 		time.sleep(1)

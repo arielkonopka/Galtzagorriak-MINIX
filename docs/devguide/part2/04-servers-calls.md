@@ -1,7 +1,7 @@
 # 4. Servers and system calls
 
 MM and FS are MINIX 2.0's servers, extended for the port. This chapter shows where new calls go
-and what each kind of extension costs. The rule from the owner applies first: **do not rewrite
+and what each kind of extension costs. The rule from the user applies first: **do not rewrite
 working MINIX core without need**; touch it for RAM, responsiveness or security, or when a
 feature cannot be done outside it.
 

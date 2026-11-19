@@ -12,7 +12,8 @@ grep '^alarm:' /etc/passwd >/dev/null || {
 sed -e 's|^Alarm:root:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
     -e 's|^Alarm:root:@alarm:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
     -e 's|^Ordua:root:@alarm:/usr/bin/alarm$|Ordua:alarm:@alarm:=/usr/bin/alarm|' \
-    /etc/apps > /etc/apps.new && mv /etc/apps.new /etc/apps
+    /etc/apps > /etc/apps.new && sync &&
+	mv /etc/apps.new /etc/apps
 grep ':=/usr/bin/alarm$' /etc/apps >/dev/null || {
 	echo 'Ordua:alarm:@alarm:=/usr/bin/alarm' >> /etc/apps
 	echo "alarm: the launcher now has Ordua"

@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include "gui.h"
 
-#define LCD_COLS	32		/* 128 x 64 pixels, 4 x 6 font */
+#define LCD_COLS	31		/* 128 x 64 pixels, 4 x 6 font, in a frame */
 #define LCD_ROWS	10
 
 int main(void)

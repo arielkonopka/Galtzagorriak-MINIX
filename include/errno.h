@@ -73,6 +73,9 @@ extern int errno;		  /* place where the error numbers go */
 #define ENOLCK        (_SIGN 37)  /* no locks available */
 #define ENOSYS        (_SIGN 38)  /* function not implemented */
 #define ENOTEMPTY     (_SIGN 39)  /* directory not empty */
+#define EOVERFLOW     (_SIGN 40)  /* data lost: a stream overran its reader
+				   * (/dev/rfid, R9.0.5; header only: libc's
+				   * strerror() says "unknown error") */
 #define ENOTSUP       ENOSYS      /* not supported (yet): the same number,
 				   * no new errlist entry (issue #302) */
 

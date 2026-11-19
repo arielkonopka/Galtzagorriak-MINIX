@@ -97,6 +97,10 @@ No 3D printer and no soldering are needed.
    **close that terminal program**, because only one program can hold the port.
 3. Do not run the launcher's RFID, IR or iButton apps while testing: the device files are used
    by one program at a time.
+4. Optional: `echo console cyan >/dev/led` as root makes the MINIX Flipper's LED flash with every
+   burst of console traffic. During a run it then flickers all the time; when it stays dark for
+   more than a few seconds, the script is waiting on something (or the console stopped
+   answering: look at the log). `echo off >/dev/led` before power measurements.
 
 ## 6.4 The physical setup
 
@@ -365,7 +369,8 @@ Windows write `py` instead of `python3`.
 | `--baseline FILE.json` | compare with an earlier run |
 | `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
 | `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |
-| `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`) |
+| `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`); refused if it is not a transmit band of `--region` |
+| `--region EU\|US\|any` | where the rows may make the reference Flipper transmit (default `EU`: 433.05–434.79 and 868.0–868.6 MHz). Rows outside it are BLOCKED. Unleashed applies no region itself, so this is the only guard: use `US` or `any` only where that is legal |
 | `--log FILE` | full transcript of both consoles |
 | `--password PW` | MINIX root password (else `TWOFLIP_PASSWORD`, else asked) |
 
@@ -375,7 +380,8 @@ Windows write `py` instead of `python3`.
   data length (Unleashed's `rfid emulate X 00` lists names and lengths). If a row says the
   protocol was read but the data differs in both directions, the protocol may not carry every
   bit of the pattern: compare with what Unleashed read in the M→U row and change the vector in
-  `LF_PROTOCOLS`/`lf_data`. "Radio Key" has a space in its name, which Unleashed's command line
+  `LF_PROTOCOLS`/`lf_data`. `LF_CANONICAL` holds such vectors (Paradox, Gallagher, Radio Key,
+  FDX-A): the bytes the Unleashed code itself gives back after encoding and decoding the pattern. "Radio Key" has a space in its name, which Unleashed's command line
   cannot take, so its U→M row is BLOCKED.
 - **Infrared:** one message per protocol, from Unleashed's infrared unit tests where it has them
   (`IR_VECTORS`).
