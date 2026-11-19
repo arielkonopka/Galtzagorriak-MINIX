@@ -6,6 +6,51 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+## 0.1.2 (2026-11-19): interim release, two-Flipper tests still running
+
+**An interim release.** The code of milestone M1 (Phases 2a, 2b, 2c and 2d) is merged, and much
+of M2 and M3 with it, but the device checks (#109) and the two-Flipper tests against Unleashed
+(`tools/twoflip.py`) are not finished, so no phase counts as complete yet and only the patch
+number goes up (spec J.1). 0.5.0 follows once those checks pass. Expect rough edges; report them
+as issues.
+
+**Install from scratch (full re-flash).** The ABI went from 1 to 2 (64-bit `time_t`, Phase
+2d), the C library and `libfuri` are now shared libraries in flash (R2b.9, #201), and the
+installed programs start at another address. A card or flash from 0.1.1 cannot be upgraded with
+`pkg`: back up `/home` (manual, `install.md` section 7), write the new `card.img`, flash the new
+`minix-base.bin` (not only `minix.bin`), and install the app packages again. The signed update
+file (spec section S, T33) is not in this release yet.
+
+What is new since 0.1.1, in short:
+- **Foundation (M1):** time past 2038 (Phase 2d), one shared C library in flash (R2b.9),
+  `vfork` (Phase 2c), smaller programs in RAM (R2a.5, `sh` −3.3 KB per process); accounts with a
+  root password, safer `pkg` (Phase 3); kernel hardening (Phase 4a: BASEPRI, stack guards,
+  flash ECC); `poll()` and the ms timer (R4b.2, R4b.6); Stop2 deep sleep and lower idle current
+  (T14a–T14d).
+- **On the screen:** the launcher in the "Pine meets modern UX" style, with a Stock skin
+  (`Style: pine|stock`); the desktop with SETTINGS, APPS, HOME, notifications and running apps;
+  window apps (Kanpaia `remind` 4.0 KB, Ordua `alarm`), settings groups, Power, Self test,
+  Spectrum; `libfuri` for ported stock apps as one shared library.
+- **Radios and pins:** 125 kHz RFID with all 25 Unleashed LF protocols (read, write, emulate,
+  raw); iButton read/write/emulate (Dallas; Cyfral and Metakom read); Sub-GHz `subghz` with the
+  stock decoders and radio regions by country; infrared by DMA capture; GPIO edges, ADC and
+  `/dev/adcs`; LED patterns, timed vibration.
+- **USB:** HID keyboard and mouse (Bad USB, Teklatua, `jiggle`), MTP file transfer core
+  (`mtpd`, QEMU-tested; the USB side is pending), console fixes (Ctrl-C, Backspace, CR LF).
+- **SD card:** plain swap (off by default) with less wear, clean flag and card-pulled handling,
+  partitions past 4 GiB and MINIX V3 file systems (60-character names), DISCARD.
+- **Security:** weekly reviews (kernel and FS), `exec` clears registers, console flood DoS fixed.
+- **Tests:** `twoflip.py` (two Flippers, about 230 rows), `nightpower.py`, power-cut and flash
+  budget gates in CI.
+
+ABI 2 (was 1). Base package 4.49. Static RAM (ramcheck): kernel 14884 B, MM 10224 B, FS 27392 B,
+init 764 B (0.1.1: 14768 / 10172 / 27196 / 764). Shared libc 18 KB and libfuri + libapp 41 KB
+in flash, once. Latency (`flipper/PORTING.md`): L1 and L2 unchanged in budget; the full table is
+still to be measured again on the device with this build.
+Images: attached to the GitHub release `v0.1.2`; install as in `docs/manual/install.md`.
+
+The full list, newest first:
+
 - (#306, T27a part 2: O.4 without 32-bit `ino_t`) **FS mounts MINIX V3 file systems**, as util-linux `mkfs.minix -3` makes them, with 1 KB blocks and at most 65 535 inodes until `ino_t` is 32-bit (`mkfs.minix -3 -i 60000`). Other block sizes are refused with a message. Directory entries are handled per file system: 16 B with 14-character names on V1/V2, 64 B with 60-character names on V3. V3 files can be larger than 64 MB (triple indirect zone, up to 2 GiB). The N.1 clean flags sit at offset 14 of a V3 super block, where MINIX 3.3 keeps its `s_flags`. **API:** `NAME_MAX` is 60. A path component over 60 characters gives `ENAMETOOLONG`; V1/V2 still cut names at 14, because the `pkg` database on existing cards relies on that. `readdir()` parses V2 and V3 entries into `struct dirent { ino_t d_ino; char d_name[61]; }`. The flex format and `d_extent` are gone. `sh` globbing reads V3 directories. `/etc/setup` still makes a V2 `/home`. New test `tools/v3card.py` (a host-made V3 `/home` in QEMU, then host `fsck.minix`). Kernel, MM and FS RAM +0 B (ramcheck 14884 / 10224 / 27392); `mtpd` .bss +40 B (its `DIR`); no flash writes.
 - (Spec section R, T34; user request 2026-11-17/18) Plan for **`kutxa`, a small database**: a copy-on-write B+tree appended to one file on `/home` (1 KB pages with CRC, a commit page after each commit, so a power cut leaves the last commit), records without a schema, indexes added later, readers with snapshots, compaction at idle; the `kutxa` command (TSV out, works with `grep`/`cut`/`sort`), no SQL, Berry only for special tasks; `fsync()` and `O_NOCACHE` in FS (0 B RAM); in the base image, `pkg install --flash kutxa` on request. Written first, before the library: the contract `src/lib/kutxa/kutxa.h` and the tests `flipper/tests/kutxa/` (calendar, reminders, logs, holidays and name days, IR library, schemaless records, snapshots, power cuts, fuzz; `clitest.sh` for the command), not yet in CI. No code change.
 - (#306, T27a part 1: R12.39 + O.3) **SD card partitions past 4 GiB.** The SD driver keeps a partition's start and size in sectors, so a partition may start and end anywhere in the first 2 TiB and be larger than 4 GiB. Block requests carry a 64-bit position: `HIGHPOS` (`m2_l2`) in `DEV_READ`/`DEV_WRITE`, and `io_high` in the 2 pad bytes of `struct iorequest_s` (still 16 B); FS `rw_block`/`rw_scattered` set it, MM swap sends 0. New ioctls `DIOCGETPS` (first sector and sector count) and `DIOCPRW` (up to 64 raw sectors anywhere in the partition; FS refuses a write on a mounted device or through a read-only descriptor), libc `bread()`/`bwrite()` in `<minix/partition.h>`. `DIOCGETP` keeps bytes: `EOVERFLOW` for a start past 4 GiB, size at most 4 GiB − 512. `mkpart` places partitions past 4 GiB (swap still at most 4 GiB − 1 MiB); `erase` and the selftest SD line use `DIOCGETPS`. QEMU: a card with a hole (`GZ-HOLE!` in the MBR) puts `/home` past 4 GiB on the 32-bit image; `tools/bigcard.py` and `tests/prwtest` check it. Kernel, MM and FS RAM +0 B (ramcheck 14884 / 10224 / 27392); no flash writes. The kernel side is the local lane's directory (#110), done here in its QEMU form.
