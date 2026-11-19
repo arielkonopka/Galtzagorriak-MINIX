@@ -11,7 +11,8 @@
  *  3. "mounted": bwrite() refused (EBUSY), the data unchanged;
  *     else bwrite()/bread() of the last sector round-trips (the old
  *     contents are put back) and past the end is EINVAL
- *  4. bwrite() through a read-only descriptor: EBADF
+ *  4. bwrite() through a read-only descriptor, bread() through a
+ *     write-only one: EBADF
  * Exit status: the number of failures.
  */
 #include "t.h"
@@ -67,6 +68,14 @@ int main(int argc, char **argv)
 	r = bwrite(ro, last, c, 1);
 	t_result("bwrite on a read-only descriptor: EBADF",
 		r == -1 && errno == EBADF, NULL);
+	{
+		int wo = open(argv[1], O_WRONLY);
+
+		r = wo < 0 ? 0 : bread(wo, last, d, 1);
+		t_result("bread on a write-only descriptor: EBADF",
+			wo < 0 || (r == -1 && errno == EBADF), NULL);
+		if (wo >= 0) close(wo);
+	}
 	if (mounted) {
 		int w = open(argv[1], O_RDWR);
 
