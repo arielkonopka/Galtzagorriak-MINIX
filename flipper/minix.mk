@@ -384,6 +384,7 @@ CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 			# fit, fsck shrinks its zone window) + 24 KB (stack:
@@ -786,7 +787,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake sgfake
+	   swaptime swaptime64 regtest hidfake sgfake alarmrace
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
@@ -941,7 +942,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.29
+BASE_VER := 4.32
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -1033,9 +1034,12 @@ libc: $(MB)/libc.a
 QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native,userspace=on
 
+# The M2 self-test took 97 s under QEMU 10.0 (Debian 13) once #152 added
+# the FPU checks: 90 s cut it off at its last test.  Slower hosts and a
+# growing test list need room; a real hang still ends.
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
-	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
+	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }
