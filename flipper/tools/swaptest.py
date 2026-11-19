@@ -24,6 +24,9 @@ partition /dev/hd3, type 82), logs in as root and checks:
            not in MM, so it is not swapped.
   AC12.10  placement: tests/swapper -c 50 (two parked apps, a foreground
            app placed low)
+  R12.32   the first boot's partitions start on 4 MiB boundaries
+  R12.33   erase refuses /dev/hd0 and mounted partitions, and non-root;
+           erase /dev/hd3 (swap off) leaves 0x00 where data was
   R12.5 b  the idle reserve swaps out a process idle for 10 s
   AC12.14, AC12.13 (12g)
            /usr/tests/swapwear (see tests/swapwear.c): a swap-out of an
@@ -111,6 +114,23 @@ def main():
 			"R12.28: swap=crypt refused with a message")
 		check(r.sh("su bin -c 'swapon /dev/hd3'", 30) not in (0, None),
 			"R12.1: only root turns swap on")
+		# R12.32, R12.33: 4 MiB alignment, erase
+		out = r.output("mkpart -l /dev/hd0", 30) or b""
+		starts = [int(x) for x in re.findall(rb"start +(\d+)", out)]
+		check(len(starts) == 4 and all(x % 8192 == 0 for x in starts),
+			"R12.32: partitions start on 4 MiB boundaries %s" % starts)
+		for dev in ("/dev/hd0", "/dev/hd1", "/dev/hd2"):
+			check(r.sh("erase %s" % dev, 30) not in (0, None),
+				"R12.33: erase %s (in use) refused" % dev)
+		out = r.output("echo erase-marker | dd of=/dev/hd3 bs=512 "
+			"seek=5 2>/dev/null; sync; erase /dev/hd3; echo st=$?; "
+			"dd if=/dev/hd3 bs=512 skip=5 count=1 2>/dev/null | "
+			"grep -c marker", 120)
+		check(out is not None and b"st=0" in out
+			and re.search(rb"(?m)^0\r?$", out) is not None,
+			"R12.33: erase /dev/hd3 fills it with 0x00 (QEMU)")
+		check(r.sh("su bin -c 'erase /dev/hd3'", 30) not in (0, None),
+			"R12.33: only root erases")
 		check(r.sh("swapon /dev/hd3 plain && swapon -r 0 && free -t on",
 			30) == 0, "swapon /dev/hd3 plain (reserve 0 for now)")
 		out = r.output("free -v | grep '^swap'", 30)
