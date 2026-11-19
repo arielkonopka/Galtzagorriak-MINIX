@@ -334,15 +334,19 @@ static void test_never(void)
 
 /* Start programs until more than the free RAM is in use (AC12.1).  With
  * -f (want_parent) go on until the parent, a shell waiting for us, has
- * been swapped out on demand as well (or 12 programs run). */
+ * been swapped out on demand as well (or 12 programs run).  Those are
+ * Secret: yes copies (never swapped), like apps the user is running: idle
+ * swappable copies would always be the better victim (a larger hole than
+ * the shell's, sw_room) and fill the process table first (#335). */
 static int test_fill(int want_parent)
 {
 	int pid[12], st, n, i, ok, back = 0, swapped = 0;
 	long f = free_bytes(), img = 0;
 	struct swinfo si;
+	char *prog = want_parent ? "/usr/tests/swapsecret" : me;
 
 	for (n = 0; n < 12; ) {
-		if ((pid[n] = start(me, "-p")) < 0) break;
+		if ((pid[n] = start(prog, "-p")) < 0) break;
 		sleep(2);		/* waited 1 s: may be swapped */
 		if (waitpid(pid[n], &st, WNOHANG) != 0) {	/* exec failed */
 			printf("  start %d: %s\n", n, t_status(st));
@@ -359,7 +363,10 @@ static int test_fill(int want_parent)
 	swapped = si.nproc;
 	printf("  %d programs of %ld bytes started, %ld bytes were free; "
 		"%d swapped\n", n, img, f, swapped);
-	ok = n >= 3 && swapped >= 1;
+	/* -f: the shell (and other idle ones) made the room, not the
+	 * fillers; the program that needed it may still not fit. */
+	ok = want_parent ? n >= 2 && is_swapped(getppid(), NULL)
+			 : n >= 3 && swapped >= 1;
 	t_result("start more than fits: the idle ones swapped (AC12.1)", ok,
 								NULL);
 	for (i = 0; i < n; i++) kill(pid[i], SIGUSR1);

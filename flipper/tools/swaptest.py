@@ -68,8 +68,9 @@ def flash_counts(r):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("-n", type=int, default=100, help="kill cycles")
+	ap.add_argument("--image", default="minix-base.bin")
 	a = ap.parse_args()
-	r = powercut.Run(0, 0)
+	r = powercut.Run(0, 0, a.image)
 	try:
 		if not r.login():
 			check(False, "login")
