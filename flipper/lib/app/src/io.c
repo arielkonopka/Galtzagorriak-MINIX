@@ -257,9 +257,74 @@ int app_alert(const struct app_timer *t, int cat, int flags, int vol,
 	return pid;
 }
 
+/* The desktop's record of a notification (spec K.3, T23c):
+ * "notify\tCAT\tUID\tPID\tTITLE\tTEXT\n", CAT "info" or "reminder", tabs,
+ * newlines and backslashes escaped (K.1).  The text is cut so that the
+ * record fits in size (at most APP_DESK_LINE, one write() to the FIFO).
+ * Its length, or -1 (an alarm: not for the desktop; no room). */
+int notify_record(char *buf, int size, int cat, unsigned uid, int pid,
+				const char *title, const char *text)
+{
+	char num[2][12];
+	const char *part[6];
+	int n = 0, k, i;
+
+	if (cat != TC_INFO && cat != TC_REMINDER) return -1;
+	if (size > APP_DESK_LINE) size = APP_DESK_LINE;
+	for (k = 0; k < 2; k++) {
+		char *q = num[k] + 11;
+		unsigned v = k == 0 ? uid : (unsigned) pid;
+
+		*q = 0;
+		do *--q = (char) ('0' + v % 10); while ((v /= 10) > 0);
+		part[2 + k] = q;
+	}
+	part[0] = "notify";
+	part[1] = cat == TC_INFO ? "info" : "reminder";
+	part[4] = title;
+	part[5] = text;
+	for (k = 0; k < 6; k++) {
+		if (k > 0) {
+			if (n >= size - 1) return -1;
+			buf[n++] = '\t';
+		}
+		for (i = 0; part[k][i] != 0; i++) {
+			char c = part[k][i], e = c == '\t' ? 't'
+				: c == '\n' ? 'n' : c == '\\' ? '\\' : 0;
+
+			if (n + 1 + (e != 0) > size - 1) {
+				if (k < 5) return -1;
+				break;		/* the text: cut */
+			}
+			if (e != 0) {
+				buf[n++] = '\\';
+				buf[n++] = e;
+			} else
+				buf[n++] = c;
+		}
+	}
+	buf[n++] = '\n';
+	return n;
+}
+
+/* Send it to the desktop's FIFO, never waiting: no desktop, a full FIFO
+ * or no right to it (an app outside group gui) and it is not listed. */
+static void notify_desk(int cat, const char *title, const char *text)
+{
+	char rec[APP_DESK_LINE];
+	int n = notify_record(rec, sizeof rec, cat, (unsigned) getuid(),
+			      (int) getpid(), title, text), fd;
+
+	if (n < 0 || (fd = open(APP_DESK, O_WRONLY | O_NONBLOCK)) < 0) return;
+	(void) write(fd, rec, (size_t) n);
+	close(fd);
+}
+
 /* Post a notification now (an app; the alert runs as the caller).
- * opts: flags, snooze and id (NULL: everything, no snooze).  The alert's
- * pid, 0 when do-not-disturb holds it back, -1 on errors. */
+ * opts: flags, snooze and id (NULL: everything, no snooze).  Info and
+ * reminders also go to the desktop's Notifications page (T23c, spec K.6),
+ * even while do-not-disturb holds the alert back; alarms only ring (K.4).
+ * The alert's pid, 0 when do-not-disturb holds it back, -1 on errors. */
 int notify_post(int cat, const char *title, const char *text,
 					const struct app_timer *opts)
 {
@@ -280,6 +345,7 @@ int notify_post(int cat, const char *title, const char *text,
 	t.title[sizeof t.title - 1] = 0;
 	strncpy(t.text, text, sizeof t.text - 1);
 	t.text[sizeof t.text - 1] = 0;
+	notify_desk(cat, t.title, t.text);
 	notify_policy(&p, getenv("HOME"));
 	if ((f = notify_flags(&p, cat, t.flags, time((time_t *) 0))) == 0)
 		return 0;

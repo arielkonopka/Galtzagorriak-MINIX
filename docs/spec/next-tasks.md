@@ -339,6 +339,7 @@ The user wants every app reached from the launcher to look like it: title bar wi
 - Hint line drawn by Submenu, VariableItemList (`[value]`), Popup, DialogEx, TextInput from their own button labels; title bar state on the right; scroll mark in Submenu and VariableItemList. `GuiLayerWindow` height unchanged for custom views (stock `elements_button_*` stay).
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
+- **Done** in the T22b PR (#304): `pine.c` in `libfuri`; `remind` and `alarm` are libgm window apps since T23b and no longer link `libfuri`, so `furihello` (and `timed`/`alert`, which draw no modules) are the relinked programs.
 
 ## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, user request 2026-11-17): milestone M3
 Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
@@ -438,6 +439,7 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - R5.6b.1 setting row and redraw; R5.6b.2 Apps page as stock `menu.c`, other pages as stock `submenu`, popup for messages.
 - R5.6b.3 10×10 built-in icon table (stock icons allowed, D.3), `Icon10:` in `fam2pkg` and the `##` field form.
 - R5.6b.4 the two stock fonts as `const`, `gui_text_font()`; a host test renders the launcher's stock frame and the ported `menu.c` frame and compares them.
+- With `Style: stock` the launcher starts apps with `FURI_STYLE=stock` in their environment, so the `libfuri` modules draw as stock (T22b: `flipper/lib/furi/src/gui/pine.c`; Pine is their default).
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 

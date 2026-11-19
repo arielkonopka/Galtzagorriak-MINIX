@@ -23,7 +23,9 @@
 #ifndef CLK_TCK
 #define CLK_TCK 100
 #endif
+#define font_4x6 gui_font_4x6	/* libfuri's pine.c has one too (T22b) */
 #include "../../gui/gui.c"		/* its frame buffer fb */
+#undef font_4x6
 #include "../../gui/launcher_stock.h"
 #include "../../gui/appline.h"
 
@@ -128,6 +130,8 @@ int main(int argc, char **argv)
 	Submenu *s = submenu_alloc();
 	char name[40];
 	int i, pos;
+
+	setenv("FURI_STYLE", "stock", 1);	/* libfuri's Submenu as stock (T22b) */
 
 	dump = argc > 1 && strcmp(argv[1], "-d") == 0;
 	make_icons();

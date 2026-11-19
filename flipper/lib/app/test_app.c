@@ -457,8 +457,33 @@ static void logs(void)
 		== -1, "app_log: bad names refused");
 }
 
+/* T23c: notify_post's record for the desktop (gui/desktop.c dk_parse). */
+static void desk_record(void)
+{
+	char b[APP_DESK_LINE + 8], longt[200];
+	int n;
+
+	n = notify_record(b, sizeof b, TC_REMINDER, 21, 345, "Water", "Drink\ta glass");
+	b[n > 0 ? n : 0] = 0;
+	CHECK(strcmp(b, "notify\treminder\t21\t345\tWater\tDrink\\ta glass\n") == 0,
+		"desktop record: reminder, the tab escaped");
+	n = notify_record(b, sizeof b, TC_INFO, 0, 1, "a\\b", "x\ny");
+	b[n > 0 ? n : 0] = 0;
+	CHECK(strcmp(b, "notify\tinfo\t0\t1\ta\\\\b\tx\\ny\n") == 0,
+		"desktop record: info, backslash and newline escaped");
+	CHECK(notify_record(b, sizeof b, TC_ALARM, 0, 1, "Wake", "") == -1,
+		"desktop record: alarms are not for the desktop (K.4)");
+	memset(longt, '\t', sizeof longt - 1);
+	longt[sizeof longt - 1] = 0;
+	n = notify_record(b, sizeof b, TC_INFO, 65535, 32767, "T", longt);
+	CHECK(n == APP_DESK_LINE - 1 && b[n - 1] == '\n' && b[n - 2] == 't'
+		&& b[n - 3] == '\\', "desktop record: a long text cut whole, "
+		"at most 128 B");
+}
+
 int main(void)
 {
+	desk_record();
 	interval_week("UTC0", 0);
 	interval_week("CET-1CEST,M3.5.0,M10.5.0/3", 1);
 	sweep("UTC0", water);

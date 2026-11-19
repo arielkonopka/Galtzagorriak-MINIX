@@ -16,10 +16,12 @@
  * moves through them itself (winsrv.c), so the app needs no GUI code and
  * an open one costs about 4 KB.
  *
- * Pages (R5.6a.4, spec K.6): in a row, SETTINGS <- APPS -> HOME (later
- * Notifications and Running).  APPS is the app list; SETTINGS the system
- * groups (K.7) and the launcher's own (icons, hints, battery,
- * /etc/launcher.conf); HOME the tiles of the desktop's modules.  A page is
+ * Pages (R5.6a.4, spec K.6): in a row, SETTINGS <- APPS -> HOME -> NOTES
+ * -> RUNNING.  APPS is the app list; SETTINGS the system groups (K.7) and
+ * the launcher's own (icons, hints, battery, /etc/launcher.conf); HOME the
+ * tiles of the desktop's modules; NOTES the last 8 notifications (T23c:
+ * OK opens one, Back clears it); RUNNING the parked apps (R12.20, not
+ * there yet: the page says so).  A page is
  * an entry of pages[]: its name, hint text and neighbours.  Left and
  * Right act on the release of a key pressed alone (gui_input), so the
  * backlight gesture Left+Up (R6.10) never turns a page.  The look is spec
@@ -70,22 +72,22 @@
  * has its 6 rows at the start of the block, before the label (R5.6a.5:
  * no allocation of its own); bit i of has_icon says which.  An entry
  * with a 10x10 icon of its own ("##", R5.6b.3) has its 20 B before
- * those (or before the label); bit 16 + i says which. */
+ * those (or before the label); bit i of has10 says which. */
 struct app {
 	char *label;
 	char *user;
 	char *cmd;
 } apps[MAXAPPS];
 int napps;
-int fsck_err;		/* /etc/rc found errors on the card (spec N.3) */
-static unsigned long has_icon;
+static char fsck_err;	/* /etc/rc found errors on the card (spec N.3) */
+static unsigned short has_icon, has10;	/* 16 bits: MAXAPPS */
 static unsigned char opt;		/* OPT_* below */
 #define OPT_ICONS	1
 #define OPT_HINTS	2
 #define OPT_BATT	4
 #define OPT_LOG		8		/* GuiLog: on (spec K.3, K.8) */
 #define OPT_STOCK	16		/* Style: stock (spec R5.6b) */
-#define HAS10(i)	(has_icon & (1UL << (16 + (i))))
+#define HAS10(i)	(has10 & (1U << (i)))
 /* The battery on the title bar (owner 2026-11-17): the charge in percent
  * (BAT_NONE: not read yet or no gauge) and BAT_CHG while charging, read
  * from /dev/power at a redraw when the last reading is a minute old - so
@@ -99,6 +101,7 @@ static unsigned short bat_t;		/* seconds (mod 2^16) of that reading */
 static struct desk desk;
 static int dk_rfd = -1, dk_wfd = -1, bl_fd = -1;
 static char dk_skip;			/* the rest of an overlong record */
+static unsigned char dk_new;		/* notifications in the last desk_read */
 static char clock_shown;		/* the frame on the LCD has the time */
 static time_t shown_min;		/* and this minute (time() / 60) */
 
@@ -114,7 +117,7 @@ static void free_apps(void)
 		     : has_icon & (1UL << napps) ? (char *) ICON(napps)
 		     : apps[napps].label);
 	}
-	has_icon = 0;
+	has_icon = has10 = 0;
 }
 
 static void load_apps(const char *apps_file)
@@ -143,7 +146,7 @@ static void load_apps(const char *apps_file)
 		if (ic10) {
 			memcpy(m, rows10, ICON10_B);
 			m += ICON10_B;
-			has_icon |= 1UL << (16 + napps);
+			has10 |= 1U << napps;
 		}
 		if (ic) {
 			memcpy(m, rows, ICON_H);
@@ -211,7 +214,7 @@ static void save_conf(const char *conf_file)
  * would be relocated into RAM); the rows are drawn by page number. */
 struct page {
 	char title[10];
-	char hints[24];
+	char hints[32];
 	signed char left, right;		/* page index, -1: none */
 };
 
@@ -219,12 +222,23 @@ struct page {
 #define PG_SYS	1			/* SETTINGS: the groups (K.7) */
 #define PG_SET	2			/* the launcher's own settings */
 #define PG_HOME	3			/* the modules' tiles (K.6) */
+#define PG_NOTES 4			/* the notifications (T23c) */
+#define PG_RUN	5			/* the parked apps (R12.20) */
+#define PG_NOTE	6			/* one notification, opened */
+/* Pages drawn in the Stock style (R5.6b); the desktop's NOTES, RUNNING
+ * and NOTE pages (T23c) keep the Pine drawing for now. */
+#define STOCK_PG(pg)	((opt & OPT_STOCK) && (pg) <= PG_HOME)
 static const struct page pages[] = {
 	{ "APPS", "<Settings OK Run >Home", PG_SYS, PG_HOME },
 	{ "SETTINGS", "OK Open  Back Done", -1, -1 },
 	{ "LAUNCHER", "OK Toggle  Back Done", -1, -1 },
-	{ "HOME", "<Apps", PG_APPS, -1 },
+	{ "HOME", "<Apps  >Notes", PG_APPS, PG_NOTES },
+	{ "NOTES", "<Home OK Open Back Clear >Run", PG_HOME, PG_RUN },
+	{ "RUNNING", "<Notes", PG_NOTES, -1 },
+	{ "NOTE", "OK Keep  Back Clear", -1, -1 },
 };
+static int nsel;			/* PG_NOTE: the notification shown */
+#define NOTE_COLS	31		/* characters on a row of PG_NOTE */
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
  * like an app, the groups of setgroup as window apps ("=", K.8: the
@@ -250,10 +264,24 @@ static const struct {
 
 #define SET_N	4			/* rows of the launcher's own page */
 
+/* "HH:MM" of hm (hour * 60 + minute) into b[6]. */
+static char *hm_text(char *b, unsigned hm)
+{
+	b[0] = (char) ('0' + hm / 600);
+	b[1] = (char) ('0' + hm / 60 % 10);
+	b[2] = ':';
+	b[3] = (char) ('0' + hm % 60 / 10);
+	b[4] = (char) ('0' + hm % 10);
+	b[5] = 0;
+	return b;
+}
+
 static int page_rows(int pg)
 {
 	return pg == PG_APPS ? napps : pg == PG_SYS ? SYS_N
-		: pg == PG_HOME ? dk_tiles(&desk) : SET_N;
+		: pg == PG_HOME ? dk_tiles(&desk) : pg == PG_NOTES ? desk.notes
+		: pg == PG_RUN ? 0 : pg == PG_NOTE ? 2 + ((int) strlen(
+			desk.n[nsel].body) + NOTE_COLS - 1) / NOTE_COLS : SET_N;
 }
 
 static const char set_name[SET_N][8] = { "Icons", "Hints", "Battery", "Style" };
@@ -267,6 +295,28 @@ static void page_row(int pg, int i, int y, int inv)
 
 	if (pg == PG_HOME)
 		gui_text(6, y, dk_tile(&desk, i)->text, inv);
+	else if (pg == PG_NOTES) {	/* "* Title          12:34" */
+		const struct dk_note *e = &desk.n[i];
+		char b[6];
+
+		if (e->unread) gui_text(6, y, "*", inv);
+		gui_text(11, y, e->title, inv);
+		gui_text(GUI_W - 22, y, hm_text(b, e->hm), inv);
+	} else if (pg == PG_NOTE) {	/* from, title, the text wrapped */
+		const struct dk_note *e = &desk.n[nsel];
+		char b[NOTE_COLS + 1];
+
+		if (i == 0) {
+			gui_text(gui_text(1, y, e->name, 0) + 5, y,
+				 hm_text(b, e->hm), 0);
+		} else if (i == 1)
+			gui_text(1, y, e->title, 0);
+		else {
+			strncpy(b, e->body + (i - 2) * NOTE_COLS, NOTE_COLS);
+			b[NOTE_COLS] = 0;
+			gui_text(1, y, b, 0);
+		}
+	}
 	else if (pg == PG_SYS) {
 		gui_text(6, y, sys_tab[i].name, inv);
 		if (sys_tab[i].cmd[0] == 0 && i != SYS_LAUNCHER)
@@ -448,15 +498,18 @@ static void status_right(int x0, int pg, int sel, int n)
 			b[4] = (char) ('0' + tm->tm_min % 10);
 			b[5] = 0;
 			t = b;
-		} else if (part == 1 && desk.unread > 0) {
-			t = pos_text(b, 0, desk.unread) + 2;
+		} else if (part == 1 && dk_unread(&desk) > 0) {
+			t = pos_text(b, 0, dk_unread(&desk)) + 2;
 			*--t = '*';		/* "*3": over "0/3" */
 		} else if (part == 2 && desk.st >= 0) {
 			memcpy(b, desk.t[(int) desk.st].text, DK_STATUS);
 			b[DK_STATUS] = 0;
 			t = b;
-		} else if (part == 3 && (opt & OPT_HINTS) && pg == PG_APPS && n > 0)
+		} else if (part == 3 && (opt & OPT_HINTS) && n > 0
+			   && (pg == PG_APPS || pg == PG_NOTES))
 			t = pos_text(b, sel + 1, n);
+		else if (part == 3 && (opt & OPT_HINTS) && pg == PG_NOTE)
+			t = pos_text(b, nsel + 1, desk.notes);
 		if (t == NULL || *t == 0) continue;
 		w = (int) strlen(t) * 4;
 		if (x - w < x0 + 2) continue;
@@ -476,7 +529,7 @@ static void draw(int pg, int sel, int top, const char *note)
 	const char *title = fsck_err && pg == PG_APPS
 				? "CARD HAS ERRORS: RUN FSCK" : p->title;
 
-	if (opt & OPT_STOCK) {
+	if (STOCK_PG(pg)) {
 		stock_draw(pg, sel, top, note);
 		return;
 	}
@@ -487,6 +540,7 @@ static void draw(int pg, int sel, int top, const char *note)
 		bat_draw();
 	}
 	status_right((GUI_W + (int) strlen(title) * 4) / 2, pg, sel, n);
+	if (pg == PG_NOTE) sel = -1;		/* text: no selection */
 	for (i = 0; i < vis && top + i < n; i++) {
 		y = ROW_Y(i);
 		if (top + i == sel) gui_fill(0, y - 1, GUI_W - 1, y + 5, 1);
@@ -505,6 +559,11 @@ static void draw(int pg, int sel, int top, const char *note)
 	}
 	if (pg == PG_APPS && n == 0) gui_center(30, "no apps in /etc/apps", 0);
 	if (pg == PG_HOME && n == 0) gui_center(30, "no tiles", 0);
+	if (pg == PG_NOTES && n == 0) gui_center(30, "no notifications", 0);
+	if (pg == PG_RUN) {		/* R12.20 (park) is not there yet */
+		gui_center(24, "nothing running", 0);
+		gui_center(36, "(parking apps comes later)", 0);
+	}
 	if (hints) {
 		gui_hline(0, GUI_W - 1, HINT_Y - 2, 1);
 		gui_text(1, HINT_Y, note != NULL ? note : p->hints, 0);
@@ -686,8 +745,17 @@ static int desk_read(void)
 			if (dk_skip)
 				dk_skip = 0;
 			else if (dk_parse(p, &r) > 0 && (r.verb == DV_NOTIFY
-				 || r.verb == DV_CLOSE || alive(r.pid)))
+				 || r.verb == DV_CLOSE || alive(r.pid))) {
 				c |= dk_apply(&desk, &r);	/* else dropped */
+				if (r.verb == DV_NOTIFY) {	/* its time */
+					time_t now = time((time_t *) NULL);
+					struct tm *tm = localtime(&now);
+
+					desk.n[0].hm = (unsigned short)
+						(tm->tm_hour * 60 + tm->tm_min);
+					if (dk_new < DK_NNOTES) dk_new++;
+				}
+			}
 			p = nl + 1;
 		}
 		len -= (int) (p - buf);
@@ -746,7 +814,7 @@ int main(int argc, char **argv)
 	memset(&in, 0, sizeof in);
 	for (;;) {
 		n = page_rows(pg);
-		vis = !(opt & OPT_STOCK) ? GUI_ROWS - 1 - ((opt & OPT_HINTS) != 0)
+		vis = !STOCK_PG(pg) ? GUI_ROWS - 1 - ((opt & OPT_HINTS) != 0)
 			: pg == PG_APPS ? (n > 0 ? n : 1) : STOCK_SUB_ROWS;
 		if (sel >= n) sel = n > 0 ? n - 1 : 0;
 		if (sel < top) top = sel;
@@ -772,10 +840,17 @@ int main(int argc, char **argv)
 		}
 		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, i, dk_rfd);
 		if (k == GUI_FD) {		/* records from modules */
+			dk_new = 0;
 			c = desk_read();
 			if (c & DC_NOTE) {
-				note = desk.note;
+				note = desk.n[0].title;
 				note_t = now_ticks();
+				/* the rows move down: keep the one in hand */
+				if (pg == PG_NOTES && sel > 0) sel += dk_new;
+				if (pg == PG_NOTE && (nsel += dk_new) >= desk.notes) {
+					pg = PG_NOTES;	/* it was pushed out */
+					sel = desk.notes - 1;
+				}
 			}
 			if ((c & (DC_STATUS | DC_NOTE))
 			    || ((c & DC_TILES) && pg == PG_HOME)) dirty = 1;
@@ -815,18 +890,33 @@ int main(int argc, char **argv)
 				pg = pages[pg].right;
 				sel = top = 0;
 				(void) dk_purge(&desk, alive);
-				if (desk.unread > 0) {	/* until the Notifications
-							 * page (T23c): the last
-							 * one, and seen */
-					note = desk.note;
-					note_t = now_ticks();
-					desk.unread = 0;
-				}
 			}
-		} else if (pg == PG_HOME) {
+		} else if (pg == PG_HOME || pg == PG_RUN) {
 			if (k == KEY_LEFT) {
-				pg = PG_APPS;
-				sel = was;
+				pg = pages[pg].left;
+				sel = pg == PG_APPS ? was : 0;
+				top = 0;
+			} else if (k == KEY_RIGHT && pages[pg].right >= 0) {
+				pg = pages[pg].right;
+				sel = top = 0;
+			}
+		} else if (pg == PG_NOTES) {	/* T23c */
+			if (k == KEY_LEFT || k == KEY_RIGHT) {
+				pg = k == KEY_LEFT ? PG_HOME : PG_RUN;
+				sel = top = 0;
+				if (pg == PG_HOME) (void) dk_purge(&desk, alive);
+			} else if (k == KEY_OK && desk.notes > 0) {
+				nsel = sel;
+				desk.n[nsel].unread = 0;
+				pg = PG_NOTE;
+				top = 0;
+			} else if (k == KEY_BACK && desk.notes > 0)
+				dk_clear(&desk, sel);
+		} else if (pg == PG_NOTE) {	/* OK keeps it, Back clears it */
+			if (k == KEY_OK || k == KEY_BACK) {
+				if (k == KEY_BACK) dk_clear(&desk, nsel);
+				pg = PG_NOTES;
+				sel = nsel;
 				top = 0;
 			}
 		} else if (pg == PG_SYS) {
