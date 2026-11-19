@@ -441,7 +441,47 @@ def mx_lf_cmd(verb, proto, data):
 	return 'rfid %s "%s" %s' % (verb, proto, data)
 
 
+# The RFID rows depend on how far apart the two antennas are (devguide
+# 6.4, checked 2026-11-19 with the Flippers in their silicone cases): the
+# ASK and FSK rows read with a thick spacer (about 5 mm of card), the PSK
+# rows with none (their short loads are too weak further away; with a thin
+# card 3 of 5, and that close most ASK/FSK rows are not read).  --spacer
+# says which is in; "ask" runs the thick rows first, then asks for the
+# change.
+LF_PSK = {"Keri", "Indala26", "Idteck", "Nexwatch", "Indala224"}
+SPACERS = ("none", "thin", "thick")
+
+
+def lf_spacers(proto):
+	"""The spacers a protocol's rows read with."""
+	return ("none",) if proto in LF_PSK else ("thick",)
+
+
+def spacer_gate(opt, proto):
+	"""None if the row may run with the spacer in, else its BLOCKED
+	status; with --spacer ask, ask for the change first."""
+	sp = getattr(opt, "spacer", None)
+	want = lf_spacers(proto)
+	if sp is None:
+		return None
+	if sp == "ask":
+		if getattr(opt, "spacer_now", None) not in want:
+			opt.spacer_now = want[-1]
+			ask(opt, "RFID: put the two Flippers back to back %s." % (
+				"with no spacer (cases on, backs touching)"
+				if want[-1] == "none" else
+				"with the thick spacer between them (about 5 mm of card)"))
+		return None
+	if sp not in want:
+		return "BLOCKED", "needs the %s spacer (--spacer %s or ask)" % (
+			" or ".join(want), want[-1])
+	return None
+
+
 def rfid_u2m(ul, mx, opt, proto, data):
+	g = spacer_gate(opt, proto)
+	if g:
+		return g
 	if " " in proto:
 		return "BLOCKED", "the Unleashed CLI cannot take a protocol name " \
 			"with a space"
@@ -462,6 +502,9 @@ def ul_read_lf(ul):
 
 
 def rfid_m2u(ul, mx, opt, proto, data):
+	g = spacer_gate(opt, proto)
+	if g:
+		return g
 	# the run list of a long PSK frame takes a few seconds to find
 	# (Nexwatch 3.9 s on the device)
 	ok = mx.start(mx_lf_cmd("emulate", proto, data),
@@ -1115,6 +1158,19 @@ def build_rows(opt):
 	return rows
 
 
+def spacer_order(rows):
+	"""The rfid rows that need no spacer after the others, so that
+	--spacer ask asks only once."""
+	rf = [i for i, r in enumerate(rows) if r[1] == "rfid"]
+	if not rf:
+		return rows
+	thin = [rows[i] for i in rf if "thick" not in lf_spacers(rows[i][5][0])]
+	thick = [rows[i] for i in rf if "thick" in lf_spacers(rows[i][5][0])]
+	first = rf[0]
+	rest = [r for i, r in enumerate(rows) if i not in rf]
+	return rest[:first] + thick + thin + rest[first:]
+
+
 def select_rows(rows, pats):
 	if not pats:
 		return rows
@@ -1170,6 +1226,7 @@ def write_map(path, res, info):
 	L = ["# Coverage map: Galtzagorriak MINIX vs Unleashed", "",
 		"Made by `flipper/tools/twoflip.py` on %s." % info["date"],
 		"MINIX: %s. Unleashed: %s." % (info["minix"], info["unleashed"]),
+		"RFID spacer: %s (devguide 6.4)." % (info.get("spacer") or "not given"),
 		"", "Statuses: PASS works; FAIL MINIX has it but it is wrong; "
 		"MISSING not in MINIX yet; BLOCKED the Unleashed side could not "
 		"do its part; N/A needs extra hardware; INFO measurement only.",
@@ -1307,6 +1364,10 @@ def main():
 		help="Sub-GHz transmit bands the rows may use (default EU)")
 	ap.add_argument("--map")
 	ap.add_argument("--baseline")
+	ap.add_argument("--spacer", choices=SPACERS + ("ask",),
+		help="RFID: the spacer between the Flippers (devguide 6.4); "
+		"rows that need another are BLOCKED; ask: thick rows first, then "
+		"it asks for the change")
 	ap.add_argument("--t5577", action="store_true")
 	ap.add_argument("--rw1990", action="store_true")
 	ap.add_argument("--log")
@@ -1322,6 +1383,8 @@ def main():
 			% (opt.freq, opt.region))
 
 	rows = select_rows(build_rows(opt), opt.patterns)
+	if opt.spacer == "ask":
+		rows = spacer_order(rows)
 	if not rows:
 		sys.exit("twoflip: no row matches (see --list)")
 	if opt.list:
@@ -1406,7 +1469,8 @@ def finish(ul, mx, opt, rows):
 	summary(res)
 	if opt.map:
 		write_map(opt.map, res, {"date": time.strftime("%Y-%m-%d %H:%M"),
-			"minix": mv, "unleashed": uv})
+			"minix": mv, "unleashed": uv,
+			"spacer": getattr(opt, "spacer", None)})
 		print("map: %s (+ .json)" % opt.map)
 	bad = sum(1 for r in res if r["status"] == "FAIL")
 	if opt.baseline:
