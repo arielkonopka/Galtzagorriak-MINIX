@@ -276,10 +276,9 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
   r = OK;
 
   if (flag != IS_EMPTY) {
-	/* A name longer than this file system holds (spec O.4): no cut. */
-	if (nlen < NAME_MAX
-		&& memchr(string, '\0', (size_t) nlen + 1) == NULL)
-		return(ENAMETOOLONG);
+	/* A name longer than NAME_MAX (60) never gets here (get_name: spec
+	 * O.4).  V1/V2 still cut names at 14, as MINIX always did: the pkg
+	 * database on existing cards has names cut that way. */
 	bits = (flag == LOOK_UP ? X_BIT : W_BIT | X_BIT);
 
 	if (string == dot1 || string == dot2) {

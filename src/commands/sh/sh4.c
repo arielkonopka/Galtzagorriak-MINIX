@@ -481,7 +481,8 @@ register char *pp;
 	register char *np, *cp;
 	char *name, *gp, *dp;
 	int dn, j, n, k;
-	struct direct ent[NDENT];
+	char ent[NDENT * 16];	/* raw entries: V1/V2 16 B, V3 64 B (O.4) */
+	int es = 16, nl = 14, first = 1;
 	char dname[NAME_MAX+1];
 	struct stat dbuf;
 
@@ -502,16 +503,27 @@ register char *pp;
 		return;
 	}
 	dname[NAME_MAX] = '\0';
-	while ((n = read(dn, (char *)ent, sizeof(ent))) >= sizeof(*ent)) {
-		n /= sizeof(*ent);
+	while ((n = read(dn, ent, sizeof(ent))) >= es) {
+		/* The first entry is ".": its name at byte 4 on a V3 file
+		 * system, at byte 2 on V1/V2 (as readdir() tells them). */
+		if (first && n >= 64 && ent[4] == '.'
+					&& !(ent[2] == '.' && ent[3] == 0)) {
+			es = 64;
+			nl = 60;
+		}
+		first = 0;
+		n /= es;
 		for (j=0; j<n; j++) {
-			if (ent[j].d_ino == 0)
+			char *e = ent + j * es;
+			if (e[0] == 0 && e[1] == 0
+				&& (es == 16 || (e[2] == 0 && e[3] == 0)))
 				continue;
-			strncpy(dname, ent[j].d_name, NAME_MAX);
+			memset(dname, 0, sizeof(dname));
+			strncpy(dname, e + es - nl, nl);
 			if (dname[0] == '.')
 				if (*gp != '.')
 					continue;
-			for(k=0; k<NAME_MAX; k++)
+			for(k=0; k<nl; k++)
 				if (any(dname[k], spcl))
 					dname[k] |= QUOTE;
 			if (gmatch(dname, gp)) {

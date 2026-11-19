@@ -69,7 +69,7 @@
 #define LINK_MAX         127	/* # links a file may have */
 #define MAX_CANON        255	/* size of the canonical input queue */
 #define MAX_INPUT        255	/* size of the type-ahead buffer */
-#define NAME_MAX          14	/* # chars in a file name */
+#define NAME_MAX          60	/* # chars in a file name (V3; V2: 14) */
 #define PATH_MAX         255	/* # chars in a path name */
 #define PIPE_BUF        7168	/* # bytes in atomic write to a pipe */
 #define STREAM_MAX        20	/* must be the same as FOPEN_MAX in stdio.h */

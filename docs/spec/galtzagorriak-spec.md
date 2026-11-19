@@ -1795,8 +1795,15 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
   `search_dir`, `new_node`, `do_mkdir`, `do_rename`, `unlink_file`. Path parsing buffers grow to
   60 characters; `NAME_MAX` in `<limits.h>` becomes 60, and `pathconf(_PC_NAME_MAX)` answers per
   file system (14 on V2). A name longer than the FS allows gets `ENAMETOOLONG` (no silent cut).
+  *Amended in T27a (2026-11-19):* a component over 60 characters gets `ENAMETOOLONG` on every FS,
+  but V1/V2 keep cutting names at 14 as MINIX always did: the `pkg` database on existing cards
+  (`/usr/var/pkg/info/NAME.postinst`, `NAME.control`) holds names cut that way, and `ENAMETOOLONG`
+  on V2 made those packages unreadable (M2 `pkg #271`). ACO.2's V2 clause waits for a `pkg`
+  database with short names.
 - **Reading a directory:** `read()` on a V3 directory returns the raw 64-byte entries (FS does
-  no translation). libc `opendir` asks `fstatfs()` (O.5) for the format once; `readdir` parses V2
+  no translation). libc `readdir` finds the format once from the directory's first entry (always
+  `.`: name at byte 2 on V2, byte 4 on V3; no system call, so a caller's own `DIR` such as
+  `mtpd`'s works too; amended in T27a, was `fstatfs()`); it parses V2
   entries (16 B, `u16_t` inode) or V3 entries (64 B, `u32_t` inode, 60-character name) into
   `struct dirent { ino_t d_ino; char d_name[61]; }`. The old "flex" format (never on our disks)
   is dropped; `d_extent` users are fixed. `DIR` stays 1 KB per open directory.

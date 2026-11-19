@@ -2,51 +2,45 @@
  *							Author: Kees J. Bot
  *								24 Apr 1989
  * 
- * Note: The V7 format directory entries used under Minix must be transformed
- * into a struct dirent with a d_name of at least 15 characters.  Given that
- * we have to transform V7 entries anyhow it is little trouble to let the
- * routines understand the so-called "flex" directory format too.
+ * Note: The directory entries used under Minix (16-byte V1/V2, 64-byte V3)
+ * are transformed into a struct dirent with a d_name of 61 characters.
  */
 
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
-/* _fl_direct is a flexible directory entry.  Actually it's a union of 8
- * characters and the 3 fields defined below. 
+/* On-disk directory entries (spec O.4).  The FS returns them as they are;
+ * readdir() turns them into a struct dirent.  The old "flex" format, never
+ * on our disks, is gone.
  */
 
-/* Flexible directory entry: */
-struct _fl_direct {		/* First slot in an entry */
-	ino_t		d_ino;
-	unsigned char	d_extent;
-	char		d_name[5];  /* Four characters for the shortest name */
+/* Version 7 / MINIX V1 and V2 directory entry, 16 bytes: */
+struct _v7_direct {		
+	unsigned short	d_ino;
+	char		d_name[14];
 };
 
-	/* Name of length len needs _EXTENT(len) extra slots. */
-#define _EXTENT(len)	(((len) + 3) >> 3)
+/* MINIX V3 directory entry, 64 bytes: */
+struct _v3_direct {
+	unsigned long	d_ino;
+	char		d_name[60];
+};
 
-/* Version 7 directory entry: */
-struct _v7_direct {		
-	ino_t		d_ino;
-	char		d_name[14];
+struct dirent {
+	ino_t		d_ino;		/* I-node number */
+	char		d_name[61];	/* Null terminated name */
 };
 
 /* Definitions for the directory(3) routines: */
 typedef struct {
 	char		_fd;	/* Filedescriptor of open directory */
-	char		_v7;	/* Directory is Version 7 */
-	short		_count;	/* This many objects in buf */
+	char		_v7;	/* Entry size: 16 (V1/V2) or 64 (V3) */
+	short		_count;	/* This many bytes left in buf */
 	off_t		_pos;	/* Position in directory file */
-	struct _fl_direct  *_ptr;	/* Next slot in buf */
-	struct _fl_direct  _buf[128];	/* One block of a directory file */
-	struct _fl_direct  _v7f[3];	/* V7 entry transformed to flex */
+	char		*_ptr;	/* Next entry in buf */
+	char		_buf[1024];	/* One block of a directory file */
+	struct dirent	_ent;	/* The entry readdir() returns */
 } DIR;
-
-struct dirent {		/* Largest entry (8 slots) */
-	ino_t		d_ino;		/* I-node number */
-	unsigned char	d_extent;	/* Extended with this many slots */
-	char		d_name[61];	/* Null terminated name */
-};
 
 /* Function Prototypes. */
 #ifndef _ANSI_H

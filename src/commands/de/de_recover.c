@@ -265,9 +265,9 @@ ino_t Find_Deleted_Entry( s, path_name )
 					      == sizeof(struct direct) )
     {
     if ( entry.d_ino == 0  &&
-	strncmp( file_name, entry.d_name, NAME_MAX - sizeof(ino_t) ) == 0 )
+	strncmp( file_name, entry.d_name, DIRSIZ - sizeof(ino_t) ) == 0 )
       {
-      ino_t inode = *( (ino_t *) &entry.d_name[ NAME_MAX - sizeof(ino_t) ] );
+      ino_t inode = *( (ino_t *) &entry.d_name[ DIRSIZ - sizeof(ino_t) ] );
 
       close( dir_d );
 

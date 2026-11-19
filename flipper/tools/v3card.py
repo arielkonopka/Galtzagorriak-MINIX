@@ -10,8 +10,9 @@ Usage: v3card.py
   3. Booted again, as root (until fsck learns V3, /etc/rc mounts it
      read-only; the test mounts it read-write by hand):
        /home mounts; a 57- and a 60-character name work with cp, ls, mv,
-       cat, rm and mkdir/rmdir; 61 characters give "File name too long";
-       15 characters on V2 /usr give it too, 14 still work
+       mkdir/rmdir; 61 characters give "File name too long"; on V2 /usr
+       a 15-character name is still cut at 14 (existing cards rely on it)
+       ls (readdir) shows the long names
        a file written to /home reads back the same after a remount
   4. QEMU is stopped; on the host 'fsck.minix -3 -f' finds /home clean
      and 'fsck.minix -l' lists the long names.
@@ -121,21 +122,17 @@ def main():
 		out = r.output("cp /etc/rc /home/%s; echo st=$?" % N61, 30) or b""
 		check(b"too long" in out and b"st=0" not in out,
 			"61 characters: %s" % out.strip().decode(errors="replace"))
-		out = r.output("cp /etc/rc /usr/tmp/abcdefghijklmno; echo st=$?",
-			30) or b""
-		check(b"too long" in out and b"st=0" not in out,
-			"15 characters on V2 /usr: %s"
-			% out.strip().decode(errors="replace"))
-		check(r.sh("cp /etc/rc /usr/tmp/abcdefghijklmn && "
+		check(r.sh("cp /etc/rc /usr/tmp/abcdefghijklmno && "
+			"test -f /usr/tmp/abcdefghijklmn && "
 			"rm /usr/tmp/abcdefghijklmn", 30) == 0,
-			"14 characters on V2 /usr still work")
+			"15 characters on V2 /usr: cut at 14, as before")
 		# One command per line: the console's line is short.
 		d = "/home/" + N57[:50]
 		ok = r.sh("mkdir " + d, 30) == 0
 		ok = ok and r.sh("mv /home/%s %s" % (N57, d), 30) == 0
 		ok = ok and r.sh("test -f %s/%s" % (d, N57), 30) == 0
 		ok = ok and r.sh("cd %s && mv %s /home" % (d, N57), 30) == 0
-		ok = ok and r.sh("rmdir " + d, 30) == 0
+		ok = ok and r.sh("cd / && rmdir " + d, 30) == 0
 		check(ok, "mkdir, mv into and out of, rmdir a 50-character "
 			"directory")
 		check(r.sh("cd / && umount /dev/hd4 && mount /dev/hd4 /home", 60)
