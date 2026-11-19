@@ -864,7 +864,7 @@ int count;
 		us += d[j];
 	}
   }
-  if (ir_rd || tx_on) return(EBUSY);	/* one radio: a reader listens */
+  if (ir_rd || tx_on || rs_on) return(EBUSY);	/* one radio: a reader listens */
   if ((r = sg_tx_check((us + 999) / 1000, &hz, &limit)) != OK) return(r);
   if (hal_subghz_tx(hz, (u32_t) user, (unsigned) n) < 0) return(ENOTSUP);
   sg_air_ms += (us + 999) / 1000;

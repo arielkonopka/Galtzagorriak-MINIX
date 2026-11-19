@@ -239,12 +239,21 @@ static int cmd_decode(int argc, char **argv)
 static int txfd = -1;
 static int nframe;
 static bool frame_level;		/* the level of frame[nframe - 1] */
+static uint32_t frame_us;		/* the frame's time so far */
 static int tx_errno;
+
+/* The radio sends a write with the CPU busy for its whole time (the Flipper's
+ * HAL takes 250 ms at most and says so with "no transmitter"): a frame ends
+ * on a silence before it passes TX_FRAME_US, and goes out at one that is
+ * after TX_SPLIT_US already. */
+#define TX_FRAME_US	240000UL
+#define TX_SPLIT_US	100000UL
 
 static int flush_frame(void)
 {
 	int n = nframe * 4;
 
+	frame_us = 0;
 	if (nframe == 0) return 0;
 	nframe = 0;
 	if (write(txfd, (char *) frame, n) != n) {
@@ -266,15 +275,19 @@ static int put_level(bool level, uint32_t us)
 		uint32_t t = frame[nframe - 1] + us;
 		frame[nframe - 1] = t > SG_DURATION_MAX || t < us
 			? SG_DURATION_MAX : t;
+		frame_us += us;
 		return 0;
 	}
-	if (nframe == FRAME) {
+	if (nframe == FRAME || (nframe > 0 && frame_us + us > TX_FRAME_US)) {
 		if (flush_frame() < 0) return -1;
 		if (!level) return 0;
 	}
 	frame[nframe++] = us;
+	frame_us += us;
 	frame_level = level;
-	if (!level && us >= GAP_US && nframe > FRAME / 2) return flush_frame();
+	if (!level && ((us >= GAP_US && nframe > FRAME / 2)
+	    || (us >= 5000 && frame_us > TX_SPLIT_US)))
+		return flush_frame();
 	return 0;
 }
 

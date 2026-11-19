@@ -374,11 +374,72 @@ void hal_subghz_off(void)
 	gpio_set(GPIOC, 4, 0);
 }
 
-/* Transmit and packets (R8.2): not written yet on the Flipper.  The
- * kernel refuses with ENOTSUP until the local agent adds the CC1101 TX
- * path (off by default, the Autonomy rule); the band and duty-cycle
- * check runs before this either way. */
-int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
+/* Transmit (R8.2, #302): the CC1101 as an OOK transmitter, as stock's async
+ * TX (furi_hal_subghz_start_async_tx) but simpler: GDO0 (PA1) is the chip's
+ * data input in async mode and the CPU drives it from the DWT cycle counter,
+ * so the call returns when the frame is out (the writer's memory is valid
+ * until then, hal.h).  The kernel's band and duty-cycle check runs before
+ * this; this adds its own limits, because a bug here keys the transmitter:
+ * - only the 433 MHz band (the 315 and 868 paths are not tried yet);
+ * - at most 512 durations and 250 ms in all (the CPU does nothing else
+ *   meanwhile: the system does not answer for that long);
+ * - low power: PATABLE -10 dBm (0x34 at 433 MHz, datasheet table 39);
+ * - the radio always goes to idle at the end, and back to listening (the
+ *   caller tuned it with hal_subghz_rx).
+ * The frame's first duration is carrier on, then off, on, ... */
+#define SG_TX_MAX_N	512
+#define SG_TX_MAX_US	250000u
+#define SG_TX_PATABLE	0x34
+
+static void cc_patable(uint8_t level)	/* PATABLE[0] = 0 (OOK off), [1] = level */
+{
+	(void) cc_ready();
+	(void) spi1_xfer(0x7E);			/* PATABLE, burst write */
+	(void) spi1_xfer(0x00);
+	(void) spi1_xfer(level);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+}
+
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
+{
+	const uint32_t *d = (const uint32_t *) src;
+	uint32_t us = 0, t0, per = hal_cpu_hz() / 1000000u, at = 0;
+	unsigned i;
+	int r = 0;
+
+	if (n == 0 || n > SG_TX_MAX_N || cc_band(hz) != 433) return -1;
+	for (i = 0; i < n; i++) {
+		us += d[i];
+		if (d[i] == 0 || us > SG_TX_MAX_US) return -1;
+	}
+	spi1_on(0);
+	cc_strobe(0x36);				/* SIDLE */
+	(void) cc_xfer2(0x22, 0x11);			/* FREND0: PATABLE 0 off, 1 on (OOK) */
+	cc_patable(SG_TX_PATABLE);
+	gpio_set(GPIOA, 1, 0);				/* data low: no carrier */
+	gpio_cfg(GPIOA, 1, MODE_OUT, PULL_NONE, 0);	/* GDO0 is the data input now */
+	cc_strobe(0x35);				/* STX */
+	t0 = DWT->CYCCNT;
+	while ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x13) {	/* MARCSTATE TX */
+		if (DWT->CYCCNT - t0 > hal_cpu_hz() / 200) { r = -1; break; }
+	}
+	if (r == 0) {
+		t0 = DWT->CYCCNT;
+		for (i = 0; i < n; i++) {
+			gpio_set(GPIOA, 1, !(i & 1));	/* on, off, on, ... */
+			at += d[i] * per;
+			while (DWT->CYCCNT - t0 < at) ;
+		}
+	}
+	gpio_set(GPIOA, 1, 0);
+	cc_strobe(0x36);				/* SIDLE: carrier off in any case */
+	(void) cc_xfer2(0x22, 0x10);			/* FREND0 as the receiver has it */
+	gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);
+	spi1_off();
+	(void) hal_subghz_rx(hz);			/* listening again */
+	return r;
+}
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
 int hal_subghz_pkt_rx(uint8_t *p, unsigned max) { (void) p; (void) max; return -1; }
 int hal_subghz_fake(int what) { (void) what; return -1; }
