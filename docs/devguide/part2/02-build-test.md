@@ -50,7 +50,7 @@ goes to `build/<board>/minix/`.
 | `pkgs` | the other packages (`hello`, `tests`) |
 | `card` | `card.img`: MBR + root partition for the SD card |
 | `disk` | `fs.img` and the QEMU `disk.img` |
-| `minix-run` | boot `minix.bin` in QEMU with `disk.img` (BOARD=qemu, 60 s limit) |
+| `minix-run` | boot `minix.bin` in QEMU with `disk.img` (BOARD=qemu, 240 s limit: M2 takes about 100 s under QEMU 10) |
 | `minix-flash` | `dfu-util` the plain `minix.bin` (BOARD=flipper) |
 | `ramcheck` | static RAM of each image against `ram-budget.txt`, plus `versioncheck` and `bsscheck` (no base program above 4 KB `.bss` except those in `bss-exceptions.txt`) |
 | `versioncheck` | version numbers in `gzversion.h` agree with `CHANGELOG.md` |
