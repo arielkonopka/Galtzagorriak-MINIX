@@ -20,6 +20,9 @@ partition /dev/hd3, type 82), logs in as root and checks:
            keeps its variables (a copy of sh with its text in flash,
            /tmp/swsh: QEMU's own programs run their text from RAM, which
            is never swapped, R12.3; on the Flipper they are in flash).
+           The launcher is installed in flash too and the system
+           rebooted before the tests: its 32 KB of text in RAM left no
+           hole for a test image next to its parent.
            The launcher part needs parking (M4): today it waits in FS,
            not in MM, so it is not swapped.
   AC12.10  placement: tests/swapper -c 50 (two parked apps, a foreground
@@ -102,6 +105,24 @@ def main():
 			"&& pkg flash /tmp/swsh", 300) == 0
 			and r.sh("pkg flash /usr/tests/swapwear", 300) == 0,
 			"run-time cache off, test programs installed in flash")
+		# The launcher too, then a reboot so that it runs from flash
+		# as on the Flipper.  QEMU's copy has its text in RAM (32 KB,
+		# never swapped, R12.3; it waits in FS, not MM): with it, a
+		# 32 KB test image no longer fits next to its parent, its exec
+		# fails (EAGAIN) and the forced swap-outs found the vfork
+		# child dead (EBUSY).
+		check(r.sh("pkg flash /bin/launcher && sync", 300) == 0,
+			"the launcher installed in flash")
+		r.send("reboot")
+		if not r.login():
+			check(False, "login after the reboot")
+			return 1
+		check(r.sh("pkg budget 0", 30) == 0,
+			"run-time cache off again after the reboot")
+		out = r.output("free", 30)
+		m = out and re.search(rb"largest hole (\d+) KB", out)
+		check(m is not None and int(m.group(1)) >= 48,
+			"room for two test images: %s" % (out or b"").strip())
 		before = flash_counts(r)
 
 		# AC12.11 / R12.1 amended
