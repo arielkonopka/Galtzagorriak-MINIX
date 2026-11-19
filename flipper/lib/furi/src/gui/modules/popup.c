@@ -4,6 +4,7 @@
 #include "popup.h"
 #include <gui/elements.h>
 #include <furi.h>
+#include "pine.h"
 
 struct Popup {
     View* view;
@@ -26,6 +27,7 @@ typedef struct {
 typedef struct {
     uint8_t x;
     uint8_t y;
+    bool has_callback; /* Pine hints: a key closes it (in the padding) */
     const Icon* icon;
 } IconElement;
 
@@ -37,6 +39,14 @@ typedef struct {
 
 static void popup_view_draw_callback(Canvas* canvas, void* _model) {
     PopupModel* model = _model;
+
+    if(pine_on()) { /* spec K.2: the header as the title, the hints */
+        pine_body(
+            canvas, model->header.text, model->text.text, model->icon.icon, model->icon.x,
+            model->icon.y);
+        pine_hints(canvas, model->icon.has_callback ? "Any key Close" : "Back Close");
+        return;
+    }
 
     // Prepare canvas
     canvas_clear(canvas);
@@ -143,6 +153,7 @@ Popup* popup_alloc(void) {
             model->icon.x = 0;
             model->icon.y = 0;
             model->icon.icon = NULL;
+            model->icon.has_callback = false;
         },
         true);
     return popup;
@@ -164,6 +175,8 @@ View* popup_get_view(Popup* popup) {
 void popup_set_callback(Popup* popup, PopupCallback callback) {
     furi_check(popup);
     popup->callback = callback;
+    with_view_model(
+        popup->view, PopupModel * model, { model->icon.has_callback = callback != NULL; }, true);
 }
 
 void popup_set_context(Popup* popup, void* context) {

@@ -6,6 +6,7 @@
 #include <gui/elements.h>
 #include <assets_icons.h>
 #include <furi.h>
+#include "pine.h"
 
 struct TextInput {
     View* view;
@@ -165,9 +166,28 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
 
     const char* text = model->text_buffer;
 
+    const bool pine = pine_on();
+    int origin_y = keyboard_origin_y;
+
     canvas_clear(canvas);
     canvas_set_color(canvas, ColorBlack);
 
+    if(pine) {
+        /* spec K.2: the header as the title, the text after "> " on the
+         * first row, the keyboard above the hint line */
+        const int max = (int)(canvas_width(canvas) / 4) - 4;
+        const char* t = text ? text : "";
+        int x = 1, len = (int)strlen(t);
+        pine_title(canvas, model->header && *model->header ? model->header : NULL, NULL);
+        x += pine_text(canvas, x, pine_top(canvas), "> ", false);
+        if(len > max) {
+            x += pine_text(canvas, x, pine_top(canvas), "..", false);
+            t += len - max + 2;
+        }
+        x += pine_text(canvas, x, pine_top(canvas), t, model->clear_default_text);
+        if(!model->clear_default_text) pine_text(canvas, x, pine_top(canvas), "_", false);
+        origin_y = (int)canvas_height(canvas) - 8 - 35;
+    } else {
     canvas_draw_str(canvas, 2, 8, model->header);
     elements_slightly_rounded_frame(canvas, 1, 12, 126, 15);
 
@@ -190,6 +210,7 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
         canvas_draw_str(canvas, start_pos + canvas_string_width(canvas, text) + 2, 22, "|");
     }
     canvas_draw_str(canvas, start_pos, 22, text);
+    }
 
     canvas_set_font(canvas, FontKeyboard);
 
@@ -204,13 +225,13 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
                     canvas_draw_icon(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         &I_KeySaveSelected_24x11);
                 } else {
                     canvas_draw_icon(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         &I_KeySave_24x11);
                 }
             } else if(keys[column].text == BACKSPACE_KEY) {
@@ -219,13 +240,13 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
                     canvas_draw_icon(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         &I_KeyBackspaceSelected_16x9);
                 } else {
                     canvas_draw_icon(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         &I_KeyBackspace_16x9);
                 }
             } else {
@@ -234,7 +255,7 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
                     canvas_draw_box(
                         canvas,
                         keyboard_origin_x + keys[column].x - 1,
-                        keyboard_origin_y + keys[column].y - 8,
+                        origin_y + keys[column].y - 8,
                         7,
                         10);
                     canvas_set_color(canvas, ColorWhite);
@@ -247,13 +268,13 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
                     canvas_draw_glyph(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         char_to_uppercase(keys[column].text));
                 } else {
                     canvas_draw_glyph(
                         canvas,
                         keyboard_origin_x + keys[column].x,
-                        keyboard_origin_y + keys[column].y,
+                        origin_y + keys[column].y,
                         keys[column].text);
                 }
             }
@@ -269,6 +290,14 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
         canvas_draw_rframe(canvas, 9, 9, 110, 48, 2);
         elements_multiline_text(canvas, 62, 20, furi_string_get_cstr(model->validator_text));
         canvas_set_font(canvas, FontKeyboard);
+    }
+    if(pine) {
+        const char key = get_row(model->selected_row)[model->selected_column].text;
+        pine_hints(
+            canvas,
+            key == ENTER_KEY     ? "OK Save  Back Cancel" :
+            key == BACKSPACE_KEY ? "OK Delete  Back Cancel" :
+                                   "OK Type  Back Cancel");
     }
 }
 
