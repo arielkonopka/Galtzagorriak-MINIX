@@ -302,9 +302,15 @@ The Stop2 share is only meaningful for A and C; for B it is about 0 %, by design
 1. **Before:** a build of main that has #344 (`ver` shows it; the run needs `wother` as 32 bits),
    dev mode off (`reboot` once as root), launcher on the screen, Power app closed, SD card in, no
    alarms for a baseline run. Battery 50 to 90 %.
-2. **The sensor.** With the AM2301 (DHT21) connected as soon as `dht` exists (issue #358), `nightpower.py`
-   reads it itself. Until then, put any thermometer next to the Flipper (not on the charger, not in
-   the sun) and write down the temperature at the start and at the end.
+2. **The temperature.** The crystal drifts with temperature, so write down the room temperature at
+   both ends. Put any thermometer next to the Flipper (not on the charger, not in the sun) and give
+   the reading to the script: `nightpower.py start --ambient 21.5` in the evening and
+   `nightpower.py end --ambient 22.0` in the morning (degrees Celsius). The report then prints
+   `Ambient: 21.5 -> 22.0 C` and the drift in ppm at that temperature, and the PORTING.md row gets
+   `ambient 21.5 -> 22.0 C`. With the AM2301 (DHT21) connected and the `dht` command from issue #358,
+   use `--ambient-cmd dht` instead (the script runs it on the Flipper and reads `temp=…`).
+   The decoder for the sensor's frame is already in `src/lib/dht` (host test: `make dhttest`);
+   only the reading on the Flipper is still to be done by the local agent.
 3. **Start** (USB still connected), from `flipper/`:
 
    ```
@@ -320,8 +326,7 @@ The Stop2 share is only meaningful for A and C; for B it is about 0 %, by design
    ```
 
    It prints the Stop2 share, the wake-ups, whether a counter wrapped, the clock drift in s and
-   ppm, and the PORTING.md row. Add the two temperatures to the row by hand (Notes) until the sensor
-   is wired in.
+   ppm, and the PORTING.md row (with the two temperatures, if you gave them).
 5. **Run B** is the same with the cable plugged in the whole time (the console must stay free:
    close the terminal after `start`).
 6. **Calibrating:** if A shows a steady drift of 20 ppm or more, as root on the Flipper:
