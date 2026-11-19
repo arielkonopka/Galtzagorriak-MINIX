@@ -4,11 +4,11 @@ The launcher is the main screen: the list of apps you see after the boot screen,
 come back to when an app ends. It is also the **desktop** (spec K.6): its pages sit in a row,
 
 ```
-SETTINGS  <-  APPS  ->  HOME
+SETTINGS  <-  APPS  ->  HOME  ->  NOTES  ->  RUNNING
 ```
 
-and Left/Right move along it. APPS, the app list, is the page you start on. Notifications and
-Running pages come later, to the right of HOME.
+and Left/Right move along it. APPS, the app list, is the page you start on. HOME, NOTES (the
+notifications) and RUNNING are described in [Desktop and modules](desktop.md).
 
 ![The app list](img/launcher-list.png)
 
@@ -34,14 +34,15 @@ backlight (see [Buttons and gestures](buttons.md)) does not turn the page.
 
 HOME shows the **tiles** of the desktop's modules: small programs, often shell scripts, that
 put one line each on this page, such as the battery or the next bus. Up/Down move the bar,
-Left goes back to APPS. With no module running it says `no tiles`.
+Left goes back to APPS, Right to NOTES. With no module running it says `no tiles`. Writing a
+module: [Desktop and modules](desktop.md).
 
 A module writes its lines with the `guimod` command:
 
 ```
 guimod tile NAME TEXT ...      set or change the module's tile
 guimod status NAME TEXT ...    a short text (6 characters) on the status line
-guimod notify NAME TEXT ...    a notification: the count on the status line, the text noted
+guimod notify NAME TEXT ...    a notification: on the NOTES page, counted on the status line
 guimod close NAME              its tile and status go
 ```
 
@@ -58,9 +59,8 @@ Start it with `sh /usr/share/examples/gui/battile.sh &`. When the module ends or
 its tile goes (at the next key, or within a minute while HOME is shown). A module is your user
 plus its name, so it can change only its own tiles; at most 16 tiles and statuses together.
 
-A notification shows its text on the bottom line for 2 seconds and counts on the status line
-(`*1`). Until the Notifications page comes, going to HOME shows the last one again and clears the
-count.
+A notification shows its text on the bottom line for 2 seconds, counts on the status line
+(`*1`) until you open it, and stays on the NOTES page (the last 8) until you clear it there.
 
 **When the screen is redrawn.** Only when something changes: a key, a record from a module
 that changes what is shown, and the minute of the clock. With the light off, or while an app is
