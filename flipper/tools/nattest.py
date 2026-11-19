@@ -827,6 +827,9 @@ def subghz(r):
 	print("  RAM: subghz rx listening: %d bytes (free %d -> %d; text "
 	      "%d B in flash)" % (base - now, base, now,
 	      struct.unpack_from("<I", hdr, 8)[0]), flush=True)
+	out = r.output("subghz heap", 20)
+	check(out is not None and re.match(rb"heap: \d+ bytes for rx", out) is not None,
+	      "subghz heap: %s" % (out or b"").decode(errors="replace").strip())
 	out = r.output("/usr/tests/sgfake /tmp/p.sub; sleep 1; "
 		"kill -2 $rp; wait $rp; cat /tmp/rx.out", 120)
 	check(out is not None and b"Princeton 24bit Key:7C5703" in out

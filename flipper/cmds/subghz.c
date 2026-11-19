@@ -21,6 +21,7 @@
  *		subghz region [XX]	the radio region (R8.2): show it, or
  *					set it (once per boot, /etc/rc)
  *		subghz list		the protocols, what each can do
+ *		subghz heap		the heap receiving takes (bytes)
  *
  * The protocols are the Unleashed firmware's (libsubghz, src/lib/subghz):
  * every decoder and encoder.  KeeLoq and the other rolling codes need the
@@ -69,7 +70,8 @@ static int usage(void)
 		"       subghz tx_from_file FILE [REPEAT]\n"
 		"       subghz chat FREQ\n"
 		"       subghz region [EU|US|JP]\n"
-		"       subghz list\n");
+		"       subghz list\n"
+		"       subghz heap\n");
 	return 2;
 }
 
@@ -531,6 +533,20 @@ static int cmd_list(void)
 	return 0;
 }
 
+/* What receiving takes from the heap: every decoder's state (rx). */
+static int cmd_heap(void)
+{
+	SubGhzEnvironment *env;
+	SubGhzReceiver *rx = receiver(&env);
+
+	printf("heap: %lu bytes for rx (the environment and every decoder's "
+		"state), frame buffer %lu bytes static\n",
+		(unsigned long) subghz_heap_bytes, (unsigned long) sizeof(frame));
+	subghz_receiver_free(rx);
+	sg_env_free(env);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2) return usage();
@@ -541,5 +557,6 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "chat") == 0) return cmd_chat(argc, argv);
 	if (strcmp(argv[1], "region") == 0) return cmd_region(argc, argv);
 	if (strcmp(argv[1], "list") == 0) return cmd_list();
+	if (strcmp(argv[1], "heap") == 0) return cmd_heap();
 	return usage();
 }
