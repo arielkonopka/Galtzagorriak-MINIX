@@ -187,6 +187,41 @@ uint16_t hal_ow_now(void) { return 0; }
 void hal_ib_emu(int on) { (void) on; }		/* no reader in QEMU */
 int hal_ib_edge(void) { return 0; }
 void hal_ib_clear(void) { }
+
+/* R6.7 part 3b: no contact in QEMU, so a capture sees what is being
+ * played (a loopback, as if another Flipper emulated the key), from a
+ * point that moves on each time, with the reader's jitter of +-2 us on
+ * every level.  RAM: 12 B, QEMU only. */
+static uint32_t ib_src;
+static uint16_t ib_n, ib_at;
+static uint8_t ib_level;
+
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	ib_src = src;
+	ib_n = (uint16_t) n;
+	ib_level = (uint8_t) (level != 0);
+	return 0;
+}
+
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
+{
+	const uint16_t *s = (const uint16_t *) ib_src;
+	uint16_t *d = (uint16_t *) dst;
+	unsigned i, k;
+	int v;
+
+	(void) ms;
+	if (ib_n == 0) return 0;		/* nobody plays: no key */
+	ib_at = (uint16_t) ((ib_at + 7) % ib_n);
+	*level = (ib_level ^ ib_at) & 1;
+	for (i = 0; i < n; i++) {
+		k = (ib_at + i) % ib_n;
+		v = (int) s[k] + (int) ((i * 5u + k) % 5u) - 2;
+		d[i] = (uint16_t) (v < 1 ? 1 : v > 65535 ? 65535 : v);
+	}
+	return (int) n;
+}
 int hal_btn_pending(void) { return 1; }
 
 /* Sub-GHz, the QEMU backend (issue #302): a radio that tunes the stock

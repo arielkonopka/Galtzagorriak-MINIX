@@ -42,8 +42,26 @@ say "Resource busy", and the Flipper stays out of its deep sleep: emulation uses
 Programs do it with `ioctl(IBIOCEMU)` (`<minix/ibutton.h>`), which ends when they close the
 device or exit.
 
-Cyfral and Metakom keys are **(planned)** (spec R6.7 part 3b), as is an iButton app in the
-launcher.
+**Cyfral and Metakom keys** (the Russian intercom keys, spec R6.7 part 3b) use the same command,
+with the key as the stock firmware prints it (Cyfral 4 hex digits, Metakom 8):
+
+```
+ikey read                    # also prints "Cyfral A1B2" or "Metakom 0305090A"
+ikey emulate Cyfral A1B2
+ikey emulate -t 30 Metakom 0305090A
+```
+
+These keys are not 1-Wire: they send their number over and over as long and short levels on the
+contact. `ikey read` tries a Dallas key first, then records the contact's levels and decodes them.
+`ikey emulate` plays the key's levels on the contact in a loop. A Metakom number needs every byte
+with an even number of 1 bits (readers check it); `ikey` refuses any other. Writing Cyfral or
+Metakom blanks (TM01x) is not there. **On the Flipper this is not working yet:** the capture and
+playback hardware part comes after the first version, and until then `ikey` says "not implemented
+on this board yet, Dallas only" (Dallas keys work as before). It works in QEMU. Programs use
+`ioctl(IBIOCCAPT)` and `ioctl(IBIOCPLAY)` (`<minix/ibutton.h>`) with the line code in
+`src/lib/ibkey`.
+
+An iButton app in the launcher is **(planned)**.
 
 ## Voltages on the header pins (`/dev/adc`)
 

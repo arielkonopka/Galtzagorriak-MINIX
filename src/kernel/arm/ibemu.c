@@ -28,6 +28,8 @@
 #define IE_CMD		2	/* reading the command byte */
 #define IE_SEND		3	/* READ ROM: sending 64 bits */
 #define IE_SEARCH	4	/* SEARCH ROM: 64 x (bit, ~bit, choice) */
+#define IE_PLAY		5	/* not a Dallas key: a Cyfral or Metakom
+				 * pulse list plays (IBIOCPLAY, R6.7 part 3b) */
 
 #define IE_RESET_US	380	/* longer low: a reset (standard: 480) */
 #define IE_ONE_US	15	/* shorter low: a 1 written */
@@ -62,7 +64,7 @@ unsigned us;
 {
   int b;
 
-  if (e->st == IE_OFF) return(0);
+  if (e->st == IE_OFF || e->st == IE_PLAY) return(0);
   if (!rising) {			/* a slot starts */
 	e->low = 1;
 	if (e->st == IE_SEND) b = IE_ROMBIT(e, e->bit);

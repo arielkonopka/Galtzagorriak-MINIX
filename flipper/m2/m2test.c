@@ -23,6 +23,7 @@
 #include <minix/hid.h>
 #include <minix/subghz.h>
 #include "libhid.h"
+#include "ibkey.h"
 #include <minix/partition.h>
 #include <time.h>
 #include <utime.h>
@@ -1393,6 +1394,128 @@ static void ibemu_tests(void)
 	if (fd >= 0) close(fd);
 }
 
+/* R6.7 part 3b: Cyfral and Metakom.  QEMU's capture sees the list being
+ * played (a loopback), so IBIOCPLAY -> IBIOCCAPT -> libibkey must give the
+ * key back; then the rules (EINVAL, EBUSY, the close), then ikey itself:
+ * `ikey emulate Metakom` in the background, `ikey read` finds it.  ikey
+ * runs only twice here: a third run would put it in the flash text cache
+ * (T2), pages the flash budget does not have. */
+static unsigned short ibm_dur[IBK_MAXFRAME], ibm_cap[256];
+
+static int ibm_capt(int fd, unsigned n)
+{
+	struct ib_capt c;
+
+	c.dur = ibm_cap;
+	c.n = n;
+	c.ms = 50;
+	c.got = 0;
+	if (ioctl(fd, IBIOCCAPT, &c) < 0) return -1;
+	return c.got == n ? c.level : -2;
+}
+
+static int ibm_file_has(const char *path, const char *s)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	buf[n] = 0;
+	return strstr(buf, s) != NULL;
+}
+
+static pid_t ibm_run(const char *out, const char *a1, const char *a2,
+	const char *a3, const char *a4, const char *a5)
+{
+	pid_t p;
+	int fd;
+
+	if ((p = fork()) == 0) {
+		fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
+		execl("/bin/ikey", "ikey", a1, a2, a3, a4, a5, (char *) NULL);
+		_exit(99);
+	}
+	return p;
+}
+
+static void ibmisc_tests(void)
+{
+	static const unsigned char cy[2] = { 0xA1, 0xB2 };
+	struct ib_play q;
+	struct ib_emu e;
+	unsigned char key[IBK_MAXKEY], buf[8];
+	int fd, n, lv, kt, st, e1, e2;
+	pid_t p, r;
+
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		check(0, "ibmisc: open");
+		return;
+	}
+	errno = 0;
+	check(ibm_capt(fd, 256) == -1 && errno == ENODEV,
+		"ibmisc: IBIOCCAPT, nobody plays -> ENODEV");
+	check(ibm_capt(fd, 8) == -1 && errno == EINVAL,
+		"ibmisc: IBIOCCAPT, 8 durations -> EINVAL");
+	n = ibk_frame(IBK_CYFRAL, cy, ibm_dur, &lv, IBK_MAXFRAME);
+	memset(&q, 0, sizeof q);
+	q.dur = ibm_dur; q.n = (unsigned) n - 1; q.level = lv;
+	check(ioctl(fd, IBIOCPLAY, &q) < 0 && errno == EINVAL,
+		"ibmisc: IBIOCPLAY, an odd count -> EINVAL");
+	q.n = (unsigned) n;
+	ibm_dur[3] = 0;
+	check(ioctl(fd, IBIOCPLAY, &q) < 0 && errno == EINVAL,
+		"ibmisc: IBIOCPLAY, a 0 us level -> EINVAL");
+	(void) ibk_frame(IBK_CYFRAL, cy, ibm_dur, &lv, IBK_MAXFRAME);
+	q.served = 99;
+	check(ioctl(fd, IBIOCPLAY, &q) == 0 && q.served == 0,
+		"ibmisc: IBIOCPLAY Cyfral A1B2, nobody served yet");
+	lv = ibm_capt(fd, 256);
+	kt = lv >= 0 ? ibk_decode(ibm_cap, 256, lv, key) : 0;
+	check(kt == IBK_CYFRAL && key[0] == 0xA1 && key[1] == 0xB2,
+		"ibmisc: IBIOCCAPT (loopback) decodes as Cyfral A1B2");
+	check(ioctl(fd, IBIOCPLAY, &q) == 0 && q.served == 1,
+		"ibmisc: the capture counts as served");
+	e1 = read(fd, buf, 8) < 0 && errno == EBUSY;
+	memset(&e, 0, sizeof e);
+	e.on = 1;
+	e2 = ioctl(fd, IBIOCEMU, &e) < 0 && errno == EBUSY;
+	check(e1 && e2, "ibmisc: read and IBIOCEMU busy while playing");
+	if ((p = fork()) == 0) {
+		int f = open("/dev/ibutton", O_RDWR);
+
+		_exit(f >= 0 && ioctl(f, IBIOCPLAY, &q) < 0 && errno == EBUSY
+			? 0 : 1);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "ibmisc: another player gets EBUSY");
+	close(fd);				/* ends the playing */
+	fd = open("/dev/ibutton", O_RDWR);
+	errno = 0;
+	check(fd >= 0 && ibm_capt(fd, 256) == -1 && errno == ENODEV,
+		"ibmisc: after close nothing plays (ENODEV)");
+	if (fd >= 0) close(fd);
+
+	/* ikey end to end: emulate Metakom, read it */
+	p = ibm_run("/tmp/ike.out", "emulate", "-t", "3", "Metakom",
+		"0305090A");
+	(void) poll((struct pollfd *) NULL, 0, 700);
+	r = ibm_run("/tmp/ikr.out", "read", "-n", "4", (char *) NULL, NULL);
+	e1 = r > 0 && waitpid(r, &st, 0) == r && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
+	e2 = p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
+	check(e1 && ibm_file_has("/tmp/ikr.out", "Metakom 0305090A"),
+		"ibmisc: ikey read finds `ikey emulate Metakom 0305090A`");
+	check(e2 && ibm_file_has("/tmp/ike.out", "Read by a reader"),
+		"ibmisc: ikey emulate says a reader read it");
+	(void) unlink("/tmp/ike.out");
+	(void) unlink("/tmp/ikr.out");
+}
+
 /* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
  * it reads high). */
 static void ibutton_tests(void)
@@ -1422,6 +1545,7 @@ static void ibutton_tests(void)
 		"ibutton: too many steps -> EINVAL");
 	close(fd);
 	ibemu_tests();
+	ibmisc_tests();
 }
 #endif
 
