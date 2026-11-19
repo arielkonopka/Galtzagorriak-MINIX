@@ -86,6 +86,7 @@ static int listen_at(unsigned long hz, int *pk)
 	if (sg < 0) return 0;
 	if (write(sg, t + i, sizeof t - 1 - i) != (int) (sizeof t - 1 - i))
 		return 0;
+	lseek(sg, 0L, SEEK_SET);	/* one line, then EOF: from 0 again */
 	if ((n = read(sg, t, sizeof t)) <= 0) return 0;
 	return sp_parse(t, n, pk);
 }
