@@ -8,7 +8,7 @@ issue #302).
 
 | Part | State |
 |---|---|
-| `subghz rx`, `decode`, `list`, `region`, `heap` | **works**; `rx` on the Flipper still needs its check with real remotes (device checks, #109) |
+| `subghz rx`, `decode`, `list`, `region`, `heap` | **works**; on the Flipper `rx` decodes 31 of the 37 protocols a second (Unleashed) Flipper sends, checked 2026-11-19; real remotes are still to be tried |
 | `subghz tx`, `tx_from_file`, `chat` | **in QEMU** (the frames show on the console); on the Flipper the transmitter is **(planned)**, they say "no transmitter on this device yet" |
 
 ## Installing
@@ -19,6 +19,18 @@ pkg install /lib/pkg/subghz_1.0.tar
 
 The program is large (131 KB) and runs from flash, so it takes little RAM: about 28 KB while
 `subghz rx` listens (27.5 KB measured in QEMU), all freed when it ends.
+
+If `subghz` then says `no memory to start it`, its copy in flash is not in use yet. This
+happens after the install and after every restart (a known problem, #109). Run, as root:
+
+```
+pkg flash /usr/bin/subghz     # only after a new system image was flashed
+pkg bind /usr/bin/subghz
+```
+
+**Distance.** A remote held right against the Flipper can be too strong: the receiver is
+overloaded and nothing decodes. A second Flipper lying back to back with this one was too
+close in the check; about 1 m away worked.
 
 ## Commands
 
