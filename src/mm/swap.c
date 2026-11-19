@@ -12,10 +12,24 @@
  * foreground app from the bottom, everything else from the top).
  *
  * Slot i (192 KB) belongs to mproc[i].  Sector 0 is the header (magic,
- * pid, where the image goes, and in plain mode a CRC-32 of the image where
- * 12b will put the GCM tag); the image follows from sector 1.  A wrong
+ * pid, where the image goes, and in plain mode a CRC-32 of every 4 KB
+ * chunk of the image, R12.29); the image follows from sector 1.  A wrong
  * header, a CRC mismatch or a read error kills the process on swap-in: it
  * never runs with a damaged image.
+ *
+ * Less wear on the card (12g):
+ *   - R12.29: a swap-out writes only the chunks whose CRC differs from the
+ *     one in the slot's header, and nothing at all if none does.  The
+ *     header is trusted only while SWAPHDR says it describes the chunks on
+ *     the card (set by a whole swap-out and a good swap-in, cleared by
+ *     fork, a write of a chunk that is not yet covered by a new header,
+ *     and a change of the swap device);
+ *   - R12.30: a process woken from the card (SWAPHOT) is left alone by the
+ *     reserve until it has waited 120 s once; on demand it goes at once;
+ *   - R12.31: on demand, the CRCs first, then the header, then the changed
+ *     chunks in ascending order.  The reserve's job writes its chunks in
+ *     ascending order and the header last (the job may be voided between
+ *     steps, and the header must never claim a chunk not on the card).
  *
  * When:
  *   - on demand (R12.5 a): exec or fork cannot get memory.  Victims have
@@ -62,6 +76,7 @@
 #define SW_SECT		512		/* sector */
 #define SW_SLOT		(192UL * 1024)	/* R12.2: one per mproc slot */
 #define SW_CHUNK	8		/* sectors per transfer (4 KB, R12.23) */
+#define SW_NCHUNK	48		/* chunks in a slot: 383 sectors at most */
 #define SW_MAGIC	0x57535A47UL	/* "GZSW" */
 #define SW_MAJOR	3		/* WINCHESTER: /dev/hd* (FS dmap) */
 #define SW_TYPE		0x82		/* MBR partition type: swap */
@@ -69,6 +84,7 @@
 #define RATE_KB		256		/* reserve: at most this a minute */
 #define WAIT_DEMAND	1		/* s waited before on-demand swap */
 #define WAIT_RESERVE	10		/* s waited before reserve swap */
+#define WAIT_HOT	120		/* ... after a swap-in (R12.30) */
 #define MAX_RES_KB	192
 
 #define LOST		0x80		/* sw.mode: card gone or failing */
@@ -85,40 +101,45 @@ struct swhdr {
   unsigned long dstart, dlen;		/* data part, bytes */
   unsigned long sstart, slen;		/* stack part */
   unsigned long count;			/* write counter (12b) */
-  unsigned long tag[4];			/* plain: tag[0] = CRC-32; 12b: GCM */
+  unsigned long tag[4];			/* 12b: GCM (R12.10a: per chunk) */
+  unsigned long crc[SW_NCHUNK];		/* plain: CRC-32 of each chunk */
 };
 
 struct layout {			/* where a swapped image lives in RAM */
   phys_bytes d, dl;		/* data part: [d, d + dl) */
   phys_bytes s, sl;		/* stack part: [s, s + sl) */
   phys_clicks base, clicks;	/* [D.start, S.end) */
+  phys_bytes glo, ghi;		/* the gap [brk, sp): zeroed on swap-in */
 };
 
 /* All of MM's swap state (R12.26: at most 96 B). */
 PRIVATE struct {
   unsigned short since[NR_PROCS];	/* when it began to wait, s */
-  unsigned long crc;		/* reserve job: CRC so far */
   dev_t dev;			/* swap partition, NO_DEV: off */
   unsigned short res_kb;	/* reserve, KB (0: off) */
   unsigned short win;		/* reserve: its minute began, s */
   unsigned short wkb;		/* reserve: KB written in that minute */
-  unsigned short off;		/* reserve job: image sectors written */
+  unsigned short off;		/* reserve job: chunks done */
   unsigned short nout, nin;	/* swap-outs, swap-ins since boot */
   unsigned char busy;		/* reserve job: slot + 1, 0: none */
   unsigned char mode;		/* SW_OFF, SW_PLAIN; | LOST */
   unsigned char armed;		/* a synchronous alarm is set */
+  unsigned char trust;		/* reserve job: the header was SWAPHDR's */
 } sw;
 
 FORWARD _PROTOTYPE( unsigned short sw_now, (void)			);
 FORWARD _PROTOTYPE( int sw_layout, (struct mproc *rmp, struct layout *l));
 FORWARD _PROTOTYPE( int sw_io, (int op, int proc, unsigned long pos,
 					phys_bytes addr, phys_bytes n)	);
-FORWARD _PROTOTYPE( int sw_part, (struct mproc *rmp, struct layout *l,
-				int op, unsigned i, unsigned long *crc)	);
+FORWARD _PROTOTYPE( unsigned long sw_crc, (struct layout *l,
+			unsigned long v, phys_bytes a, phys_bytes n)	);
+FORWARD _PROTOTYPE( int sw_chunk, (struct mproc *rmp, struct layout *l,
+				int op, unsigned c, unsigned long *crc)	);
+FORWARD _PROTOTYPE( int sw_hdrread, (struct mproc *rmp, struct layout *l));
+FORWARD _PROTOTYPE( void sw_mkhdr, (struct mproc *rmp, struct layout *l));
 FORWARD _PROTOTYPE( int sw_eligible, (struct mproc *rmp, unsigned wait)	);
 FORWARD _PROTOTYPE( int sw_out, (struct mproc *rmp)			);
-FORWARD _PROTOTYPE( int sw_finish, (struct mproc *rmp, struct layout *l,
-						unsigned long crc)	);
+FORWARD _PROTOTYPE( int sw_finish, (struct mproc *rmp, struct layout *l));
 FORWARD _PROTOTYPE( void sw_fail, (char *why)				);
 FORWARD _PROTOTYPE( int sw_pending, (struct mproc *rmp)			);
 FORWARD _PROTOTYPE( void sw_kill, (struct mproc *rmp, char *why)	);
@@ -128,6 +149,7 @@ FORWARD _PROTOTYPE( int sw_room_at, (phys_clicks base, phys_clicks n,
 							int evict)	);
 
 #define nsect(l)	((unsigned) (((l)->dl + (l)->sl) / SW_SECT))
+#define nchunk(l)	((nsect(l) + SW_CHUNK - 1) / SW_CHUNK)
 #define slotpos(rmp)	((unsigned long) ((rmp) - mproc) * SW_SLOT)
 
 
@@ -188,6 +210,8 @@ struct layout *l;
   if (l->s > sp || (l->s > l->d + l->dl && l->d + l->dl < dend))
 	return(EINVAL);
   if (SW_SECT * (1 + nsect(l)) > SW_SLOT) return(EINVAL);
+  l->glo = dend;
+  l->ghi = sp > dend ? (phys_bytes) sp : dend;
   return(OK);
 }
 
@@ -218,36 +242,102 @@ phys_bytes n;			/* bytes, whole sectors */
 
 
 /*===========================================================================*
- *				sw_part					     *
+ *				sw_crc					     *
  *===========================================================================*/
-PRIVATE int sw_part(rmp, l, op, i, crc)
+PRIVATE unsigned long sw_crc(l, v, a, n)
+struct layout *l;
+unsigned long v;		/* CRC so far */
+phys_bytes a, n;		/* [a, a + n) */
+{
+/* CRC-32 of [a, a + n) without the gap: whole sectors reach past brk and
+ * below sp, and what lies there (a signal handler's frame below sp) is
+ * zeroed on swap-in, never used, so it is no reason to write a chunk. */
+  phys_bytes e = a + n, lo = l->glo, hi = l->ghi;
+
+  if (lo < a) lo = a;
+  if (hi > e) hi = e;
+  if (lo >= hi) return(crc32_more(v, (unsigned char *) a, n));
+  v = crc32_more(v, (unsigned char *) a, lo - a);
+  return(crc32_more(v, (unsigned char *) hi, e - hi));
+}
+
+
+/*===========================================================================*
+ *				sw_chunk				     *
+ *===========================================================================*/
+PRIVATE int sw_chunk(rmp, l, op, c, crc)
 struct mproc *rmp;
 struct layout *l;
-int op;
-unsigned i;			/* first image sector */
-unsigned long *crc;		/* CRC-32 so far */
+int op;				/* 0: CRC only, DEV_WRITE: write only,
+				 * DEV_READ: read, then its CRC */
+unsigned c;			/* chunk: image sectors 8c .. 8c + 7 */
+unsigned long *crc;		/* its CRC-32 (not for DEV_WRITE) */
 {
-/* Move up to 4 KB of the image, from image sector i, within one part.
- * The CRC covers the image as it is on the card.  Returns the sectors
- * done, or an error. */
-  unsigned ds = (unsigned) (l->dl / SW_SECT), n;
+/* One 4 KB chunk of the image (the last one may be shorter).  A chunk that
+ * spans the end of the data part and the start of the stack part is
+ * contiguous on the card but not in RAM: two transfers.  OK or EIO. */
+  unsigned ds = (unsigned) (l->dl / SW_SECT), i = c * SW_CHUNK, e, n;
+  unsigned long v = 0xFFFFFFFFUL;
   phys_bytes addr;
 
-  if (i < ds) {
-	addr = l->d + (phys_bytes) i * SW_SECT;
-	n = ds - i;
-  } else {
-	addr = l->s + (phys_bytes) (i - ds) * SW_SECT;
-	n = nsect(l) - i;
+  e = i + SW_CHUNK;
+  if (e > nsect(l)) e = nsect(l);
+  for (; i < e; i += n) {
+	if (i < ds) {
+		addr = l->d + (phys_bytes) i * SW_SECT;
+		n = (ds < e ? ds : e) - i;
+	} else {
+		addr = l->s + (phys_bytes) (i - ds) * SW_SECT;
+		n = e - i;
+	}
+	if (op != 0 && sw_io(op, (int) (rmp - mproc),
+			slotpos(rmp) + (1UL + i) * SW_SECT, addr,
+			(phys_bytes) n * SW_SECT) != OK) return(EIO);
+	if (op != DEV_WRITE)
+		v = sw_crc(l, v, addr, (phys_bytes) n * SW_SECT);
   }
-  if (n > SW_CHUNK) n = SW_CHUNK;
-  if (op == DEV_WRITE)
-	*crc = crc32_more(*crc, (unsigned char *) addr, (unsigned long) n * SW_SECT);
-  if (sw_io(op, (int) (rmp - mproc), slotpos(rmp) + (1UL + i) * SW_SECT,
-			addr, (phys_bytes) n * SW_SECT) != OK) return(EIO);
-  if (op == DEV_READ)
-	*crc = crc32_more(*crc, (unsigned char *) addr, (unsigned long) n * SW_SECT);
-  return((int) n);
+  *crc = ~v;
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				sw_hdrread				     *
+ *===========================================================================*/
+PRIVATE int sw_hdrread(rmp, l)
+struct mproc *rmp;
+struct layout *l;
+{
+/* Read the slot's header into HDR (a read does not wear the card).  Is it
+ * this process's, for this layout? */
+  struct swhdr *h = HDR;
+
+  if (sw_io(DEV_READ, MM_PROC_NR, slotpos(rmp), (phys_bytes) h,
+					(phys_bytes) SW_SECT) != OK)
+	return(FALSE);
+  return(h->magic == SW_MAGIC && h->pid == (unsigned long) rmp->mp_pid
+		&& h->dstart == l->d && h->dlen == l->dl
+		&& h->sstart == l->s && h->slen == l->sl);
+}
+
+
+/*===========================================================================*
+ *				sw_mkhdr				     *
+ *===========================================================================*/
+PRIVATE void sw_mkhdr(rmp, l)
+struct mproc *rmp;
+struct layout *l;
+{
+/* A new header in HDR, without the chunk CRCs. */
+  struct swhdr *h = HDR;
+
+  memset((char *) h, 0, SW_SECT);
+  h->magic = SW_MAGIC;
+  h->pid = (unsigned long) rmp->mp_pid;
+  h->dstart = l->d;
+  h->dlen = l->dl;
+  h->sstart = l->s;
+  h->slen = l->sl;
 }
 
 
@@ -284,29 +374,15 @@ unsigned wait;			/* it must have waited this long, s */
 /*===========================================================================*
  *				sw_finish				     *
  *===========================================================================*/
-PRIVATE int sw_finish(rmp, l, crc)
+PRIVATE int sw_finish(rmp, l)
 struct mproc *rmp;
 struct layout *l;
-unsigned long crc;
 {
-/* The image is on the card: write the header, tell the kernel, free the
+/* The image and its header are on the card: tell the kernel, free the
  * memory (R12.4). */
-  struct swhdr *h = HDR;
   int slot = (int) (rmp - mproc);
 
-  memset((char *) h, 0, SW_SECT);
-  h->magic = SW_MAGIC;
-  h->pid = (unsigned long) rmp->mp_pid;
-  h->dstart = l->d;
-  h->dlen = l->dl;
-  h->sstart = l->s;
-  h->slen = l->sl;
-  h->tag[0] = ~crc;
-  if (sw_io(DEV_WRITE, MM_PROC_NR, slotpos(rmp), (phys_bytes) h,
-						(phys_bytes) SW_SECT) != OK) {
-	sw_fail("write error");
-	return(EIO);
-  }
+  rmp->mp_flags |= SWAPHDR;
   if (sys_swap(slot, 1) != OK) return(EBUSY);
   rmp->mp_flags |= SWAPPED;
   free_mem(l->base, l->clicks);
@@ -324,22 +400,46 @@ unsigned long crc;
 PRIVATE int sw_out(rmp)
 struct mproc *rmp;
 {
-/* Swap one eligible process out now, 4 KB a transfer (other requests to
- * the card get in between). */
+/* Swap one eligible process out now.  R12.29: only the chunks that changed
+ * since the header on the card was written; R12.31: CRCs first, then the
+ * header, then those chunks in ascending order, 4 KB a transfer (other
+ * requests to the card get in between). */
   struct layout l;
-  unsigned long crc = 0xFFFFFFFFUL;
-  unsigned i;
-  int n;
+  struct swhdr *h = HDR;
+  unsigned long crc, chg[2];
+  unsigned c, nc;
+  int same;
 
   if (sw.busy == (rmp - mproc) + 1) sw.busy = 0;
   if (sw_layout(rmp, &l) != OK) return(EINVAL);
-  for (i = 0; i < nsect(&l); i += n) {
-	if ((n = sw_part(rmp, &l, DEV_WRITE, i, &crc)) < 0) {
+  nc = nchunk(&l);
+  same = (rmp->mp_flags & SWAPHDR) && sw_hdrread(rmp, &l);
+  if (!same) sw_mkhdr(rmp, &l);
+  chg[0] = chg[1] = 0;			/* on MM's stack: 0 B static */
+  for (c = 0; c < nc; c++) {
+	(void) sw_chunk(rmp, &l, 0, c, &crc);
+	if (!same || crc != h->crc[c]) {
+		chg[c >> 5] |= 1UL << (c & 31);
+		h->crc[c] = crc;
+	}
+  }
+  if (chg[0] | chg[1]) {
+	/* Until the last chunk is on the card the header claims too much. */
+	rmp->mp_flags &= ~SWAPHDR;
+	if (sw_io(DEV_WRITE, MM_PROC_NR, slotpos(rmp), (phys_bytes) h,
+					(phys_bytes) SW_SECT) != OK) {
 		sw_fail("write error");
 		return(EIO);
 	}
+	for (c = 0; c < nc; c++) {
+		if (!(chg[c >> 5] & (1UL << (c & 31)))) continue;
+		if (sw_chunk(rmp, &l, DEV_WRITE, c, &crc) != OK) {
+			sw_fail("write error");
+			return(EIO);
+		}
+	}
   }
-  return(sw_finish(rmp, &l, crc));
+  return(sw_finish(rmp, &l));
 }
 
 
@@ -439,10 +539,9 @@ struct mproc *rmp;
  * else the wake has to wait. */
   struct layout l;
   struct swhdr *h = HDR;
-  unsigned long crc = 0xFFFFFFFFUL;
-  phys_bytes dend;
-  unsigned i;
-  int n, slot = (int) (rmp - mproc);
+  unsigned long crc;
+  unsigned c;
+  int slot = (int) (rmp - mproc);
 
   if (!(rmp->mp_flags & SWAPPED)) return(OK);
   if ((sw.mode & LOST) || (rmp->mp_flags & SWAPBAD)) return(ENXIO);
@@ -471,26 +570,25 @@ struct mproc *rmp;
 								rmp->mp_pid);
 	goto bad;
   }
-  for (i = 0; i < nsect(&l); i += n) {
-	if ((n = sw_part(rmp, &l, DEV_READ, i, &crc)) < 0) {
+  /* R12.29: each chunk against its own CRC, also the ones a swap-out
+   * skipped because they had not changed. */
+  for (c = 0; c < nchunk(&l); c++) {
+	if (sw_chunk(rmp, &l, DEV_READ, c, &crc) != OK) {
 		sw_fail("read error");
 		goto bad;
 	}
-  }
-  if (~crc != HDR->tag[0]) {
-	printf("swap: %s (pid %d): CRC mismatch\n", rmp->mp_name,
+	if (crc != h->crc[c]) {
+		printf("swap: %s (pid %d): CRC mismatch\n", rmp->mp_name,
 								rmp->mp_pid);
-	goto bad;
+		goto bad;
+	}
   }
-  /* R12.6: the gap gets zeroes, never what the RAM held meanwhile. */
-  dend = l.d + ((phys_bytes) rmp->mp_seg[D].mem_len << CLICK_SHIFT);
-  {
-	vir_bytes sp;
-
-	sys_getsp(slot, &sp);
-	if (sp > dend) memset((char *) dend, 0, (size_t) (sp - dend));
-  }
-  rmp->mp_flags &= ~SWAPPED;
+  /* R12.6: the gap gets zeroes, never what the RAM held meanwhile (nor
+   * what the card holds there: the CRCs leave it out). */
+  if (l.ghi > l.glo) memset((char *) l.glo, 0, (size_t) (l.ghi - l.glo));
+  /* The card holds what is in RAM now (SWAPHDR stays); R12.30: woken
+   * from the card, so the reserve leaves it alone for a while. */
+  rmp->mp_flags = (rmp->mp_flags & ~SWAPPED) | SWAPHOT;
   sw.since[slot] = sw_now();
   sw.nin++;
   if (mem_trace)
@@ -640,9 +738,10 @@ PUBLIC void sw_step()
  * for the flash cache's work), and at most 256 KB a minute. */
   struct mproc *rmp, *best;
   struct layout l;
-  unsigned long b, z;
+  unsigned long b, z, crc;
   unsigned short now;
-  int n, slot;
+  unsigned c, nc;
+  int slot, same;
 
   sw.armed = FALSE;
   if (sw.mode != SW_PLAIN || sw.res_kb == 0) {
@@ -664,7 +763,10 @@ PUBLIC void sw_step()
 	}
 	best = NULL;
 	for (rmp = &mproc[INIT_PROC_NR + 1]; rmp < &mproc[NR_PROCS]; rmp++) {
-		if (!sw_eligible(rmp, WAIT_RESERVE)) continue;
+		/* R12.30: back from the card by its own wake: 120 s, once. */
+		if (!sw_eligible(rmp, (rmp->mp_flags & SWAPHOT)
+					? WAIT_HOT : WAIT_RESERVE)) continue;
+		rmp->mp_flags &= ~SWAPHOT;
 		slot = (int) (rmp - mproc);
 		if (best == NULL || (unsigned short) (now - sw.since[slot])
 			    > (unsigned short) (now - sw.since[best - mproc]))
@@ -676,7 +778,7 @@ PUBLIC void sw_step()
 	}
 	sw.busy = (unsigned char) (best - mproc + 1);
 	sw.off = 0;
-	sw.crc = 0xFFFFFFFFUL;
+	sw.trust = (best->mp_flags & SWAPHDR) != 0;
   }
 
   /* One chunk, if the system is idle. */
@@ -690,17 +792,43 @@ PUBLIC void sw_step()
 	sw_alarm(HZ);
 	return;
   }
-  if (sw.off < nsect(&l)) {
-	if ((n = sw_part(rmp, &l, DEV_WRITE, sw.off, &sw.crc)) < 0) {
-		sw_fail("write error");
-		return;
+  /* R12.29: the next chunk that differs from the header on the card (read
+   * again: mbuf does not live between steps); the ones before it that do
+   * not cost CRCs only.  The header still describes the chunks after the
+   * one this step writes, and it is no longer SWAPHDR's once a chunk is
+   * written. */
+  nc = nchunk(&l);
+  if (sw.off < nc) {
+	same = sw.trust && sw_hdrread(rmp, &l);
+	while (sw.off < nc) {
+		c = sw.off++;
+		(void) sw_chunk(rmp, &l, 0, c, &crc);
+		if (same && crc == HDR->crc[c]) continue;
+		rmp->mp_flags &= ~SWAPHDR;
+		if (sw_chunk(rmp, &l, DEV_WRITE, c, &crc) != OK) {
+			sw_fail("write error");
+			return;
+		}
+		sw.wkb += SW_CHUNK / 2;
+		break;
 	}
-	sw.off += n;
-	sw.wkb += (unsigned) n / 2;
   }
-  if (sw.off >= nsect(&l)) {
+  if (sw.off >= nc) {
 	sw.busy = 0;
-	if (sw_finish(rmp, &l, sw.crc) != OK) return;
+	/* The header last, from CRCs taken now: the process is blocked, its
+	 * RAM is what the job wrote (sw_touch voids the job otherwise).
+	 * Nothing changed: nothing written, not even the header. */
+	if (!(rmp->mp_flags & SWAPHDR)) {
+		sw_mkhdr(rmp, &l);
+		for (c = 0; c < nc; c++)
+			(void) sw_chunk(rmp, &l, 0, c, &HDR->crc[c]);
+		if (sw_io(DEV_WRITE, MM_PROC_NR, slotpos(rmp),
+			    (phys_bytes) HDR, (phys_bytes) SW_SECT) != OK) {
+			sw_fail("write error");
+			return;
+		}
+	}
+	if (sw_finish(rmp, &l) != OK) return;
   }
   sw_alarm(2);			/* the next chunk, or the next victim */
 }
@@ -727,6 +855,8 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
 	if ((rmp->mp_flags & (IN_USE | SWAPPED)) == (IN_USE | SWAPPED))
 		return(EBUSY);
   sw.busy = 0;
+  for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
+	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
   if (mode == SW_OFF) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;

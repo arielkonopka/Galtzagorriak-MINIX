@@ -1,0 +1,53 @@
+.TH ERASE 8
+.SH NAME
+erase \- tell the SD card a partition is empty
+.SH SYNOPSIS
+.nf
+\fBerase\fR [\fB\-q\fR] \fI/dev/hdN\fR
+.fi
+.SH DESCRIPTION
+.B Erase
+sends the SD ERASE command (CMD32, CMD33, CMD38) over a whole partition
+of the SD card, so the card knows that all of it is empty.
+A card that was once full (from a camera or a phone) then has its whole
+free pool for wear levelling again (Galtzagorriak MINIX, spec R12.33).
+Everything on the partition is gone: make a file system on it with
+.BR mkfs (1)
+afterwards, or use it for swap.
+.PP
+.B /etc/setup
+runs it over
+.BR /dev/hd2 " (" /usr ),
+.BR /dev/hd3 " (swap) and"
+.BR /dev/hd4 " (" /home )
+on the first boot, before
+.BR mkfs ,
+with the line "Preparing the card..." on the screen.
+It is an install-time step: an erase can take seconds, and on a cheap
+card it may start the card's garbage collection, so the system never
+erases at run time.
+.PP
+Only root may erase (the
+.B DIOCERASE
+ioctl on the partition device).
+.B Erase
+refuses the whole card
+.RB ( /dev/hd0 ),
+a partition that is mounted or holds a mounted subpartition, and the swap
+partition while swap is on, with
+.BR EBUSY .
+.TP
+.B \-q
+say nothing when the card or the driver cannot erase; only the exit
+status 2 tells.
+.SH "EXIT STATUS"
+0 erased, 1 an error, 2 the card or the driver cannot erase.
+.SH NOTES
+On the Flipper the SD driver cannot erase yet (task T18b):
+.B erase
+says "this card or driver cannot erase" and exits with 2, and setup goes
+on without it.
+In QEMU the disk image has no ERASE: the range gets the erased value,
+0x00.
+.SH "SEE ALSO"
+.BR mkfs (1).

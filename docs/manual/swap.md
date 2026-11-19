@@ -59,6 +59,46 @@ Without an MMU a swapped program must come back to exactly the same addresses. S
 the screen is placed at the bottom of RAM and everything else at the top. A swapped program then
 usually finds its place free. If it doesn't yet, its wake-up waits until the memory is free.
 
+## Swap and the card's wear
+
+Flash memory wears out with writing, and an SD card spreads its writes over its free blocks
+(wear levelling). Swap writes as little as it can:
+
+- **Only what changed.** The card keeps a checksum of every 4 KB piece of a swapped program.
+  When the same program is swapped out again, only the pieces that changed since are written,
+  and nothing at all if nothing changed. **A parked app that sleeps costs the card nothing**:
+  its next swap-out after a wake that changed nothing writes 0 bytes.
+- **Not what will wake soon.** A program that came back from the card because its own timer or
+  a signal woke it is left in RAM by the reserve until it has waited for 2 minutes (instead of
+  10 seconds), once. A parked app with a 1-minute timer therefore stays in RAM. When RAM is
+  really needed (a program cannot start), it is swapped out at once as before.
+- **In order.** The header first, then the pieces in ascending order: the card sees one
+  sequential write.
+- **Aligned partitions.** The first boot starts every partition on a 4 MiB boundary, so the
+  swap slots lie in as few of the card's erase units as possible (new cards only; an existing
+  card keeps its layout).
+- **An empty card is told so.** The first boot runs `erase` over `/usr`, swap and `/home`
+  before it makes the file systems (see [Installation](install.md), first boot).
+
+### Which card
+
+Typical use writes about 1 MB a day to swap, which no card minds. Prefer a branded card; a
+"High Endurance" or industrial card (the kind sold for dash cams) lasts longest. Avoid unbranded
+cards and cards that were full for a long time before, unless the first boot erased them.
+
+### erase
+
+```
+# erase /dev/hd3
+```
+
+`erase /dev/hdN` (root only) tells the card that a whole partition is empty (SD ERASE). Its data
+is gone; run `mkfs` after it (or `swapon` for the swap partition). It refuses the whole card
+(`/dev/hd0`), a mounted partition and the swap partition while swap is on (`EBUSY`). It is
+meant for setting up a card, never for normal use: an erase can take seconds. **(planned on the
+Flipper, T18b)**: until the SD driver can erase, it says "this card or driver cannot erase" and
+exits with status 2. See `man 8 erase`.
+
 ## Looking at it
 
 ```
