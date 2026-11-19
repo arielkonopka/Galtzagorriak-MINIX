@@ -158,6 +158,11 @@ a quick check that nothing is lost. Long frames are emulated the same way in rev
 (segments of equal length and load) and the kernel refills a small ring from it while the reader's
 own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
 
+A tag no decoder knows can be recorded as it is: `rfid raw /home/flipper/tag.ask.raw` (10 s; `-t
+SECS` for longer, `-c psk` for PSK tags, Ctrl-C ends it early) writes the signal in the same RAW
+format as the Unleashed firmware (`.ask.raw`, `.psk.raw`), so the file can be looked at on a PC
+(`flipper/tools/lfrawdump.py FILE`) or on a Flipper with Unleashed.
+
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
 firmware does):
 
