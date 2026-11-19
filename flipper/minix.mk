@@ -836,7 +836,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
 	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
-	   notepost
+	   notepost prwtest
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
