@@ -118,6 +118,22 @@ void hal_ib_clear(void)
 	EXTI->PR1 = EXTI_PR1_PIF14;
 }
 
+/* R6.7 part 3b, Cyfral and Metakom: not here yet.  The device side (the
+ * comparator capture, the pulse playback on PB14 by a timer) comes after
+ * the first version (issue #318); until then /dev/ibutton says ENXIO and
+ * ikey says so. */
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	(void) src; (void) n; (void) level;
+	return n == 0 ? 0 : -1;
+}
+
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
+{
+	(void) dst; (void) n; (void) ms; (void) level;
+	return -1;
+}
+
 /*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/
@@ -351,6 +367,18 @@ void hal_subghz_off(void)
 	spi1_off();
 	gpio_set(GPIOC, 4, 0);
 }
+
+/* Transmit and packets (R8.2): not written yet on the Flipper.  The
+ * kernel refuses with ENOTSUP until the local agent adds the CC1101 TX
+ * path (off by default, the Autonomy rule); the band and duty-cycle
+ * check runs before this either way. */
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max) { (void) p; (void) max; return -1; }
+int hal_subghz_fake(int what) { (void) what; return -1; }
+int hal_subghz_fake_take(int what) { (void) what; return 0; }
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n) { (void) p; (void) n; return -1; }
+int hal_subghz_line(uint32_t *hash) { (void) hash; return -1; }
 
 /*===========================================================================*
  *				Clocks					     *
@@ -1511,6 +1539,17 @@ int hal_disk_discard(uint32_t first, uint32_t last)
 out:
 	sd_select(0);
 	return r;
+}
+
+/* R12.33: ERASE comes with the disk driver work of T18b (CMD38 with
+ * argument 0, the card's erase timeout from its SD Status, card-detect
+ * checks as N.6).  Until then DIOCERASE answers ENOTTY and /etc/setup goes
+ * on without it. */
+int hal_disk_erase(uint32_t first, uint32_t last)
+{
+	(void) first;
+	(void) last;
+	return -2;
 }
 
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
@@ -3103,8 +3142,8 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 {
 	/* R9.0.4: the field: 125 kHz/50 %, PSK 62.5 kHz/25 % (stock
 	 * furi_hal_rfid_tim_read_start(62500, 0.25)), 134.2 kHz/50 % */
-	uint32_t t0, hz = carrier == 1 ? 62500u : carrier == 2 ? 134200u
-								: 125000u;
+	uint32_t t0, hz = (carrier & 3) == 1 ? 62500u
+				: (carrier & 3) == 2 ? 134200u : 125000u;
 	uint32_t period = (SystemCoreClock + hz / 2) / hz;
 
 	if (n == 0) return -1;
@@ -3123,7 +3162,7 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;
 	TIM1->ARR = period - 1;
-	TIM1->CCR1 = carrier == 1 ? period / 4 : period / 2;
+	TIM1->CCR1 = (carrier & 3) == 1 ? period / 4 : period / 2;
 	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 	TIM1->CCMR2 = 0;
 	TIM1->CCER = TIM_CCER_CC1NE;
@@ -3148,8 +3187,11 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
 	DMA1_Channel4->CMAR = dst;
 	DMA1_Channel4->CNDTR = n;
+	DMA1->IFCR = DMA_IFCR_CGIF4;
 	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
-							| DMA_CCR_EN;
+		| (carrier & HAL_RFID_STREAM ? DMA_CCR_CIRC | DMA_CCR_HTIE
+				| DMA_CCR_TCIE : 0)		/* R9.0.5 */
+		| DMA_CCR_EN;
 	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
 	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
 	TIM2->ARR = 0xFFFFFFFF;
@@ -3161,8 +3203,27 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM2->EGR = TIM_EGR_UG;
 	TIM2->SR = 0;
 	TIM2->DIER = TIM_DIER_CC4DE;
+	t0 = (COMP1->CSR & COMP_CSR_VALUE) != 0;	/* the level the first
+						 * captured edge leaves */
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
-	return 0;
+	return (int) t0;
+}
+
+/* R9.0.5: the stream's DMA interrupts (the half and the end of the ring):
+ * which halves have been filled since the last call (bit 0 the first, bit 1
+ * the second), acked. */
+int hal_rfid_stream_irq(void)
+{
+	return DMA1_Channel4_IRQn;
+}
+
+unsigned hal_rfid_stream_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF4 ? 1u : 0) | (isr & DMA_ISR_TCIF4 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF4 | DMA_IFCR_CTCIF4 | DMA_IFCR_CGIF4;
+	return r;
 }
 
 void hal_rfid_stop(void)
@@ -3258,6 +3319,9 @@ void hal_rfid_capture_stop(void)
  * are physical addresses of n 32-bit words; the caller pins the memory. */
 int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 {
+	unsigned irq = n & HAL_RFID_REFILL;	/* R9.0.6: a ring, refilled */
+
+	n &= ~HAL_RFID_REFILL;
 	if (n == 0) return -1;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
@@ -3296,13 +3360,31 @@ int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 	DMA1_Channel6->CMAR = pulse;
 	DMA1_Channel6->CNDTR = n;
 	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
-		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
+		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+		| (irq ? DMA_CCR_HTIE | DMA_CCR_TCIE : 0) | DMA_CCR_EN;
 	DMA1_Channel6->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
 		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
 	TIM2->DIER = TIM_DIER_UDE;		/* every update takes the next pair */
 	TIM2->CNT = 0;
 	TIM2->CR1 = TIM_CR1_CEN;
 	return 0;
+}
+
+/* R9.0.6: the emulation ring's half/complete interrupt (channel 6 takes
+ * its pairs on the same trigger, so channel 5's tells for both): which
+ * halves have been played since the last call (bit 0 the first), acked. */
+int hal_rfid_emu_irq(void)
+{
+	return DMA1_Channel5_IRQn;
+}
+
+unsigned hal_rfid_emu_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF5 ? 1u : 0) | (isr & DMA_ISR_TCIF5 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF5 | DMA_IFCR_CTCIF5 | DMA_IFCR_CGIF5;
+	return r;
 }
 
 void hal_rfid_emulate_stop(void)

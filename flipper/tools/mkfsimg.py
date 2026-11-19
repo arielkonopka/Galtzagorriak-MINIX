@@ -24,7 +24,8 @@ Mode strings: type (- d c b), setuid (- u), setgid (- g), octal perms
 Host paths are relative to --root (default: the PROTO's directory).
 
 --mbr also writes a whole-disk image with an MBR and the file system as
-partition 1 (type 0x81) at sector 2048, laid out like the SD card.
+partition 1 (type 0x81) at sector 8192 (4 MiB, spec R12.32), laid out like
+the SD card.
 """
 import argparse
 import os
@@ -265,7 +266,7 @@ def main():
           + (f"; trimmed to {len(img) // 1024} KB" if a.trim else ""))
 
     if a.mbr:
-        start = 2048
+        start = 8192                # 4 MiB: the SD allocation unit
         nsec = blocks * 2
         mbr = bytearray(512)
         mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\x00\x02\x00", 0x81,

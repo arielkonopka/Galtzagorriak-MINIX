@@ -11,9 +11,11 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest
+TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
+	   spectest pmstattest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey \
+     run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -30,6 +32,10 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
+# libibkey (spec R6.7 part 3b): the Unleashed Cyfral and Metakom iButton
+# protocols, every key round trip (make ibkeytest).
+run-ibkey:
+	$(MAKE) -C $(MROOT)/flipper/tests/ibkey test
 # libmodem (spec section P, ACP.1, ACP.2): data modems between two
 # Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
 run-modem:
@@ -38,6 +44,20 @@ run-modem:
 # DE, UTF-8, the report builders (make hidtest).
 run-hid:
 	$(MAKE) -C $(MROOT)/flipper/tests/hid test
+# libsubghz (Phase 9, issue #302): the Unleashed Sub-GHz protocols; every
+# RAW capture of the Unleashed unit tests, encoder round trips, a fuzz
+# (make subghztest).
+run-subghz:
+	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
+
+# mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
+# pipe, then a short libFuzzer run of the container parser (AC10.4.6;
+# needs clang, skipped without it; the PR runs it for an hour).
+run-mtpd:
+	$(MAKE) -C $(MROOT)/flipper/mtpd test
+	if command -v clang >/dev/null; then \
+	  $(MAKE) -C $(MROOT)/flipper/mtpd fuzz FUZZTIME=60; \
+	else echo "mtpd fuzz: no clang, skipped"; fi
 
 # test(1) (src/commands/simple/test.c, #118): the POSIX file tests.
 run-testcmd: $(B)/testcmd testcmd.sh
@@ -86,6 +106,29 @@ $(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/ap
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) icontest.c $(MROOT)/flipper/gui/appline.c -o $@
 
+# The launcher's Stock style (R5.6b, AC5.7): launcher_stock.c against the
+# stock menu.c and submenu as ported into libfuri, from the same entries.
+FURI	:= $(MROOT)/flipper/lib/furi
+FURI_SRC := $(FURI)/src/thread.c $(FURI)/src/sync.c $(FURI)/src/timer.c \
+	    $(FURI)/src/record.c $(FURI)/src/string.c $(FURI)/src/check.c \
+	    $(FURI)/src/fdwait.c $(FURI)/src/port_host.c \
+	    $(wildcard $(FURI)/src/gui/*.c $(FURI)/src/gui/modules/*.c \
+	    $(FURI)/src/gui/modules/widget_elements/*.c) $(wildcard $(FURI)/u8g2/*.c)
+$(B)/stocktest: stocktest.c $(MROOT)/flipper/gui/gui.c $(MROOT)/flipper/gui/launcher_stock.c \
+		$(MROOT)/flipper/gui/appline.c $(FURI_SRC)
+	@mkdir -p $(B)
+	$(CC) -O1 -g -Wall -Wno-unused-function -Wno-unused-parameter -std=gnu11 $(SAN) \
+	    -DFURI_HOST -I$(FURI)/include -I$(FURI)/include/gui \
+	    -I$(FURI)/include/gui/modules -I$(FURI)/u8g2 -I$(FURI)/src/gui -I$(FURI) \
+	    -I$(MROOT)/flipper/hal/common stocktest.c \
+	    $(MROOT)/flipper/gui/launcher_stock.c $(MROOT)/flipper/gui/appline.c \
+	    $(FURI_SRC) -lpthread -o $@
+
+# specmath.c: the Spectrum app's steps, scale, zoom and greys (issue #157).
+$(B)/spectest: spectest.c $(MROOT)/flipper/gui/specmath.c $(MROOT)/flipper/gui/specmath.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wextra spectest.c $(MROOT)/flipper/gui/specmath.c -o $@
+
 # winrec.c and libgm: the window records of spec K.8 (T23b).
 $(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
 		$(MROOT)/src/lib/gm/gm.c $(MROOT)/src/lib/gm/gm.h
@@ -106,7 +149,12 @@ $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
 
+# pmstat.h: the Stop2 counters of /dev/power (T14b, R6.8, #284).
+$(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) pmstattest.c -o $@
+
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz

@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <minix/callnr.h>
 #include <minix/com.h>
+#include <minix/subghz.h>
 #include "dev.h"
 #include "file.h"
 #include "fproc.h"
@@ -217,6 +218,11 @@ PUBLIC int do_ioctl()
   if ( (rip->i_mode & I_TYPE) != I_CHAR_SPECIAL
 	&& (rip->i_mode & I_TYPE) != I_BLOCK_SPECIAL) return(ENOTTY);
   dev = (dev_t) rip->i_zone[0];
+  /* #326: the Sub-GHz region (the bands a transmit may use) is set by the
+   * superuser only (/etc/rc).  The device is 0660 group subghz, and the
+   * kernel does not know the caller's uid, so FS checks it here.  'Q' is
+   * the Sub-GHz ioctl group only, so no other device sees this number. */
+  if (m.TTY_REQUEST == SGIOCREGION && !super_user) return(EPERM);
   find_dev(dev);
 
   dev_mess= m;

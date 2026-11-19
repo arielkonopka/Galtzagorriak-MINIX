@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [badusb|jiggle|teklatua]  (only the AC11.3.1, AC11.3.3
-       or AC11.3.2 part)
+Usage: nattest.py [badusb|jiggle|teklatua|subghz|notes|launcher-style]  (only
+       the AC11.3.1, AC11.3.3, AC11.3.2, Sub-GHz, T23c or T31 part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -61,6 +61,26 @@ timed, remind and alarm packages and checks:
            once plugged in; the desktop's status line shows J while it
            runs and not after jiggle -k, which ends it; a second jiggle
            is refused; its RAM (free -v, memuse) is at most 1 KB
+  #302     subghz (only with the argument subghz): a recorded Princeton
+           capture fed to subghz rx (tests: sgfake, SGIOCFAKE) prints
+           "Princeton 24bit Key:7C5703"; tx_from_file sends the file's
+           stream (QEMU's sg> tx lines); a 315 MHz transmit in region EU
+           is refused; the RAM of subghz rx listening
+
+  T23c     the desktop's Notifications page (spec K.6) with fake
+           buttons: 10 notifications posted through libapp's
+           notify_post() (tests package: notepost, do-not-disturb on so
+           that no alert rings) -> NOTES lists only the newest 8, newest
+           first, each marked unread, and the status line says *8; OK
+           opens one (sender, title, text; *7), OK keeps it, Back clears
+           one (on the list and in the opened view); RUNNING says
+           nothing runs (R12.20 not there yet); the launcher's free RAM
+           with 8 notifications (ACK.4)
+
+  T31      the launcher's Stock style (spec R5.6b, AC5.7; only with the
+           argument launcher-style): Style toggled on its settings page,
+           a frame of each style, the Style: line in /etc/launcher.conf,
+           FURI_STYLE=pine|stock in an app it starts
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -221,6 +241,12 @@ def win_only(r, prog):
 	     "test -f /etc/launcher.conf && cp /etc/launcher.conf /tmp/lc.bak; "
 	     "grep ':=/usr/bin/%s$' /tmp/apps.bak > /etc/apps; "
 	     "echo 'GuiLog: on' >> /etc/launcher.conf" % prog, 20)
+	return reread(r)
+
+
+def reread(r):
+	"""Make the launcher read /etc/apps and its conf again: run the app
+	under its cursor and end it with Back.  Returns the free RAM then."""
 	tap(r, "back")		# lights the screen; Back on a page: the list
 	tap(r, "back")
 	# whichever app the cursor is on (the Console after boot, Kanpaia
@@ -764,8 +790,322 @@ def badusb(r):
 	r.sh("rm -f /home/flipper/badusb/zwait.txt", 20)
 	win_restore(r)
 
+def sg_values(path):
+	"""The RAW_Data durations of a .sub capture, as the kernel takes
+	them from subghz tx_from_file: the same sign merged, the carrier
+	on first, each at most 1 s (SG_DURATION_MAX)."""
+	out = []
+	with open(path) as f:
+		for line in f:
+			if not line.startswith("RAW_Data:"):
+				continue
+			for v in map(int, line[9:].split()):
+				v = max(-1000000, min(1000000, v))
+				if v == 0 or not out and v < 0:
+					continue
+				if out and (out[-1] > 0) == (v > 0):
+					s = out[-1] + v
+					out[-1] = max(-1000000, min(1000000, s))
+				else:
+					out.append(v)
+	return out
 
-PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua}
+# The LCD's 4x6 font (hal/common/font4x6.c): to read text off a frame.
+def _font():
+	with open(os.path.join(HERE, "..", "hal", "common", "font4x6.c")) as f:
+		src = f.read()
+	return [bytes(int(v, 16) for v in m.group(1).split(","))
+		for m in re.finditer(r"\{(0x[0-9a-f]{2}(?:,0x[0-9a-f]{2}){5})\}",
+				     src)]
+
+
+FONT = _font()
+
+
+def lcd_frame(r):
+	"""The 1 KB frame of /dev/lcd (page-major, as m2test's lgrab)."""
+	out = clean(r.output("dd if=/dev/lcd bs=1024 count=1 2>/dev/null | "
+			     "od -bv", 30))	# MINIX od: octal bytes
+	b = bytes(int(h, 8) for h in re.findall(rb"(?<![0-9])[0-7]{3}(?![0-9])",
+						 out))
+	if len(b) != 1024:
+		print("  lcd_frame: %d bytes: %r" % (len(b), out[:300]))
+		return None
+	return b
+
+
+def lpix(fb, x, y):
+	return fb[(y >> 3) * 128 + x] >> (y & 7) & 1
+
+
+def show(fb):
+	"""A frame as text, for a failed check."""
+	if fb is not None:
+		for y in range(64):
+			print("  |" + "".join("#" if lpix(fb, x, y) else "."
+					      for x in range(128)))
+
+
+def text_at(fb, x, y, s, inv=False):
+	"""Whether s is drawn at x, y (gui_text; inv: white on black).  The
+	glyphs' top 5 rows: the 6th is under the next row's selection bar."""
+	if fb is None or x < 0 or x + 4 * len(s) > 128:
+		return False
+	for i, c in enumerate(s):
+		g = FONT[ord(c) - 32]
+		for gy in range(5):
+			for gx in range(4):
+				want = 1 if g[gy] & (0x80 >> gx) else 0
+				if lpix(fb, x + 4 * i + gx, y + gy) != want ^ inv:
+					return False
+	return True
+
+
+def text_in(fb, y, s, inv=False):
+	"""Whether s is drawn anywhere on the text line at y."""
+	return any(text_at(fb, x, y, s, inv) for x in range(0, 129 - 4 * len(s)))
+
+
+def notes(r):
+	"""T23c (spec K.6, K.3, K.4): the Notifications and Running pages of
+	the launcher of /etc/rc, driven by fake buttons, from APPS."""
+	if r.sh("test -x /usr/tests/notepost", 20) != 0:
+		check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 300) == 0,
+			"install the tests package (notepost)")
+	# do-not-disturb all day: notify_post() lists them, no alert rings
+	r.sh("rm -f /tmp/nc.bak; test -f /etc/notify.conf && "
+	     "cp /etc/notify.conf /tmp/nc.bak; "
+	     "echo 'Dnd: 00:00-23:59' > /etc/notify.conf", 20)
+	if hm(time.time()) == "23:59":
+		r.sh("sleep 61", 90)
+	tap(r, "back", lit=True)	# lights the screen
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True), "T23c: the launcher on APPS")
+	base = freebytes(r)
+	out = clean(r.output("/usr/tests/notepost 10; echo st=$?", 60))
+	check(out is not None and b"st=0" in out,
+		"T23c: notify_post() 10 times (notepost)")
+	r.sh("sleep 1", 20)
+	now = freebytes(r)
+	print("  RAM: launcher with 8 notifications: %d bytes more (free %d "
+	      "-> %d; the table is fixed, in its .bss)" % (base - now, base, now),
+	      flush=True)
+	check(base - now <= 0, "ACK.4: 8 notifications take no RAM beyond "
+	      "the launcher's fixed table")
+	tap(r, "right", lit=True)			# HOME
+	tap(r, "right", lit=True)			# NOTES
+	fb = lcd_frame(r)
+	rows = [text_at(fb, 11, 7 + 6 * i, "Note %d" % (10 - i), i == 0)
+		and text_at(fb, 6, 7 + 6 * i, "*", i == 0) for i in range(8)]
+	check(text_in(fb, 1, "NOTES", True) and all(rows),
+		"T23c: NOTES lists Note 10 .. Note 3, newest first, all unread")
+	if not all(rows):
+		print("  rows: %s" % rows)
+		show(fb)
+	check(not any(lpix(fb, 127, y) for y in range(13, 55))
+	      and text_in(fb, 1, "1/8", True),
+	      "T23c: only the last 8 are kept (no scroll mark, 1/8)")
+	check(text_in(fb, 1, "*8", True), "T23c: the status line: *8 unread")
+	check(text_in(fb, 58, "<Home OK Open Back Clear >Run"),
+		"T23c: the hint line of NOTES")
+	tap(r, "ok", lit=True)				# open Note 10
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "NOTE", True) and text_at(fb, 1, 7, "info")
+	      and text_at(fb, 1, 13, "Note 10")
+	      and text_at(fb, 1, 19, "Text of note 10")
+	      and text_in(fb, 1, "*7", True)
+	      and text_in(fb, 58, "OK Keep  Back Clear"),
+	      "T23c: OK opens it: sender, title, text; *7 unread")
+	tap(r, "ok", lit=True)				# keep it
+	fb = lcd_frame(r)
+	check(text_at(fb, 11, 7, "Note 10", True)
+	      and not text_at(fb, 6, 7, "*", True)
+	      and text_in(fb, 1, "*7", True),
+	      "T23c: OK keeps it, read now (no *), *7")
+	tap(r, "down", lit=True)
+	tap(r, "back", lit=True)			# clear Note 9
+	fb = lcd_frame(r)
+	check(text_at(fb, 11, 7, "Note 10") and text_at(fb, 11, 13, "Note 8", True)
+	      and text_at(fb, 11, 43, "Note 3") and not text_at(fb, 11, 49, "Note 3")
+	      and text_in(fb, 1, "*6", True) and text_in(fb, 1, "2/7", True),
+	      "T23c: Back on the list clears one (7 left, *6)")
+	if not text_at(fb, 11, 13, "Note 8", True): show(fb)
+	tap(r, "up", lit=True)
+	tap(r, "ok", lit=True)				# Note 10 again
+	tap(r, "back", lit=True)			# clear it from the view
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "NOTES", True) and text_at(fb, 11, 7, "Note 8", True)
+	      and text_in(fb, 1, "1/6", True) and text_in(fb, 1, "*6", True),
+	      "T23c: Back on an opened one clears it (6 left)")
+	tap(r, "right", lit=True)			# RUNNING
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "RUNNING", True)
+	      and text_in(fb, 24, "nothing running"),
+	      "T23c: RUNNING: nothing running (R12.20 not there yet)")
+	for _ in range(3):
+		tap(r, "left", lit=True)		# NOTES, HOME, APPS
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and text_in(fb, 1, "*6", True),
+		"T23c: Left back to APPS, the count stays")
+	r.sh("rm -f /etc/notify.conf; test -f /tmp/nc.bak && "
+	     "cp /tmp/nc.bak /etc/notify.conf", 20)
+
+
+def style_toggle(r):
+	"""APPS -> SETTINGS -> Launcher -> OK on Style (launcher_test of m2test)."""
+	tap(r, "left", lit=True)			# SETTINGS
+	for _ in range(7):
+		tap(r, "down", 0, lit=True)		# Launcher
+	tap(r, "ok", lit=True)
+	for _ in range(3):
+		tap(r, "down", 0, lit=True)		# Style
+	tap(r, "ok", lit=True)				# toggles, redrawn at once
+
+
+def stock_apps(fb):
+	"""The Apps page as the stock menu: the frame of the selected entry
+	(rows 21 and 42), the scroll bar at x 126, no title bar."""
+	return fb is not None and not lpix(fb, 0, 0) and not lpix(fb, 64, 0) \
+		and lpix(fb, 126, 0) and all(lpix(fb, x, 21) and lpix(fb, x + 1, 42)
+					     for x in range(2, 122))
+
+
+def style_of(r, want):
+	"""OK on the app under the cursor (/tmp/sty.sh): its FURI_STYLE."""
+	r.sh("rm -f /tmp/sty.out", 20)
+	tap(r, "ok", 2, lit=True)
+	out = file_out(r, "cat /tmp/sty.out 2>/dev/null",
+		       lambda o: clean(o).strip(), 20)
+	if clean(out).strip() != want:
+		print("  sty.out: %r" % out)
+	return clean(out).strip() == want
+
+
+def launcher_style(r):
+	"""T31 (spec R5.6b, AC5.7): the launcher of /etc/rc in both styles,
+	driven by fake buttons: a frame of each, the Style: line it writes
+	to /etc/launcher.conf and FURI_STYLE in an app it starts."""
+	r.sh("cp /etc/apps /tmp/apps.bak; rm -f /tmp/lc.bak; "
+	     "test -f /etc/launcher.conf && cp /etc/launcher.conf /tmp/lc.bak; "
+	     "echo 'echo $FURI_STYLE > /tmp/sty.out' > /tmp/sty.sh; "
+	     "(echo 'Styl:root:@app:/bin/sh /tmp/sty.sh'; "
+	     "grep -v '^#' /tmp/apps.bak) > /etc/apps", 20)
+	reread(r)			# the cursor on Styl now
+	tap(r, "back", lit=True)
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and lpix(fb, 127, 0),
+	      "AC5.7: Pine: the APPS title bar")
+	if fails: show(fb)
+	check(style_of(r, b"pine"), "AC5.7: an app started in Pine sees FURI_STYLE=pine")
+	style_toggle(r)
+	fb = lcd_frame(r)
+	check(fb is not None and not lpix(fb, 0, 0) and not lpix(fb, 127, 1)
+	      and lpix(fb, 5, 51),
+	      "AC5.7: Style -> stock on the settings page, redrawn at once (submenu look)")
+	tap(r, "back", lit=True)			# SETTINGS
+	tap(r, "back", lit=True)			# APPS, the conf written
+	fb = lcd_frame(r)
+	ok = stock_apps(fb)
+	check(ok, "AC5.7: Stock: the Apps page as the stock menu")
+	if not ok: show(fb)
+	out = clean(r.output("grep -c '^Style: stock$' /etc/launcher.conf; "
+			     "cat /etc/launcher.conf", 20))
+	check(out.split(b"\n")[0].strip() == b"1",
+	      "AC5.7: /etc/launcher.conf has one Style: stock line")
+	if fails: print("  launcher.conf: %r" % out)
+	check(style_of(r, b"stock"), "AC5.7: an app started in Stock sees FURI_STYLE=stock")
+	fb = lcd_frame(r)
+	check(stock_apps(fb), "AC5.7: Stock: the menu is back after the app")
+	style_toggle(r)					# back to Pine
+	tap(r, "back", lit=True)
+	tap(r, "back", lit=True)
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and lpix(fb, 127, 0),
+	      "AC5.7: Style: pine again, the title bar is back")
+	out = clean(r.output("grep -c '^Style: pine$' /etc/launcher.conf; "
+			     "cat /etc/launcher.conf", 20))
+	check(out.split(b"\n")[0].strip() == b"1",
+	      "AC5.7: /etc/launcher.conf has Style: pine again")
+	check(style_of(r, b"pine"), "AC5.7: an app started in Pine again sees FURI_STYLE=pine")
+	win_restore(r)
+	r.sh("rm -f /tmp/sty.sh /tmp/sty.out", 20)
+
+
+def subghz(r):
+	"""Issue #302: subghz in QEMU (package subghz, tests: sgfake).  A
+	recorded Princeton capture fed to subghz rx (SGIOCFAKE) decodes;
+	tx_from_file sends the file's stream (QEMU's sg> tx lines); a
+	transmit outside the region's bands is refused; the RAM of
+	subghz rx while it listens."""
+	vec = os.path.join(HERE, "..", "tests", "subghz", "vectors",
+		"princeton_raw.sub")
+	check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 300) == 0,
+		"install the tests package (sgfake)")
+	check(r.sh("pkg install /lib/pkg/subghz_1.0.tar", 300) == 0,
+		"install the subghz package")
+	# the capture onto the disk, 12 values a line (the console's line)
+	with open(vec) as f:
+		lines = f.read().splitlines()
+	r.sh("rm -f /tmp/p.sub", 20)
+	for l in lines:
+		if not l.startswith("RAW_Data:"):
+			r.sh("echo '%s' >>/tmp/p.sub" % l, 20)
+			continue
+		v = l[9:].split()
+		for i in range(0, len(v), 12):
+			r.sh("echo 'RAW_Data: %s' >>/tmp/p.sub"
+			     % " ".join(v[i:i + 12]), 20)
+	out = r.output("subghz region; subghz region EU; subghz region", 20)
+	check(out is not None and out.split()[-1:] == [b"EU"],
+		"subghz region EU (once per boot)")
+	if fails: print(out)
+
+	base = freebytes(r)
+	r.sh("subghz rx 433920000 >/tmp/rx.out 2>&1 & rp=$!; sleep 2", 20)
+	now = freebytes(r)
+	with open(os.path.join(powercut.MB, "bin", "subghz"), "rb") as f:
+		hdr = f.read(16)
+	print("  RAM: subghz rx listening: %d bytes (free %d -> %d; text "
+	      "%d B in flash)" % (base - now, base, now,
+	      struct.unpack_from("<I", hdr, 8)[0]), flush=True)
+	out = r.output("subghz heap", 20)
+	check(out is not None and re.match(rb"heap: \d+ bytes for rx", out) is not None,
+	      "subghz heap: %s" % (out or b"").decode(errors="replace").strip())
+	out = r.output("/usr/tests/sgfake /tmp/p.sub; sleep 1; "
+		"kill -2 $rp; wait $rp; cat /tmp/rx.out", 120)
+	check(out is not None and b"Princeton 24bit Key:7C5703" in out
+		and b"Packets received" in out,
+		"subghz rx: the recorded Princeton capture (sgfake) decodes: "
+		"Princeton 24bit Key:7C5703")
+	if out is None or b"7C5703" not in out: print(out)
+
+	mark = len(r.out)
+	st = r.sh("subghz tx_from_file /tmp/p.sub", 120)
+	got = []
+	for m in re.finditer(rb"sg> tx 433920000 (\d+)((?:\r?\nsg>(?: -?\d+)+)*)",
+			r.out[mark:]):
+		vals = [int(x) for x in re.findall(rb"-?\d+", m.group(2))]
+		if len(vals) != int(m.group(1)):
+			got = None
+			break
+		got += vals
+	want = sg_values(vec)
+	check(st == 0 and got == want, "subghz tx_from_file: QEMU's sg> tx "
+	      "lines give back the file's stream (%d durations)" % len(want))
+	if fails and got != want:
+		print("  got %s ... (%s), want %s ..." % (got and got[:8],
+		      got and len(got), want[:8]))
+
+	out = r.output("subghz tx 7C5703 315000000 400 3; echo st=$?", 30)
+	check(out is not None and b"refused: outside the region's bands" in out
+		and b"st=1" in out and b"sg> tx 315" not in r.out[mark:],
+		"subghz tx at 315 MHz in region EU: refused")
+	if fails: print(out)
+	r.sh("rm -f /tmp/p.sub /tmp/rx.out", 20)
+
+
+PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua,
+	 "subghz": subghz, "notes": notes, "launcher-style": launcher_style}
 
 
 def main():
@@ -779,7 +1119,7 @@ def main():
 			return 1
 		part = sys.argv[1] if len(sys.argv) > 1 else None
 		if part is not None:
-			if part != "jiggle":
+			if part not in ("jiggle", "subghz"):
 				keyfiles(r)
 			PARTS[part](r)
 			if os.environ.get("NATTEST_LOG"):
@@ -928,6 +1268,7 @@ def main():
 		teklatua(r)
 		jiggle(r)
 		badusb(r)
+		notes(r)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:
 				f.write(r.out)

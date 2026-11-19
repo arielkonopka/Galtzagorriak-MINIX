@@ -93,6 +93,45 @@ long hal_subghz_rx(uint32_t hz);
 int hal_subghz_rssi(uint32_t *hz);
 void hal_subghz_off(void);
 
+/* Sub-GHz transmit (R8.2, issue #302), behind the kernel's band and
+ * duty-cycle check (flipdev.c), at the frequency hal_subghz_rx tuned:
+ * - hal_subghz_tx: a frame of n durations in us, carrier on first, then
+ *   off, on, ... (the /dev/subghzraw format), in memory at src;
+ * - hal_subghz_pkt_tx / _pkt_rx: one packet (at most HAL_SUBGHZ_PKT
+ *   bytes) through the chip's FIFO, as stock's `subghz chat`; _pkt_rx
+ *   gives a received one (its length) or 0 when none has come.
+ * All return -1 when there is no such path: on the Flipper until the
+ * CC1101 TX and packet paths are written (local agent; off by default,
+ * the Autonomy rule).  QEMU's backend prints each frame or packet as
+ * console lines ("sg> tx ...", "sg> pkt ..."); hal_subghz_line gives the
+ * FNV-1a hash of what the last one printed, hal_subghz_fake (QEMU tests,
+ * -1 on the Flipper) makes the next frame or packet a received one
+ * (HAL_SG_FAKE_RAW: /dev/subghzraw's reader gets it; HAL_SG_FAKE_PKT:
+ * hal_subghz_pkt_rx gives it), and hal_subghz_fake_take tells whether
+ * one was armed (and disarms it).
+ *
+ * The frame rule (issue #326): src is the writer's physical address,
+ * valid only until hal_subghz_tx returns; then the kernel replies and the
+ * writer may change, free or lose that memory (exit, swap-out, a shrinking
+ * brk).  A backend that sends asynchronously (the CC1101 path, which
+ * feeds the chip from a timer or DMA after the call returns) must either
+ * copy the frame into its own buffer before it returns, or not return
+ * until the frame is out, or make the kernel pin the writer as RFID's
+ * ring is pinned (the writer stays suspended, p_physio, until the last
+ * duration is sent; the reply comes from the interrupt's completion).
+ * Never keep src past the return.  QEMU's backend prints the frame
+ * before it returns. */
+#define HAL_SUBGHZ_PKT	60
+#define HAL_SG_FAKE_RAW	1
+#define HAL_SG_FAKE_PKT	2
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n);
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n);
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max);
+int hal_subghz_fake(int what);
+int hal_subghz_fake_take(int what);
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n);
+int hal_subghz_line(uint32_t *hash);
+
 /* iButton 1-Wire (R6.7): drive the line low (1) or let it go (0), read
  * it, wait some microseconds (busy: only for the slot timing). */
 void hal_ow_line(int low);
@@ -106,6 +145,15 @@ uint16_t hal_ow_now(void);		/* a us clock, mod 2^16 */
 void hal_ib_emu(int on);
 int hal_ib_edge(void);
 void hal_ib_clear(void);
+/* R6.7 part 3b, Cyfral and Metakom (<minix/ibutton.h> IBIOCPLAY and
+ * IBIOCCAPT).  hal_ib_play: play n durations (16-bit, us) at physical
+ * address src round and round on the contact, the first at `level`
+ * (1 released), the rest alternating; n = 0 stops.  hal_ib_capt: up to n
+ * durations of the contact's levels into dst within about ms ms; returns
+ * how many (0: the line did not move), *level that of the first.  Both
+ * -1: not on this board (the Flipper until the device side is done). */
+int hal_ib_play(uint32_t src, unsigned n, int level);
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level);
 int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
@@ -218,7 +266,15 @@ void hal_pulse_stop(void);
  * caller pins it; hal_pulse_left tells the words not yet written);
  * hal_rfid_stop turns it all off.  -1: no reader. */
 int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier);
-/* carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz */
+/* Returns the comparator's level just before the capture started (0/1),
+ * or -1.  carrier: R9.0.4, 0 125 kHz/50 %, 1 62.5 kHz/25 % (PSK), 2 134.2 kHz;
+ * | HAL_RFID_STREAM (R9.0.5): the n words are a ring the DMA fills round
+ * and round, with an interrupt (hal_rfid_stream_irq) at each half;
+ * hal_rfid_stream_ack() in it: bit 0 the first half full, bit 1 the
+ * second. */
+#define HAL_RFID_STREAM	0x100
+int hal_rfid_stream_irq(void);
+unsigned hal_rfid_stream_ack(void);
 void hal_rfid_stop(void);
 /* R6.5 part 3: hold the 125 kHz field up across a T5577 command and its
  * reply (hal_rfid_field(1)), so a write leaves it on and hal_rfid_capture
@@ -234,6 +290,12 @@ void hal_rfid_capture_stop(void);
  * (CCR3), both physical, n words each, played round and round by DMA with no
  * CPU work.  The caller pins the memory. */
 int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n);
+/* R9.0.6: n | HAL_RFID_REFILL: the arrays are a ring the kernel refills;
+ * an interrupt (hal_rfid_emu_irq) at each half played, and
+ * hal_rfid_emu_ack() in it: bit 0 the first half done, bit 1 the second. */
+#define HAL_RFID_REFILL	0x10000
+int hal_rfid_emu_irq(void);
+unsigned hal_rfid_emu_ack(void);
 void hal_rfid_emulate_stop(void);
 uint32_t hal_cycles(void);
 
@@ -275,6 +337,19 @@ int hal_hid_fake(uint32_t st);
 int hal_hid_line(uint32_t *hash);
 void hid_event(unsigned what);		/* the kernel's; interrupt level */
 
+#ifdef BOARD_QEMU
+/* The MTP test line (spec R10.4, T29a), QEMU only: CMSDK UART1, QEMU's
+ * second -serial, raw bytes for mtpd's stream transport (/dev/mtpline,
+ * kernel/arm/mtpline.c).  Not on the Flipper (USB is its MTP, T29b).
+ * hal_line_getc(): a received byte or -1; hal_line_rx_irq(): the receive
+ * interrupt on/off (off also clears a pending one). */
+void hal_line_init(void);
+int hal_line_irq(void);
+int hal_line_getc(void);
+void hal_line_putc(int c);
+void hal_line_rx_irq(int on);
+#endif
+
 /* Block storage: the microSD card (SPI mode) on the Flipper, a disk image
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
  * All return 0 on success, -1 on error. */
@@ -306,6 +381,11 @@ int hal_disk_fake(int state);
  * init).  The card is busy meanwhile; the HAL waits by hal_disk_nap() (the
  * kernel's: the disk task sleeps one clock tick). */
 int hal_disk_discard(uint32_t first, uint32_t last);
+/* R12.33: ERASE sectors first..last (CMD32/CMD33/CMD38; install time only,
+ * never at run time).  0, -1 error, -2 no erase in this HAL (the Flipper
+ * until T18b).  QEMU fills the range with the erased value, 0x00.  Waits
+ * like hal_disk_discard(). */
+int hal_disk_erase(uint32_t first, uint32_t last);
 void hal_disk_nap(void);
 
 /* Internal flash for the program text cache (mm/fcache.c): a region of

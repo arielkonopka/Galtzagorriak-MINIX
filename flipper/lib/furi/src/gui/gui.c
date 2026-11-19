@@ -91,9 +91,12 @@ void gui_redraw(Gui* gui) {
         gui_redraw_layer(gui, GuiLayerDesktop, false);
         gui_redraw_title(gui);
     } else if(!gui_redraw_layer(gui, GuiLayerFullscreen, false)) {
-        bool drawn = gui_redraw_layer(gui, GuiLayerWindow, true);
-        if(!drawn) drawn = gui_redraw_layer(gui, GuiLayerDesktop, false);
-        if(drawn) gui_redraw_title(gui);
+        bool window = gui_redraw_layer(gui, GuiLayerWindow, true);
+        bool drawn = window || gui_redraw_layer(gui, GuiLayerDesktop, false);
+        /* a Pine module (pine.c) in a window draws the bar itself, with
+         * its state on the right: then its top left pixel is black */
+        if(drawn && !(window && (canvas_get_buffer(gui->canvas)[0] & 1)))
+            gui_redraw_title(gui);
     }
     canvas_commit(gui->canvas);
 }

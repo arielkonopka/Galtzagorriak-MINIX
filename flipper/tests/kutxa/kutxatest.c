@@ -1,6 +1,6 @@
 /* kutxatest - libkutxa (src/lib/kutxa, spec section R) on the PC: the use
  * cases the user asked for (2026-11-18), ACR.1-ACR.9.  Written before the
- * library (test first, T33a makes it pass); it builds against kutxa.h.
+ * library (test first, T34a makes it pass); it builds against kutxa.h.
  *
  *   basic       put/get/del, overwrite, long values, key limits, errors
  *   calendar    events keyed by start time: "this week", edit by id via an
@@ -26,7 +26,7 @@
  *   fuzz        mutated and random files never crash or loop (ACR.9)
  *   lock        a second writer gets EBUSY (real file, fcntl)
  *
- * Run by `make test` here; T33a adds it to tests/host (CI) and `make
+ * Run by `make test` here; T34a adds it to tests/host (CI) and `make
  * kutxatest`.  Test data uses Basque words: bilera = meeting, lana = work,
  * mendia = mountain, urtebetetzea = birthday, kokapena = place.
  */

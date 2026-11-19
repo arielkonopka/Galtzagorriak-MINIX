@@ -316,6 +316,8 @@ def expected(rid):
 		return "MISSING"
 	if rid.startswith("subghz-level_868"):
 		return "BLOCKED"
+	if rid.startswith("subghz-level_315"):
+		return "BLOCKED"	# not an EU band: twoflip refuses it (--region)
 	if rid.startswith("subghz-level"):
 		return "PASS"
 	if rid == "subghz-raw_timings-u2m":

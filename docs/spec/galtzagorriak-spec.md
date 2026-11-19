@@ -2210,7 +2210,7 @@ Source: ERC/REC 70-03 (03.2024) App. 1; Decision (EU) 2018/1538
 | Field | Meaning |
 |---|---|
 | `lo_mhz`, `hi_mhz` | the band edges; the whole occupied bandwidth plus 2 × 20 ppm crystal error must lie inside (RP.6) |
-| `dbm` | the legal power limit rounded **down** to whole dBm: e.r.p. as the law says it (EU, CEPT), or the e.i.r.p. computed from the field strength at 3 m, EIRP = (E·3 m)² / 30 Ω (USA, Canada). The kernel uses the highest CC1101 PATABLE step ≤ this value (−30, −20, −15, −10, −6, 0, 5, 7, 10 dBm), assuming a 0 dBi antenna (the Flipper's is below that) |
+| `dbm` | the legal power limit rounded **down** to whole dBm and capped at the CC1101's +10 dBm (so 25 mW and 500 mW e.r.p. rows say `10`; the `ref` names the legal value): e.r.p. as the law says it (EU, CEPT), or the e.i.r.p. computed from the field strength at 3 m, EIRP = (E·3 m)² / 30 Ω (USA, Canada). The kernel uses the highest CC1101 PATABLE step ≤ this value (−30, −20, −15, −10, −6, 0, 5, 7, 10 dBm), assuming a 0 dBi antenna (the Flipper's is below that) |
 | `duty` | the duty-cycle limit over any 60 minutes (RP.7), `none` if there is none |
 | `bw_khz` | the largest occupied bandwidth (2 · dev + rate, without crystal error), `0` = no limit |
 | `use` | `any`: any kind of transmission inside the limits. `ctl`: control signals only (US/CA momentary remotes): no data except with a control signal, each transmission ends ≤ 5 s after it started, no regular periodic sending. `per`: any kind of transmission, but each one ≤ 1 s and then silence ≥ 30 × its length and never < 10 s. `fhss`: only the frequency-hopping link (R19.11), whose hop table the kernel checks at arm time |
@@ -2361,6 +2361,31 @@ Q.5 where marked:
 
 - The matrix was read from the PDF's text by column position: T32 checks every AL/BA/MK cell
   against the PDF page and reads Appendix 3 (national restrictions) before transmit is enabled.
+
+**`NO`, `GB`** (issue #292, the countries the user travels to; neither is bound by the EU
+decision): Norway is in the EEA and CEPT; Nkom's licence-exempt regulation implements ERC/REC
+70-03. The United Kingdom has its own Interface Requirement, Ofcom **IR 2030** (UK
+Interface Requirements 2030, short range devices), which follows the 70-03 Annex 1 conditions
+for these bands. Both get their own file (no `Base: EU`, the sources differ) with the Annex 1
+rows of `EU`:
+
+| Annex 1 band | MHz | NO | GB |
+|---|---|---|---|
+| g1 / g2 / g3, h1.3–h1.9 | 433.05–434.79, 863–870 | active | active |
+| h0 | 862–863 | `#?` | `#?` |
+| h2, h3 | 870–873, 915–918 (Q.5) | `#?` | `#?` |
+
+- h0 is a 2022 addition and h2/h3 are not harmonised; their status for NO (70-03 App. 1) and
+  GB (IR 2030) was not read, so they stay `#?` until T32b checks them.
+
+**Countries shipped first** (issue #292): PL, ES, FR, IE, FI, SE (`Base: EU` + Q.5), NO, GB,
+AL, US, CA, plus `EU` itself. Any other code is refused (Q.6); the remaining member states, BA
+and MK follow with T32a.
+
+**The stock firmware's region data is not a reference for the law.** Its bundle (2026-11-18)
+gives every European country listed here 433.05–434.79 and 868.15–868.55 MHz at +12 dBm and
+50 % duty, and US/CA 304.10–321.95, 433.05–434.79, 915–928 MHz with the same limits: looser
+than every table above (EU 433 MHz: 10 mW, 10 %; US 433.92 MHz: −15 dBm, `ctl` only).
 
 ### Q.5 The bands that differ between countries: 870–876 and 915–921 MHz
 
@@ -2522,6 +2547,8 @@ compatibility; secrets (no encryption here; `/home` is not encrypted).
 
 ### R.7 Two small FS additions (RR.7)
 
+- FS is exactly at its RAM budget (27 392 B, `flipper/ram-budget.txt`, 2026-11-19), so both
+  additions must cost **0 B** of FS data, bss and stack growth, checked by `ramcheck`.
 - **RR.7a `fsync(fd)`.** MINIX 2.0 has only `sync()`. New `fcntl(fd, F_FSYNC)` (no new call
   number) and libc `fsync()`: FS writes the dirty buffers of the file's device (at most 18) with
   `rw_scattered` and the inode if dirty, then returns. RAM 0 B, text ≈ 0.2 KB. Until it exists
@@ -2608,7 +2635,7 @@ kutxa trees FILE | info FILE | check FILE | compact FILE
 
 The tests for the use cases above are in the repo before the library: `flipper/tests/kutxa/`
 (`kutxatest.c` against `src/lib/kutxa/kutxa.h`, `clitest.sh` against the command; `make test`
-there says "not written yet" until T33a). T33a makes them pass without weakening them.
+there says "not written yet" until T34a). T34a makes them pass without weakening them.
 
 - ACR.1 (host) Power cut at every write and every `fsync` of a random workload (puts, deletes,
   values over 400 B, commits every 1–40 changes), with unsynced sectors kept, lost or torn
@@ -6391,5 +6418,5 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (user request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (user request; no journaling) | section N, T17 |
 | Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (user request) | section P, T26; 8, 13, 15 |
-| Small database `kutxa`: B+tree file on `/home`, indexes, `kutxa` command, no SQL, tests first (user request) | section R, T33 |
+| Small database `kutxa`: B+tree file on `/home`, indexes, `kutxa` command, no SQL, tests first (user request) | section R, T34 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |

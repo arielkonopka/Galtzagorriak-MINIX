@@ -339,6 +339,7 @@ The user wants every app reached from the launcher to look like it: title bar wi
 - Hint line drawn by Submenu, VariableItemList (`[value]`), Popup, DialogEx, TextInput from their own button labels; title bar state on the right; scroll mark in Submenu and VariableItemList. `GuiLayerWindow` height unchanged for custom views (stock `elements_button_*` stay).
 - Relink and check `furihello`, `remind`, `alarm` (frame dumps). Shared-library flash and per-app RAM before/after in the PR (no growth per app beyond strings).
 - Berry `gui` binding (R7c) and desktop `window` records (K.3) get the same parts when they are built; their tasks link to K.2.
+- **Done** in the T22b PR (#304): `pine.c` in `libfuri`; `remind` and `alarm` are libgm window apps since T23b and no longer link `libfuri`, so `furihello` (and `timed`/`alert`, which draw no modules) are the relinked programs.
 
 ## T23. The desktop: the launcher grows into the K.2 desktop (spec K.6, user request 2026-11-17): milestone M3
 Order and layers in spec K.6. Starts after #201 (shared `libfuri`/`libapp`) and T21a (launcher look, #229) merge. All three parts are `lane:cloud` (QEMU with fake buttons); the device checks go to #109.
@@ -399,6 +400,7 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 
 ### T32a (`lane:cloud`, host + QEMU)
 - The `.reg` files of Q.4/Q.5 in `flipper/rootfs/usr/share/region/`: `EU`, the 27 member states (`Base: EU` + their `#?` rows), `US`, `CA`, `AL`, `BA`, `MK`; every row with its `ref`.
+  - Done first for the countries of #292: `EU`, PL, ES, FR, IE, FI, SE, NO, GB, AL, US, CA, with the parser, the row choice and the host tests in `libmodem` (`src/lib/modem/region.c`), the `region` command without the flash record (it writes `/etc/flipper/region`), and the kernel's country → band set map. Open: the other 21 member states, BA, MK, the RQ.2 blob, RQ.5's hash list.
 - `src/lib/modem` (or a small `libregion` shared with the kernel): parser (Q.2), compiler to the RQ.2 blob, the row choice of Q.2 (first admitting row, `SG_DATA`/`SG_CTL`, `per` 1 s / 30x / 10 s, `ctl` 5 s), replacing today's `const mdm_bands[]`. Host tests ACQ.1, ACQ.2.
 - `region list|show|set` (RQ.1, RQ.5: build-time SHA-256 list, `-f`, log line); manual page `region(1)` and a manual section (Q.7).
 - RAM: 0 B resident; `region` runs and exits. Flash: the blob, once per `region set`; say so in the PR.
@@ -409,17 +411,17 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 - Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
 - Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
 
-## T33. A small database `kutxa` (spec section R; user request 2026-11-17/18): not scheduled, the user starts it
+## T34. A small database `kutxa` (spec section R; user request 2026-11-17/18): not scheduled, the user starts it
 Designed and its tests written first (2026-11-18); the implementation waits until the user asks for it. Works on today's V2 `/home` (files up to 64 MB); big files need T27.
 
-### T33a (`lane:cloud`, host + QEMU)
+### T34a (`lane:cloud`, host + QEMU)
 - `src/lib/kutxa/` (`kutxa.c`, `krec.c`) behind the existing `kutxa.h` (RR.1–RR.6): pages, CRC, copy on write with spill, commit, open with tail truncation and rollback, catalog, indexes, cursors, bulk load, compaction. No `malloc`. The header may get additions; a change to an existing declaration needs a note in the PR.
-- FS: `fcntl(F_FSYNC)` + libc `fsync()` (RR.7a) and `O_NOCACHE` with `ONE_SHOT` (RR.7b); FS RAM 0 B (`ramcheck`).
+- FS: `fcntl(F_FSYNC)` + libc `fsync()` (RR.7a) and `O_NOCACHE` with `ONE_SHOT` (RR.7b). FS is exactly at its 27 392 B budget, so this must be truly 0 B (no new statics, no deeper stack; `ramcheck`).
 - `src/commands/kutxa/kutxa.c` (RR.8), `flipper/tools/kutxa.py` (same format, `build`/`dump`/`check`), base package (RR.10a), `pkg install --flash kutxa` checked (RR.10b). Manual pages `kutxa(1)`, `kutxa(3)` and a manual chapter (R.13).
 - **Make `flipper/tests/kutxa` pass as written** (`kutxatest.c`, `clitest.sh`, ACR.1–ACR.10); do not loosen a check, say in the PR if one is wrong and why. Add the directory to `tests/host` (CI) and `make kutxatest`; run `clitest.sh` in QEMU too (the M2 tests package).
 - Text sizes (library, command) and the RR.11 RAM numbers in the PR.
 
-### T33b (`lane:local`, Flipper)
+### T34b (`lane:local`, Flipper)
 - ACR.11 on the device: a 1 million record file built with `kutxa.py` and copied to `/home`; lookup p99, scan rate, commit time; `lat` L1 during a compaction and a `kutxa dump` in the background; numbers in PORTING.md and R.11.
 - Later, with Phase 7c: the Berry module (RR.9). With the second app that uses the library: `KUTXA=shared` (RR.10c).
 
@@ -452,6 +454,7 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - R5.6b.1 setting row and redraw; R5.6b.2 Apps page as stock `menu.c`, other pages as stock `submenu`, popup for messages.
 - R5.6b.3 10×10 built-in icon table (stock icons allowed, D.3), `Icon10:` in `fam2pkg` and the `##` field form.
 - R5.6b.4 the two stock fonts as `const`, `gui_text_font()`; a host test renders the launcher's stock frame and the ported `menu.c` frame and compares them.
+- With `Style: stock` the launcher starts apps with `FURI_STYLE=stock` in their environment, so the `libfuri` modules draw as stock (T22b: `flipper/lib/furi/src/gui/pine.c`; Pine is their default).
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 

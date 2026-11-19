@@ -4,11 +4,11 @@ The launcher is the main screen: the list of apps you see after the boot screen,
 come back to when an app ends. It is also the **desktop** (spec K.6): its pages sit in a row,
 
 ```
-SETTINGS  <-  APPS  ->  HOME
+SETTINGS  <-  APPS  ->  HOME  ->  NOTES  ->  RUNNING
 ```
 
-and Left/Right move along it. APPS, the app list, is the page you start on. Notifications and
-Running pages come later, to the right of HOME.
+and Left/Right move along it. APPS, the app list, is the page you start on. HOME, NOTES (the
+notifications) and RUNNING are described in [Desktop and modules](desktop.md).
 
 ![The app list](img/launcher-list.png)
 
@@ -34,14 +34,15 @@ backlight (see [Buttons and gestures](buttons.md)) does not turn the page.
 
 HOME shows the **tiles** of the desktop's modules: small programs, often shell scripts, that
 put one line each on this page, such as the battery or the next bus. Up/Down move the bar,
-Left goes back to APPS. With no module running it says `no tiles`.
+Left goes back to APPS, Right to NOTES. With no module running it says `no tiles`. Writing a
+module: [Desktop and modules](desktop.md).
 
 A module writes its lines with the `guimod` command:
 
 ```
 guimod tile NAME TEXT ...      set or change the module's tile
 guimod status NAME TEXT ...    a short text (6 characters) on the status line
-guimod notify NAME TEXT ...    a notification: the count on the status line, the text noted
+guimod notify NAME TEXT ...    a notification: on the NOTES page, counted on the status line
 guimod close NAME              its tile and status go
 ```
 
@@ -58,9 +59,8 @@ Start it with `sh /usr/share/examples/gui/battile.sh &`. When the module ends or
 its tile goes (at the next key, or within a minute while HOME is shown). A module is your user
 plus its name, so it can change only its own tiles; at most 16 tiles and statuses together.
 
-A notification shows its text on the bottom line for 2 seconds and counts on the status line
-(`*1`). Until the Notifications page comes, going to HOME shows the last one again and clears the
-count.
+A notification shows its text on the bottom line for 2 seconds, counts on the status line
+(`*1`) until you open it, and stays on the NOTES page (the last 8) until you clear it there.
 
 **When the screen is redrawn.** Only when something changes: a key, a record from a module
 that changes what is shown, and the minute of the clock. With the light off, or while an app is
@@ -136,6 +136,7 @@ Launcher, on the SETTINGS page:
 | Icons | the small pictures before the app names |
 | Hints | the button line at the bottom and the position in the title bar |
 | Battery | the battery on the title bar |
+| Style | `pine` (the look above) or `stock` (the look of the stock firmware's menus, see [Stock style](#stock-style)) |
 
 Up/Down choose a setting, OK (or Left/Right) switches it, Back returns to SETTINGS. The
 settings are kept in `/etc/launcher.conf` on the SD card, which is written only when you go back
@@ -145,6 +146,7 @@ to the app list with something changed:
 Icons: on
 Hints: on
 Battery: on
+Style: pine
 ```
 
 You can also edit that file from the shell; the launcher reads it again after the next app ends.
@@ -152,6 +154,126 @@ With all three off, the screen looks as it did before icons existed.
 
 The battery value is read when the screen is redrawn, at most once a minute; the launcher never
 wakes up only to update it.
+
+## Stock style
+
+With `Style: stock` the launcher looks like the stock firmware's menus. It is the same launcher
+(one program, no restart): the same apps, keys, pages and settings; only the drawing changes.
+Switch it on the launcher's settings page (SETTINGS, Launcher, `Style`): the page redraws at once,
+and `/etc/launcher.conf` is written when you go back to the app list.
+
+- **The app list** looks like the stock main menu: the app before, the selected app in a
+  rounded frame in the bold font, the app after, a scroll bar on the right. There is no title bar
+  and no hint line. Up/Down move (past the end it wraps), OK starts, Left/Right still change the
+  page.
+- **The other pages** (SETTINGS, the launcher's own settings, HOME) look like a stock submenu:
+  the page name at the top, three rows, the selected one in a black rounded box.
+- **Messages** ("not found", "unknown user", a notification) show in a small box over the list
+  for 2 seconds or until the next key.
+- **Apps follow the style.** The launcher starts each app with `FURI_STYLE=stock` or
+  `FURI_STYLE=pine` in its environment, matching `Style:`, so apps built on libfuri draw their
+  menus and dialogs in the same look.
+- **Icons** are 10×10. The built-in `rfid`, `nfc`, `subghz`, `ir`, `ibutton`, `usb`, `file`,
+  `settings`, `music` and `console` have the stock firmware's pictures; the other built-in icons
+  and your own 8×6 ones are drawn in the middle of the cell. An app can bring a 10×10 icon of its
+  own (the `##` form below).
+- The text uses the two stock fonts (Helvetica Bold for the selected app, HaxrCorp 4089 for the
+  rest).
+
+The same three apps in the Pine style:
+
+```
+█████████████████████████████████████████████████████████▀██▀▀██▀▀███▀▀█████████████████████████████████████████████████████████
+████████████████████████████████████████████████████████ ▀ █ ▀▄█ ▀▄█▄▀██████████████████████████████████████████████████████████
+████████████████████████████████████████████████████████ █ █ ███ ███▀▀▄█████████████████████████████████████████████████████████
+█▀████▀██████▀███▀▀█████▀████████▀▀█▀█▀█████████████████████████████████████████████████████████████████████████████████████████
+██▄▀██ █ █▀ █ ██▄▀██ █ █ ▄▀█▀▀▀█ █▀█ ▀ █▄▄ █████████████████████████████████████████████████████████████████████████████████████
+█▀▄█████▄▀▀▄████▀▀▄█▄▀ █ ▀▄█████▄▀ █ █ █▀ ▀█████████████████████████████████████████████████████████████████████████████████████
+▀▀▀▀▀▀█▀▀▄ ▀█▀▀▀▀█▀▀▀█▀▀███▀▀▀▀▀█▀▀▀█▀█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+       ▀▄█▄▀    ▀█  ▀ █ █▄      █▄▀ █▄█ ▀▀█
+        █▄█     ▄█▄ ▄█▄ ▄▄▀     █ █ █ █ ▄█▄
+       ▄▄  ▄      ▄ ▄▄▄  ▄
+      █  █  █   █▄█ █▄  █ ▀
+      █  █  █   █ ▀ █   ▀▄▀
+       ▀▀  ▀
+```
+
+and in the Stock style:
+
+```
+                                                                                                                              ▀
+                                                                                                                              ▀
+       ▄      ▄                                                                                                               ▀
+      █ ▄▀  ▀▄ █       ▄▄▄       ▄           ▄▄▄  ▄   ▄                                                                       ▀
+      █ █ ██ █ █      █   ▀ ▄  ▄ █▄▄        █   ▀ █   █ ▄▄▄▄                                                                  ▀
+      ▀▄  ▄▄  ▄▀       ▀▀▀▄ █  █ █  █ ▀▀▀▀▀ █  ▀█ █▀▀▀█  ▄▄▀                                                                  ▀
+          ██          ▀▄▄▄▀ ▀▄▄█ █▄▄▀       ▀▄▄▄▀ █   █ █▄▄▄                                                                  ▀
+          ▀▀                                                                                                                  ▀
+                                                                                                                              ▀
+                                                                                                                              ▀
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   ▄█▄
+▄▀                                                                                                                        █▄ ███
+█                                                                                                                         ██ ███
+█          ▄▄▄                                                                                                            ██ ███
+█      ▄▄▄    ▀▄       ▄██  ▄█▀█▄ ██▀▀▀    ██    ██  ██                                                                   ██ ███
+█     █ ▄ ▀▀▄  █        ██     ██ ██▄▄     ██▄█▀ ██▄▄██ ▀▀▀██                                                             ██ ███
+█     ▀▄ ▄▀▄ █          ██   ▄█▀  ▄  ██    ███▄  ██  ██  ▄█▀                                                              ██ ███
+█      ▀▄ ▀ ▄▀          ██  ██▄▄▄ ▀█▄█▀    ██ ▀█▄██  ██ ██▄▄▄                                                             ██ ███
+█        ▀▀▀                                                                                                              ██ ███
+█                                                                                                                         ██ ███
+▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄██ ███
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   ▀
+                                                                                                                              ▀
+                                                                                                                              ▀
+             ▄                                                                                                                ▀
+       ▄   ▄  ▀▄      ▄   ▄ ▄▄▄▄▄  ▄▄▄                                                                                        ▀
+      █▀▄   █  █      █▄  █ █     █   ▀                                                                                       ▀
+      █  ▀▄▄▀  █      █ ▀▄█ █▀▀▀  █                                                                                           ▀
+       ▀   ▀  ▄▀      █   █ █     ▀▄▄▄▀                                                                                       ▀
+             ▀                                                                                                                ▀
+                                                                                                                              ▀
+                                                                                                                              ▀
+```
+
+A message in the Stock style:
+
+```
+                                                                                                                              ▀
+                                                                                                                              ▀
+       ▄      ▄                                                                                                               ▀
+      █ ▄▀  ▀▄ █       ▄▄▄       ▄           ▄▄▄  ▄   ▄                                                                       ▀
+      █ █ ██ █ █      █   ▀ ▄  ▄ █▄▄        █   ▀ █   █ ▄▄▄▄                                                                 ▄█▄
+      ▀▄  ▄▄  ▄▀       ▀▀▀▄ █  █ █  █ ▀▀▀▀▀ █  ▀█ █▀▀▀█  ▄▄▀                                                                 ███
+          ██          ▀▄▄▄▀ ▀▄▄█ █▄▄▀       ▀▄▄▄▀ █   █ █▄▄▄                                                                 ███
+          ▀▀                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                           ███
+                            █▀                                                                   ▀█                          ███
+                            █                                                                     █                           ▀
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█                                                                     █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    ▀
+▄▀                          █                                                                     █                       █▄  ▀
+█                           █                                                                     █                       ██  ▀
+█          ▄▄▄              █                ▄                                                    █                       ██  ▀
+█      ▄▄▄    ▀▄       ▄██  █      ▄  ▄ ▄▄▄  █  ▄ ▄▄▄   ▄▄  ▄  ▄  ▄ ▄▄▄    ▄  ▄  ▄▄  ▄▄  ▄▄▄      █                       ██  ▀
+█     █ ▄ ▀▀▄  █        ██  █      █  █ █  █ █▄▀  █  █ █  █ █  █  █ █  █   █  █ ▀▄  █▄▄█ █        █                       ██  ▀
+█     ▀▄ ▄▀▄ █          ██  █      ▀▄▄█ █  █ █ ▀▄ █  █ ▀▄▄▀ ▀▄▄▀▄▄▀ █  █   ▀▄▄█ ▄▄▀ ▀▄▄  █        █                       ██  ▀
+█      ▀▄ ▀ ▄▀          ██  █                                                                     █                       ██  ▀
+█        ▀▀▀                █                                                                     █                       ██  ▀
+█                           █                                                                     █                       ██  ▀
+▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█                                                                     █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄██  ▀
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█                                                                     █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   ▀
+                            █▄                                                                   ▄█                           ▀
+                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                            ▀
+             ▄                                                                                                                ▀
+       ▄   ▄  ▀▄      ▄   ▄ ▄▄▄▄▄  ▄▄▄                                                                                        ▀
+      █▀▄   █  █      █▄  █ █     █   ▀                                                                                       ▀
+      █  ▀▄▄▀  █      █ ▀▄█ █▀▀▀  █                                                                                           ▀
+       ▀   ▀  ▄▀      █   █ █     ▀▄▄▄▀                                                                                       ▀
+             ▀                                                                                                                ▀
+                                                                                                                              ▀
+                                                                                                                              ▀
+```
+
+The Stock style has only been tested in QEMU so far. Nobody has checked yet how readable it is
+on the Flipper's LCD.
 
 ## The list of apps: `/etc/apps`
 
@@ -172,7 +294,13 @@ The icon is one of:
 - **`@name`**: a built-in icon, e.g. `@bell`;
 - **`#` and 12 hex digits**: your own 8×6 picture, one byte per row from the top, the left pixel
   in the highest bit, e.g. `#183C3C7E0018` (a small bell);
-- **one or two characters**, drawn in the list font, e.g. `>_` or `Zz`.
+- **one or two characters**, drawn in the list font, e.g. `>_` or `Zz`;
+- **`##` and 40 hex digits**: a 10×10 picture for the [Stock style](#stock-style), two bytes per
+  row from the top, the left pixel in the highest bit (the low 6 bits of every second byte are
+  unused), e.g. `##0700008070408C40A24089005500490022001C00`. The Pine style shows no icon for
+  it, unless one of the forms above follows the 40 digits, e.g.
+  `##0700008070408C40A24089005500490022001C00@rfid`. A package gives it with
+  `mkpkg.py --icon10` (a 10×10 PNG, the `fap_icon` of a stock app, copied without downscaling).
 
 A broken icon (an unknown name, bad hex digits, three characters) shows as no icon; the app
 still starts.

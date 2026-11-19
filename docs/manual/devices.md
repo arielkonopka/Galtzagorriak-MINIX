@@ -42,8 +42,26 @@ say "Resource busy", and the Flipper stays out of its deep sleep: emulation uses
 Programs do it with `ioctl(IBIOCEMU)` (`<minix/ibutton.h>`), which ends when they close the
 device or exit.
 
-Cyfral and Metakom keys are **(planned)** (spec R6.7 part 3b), as is an iButton app in the
-launcher.
+**Cyfral and Metakom keys** (the Russian intercom keys, spec R6.7 part 3b) use the same command,
+with the key as the stock firmware prints it (Cyfral 4 hex digits, Metakom 8):
+
+```
+ikey read                    # also prints "Cyfral A1B2" or "Metakom 0305090A"
+ikey emulate Cyfral A1B2
+ikey emulate -t 30 Metakom 0305090A
+```
+
+These keys are not 1-Wire: they send their number over and over as long and short levels on the
+contact. `ikey read` tries a Dallas key first, then records the contact's levels and decodes them.
+`ikey emulate` plays the key's levels on the contact in a loop. A Metakom number needs every byte
+with an even number of 1 bits (readers check it); `ikey` refuses any other. Writing Cyfral or
+Metakom blanks (TM01x) is not there. **On the Flipper this is not working yet:** the capture and
+playback hardware part comes after the first version, and until then `ikey` says "not implemented
+on this board yet, Dallas only" (Dallas keys work as before). It works in QEMU. Programs use
+`ioctl(IBIOCCAPT)` and `ioctl(IBIOCPLAY)` (`<minix/ibutton.h>`) with the line code in
+`src/lib/ibkey`.
+
+An iButton app in the launcher is **(planned)**.
 
 ## Voltages on the header pins (`/dev/adc`)
 
@@ -96,8 +114,8 @@ is refused. `peak` is the strongest of the samples taken during the read (about 
 remote are not missed. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
 signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
 radio keeps listening until `echo 0`, or until nobody has read it for about a minute (it draws
-about 15 mA while listening). A spectrum view and
-recording will build on this.
+about 15 mA while listening). The **Spectrum** app on the launcher sweeps it across a band
+([Sub-GHz](subghz.md#spectrum-what-is-on-the-air-launcher-app)).
 
 ## 125 kHz RFID tags (`rfid`, `/dev/rfid`)
 
@@ -114,8 +132,10 @@ EM4100 04 00 98 3D C5
 The first line is the protocol and the tag's data as the stock app shows and saves it (`Data:` in
 its `.rfid` files); the lines under it are what the stock app's info screen shows. `rfid -r` also
 prints the timings, `-n N` makes up to N attempts of half a second (default 4, more while a tag
-has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. Without a
-tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
+has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. When those
+short reads find nothing, `rfid` listens for up to 3 seconds more without a gap, which reads
+tags whose frames are longer than one short read (EM4100 at RF/32, FDX-B, Viking, Jablotron,
+Gallagher...). Without a tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
 62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
 use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
 and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
@@ -135,17 +155,35 @@ chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125
 | Jablotron | Jablotron | diphase RF/64 | yes | yes |
 | GProxII | Guardall | biphase RF/64 | yes | yes |
 | PAC/Stanley | | direct RF/32 | yes | yes |
-| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox, IoProxXSF | HID and others | FSK | **(planned)** | **(planned)** |
-| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | **(planned)** |
+| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox | HID and others | FSK | **(planned)** | yes (run list) |
+| IoProxXSF | Kantech | FSK | **(planned)** | **(planned)** |
+| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | yes (run list) |
 
 Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
 tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
-Reading and emulating the FSK and PSK ones waits for
-more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
-already there), and emulation longer than 512 segments (their frames are 540 to 3534).
+FSK and PSK frames are 540 to 3534 segments long, more than the 512 of the plain emulation;
+`rfid emulate` plays them as a run list instead (equal segments in a row are one run: 17 to 201
+runs), refilled into a small ring while the reader reads (`ioctl(RFIDIOCEMURUN)`). They have
+been checked on the PC, not yet with a reader. IoProxXSF's encoder never repeats exactly, so it
+has no loop to play yet. Reading the FSK and PSK ones waits for their decoders on the streaming
+capture (T19b).
 
-Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
-firmware does):
+For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
+edges go round and round into a ring in the program's memory, `read` says which half is new, and
+falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
+tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
+a quick check that nothing is lost. Long frames are emulated the same way in reverse: `ioctl(RFIDIOCEMURUN)` takes a list of runs
+(segments of equal length and load) and the kernel refills a small ring from it while the reader's
+own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
+
+A tag no decoder knows can be recorded as it is: `rfid raw /home/flipper/tag.ask.raw` (10 s; `-t
+SECS` for longer, `-c psk` for PSK tags, Ctrl-C ends it early) writes the signal in the same RAW
+format as the Unleashed firmware (`.ask.raw`, `.psk.raw`), so the file can be looked at on a PC
+(`flipper/tools/lfrawdump.py FILE`) or on a Flipper with Unleashed.
+
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, then the Hitag micro
+"magic" chips ID8265, ID8210 and H5.5 with their three passwords, as the Unleashed firmware does;
+`-hitag` goes straight to those):
 
 ```
 rfid write EM 00 DE AD BE EF

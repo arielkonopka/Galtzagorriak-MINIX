@@ -263,10 +263,14 @@ PRIVATE void do_clocktick()
 	if (bill_ptr == prev_ptr) lock_sched();	/* process has run too long */
 	sched_ticks = SCHED_RATE;		/* reset quantum */
 	prev_ptr = bill_ptr;			/* new previous process */
-  }
 #if (SHADOWING == 1)
-  if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q]);
+	/* A shadow group's members take turns once per quantum, like any
+	 * other processes (#331); a swap copies their images.  When the
+	 * resident member blocks and nothing else is ready, the idle task
+	 * has the swap done at once (shadow_kick). */
+	if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q]);
 #endif
+  }
 }
 
 
@@ -467,7 +471,18 @@ PRIVATE void cause_alarm()
   message mess;
 
   syn_bits |= (u32_t) 1 << (watchdog_proc + NR_TASKS);
-  if (!syn_al_alive) send (SYN_ALRM_TASK, &mess);
+  /* syn_al_alive is FALSE only while SYN_AL waits in receive(CLOCK) (tasks
+   * never preempt each other), so this send never blocks.  Set it here, not
+   * only when SYN_AL runs: a second alarm in the same pass (MM's and FS's,
+   * or a tick that catches up after tickless idle) would otherwise send
+   * again before SYN_AL ran, and CLOCK would block on it.  With SYN_AL
+   * itself blocked sending CLOCK_INT to a busy MM, MM's next sendrec(CLOCK)
+   * then failed with ELOCKED: "alarm er" (issue #308).  SYN_AL looks at all
+   * of syn_bits after the wakeup, so no alarm is lost. */
+  if (!syn_al_alive) {
+	syn_al_alive = TRUE;
+	send (SYN_ALRM_TASK, &mess);
+  }
 }
 
 
@@ -614,10 +629,10 @@ int irq;
 #endif
 #if (SHADOWING == 1) && (CHIP == ARM_CM)
       /* A shadowed process can only run after the clock task swapped it
-       * in; do not make it wait for the end of a quantum (on an idle
-       * system sched_ticks never gets there at all).
+       * in, at the end of a quantum (on an idle system sched_ticks never
+       * gets there otherwise; shadow_kick swaps at once when idle).
        */
-      rdy_head[SHADOW_Q] != NIL_PROC ||
+      rdy_head[SHADOW_Q] != NIL_PROC && sched_ticks == 1 ||
 #endif
       sched_ticks == 1 &&
       bill_ptr == prev_ptr &&

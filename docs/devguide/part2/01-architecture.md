@@ -85,6 +85,12 @@ Budget L10 (boot to launcher menu) is 3 s.
 - **Shadowing** (from the Atari ST port): after `fork` the child shares the parent's addresses;
   the kernel exchanges the two data images on a switch (`shadow.c`, `flip.S`). The idle task
   raises PendSV so a ready shadowed process is swapped in without waiting for the next tick.
+  Otherwise the clock swaps a group member in only at the end of a 100 ms quantum, because
+  each swap copies the images (#331). The swapped-in member goes to the tail of the user
+  queue, so processes already waiting there (the launcher with a key to draw) run first.
+  On the shadow queue a woken member (`ready()`) goes to the head and a preempted resident
+  goes to the tail. Before a flip, `unshadow()` saves the FP registers that are still live
+  in the FPU (`fp_save`), so that `fp_flush` cannot later write them into the other image.
 - **Scheduling**: MINIX's queues (tasks, servers, users, plus a shadow queue). Tasks are never
   preempted by tasks. The interactive queue for the foreground app is planned (R0.8a).
 - **Programs** are position-independent (`r9` = data base). MM places `exec` images at the top

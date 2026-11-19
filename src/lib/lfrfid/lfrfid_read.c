@@ -62,7 +62,6 @@ bool lfrfid_normalize(ProtocolDict* dict, ProtocolId p, LFRFIDWriteRequest* req)
     return protocol_dict_get_write_data(dict, p, req);
 }
 
-#define SIGW 48 /* runs that mark a frame's start */
 #define MAXY 40000 /* longest repeat looked for, in runs */
 #define WARM 4 /* runs skipped first: an encoder's first run can differ from
                   the same place a frame later (PAC/Stanley splits a run at
@@ -106,19 +105,115 @@ static void emu_new(EmuRun* r, const ProtocolBase* b, const uint8_t* data, size_
         (void)emu_run(r);
 }
 
-/* Does the waveform repeat after L runs, for MAXY runs (more than any
- * frame)? */
+/* The load as the Flipper's pull pin drives it reaches a reader's envelope
+ * detector about 2 carrier periods late on its falling side: measured with
+ * the reference Flipper (Unleashed rfid raw_read), a 4-of-8 load showed as
+ * 6 of 8 and the 4 periods unloaded of an RF/8 FSK cycle vanished, so no
+ * FSK frame read.  Each loaded part is cut by that much (never below 1 and
+ * never a segment loaded for all of it, a deliberate long load): FSK and
+ * PSK now read, ASK keeps working (2 of 32 is noise to it). */
+#define EMU_TRIM 2
+
+static uint32_t emu_trim(uint32_t dur, uint32_t pul) {
+    if(pul == 0 || pul > dur) return pul; /* none, or all of the segment */
+    return pul > EMU_TRIM ? pul - EMU_TRIM : 1;
+}
+
+/* Does the waveform repeat after L runs?  Checked for EMU_FRAMES whole
+ * repeats, and for at least EMU_MINY runs, which is longer than any
+ * constant stretch of a frame (a preamble of equal cycles repeats after a
+ * cycle for all of its length), at most MAXY: an encoder is a state machine
+ * over its frame, so a shift that holds for several frames holds for good.
+ * Checking MAXY runs for every candidate made a frame with many candidates
+ * take seconds on the device (Pyramid 13.8 s). */
+#define EMU_FRAMES 4
+#define EMU_MINY 8192
+
 static bool emu_period(const ProtocolBase* b, const uint8_t* data, size_t size, long L) {
     EmuRun x, y;
-    long i;
+    long i, lim = EMU_FRAMES * L;
 
+    if(lim < EMU_MINY) lim = EMU_MINY;
+    if(lim > MAXY) lim = MAXY;
     emu_new(&x, b, data, size, WARM);
     emu_new(&y, b, data, size, WARM + L);
-    for(i = 0; i < MAXY; i++)
+    for(i = 0; i < lim; i++)
         if(emu_run(&x) != emu_run(&y)) break;
     b->free(x.e);
     b->free(y.e);
-    return i == MAXY;
+    return i == lim;
+}
+
+/* The repeat's length in runs: the first shift L at which the waveform
+ * repeats (emu_period).  A candidate is a shift at which the last HASHW
+ * runs hash as the first HASHW do: a rolling hash, kept by a second encoder
+ * HASHW runs behind the first (no buffer), so FSK frames, whose runs take
+ * only a few values, give few false candidates (48 runs compared gave
+ * Pyramid 1130 of them, each checked from the start: 13.8 s on the device).
+ * -1: none. */
+#define HASHW 512
+#define HASHB 0x9E3779B1u
+
+static long emu_len(const ProtocolBase* b, const uint8_t* data, size_t size) {
+    uint32_t sig = 0, h = 0, bw = 1, w;
+    long L = -1, i;
+    EmuRun r, t;
+
+    emu_new(&r, b, data, size, WARM);
+    emu_new(&t, b, data, size, WARM);
+    for(i = 1; i < HASHW; i++)
+        bw *= HASHB; /* HASHB^(HASHW-1) */
+    for(i = 0; i < HASHW; i++)
+        sig = sig * HASHB + emu_run(&r);
+    h = sig;
+    for(i = HASHW; i < MAXY && L < 0; i++) {
+        w = emu_run(&r);
+        h = (h - emu_run(&t) * bw) * HASHB + w;
+        if(h == sig && emu_period(b, data, size, i - HASHW + 1)) L = i - HASHW + 1;
+    }
+    b->free(r.e);
+    b->free(t.e);
+    return L;
+}
+
+int lfrfid_emu_runs(
+    ProtocolId p,
+    const uint8_t* data,
+    size_t size,
+    uint16_t* runs,
+    int max) {
+    const ProtocolBase* b = lfrfid_protocols[p];
+    long L = emu_len(b, data, size), i;
+    int n = 0;
+    uint32_t w;
+    EmuRun r;
+
+    if(L < 2) return -1;
+    emu_new(&r, b, data, size, WARM);
+    w = emu_run(&r);
+    if(!(w & 1)) w = emu_run(&r);
+    for(i = 0; i < L; i += 2) {
+        uint32_t lo = emu_run(&r), dur = (w >> 1) + (lo >> 1) - 1, pul = w >> 1;
+
+        pul = emu_trim(dur, pul);
+        if(n > 0 && runs[4 * (n - 1)] == dur && runs[4 * (n - 1) + 1] == pul &&
+           runs[4 * (n - 1) + 2] < 0xFFFF) {
+            runs[4 * (n - 1) + 2]++;
+        } else {
+            if(n >= max || dur > 0xFFFF) {
+                n = -1;
+                break;
+            }
+            runs[4 * n] = (uint16_t)dur;
+            runs[4 * n + 1] = (uint16_t)pul;
+            runs[4 * n + 2] = 1;
+            runs[4 * n + 3] = 0;
+            n++;
+        }
+        w = emu_run(&r);
+    }
+    b->free(r.e);
+    return n;
 }
 
 int lfrfid_emu_segments(
@@ -129,25 +224,12 @@ int lfrfid_emu_segments(
     uint32_t* pulse,
     int max) {
     const ProtocolBase* b = lfrfid_protocols[p];
-    uint32_t sig[SIGW], ring[SIGW], w;
-    long L = -1, i, k;
+    uint32_t w;
+    long L, i;
     int nseg = 0;
     EmuRun r;
 
-    /* the repeat's length in runs: the first shift at which the first SIGW
-     * runs come again and the whole waveform repeats (a preamble's
-     * constant part repeats its start sooner: those fail the second test) */
-    emu_new(&r, b, data, size, WARM);
-    for(i = 0; i < SIGW; i++)
-        sig[i] = ring[i] = emu_run(&r);
-    for(i = SIGW; i < MAXY && L < 0; i++) {
-        ring[i % SIGW] = w = emu_run(&r);
-        if(w != sig[SIGW - 1]) continue;
-        for(k = 0; k < SIGW; k++)
-            if(ring[(i - SIGW + 1 + k) % SIGW] != sig[k]) break;
-        if(k == SIGW && emu_period(b, data, size, i - SIGW + 1)) L = i - SIGW + 1;
-    }
-    b->free(r.e);
+    L = emu_len(b, data, size);
     if(L < 0 || L < 2) return -1; /* none, or never loaded and unloaded */
     /* L runs from a loaded one: segments of a loaded run and the unloaded
      * one after it, round to the start again */
@@ -162,7 +244,8 @@ int lfrfid_emu_segments(
             break;
         }
         dur[nseg] = (w >> 1) + (lo >> 1) - 1;
-        pulse[nseg++] = w >> 1;
+        pulse[nseg] = emu_trim(dur[nseg], w >> 1);
+        nseg++;
         w = emu_run(&r);
     }
     b->free(r.e);

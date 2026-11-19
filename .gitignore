@@ -6,3 +6,4 @@ __pycache__/
 flipper/lib/*/build/
 flipper/apps/*/build/
 flipper/tests/*/build/
+flipper/mtpd/build/

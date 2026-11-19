@@ -138,7 +138,8 @@ very early), use the hardware combination: hold **Left + Back + OK**, release **
 The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh card,
 `/etc/setup` then prepares the rest of the card. This happens once and takes a minute or two:
 
-1. It adds three partitions after the root file system and **reboots by itself**:
+1. It adds three partitions after the root file system, each starting on a 4 MiB boundary
+   (the card's usual erase unit), and **reboots by itself**:
 
    | Partition | Mounted on | Size | Use |
    |---|---|---|---|
@@ -150,7 +151,11 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    **(planned)** `/home` as a MINIX V3 file system that fills the whole card, also past 4 GB
    (spec section O).
 
-2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
+2. After the reboot it shows "Preparing the card..." and tells the card that `/usr`, swap and
+   `/home` are empty (`erase`, see [Swap](swap.md)): a card that was full before, from a camera
+   or a phone, then has its whole free pool for wear levelling. **(planned on the Flipper,
+   T18b)**: until the SD driver can erase, setup says "this card or driver cannot erase, going
+   on" and goes on. Then it makes the file systems on `/usr` and `/home` and continues booting.
    Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
    the launcher. The boot never waits for the console, so a Flipper with no USB host comes up as
    usual.
@@ -334,7 +339,7 @@ What works on the Flipper (details in [Hardware devices](devices.md) and the oth
 - Screen, backlight with fade-out, RGB status LED, buttons, vibration, speaker.
 - The launcher desktop with settings, reminders and an alarm clock, timers and alerts ([Timers and alerts](timers.md)).
 - 125 kHz RFID: read, write T5577 cards and emulate, all 25 LF protocols (`rfid`).
-- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`).
+- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`). Cyfral and Metakom: in QEMU only for now (device part pending).
 - Infrared send and receive with the stock protocols (`ir`).
 - Sub-GHz: receiving and tuning only so far (`/dev/subghz`, `/dev/subghzraw`).
 - USB: the serial console, and the Flipper as a keyboard, mouse or media keys

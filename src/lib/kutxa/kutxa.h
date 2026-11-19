@@ -1,8 +1,8 @@
 /* kutxa.h - a small database: a copy-on-write B+tree appended to one file
- * (spec section R, task T33).  "Kutxa" is Basque for a chest.
+ * (spec section R, task T34).  "Kutxa" is Basque for a chest.
  *
  * THIS IS THE CONTRACT ONLY.  The library (kutxa.c, krec.c) is written in
- * T33a; flipper/tests/kutxa/kutxatest.c tests it against this header and is
+ * T34a; flipper/tests/kutxa/kutxatest.c tests it against this header and is
  * written first, from the use cases the user asked for (RR.12).
  *
  * One file holds up to KT_MAXOPEN open trees out of any number of named

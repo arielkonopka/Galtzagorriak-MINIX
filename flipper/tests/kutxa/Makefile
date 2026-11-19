@@ -5,8 +5,8 @@
 #	make test	build kutxatest and the host kutxa, run both tests
 #
 # The tests were written before the library (test first, 2026-11-18); until
-# T33a adds src/lib/kutxa/*.c and src/commands/kutxa/kutxa.c this stops with
-# "libkutxa is not written yet".  T33a adds it to tests/host (CI) and to
+# T34a adds src/lib/kutxa/*.c and src/commands/kutxa/kutxa.c this stops with
+# "libkutxa is not written yet".  T34a adds it to tests/host (CI) and to
 # `make kutxatest` in flipper/Makefile.
 MROOT	:= ../../..
 L	:= $(MROOT)/src/lib/kutxa
@@ -23,7 +23,7 @@ test: have $(B)/kutxatest $(B)/kutxa
 
 have:
 	@test -n "$(SRC)" -a -f $(C)/kutxa.c || \
-	  { echo "libkutxa is not written yet (spec section R, task T33a)"; exit 1; }
+	  { echo "libkutxa is not written yet (spec section R, task T34a)"; exit 1; }
 
 $(B)/kutxatest: kutxatest.c $(SRC) $(L)/kutxa.h
 	@mkdir -p $(B)

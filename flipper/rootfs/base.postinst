@@ -49,6 +49,12 @@ grep '^RFID:' /etc/apps >/dev/null || {
 	echo 'RFID:nobody:@rfid:/bin/lfrfid' >> /etc/apps
 	echo "base: the launcher now has RFID"
 }
+# Issue #157: the Sub-GHz spectrum app on the launcher (a card without
+# its own /etc/apps uses /rom's, which has it).
+test -f /etc/apps && grep '^Spectrum:' /etc/apps >/dev/null || test ! -f /etc/apps || {
+	echo 'Spectrum:nobody:@subghz:/bin/spectrum' >> /etc/apps
+	echo "base: the launcher now has Spectrum"
+}
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
 test -f /etc/apps &&	# a card without its own copy keeps using /rom's
@@ -116,6 +122,14 @@ then
 	mknod /dev/subghzraw c 6 14 || echo "base: could not make /dev/subghzraw"
 	chgrp gui /dev/subghzraw 2>/dev/null
 	chmod 660 /dev/subghzraw 2>/dev/null
+fi
+# Cards made before issue #302 lack /dev/subghzpkt (Sub-GHz packets, as
+# stock's subghz chat).
+if test ! -r /dev/subghzpkt
+then
+	mknod /dev/subghzpkt c 6 20 || echo "base: could not make /dev/subghzpkt"
+	chgrp gui /dev/subghzpkt 2>/dev/null
+	chmod 660 /dev/subghzpkt 2>/dev/null
 fi
 # Cards made before R6.5 lack /dev/rfid (a 125 kHz tag's signal); test
 # builds of R6.5 made it minor 15, which is /dev/lat: made again each time.
