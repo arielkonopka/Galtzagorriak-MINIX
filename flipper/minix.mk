@@ -913,7 +913,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.28
+BASE_VER := 4.31
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
@@ -1005,9 +1005,12 @@ libc: $(MB)/libc.a
 QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native,userspace=on
 
+# The M2 self-test took 97 s under QEMU 10.0 (Debian 13) once #152 added
+# the FPU checks: 90 s cut it off at its last test.  Slower hosts and a
+# growing test list need room; a real hang still ends.
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
-	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
+	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }
