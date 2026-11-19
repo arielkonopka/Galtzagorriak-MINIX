@@ -28,17 +28,17 @@ struct dirent *readdir(DIR *dp)
 	e= &dp->_ent;
 	if (dp->_v7 == (char)-1) {
 		/* The entry format (spec O.4), once, from the directory's first
-		 * entry, always ".": a V1/V2 entry has its name at byte 2, a V3
-		 * entry at byte 4 (bytes 2-3 are then the high half of an inode
-		 * number, never ".\0": a V3 file system has fewer than 3
-		 * million inodes). */
+		 * entry, always ".": a V3 entry has ".\0" at bytes 4-5; a V1/V2
+		 * entry has its name at byte 2, zero-padded, so byte 4 is 0.
+		 * Only name bytes are looked at, never the inode number, so any
+		 * 32-bit inode number works. */
 		char h[8];
 		off_t here= lseek(dp->_fd, (off_t) 0, SEEK_CUR);
 
 		dp->_v7= 16;
 		if (here != -1 && lseek(dp->_fd, (off_t) 0, SEEK_SET) == 0
 			&& read(dp->_fd, h, sizeof(h)) == sizeof(h)
-			&& h[4] == '.' && !(h[2] == '.' && h[3] == 0))
+			&& h[4] == '.' && h[5] == 0)
 			dp->_v7= 64;
 		if (here != -1) (void) lseek(dp->_fd, here, SEEK_SET);
 	}
