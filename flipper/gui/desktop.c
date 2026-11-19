@@ -170,7 +170,8 @@ int dk_apply(struct desk *d, const struct dk_rec *r)
 	case DV_NOTIFY: {
 		struct dk_note *e = &d->n[0];
 
-		memmove(d->n + 1, d->n, sizeof d->n - sizeof d->n[0]);
+		if (d->n == (struct dk_note *) 0) return 0;
+		memmove(d->n + 1, d->n, (DK_NNOTES - 1) * sizeof d->n[0]);
 		if (d->notes < DK_NNOTES) d->notes++;
 		e->uid = r->uid;
 		e->hm = 0;

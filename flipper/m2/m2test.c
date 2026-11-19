@@ -1384,6 +1384,7 @@ static int row_text(int i)		/* row i of a page has text */
 }
 
 static int sectors_written(void);
+static long free_ram(void);
 
 static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 {
@@ -1456,10 +1457,15 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 	check(ms >= 0 && !lpix(0, 7) && kill(lpid, 0) == 0,
 		"ACK.2: the killed module's tile goes, the desktop keeps working");
 
-	/* ACK.3: four modules as fast as they can, keys on APPS */
+	/* ACK.3: four modules as fast as they can, keys on APPS.  Each
+	 * process writes two of them (w[i] and w[i + 2 mod 4]): a fork is a
+	 * 24.5 KB copy of m2test, and in QEMU, where the programs' text is
+	 * in RAM, the fourth may not fit (ENOMEM, T23c: the launcher's text
+	 * +1.3 KB); the four tiles still come, and the FIFO is as full. */
 	wtap(b, 0x04);					/* Left: APPS */
 	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
 	s0 = sectors_written();
+	printf("  ACK.3 free RAM before the flood modules: %ld bytes\n", free_ram());
 	fflush(stdout);
 	for (i = 0; i < 4; i++)
 		if ((w[i] = fork()) == 0) {
@@ -1468,12 +1474,15 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 			long k;
 
 			for (k = 0; fd >= 0; k++) {
-				n = sprintf(rec, "tile\tw%d\t0\t%d\tflood %ld\n", i,
-					    (int) getpid(), k);
+				n = sprintf(rec, "tile\tw%d\t0\t%d\tflood %ld\n",
+					    k & 1 ? (i + 2) % 4 : i, (int) getpid(), k);
 				(void) write(fd, rec, (size_t) n);
 			}
 			_exit(0);
 		}
+	for (i = 0; i < 4; i++)
+		if (w[i] < 0) printf("  ACK.3 flood process %d: fork failed (errno %d)"
+				     ", the others write its module\n", i, errno);
 	(void) poll((struct pollfd *) NULL, 0, 200);
 	for (i = 0; i < 4; i++) {
 		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);

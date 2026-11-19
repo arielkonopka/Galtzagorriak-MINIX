@@ -44,10 +44,13 @@ struct dk_note {
 };
 
 /* The desktop's state: the table and the last DK_NNOTES notifications,
- * the newest first. */
+ * the newest first.  n: DK_NNOTES entries given by the caller (the
+ * launcher allocates them at the first notification and frees them when
+ * the last is cleared, so no RAM is taken while there are none); NULL:
+ * notifications are dropped. */
 struct desk {
 	struct dk_tile t[DK_NTILES];
-	struct dk_note n[DK_NNOTES];
+	struct dk_note *n;
 	unsigned char notes;		/* entries used in n[] */
 	signed char st;			/* the status shown: entry, -1 none */
 };
