@@ -6,7 +6,8 @@ Usage: v3card.py
   1. A fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
      qemu) boots once: the first boot makes /usr, swap and /home.
   2. QEMU is stopped.  On the host, util-linux 'mkfs.minix -3' makes a V3
-     file system of /home's size and it replaces /home (/dev/hd4).
+     file system of /home's size with 200 000 inodes (past the old
+     16-bit ino_t, O.4d) and it replaces /home (/dev/hd4).
   3. Booted again, as root (until fsck learns V3, /etc/rc mounts it
      read-only; the test mounts it read-write by hand):
        /home mounts; a 57- and a 60-character name work with cp, ls, mv,
@@ -102,7 +103,7 @@ def main():
 			return fails
 		with open(part, "wb") as p:
 			p.truncate(size * 512)
-		st, out = host(["mkfs.minix", "-3", "-i", "60000", part])
+		st, out = host(["mkfs.minix", "-3", "-i", "200000", part])
 		check(st == 0, "host mkfs.minix -3: " + out.strip().replace(
 			"\n", " | "))
 		copy_part(img, start, size, part, True)

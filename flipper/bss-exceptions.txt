@@ -33,5 +33,6 @@ launcher	5468
 # one DIR (1 KB) kept here instead of opendir()'s malloc: no heap, so no
 # MM gap.  Running: data 684 + .bss + CHMEM 2048 = 7.4 KB (spec <= 8 KB).
 # T27a (spec O.4): +40 B, the DIR's entry is a struct dirent (64 B, names
-# of 60 characters on a V3 /home) instead of the 24 B flex slots.
-mtpd	4868
+# of 60 characters on a V3 /home) instead of the 24 B flex slots.  O.4d:
+# +4 B, d_ino is 32-bit (struct dirent 68 B).
+mtpd	4872

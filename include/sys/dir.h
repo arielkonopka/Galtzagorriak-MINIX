@@ -9,8 +9,8 @@
 #define DIRSIZ	14
 #endif
 
-struct direct {
-  ino_t d_ino;
+struct direct {		/* V1/V2 on disk: 16-bit inode (spec O.4) */
+  unsigned short d_ino;
   char d_name[DIRSIZ];
 };
 

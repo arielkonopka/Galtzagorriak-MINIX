@@ -281,3 +281,78 @@ What to do when a line fails:
 Still open: a clean night above 99 % in Stop2 (with `start`, no keys pressed), the idle current against 1.5 mA (needs a weekend
 run or a meter on the battery leads), and later ≤ 0.6 mA once the SD card is switched off with
 the screen (T14d part 2; the reason it is not done yet is in PORTING.md under the Power table).
+
+## 7.11 The repeat: a long Stop2 run with clock drift and temperature
+
+The 2026-11-17/18 night has to be repeated (it had no evening reading, and the wake-up counter
+wrapped, #284). This run also measures the **clock drift**: −1.6 s in 20 h (about 22 ppm, about 2 s
+a day) passes AC6.6 but is poor for an alarm clock. A 32 kHz crystal drifts with temperature, so
+the room temperature is written down at both ends. The plan:
+
+| Run | Length | USB | Answers |
+|---|---|---|---|
+| A | 26 h or a weekend, on battery | unplugged | Stop2 share above 99 %, `wother` past 65535 without a wrap (the #344 fix on the device), drift in ppm in Stop2 |
+| B | 8 h or more | plugged in all the time (the Flipper never sleeps) | drift in ppm **without** Stop2: if A and B drift the same, the crystal is the cause, if A drifts more, tick counting around Stop2 entry and exit is |
+| C | as A, after `rtc cal` | unplugged | whether the calibration brought the drift below about ±5 ppm |
+
+The Stop2 share is only meaningful for A and C; for B it is about 0 %, by design.
+
+### For the person
+
+1. **Before:** a build of main that has #344 (`ver` shows it; the run needs `wother` as 32 bits),
+   dev mode off (`reboot` once as root), launcher on the screen, Power app closed, SD card in, no
+   alarms for a baseline run. Battery 50 to 90 %.
+2. **The sensor.** With the AM2301 (DHT21) connected as soon as `dht` exists (issue #358), `nightpower.py`
+   reads it itself. Until then, put any thermometer next to the Flipper (not on the charger, not in
+   the sun) and write down the temperature at the start and at the end.
+3. **Start** (USB still connected), from `flipper/`:
+
+   ```
+   python3 -I tools/nightpower.py start
+   ```
+
+   Unplug USB at once and press no key. Do not set the clock with `date` or the phone link during
+   the run: the drift is measured against the start offset.
+4. **End** (plug in, then at once):
+
+   ```
+   python3 -I tools/nightpower.py end --report night-$(date +%F).md
+   ```
+
+   It prints the Stop2 share, the wake-ups, whether a counter wrapped, the clock drift in s and
+   ppm, and the PORTING.md row. Add the two temperatures to the row by hand (Notes) until the sensor
+   is wired in.
+5. **Run B** is the same with the cable plugged in the whole time (the console must stay free:
+   close the terminal after `start`).
+6. **Calibrating:** if A shows a steady drift of 20 ppm or more, as root on the Flipper:
+   `rtc cal STEPS`, where one step is 0.954 ppm and **+ is faster**. A clock that lost 22 ppm
+   needs about `+23`. Then run C. `rtc` alone shows the calibration in force.
+7. **Report** each run in issue #109 with the report file attached, and add its row to the Power
+   table in `flipper/PORTING.md`.
+
+### For the agent
+
+Task from #109 (comments of 2026-11-19), local lane; the cloud has written `nightpower.py` and this
+chapter.
+
+1. Flash main with #344 and leave dev mode (`reboot`, not `reboot -d`). Confirm
+   `cat /dev/power` ends with `up= stop2= wbtn= wother=` and that `ver` names the build.
+2. Run A, B and C as above with `nightpower.py start`/`end`. Never set the clock between `start`
+   and `end`. If the person is not present, plug and unplug the cable at the times they give; the
+   script leaves out the time on USB by itself (it prints `plugged in at …`).
+3. For each run record: build (`ver`), hours, Stop2 %, `wbtn`/`wother` per minute, whether a
+   counter wrapped, drift in s and ppm, `temp=` from `/dev/power` at both ends (battery
+   temperature, not ambient), ambient temperature (sensor or the person's reading), and the
+   charge in %.
+4. After A: with `wother` past 65535, check `wother >= stop2 / 0.967` **without** unwrapping.
+   That is the device test of #344; tick it in #344's "Needs on-device test" list.
+5. If A fails the Stop2 share, run once on a `make latcheck` image and attach `lat`'s
+   `Stop2 not taken:` line: it names the reason.
+6. Compare A with B for the drift. If A drifts more than B by 5 ppm or more, look at
+   `pm_sleep()` (`src/kernel/arm/klib.c`): the ticks counted from the LPTIM clocks on each wake
+   (`lost_ticks`, the part of the tick already gone) and how the RTC is read at boot.
+7. If the drift is steady, calibrate with `rtc cal`, run C, and write the final step count into
+   the Power table. A permanent calibration at boot is a design question (where it is stored,
+   R6.2): propose it in the issue, do not add it silently.
+8. Results go into issue #109 (report attached) and `flipper/PORTING.md`, with the numbers above.
+   The wording rule applies: "the user", never "the owner".

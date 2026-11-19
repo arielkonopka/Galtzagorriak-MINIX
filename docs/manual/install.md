@@ -285,10 +285,16 @@ R10.4), also from Windows and macOS.
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
 
+(**From 0.1.1 to 0.1.2 or later** the steps below do not work: that step changes the ABI, the
+shared C library and the place of the installed programs at once. Back up `/home` as above,
+write the new card image (section 4), flash the new `minix-base.bin` (section 5) and install
+your app packages again. The release notes in `CHANGELOG.md` say when a release needs this.)
+
 (Not across an ABI change: the new system cannot run the old programs and the old `pkg` refuses
 the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
 (64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
-you need from `/home` first. `ver` and the *About* app show the ABI.)
+you need from `/home` first. The step from ABI 2 to ABI 3 (32-bit inode numbers, T27a) is the
+same: rewrite the card. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the

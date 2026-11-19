@@ -12,7 +12,9 @@
  *		once (8 double words):
  *		  sha[32]	SHA-256 of the text as written and read back
  *		  addr, size	where the text is; all ones: free slot
- *		  ino|dev, ctime  the program file it was installed for
+ *		  id, ctime	the program file it was installed for: id =
+ *				ino << 12 | dev (spec O.4: 20-bit inode,
+ *				12-bit device; ABI 2 had ino << 16 | dev)
  *		  seq, flags	insertion counter; flags unused
  *		  dead		all ones: live; programmed 0: removed
  *   page 2..	text, whole pages per program.
@@ -60,7 +62,7 @@ extern char mbuf[];			/* exec.c's buffer, free here */
 struct inrec {
   unsigned char sha[32];
   unsigned long addr, size;
-  unsigned long id;		/* ino << 16 | dev */
+  unsigned long id;		/* ino << 12 | dev, BINDING() */
   unsigned long ctime;
   unsigned long seq, flags;
   unsigned long dead0, dead1;
@@ -71,6 +73,7 @@ struct inrec {
 PRIVATE unsigned long in_st;
 
 FORWARD _PROTOTYPE( int in_clock_set, (void)				);
+FORWARD _PROTOTYPE( unsigned long in_id, (struct stat *s)		);
 
 #define in_base		(in_st & ~3UL)
 #define in_dir		((int) (in_st & 3))
@@ -89,8 +92,22 @@ FORWARD _PROTOTYPE( int in_clock_set, (void)				);
 #define GEN(d)		(((unsigned long *) DIRADDR(d))[1])
 #define UNBOUND(r)	((r)->id == 0xFFFFFFFFUL && (r)->ctime == 0xFFFFFFFFUL)
 #define HEADCRC		256	/* bytes of text under the record's CRC */
-#define BINDING(s)	((unsigned long) (s)->st_ino << 16 \
-					| ((unsigned long) (s)->st_dev & 0xFFFF))
+/* The binding word (spec O.4): a 20-bit inode number (a V3 file system with
+ * 1 KB blocks has fewer than 2^20 inodes: its inode table ends below the
+ * 16-bit s_firstdatazone) and a 12-bit device (major < 16).  A file outside
+ * that gets 0, which no record holds (inode 0 is never a file): it is not
+ * installed and runs from RAM. */
+#define BINDING(s)	in_id(s)
+#define ID_DEV(id)	((int) ((id) & 0xFFF))
+#define ID_INO(id)	((int) ((id) >> 12))
+
+PRIVATE unsigned long in_id(s)
+struct stat *s;
+{
+  if ((unsigned long) s->st_ino > 0xFFFFFUL || (s->st_dev & 0xF000) != 0)
+	return(0);
+  return((unsigned long) s->st_ino << 12 | (unsigned long) (s->st_dev & 0xFFF));
+}
 
 PRIVATE int in_erased(w)	/* a whole record still erased? */
 unsigned long *w;
@@ -302,8 +319,8 @@ struct inrec *r;
   message m;
 
   if (UNBOUND(r)) return(FALSE);
-  m.m1_i1 = (int) (r->id & 0xFFFF);
-  m.m1_i2 = (int) (r->id >> 16);
+  m.m1_i1 = ID_DEV(r->id);
+  m.m1_i2 = ID_INO(r->id);
   m.m1_i3 = (int) r->ctime;
   return(_taskcall(FS_PROC_NR, INOCHK, &m) == 0);
 }
@@ -457,6 +474,7 @@ struct exec *hdr;
   /* Only a file nobody but root or bin could have written (R2b.5 b). */
   if ((s->st_uid != SUPER_USER && s->st_uid != BIN_UID)
 	|| (s->st_mode & (S_IWGRP | S_IWOTH))) return(EPERM);
+  if (BINDING(s) == 0) return(EFBIG);	/* no binding word for it */
   if (read(fd, (char *) hdr, sizeof(*hdr)) < (int) A_MINHDR
 	|| BADMAG(*hdr) || !(hdr->a_flags & A_SEP) || hdr->a_text <= 0)
 	return(ENOEXEC);

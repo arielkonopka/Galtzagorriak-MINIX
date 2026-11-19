@@ -142,8 +142,9 @@ static int name_of(unsigned long id, char *out, int len)
 			if (strlen(dirs[i]) + strlen(e->d_name) + 2 > sizeof path)
 				continue;
 			sprintf(path, "%s/%s", dirs[i], e->d_name);
+			/* MM's binding word (finst.c, spec O.4) */
 			if (stat(path, &sb) == 0 && ((unsigned long) sb.st_ino
-				<< 16 | ((unsigned long) sb.st_dev & 0xFFFF)) == id) {
+				<< 12 | ((unsigned long) sb.st_dev & 0xFFF)) == id) {
 				closedir(d);
 				strncpy(out, path, len - 1);
 				out[len - 1] = 0;
