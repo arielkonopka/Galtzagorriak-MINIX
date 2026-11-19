@@ -600,6 +600,16 @@ $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/min
 OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/cc1101.o \
 	   $(MB)/modem/duty.o
 REGION_FILES := $(sort $(wildcard rootfs/usr/share/region/*.reg))
+# libibkey (spec R6.7 part 3b, src/lib/ibkey): Cyfral and Metakom iButton
+# keys (Unleashed's line code), linked into ikey.
+IBKEY_DIR := $(MROOT)/src/lib/ibkey
+$(MB)/ibkey/ibkey.o: $(IBKEY_DIR)/ibkey.c $(IBKEY_DIR)/ibkey.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/ibutton.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+OBJS_ikey = $(MB)/cmd/port/ikey.o $(MB)/ibkey/ibkey.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
