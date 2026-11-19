@@ -1,0 +1,118 @@
+# make subghztest: every RAW capture of vectors/ through all decoders
+# (file: protocol bits key xcount); regenerate with subghztest -g
+alutech_at_4n_raw.sub: Alutech AT-4N 72bit Key:ED65BE24B253C334 x1
+alutech_at_4n_raw.sub: Alutech AT-4N 72bit Key:10E3AA491E60F778 x1
+alutech_at_4n_raw.sub: Alutech AT-4N 72bit Key:CF607ADF1C9C76DE x1
+alutech_at_4n_raw.sub: Alutech AT-4N 72bit Key:60F07C67E07CCAF9 x1
+ansonic_raw.sub: Ansonic 12bit Key:AA3 x12
+bett_raw.sub: BETT 18bit Key:0CCCC x14
+came_atomo_raw.sub: CAME Atomo 62bit Key:1FAFCBEED15B667F x1
+came_atomo_raw.sub: CAME Atomo 62bit Key:184F8DB91369D86F x1
+came_atomo_raw.sub: CAME Atomo 62bit Key:186F4741553E1A5D x1
+came_atomo_raw.sub: CAME Atomo 62bit Key:1FAFCBDED15B667F x1
+came_atomo_raw.sub: CAME Atomo 62bit Key:184F8D891369D86F x1
+came_atomo_raw.sub: CAME Atomo 62bit Key:186F4771553E1A5D x1
+came_raw.sub: CAME 12bit Key:216 x35
+came_twee_raw.sub: CAME TWEE 54bit Key:3FFF72EB0BBD4E x2
+came_twee_raw.sub: CAME TWEE 54bit Key:3FFF72C9299F6C x2
+came_twee_raw.sub: CAME TWEE 54bit Key:3FFF72AF4FF90A x2
+came_twee_raw.sub: CAME TWEE 54bit Key:3FFF728D6DDB28 x2
+came_twee_raw.sub: CAME TWEE 54bit Key:3FFF72638335C6 x1
+clemsa_raw.sub: Clemsa 18bit Key:2FCAA x36
+dickert_raw.sub: Dickert_MAHS 36bit Key:155577515 x5
+doitrand_raw.sub: Doitrand 37bit Key:1E60082F5F x11
+doorhan_raw.sub: KeeLoq 64bit Key:5AB6695A81636CB4 x5
+doorhan_raw.sub: KeeLoq 64bit Key:1C81ADD481636CB4 x4
+doorhan_raw.sub: KeeLoq 64bit Key:3BBA515C81636CB4 x4
+dooya_raw.sub: Dooya 40bit Key:E1DC030511 x3
+dooya_raw.sub: Dooya 40bit Key:E1DC03051E x2
+elplast_raw.sub: Elplast 18bit Key:32C82 x67
+faac_slh_raw.sub: Faac SLH 64bit Key:A03A05283CFAA63B x2
+faac_slh_raw.sub: Faac SLH 64bit Key:A03A0529CDD23073 x2
+faac_slh_raw.sub: Faac SLH 64bit Key:A03A0528F3E6BA9B x4
+feron_raw.sub: Feron 32bit Key:6338847B x102
+freezer_raw.sub: Freezer 24bit Key:C31C1F x5
+gangqi_raw.sub: GangQi 34bit Key:29DDB7738 x25
+gate_tx_raw.sub: GateTX 24bit Key:02EDCD x7
+gate_tx_raw.sub: GateTX 24bit Key:02EDAD x5
+gate_tx_raw.sub: Princeton 24bit Key:FE8929 x1
+gate_tx_raw.sub: GateTX 24bit Key:02ED9D x7
+gate_tx_raw.sub: GateTX 24bit Key:02ED0D x7
+hay21_raw.sub: Hay21 21bit Key:1877B7 x5
+hollarm_raw.sub: Hollarm 42bit Key:0ED243C226F x12
+holtek_ht12x_raw.sub: Holtek_HT12X 12bit Key:FFB x18
+holtek_raw.sub: Holtek 40bit Key:500000AABA x1
+holtek_raw.sub: Holtek 40bit Key:500000AAEA x1
+holtek_raw.sub: Holtek 40bit Key:500000AAAB x2
+honeywell_wdb_raw.sub: Honeywell 48bit Key:56A370200000 x49
+hormann_hsm_raw.sub: Hormann HSM 44bit Key:FF2947CAF13 x14
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0CBBBF40 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C915D88 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C67FBD8 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C3D99E0 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C133760 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C1B8DD2 x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0CF12B9E x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0CC7C94A x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C9D67BE x1
+ido_117_111_raw.sub: iDo 117/111 48bit Key:574A0C730532 x1
+intertechno_v3_raw.sub: Intertechno_V3 32bit Key:3F86C59F x12
+kinggates_stylo4k_raw.sub: KingGates Stylo4k 89bit Key:001C9037F0C80000 x12
+legrand_2E37F_raw.sub: Legrand 18bit Key:2E37F x175
+legrand_raw.sub: Legrand 18bit Key:2E37F x175
+linear_delta3_raw.sub: LinearDelta3 8bit Key:D0 x62
+linear_raw.sub: Linear 10bit Key:316 x53
+magellan_raw.sub: Magellan 32bit Key:37AEC852 x8
+marantec24_raw.sub: Marantec24 24bit Key:AC05C4 x36
+marantec_raw.sub: Marantec 49bit Key:1300710DF869F x6
+mastercode_raw.sub: Mastercode 36bit Key:B7E003C04 x2
+megacode_raw.sub: MegaCode 24bit Key:8AE2D2 x10
+nero_radio_raw.sub: Nero Radio 56bit Key:57250501049DD3 x9
+nero_radio_raw.sub: Nero Radio 56bit Key:57250502049D13 x10
+nero_sketch_raw.sub: Nero Sketch 40bit Key:8511138511 x30
+nice_flo_raw.sub: Nice FLO 24bit Key:5C14E4 x6
+nice_flo_raw.sub: Nice FLO 20bit Key:C14E4 x1
+nice_flor_s_raw.sub: Nice FloR-S 52bit Key:1C2863FC03074 x1
+nice_flor_s_raw.sub: Nice FloR-S 52bit Key:1C004BE42B2F6 x1
+nice_flor_s_raw.sub: Nice FloR-S 52bit Key:1C34DBBA15115 x1
+nice_one_raw.sub: Nice FloR-S 72bit Key:0001724A7D9A522F x1
+nice_one_raw.sub: Nice FloR-S 72bit Key:0001035898CB037E x1
+nice_one_raw.sub: Nice FloR-S 72bit Key:0001DB6A15F33B46 x1
+phoenix_v2_raw.sub: Phoenix_V2 52bit Key:C467086805BDA x1
+power_smart_raw.sub: Power Smart 64bit Key:FD0337ACAAFCC852 x6
+princeton_raw.sub: Princeton 24bit Key:7C5703 x3
+princeton_raw.sub: Princeton 24bit Key:7C570C x3
+princeton_raw.sub: Princeton 24bit Key:7C5730 x3
+princeton_raw.sub: Princeton 24bit Key:7C57C0 x3
+proteco_b_raw.sub: Proteco 24bit Key:DF2394 x11
+proteco_c_raw.sub: Proteco 24bit Key:DF2395 x9
+proteco_raw.sub: Proteco 24bit Key:DF2396 x4
+revers_rb2_raw.sub: Revers_RB2 64bit Key:FFFFFFFF39F90A00 x13
+roger_raw.sub: Roger 28bit Key:5ABA101 x72
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BCC x1
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BD0 x5
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BD2 x3
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BD8 x5
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BDC x3
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BDE x3
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BE2 x3
+security_pls_1_0_raw.sub: Security+ 1.0 42bit Key:239E6A38BE4 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D020760C164 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D2A6AD30881 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D158E86A39B x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D123834EAA6 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D2A064551E4 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D264AE5CA84 x2
+security_pls_2_0_raw.sub: Security+ 2.0 62bit Key:00003D2195CB155B x2
+smc5326_raw.sub: SMC5326 25bit Key:17D5575 x9
+somfy_keytis_raw.sub: Somfy Keytis 80bit Key:00A45F5F1B2DFE33 x5
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A78381899B8888 x1
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A79391988A9999 x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A78183899B8888 x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A7B3B1BAA8BBBB x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A78785899B8888 x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A78684899B8888 x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A7B6B4BAA8BBBB x3
+somfy_telis_raw.sub: Somfy Telis 56bit Key:A7B7B5BAA8BBBB x1
+telcoma_edge_ch_raw.sub: Telcoma/Cardin EDGE 32bit Key:FF309FC1 x14
+telcoma_edge_raw.sub: Telcoma/Cardin EDGE 32bit Key:FF309FC0 x8

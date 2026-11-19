@@ -41,5 +41,10 @@
 # 36 KB: one more 4 KB page.  The test itself sets the cache budget to 0
 # (pkg, tar, sh and sleep run more than twice there): nothing changed in
 # how often the cache writes.
-m2      cache   11
+# 2026-11-19 (T29a mtpd_test, #319): 12.  m2test's text grew from 40512 B
+# on main cd9f4df to 41460 B, past 40 KB (10 pages): one more 4 KB
+# page.  Not the minor clash with subghzpkt: it stays 12 with /dev/mtpline
+# on minor 21 and both subghz checks ok.  Nothing changed in how often the
+# cache writes.
+m2      cache   12
 m2      inst    0

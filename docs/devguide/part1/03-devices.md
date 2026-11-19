@@ -287,19 +287,36 @@ The low-frequency antenna, driven by the pulse engine (R6.5, R9.0.4; `<minix/rfi
   carrier and plays the list in step with it, with no CPU work and no drift, until `n` = 0, a
   close or a signal. Your arrays stay pinned meanwhile: do not free them. At most 512 segments.
 
-## 3.10b Sub-GHz receive: `/dev/subghz`, `/dev/subghzraw`
+## 3.10b Sub-GHz: `/dev/subghz`, `/dev/subghzraw`, `/dev/subghzpkt`
 
-The CC1101 can listen; it never transmits through these devices (transmit, with the regional
-limits, is **(planned)**, Phase 8).
+Group `subghz` (`<minix/subghz.h>`, R8.1, R8.2, issue #302). The `subghz` command (package
+`subghz`, manual chapter [Sub-GHz remotes](../../manual/subghz.md)) is the tool; its protocols
+are the library `libsubghz` (`src/lib/subghz`, the Unleashed `lib/subghz`; see its `README`).
 
-- `/dev/subghz`: write the frequency in Hz as text (`433920000`); only the stock firmware's
-  bands are accepted (300–348, 387–464, 779–928 MHz), others give `EINVAL`. Read one line:
-  `rssi=-95 peak=-60 freq=433919830` (dBm; `peak` is the strongest sample during the read's
-  ~30 ms; `freq` what the chip tuned). Write `0` to stop. The radio also stops by itself after
-  about a minute without a read (it draws ~15 mA).
-- `/dev/subghzraw`: what the receiver demodulates (on-off keying), as 32-bit µs durations,
-  carrier first, the `/dev/ir` format. A read waits for the first change and ends after 0.1 s of
-  silence or a full buffer. There is no RSSI threshold yet, so noise toggles it too.
+- `/dev/subghz` (minor 11): write the frequency in Hz as text (`433920000`); only the stock
+  firmware's bands are accepted (300–348, 387–464, 779–928 MHz), others give `EINVAL`. Read one
+  line: `rssi=-95 peak=-60 freq=433919830` (dBm; `peak` is the strongest sample during the
+  read's ~30 ms; `freq` what the chip tuned). Write `0` to stop. The radio also stops by itself
+  after about a minute without a read (it draws ~15 mA).
+- `/dev/subghzraw` (minor 14): a **read** gives what the receiver demodulates (on-off keying),
+  as 32-bit µs durations, carrier first, the `/dev/ir` format. It waits for the first change and
+  ends after 0.1 s of silence or a full buffer. There is no RSSI threshold yet, so noise toggles
+  it too. A **write** sends a frame in the same format (each duration 1 µs–1 s) at the frequency
+  `/dev/subghz` tuned.
+- `/dev/subghzpkt` (minor 20): one packet (1–60 bytes) per write or read, through the chip's
+  FIFO, as stock's `subghz chat`; a read with nothing heard gives `EAGAIN`.
+- Every transmit is checked by the kernel against the **region** (`SGIOCREGION`, set once per
+  boot by `/etc/rc` from `/etc/flipper/region`; `SGIOCGREGION` reads it) and the band's duty
+  cycle for the hour (`SGIOCAIR`: used and allowed ms). Errors: `EIO` not tuned, `EPERM` no
+  region or outside its bands, `EAGAIN` the hour's share used up, `EBUSY` a reader is listening,
+  `EINVAL` a bad frame, `ENOTSUP` no transmitter (the Flipper, for now: the CC1101 transmit path
+  is **(planned)**).
+- QEMU: a transmit prints console lines (`sg> tx FREQ N` and the durations, 16 a line, off ones
+  negative; `sg> pkt FREQ hex…`). Test hooks, `ENOTTY` on the Flipper: `SGIOCLINE` gives the
+  FNV-1a hash of the last one printed; `SGIOCFAKE` (`SG_FAKE_RAW` on `/dev/subghzraw`,
+  `SG_FAKE_PKT` on `/dev/subghzpkt`) makes the next write a received frame or packet.
+  `/usr/tests/sgfake FILE` (package `tests`) plays a `.sub` RAW capture into a running
+  `subghz rx` this way; `tools/nattest.py subghz` uses it.
 
 ## 3.10c The clock's alarm: `/dev/rtc`
 
@@ -324,7 +341,7 @@ Where each radio stands on main, so you know what you can build on today:
 |---|---|---|---|
 | **125 kHz RFID** | works: read, write (T5577, EM4305), emulate, clear passwords, read blocks | `/dev/rfid` (3.10a) | `rfid` command; stock `lib/lfrfid` (25 protocols); the RFID launcher app. ASK/biphase protocols read and emulate; FSK and PSK ones are written but not yet read or emulated (T19b) |
 | **iButton** | works: read, write RW1990 | `/dev/ibutton` (3.10) | `ikey` |
-| **Sub-GHz** | receive only: RSSI and the demodulated signal | `/dev/subghz`, `/dev/subghzraw` (3.10b) | `ir rx -r -d /dev/subghzraw` shows the timings; protocol decoders, recording and transmit are **(planned)**, Phases 8–9 |
+| **Sub-GHz** | receive: RSSI, the demodulated signal, every Unleashed decoder; transmit with the region's limits in QEMU, on the Flipper **(planned)** | `/dev/subghz`, `/dev/subghzraw`, `/dev/subghzpkt` (3.10b) | `subghz` command (package `subghz`); `libsubghz` (`src/lib/subghz`, 70 protocols, decoders and encoders) |
 | **Infrared** | works: send and receive, stock protocols and remote files | `/dev/ir` (3.9) | `ir` |
 | **NFC** (ST25R3916, 13.56 MHz) | **(planned)**, spec Phase 13–14 (milestone M6) | `/dev/nfc` to come: field control, polling NFC-A/B/F/V, `transceive` straight between the chip's FIFO and your buffer, card emulation with the chip's own anticollision | the stock NFC protocol libraries ported as user-space libraries. Nothing in the code yet |
 | **Bluetooth LE** (CPU2) | **(planned)**, spec Phase 15–16 (milestone M7). The radio core is never started today | a transport task `ble` and a `bled` daemon (GATT serial, battery, HID, pairing with a PIN on the screen), started on demand; `rpcd` for the official phone app | `sbctl` (Storz & Bickel remote) has its protocol core ready and host-tested (`flipper/apps/sbctl`) waiting for it |
@@ -407,6 +424,14 @@ Bytes from the STM32's hardware random number generator. Use it for salts, nonce
 names; `rand()` is not random. A read can be short while the radio core holds the generator:
 loop until you have what you need. **On QEMU it is a weak fallback** (a xorshift seeded from the
 uptime), clearly not for keys.
+
+## 3.12a The MTP test line: `/dev/mtpline` (QEMU only)
+
+Minor 21, root only (`c--600`). Raw bytes both ways on QEMU's second serial line, with no tty
+processing: `mtpd -l /dev/mtpline` serves MTP on it and `tools/mtphost.py` sits on QEMU's
+socket at the other end ([Files to a PC over USB](../../manual/usb-files.md)). A read returns
+what has arrived (at least one byte, or `EAGAIN` with `O_NONBLOCK`). The Flipper kernel does not
+have it (`ENXIO`); there MTP goes over USB.
 
 ## 3.13 Who may use what: an example
 

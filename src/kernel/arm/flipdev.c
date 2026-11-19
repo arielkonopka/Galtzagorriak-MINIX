@@ -77,6 +77,7 @@
 #include <minix/rfid.h>
 #include <minix/ibutton.h>
 #include <minix/hid.h>
+#include <minix/subghz.h>
 #include <signal.h>
 #include "ibemu.c"		/* the Dallas key's 1-Wire slave (R6.7) */
 
@@ -94,10 +95,13 @@
 #define SUBGHZ_MINOR	11	/* the CC1101, receive only (R8.1 part 1) */
 #define ADCS_MINOR	12	/* a header pin sampled into the reader (R6.4) */
 #define RTC_MINOR	13	/* the RTC alarm, calibration (R6.2, R7b.1) */
-#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7) */
+#define SGRAW_MINOR	14	/* its demodulated data, timed (R4b.7);
+				 * a write sends a frame (R8.2) */
 #define RFID_MINOR	16	/* a 125 kHz tag's signal, timed (R6.5) */
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
+#define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+/* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */
@@ -324,6 +328,10 @@ FORWARD _PROTOTYPE( int adc_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int sg_put, (char *line, int n, int v) );
+FORWARD _PROTOTYPE( int sg_tx_check, (u32_t ms, u32_t *hzp, u32_t *limit) );
+FORWARD _PROTOTYPE( int sg_raw_write, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_pkt_rw, (message *m_ptr, phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( int adcs_config, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int adcs_read, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( void adcs_end, (int ok) );
@@ -335,6 +343,9 @@ PRIVATE u8_t sg_state;
 PRIVATE u8_t as_proc;		/* the reader + 1, 0: none */
 PRIVATE u8_t as_caller, as_done;
 PRIVATE u16_t as_count;
+PRIVATE u16_t sg_region;		/* R8.2: SG_REGION('E','U'); 0 none */
+PRIVATE u16_t sg_rev;			/* QEMU: a fake frame's reader to
+					 * revive, bytes + 1 (issue #302) */
 FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
@@ -359,6 +370,9 @@ FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
 
 #include "hiddev.c"		/* USB HID, /dev/hidkbd... (R11.3.1) */
+#ifdef BOARD_QEMU
+#include "mtpline.c"		/* QEMU: /dev/mtpline, MTP tests (R10.4) */
+#endif
 
 /* The console on the LCD (launcher: "Console"): what goes out on the
  * console (cons.c) is also drawn into fbuf, which holds the screen anyway,
@@ -417,6 +431,9 @@ PUBLIC void flipdev_task()
 	put_irq_handler(r, rtc_int);
 	enable_irq(r);
   }
+#ifdef BOARD_QEMU
+  line_init();				/* /dev/mtpline (R10.4 tests) */
+#endif
   if ((r = hal_ir_tx_irq()) >= 0) {
 	hal_ir_tx_stop();			/* whatever ran before us */
 	put_irq_handler(r, ir_tx_int);
@@ -452,9 +469,13 @@ PUBLIC void flipdev_task()
 			if (rf_held) rfid_field_off();	/* the holder let go */
 			if (rf_emu != 0) rfid_emu_off();
 		}
-		r = (unsigned) fm.DEVICE <= LAST_MINOR ? OK : ENXIO;
+		r = (unsigned) fm.DEVICE <= LAST_MINOR
+				|| fm.DEVICE == SGPKT_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
+#endif
+#ifdef BOARD_QEMU
+		if (fm.DEVICE == LINE_MINOR) r = OK;
 #endif
 		break;
 	case DEV_READ:
@@ -466,6 +487,8 @@ PUBLIC void flipdev_task()
 		  : fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
 		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
+		  : fm.DEVICE == SUBGHZ_MINOR || fm.DEVICE == SGRAW_MINOR
+		    || fm.DEVICE == SGPKT_MINOR ? sg_ioctl(&fm)
 		  : fg_ioctl(&fm);
 		break;
 	case DEV_SELECT:
@@ -473,6 +496,9 @@ PUBLIC void flipdev_task()
 		break;
 	case CANCEL:
 		if (rd_waiting && rd_proc == fm.PROC_NR) rd_waiting = FALSE;
+#ifdef BOARD_QEMU
+		if (ln_rd && ln_proc == fm.PROC_NR) ln_rd = FALSE;
+#endif
 		if (hid_rdp == fm.PROC_NR + 1) hid_rdp = 0;
 		if (pre_rd == fm.PROC_NR + 1) pre_rd = 0;	/* R7b.2 */
 		if (rs_wait && ir_proc == fm.PROC_NR) rs_wait = 0;	/* R9.0.5 */
@@ -498,6 +524,10 @@ PUBLIC void flipdev_task()
 		r = EINVAL;
 	}
 	reply(TASK_REPLY, fm.m_source, fm.PROC_NR, r);
+	if (sg_rev != 0) {		/* QEMU: a fake frame was read */
+		reply(REVIVE, ir_caller, ir_proc, (int) sg_rev - 1);
+		sg_rev = 0;
+	}
 	if (sel_wait) sel_check();	/* e.g. a tune cancelled */
 	hid_check();			/* e.g. a persona let go */
   }
@@ -719,6 +749,191 @@ int count;
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
   return(count);
+}
+
+
+/*===========================================================================*
+ *				Sub-GHz transmit (R8.2)			     *
+ *===========================================================================*/
+/* Every transmit (a frame on /dev/subghzraw, a packet on /dev/subghzpkt)
+ * passes here first: the frequency is read back from the chip (not taken
+ * from what was asked), it must lie in a band of the region set at boot,
+ * and the band's duty cycle over the hour must allow the frame's air time.
+ * The table is const (flash).  Bands as stock's region data for the three
+ * regions; the EU duty cycles are ETSI EN 300 220's (as libmodem's P.4
+ * table).  RAM: the region (1 B) and the hour's air time (8 B). */
+#define SG_HOUR_S	3600
+PRIVATE const struct sg_band {
+  char rg[2];
+  u16_t duty_pm;		/* per mille of the hour; 1000: no limit */
+  u32_t lo, hi;			/* Hz */
+} sg_bands[] = {
+  { "EU", 100,  433050000, 434790000 },		/* 10 % */
+  { "EU",  10,  868000000, 868600000 },		/* 1 % */
+  { "EU",   1,  868700000, 869200000 },		/* 0.1 % */
+  { "EU", 100,  869400000, 869650000 },		/* 10 % */
+  { "EU", 1000, 869700000, 870000000 },
+  { "US", 500,  304100000, 321950000 },		/* stock: 50 % */
+  { "US", 500,  433050000, 434790000 },
+  { "US", 500,  915000000, 928000000 },
+  { "JP", 500,  312000000, 315250000 },
+  { "JP", 500,  920500000, 923500000 },
+};
+#define SG_NBANDS	(sizeof(sg_bands) / sizeof(sg_bands[0]))
+PRIVATE u32_t sg_air_ms, sg_hour;	/* air time since sg_hour (s) */
+
+PRIVATE int sg_tx_check(ms, hzp, limit)
+u32_t ms;				/* the frame's air time */
+u32_t *hzp;				/* out: the frequency */
+u32_t *limit;				/* out: the band's ms per hour */
+{
+  unsigned i;
+  u32_t hz, now = (u32_t) (get_uptime() / HZ);
+
+  if (!(sg_state & SG_ON) || hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF)
+	return(EIO);			/* not tuned (R8.1: read back) */
+  if (sg_region == 0) return(EPERM);
+  for (i = 0; i < SG_NBANDS; i++) {
+	if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == sg_region
+			&& hz >= sg_bands[i].lo && hz <= sg_bands[i].hi) break;
+  }
+  if (i == SG_NBANDS) return(EPERM);
+  if (now - sg_hour >= SG_HOUR_S) {		/* a new hour */
+	sg_hour = now;
+	sg_air_ms = 0;
+  }
+  *hzp = hz;
+  *limit = (u32_t) sg_bands[i].duty_pm * SG_HOUR_S;
+  if (sg_air_ms + ms > *limit) return(EAGAIN);
+  return(OK);
+}
+
+PRIVATE int sg_raw_write(user, count)
+phys_bytes user;
+int count;
+{
+/* One frame: durations in us, carrier first.  Checked a few words at a
+ * time on the stack, then sent from the writer's memory. */
+  u32_t d[16], us = 0, hz, limit;
+  int i, j, k, n, r;
+
+  if (count % 4 != 0 || count > 0x7FFC) return(EINVAL);
+  n = count / 4;
+  if (hal_subghz_fake_take(HAL_SG_FAKE_RAW)) {
+	/* QEMU test hook: a received frame for the waiting reader */
+	if (!ir_rd || pu_input != 1) return(EAGAIN);
+	n = count > (int) ir_count ? ir_count : count;
+	phys_copy(user, ir_buf, (phys_bytes) n);
+	hal_pulse_stop();
+	lock();
+	pm_busy &= ~PM_PULSE;
+	unlock();
+	proc_addr(ir_proc)->p_physio = FALSE;
+	ir_rd = FALSE;
+	sg_rev = (u16_t) n + 1;		/* revived after this call's reply */
+	return(count);
+  }
+  for (i = 0; i < n; i += k) {
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(user + (phys_bytes) i * 4, vir2phys(d), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) {
+		if (d[j] == 0 || d[j] > SG_DURATION_MAX) return(EINVAL);
+		us += d[j];
+	}
+  }
+  if (ir_rd || tx_on) return(EBUSY);	/* one radio: a reader listens */
+  if ((r = sg_tx_check((us + 999) / 1000, &hz, &limit)) != OK) return(r);
+  if (hal_subghz_tx(hz, (u32_t) user, (unsigned) n) < 0) return(ENOTSUP);
+  sg_air_ms += (us + 999) / 1000;
+  return(count);
+}
+
+PRIVATE int sg_pkt_rw(m_ptr, user, count)
+message *m_ptr;
+phys_bytes user;
+int count;
+{
+/* /dev/subghzpkt: one packet.  The air time as stock chat's preset sends
+ * it (GFSK 9.99 kBd; preamble, sync, length and CRC: 12 bytes more). */
+  u8_t p[HAL_SUBGHZ_PKT];
+  u32_t hz, limit, ms;
+  int r;
+
+  if (m_ptr->m_type == DEV_READ) {
+	if (!(sg_state & SG_ON)) return(EIO);
+	if (count > HAL_SUBGHZ_PKT) count = HAL_SUBGHZ_PKT;
+	sg_state |= SG_READ;
+	if ((r = hal_subghz_pkt_rx(p, (unsigned) count)) < 0) return(ENOTSUP);
+	if (r == 0) return(EAGAIN);	/* none: poll again later */
+	phys_copy(vir2phys(p), user, (phys_bytes) r);
+	return(r);
+  }
+  if (count > HAL_SUBGHZ_PKT) return(EINVAL);
+  phys_copy(user, vir2phys(p), (phys_bytes) count);
+  if (hal_subghz_fake_take(HAL_SG_FAKE_PKT))	/* QEMU: a received one */
+	return(hal_subghz_pkt_fake(p, (unsigned) count) < 0 ? EINVAL : count);
+  ms = ((u32_t) count + 12) * 8 * 1000 / 9990 + 1;
+  if ((r = sg_tx_check(ms, &hz, &limit)) != OK) return(r);
+  if (hal_subghz_pkt_tx(hz, p, (unsigned) count) < 0) return(ENOTSUP);
+  sg_air_ms += ms;
+  return(count);
+}
+
+PRIVATE int sg_ioctl(m_ptr)
+message *m_ptr;
+{
+/* <minix/subghz.h>: the region, the hour's air time, the QEMU hooks. */
+  phys_bytes user;
+  struct sg_air a;
+  u32_t hz, limit, st;
+  int v, size, r;
+  unsigned i;
+
+  switch (m_ptr->TTY_REQUEST) {
+  case SGIOCREGION: case SGIOCGREGION: case SGIOCFAKE: size = sizeof(int); break;
+  case SGIOCLINE: size = sizeof(long); break;
+  case SGIOCAIR: size = sizeof(a); break;
+  default: return(ENOTTY);
+  }
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, (vir_bytes) size);
+  if (user == 0) return(EFAULT);
+  switch (m_ptr->TTY_REQUEST) {
+  case SGIOCREGION:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	for (i = 0; i < SG_NBANDS; i++)
+		if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == v) break;
+	if (i == SG_NBANDS) return(EINVAL);
+	if (sg_region != 0 && sg_region != (u16_t) v) return(EPERM);
+	sg_region = (u16_t) v;		/* once: until the next boot */
+	return(OK);
+  case SGIOCGREGION:
+	v = sg_region;
+	break;
+  case SGIOCAIR:
+	r = sg_tx_check(0, &hz, &limit);
+	if (r != OK && r != EAGAIN) return(r);
+	a.used_ms = sg_air_ms;
+	a.limit_ms = limit;
+	phys_copy(vir2phys(&a), user, (phys_bytes) size);
+	return(OK);
+  case SGIOCFAKE:
+	phys_copy(user, vir2phys(&v), (phys_bytes) size);
+	if (v != HAL_SG_FAKE_RAW && v != HAL_SG_FAKE_PKT) return(EINVAL);
+	if ((m_ptr->DEVICE == SGRAW_MINOR) != (v == HAL_SG_FAKE_RAW))
+		return(EINVAL);		/* the file it is for */
+	if (hal_subghz_fake(v) < 0) return(ENOTTY);
+	return(OK);
+  case SGIOCLINE: {
+	long h;
+
+	if (hal_subghz_line(&st) < 0) return(ENOTTY);
+	h = (long) st;
+	phys_copy(vir2phys(&h), user, (phys_bytes) size);
+	return(OK);
+  }
+  }
+  phys_copy(vir2phys(&v), user, (phys_bytes) size);
+  return(OK);
 }
 
 
@@ -1185,6 +1400,9 @@ message *m_ptr;
 	: numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count);
   if (user == 0) return(EFAULT);
   if (IS_HID(m_ptr->DEVICE)) return(hid_rw(m_ptr, user, count));
+#ifdef BOARD_QEMU
+  if (m_ptr->DEVICE == LINE_MINOR) return(line_rw(m_ptr, user, count));
+#endif
 
   switch (m_ptr->DEVICE) {
 #if LATTRACE
@@ -1399,10 +1617,14 @@ message *m_ptr;
 	}
 	return(rfid_read(m_ptr, user, count));
 
+  case SGPKT_MINOR:
+	return(sg_pkt_rw(m_ptr, user, count));
+
   case SGRAW_MINOR:
 	/* R4b.7 part 2: what the receiver demodulates, as /dev/ir's
-	 * durations, high (carrier) first; tune with /dev/subghz first */
-	if (m_ptr->m_type == DEV_WRITE) return(EINVAL);
+	 * durations, high (carrier) first; tune with /dev/subghz first.
+	 * A write sends such a frame (R8.2). */
+	if (m_ptr->m_type == DEV_WRITE) return(sg_raw_write(user, count));
 	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
 	sg_state |= SG_READ;			/* in use: it stays on */
 	return(pulse_read(m_ptr, user, count, 1));
@@ -1900,6 +2122,9 @@ PRIVATE void do_hardint()
 	r = deliver(rd_proc, rd_vir, rd_count);
 	reply(REVIVE, rd_caller, rd_proc, r);
   }
+#ifdef BOARD_QEMU
+  line_check();				/* /dev/mtpline */
+#endif
   if (rs_wait && rs_done != rs_got) {	/* R9.0.5: a half for the read */
 	rs_wait = 0;
 	r = rs_take(ir_buf);
