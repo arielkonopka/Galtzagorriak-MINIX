@@ -114,15 +114,23 @@ int count;
 	}
 	return(count);
   }
-  if (ln_tail != ln_head)
+  /* The empty test and ln_rd under lock: an RX interrupt between them
+   * would fill the ring without a wakeup (ln_rd still FALSE), and with
+   * the last bytes of a command in it the reader would sleep for good,
+   * since the PC waits for the answer (M2's 60 s mtpd hang, #330). */
+  lock();
+  if (ln_tail != ln_head) {
+	unlock();
 	return(line_give(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
-  if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
-  if (ln_rd) return(EIO);		/* one reader at a time */
+  }
+  if (m_ptr->TTY_FLAGS & O_NONBLOCK) { unlock(); return(EAGAIN); }
+  if (ln_rd) { unlock(); return(EIO); }	/* one reader at a time */
   ln_rd = TRUE;
   ln_caller = m_ptr->m_source;
   ln_proc = m_ptr->PROC_NR;
   ln_vir = (vir_bytes) m_ptr->ADDRESS;
   ln_count = count;
+  unlock();
   return(SUSPEND);
 }
 

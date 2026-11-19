@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [badusb|jiggle|teklatua|subghz|notes]  (only the AC11.3.1,
-       AC11.3.3, AC11.3.2, Sub-GHz or T23c part)
+Usage: nattest.py [badusb|jiggle|teklatua|subghz|notes|launcher-style]  (only
+       the AC11.3.1, AC11.3.3, AC11.3.2, Sub-GHz, T23c or T31 part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -76,6 +76,11 @@ timed, remind and alarm packages and checks:
            one (on the list and in the opened view); RUNNING says
            nothing runs (R12.20 not there yet); the launcher's free RAM
            with 8 notifications (ACK.4)
+
+  T31      the launcher's Stock style (spec R5.6b, AC5.7; only with the
+           argument launcher-style): Style toggled on its settings page,
+           a frame of each style, the Style: line in /etc/launcher.conf,
+           FURI_STYLE=pine|stock in an app it starts
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -236,6 +241,12 @@ def win_only(r, prog):
 	     "test -f /etc/launcher.conf && cp /etc/launcher.conf /tmp/lc.bak; "
 	     "grep ':=/usr/bin/%s$' /tmp/apps.bak > /etc/apps; "
 	     "echo 'GuiLog: on' >> /etc/launcher.conf" % prog, 20)
+	return reread(r)
+
+
+def reread(r):
+	"""Make the launcher read /etc/apps and its conf again: run the app
+	under its cursor and end it with Back.  Returns the free RAM then."""
 	tap(r, "back")		# lights the screen; Back on a page: the list
 	tap(r, "back")
 	# whichever app the cursor is on (the Console after boot, Kanpaia
@@ -940,6 +951,86 @@ def notes(r):
 	     "cp /tmp/nc.bak /etc/notify.conf", 20)
 
 
+def style_toggle(r):
+	"""APPS -> SETTINGS -> Launcher -> OK on Style (launcher_test of m2test)."""
+	tap(r, "left", lit=True)			# SETTINGS
+	for _ in range(7):
+		tap(r, "down", 0, lit=True)		# Launcher
+	tap(r, "ok", lit=True)
+	for _ in range(3):
+		tap(r, "down", 0, lit=True)		# Style
+	tap(r, "ok", lit=True)				# toggles, redrawn at once
+
+
+def stock_apps(fb):
+	"""The Apps page as the stock menu: the frame of the selected entry
+	(rows 21 and 42), the scroll bar at x 126, no title bar."""
+	return fb is not None and not lpix(fb, 0, 0) and not lpix(fb, 64, 0) \
+		and lpix(fb, 126, 0) and all(lpix(fb, x, 21) and lpix(fb, x + 1, 42)
+					     for x in range(2, 122))
+
+
+def style_of(r, want):
+	"""OK on the app under the cursor (/tmp/sty.sh): its FURI_STYLE."""
+	r.sh("rm -f /tmp/sty.out", 20)
+	tap(r, "ok", 2, lit=True)
+	out = file_out(r, "cat /tmp/sty.out 2>/dev/null",
+		       lambda o: clean(o).strip(), 20)
+	if clean(out).strip() != want:
+		print("  sty.out: %r" % out)
+	return clean(out).strip() == want
+
+
+def launcher_style(r):
+	"""T31 (spec R5.6b, AC5.7): the launcher of /etc/rc in both styles,
+	driven by fake buttons: a frame of each, the Style: line it writes
+	to /etc/launcher.conf and FURI_STYLE in an app it starts."""
+	r.sh("cp /etc/apps /tmp/apps.bak; rm -f /tmp/lc.bak; "
+	     "test -f /etc/launcher.conf && cp /etc/launcher.conf /tmp/lc.bak; "
+	     "echo 'echo $FURI_STYLE > /tmp/sty.out' > /tmp/sty.sh; "
+	     "(echo 'Styl:root:@app:/bin/sh /tmp/sty.sh'; "
+	     "grep -v '^#' /tmp/apps.bak) > /etc/apps", 20)
+	reread(r)			# the cursor on Styl now
+	tap(r, "back", lit=True)
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and lpix(fb, 127, 0),
+	      "AC5.7: Pine: the APPS title bar")
+	if fails: show(fb)
+	check(style_of(r, b"pine"), "AC5.7: an app started in Pine sees FURI_STYLE=pine")
+	style_toggle(r)
+	fb = lcd_frame(r)
+	check(fb is not None and not lpix(fb, 0, 0) and not lpix(fb, 127, 1)
+	      and lpix(fb, 5, 51),
+	      "AC5.7: Style -> stock on the settings page, redrawn at once (submenu look)")
+	tap(r, "back", lit=True)			# SETTINGS
+	tap(r, "back", lit=True)			# APPS, the conf written
+	fb = lcd_frame(r)
+	ok = stock_apps(fb)
+	check(ok, "AC5.7: Stock: the Apps page as the stock menu")
+	if not ok: show(fb)
+	out = clean(r.output("grep -c '^Style: stock$' /etc/launcher.conf; "
+			     "cat /etc/launcher.conf", 20))
+	check(out.split(b"\n")[0].strip() == b"1",
+	      "AC5.7: /etc/launcher.conf has one Style: stock line")
+	if fails: print("  launcher.conf: %r" % out)
+	check(style_of(r, b"stock"), "AC5.7: an app started in Stock sees FURI_STYLE=stock")
+	fb = lcd_frame(r)
+	check(stock_apps(fb), "AC5.7: Stock: the menu is back after the app")
+	style_toggle(r)					# back to Pine
+	tap(r, "back", lit=True)
+	tap(r, "back", lit=True)
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and lpix(fb, 127, 0),
+	      "AC5.7: Style: pine again, the title bar is back")
+	out = clean(r.output("grep -c '^Style: pine$' /etc/launcher.conf; "
+			     "cat /etc/launcher.conf", 20))
+	check(out.split(b"\n")[0].strip() == b"1",
+	      "AC5.7: /etc/launcher.conf has Style: pine again")
+	check(style_of(r, b"pine"), "AC5.7: an app started in Pine again sees FURI_STYLE=pine")
+	win_restore(r)
+	r.sh("rm -f /tmp/sty.sh /tmp/sty.out", 20)
+
+
 def subghz(r):
 	"""Issue #302: subghz in QEMU (package subghz, tests: sgfake).  A
 	recorded Princeton capture fed to subghz rx (SGIOCFAKE) decodes;
@@ -1014,7 +1105,7 @@ def subghz(r):
 
 
 PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua,
-	 "subghz": subghz, "notes": notes}
+	 "subghz": subghz, "notes": notes, "launcher-style": launcher_style}
 
 
 def main():
