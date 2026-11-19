@@ -1791,6 +1791,49 @@ static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
 		"desktop: a notification: the count on the status line, the text noted");
 }
 
+/* #331: four processes spinning on EAGAIN (O_NONBLOCK writes to full
+ * pipes, /bin/spinfifo: a shadow group of four) must not freeze the
+ * launcher: key -> frame on APPS as ACK.3 measures it.  They are started
+ * with a plain fork() of m2test (process 1, large data): the fork must
+ * return in the parent (or fail cleanly), not hang it. */
+static void __attribute__((noinline)) spin_test(int b, int l)
+{
+	long ms, worst = 0;
+	pid_t w;
+	int i, st;
+
+	wtap(b, 0x04);					/* Left: APPS */
+	w = fork();
+	if (w == 0) {
+		(void) setsid();
+		execl("/bin/spinfifo", "spinfifo", "4", (char *) NULL);
+		_exit(99);
+	}
+	printf("  #331 fork() of m2test: %s (errno %d)\n",
+		w > 0 ? "returned" : "failed", w > 0 ? 0 : errno);
+	check(w > 0 || errno == ENOMEM || errno == EAGAIN,
+		"#331: fork() of m2test returns or fails cleanly");
+	if (w < 0 && (w = vfork()) == 0) {
+		(void) setsid();
+		execl("/bin/spinfifo", "spinfifo", "4", (char *) NULL);
+		_exit(99);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	for (i = 0; i < 4; i++) {
+		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);
+		if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	}
+	printf("  #331 key -> frame on APPS, 4 EAGAIN spinners: max %ld ms"
+		" (4 keys)\n", worst);
+	check(w > 0 && worst < 500,
+		"#331: keys redrawn while 4 processes spin on EAGAIN (QEMU)");
+	if (w > 0) {
+		(void) kill(-w, SIGKILL);
+		(void) kill(w, SIGKILL);	/* before its setsid() */
+		while (waitpid(-w, &st, 0) > 0 || errno == EINTR) ;
+	}
+}
+
 /* T24b, T24d / spec K.7, K.8: settings time from the launcher's SETTINGS
  * page, the window app setgroup (the launcher draws it), run once here
  * and once for Display (more runs would make the run-time cache copy
@@ -2503,6 +2546,7 @@ static void launcher_test(void)
 	settings_test(b, l);			/* T24b, spec K.7 */
 	window_test(b, l);			/* T23b, spec K.8 */
 	desktop_test(b, l, pid);		/* T23a, spec K.6 */
+	spin_test(b, l);			/* #331 */
 	kill(pid, SIGKILL);
 	(void) waitpid(pid, &st, 0);
 	/* m2test is process 1: whatever the launcher left is ours now */

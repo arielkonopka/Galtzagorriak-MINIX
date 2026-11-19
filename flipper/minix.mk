@@ -326,7 +326,7 @@ UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
 ifeq ($(BOARD),qemu)
-UPROGS	+= furitest furihello gmdemo fptest
+UPROGS	+= furitest furihello gmdemo fptest spinfifo
 endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
@@ -378,6 +378,7 @@ CHMEM_setgroup := 1536	# K.7/K.8 window app, ACK7.4: all stack (no heap, so no
 			# deepest About ~0.9 KB (-fstack-usage) + environment
 CHMEM_m2test := 16384
 CHMEM_fptest := 8192
+CHMEM_spinfifo := 1024	# #331: EAGAIN spinners, all stack
 CHMEM_furitest := 16384	# 3 KB main stack + up to 3 thread stacks of 1 KB + heap
 CHMEM_furihello := 12288	# main stack + gui thread 2 KB + heap (Canvas 1.1 KB, views)
 CHMEM_mined  := 12288	# T8 follow-up: one malloc per line; ~1.6 B per file byte:
@@ -435,6 +436,11 @@ $(MB)/hid/hid.o: $(HID_DIR)/hid.c $(HID_DIR)/libhid.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 OBJS_m2test = $(MB)/cmd/m2test.o $(MB)/hid/hid.o
+# spinfifo (#331): processes spinning on EAGAIN, for m2test's L1 check.
+OBJS_spinfifo = $(MB)/cmd/spinfifo.o
+$(MB)/cmd/spinfifo.o: m2/spinfifo.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # fptest (R5.7): the FPU checks; m2fpu.c and fpregs.S use the FPU.
 OBJS_fptest = $(MB)/cmd/fptest.o $(MB)/cmd/m2fpu.o $(MB)/cmd/fpregs.o
 $(MB)/cmd/fptest.o: m2/fptest.c
