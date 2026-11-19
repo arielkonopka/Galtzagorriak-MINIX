@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- `tools/twoflip.py`: **`--spacer none|thin|thick|ask`** for the RFID rows. On the device no one distance suits all of them: with about 5 mm of card between the (cased) Flippers the ASK and FSK rows read and PSK mostly does not; with the cases touching all five PSK protocols read 5/5 and FSK 0/5. Rows that need another spacer are BLOCKED and say which; `ask` runs the thick rows first, then asks for the change; the map records the spacer. PSK emulation needed no code change (ETR edge and trim variants made no difference). Devguide 6.4 has the measured table for both directions.
 ## 0.1.2 (2026-11-19): interim release, two-Flipper tests still running
 
 **An interim release.** The code of milestone M1 (Phases 2a, 2b, 2c and 2d) is merged, and much

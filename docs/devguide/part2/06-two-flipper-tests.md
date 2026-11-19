@@ -111,7 +111,23 @@ back, each Flipper's coil sits over the other's, which is what a reader and a ta
 distance must be **small and the same every time**, or a result depends on how the Flippers
 happened to lie.
 
-1. Take off silicone cases or covers (they add several millimetres).
+**The spacer matters, and no single one suits every RFID row** (measured 2026-11-19, both
+Flippers in their silicone cases, reference Unleashed `unlshd-093`):
+
+| Between the cases | MINIX emulates, Unleashed reads | Unleashed emulates, MINIX reads |
+|---|---|---|
+| **thick**: about 5 mm of card | ASK and FSK read; PSK mostly not (Keri 1 in 3) | ASK: 9 protocols |
+| **thin**: one sheet of box card | 3 of 5 PSK; most ASK/FSK not | ASK: 5 |
+| **none**: the cases touch | all 5 PSK (5/5 each); FSK 0/5, ASK RF/32 0/3 | ASK: 8 |
+
+So run the ASK and FSK rows with the thick spacer and the PSK rows (Keri, Indala26, Idteck,
+Nexwatch, Indala224) with none. Tell the script which is in with `--spacer none|thin|thick`
+(rows that need another one are BLOCKED and say so), or use `--spacer ask`: it runs the thick
+rows first and then asks you to take the spacer out. MINIX reading FSK and PSK gives
+"no signal" at every distance; that is MINIX's receive path, not the setup (#210).
+
+1. Silicone cases may stay on if you use the table above; without them the distances differ,
+   so find your own thick and thin spacers the same way.
 2. Put the two Flippers back to back, screens facing outwards, **both top edges (the GPIO
    header) at the same end**, and line up their outlines exactly. Seen from the side:
 
@@ -371,6 +387,7 @@ Windows write `py` instead of `python3`.
 | `-r N` | run each row N times; a row that passed only sometimes is FAIL "k/N passed" (shows marginal distance or alignment) |
 | `--map FILE` | write the coverage map (Markdown) and FILE.json |
 | `--baseline FILE.json` | compare with an earlier run |
+| `--spacer none\|thin\|thick\|ask` | RFID: the spacer between the Flippers (6.4). RFID rows that need another one are BLOCKED; `ask` runs the thick-spacer rows first, then asks for the change. Written into the map. |
 | `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
 | `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |
 | `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`); refused if it is not a transmit band of `--region` |
