@@ -43,8 +43,8 @@ int style;		/* partitioning style: floppy, primary, sub. */
 
   /* Get the geometry of the device to partition */
   if ((dv = (*dp->dr_prepare)(device)) == NIL_DEV || dv->dv_size == 0) return;
-  base = dv->dv_base >> SECTOR_SHIFT;
-  limit = base + (dv->dv_size >> SECTOR_SHIFT);
+  base = DV_SECS(dv->dv_base);
+  limit = base + DV_SECS(dv->dv_size);
 
   /* Read the partition table for the device. */
   if (!get_part_table(dp, device, 0L, table)) return;
@@ -78,8 +78,8 @@ int style;		/* partitioning style: floppy, primary, sub. */
 	if (pe->lowsec > limit) pe->lowsec = limit;	/* (and no wrap below) */
 	if (part_limit < pe->lowsec) part_limit = pe->lowsec;
 
-	dv->dv_base = pe->lowsec << SECTOR_SHIFT;
-	dv->dv_size = (part_limit - pe->lowsec) << SECTOR_SHIFT;
+	dv->dv_base = SECS_DV(pe->lowsec);
+	dv->dv_size = SECS_DV(part_limit - pe->lowsec);
 
 	if (style == P_PRIMARY) {
 		/* Each Minix primary partition can be subpartitioned. */
@@ -123,8 +123,8 @@ unsigned long extbase;	/* sector offset of the base extended partition */
 
   /* The extended partition itself, as partition() clipped it. */
   if ((dv = (*dp->dr_prepare)(extdev)) == NIL_DEV) return;
-  base = dv->dv_base >> SECTOR_SHIFT;
-  limit = base + (dv->dv_size >> SECTOR_SHIFT);
+  base = DV_SECS(dv->dv_base);
+  limit = base + DV_SECS(dv->dv_size);
 
   offset = 0;
   links = 0;
@@ -153,8 +153,8 @@ unsigned long extbase;	/* sector offset of the base extended partition */
 				lo = limit;
 			hi = lo + pe->size;
 			if (hi < lo || hi > limit) hi = limit;
-			dv->dv_base = lo << SECTOR_SHIFT;
-			dv->dv_size = (hi - lo) << SECTOR_SHIFT;
+			dv->dv_base = SECS_DV(lo);
+			dv->dv_size = SECS_DV(hi - lo);
 
 			/* Out of devices? */
 			if (++subdev % NR_PARTITIONS == 0) return;
@@ -183,7 +183,7 @@ struct part_entry *table;	/* four entries */
   unsigned char part[NR_PARTITIONS * sizeof(table[0]) + 2];
 
   if ((dv = (*dp->dr_prepare)(device)) == NIL_DEV
-	|| hal_disk_read_part((dv->dv_base >> SECTOR_SHIFT) + offset,
+	|| hal_disk_read_part(DV_SECS(dv->dv_base) + offset,
 				PART_TABLE_OFF, sizeof(part), part) != 0) {
 	printf("%s: can't read partition table\n", (*dp->dr_name)());
 	return 0;
@@ -197,6 +197,7 @@ struct part_entry *table;	/* four entries */
 
   mess.DEVICE = device;
   mess.POSITION = offset << SECTOR_SHIFT;
+  mess.HIGHPOS = 0;
   mess.COUNT = SECTOR_SIZE;
   mess.ADDRESS = (char *) tmp_buf;
   mess.PROC_NR = proc_number(proc_ptr);

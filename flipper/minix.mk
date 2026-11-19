@@ -116,7 +116,7 @@ SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
-	   lrand getopt gmtime
+	   lrand getopt gmtime bread
 SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
 LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
 	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))

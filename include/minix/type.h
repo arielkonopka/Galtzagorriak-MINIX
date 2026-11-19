@@ -101,6 +101,8 @@ struct iorequest_s {
   char *io_buf;			/* buffer in user space */
   int io_nbytes;		/* size of request */
   unsigned short io_request;	/* read, write (optionally) */
+  unsigned short io_high;	/* R12.39: position bits 32-47 (in what was
+				 * padding: the size stays 16 B) */
 };
 #endif /* _TYPE_H */
 

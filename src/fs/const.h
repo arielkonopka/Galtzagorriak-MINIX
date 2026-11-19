@@ -68,6 +68,7 @@
 #define ROOT_INODE         1	/* inode number for root directory */
 #define BOOT_BLOCK  ((block_t) 0)	/* block number of boot block */
 #define SUPER_BLOCK ((block_t) 1)	/* block number of super block */
+#define BLOCK_SHIFT       10	/* log2(BLOCK_SIZE): 64-bit positions (R12.39) */
 
 #define DIR_ENTRY_SIZE       usizeof (struct direct)  /* # bytes/dir entry   */
 #define NR_DIR_ENTRIES   (BLOCK_SIZE/DIR_ENTRY_SIZE)  /* # dir entries/blk   */

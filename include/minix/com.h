@@ -174,6 +174,9 @@
 #define COUNT          m2_i3	/* how many bytes to transfer */
 #define REQUEST        m2_i3	/* ioctl request code */
 #define POSITION       m2_l1	/* file offset */
+#define HIGHPOS        m2_l2	/* R12.39: high 32 bits of a block device
+				 * position (DEV_READ/DEV_WRITE; the same
+				 * field as TTY_FLAGS of character devices) */
 #define ADDRESS        m2_p1	/* core buffer address */
 
 /* Names of message fields for messages to TTY task. */
