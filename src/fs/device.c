@@ -19,6 +19,7 @@
 #include <minix/callnr.h>
 #include <minix/com.h>
 #include <minix/subghz.h>
+#include <minix/fg.h>
 #include <sys/ioctl.h>
 #include <minix/partition.h>
 #include "dev.h"
@@ -228,6 +229,29 @@ PUBLIC int do_ioctl()
    * kernel does not know the caller's uid, so FS checks it here.  'Q' is
    * the Sub-GHz ioctl group only, so no other device sees this number. */
   if (m.TTY_REQUEST == SGIOCREGION && !super_user) return(EPERM);
+  /* Security review 2026-11-19, H1: DIOCSETP rewrites a driver's idea of
+   * where a device begins and how long it is.  On /dev/rom (0644) that
+   * let any process read all of RAM, or reset the device with a bus
+   * fault.  The superuser only (repartition); 'd' is the disk group. */
+  if (m.TTY_REQUEST == DIOCSETP && !super_user) return(EPERM);
+  /* H5: FGIOCSET names the process that gets the screen and the buttons,
+   * and that a long Back ends.  The superuser (the launcher) names any;
+   * others only themselves, nobody (0), or a process of their own real
+   * uid (an app's own child).  The kernel still refuses servers and init. */
+  if (m.TTY_REQUEST == FGIOCSET && !super_user) {
+	int fgpid;
+	struct fproc *rfp;
+
+	if (sys_copy(who, D, (phys_bytes) m.ADDRESS, FS_PROC_NR, D,
+			(phys_bytes) &fgpid, (phys_bytes) sizeof(fgpid)) != OK)
+		return(EFAULT);
+	if (fgpid != 0 && fgpid != fp->fp_pid) {
+		for (rfp = &fproc[0]; rfp < &fproc[NR_PROCS]; rfp++)
+			if (rfp->fp_pid == fgpid) break;
+		if (rfp == &fproc[NR_PROCS]) return(ESRCH);
+		if (rfp->fp_realuid != fp->fp_realuid) return(EPERM);
+	}
+  }
   /* R12.39: a raw sector read (DIOCPRW) needs a descriptor open for
    * reading; a write, one open for writing and a device that is not
    * mounted (the cache would not see it).  The kernel cannot check

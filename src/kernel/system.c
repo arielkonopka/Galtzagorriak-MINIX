@@ -665,6 +665,11 @@ message *m_ptr;			/* pointer to request message */
   proc_nr = m_ptr->PROC1;	/* slot number of exec-ing process */
   if (!isokprocn(proc_nr)) return(E_BAD_PROC);
   p = proc_addr(proc_nr);
+#if (CHIP == ARM_CM)
+  /* Security review 2026-11-19, H2: the old image goes away, and with it
+   * the buffers a stream or an emulation was reading or writing by DMA. */
+  flipdev_xit(proc_nr);
+#endif
   rmshadow(p, &base, &size);
   do_newmap(m_ptr);
   c1 = p->p_map[D].mem_phys;

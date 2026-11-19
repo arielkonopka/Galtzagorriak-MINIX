@@ -54,5 +54,8 @@
 # text grew from 44224 B on main 5f7c48f to 47464 B, past 44 KB (11
 # pages): one more 4 KB page.  ikey itself runs only twice in M2 (not
 # cached).  Nothing changed in how often the cache writes.
-m2      cache   13
+# 2026-11-19 (security review H1/H2/H5 checks): 14.  m2test's text grew by
+# 712 B, from 48644 B on main e038fbe to 49356 B, past 48 KB (12 pages):
+# one more 4 KB page.  Nothing changed in how often the cache writes.
+m2      cache   14
 m2      inst    0
