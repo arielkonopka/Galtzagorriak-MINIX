@@ -312,7 +312,7 @@ static int cc_band(uint32_t hz)		/* stock's bands: 315 433 868, or -1 */
 
 long hal_subghz_rx(uint32_t hz)
 {
-	uint32_t w;
+	uint32_t w, t0;
 	unsigned i;
 	int band = cc_band(hz);
 
@@ -338,6 +338,12 @@ long hal_subghz_rx(uint32_t hz)
 	(void) cc_xfer2(0x00, band == 315 ? 0x2F : 0x2F | 0x40);	/* IOCFG2 */
 	cc_strobe(0x36);				/* SIDLE */
 	cc_strobe(0x34);				/* SRX (calibrates) */
+	/* The radio is listening when this returns: calibration takes about
+	 * 1 ms, and a read right after the write (Spectrum's) found "off"
+	 * and said "no radio".  RX is MARCSTATE 0x0D; 5 ms at most. */
+	t0 = DWT->CYCCNT;
+	while ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D
+	       && DWT->CYCCNT - t0 < hal_cpu_hz() / 200) ;
 	spi1_off();
 	return (long) (((uint64_t) w * 26000000u) >> 16);
 }
