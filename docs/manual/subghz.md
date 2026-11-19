@@ -41,7 +41,8 @@ time, so a long RAW recording needs no more RAM than a short one.
 
 Every frame and packet goes through the kernel, which checks it against the region's bands and
 their duty cycle for the hour (spec R8.2). With no region set **nothing can be sent**.
-`/etc/rc` sets it at boot from `/etc/flipper/region` (two letters); root can write that file:
+`/etc/rc` sets it at boot from `/etc/flipper/region` (two letters). Only root can write that
+file or set the region; another user gets "only root may set the region":
 
 ```
 echo EU > /etc/flipper/region       # then reboot, or once: subghz region EU

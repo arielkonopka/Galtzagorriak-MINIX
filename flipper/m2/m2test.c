@@ -846,7 +846,8 @@ static const struct {
 	char s3[sizeof "/dev/subghzpkt"];
 	char s4[sizeof "subghz: open the 3 files (pkt: minor 20)"];
 	char s5[sizeof "subghz: untuned EIO; tuned, no region: EPERM"];
-	char s6[sizeof "subghz: region XX EINVAL, EU set once (US: EPERM)"];
+	char s6[sizeof "subghz: region: non-root EPERM, XX EINVAL, EU set once "
+		"(US: EPERM)"];
 	char s7[sizeof "tx 433920000 3 350 -700 350"];
 	char s8[sizeof "subghz: a frame goes out, its console line (sg> tx)"];
 	char s9[sizeof "yo"];
@@ -866,7 +867,8 @@ static const struct {
 	"/dev/subghzpkt",
 	"subghz: open the 3 files (pkt: minor 20)",
 	"subghz: untuned EIO; tuned, no region: EPERM",
-	"subghz: region XX EINVAL, EU set once (US: EPERM)",
+	"subghz: region: non-root EPERM, XX EINVAL, EU set once "
+		"(US: EPERM)",
 	"tx 433920000 3 350 -700 350",
 	"subghz: a frame goes out, its console line (sg> tx)",
 	"yo",
@@ -922,8 +924,20 @@ static void subghz_tests(void)
 	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
 		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
 	check(e, sg.s5);
+	/* #326: a member of group subghz that is not root may not set the
+	 * region while none is set (it asks for US: had that worked, EU
+	 * below would fail) */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		setgid(10);
+		setuid(9999);
+		v = SG_REGION('U', 'S');
+		_exit(ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM ? 0 : 1);
+	}
+	e = pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
 	v = SG_REGION('X', 'X');
-	e = ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
 	v = SG_REGION('E', 'U');
 	e = e && ioctl(s, SGIOCREGION, &v) == 0;
 	v = SG_REGION('U', 'S');
