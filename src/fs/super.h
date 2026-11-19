@@ -19,16 +19,31 @@
  */
 
 
+/* Spec O.4: the FS server (fs.h defines _FS_SERVER) has a 32-bit s_ninodes
+ * and reads block 1 field by field (read_super), so its fields are ordered
+ * for no padding.  Programs that read block 1 straight into this struct
+ * (mkfs, fsck, df, de, readfs, badblocks, libc fsversion) get the V1/V2
+ * on-disk layout, as before. */
 EXTERN struct super_block {
+#ifdef _FS_SERVER
   ino_t s_ninodes;		/* # usable inodes on the minor device */
+#else
+  unsigned short s_ninodes;	/* # usable inodes (V1/V2 on disk) */
+#endif
   zone1_t  s_nzones;		/* total device size, including bit maps etc */
   short s_imap_blocks;		/* # of blocks used by inode bit map */
   short s_zmap_blocks;		/* # of blocks used by zone bit map */
   zone1_t s_firstdatazone;	/* number of first data zone */
   short s_log_zone_size;	/* log2 of blocks/zone */
+#ifdef _FS_SERVER
   short s_magic;		/* magic number to recognize super-blocks;
 				 * in core before s_max_size (no padding) */
   off_t s_max_size;		/* maximum file size on this device */
+#else
+  off_t s_max_size;		/* maximum file size on this device */
+  short s_magic;		/* magic number to recognize super-blocks */
+  unsigned short s_flags;	/* ex s_pad (spec N.1) */
+#endif
   zone_t s_zones;		/* number of zones (replaces s_nzones in V2) */
 
   /* The following items are only used when the super_block is in memory. */
@@ -36,9 +51,11 @@ EXTERN struct super_block {
   struct inode *s_imount;	/* inode mounted on */
   unsigned s_inodes_per_block;	/* precalculated from magic number */
   dev_t s_dev;			/* whose super block is this? */
+#ifdef _FS_SERVER
   unsigned short s_flags;	/* ex s_pad: SF_* below (spec N.1); here,
 				 * beside s_dev, so the 32-bit s_ninodes
-				 * costs 2 B per slot, not 4 (spec O.4) */
+				 * costs nothing (spec O.4) */
+#endif
   int s_rd_only;		/* set to 1 iff file sys mounted read only */
   int s_native;			/* set to 1 iff not byte swapped file system */
   int s_version;		/* file system version, zero means bad magic */

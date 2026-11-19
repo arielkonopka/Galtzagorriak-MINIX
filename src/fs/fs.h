@@ -4,6 +4,7 @@
 #define _POSIX_SOURCE      1	/* tell headers to include POSIX stuff */
 #define _MINIX             1	/* tell headers to include MINIX stuff */
 #define _SYSTEM            1	/* tell headers that this is the kernel */
+#define _FS_SERVER         1	/* super.h: the in-core layout (spec O.4) */
 
 /* The following are so basic, all the *.c files get them automatically. */
 #include <minix/config.h>	/* MUST be first */
