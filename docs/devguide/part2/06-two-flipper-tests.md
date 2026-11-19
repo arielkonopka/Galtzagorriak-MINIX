@@ -112,19 +112,27 @@ distance must be **small and the same every time**, or a result depends on how t
 happened to lie.
 
 **The spacer matters, and no single one suits every RFID row** (measured 2026-11-19, both
-Flippers in their silicone cases, reference Unleashed `unlshd-093`):
+Flippers in their silicone cases, reference Unleashed `unlshd-093`). The three setups:
 
-| Between the cases | MINIX emulates, Unleashed reads | Unleashed emulates, MINIX reads |
+- **thick**: the whole box of a Flipper Zero, folded along its own edges (about 10 mm);
+- **thin**: half of that box, folded so that half of it presses the Flipper against the table
+  (about 5 mm);
+- **none**: the silicone cases touch.
+
+| Spacer | MINIX emulates, Unleashed reads (M→U) | Unleashed emulates, MINIX reads (U→M) |
 |---|---|---|
-| **thick**: about 5 mm of card | ASK and FSK read; PSK mostly not (Keri 1 in 3) | ASK: 9 protocols |
-| **thin**: one sheet of box card | 3 of 5 PSK; most ASK/FSK not | ASK: 5 |
-| **none**: the cases touch | all 5 PSK (5/5 each); FSK 0/5, ASK RF/32 0/3 | ASK: 8 |
+| **thick** | ASK and FSK read; PSK mostly not (Keri 1 in 3) | 18 of 25 (with `rfid` from #357) |
+| **thin** | 3 of 5 PSK; most ASK/FSK not | ASK and PSK read; of the FSK ones HIDProx |
+| **none** | all 5 PSK (5/5 each); FSK 0/5, ASK RF/32 0/3 | ASK and PSK read; of the FSK ones AWID |
 
-So run the ASK and FSK rows with the thick spacer and the PSK rows (Keri, Indala26, Idteck,
-Nexwatch, Indala224) with none. Tell the script which is in with `--spacer none|thin|thick`
-(rows that need another one are BLOCKED and say so), or use `--spacer ask`: it runs the thick
-rows first and then asks you to take the spacer out. MINIX reading FSK and PSK gives
-"no signal" at every distance; that is MINIX's receive path, not the setup (#210).
+For reading, ASK and PSK tags read at every spacer; each FSK row reads only at some (HIDProx
+thick or thin, AWID thick or none), HIDExt and Pyramid at none of them, and EM4100 at RF/16
+never. So `--spacer` gates the emulation rows only: run those ASK and FSK rows with the thick
+spacer and the PSK rows (Keri, Indala26, Idteck, Nexwatch, Indala224) with none. Tell the script
+which is in with `--spacer none|thin|thick` (rows that need another one are BLOCKED and say
+so), or use `--spacer ask`: it runs the thick rows first and then asks you to take the spacer
+out. Real tags (T5577 fobs written as HIDProx, AWID, Indala26, Keri, PAC/Stanley, Electra,
+EM4100) read without any of this (#357); the spacer only matters for a Flipper's emulation.
 
 1. Silicone cases may stay on if you use the table above; without them the distances differ,
    so find your own thick and thin spacers the same way.
