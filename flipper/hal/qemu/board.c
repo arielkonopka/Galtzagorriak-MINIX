@@ -461,6 +461,26 @@ static int disk_fd = -1;
 static int disk_fake;		/* N.6 test hook: 0 in, 1 out, 2 another card */
 static uint32_t disk_wsect;	/* sectors written (hook 3: ACK7.2, AC12.14) */
 static uint32_t disk_sectors;
+/* R12.39 tests (tools/bigcard.py): a card bigger than the image.  If the
+ * MBR holds "GZ-HOLE!" at 0x1A8, the u32 at 0x1B0 is a sector and the u32
+ * at 0x1B4 a count: the card gets a hole of that many sectors there (reads
+ * give zeros, writes fail), and the image's sectors from there on follow
+ * the hole.  So a partition past 4 GiB fits a semihosted image, whose
+ * positions are 32-bit. */
+static uint32_t hole_at, hole_len;
+
+static int disk_map(uint32_t *sector, unsigned count)
+{
+	if (*sector >= disk_sectors || count > disk_sectors - *sector)
+		return -1;
+	if (*sector + count <= hole_at) return 0;
+	if (*sector >= hole_at + hole_len) {
+		*sector -= hole_len;
+		return 0;
+	}
+	return *sector >= hole_at && *sector + count <= hole_at + hole_len
+		? 1 : -1;			/* in the hole, or across its edge */
+}
 
 int hal_disk_init(void)
 {
@@ -477,6 +497,21 @@ int hal_disk_init(void)
 	if (len == (uint32_t) -1) return -1;
 	disk_fd = (int) fd;
 	disk_sectors = len / HAL_SECTOR_SIZE;
+	{
+		uint8_t m[16];
+		uint32_t sk[2] = { fd, 0x1A8 }, rd[3] = { fd, (uint32_t) m, 16 };
+
+		if (semihost(SYS_SEEK, sk) == 0 && semihost(SYS_READ, rd) == 0
+		    && memcmp(m, "GZ-HOLE!", 8) == 0) {
+			memcpy(&hole_at, m + 8, 4);
+			memcpy(&hole_len, m + 12, 4);
+			if (hole_at > disk_sectors
+			    || hole_len > 0xFFFFFFFFu - disk_sectors)
+				hole_at = hole_len = 0;
+			else
+				disk_sectors += hole_len;
+		}
+	}
 	return 0;
 }
 
@@ -510,9 +545,10 @@ int hal_disk_fake(int state)
 static int disk_seek(uint32_t sector, unsigned count)
 {
 	uint32_t args[2];
+	int h;
 
-	if (disk_fd < 0 || sector >= disk_sectors
-				|| count > disk_sectors - sector) return -1;
+	if (disk_fd < 0 || (h = disk_map(&sector, count)) < 0) return -1;
+	if (h) return 1;				/* in the hole */
 	args[0] = disk_fd;
 	args[1] = sector * HAL_SECTOR_SIZE;	/* image must stay < 4 GB */
 	return semihost(SYS_SEEK, args) == 0 ? 0 : -1;
@@ -528,10 +564,12 @@ int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
 		unsigned n = len - pos < sizeof(chunk) ? len - pos : sizeof(chunk);
 		uint32_t args[3] = { disk_fd, (uint32_t) chunk, n };
 
-		if (disk_seek(sector, 1) < 0) return -1;
+		uint32_t ps = sector;
+
+		if (disk_fd < 0 || disk_map(&ps, 1) != 0) return -1;
 		{
 			uint32_t sk[2] = { disk_fd,
-				sector * HAL_SECTOR_SIZE + off + pos };
+				ps * HAL_SECTOR_SIZE + off + pos };
 			if (semihost(SYS_SEEK, sk) != 0) return -1;
 		}
 		if (semihost(SYS_READ, args) != 0) return -1;
@@ -543,8 +581,13 @@ int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf)
 int hal_disk_read(uint32_t sector, void *buf, unsigned count)
 {
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
+	int h;
 
-	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
+	if (disk_fake == 1 || (h = disk_seek(sector, count)) < 0) return -1;
+	if (h) {				/* the R12.39 test hole */
+		memset(buf, 0, count * HAL_SECTOR_SIZE);
+		return 0;
+	}
 	return semihost(SYS_READ, args) == 0 ? 0 : -1;	/* 0 = all read */
 }
 
@@ -552,7 +595,7 @@ int hal_disk_write(uint32_t sector, const void *buf, unsigned count)
 {
 	uint32_t args[3] = { disk_fd, (uint32_t) buf, count * HAL_SECTOR_SIZE };
 
-	if (disk_fake == 1 || disk_seek(sector, count) < 0) return -1;
+	if (disk_fake == 1 || disk_seek(sector, count) != 0) return -1;
 	disk_wsect += count;
 	return semihost(SYS_WRITE, args) == 0 ? 0 : -1;
 }

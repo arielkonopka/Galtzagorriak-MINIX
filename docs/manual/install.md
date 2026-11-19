@@ -313,6 +313,16 @@ before is not found at the new place.)
 (a hang) goes back to DFU mode, so a broken new image returns there by itself. Without dev mode
 a hang just reboots the Flipper, like the stock firmware.
 
+### Updating with the update file (planned)
+
+Each release will come with one signed file, `Galtzagorriak-X.Y.Z.update`, on its GitHub release
+page. Copy it onto the Flipper (in Windows Explorer: drag it onto the Flipper, which shows up as a
+portable device), press **OK** on the Flipper when it shows the new version and its notes, and wait
+for the progress bar (about 10 seconds; do not take the battery out). Your files in `/home`, your
+settings and your alarms stay. The Flipper installs only files signed by the project's key (or by
+your own key, if you build the system yourself), and an older release only after you confirm it
+with OK on the Flipper. Until this exists, use the steps above.
+
 ## 8. Recovery and going back to the stock firmware
 
 | Problem | What to do |

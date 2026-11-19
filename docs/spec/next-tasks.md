@@ -458,6 +458,21 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
 
+## T33. Signed update file `Galtzagorriak.update` (spec section S; user request 2026-11-18): milestone M3, after T29 (MTP)
+Goal: Windows users update by dragging one signed file onto the Flipper and pressing OK. No CPU2 needed.
+
+### T33a (`lane:cloud`, host + QEMU)
+- `tools/mkupdate.py`, `tools/gzsign` (`--new-key`), `tools/gzupdate-check.py`; `make BOARD=flipper update` (RS.17); format of RS.1/RS.2 documented in `flipper/PORTING.md`.
+- Ed25519 + SHA-512 verifier in C, shared by `atea` and libc's crypto part (RS.4); host tests with RFC 8032 vectors and the ACS.1 bad files (ASan/UBSan, `flipper/tests/host`).
+- `gzupdate check|apply|finish|commit` (RS.8–RS.10, RS.14 manifest, RS.15) `gztree` plus INIT's epoch check and exec (RS.14, INIT +0 B RAM), with `powercut.py` cut points (ACS.2, ACS.3). In QEMU `atea`'s flash step is simulated on the QEMU flash image.
+- CI: `release` job signs and attaches `Galtzagorriak-X.Y.Z.update` + `.sha512` (RS.18), secret `GZ_UPDATE_KEY` in the GitHub environment `release` (the user creates the key and the environment, RS.20; until then the job skips signing and says so). `GZ_EPOCH` + `versioncheck` (RS.19).
+- Manual: `install.md` §7 "Updating with the update file" (S.11).
+
+### T33b (`lane:local`, Flipper)
+- `atea` at 0x0800_0000 (≤ 16 KB): DFU checks as `hal_early_boot`, `BKP11R` (free on main; add it to the backup-register list in `board.c` and PORTING.md), polled SD SPI, LCD progress, page compare/erase/program with first-page-last, epoch and downgrade press, trial counter and rollback question (RS.11–RS.16). System image linked at 0x0800_4000; shared libc, libfuri/libapp and the installed region move up 16 KB (libc 0x0803_4000, programs 0x0804_C000; S.8; one full DFU flash, as #201).
+- `mtpd` hook (RS.7) and the confirmation window (RS.8, K.2 style).
+- ACS.4–ACS.8 on the device; measure verify time, `atea` size and stack, update time for a full and a one-program change; report page erases.
+
 ## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; user decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
 
@@ -488,6 +503,7 @@ Several ST CPU2 images on the card, switched with `radio use` in maintenance mod
 One `/home` that fills the card between `/usr` and swap, MINIX V3 (Linux mounts it), 60-character names. Root and `/usr` stay V2; `NR_SUPERS` stays 4.
 
 ### T27a (`lane:cloud`, QEMU): driver positions, FS V3, tools
+- **Part 1 done (#306, 2026-11-19):** R12.39 in its QEMU form (sectors, `HIGHPOS`/`io_high`, `DIOCGETPS`, `DIOCPRW`, `mkpart` past 4 GiB) and O.3 (FS sets the high position, libc `bread`/`bwrite`); `tools/bigcard.py` (QEMU card with a hole, `/home` past 4 GiB). Positions past 4 GiB *inside* a partition (`HIGHPOS` ≠ 0) are only reached on the device (the QEMU image is 32-bit): T27b. Next: O.4.
 - O.3: needs R12.39 (amended: `dv_size` in sectors, `HIGHPOS`, `DIOCPRW`, `DIOCGETPS`), done once in `disk.c`/`drvlib.c` by the local lane (#110). T27a only sets `HIGHPOS` in FS `rw_block`/`rw_scattered` (64-bit position) and adds libc `bread`/`bwrite`.
 - O.4: `SUPER_V3` mount checks (1 KB blocks, zone = block, message otherwise); 32-bit `ino_t` (FS `i_num` repacked +0 B, MM `mp_ino` ≤ +32 B, `st_ino`/`d_ino`, on-disk V1/V2 fields explicit `u16_t`, ABI bump); per-FS entry size and name length; `NAME_MAX` 60 + per-FS `pathconf`; `ENAMETOOLONG` instead of cutting; libc `readdir` parses V2 and V3 entries (format from `fstatfs`), flex dropped; triple indirect for V3; N.1 flags in the V3 spare pad (same pad as MINIX 3.3's `s_flags`). Audit list of raw `struct direct` users in O.4.
 - O.5: free counters + delta (FS ≤ +20 B), `FSTATFS` + libc `statfs`/`fstatfs`, hint in super block 1 with the CLEAN write, idle recount in `update`; `df` and `libfuri` storage info use it.
@@ -513,6 +529,13 @@ User request outside the milestone order (like T19). Analysis and design: spec s
 
 ### T26c NFC (M6, after Phase 13) and T26d BLE (M7, after Phase 15)
 - P.6: ISO 14443-4 frames between an NFC-A initiator and a card-emulating target, S(WTX) answered by the driver. P.7: one L2CAP CoC, bonded and encrypted, `gmodem pair -m ble`.
+
+## T35. Canary cores for beacons and GPIO (spec M.0, R16.5.7, R7b.4.4; user request 2026-11-17): `lane:cloud`, when a cloud slot is free
+The drivers wait for their milestones (BLE M7, `sensor` task M4), but the logic needs no hardware, so it is written now and tested on the host, as T6 (`sbctl`) and T13 (`camfind`). Read spec M.0 first: both are observe-only; no transmit path anywhere. No CAN canary (out of scope, spec M.2).
+- `flipper/apps/canary/beacon.c/.h`: parser for one BLE advertising payload (AD structures) → iBeacon / Eddystone (UID, URL, TLM, EID) / AltBeacon or "not a beacon"; deployment grouping table as R16.5.7 (caller-owned, fixed size, LRU when full). Bounds-checked on every length byte (I2).
+- `flipper/apps/canary/gpiorules.c/.h`: debounce and the `loop` / `contact` / `pulse` / `volt` rules of R7b.4.4 on a stream of samples.
+- Host tests (`make -C flipper/apps/canary test`): beacon golden vectors (iBeacon, each Eddystone frame, AltBeacon, malformed lengths, a truncated packet); GPIO bounce and window cases.
+- No UI, no drivers. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)

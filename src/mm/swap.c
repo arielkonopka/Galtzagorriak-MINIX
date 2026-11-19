@@ -233,6 +233,7 @@ phys_bytes n;			/* bytes, whole sectors */
   m.m_type = op;
   m.DEVICE = (int) (sw.dev & BYTE);
   m.POSITION = (long) pos;
+  m.HIGHPOS = 0;		/* R12.39: swap stays below 4 GiB */
   m.PROC_NR = proc;
   m.ADDRESS = (char *) addr;
   m.COUNT = (int) n;

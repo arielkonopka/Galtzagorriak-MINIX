@@ -30,6 +30,12 @@ Addition (2026-11-18): section R (a small database `kutxa`: a copy-on-write B+tr
 to one file on `/home`, records without a schema, indexes added later, the `kutxa` command, no
 SQL; in the image, optionally in flash; tests written first; user request). Background: the
 project report `small-database-analysis.md` (Polish, not in the repo).
+Addition (2026-11-18): section S (signed update file `Galtzagorriak.update` over USB/MTP for
+Windows users: boot stage `atea`, Ed25519, staging on the swap partition, A/B switch of the SD
+files, rollback, CI signing; user request).
+Addition (2026-11-19): M.0 (intent and boundaries of the canaries, guidance for implementing
+agents), new canaries `beacon` (R16.5.7) and `gpio` (R7b.4.4), USB power quality (R11.2.10); a CAN
+bus canary is out of scope (user request 2026-11-17, user decision 2026-11-19).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -1434,6 +1440,22 @@ enumerates, a phone that connects over Bluetooth and probes services, a reader t
 NFC field in your pocket, a jammer on 433 MHz. The USB canary (11.2) is the first member; this
 section sets the rules for all of them.
 
+### M.0 Intent and boundaries (user, 2026-11-17)
+
+The canaries are **personal, defensive tools on the user's own Flipper**. They tell the user what
+other equipment is doing *to the user or around the user*: a port that tries to talk to the
+device, a tracker that follows the user, a reader field in the user's pocket, a jammer near the
+user's car, a shop that runs positioning beacons, a wire loop that was opened. They observe. They
+never act on anyone else's device, and none of them has a transmit, inject, replay or decrypt path
+for third-party traffic: those paths are **absent by design**, not switched off.
+
+For implementing agents: some requirements in this section look like radio work that could be used
+against others. Read each one against M.1 and this paragraph: every requirement is receive-only or
+answers only the protocol minimum, and every acceptance test uses the user's own equipment. **If a
+requirement seems to need transmitting, injecting, decrypting third-party traffic, connecting to a
+stranger's device or following a person, treat it as a spec error: do not implement that part, say
+so in the PR and ask the user.** Do not widen a canary's role beyond its row in M.2.
+
 ### M.1 Rules for every canary
 
 - **Listen, or answer only what the protocol needs to keep the other side talking.** A canary never
@@ -1472,9 +1494,13 @@ section sets the rules for all of them.
 | `subghz` | CC1101 receive only | bursts per band (frequency, RSSI, length, decoded protocol if known), new repeating transmitters, **jamming alarm** (continuous high RSSI) | 8 | **9.2** |
 | `ir` | IR receiver | remote codes sent around you, decoded protocol | 6 | **9.2** |
 | `wifi` (optional) | ESP32 devboard, passive scan (as `camfind`) | deauthentication floods, probe requests, evil-twin SSIDs (same name, new BSSID) | 9.1 firmware | 9.2 (optional) |
+| `beacon` (user request 2026-11-17, M7) | BLE observer, part of the `ble` canary's scan | positioning beacons around you (iBeacon, Eddystone, AltBeacon): how many, which deployment, where the signal is strongest; "this place runs beacons" | 16.3 scan (full stack, R16.1.0) | **16.5** (R16.5.7) |
+| `gpio` (user request 2026-11-17, M4) | header inputs through the `sensor` task, input only | a wire loop broken, a contact opened, a voltage outside its window, pulses where there should be none | 7b.4 (H.3) | **7b.4** (R7b.4.4) |
 
 Out of scope: canaries that need to transmit to provoke the other side (active probing) and
 anything that breaks a link to see the reaction.
+Also out of scope (user decision 2026-11-19): a **CAN bus canary**, or any canary that is wired
+into a vehicle. Nothing is plugged into a car's computer or its buses. Do not add one.
 
 ---
 
@@ -2447,8 +2473,6 @@ region is kept in internal flash and survives a card change, that changing it ne
 logged, `#?` rows, custom tables and `-f`, and that the user is responsible for using the device
 legally (a note for travellers: set the region of the country you are in).
 
----
-
 ## R. A small database: `kutxa` (user request, 2026-11-17/18)
 
 **Goal:** apps keep and query more data than fits in RAM (a diary and calendar, public holidays
@@ -2676,6 +2700,291 @@ until compacted; one writer, many readers; building a database on the PC with `k
 
 ---
 
+## S. Update file over USB: `Galtzagorriak.update` (user request, 2026-11-18)
+
+**Goal:** a user with only Windows (nothing installed on the PC) can update the system. They
+drag one file, `Galtzagorriak.update`, onto the Flipper over MTP (R10.4), confirm on the Flipper
+with OK, and the Flipper updates itself: internal flash (kernel, servers, INIT, shared libc and
+the base programs in the installed region) **and** the files on the SD card, from one build, so
+the shared-libc id always matches (the `init: console: Exec format error` trap of PR #286 cannot
+happen). The file is **signed**; the Flipper refuses anything not signed by a key it trusts.
+CI produces the file for every release tag. The section letter R is skipped so it does not read
+like a requirement id.
+
+Answer to the question "how much crypto fits": all of it that matters. Checking an Ed25519
+signature costs about 6–8 KB of flash in the boot stage, **0 B of RAM while the system runs**
+(the boot stage uses RAM only before the kernel starts) and well under 2 s once per update.
+What a signature cannot do on its own: while the option bytes are open (no RDP1/WRP, R17.4,
+due after Bluetooth works), someone holding the Flipper can still flash anything over ROM DFU.
+The signature closes the paths a cable or radio can reach without the buttons: a malicious file
+dropped over MTP, BLE or the console, and a compromised root process that tries to install its
+own system.
+
+Nothing here needs CPU2, BLE or Phase 15: version 1 works with the radio core switched off.
+Later steps only add ways to deliver the same file (S.9).
+
+### S.1 The pieces
+
+| Piece | Where | Size | Runs |
+|---|---|---|---|
+| `atea` (Basque "door"), the boot stage | flash 0x0800_0000, 4 pages | ≤ 16 KB | at every reset, < 1 ms unless an update is pending |
+| System image (kernel, MM, FS, INIT) | moves to 0x0800_4000 | 192 KB region, unchanged size | as now |
+| `gzupdate` (command, base package) | installed region | ≈ 6 KB text | only when a file arrives or the user asks |
+| Staging area | start of the swap partition (`/dev/hd3`, disposable by design) | the file's size | written by `gzupdate`, read by `atea` |
+| `/.gzupdate/`, `/usr/.gzupdate/` | root and `/usr` file systems | size of the base files | the new (or previous) base files waiting to be switched |
+| `gztree` (command, base package) | `/sbin` | ≈ 3 KB text | started by INIT only when the base files must be switched (RS.14) |
+
+### S.2 The file format
+
+One file, sector aligned (512 B), little endian:
+
+```
+sector 0     header (signed part, 448 B) + Ed25519 signature (64 B)
+sector 1..   section table: up to 16 entries of 32 B
+             then the sections, each starting on a sector
+```
+
+- **RS.1 Header.** Magic `GZUPDATE`, format version (1), board (`flipper-f7`), release
+  `X.Y.Z` with build id (J.2), `GZ_ABI`, the shared-libc id and the libfuri id (#201), the
+  **epoch** (u32, +1 for every release, never reused; S.5), the oldest release this file may
+  update from (`from_min`, e.g. the first release that has `atea`), the key id (first 8 B of the
+  public key's SHA-512), the number of sections, and the **SHA-512 of the section table**. The
+  signature covers the 448 header bytes; the header covers the table; the table covers every
+  section (SHA-512 of each). So one signature check plus streaming hashes check everything, and
+  any section can be read and checked on its own.
+- **RS.2 Sections** (type, flags, offset, length, load address, SHA-512 prefix 16 B + full hash
+  in a trailer sector; the PR picks one layout and documents it):
+
+  | Type | Content | Used by |
+  |---|---|---|
+  | `flash` | `minix-base.bin` from 0x0800_4000 up: system image + the base part of the installed region (libc, libfuri, launcher, base programs, their directory pages) | `atea` |
+  | `root` | the base package tar (`base_X.Y.tar`) for `/` and `/usr` | `gzupdate`, INIT |
+  | `pkgs` | the app packages of the same build (`remind`, `alarm`, `timed`, …), one tar each | first boot after the update |
+  | `notes` | the `CHANGELOG.md` section of this release, plain text, ≤ 4 KB | shown before the OK |
+  | `radio` | reserved: a CPU2 stack image for `radio` (R16.0); not in version 1 | later |
+
+- **RS.3 Size.** About 1–3 MB with today's base (flash section ≈ 0.4–0.6 MB). MTP moves that in
+  seconds.
+
+### S.3 Algorithm and keys
+
+- **RS.4 Ed25519** (RFC 8032, pure, no context). Reasons: deterministic signatures (no random
+  nonce on the signing machine that could leak the key), 32 B public keys, one hash function
+  (SHA-512) for the signature and the section hashes, the same code on the Flipper, in QEMU and
+  in the host tests (the PKA is not emulated). The verifier is a small public-domain or
+  BSD/ISC implementation (candidates: Daniel Beer's `c25519`/`edsign`, Monocypher's
+  `crypto_eddsa_check` with unused parts left out); budget **≤ 8 KB of code, ≤ 2 s per check at
+  64 MHz, stack ≤ 2 KB**. The PR measures and reports all three.
+- **RS.5 R17.2 follows.** Signed packages use the same Ed25519 code and keys (the PKA stays for
+  U2F, R17.1, which needs P-256 anyway). One algorithm, one verifier in libc's crypto part and one
+  in `atea`.
+- **RS.6 Trusted keys live in `atea`**, two slots of 32 B:
+  1. the **release key** of the project (CI signs with it, S.6);
+  2. the **builder's own key**: a build made on the user's or the local agent's computer puts
+     the public key from `~/.config/galtzagorriak/update.pub` into slot 2 (`tools/gzsign
+     --new-key` makes the pair once, the private key never leaves that computer). Empty slot =
+     only release files install.
+  Changing a key means a new `atea`, which only ROM DFU writes (RS.12). A leaked release key is
+  handled the same way: new key, new `atea` over DFU, announced in the release notes.
+
+### S.4 The update, step by step
+
+- **RS.7 Delivery.** The file is copied into `/home/flipper` (the MTP storage, R10.4) under any
+  name ending in `.update` (`Galtzagorriak.update` in the manual). When `mtpd` finishes a
+  `SendObject` with that ending it starts `gzupdate check FILE` once (no polling, 0 B while
+  idle). Other ways in: `flsend` over the console, the card in a Linux PC, later BLE (S.9).
+- **RS.8 Check (old system, nothing changes yet).** `gzupdate check`, at low priority (L1/L2
+  hold, rule 0.8):
+  1. header magic, board, format; key id is one of `atea`'s two keys (read in place from flash);
+     **signature**; table hash; every section's SHA-512 (streamed, 4 KB at a time, ≈ 1–2 s per
+     MB);
+  2. epoch > the running epoch, unless downgrade (RS.13); `from_min` ≤ running release;
+  3. room: the staging area is big enough, the root and `/usr` file systems have room for the
+     base files twice;
+  A failure deletes nothing and says why in one line (`gzupdate: not signed by a trusted key`).
+  Success shows a window (Pine style, K.2): title `System update`, `0.8.2 → 0.9.0`, the first
+  lines of `notes` (scrollable), hint line `OK install  Back later`. **Only a button press on the
+  Flipper starts the update**: a file alone, a remote shell or an MTP host can never start it.
+  As root on the console `gzupdate apply FILE` asks the same question on the LCD.
+- **RS.9 Preconditions before applying:** battery ≥ 30 % or charging; no alarm or reminder due
+  within the next 3 minutes (asks `timed`; otherwise "after the alarm at 07:30"); apps that are
+  parked (12d) are asked to save their state (voluntary eviction) and the user is told which ones
+  will be restarted.
+- **RS.10 Stage (old system).**
+  1. `swapoff` (the swap partition holds nothing that must survive a reboot);
+  2. write the whole verified file to the staging area, raw, from sector 0; read it back and
+     compare hashes;
+  3. unpack the `root` section into `/.gzupdate/<epoch>/` and `/usr/.gzupdate/<epoch>/` (each
+     file system gets its own staging directory, so the later switch is a `rename` inside one
+     file system) and write the manifest `/.gzupdate/<epoch>/MANIFEST` (path, mode, owner,
+     SHA-256 per file) last;
+  4. keep the current update file as the rollback copy: `/usr/.gzupdate/prev.update` (only if
+     the running system came from an update file; a DFU-flashed system has none);
+  5. set the pending state (RS.11) and reboot.
+- **RS.11 Flash (`atea`, before the kernel).** At every reset `atea`:
+  1. keeps the existing first checks: Left held → ROM DFU (as `hal_early_boot` does now); the
+     `reboot -d` magic word → ROM DFU;
+  2. reads one RTC backup register (`BKP11R`: magic 0xE, state, flags) and checks that the
+     system image's first page is not erased. Nothing pending and the image complete → set VTOR
+     and MSP, jump to 0x0800_4000. **Cost: one register read and one word compare.**
+  3. Pending, or the image incomplete: start the SD card with its own small polled SPI driver
+     (sharing source with the kernel's driver), read the MBR, find the swap partition, read the
+     staged header, **check the signature and the `flash` section hash again** (the card could
+     have been swapped since `gzupdate` checked it), check the epoch rule (RS.13);
+  4. show progress on the LCD (one line, a bar, the LED breathing blue; ≈ 1.5 KB of code): the
+     user sees that it is working and must not pull the battery;
+  5. write the `flash` section with this order: **erase the system's first page first, program
+     it last** (as R21.3). Every other page: **compare first, erase and program only pages that
+     differ** (standing flash-write rule), then read back and compare;
+  6. clear the pending state, reset. Expected time: ≈ 70 ms per changed page, ≈ 10 s for a
+     full 0.5 MB, ≈ 1–3 s for a patch release.
+  CPU2 is not started yet, so no flash semaphore dance with the radio core (A16) is needed;
+  `atea` never touches CPU2, the option bytes, `SFSA` or anything at or above the guard.
+- **RS.12 `atea` is never changed by an update file.** It is written only by ROM DFU (the full
+  `minix-base.bin` starts with it), and gets WRP with R17.4. That is what makes the update
+  unbrickable: whatever happens to pages above 0x0800_4000, `atea` is still there and finishes
+  the job at the next reset.
+- **RS.13 Epoch and downgrade.** The system image carries its epoch in a fixed place of its
+  first page. `atea` installs a file only if its epoch is higher than the installed one (read from
+  flash), or, if the image is incomplete, than the epoch kept in `BKP11R` while staging.
+  Going back to an older release (lower epoch) is allowed **only with a button press inside
+  `atea`**: the LCD shows `0.9.0 → 0.8.2 (older). OK: yes, Back: no` and waits 30 s (Back or no
+  press: boot the installed system). So a root process alone can never install an older,
+  vulnerable release; a person holding the Flipper can (they could use DFU anyway).
+- **RS.14 Switch the SD files (helper started by the new INIT, before `/etc/rc`).** INIT itself
+  does no more than a check and an exec (it is at 764 of its 768 B RAM budget): if
+  `/etc/gz-tree` (one line: the epoch of the base files in place) differs from the epoch built
+  into the new system, it runs `/.gzupdate/<new epoch>/sbin/gztree` (the copy from the new tree,
+  so it matches the new shared libc; `/sbin/gztree` once the switch is done) and waits for it.
+  `gztree` (≈ 3 KB text, ≈ 2 KB RAM only while it runs, then 0) checks
+  `/.gzupdate/<new epoch>/MANIFEST` and switches the trees: for each manifest entry (`/` entries,
+  then `/usr` entries): `rename(file, /.gzupdate/<old epoch>/file)`, then
+  `rename(/.gzupdate/<new>/file, file)`; then it writes `/etc/gz-tree` by temp file + `rename`,
+  `sync`s and exits; INIT continues the boot. If `gztree` cannot start or fails, INIT logs it
+on the console and boots anyway (the next boot tries again; RS.16 counts the starts). Each step can be repeated after a power cut (a file
+  already in place with the right SHA-256 is skipped), so the switch simply finishes at the next
+  boot. The old base files stay in `/.gzupdate/<old epoch>/` for one rollback. INIT's only
+  addition is the epoch compare and one `fork`/`exec`/`wait` (+0 B static RAM).
+- **RS.15 First boot of the new system.** `/etc/rc` runs `gzupdate finish`: `pkg bind` (R2b.6
+  binds the new base programs by hash), then for each official package that was installed
+  before and whose libc/libfuri id changed, `pkg install --flash` from the `pkgs` section (the
+  launcher shows `Updating apps 2/3`); third-party packages built for the old libc are marked
+  `needs rebuild` in `pkg list` instead of failing at exec. Then `swapon`, then the staging
+  directories of the older epoch are kept, others removed. Last: `gzupdate commit` clears the
+  "trial" flag (RS.16) once the launcher is up.
+- **RS.16 Rollback after a failed start.** From staging until `commit`, `BKP11R` holds a trial
+  counter that `atea` increments at each reset. At 3 starts without `commit` (a crash loop, a
+  watchdog reset), `atea` shows `0.9.0 did not start. Go back to 0.8.2? OK / Back` and, on OK,
+  installs `prev.update` from the card (a signed file, so the same checks apply; the downgrade
+  press of RS.13 is this same press). The old INIT then has `gztree` switch the SD files back with RS.14
+  (the old tree is still in `/.gzupdate/<old epoch>/`). No previous file (the running system
+  came from DFU): `atea` says `Recovery: connect to a PC (DFU)` and offers DFU with OK.
+
+### S.5 Power loss, at every step
+
+| Cut during | What happens at the next start |
+|---|---|
+| check, stage 1–3 | old system boots; nothing pending; staged files are leftovers that the next `gzupdate` overwrites |
+| stage 4–5 (pending set) | `atea` sees pending, checks the staged file again, flashes |
+| `atea` flashing | the first page is erased until the very end, so the image counts as incomplete: `atea` starts over (only differing pages are written again) |
+| INIT switch | the switch continues where it stopped (RS.14) |
+| first-boot `finish` | `finish` runs again (each step is idempotent); trial counter limits loops |
+| card pulled during `atea` flashing | `atea` shows `Insert the SD card` and waits; Left + Back still give ROM DFU |
+
+The battery domain keeps `BKP11R` through a reset. If even the backup domain was lost (battery
+disconnected), the incomplete first page still tells `atea` to look on the card.
+
+### S.6 CI: every release tag produces a signed file
+
+- **RS.17** `tools/mkupdate.py` (host, Python, `cryptography` package) builds the file from
+  `minix-base.bin`, the base tar, the package tars and the changelog section; `tools/gzsign`
+  signs it; `tools/gzupdate-check.py` verifies it the way the Flipper does (shared test vectors
+  with the C verifier). `make BOARD=flipper update` runs all three. Without a private key it stops
+  and says how to make one (RS.20); the Flipper has no "unsigned allowed" switch.
+- **RS.18** In `.github/workflows/build.yml`, the `release` job (tag `v*`) builds the file,
+  signs it with the private key from the secret `GZ_UPDATE_KEY`, verifies it, and attaches
+  `Galtzagorriak-X.Y.Z.update` plus its `.sha512` to the GitHub release next to the images.
+  The secret lives in a GitHub **environment** `release` with the user as required reviewer, so
+  only a tag the user approves can be signed, and the PR jobs and the Claude worker
+  (`claude-worker.yml`) never see it. The public key is committed as
+  `flipper/keys/release.pub`; the build puts it into `atea` slot 1.
+- **RS.19** Epoch = a counter in `include/minix/gzversion.h` (`GZ_EPOCH`), raised by every
+  `release: X.Y.Z` PR; `versioncheck` (J.4) fails if it is not higher than the last tag's.
+- **RS.20** Key generation is a one-time step for the user (`tools/gzsign --new-key`, store the
+  private key offline and in the GitHub secret). The manual explains it; nothing is generated
+  in CI.
+
+### S.7 Flash writes, RAM, responsiveness
+
+- **Flash:** one update erases each changed page of the flash section once; a full release
+  ≈ 100–150 pages (one cycle each of 10,000), a patch release usually far fewer (compare before
+  erase). Nothing is written at run time; the update counts as an install-time write and
+  happens only after a button press. A rollback writes once more. Changed official apps are
+  reinstalled once (their own pages). The installed-region counter (`BKP16R`) counts `atea`'s
+  erases too.
+- **SD:** about 3 × the file size per update (staging, unpacked tree, MTP copy), once.
+- **RAM while the system runs: 0 B** (kernel, MM, FS unchanged; one backup register). `gzupdate`
+  ≈ 8–10 KB only while it checks or stages (4 KB hash buffer + SHA-512 state + Ed25519 stack).
+  `atea` uses RAM only before the kernel exists.
+- **Boot time:** + < 1 ms when nothing is pending.
+- **Responsiveness:** checking and staging run at low priority, L1/L2 hold; during `atea` the
+  system is not running (≈ 10 s with a progress bar, like the stock updater's screen).
+
+### S.8 Layout change, once
+
+`atea` takes the first 16 KB, so the system image starts at 0x0800_4000 (VTOR is set by `atea`)
+and keeps its 192 KB budget (it ends at 0x0803_4000). Everything with a fixed address above it
+moves up 16 KB with it: the shared libc from 0x0803_0000 to 0x0803_4000 (#167), libfuri from 0x0803_C000 to 0x0804_0000 and
+libapp by the same 16 KB (#201), and the start of installed programs from 0x0804_8000 to
+0x0804_C000. The image is not shrunk: the drivers of Phases 4b–15 need the 192 KB (Phase 2b
+table). Constants that change: `HAL_SYS_IMAGE` 0x30000 → 0x34000 (`hal/flipper/board.c` and its layout
+comment), the libc address in `<minix/shlibc.h>` and `shlibc.ld`, the libfuri/libapp addresses
+(`shfuri.ld`, `user-shfuri.ld`), the installed-region start, and `flipper.ld` (FLASH origin
+0x0800_4000; `atea` gets its own linker script). Moving libc changes its id, which is one more reason for the one-time full flash below. Like #201, the first build with `atea` needs a full
+DFU flash of `minix-base.bin` and the apps installed again; from then on, updates go through
+the file. Its `from_min` is that release.
+
+### S.9 Later, the same file over other paths (not in version 1)
+
+- the official mobile app or `rpcd` (R15.6) writes the file over BLE, then the same OK;
+- another MINIX Flipper sends it (R21.5); the stock-updater package of R21.2 stays the way in
+  from stock firmware;
+- a `radio` section updates the CPU2 stack through R16.0's maintenance swap, started by the new
+  system after the update, never by `atea`.
+
+### S.10 Acceptance
+
+- ACS.1 (host) `gzupdate-check.py` and the C verifier accept the CI-signed file and reject:
+  one flipped bit anywhere, a wrong key, a truncated file, a table/section hash mismatch, a wrong
+  board, a lower epoch; RFC 8032 test vectors pass.
+- ACS.2 (QEMU) `gzupdate check` on a good file shows the window text; on each bad file of ACS.1
+  prints one line and changes nothing (file systems' checksums before/after).
+- ACS.3 (QEMU, `tools/powercut.py`) power cut at every step of S.5, including every page of a
+  simulated `atea` flash run and every rename of RS.14: the next start always ends in the new
+  system or (before pending) the old one, never without a shell.
+- ACS.4 (Flipper, Windows 11, nothing installed) drag `Galtzagorriak.update` in Explorer, press
+  OK, 0.8.x → 0.9.0 boots, `ver` shows the new release, `/home` and settings unchanged, alarm
+  still set.
+- ACS.5 (Flipper) a build from another computer (another GCC, PR #286) updated through the file
+  boots to a shell: libc id, base files and apps match.
+- ACS.6 (Flipper) an older signed file needs the OK in `atea`; an unsigned or self-signed file
+  without slot 2 is refused before reboot and again by `atea` (staged by hand with `dd`).
+- ACS.7 (Flipper) a system that crashes at start (test build) leads after 3 resets to the
+  rollback question; OK returns to the previous release with its SD files.
+- ACS.8 Flash erases of an update between two builds that differ in one base program: only the
+  pages that differ (flash write counter).
+
+### S.11 Notes for the system manual
+
+A new section in `install.md` §7: "Updating with the update file" (download
+`Galtzagorriak-X.Y.Z.update` from the release page, drag it onto the Flipper in Explorer, OK on
+the Flipper, wait for the bar; don't remove the battery); what the messages mean; going back to
+an older release; when DFU is still needed (the first build with `atea`, a new key, a broken
+card). For builders: making a key, signing their own builds. Example release notes in the
+window: `0.9.0: alarm snooze, "Egun on!" on the welcome screen`.
+
+---
+
 ## Roadmap: phase order
 
 Phases are ordered by what the next one needs, and by the stock features they unlock. Old numbers
@@ -2829,8 +3138,9 @@ Package signatures (Phase 17, R17.2) become mandatory for this path once they ex
 
 | Region | Address | Size | Written when |
 |--------|---------|------|--------------|
-| System image (kernel, MM, FS, INIT) | 0x0800_0000 | **192 KB** (was 128 KB; drivers of Phases 4b–15 need ≈ +60 KB) | DFU only |
-| **Installed programs** (new) | 0x0803_0000 | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
+| Boot stage `atea` (section S, with T33) | 0x0800_0000 | 16 KB | ROM DFU only |
+| System image (kernel, MM, FS, INIT) | 0x0800_0000 (0x0800_4000 once `atea` exists) | **192 KB** (was 128 KB; drivers of Phases 4b–15 need ≈ +60 KB) | DFU only |
+| **Installed programs** (new) | 0x0803_0000 (0x0803_4000 once `atea` exists, S.8) | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
 | Run-time text cache | after the installed region | 128 KB default (`CACHE_SIZE`) | exec (as now) |
 | Guard | `SFSA − 16 pages` to `SFSA` | 64 KB | never |
 | CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except a stack swap (`radio use`, R16.0; same FUS path as R17.3) |
@@ -3892,6 +4202,24 @@ passes its checksum).
   - measurement helpers: area (two measurements) and volume (three);
   - temperature compensation when a temperature sensor is configured;
   - 5 V on pin 1 is switched on only while the app is open.
+- **R7b.4.4 `gpio` canary (user request 2026-11-17; section M):** input only, through the `sensor`
+  task (H.3); new module types are table entries, no new task:
+  - `loop`: a pin with the internal pull-up and a wire loop to ground (round a case, a drawer, a
+    bag's zip): **open = alarm**. Typical use: "was this opened while I was away". For a loop
+    longer than about 1 m the manual recommends an external 10 kΩ pull-up (noise);
+  - `contact`: a reed switch or button, alarm on open, on close or on any change;
+  - `pulse`: edges counted by the pulse engine (R4b.7), alarm when the rate leaves a window (a fan
+    that stopped, a PIR module that keeps firing, a meter's LED);
+  - `volt`: an ADC pin (header pins 3, 4, 7, 15, 16) sampled by the ms timer, alarm outside a
+    window, with a divider for higher voltages (H.1), e.g. "my Raspberry Pi's 5 V supply dropped";
+  - `/etc/sensors.conf` lines like the other sensors (`case loop pin=4`); events go to the
+    `canary` app and, in pocket mode (M.1), to the alert service; debounce per input (default
+    20 ms);
+  - **pocket mode** needs a pin with a free EXTI line (header pins on PA4 or PA7 only, T14
+    hardware facts) so the CPU can sleep in Stop2; other pins are polled by the ms timer only
+    while the app is in the foreground, and the app says so;
+  - the canary never drives a pin: outputs stay as they are, the 5 V and 3V3 header power follow
+    R6.1 and are switched on only if a configured module needs them.
 - Acceptance:
   - AC7b.4.1 A DHT22, a DS18B20 and a BME280 (or SHT3x) each give values matching a reference
     thermometer within the sensor's stated accuracy; `cat /dev/sensor/room` works from the
@@ -3904,6 +4232,9 @@ passes its checksum).
     interval.
   - AC7b.4.5 The sonar measures a wall at 0.5, 1 and 2 m within ±1 cm (with temperature
     compensation), and the parking-sensor beep rate follows a moving hand without visible lag.
+  - AC7b.4.6 `gpio` canary: a wire loop on PA4, cut while the Flipper is in Stop2 with the screen
+    off, vibrates within 300 ms; a `volt` input on a lab supply alarms within 100 ms of leaving
+    its window.
 - Responsiveness: sonar display and beep update ≥ 10 times per second, beep follows a new
   reading within 50 ms; sensor reads never mask interrupts (all timing by timers, UART or DMA);
   L1 holds in both apps.
@@ -4534,6 +4865,14 @@ external USB host chip; see Deferred (MAX3421E).
   L). With no SD card, the session stays on screen only.
 - **R11.2.9 Power:** with `bare` and verdict 1, the app can be left running as a charging-port
   check; the backlight follows the normal timeout.
+- **R11.2.10 Power quality (user request 2026-11-17):** the charger's ADC (BQ25896, one-shot on
+  demand as T14c) samples VBUS once a second during the session. The summary shows the minimum
+  and maximum VBUS, and flags "weak or unstable supply" when VBUS drops below 4.5 V while
+  charging, swings by more than 0.5 V, or the charger reports that it is limiting on input
+  voltage or input current (its VINDPM/IINDPM status bits; the agent takes the register and bit
+  names from the BQ25896 datasheet). Read only: the canary changes no charger setting (input
+  limit, ICO and charge current stay as R6.1 says). Works in every persona and needs no
+  enumeration, so it also judges a plain charger.
 
 Acceptance:
 - AC11.2.1 A USB charger gives verdict 1; a Linux PC gives verdict 4 with `bare`, and its trace
@@ -4547,6 +4886,8 @@ Acceptance:
   reference traces, and says "unknown" for a charger.
 - AC11.2.5 The fuzzer of R11.2.7 passes.
 - AC11.2.6 A full session leaves the internal-flash write counters unchanged (R2b.11 counters).
+- AC11.2.7 A good charger shows VBUS within 4.75–5.25 V and no flag; a charger behind a long thin
+  cable (or a bench supply set to 4.4 V) is flagged as weak.
 
 Responsiveness: AC11.2.R A SETUP packet is recorded in the USB interrupt in ≤ 5 µs; the list on
 screen updates within 100 ms of an event; L1 holds while a host floods control requests.
@@ -5903,6 +6244,27 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
     hot/cold locate. Pocket mode with the alert (M.1).
 - **R16.5.5** The canary owns `bled` while armed: the RPC and serial services are off, so a
   stranger connecting to the bait never reaches RPC (`EBUSY` for apps that need `bled`).
+- **R16.5.7 Beacons (user request 2026-11-17; observer, shares the 16.3 scan):** recognise
+  positioning beacons and show them as **places**, not as people:
+  - formats: iBeacon (manufacturer data, company `0x004C`, type `0x02`, length `0x15`: UUID,
+    major, minor, measured power), Eddystone (service UUID `0xFEAA`: UID, URL, TLM, EID frames),
+    AltBeacon (beacon code `0xBEAC`);
+  - grouping into **deployments:** by iBeacon UUID, by Eddystone-UID namespace, by the first
+    16 bytes of an AltBeacon ID, and by the host name of an Eddystone-URL. Eddystone EID and TLM
+    frames carry no stable deployment ID: they are counted as "anonymous Eddystone". Screen line e.g.
+    "1 deployment, 12 beacons, strongest −58 dBm"; a URL is shown as text (never opened);
+  - a `const` table names known deployments only from **public** sources cited in the PR that
+    adds an entry (the table may start empty); the optional `/ext/apps_data/canary/ble/rules.tsv`
+    adds the user's own names ("shop at the corner");
+  - **only beacon frames are logged in this mode;** phones and other devices seen by the scan are
+    counted, not listed (privacy, M.1);
+  - locate with the 16.3 hot/cold mapping, to find where a beacon is mounted.
+  Limits the app and the manual state plainly: a beacon only transmits; the tracking happens in a
+  phone app that hears it, so the canary shows that a place *offers* positioning, not that anyone
+  is tracked. Shops can also count phones **passively** from the phones' own Wi-Fi and BLE
+  traffic; a passive listener sends nothing and **cannot be detected** by any canary. The manual
+  gives the phone-side defences instead (random MAC addresses, no background Bluetooth/Wi-Fi
+  scanning, no location permission for shop apps).
 - Acceptance:
   - AC16.5.1 nRF Connect on Android connects to the bait; the log lists its discovery, a read, a
     refused write and a refused pairing request with the IO capabilities the phone sent.
@@ -5919,6 +6281,8 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - AC16.5.6 With key export on, the `.keys` file decrypts a sniffer capture of the session in
     Wireshark. Copying it to `/etc/flipper/bt.keys` (as root) and restarting `bled` gives a load
     error and no bond.
+  - AC16.5.7 A phone app acting as an iBeacon and one as Eddystone-URL show as two deployments
+    with the right UUID and URL; with ten phones nearby, the beacon log holds no phone addresses.
 - RAM: `bled` +256 B (connection log ring; the 16.3 scan list is shared) + ≈ 100 B session keys
   in the honeypot; app ≈ 4 KB while running.
   Flash ≈ 6 KB app, `bled` +2 KB.
@@ -5931,12 +6295,12 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - operands in the PKA's own RAM (A.6);
   - the attestation and device keys wrapped by the CPU2 secure enclave (AES2 key slots), as stock;
   - an authentication counter in an append-only flash page.
-- **R17.2** (old R9.1) Signed packages: SHA-256 of the tar, ECDSA P-256 verify on the PKA against a
-  public key in flash next to the system image; unsigned packages need `pkg install -u`. Required
+- **R17.2** (old R9.1) Signed packages: Ed25519 over the SHA-512 of the tar, with the same verifier
+  and keys as the update file (RS.5; was ECDSA P-256 on the PKA, changed 2026-11-18 so one
+  algorithm serves both); unsigned packages need `pkg install -u`. Required
   for runtime installs into the installed region (R2b.5).
-- **R17.3** Updater: a signed system image on the SD card is written to the system region by code
-  running from the installed region, with interrupts masked and a CRC check after writing.
-  Recovery is ROM DFU.
+- **R17.3** Updater: replaced by section S (signed `Galtzagorriak.update`, boot stage `atea`,
+  scheduled with T33, long before this phase; it needs no CPU2). Recovery stays ROM DFU.
 - **R17.4** Option bytes revisited (decision from 2026-11-14, now due): WRP for the system region,
   RDP level 1, PCROP if a secret needs it. Requires the user's sign-off.
 
@@ -6288,14 +6652,14 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 ## Phase 21: Install MINIX on another Flipper (user request, 2026-11-15)
 
 **Depends on:** 16 (BLE central with passkey pairing, full stack R16.1.0), 17 (signed image R17.2,
-updater image format R17.3), 18b (first-boot wizard on the target). Last phase, after 20.
+update file format, section S), 18b (first-boot wizard on the target). Last phase, after 20.
 Analysis: `reports/flipper-to-flipper-install-analysis.md` in the project files (2026-11-15).
 
 Goal: a MINIX Flipper installs MINIX on a second Flipper (the user may buy one), with no PC.
 USB cannot do it: both Flippers are USB devices only.
 
 - **R21.1 Fresh image, never a copy.** The installer writes the signed release image from our SD
-  card (the R17.3 file), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
+  card (the `.update` file of section S), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
   and passwords, settings and installed packages are ours. The signature (R17.2) is checked before
   the first byte goes out. The target starts in the first-boot wizard (18b).
 - **R21.2 (21a, main path) Over BLE, acting as the stock mobile app.** Stock firmware takes firmware
@@ -6360,7 +6724,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 
 ## Deferred (decided 2026-11-14)
 
-- WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
+- WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4; WRP covers `atea` (RS.12) too.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the user confirms.
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the user (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.13): user decision, after Phase 15.
@@ -6415,6 +6779,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (user discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (user decision) | K.5, T8 |
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (user request) | R15.7, 21 |
+| Signed update file over USB for Windows users: `atea`, Ed25519, CI-signed release file, rollback (user request) | section S, T33 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (user request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (user request; no journaling) | section N, T17 |
 | Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (user request) | section P, T26; 8, 13, 15 |

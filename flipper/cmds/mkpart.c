@@ -9,9 +9,11 @@
  * after the previous one (spec R12.32: the usual SD allocation unit, so
  * the card erases and rewrites whole units; sizes stay in MB).
  * type is hex (81 MINIX, 82 swap); size is in MB,
- * or "*" for everything that is left.  Everything is kept below 4 GiB:
- * MINIX 2.0 addresses partitions with 32-bit byte offsets.  The kernel
- * reads the new table at the next boot.
+ * or "*" for everything that is left.  Partitions may start and end
+ * anywhere on the card up to 2 TiB (R12.39: the driver counts in
+ * sectors); a swap partition (82) stays below 4 GiB - 1 MiB in size, a
+ * MINIX one (81) may be larger (a V3 /home, spec O).  The kernel reads
+ * the new table at the next boot.
  *
  * Unlike partition(8) this never moves an existing partition.
  */
@@ -26,9 +28,10 @@
 #include <ibm/partition.h>
 
 #define SECTOR		512
+#define SWAP_PART	0x82
 #define ALIGN		8192UL			/* 4 MiB in sectors */
 #define MB		2048UL			/* 1 MiB in sectors */
-#define LIMIT_SECS	(0xFFFFFFFFUL / SECTOR)	/* 4 GiB - 1 byte */
+#define SWAP_SECS	(0x800000UL - MB)	/* 4 GiB - 1 MiB */
 
 static unsigned char mbr[SECTOR];
 static char *prog;
@@ -58,7 +61,7 @@ static void list(void)
 	for (i = 0; i < NR_PARTITIONS; i++) {
 		pe = mbr + PART_TABLE_OFF + 16 * i;
 		if (pe[4] == NO_PART) continue;
-		printf("%d  type %02x  start %9lu  size %9lu  (%lu MB)\n",
+		printf("%d  type %02x  start %10lu  size %10lu  (%lu MB)\n",
 			i + 1, pe[4], get32(pe + 8), get32(pe + 12),
 			get32(pe + 12) / 2048);
 	}
@@ -66,8 +69,8 @@ static void list(void)
 
 int main(int argc, char **argv)
 {
-	struct partition geom;
-	unsigned long disk_secs, next, size, mb;
+	struct part_range geom;
+	unsigned long disk_secs, next, size, mb, type;
 	unsigned char *pe;
 	char *dev, *arg, *colon;
 	int fd, i, a, lflag = 0, slot;
@@ -85,9 +88,8 @@ int main(int argc, char **argv)
 	if (mbr[510] != 0x55 || mbr[511] != 0xAA) die("no partition table");
 	if (lflag) { list(); return 0; }
 
-	if (ioctl(fd, DIOCGETP, &geom) < 0) die("cannot get device size");
-	disk_secs = geom.size / SECTOR;
-	if (disk_secs > LIMIT_SECS) disk_secs = LIMIT_SECS;
+	if (ioctl(fd, DIOCGETPS, &geom) < 0) die("cannot get device size");
+	disk_secs = geom.count;			/* sectors (R12.39) */
 
 	/* Start after the end of the last partition in use. */
 	next = ALIGN;
@@ -106,17 +108,23 @@ int main(int argc, char **argv)
 		if ((colon = strchr(arg, ':')) == NULL) die("bad argument");
 		next = (next + ALIGN - 1) / ALIGN * ALIGN;
 		if (next >= disk_secs) die("no space left on the device");
+		type = strtoul(arg, NULL, 16);
 		if (strcmp(colon + 1, "*") == 0) {
 			size = (disk_secs - next) / MB * MB;
+			if (type == SWAP_PART && size > SWAP_SECS)
+				size = SWAP_SECS;
 		} else {
 			mb = strtoul(colon + 1, NULL, 10);
+			if (mb > (disk_secs - next) / MB)
+				die("partition does not fit");
 			size = mb * MB;
-			if (size > disk_secs - next) die("partition does not fit");
+			if (type == SWAP_PART && size > SWAP_SECS)
+				die("a swap partition is below 4 GiB");
 		}
 		if (size == 0) die("partition would be empty");
 		pe = mbr + PART_TABLE_OFF + 16 * slot;
 		memset(pe, 0, 16);
-		pe[4] = (unsigned char) strtoul(arg, NULL, 16);
+		pe[4] = (unsigned char) type;
 		/* CHS fields: "use LBA" values, as modern tools write. */
 		pe[1] = pe[5] = 0xFE; pe[2] = pe[6] = 0xFF; pe[3] = pe[7] = 0xFF;
 		put32(pe + 8, next);
