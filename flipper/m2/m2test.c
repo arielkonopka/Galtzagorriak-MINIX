@@ -482,28 +482,65 @@ static void finish(void)
  * and then pulls the cable in the middle of a send.  Here: mtpd ends
  * with status 0, it ran as the owner of its root (bin), the example file
  * is there and the half-sent one is not. */
-#define MTP_ROOT	"/tmp/mtpd"
-static const char mtp_example[] = "Filetype: Flipper SubGhz Key File\n"
-	"Version: 1\nFrequency: 433920000\n"
-	"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
-	"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n";
+/* The test's strings in one const struct (flash), as the subghz and pkg
+ * tests': each literal would cost a GOT word in every copy of m2test, and
+ * ACK.3's 4 flooders fork it with a few bytes to spare.  The paths under
+ * the root are built once into a stack buffer. */
+static const struct {
+	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"];
+	char wait[sizeof "mtpd: waiting for tools/mtphost.py on /dev/mtpline\n"];
+	char root[sizeof "/tmp/mtpd"];
+	char bin[sizeof "/bin/mtpd"];
+	char name[sizeof "mtpd"];
+	char r[sizeof "-r"];
+	char l[sizeof "-l"];
+	char line[sizeof "/dev/mtpline"];
+	char dir[sizeof "/galtzagorriak"];
+	char sub[sizeof "/etxea.sub"];
+	char pulled[sizeof "/pulled.bin"];
+	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
+	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
+	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+} mt = {
+	"Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n",
+	"mtpd: waiting for tools/mtphost.py on /dev/mtpline\n",
+	"/tmp/mtpd",
+	"/bin/mtpd",
+	"mtpd",
+	"-r",
+	"-l",
+	"/dev/mtpline",
+	"/galtzagorriak",
+	"/etxea.sub",
+	"/pulled.bin",
+	"mtpd served mtphost and ended on the pulled cable",
+	"mtpd: etxea.sub sent from the PC, owned by bin",
+	"mtpd: the half-sent file is gone, nothing else left",
+};
 
 static void mtpd_test(void)
 {
-	char buf[256];
+	char buf[256], path[sizeof mt.root + sizeof mt.dir + sizeof mt.pulled];
+	char *leaf;
 	struct stat st;
 	DIR *d;
 	struct dirent *e;
 	int fd, n, entries = 0, status = -1;
 	pid_t pid;
 
-	printf("mtpd: waiting for tools/mtphost.py on /dev/mtpline\n");
+	printf(mt.wait);
 	fflush(stdout);
-	mkdir(MTP_ROOT, 0755);
-	chown(MTP_ROOT, 2, 2);			/* bin: mtpd becomes it */
+	mkdir(mt.root, 0755);
+	chown(mt.root, 2, 2);			/* bin: mtpd becomes it */
 	pid = fork();
 	if (pid == 0) {
-		execl("/bin/mtpd", "mtpd", "-r", MTP_ROOT, "-l", "/dev/mtpline",
+		execl(mt.bin, mt.name, mt.r, mt.root, mt.l, mt.line,
 			(char *) NULL);
 		_exit(99);
 	}
@@ -517,24 +554,28 @@ static void mtpd_test(void)
 	}
 	alarm(0);
 	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
-		&& WEXITSTATUS(status) == 0,
-		"mtpd served mtphost and ended on the pulled cable");
+		&& WEXITSTATUS(status) == 0, mt.c1);
+	strcpy(path, mt.root);
+	strcat(path, mt.dir);			/* <root>/galtzagorriak */
+	leaf = path + strlen(path);
+	strcpy(leaf, mt.sub);
 	n = -1;
-	if ((fd = open(MTP_ROOT "/galtzagorriak/etxea.sub", O_RDONLY)) >= 0) {
+	if ((fd = open(path, O_RDONLY)) >= 0) {
 		n = read(fd, buf, sizeof(buf));
 		close(fd);
 	}
-	check(n == (int) strlen(mtp_example)
-		&& memcmp(buf, mtp_example, n) == 0
-		&& stat(MTP_ROOT "/galtzagorriak/etxea.sub", &st) == 0
-		&& st.st_uid == 2, "mtpd: etxea.sub sent from the PC, owned by bin");
-	if ((d = opendir(MTP_ROOT "/galtzagorriak")) != NULL) {
+	check(n == (int) strlen(mt.ex)
+		&& memcmp(buf, mt.ex, n) == 0
+		&& stat(path, &st) == 0
+		&& st.st_uid == 2, mt.c2);
+	*leaf = '\0';
+	if ((d = opendir(path)) != NULL) {
 		while ((e = readdir(d)) != NULL)
 			if (e->d_name[0] != '.') entries++;
 		closedir(d);
 	}
-	check(entries == 1 && stat(MTP_ROOT "/galtzagorriak/pulled.bin", &st) < 0,
-		"mtpd: the half-sent file is gone, nothing else left");
+	strcpy(leaf, mt.pulled);
+	check(entries == 1 && stat(path, &st) < 0, mt.c3);
 }
 
 /* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
