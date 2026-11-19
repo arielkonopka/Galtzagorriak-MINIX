@@ -873,12 +873,7 @@ PRIVATE int pm_sleep()
 #if LATTRACE
   lat_wake(hal_cycles() - cyc);
 #endif
-  pm_stat.stop += e;
-  if (pm_stat.stop >= 32768UL * 60) {	/* R6.8: whole minutes apart */
-	pm_stat.stop -= 32768UL * 60;
-	pm_stat.min++;
-  }
-  if (w & HAL_WAKE_BTN) pm_stat.btn++; else pm_stat.other++;
+  pm_stat_add(&pm_stat, e, w & HAL_WAKE_BTN);	/* pmstat.h */
 
   /* Microseconds since the last tick (32768 Hz: 15625/512 us a clock),
    * whole ticks in them, and the cycles left of the one we are in. */

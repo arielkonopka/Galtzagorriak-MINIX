@@ -1356,7 +1356,7 @@ int count;
 						: " wother="; *k != 0; k++)
 		line[n++] = *k;
 	u = i == 0 ? (unsigned long) get_uptime() / HZ
-	  : i == 1 ? (unsigned long) pm_stat.min * 60 + pm_stat.stop / 32768
+	  : i == 1 ? pm_stat_secs(&pm_stat)
 	  : i == 2 ? pm_stat.btn : pm_stat.other;
 	j = 0;
 	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);
