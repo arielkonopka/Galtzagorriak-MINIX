@@ -4,13 +4,17 @@
  * Usage:	guiflood
  *
  * Forks three copies of itself, then all four write tile records to
- * /var/run/gui as fast as they can (O_NONBLOCK: a full FIFO is skipped),
- * until they are killed: tiles w0..w3, each with its own pid.  m2test
+ * /var/run/gui as fast as the launcher reads them (blocking writes: the
+ * FIFO stays full), until they are killed: tiles w0..w3, each with its own pid.  m2test
  * forks once and execs this, in a process group of its own (setsid), and
  * ends it with kill(-pgrp).  Before, the four flooders were forks of
  * m2test itself: each needed a copy of m2test's data, and every new
  * m2test check took from a margin of a few bytes.  This image is a few
- * hundred bytes, so m2test can grow without touching ACK.3.
+ * hundred bytes of data, so m2test can grow without touching ACK.3.
+ * In QEMU (the text runs from RAM here, not from the flash cache) two
+ * things made the launcher miss every key: O_NONBLOCK writes spinning on
+ * EAGAIN, and the loop's stack at the very top of the image; both are
+ * avoided below.
  */
 #include <sys/types.h>
 #include <fcntl.h>

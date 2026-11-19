@@ -484,8 +484,7 @@ static void finish(void)
  * with status 0, it ran as the owner of its root (bin), the example file
  * is there and the half-sent one is not. */
 /* The test's strings in one const struct (flash), as the subghz and pkg
- * tests': each literal would cost a GOT word in every copy of m2test, and
- * ACK.3's 4 flooders fork it with a few bytes to spare.  The paths under
+ * tests': each literal would cost a GOT word in every copy of m2test.  The paths under
  * the root are built once into a stack buffer. */
 static const struct {
 	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
@@ -835,7 +834,7 @@ static void hid_tests(void)
  * once; every transmit is checked against its bands and duty cycle. */
 /* The test's strings in one const struct (flash), as the pkg test's
  * (PK_STRINGS below): each literal would cost a GOT word in every copy
- * of m2test, and ACK.3's 4 flooders fork it with a few bytes to spare. */
+ * of m2test. */
 static const struct {
 	char s0[sizeof "/dev/subghz"];
 	char s1[sizeof "%lu"];
