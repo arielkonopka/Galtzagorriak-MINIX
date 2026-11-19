@@ -1864,11 +1864,16 @@ long for `df` or the launcher's storage line.
 
 *Done in T27a part 4 (#306, 2026-11-19):* V3 check and repair (offset-14 flags, 64 B entries,
 32-bit inodes, triple indirect, `bread()` past 2 GiB); `imap`/`dirmap` up to the highest inode in
-use; windows above the high-water mark are compared but not walked (`-p` does not skip them yet:
-the comparison reads the zone map, ≈ 12.6 MB at 100 GiB). **Not done yet:** the 2-byte window
-record (the byte with 8 window bits stays: correct, more reads past 8 windows), the swap scratch
-past ≈ 30 000 inodes, and the idle leak sweep. That sweep cannot be `fsck -L`, which is the N.3
-log file option; it gets another letter.
+use; windows above the high-water mark are compared but not walked.
+*Done in T27a part 5 (#306, 2026-11-19):* the 2-byte window record (first and last window,
+1–255; 255 also means "and every later one"); `fsck -p` stops the zone-map comparison at the
+high-water mark; the leak sweep is **`fsck -S`** (not `-L`, the N.3 log option): as `-p`, also on
+a CLEAN file system, and compares above the mark; on a mounted file system it only reports (FS may
+change a map block between the check and the write). The swap scratch is `fsck -T dev`: used when
+the 3 B per inode (count + window record) would take more than half of `fsck_mem` (≈ 10 900
+inodes at the default 64 KB), only while swap is off on `dev` (MI_SWAPINFO), 4 B records, 16 pages
+of 1 KB in an LRU (+16 KB); `/etc/rc` passes `-T /dev/hd3` for `/usr` and `/home`. `fsck -S` is
+run by hand; starting it from `update` at idle needs `/home` unmounted, so it is not automatic.
 
 N.4's zone windows grow with the partition (100 GiB: ≈ 200 windows of 64 KB). Because the FS
 allocates from the bottom, the used zones lie below a **high-water mark** (the highest zone any

@@ -21,8 +21,10 @@ Usage: v3card.py
      (the triple indirect tree of the first, nothing leaked by the second)
      and 'fsck.minix -l' lists the long names.
   5. fsck for V3 (spec O.6): on the host, /home is damaged: a wrong link
-     count, a lost file (its entry cleared) and an out-of-range zone in a
-     third file, and CLEAN (offset 14) cleared.  Booted again, /etc/rc's
+     count on a file moved to inode 150 000 (fsck_mem cannot hold the
+     counts: they go to the scratch on the swap partition), a lost file
+     (its entry cleared) and an out-of-range zone in a third file, and
+     CLEAN (offset 14) cleared.  Booted again, /etc/rc's
      'fsck -p' repairs all three (its log, /usr/adm/fsck.log) and sets
      CLEAN; the host 'fsck.minix -f' is clean afterwards; at the next boot
      (CLEAN cleared again) fsck finds nothing.
@@ -46,6 +48,7 @@ _spec.loader.exec_module(powercut)
 N57 = "galtzagorriak_etxeko_atea_irekitzeko_urruneko_agintea.sub"
 N60 = "x" * 56 + ".sub"
 N61 = "y" * 57 + ".sub"
+HIGH = 150000	# an inode number for the fsck scratch test
 fails = 0
 T0 = time.time()
 
@@ -122,6 +125,13 @@ class V3:
 					return z * 1024 + e, ino
 		return None, None
 
+	def setimap(self, ino, on):
+		off = 2 * 1024 + ino // 8
+		self.f.seek(off)
+		b = self.f.read(1)[0]
+		b = b | (1 << (ino & 7)) if on else b & ~(1 << (ino & 7))
+		self.put(off, bytes([b]))
+
 	def flags(self):
 		return struct.unpack_from("<H", self.blk(1), 14)[0]
 
@@ -133,10 +143,17 @@ def damage(part):
 	"""A wrong link count, a lost file, an out-of-range zone."""
 	v = V3(part)
 	try:
-		_, ino = v.lookup("links")
+		# "links" moves to inode HIGH (32-bit, and past what fsck_mem
+		# holds: the counts go to the scratch on swap, spec O.6)
+		eoff, ino = v.lookup("links")
 		off, ip = v.inode(ino)
 		struct.pack_into("<H", ip, 2, 4)		# nlinks 1 -> 4
-		v.put(off, ip)
+		hoff, _ = v.inode(HIGH)
+		v.put(hoff, ip)
+		v.put(off, bytes(64))
+		v.put(eoff, struct.pack("<I", HIGH))
+		v.setimap(ino, 0)
+		v.setimap(HIGH, 1)
 		eoff, ino = v.lookup(N57)
 		v.put(eoff, b"\0\0\0\0")			# the entry: lost
 		_, ino = v.lookup("badz")
@@ -265,6 +282,8 @@ def main():
 		print(log.decode(errors="replace"))
 		check(b"hd4: unclean" in log, "/etc/rc's fsck -p checked /dev/hd4")
 		check(b": adjust" in log, "the wrong link count was repaired")
+		check(b"scratch on swap" in log, "fsck kept its counts in the "
+			"scratch on /dev/hd3 (inode %d in use)" % HIGH)
 		check(b": remove" in log, "the file with the bad zone was removed")
 		check(b"new map" in log and b": clear" in log,
 			"the lost file's inode and zones were freed")

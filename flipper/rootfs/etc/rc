@@ -42,7 +42,9 @@ test -f /etc/.setup-done && {
 	for fs in "$usr /usr" "$home /home"
 	do
 		set $fs
-		fsck -p -v -k -w 5 -m $fsck_mem -L /tmp/fsck.log $1
+		# swap is still off: past ~30 000 inodes in use fsck keeps
+		# its counts on the swap partition (spec O.6)
+		fsck -p -v -k -w 5 -m $fsck_mem -T /dev/hd3 -L /tmp/fsck.log $1
 		case $? in
 		0|1)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
 		*)	echo "rc: $1 has errors: mounted read-only, run fsck"

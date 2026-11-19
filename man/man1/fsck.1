@@ -2,7 +2,7 @@
 .SH NAME
 fsck \- perform file system consistency check
 .SH SYNOPSIS
-\fBfsck\fR [\fB\-aciklprsvz\fR] [\fB\-m\fR \fIkb\fR] [\fB\-w\fR \fIs\fR] [\fB\-L\fR \fIlog\fR] \fIdevice\fR ...
+\fBfsck\fR [\fB\-aciklprSsvz\fR] [\fB\-m\fR \fIkb\fR] [\fB\-w\fR \fIs\fR] [\fB\-L\fR \fIlog\fR] [\fB\-T\fR \fIswapdev\fR] \fIdevice\fR ...
 .br
 .de FL
 .TP
@@ -24,7 +24,9 @@ fsck \- perform file system consistency check
 .FL "\-m kb" "Use at most \fIkb\fR KB for the maps (default 64, at least 8)"
 .FL "\-p" "Preen: if the file system is marked clean and not marked for a check, do nothing (one block is read); else check and repair as \fB\-a\fR"
 .FL "\-r" "Prompt user for repairs if inconsistencies are found"
+.FL "\-S" "The leak sweep: as \fB\-p\fR, but also on a clean file system, and the zone map above the highest zone in use is compared too, so space lost there after a crash is freed. On a mounted file system it only reports"
 .FL "\-s" "List the superblock of the file system"
+.FL "\-T swapdev" "When the link counts would take more than half of \fB\-m\fR, keep them in the first blocks of the swap partition \fIswapdev\fR (not while swap is on there)"
 .FL "\-v" "Short output for the Flipper's 32-column screen: a header, the step with a spinner and a percentage redrawn in place, one line per repair and a summary"
 .FL "\-w s" "With \fB\-v\fR: after repairs, keep the summary on the screen until a button or \fIs\fR seconds"
 .FL "\-z" "Report the specified zones when they are found"
@@ -32,6 +34,7 @@ fsck \- perform file system consistency check
 .EX "fsck /dev/hd4" "Check file system on \fI/dev/hd4\fR"
 .EX "fsck \-a /dev/hd2" "Automatically fix errors on \fI/dev/hd2\fR"
 .EX "fsck \-p \-v /dev/hd1" "What /etc/rc does at boot"
+.EX "fsck \-S /dev/hd4" "Free space lost on an unmounted \fI/home\fR"
 .EX "fsck \-l /dev/hd4" "List the contents of \fI/dev/hd4\fR"
 .EX "fsck \-c 2 3 /dev/hd3" "Check and list \fI/dev/hd3\fR i-nodes 2 & 3"
 .SH DESCRIPTION
@@ -58,7 +61,19 @@ zones as large as \fB\-m\fR allows; a larger file system is checked in
 several passes (shown as \fIn\fR/\fIN\fR).
 The disk's maps are compared one block at a time, and link counts and the
 i-node maps are kept for the i-nodes up to the highest one in use.
-Windows above the highest zone any file uses are only compared with the disk.
+A window past the first is walked only for the files whose zones reach into
+it (two bytes a file: the first and the last window).
+Above the highest zone any file uses nothing is walked: without \fB\-p\fR the
+map there is compared with the disk; \fB\-p\fR stops at that zone, because
+above it the only possible error is space marked used that no file owns (a
+loss of space, not a danger); \fB\-S\fR frees that space.
+.PP
+With very many files (about 10 000 i-nodes in use with \fB\-m 64\fR) the link
+counts do not fit in memory.  With \fB\-T\fR \fIswapdev\fR they are kept in
+the first blocks of the swap partition, read and written 1 KB at a time
+through 16 KB of memory; \fI/etc/rc\fR does this for \fI/usr\fR and
+\fI/home\fR (\fB\-T /dev/hd3\fR), before swap is turned on.  Without it such a
+check stops with "out of memory" (exit status 8).
 .PP
 On a MINIX V3 file system (as util-linux \fImkfs.minix \-3\fR makes it, 1 KB
 blocks) directory entries are 64 bytes with names of up to 60 characters,

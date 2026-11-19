@@ -46,7 +46,10 @@ A check takes a few seconds for `/`, and up to about 30 seconds for `/usr` and `
 on a card with a few thousand files. `fsck_mem=64` in `/etc/rc.conf` sets how much memory (KB)
 it may use (at most about 64); less memory means more passes and a slower check. `fsck` needs
 about 90 KB of RAM: at boot that is free; to run it later yourself (`man fsck`), close the apps
-first. Reading files does not change the card (no access-time writes), so `cat` or starting a
+first. With many files on `/home` (more than about 10 000), the boot check keeps its counts on
+the swap partition, which is not in use yet at that point; this needs no setting. After a crash
+some space on `/home` can stay marked as used with no file in it (the boot check does not look
+for it, to stay quick); `umount /home; fsck -S /dev/hd4; mount /dev/hd4 /home` gives it back. Reading files does not change the card (no access-time writes), so `cat` or starting a
 program never makes a file system unclean. Pipes and FIFOs (`ls | more`, the desktop's
 `/var/run/gui`, the window apps) do not write to the card either: their data stays in memory.
 A FIFO's times (`ls -l`) on the card are not updated by reading or writing it.
