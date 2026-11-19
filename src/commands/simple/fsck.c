@@ -11,8 +11,6 @@
 #define bit_nr bit_t
 #define block_nr block_t
 #define d_inode d2_inode
-#define d_inum d_ino
-#define dir_struct struct direct
 #define i_mode d2_mode
 #define i_nlinks d2_nlinks
 #define i_size d2_size
@@ -34,7 +32,11 @@
 *   system on a 360K floppy.  The code had limited utility, was buggy,
 *   and failed due to a bug in the ACK C compiler.  Use mkfs instead!
 *
-* Galtzagorriak (spec N.3, N.4, T17a):
+* Galtzagorriak (spec N.3, N.4, T17a; spec O.6, T27a: MINIX V3 too, with
+*   64 B entries and 60-character names, 32-bit inodes, the triple
+*   indirect zone, CLEAN/CHECK at offset 14, blocks past 2 GiB read with
+*   bread(); imap/dirmap only up to the highest inode in use; the zone
+*   windows above the highest zone in use are only compared):
 *   -p  preen: nothing to do (no output) when the super block says CLEAN
 *       and not CHECK; else check and repair as -a.
 *   -v  for the Flipper's 32x10 console: a header, the phase with a
@@ -73,6 +75,7 @@
 #include "../../fs/inode.h"
 #include "../../fs/type.h"
 #include <minix/fslib.h>
+#include <minix/partition.h>
 
 #undef printf			/* defined as printk in "../fs/const.h" */
 
@@ -109,7 +112,36 @@
 #define INODE_CT	 95	/* default inodes (when making file system) */
 
 #include "../../fs/super.h"
-struct super_block sb;
+
+/* Spec O.6: the super block as fsck uses it, for V2 and V3 alike (V1 is
+ * refused).  getsuper() reads block 1 field by field, putsuper() writes it
+ * back; the on-disk layouts are in getsuper(). */
+struct {
+  unsigned long s_ninodes;	/* V2: 16 bits on the disk, V3: 32 */
+  int s_imap_blocks;
+  int s_zmap_blocks;
+  zone_t s_firstdatazone;
+  int s_log_zone_size;
+  long s_max_size;
+  zone_t s_zones;
+  unsigned short s_magic;
+  unsigned short s_flags;	/* N.1: V2 at offset 18, V3 at 14 */
+} sb;
+int v3;				/* a MINIX V3 file system */
+int esize = 16, nlen = DIRSIZ, noff = 2;	/* directory entries (O.4) */
+#define FLAGS_OFF	(v3 ? 14 : 18)
+
+/* A directory entry in memory, for both formats (spec O.6): V1/V2 on the
+ * disk 16 B (16-bit inode, 14 chars), V3 64 B (32-bit inode, 60 chars).
+ * d_name always ends in a 0. */
+typedef struct {
+  ino_t d_inum;
+  char d_name[V3_DIRSIZ + 1];
+} dir_struct;
+
+/* Disk addresses in bytes: a V3 /home can be far larger than 4 GiB. */
+typedef unsigned long long addr_t;
+#define MAXPOS		((off_t) 0x7FFFFFFFL)
 
 #define STICKY_BIT	01000	/* not defined anywhere else */
 
@@ -117,7 +149,7 @@ struct super_block sb;
  * btoa gives the byte address of a block
  */
 #define ztob(z)		((block_nr) (z) << sb.s_log_zone_size)
-#define btoa(b)		((long) (b) * BLOCK_SIZE)
+#define btoa(b)		((addr_t) (b) << 10)	/* BLOCK_SIZE */
 #define SCALE		((int) ztob(1))	/* # blocks in a zone */
 #define FIRST		((zone_nr) sb.s_firstdatazone)	/* as the name says */
 
@@ -139,9 +171,9 @@ struct super_block sb;
 
 /* Byte address of a zone/of an inode */
 #define zaddr(z)	btoa(ztob(z))
-#define inoaddr(i)	((long) (i - 1) * INODE_SIZE + (long) btoa(BLK_ILIST))
+#define inoaddr(i)	((addr_t) ((i) - 1) * INODE_SIZE + btoa(BLK_ILIST))
 #define INDCHUNK	((int) (CINDIR * ZONE_NUM_SIZE))
-#define DIRCHUNK	((int) (CDIRECT * DIR_ENTRY_SIZE))
+#define DIRCHUNK	256	/* bytes of a directory read at a time */
 
 char *prog, *device;		/* program name (fsck), device name */
 int firstcnterr;		/* is this the first inode ref cnt error? */
@@ -152,6 +184,9 @@ char rwbuf[BLOCK_SIZE];		/* one block buffer cache */
 block_nr thisblk;		/* block in buffer cache */
 char nullbuf[BLOCK_SIZE];	/* null buffer */
 bitchunk_t mapbuf[WORDS_PER_BLOCK];	/* one disk map block (spec N.4) */
+bitchunk_t zerobuf[WORDS_PER_BLOCK];	/* past the end of a computed map */
+int imblk;			/* blocks in imap and dirmap (spec O.6) */
+bit_nr hwm;			/* highest zone bit any inode owns (O.6) */
 nlink_t *count;			/* inode count */
 int changed;			/* has the diskette been written to? */
 struct stack {
@@ -208,8 +243,13 @@ _PROTOTYPE(void printpath, (int mode, int nlcr));
 _PROTOTYPE(void devopen, (void));
 _PROTOTYPE(void devclose, (void));
 _PROTOTYPE(void devio, (block_nr bno, int dir));
-_PROTOTYPE(void devread, (long offset, char *buf, int size));
-_PROTOTYPE(void devwrite, (long offset, char *buf, int size));
+_PROTOTYPE(void devread, (addr_t offset, char *buf, int size));
+_PROTOTYPE(void devwrite, (addr_t offset, char *buf, int size));
+_PROTOTYPE(void unpack, (char *raw, dir_struct *dp));
+_PROTOTYPE(void pack, (dir_struct *dp, char *raw));
+_PROTOTYPE(off_t padd, (off_t pos, off_t n));
+_PROTOTYPE(void putsuper, (void));
+_PROTOTYPE(void growmaps, (ino_t ino));
 _PROTOTYPE(void pr, (char *fmt, int cnt, char *s, char *p));
 _PROTOTYPE(void lpr, (char *fmt, long cnt, char *s, char *p));
 _PROTOTYPE(bit_nr getnumber, (char *s));
@@ -226,7 +266,7 @@ _PROTOTYPE(void freebitmap, (bitchunk_t *p));
 _PROTOTYPE(void getbitmaps, (void));
 _PROTOTYPE(void putbitmaps, (void));
 _PROTOTYPE(void chkword, (unsigned w1, unsigned w2, bit_nr bit, char *type, int *n, int *report));
-_PROTOTYPE(void chkmap, (bitchunk_t *cmap, bit_nr bit, block_nr blkno, int nblk, bit_nr nbits, char *type));
+_PROTOTYPE(void chkmap, (bitchunk_t *cmap, int cblk, bit_nr bit, block_nr blkno, int nblk, bit_nr nbits, char *type));
 _PROTOTYPE(void chkilist, (void));
 _PROTOTYPE(void getcount, (void));
 _PROTOTYPE(void counterror, (Ino_t ino));
@@ -396,7 +436,7 @@ unsigned nelem, elsize;
 void printname(s)
 char *s;
 {
-  register n = DIRSIZ;
+  register n = nlen;
   int c;
 
   do {
@@ -470,13 +510,24 @@ int dir;
 #if 0
 printf("%s at block %5d\n", dir == READING ? "reading " : "writing", bno);
 #endif
-  lseek(dev, (off_t) btoa(bno), SEEK_SET);
-  if (dir == READING) {
-	if (read(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
-		return;
+  if (bno >= (block_nr) 0x200000L) {
+	/* Spec O.6: past 2 GiB lseek() cannot go; DIOCPRW (O.3) can. */
+	if (dir == READING) {
+		if (bread(dev, (unsigned long) bno * 2, rwbuf, 2) == 0)
+			return;
+	} else {
+		if (bwrite(dev, (unsigned long) bno * 2, rwbuf, 2) == 0)
+			return;
+	}
   } else {
-	if (write(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
-		return;
+	lseek(dev, (off_t) btoa(bno), SEEK_SET);
+	if (dir == READING) {
+		if (read(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
+			return;
+	} else {
+		if (write(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
+			return;
+	}
   }
 
   printf("%s: can't %s block %ld (error = 0x%x)\n", prog,
@@ -491,25 +542,66 @@ printf("%s at block %5d\n", dir == READING ? "reading " : "writing", bno);
 
 /* Read `size' bytes from the disk starting at byte `offset'. */
 void devread(offset, buf, size)
-long offset;
+addr_t offset;
 char *buf;
 int size;
 {
-  devio((block_nr) (offset / BLOCK_SIZE), READING);
-  memmove(buf, &rwbuf[(int) (offset % BLOCK_SIZE)], (size_t)size);  /* lint but OK */
+  devio((block_nr) (offset >> 10), READING);
+  memmove(buf, &rwbuf[(int) (offset & (BLOCK_SIZE - 1))], (size_t)size);
 }
 
 /* Write `size' bytes to the disk starting at byte `offset'. */
 void devwrite(offset, buf, size)
-long offset;
+addr_t offset;
 char *buf;
 int size;
 {
   if (!repair) fatal("internal error (devwrite)");
-  if (size != BLOCK_SIZE) devio((block_nr) (offset / BLOCK_SIZE), READING);
-  memmove(&rwbuf[(int) (offset % BLOCK_SIZE)], buf, (size_t)size);  /* lint but OK */
-  devio((block_nr) (offset / BLOCK_SIZE), WRITING);
+  if (size != BLOCK_SIZE) devio((block_nr) (offset >> 10), READING);
+  memmove(&rwbuf[(int) (offset & (BLOCK_SIZE - 1))], buf, (size_t)size);
+  devio((block_nr) (offset >> 10), WRITING);
   changed = 1;
+}
+
+/* A directory entry from the disk into memory, and back (spec O.6). */
+void unpack(raw, dp)
+char *raw;
+dir_struct *dp;
+{
+  u32_t i32;
+  u16_t i16;
+
+  if (v3) {
+	memcpy(&i32, raw, 4);
+	dp->d_inum = i32;
+  } else {
+	memcpy(&i16, raw, 2);
+	dp->d_inum = i16;
+  }
+  memcpy(dp->d_name, raw + noff, (size_t) nlen);
+  dp->d_name[nlen] = 0;
+}
+
+void pack(dp, raw)
+dir_struct *dp;
+char *raw;
+{
+  u32_t i32 = dp->d_inum;
+  u16_t i16 = (u16_t) dp->d_inum;
+
+  if (v3)
+	memcpy(raw, &i32, 4);
+  else
+	memcpy(raw, &i16, 2);
+  memcpy(raw + noff, dp->d_name, (size_t) nlen);
+}
+
+/* A file position plus n, held at MAXPOS: a V3 triple indirect zone spans
+ * more than off_t holds (spec O.6). */
+off_t padd(pos, n)
+off_t pos, n;
+{
+  return(pos > MAXPOS - n ? MAXPOS : pos + n);
 }
 
 /* Print a string with either a singular or a plural pronoun. */
@@ -583,7 +675,7 @@ void lsuper()
 	printf("maxsize       = %ld", sb.s_max_size);
 	if (input(buf, 80)) sb.s_max_size = atol(buf);
 	if (yes("ok now")) {
-		devwrite(btoa(BLK_SUPER), (char *) &sb, sizeof(sb));
+		putsuper();
 		return;
 	}
   } while (yes("Do you want to try again"));
@@ -593,10 +685,52 @@ void lsuper()
 /* Get the super block from either disk or user.  Do some initial checks. */
 void getsuper()
 {
-  devread(btoa(BLK_SUPER), (char *) &sb, sizeof(sb));
+  u16_t w[16];
+  u32_t l[8];
+
+  devread(btoa(BLK_SUPER), (char *) w, sizeof(w));
+  memcpy(l, w, sizeof(l));
+  if (w[12] == SUPER_V3) {
+	/* V3 (spec O.6, as util-linux mkfs.minix -3): u32 ninodes at 0,
+	 * u16 imap 6, zmap 8, firstdatazone 10, log_zone_size 12, flags 14
+	 * (N.1), u32 max_size 16, zones 20, u16 magic 24, blocksize 28. */
+	v3 = 1;
+	sb.s_ninodes = l[0];
+	sb.s_imap_blocks = w[3];
+	sb.s_zmap_blocks = w[4];
+	sb.s_firstdatazone = w[5];
+	sb.s_log_zone_size = w[6];
+	sb.s_flags = w[7];
+	sb.s_max_size = (long) l[4];
+	sb.s_zones = l[5];
+	sb.s_magic = w[12];
+	if (w[14] != BLOCK_SIZE || w[6] != 0)
+		fatal("V3: only 1 KB blocks and zones");
+	esize = V3_DIRENT_SIZE;
+	nlen = V3_DIRSIZ;
+	noff = 4;
+  } else {
+	/* V1/V2: u16 ninodes at 0, nzones 2, imap 4, zmap 6, firstdatazone
+	 * 8, log_zone_size 10, u32 max_size 12, u16 magic 16, flags 18
+	 * (N.1), u32 zones 20. */
+	v3 = 0;
+	sb.s_ninodes = w[0];
+	sb.s_imap_blocks = w[2];
+	sb.s_zmap_blocks = w[3];
+	sb.s_firstdatazone = w[4];
+	sb.s_log_zone_size = (short) w[5];
+	sb.s_max_size = (long) l[3];
+	sb.s_magic = w[8];
+	sb.s_flags = w[9];
+	sb.s_zones = l[5];
+	esize = V2_DIRENT_SIZE;
+	nlen = DIRSIZ;
+	noff = 2;
+  }
   if (listsuper) lsuper();
   if (sb.s_magic == SUPER_MAGIC) fatal("Cannot handle V1 file systems");
-  if (sb.s_magic != SUPER_V2) fatal("bad magic number in super block");
+  if (sb.s_magic != SUPER_V2 && sb.s_magic != SUPER_V3)
+	fatal("bad magic number in super block");
   if (sb.s_ninodes <= 0) fatal("no inodes");
   if (sb.s_zones <= 0) fatal("no zones");
   if (sb.s_imap_blocks <= 0) fatal("no imap");
@@ -606,6 +740,36 @@ void getsuper()
   if (sb.s_max_size <= 0) fatal("max. file size <= 0");
 }
 
+/* Write the fields of -s back into block 1, in its own layout. */
+void putsuper()
+{
+  u16_t w[16];
+  u32_t l[8];
+
+  devread(btoa(BLK_SUPER), (char *) w, sizeof(w));
+  memcpy(l, w, sizeof(l));
+  if (v3) {
+	l[0] = sb.s_ninodes;
+	l[4] = sb.s_max_size;
+	l[5] = sb.s_zones;
+	memcpy(w, l, sizeof(l));
+	w[3] = sb.s_imap_blocks;
+	w[4] = sb.s_zmap_blocks;
+	w[5] = sb.s_firstdatazone;
+	w[6] = sb.s_log_zone_size;
+  } else {
+	l[3] = sb.s_max_size;
+	l[5] = sb.s_zones;
+	memcpy(w, l, sizeof(l));
+	w[0] = sb.s_ninodes;
+	w[2] = sb.s_imap_blocks;
+	w[3] = sb.s_zmap_blocks;
+	w[4] = sb.s_firstdatazone;
+	w[5] = sb.s_log_zone_size;
+  }
+  devwrite(btoa(BLK_SUPER), (char *) w, sizeof(w));
+}
+
 /* Check the super block for reasonable contents. */
 void chksuper()
 {
@@ -613,14 +777,16 @@ void chksuper()
   register off_t maxsize;
 
   n = bitmapsize((bit_t) sb.s_ninodes + 1);
-  if (sb.s_magic != SUPER_V2) fatal("bad magic number in super block");
   if (sb.s_imap_blocks < n) fatal("too few imap blocks");
   if (sb.s_imap_blocks != n) {
 	pr("warning: expected %d imap_block%s", n, "", "s");
 	printf(" instead of %d\n", sb.s_imap_blocks);
   }
-  n = bitmapsize((bit_t) sb.s_zones);
-  if (sb.s_zmap_blocks < n) fatal("too few zmap blocks");
+  /* The zone map holds the data zones (bit 0 unused); MINIX's mkfs makes
+   * it for all s_zones, util-linux's mkfs.minix (V3) for the data zones. */
+  if (sb.s_zmap_blocks < bitmapsize((bit_t) N_DATA + 1))
+	fatal("too few zmap blocks");
+  n = v3 ? bitmapsize((bit_t) N_DATA + 1) : bitmapsize((bit_t) sb.s_zones);
   if (sb.s_zmap_blocks != n) {
 	pr("warning: expected %d zmap_block%s", n, "", "s");
 	printf(" instead of %d\n", sb.s_zmap_blocks);
@@ -637,8 +803,8 @@ void chksuper()
 	printf("warning: expected first data zone to be %d ", n);
 	printf("instead of %u\n", sb.s_firstdatazone);
   }
-  maxsize = MAX_FILE_POS;
-  if (((maxsize - 1) >> sb.s_log_zone_size) / BLOCK_SIZE >= MAX_ZONES)
+  maxsize = v3 ? MAXPOS : MAX_FILE_POS;	/* V3: as mkfs.minix -3 */
+  if (!v3 && ((maxsize - 1) >> sb.s_log_zone_size) / BLOCK_SIZE >= MAX_ZONES)
 	maxsize = ((long) MAX_ZONES * BLOCK_SIZE) << sb.s_log_zone_size;
   if (sb.s_max_size != maxsize) {
 	printf("warning: expected max size to be %ld ", maxsize);
@@ -747,8 +913,12 @@ bitchunk_t *p;
 /* Get all the bitmaps used by this program. */
 void getbitmaps()
 {
-  imap = allocbitmap(N_IMAP);
-  dirmap = allocbitmap(N_IMAP);
+  /* Spec O.6: up to the highest inode in use (and its inode block), not
+   * the whole inode map: a big V3 /home has ~100 map blocks. */
+  imblk = bitmapsize((bit_t) maxino + INODES_PER_BLOCK + 1);
+  if (imblk > N_IMAP) imblk = N_IMAP;
+  imap = allocbitmap(imblk);
+  dirmap = allocbitmap(imblk);
   /* zmap: getwindow(), after the count array */
 }
 
@@ -788,8 +958,9 @@ int *n, *report;
 /* Check if the given (correct) bitmap is identical with the one that is
  * on the disk.  If not, ask if the disk should be repaired.
  */
-void chkmap(cmap, bit, blkno, nblk, nbits, type)
+void chkmap(cmap, cblk, bit, blkno, nblk, nbits, type)
 bitchunk_t *cmap;		/* computed map of these nblk blocks */
+int cblk;			/* blocks in cmap; the rest are zeros */
 bit_nr bit;			/* number (for messages) of its first bit */
 block_nr blkno;			/* the first of its blocks on the disk */
 int nblk;
@@ -800,7 +971,7 @@ char *type;
  * past the end of the map are what the disk has (mkfs and mkfsimg.py
  * differ there); a wrong block is written from the computed map.
  */
-  bitchunk_t *dmap = mapbuf;
+  bitchunk_t *dmap = mapbuf, *cblock;
   register bitchunk_t *p, *q;
   bitchunk_t mask;
   bit_nr b0;
@@ -813,7 +984,13 @@ char *type;
 	if (i == 0 && bit == (bit_nr) 0) dmap[0] |= 1;
 	if (i == 0 && type[0] == 'z' && wlo == 0) dmap[0] |= 1;
 	bad = 0;
-	for (w = 0, p = dmap, q = cmap + i * WORDS_PER_BLOCK;
+	if (i < cblk) {
+		cblock = cmap + i * WORDS_PER_BLOCK;
+	} else {
+		cblock = zerobuf;
+		memset((void *) zerobuf, 0, sizeof(zerobuf));
+	}
+	for (w = 0, p = dmap, q = cblock;
 				w < WORDS_PER_BLOCK; w++, p++, q++) {
 		b0 = (bit_nr) i * BLOCK_SIZE * 8 + (bit_nr) w * 16;
 		if (b0 >= nbits) {
@@ -832,8 +1009,8 @@ char *type;
 			asked = 1;
 			ok = yes("install a new map");
 		}
-		if (ok) devwrite(btoa(blkno + i), (char *)
-				(cmap + i * WORDS_PER_BLOCK), BLOCK_SIZE);
+		if (ok) devwrite(btoa(blkno + i), (char *) cblock,
+								BLOCK_SIZE);
 	}
 	vdone++;
   }
@@ -858,7 +1035,8 @@ void chkilist()
   vset("inode list", (long) last);
   printf("Checking inode list\n");
   do
-	if (vdone = ino, !bitset(imap, (bit_nr) ino)) {
+	if (vdone = ino, ino >= (ino_t) imblk * BLOCK_SIZE * 8
+					|| !bitset(imap, (bit_nr) ino)) {
 		devread(inoaddr(ino), (char *) &mode, sizeof(mode));
 		if (mode != I_NOT_ALLOC) {
 			cur_ino = ino;
@@ -901,6 +1079,28 @@ ino_t ino;
 	memset(p + maxino + 1, 0, (size_t) (newmax - maxino));
   }
   maxino = newmax;
+  growmaps(newmax);
+}
+
+/* imap and dirmap must hold bit `ino' and its inode block (spec O.6). */
+void growmaps(ino)
+ino_t ino;
+{
+  int n;
+  char *p;
+
+  n = bitmapsize((bit_t) ino + INODES_PER_BLOCK + 1);
+  if (n > N_IMAP) n = N_IMAP;
+  if (n <= imblk) return;
+  if ((p = realloc((char *) imap, (size_t) n * BLOCK_SIZE)) == NULL)
+	fatal("out of memory");
+  imap = (bitchunk_t *) p;
+  memset(p + imblk * BLOCK_SIZE, 0, (size_t) (n - imblk) * BLOCK_SIZE);
+  if ((p = realloc((char *) dirmap, (size_t) n * BLOCK_SIZE)) == NULL)
+	fatal("out of memory");
+  dirmap = (bitchunk_t *) p;
+  memset(p + imblk * BLOCK_SIZE, 0, (size_t) (n - imblk) * BLOCK_SIZE);
+  imblk = n;
 }
 
 /* The highest inode in use in the disk's inode map, and how many. */
@@ -934,7 +1134,7 @@ void getwindow()
   long left;
   int wblk;
 
-  left = fsck_mem - 2L * N_IMAP * BLOCK_SIZE - 2L * (maxino + 1)
+  left = fsck_mem - 2L * imblk * BLOCK_SIZE - 2L * (maxino + 1)
 					- 4L * BLOCK_SIZE;	/* growth */
   if (spec_imap) left -= (long) N_IMAP * BLOCK_SIZE;
   if (spec_zmap) left -= (long) N_ZMAP * BLOCK_SIZE;
@@ -1124,7 +1324,7 @@ ino_t ino, exp;
 off_t pos;
 dir_struct *dp;
 {
-  char printable_name[4 * DIRSIZ + 1];
+  char printable_name[4 * V3_DIRSIZ + 1];
 
   if (dp->d_inum != exp) {
 	make_printable_name(printable_name, dp->d_name, sizeof(dp->d_name));
@@ -1141,7 +1341,7 @@ dir_struct *dp;
 		count[exp]++;
 		return(0);
 	}
-  } else if (pos != (dp->d_name[1] ? DIR_ENTRY_SIZE : 0)) {
+  } else if (pos != (dp->d_name[1] ? esize : 0)) {
 	make_printable_name(printable_name, dp->d_name, sizeof(dp->d_name));
 	printf("warning: %s has offset %ld in ", printable_name, pos);
 	printpath(1, 0);
@@ -1158,7 +1358,7 @@ int chkname(ino, dp)
 ino_t ino;
 dir_struct *dp;
 {
-  register n = DIRSIZ + 1;
+  register n = nlen + 1;
   register char *p = dp->d_name;
 
   if (*p == '\0') {
@@ -1242,22 +1442,25 @@ d_inode *ip;
 off_t pos;
 zone_nr zno;
 {
-  dir_struct dirblk[CDIRECT];
-  register dir_struct *dp;
-  register n = SCALE * (NR_DIR_ENTRIES / CDIRECT), dirty;
-  register long offset = zaddr(zno);
+  char raw[DIRCHUNK];		/* 16 V2 or 4 V3 entries (spec O.6) */
+  dir_struct de;
+  register n = ZONE_SIZE / DIRCHUNK, dirty, e;
+  addr_t offset = zaddr(zno);
   register off_t size = 0;
 
   do {
-	devread(offset, (char *) dirblk, DIRCHUNK);
+	devread(offset, raw, DIRCHUNK);
 	dirty = 0;
-	for (dp = dirblk; dp < &dirblk[CDIRECT]; dp++) {
-		if (dp->d_inum != NO_ENTRY && !chkentry(ino, pos, dp))
+	for (e = 0; e < DIRCHUNK; e += esize) {
+		unpack(raw + e, &de);
+		if (de.d_inum != NO_ENTRY && !chkentry(ino, pos, &de)) {
+			pack(&de, raw + e);
 			dirty = 1;
-		pos += DIR_ENTRY_SIZE;
-		if (dp->d_inum != NO_ENTRY) size = pos;
+		}
+		pos += esize;
+		if (de.d_inum != NO_ENTRY) size = pos;
 	}
-	if (dirty) devwrite(offset, (char *) dirblk, DIRCHUNK);
+	if (dirty) devwrite(offset, raw, DIRCHUNK);
 	offset += DIRCHUNK;
   } while (--n);
 
@@ -1307,6 +1510,7 @@ off_t pos;
 	errzone("out-of-range", zno, level, pos);
 	return(0);
   }
+  if (bit > hwm) hwm = bit;	/* spec O.6 */
   if (bit >= whi) {	/* a later window (spec N.4): note it, go on */
 	winmask[cur_ino] |= 1 << (int) ((bit / wbits) & 7);
 	return(1);
@@ -1334,7 +1538,7 @@ int level;
 {
   zone_nr indirect[CINDIR];
   register n = NR_INDIRECTS / CINDIR;
-  register long offset = zaddr(zno);
+  addr_t offset = zaddr(zno);
 
   do {
 	devread(offset, (char *) indirect, INDCHUNK);
@@ -1352,9 +1556,8 @@ int level;
 {
   off_t power = ZONE_SIZE;
 
-  if (level != 0) do
-		power *= NR_INDIRECTS;
-	while (--level);
+  while (level-- > 0)	/* held at MAXPOS: V3 triple indirect (O.6) */
+	power = power > MAXPOS / NR_INDIRECTS ? MAXPOS : power * NR_INDIRECTS;
   return(power);
 }
 
@@ -1372,7 +1575,7 @@ int level;
 	if ((ip->i_mode & I_TYPE) == I_DIRECTORY &&
 	    !chkdirzone(ino, ip, *pos, zno))
 		return(0);
-	*pos += ZONE_SIZE;
+	*pos = padd(*pos, (off_t) ZONE_SIZE);
 	return(1);
   } else
 	return chkindzone(ino, ip, pos, zno, level);
@@ -1395,9 +1598,9 @@ int level;
    */
   for (i = 0; i < len /* && *pos < ip->i_size */ ; i++)
 	if (zlist[i] == NO_ZONE)
-		*pos += jump(level);
+		*pos = padd(*pos, jump(level));
 	else if (!markzone(zlist[i], level, *pos)) {
-		*pos += jump(level);
+		*pos = padd(*pos, jump(level));
 		ok = 0;
 	} else if (!zonechk(ino, ip, pos, zlist[i], level))
 		ok = 0;
@@ -1431,7 +1634,7 @@ d_inode *ip;
   register ok;
 
   setbit(dirmap, (bit_nr) ino);
-  if (ip->i_size > MAXDIRSIZE) {
+  if (ip->i_size > MAXDIRSIZE * (long) (esize / 16)) {
 	printf("warning: huge directory: ");
 	printpath(2, 1);
   }
@@ -1587,6 +1790,7 @@ dir_struct *dp;
 	if (listing) list(ino, &inode);
 	if (!visited && !chkinode(ino, &inode)) {
 		specset(spec_imap, (bit_nr) ino);
+		cur_ino = ino;		/* -v: the inode removed */
 		if (yes("remove")) {
 			count[ino] += inode.i_nlinks - 1;
 			clrbit(imap, (bit_nr) ino);
@@ -1650,13 +1854,13 @@ int *dirty;
 {
   zone_nr indirect[CINDIR];
   register int i, n;
-  long offset;
+  addr_t offset;
   bit_nr bit;
   int d;
 
   for (i = 0; i < len; i++) {
 	if (zlist[i] == NO_ZONE || zlist[i] < FIRST || zlist[i] >= sb.s_zones) {
-		*pos += jump(level);
+		*pos = padd(*pos, jump(level));
 		continue;
 	}
 	bit = (bit_nr) zlist[i] - FIRST + 1;
@@ -1669,14 +1873,14 @@ int *dirty;
 				zlist[i] = NO_ZONE;
 				*dirty = 1;
 			}
-			*pos += jump(level);
+			*pos = padd(*pos, jump(level));
 			continue;
 		}
 		setbit(zmap, bit - wlo);
 		nfreezone--;
 	}
 	if (level == 0) {
-		*pos += ZONE_SIZE;
+		*pos = padd(*pos, (off_t) ZONE_SIZE);
 		continue;
 	}
 	offset = zaddr(zlist[i]);
@@ -1787,7 +1991,7 @@ int sflags(set, clr)
 int set, clr;
 {
   unsigned short f;
-  long off = btoa(BLK_SUPER) + (long) offsetof(struct super_block, s_flags);
+  addr_t off = btoa(BLK_SUPER) + FLAGS_OFF;	/* N.1; V3 at 14 (O.4) */
 
   devread(off, (char *) &f, sizeof(f));
   f = (f | set) & ~clr & SF_DISK;
@@ -1841,6 +2045,7 @@ char *f, **clist, **ilist, **zlist;
   curwin = 0;
   wlo = 0;
   whi = wbits = 0;
+  hwm = 0;
 
   whereis();
   devopen();
@@ -1863,7 +2068,6 @@ char *f, **clist, **ilist, **zlist;
 
   lsi(clist);
 
-  getbitmaps();
   if (clist || ilist) spec_imap = allocbitmap(N_IMAP);
   if (zlist) spec_zmap = allocbitmap(N_ZMAP);
 
@@ -1871,6 +2075,7 @@ char *f, **clist, **ilist, **zlist;
   fillbitmap(spec_zmap, (bit_nr) FIRST, (bit_nr) sb.s_zones, zlist);
 
   findmaxino();
+  getbitmaps();		/* sized by maxino (spec O.6) */
   getcount();
   getwindow();
 
@@ -1880,12 +2085,14 @@ char *f, **clist, **ilist, **zlist;
   for (w = 0; w < nwin && !stopped; w++) {
 	if (w > 0) {
 		setwindow(w);
-		winpass();
+		/* Spec O.6: above the high-water mark no inode owns a zone;
+		 * the map is only compared (a leak there is freed). */
+		if (wlo <= hwm) winpass();
 	}
 	if (stopped) break;
 	vset("zone map", (long) (w == nwin - 1 ? N_ZMAP - w * (wbits / 8
 		/ BLOCK_SIZE) : wbits / 8 / BLOCK_SIZE));
-	chkmap(zmap, (bit_nr) FIRST - 1 + wlo,
+	chkmap(zmap, (int) (wbits / (BLOCK_SIZE * 8)), (bit_nr) FIRST - 1 + wlo,
 		BLK_ZMAP + (block_nr) (wlo / (BLOCK_SIZE * 8)),
 		w == nwin - 1 ? (int) (N_ZMAP - wlo / (BLOCK_SIZE * 8))
 			      : (int) (wbits / (BLOCK_SIZE * 8)),
@@ -1895,7 +2102,7 @@ char *f, **clist, **ilist, **zlist;
 	vset("links", 0L);
 	chkcount();
 	vset("inode map", (long) N_IMAP);
-	chkmap(imap, (bit_nr) 0, BLK_IMAP, N_IMAP, (bit_nr) sb.s_ninodes + 1,
+	chkmap(imap, imblk, (bit_nr) 0, BLK_IMAP, N_IMAP, (bit_nr) sb.s_ninodes + 1,
 								"inode");
 	chkilist();
 	printtotal();

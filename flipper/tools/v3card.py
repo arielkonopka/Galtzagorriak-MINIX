@@ -8,8 +8,8 @@ Usage: v3card.py
   2. QEMU is stopped.  On the host, util-linux 'mkfs.minix -3' makes a V3
      file system of /home's size with 200 000 inodes (past the old
      16-bit ino_t, O.4d) and it replaces /home (/dev/hd4).
-  3. Booted again, as root (until fsck learns V3, /etc/rc mounts it
-     read-only; the test mounts it read-write by hand):
+  3. Booted again (/etc/rc's fsck -p checks the new V3 /home), as root
+     (the test mounts it again by hand):
        /home mounts; a 57- and a 60-character name work with cp, ls, mv,
        mkdir/rmdir; 61 characters give "File name too long"; on V2 /usr
        a 15-character name is still cut at 14 (existing cards rely on it)
@@ -20,6 +20,12 @@ Usage: v3card.py
   4. QEMU is stopped; on the host 'fsck.minix -3 -f' finds /home clean
      (the triple indirect tree of the first, nothing leaked by the second)
      and 'fsck.minix -l' lists the long names.
+  5. fsck for V3 (spec O.6): on the host, /home is damaged: a wrong link
+     count, a lost file (its entry cleared) and an out-of-range zone in a
+     third file, and CLEAN (offset 14) cleared.  Booted again, /etc/rc's
+     'fsck -p' repairs all three (its log, /usr/adm/fsck.log) and sets
+     CLEAN; the host 'fsck.minix -f' is clean afterwards; at the next boot
+     (CLEAN cleared again) fsck finds nothing.
 Exit status: the number of failures.
 """
 import importlib.util
@@ -77,6 +83,68 @@ def copy_part(img, start, size, part, to_img):
 def host(cmd):
 	p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 	return p.returncode, p.stdout.decode(errors="replace")
+
+
+class V3:
+	"""Just enough of a MINIX V3 image on the host to damage it."""
+
+	def __init__(self, path):
+		self.f = open(path, "r+b")
+		sb = self.blk(1)
+		(self.ninodes, _, self.imap, self.zmap, self.first, _, _,
+			_, self.zones) = struct.unpack_from("<IHHHHHHII", sb, 0)
+		self.ilist = 2 + self.imap + self.zmap
+
+	def blk(self, n):
+		self.f.seek(n * 1024)
+		return self.f.read(1024)
+
+	def inode(self, ino):
+		off = self.ilist * 1024 + (ino - 1) * 64
+		self.f.seek(off)
+		return off, bytearray(self.f.read(64))
+
+	def put(self, off, data):
+		self.f.seek(off)
+		self.f.write(data)
+
+	def lookup(self, name):
+		"""(byte offset of the entry, inode) of name in the root."""
+		_, ip = self.inode(1)
+		for z in struct.unpack_from("<7I", ip, 24):
+			if z == 0:
+				continue
+			b = self.blk(z)
+			for e in range(0, 1024, 64):
+				ino = struct.unpack_from("<I", b, e)[0]
+				n = b[e + 4:e + 64].split(b"\0")[0]
+				if ino and n == name.encode():
+					return z * 1024 + e, ino
+		return None, None
+
+	def flags(self):
+		return struct.unpack_from("<H", self.blk(1), 14)[0]
+
+	def close(self):
+		self.f.close()
+
+
+def damage(part):
+	"""A wrong link count, a lost file, an out-of-range zone."""
+	v = V3(part)
+	try:
+		_, ino = v.lookup("links")
+		off, ip = v.inode(ino)
+		struct.pack_into("<H", ip, 2, 4)		# nlinks 1 -> 4
+		v.put(off, ip)
+		eoff, ino = v.lookup(N57)
+		v.put(eoff, b"\0\0\0\0")			# the entry: lost
+		_, ino = v.lookup("badz")
+		off, ip = v.inode(ino)
+		struct.pack_into("<I", ip, 24, v.zones + 100)	# zone 0
+		v.put(off, ip)
+	finally:
+		v.close()
 
 
 def cksum(r, path):
@@ -163,6 +231,8 @@ def main():
 		check(out.startswith(b"0000000  \\0  \\0"),
 			"a hole in the triple range reads as zeros")
 		check(r.sh("rm /home/big2", 60) == 0, "rm the 200 MB file")
+		check(r.sh("cp /etc/rc /home/links && echo x >/home/badz",
+			60) == 0, "two more files for the fsck test")
 		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
 			"sync, umount /home")
 		r.p.kill()
@@ -176,6 +246,83 @@ def main():
 		check(N57 in out and N60 not in out,
 			"host fsck.minix -l lists the 57-character name, not the "
 			"removed one")
+
+		# 5. fsck for V3 (spec O.6).
+		damage(part)
+		copy_part(img, start, size, part, True)
+		st, out = host(["fsck.minix", "-f", part])
+		check(st != 0, "host fsck.minix sees the damage (status %d)"
+			% st)
+		v = V3(part)
+		v.put(1024 + 14, b"\0\0")	# not CLEAN: /etc/rc checks it
+		v.close()
+		copy_part(img, start, size, part, True)
+		r = powercut.Run(0, 0, reuse=keep)
+		if not r.login():
+			check(False, "login with the damaged V3 /home")
+			return fails + 1
+		log = r.output("cat /usr/adm/fsck.log", 60) or b""
+		print(log.decode(errors="replace"))
+		check(b"hd4: unclean" in log, "/etc/rc's fsck -p checked /dev/hd4")
+		check(b": adjust" in log, "the wrong link count was repaired")
+		check(b": remove" in log, "the file with the bad zone was removed")
+		check(b"new map" in log and b": clear" in log,
+			"the lost file's inode and zones were freed")
+		check(r.sh("test ! -f /etc/.fsck-errors", 30) == 0,
+			"no errors left")
+		check(r.sh("test -f /home/links && test ! -f /home/badz && "
+			"test ! -f /home/" + N57, 60) == 0,
+			"/home: links kept, badz and the lost file gone")
+		check(r.sh("echo new >/home/after && sync; cd / && "
+			"umount /dev/hd4", 60) == 0, "write to /home, umount")
+		r.p.kill()
+		r.p.wait()
+		copy_part(img, start, size, part, False)
+		v = V3(part)
+		check(v.flags() & 3 == 1, "CLEAN at offset 14 of the V3 super "
+			"block, CHECK clear (%#x)" % v.flags())
+		v.put(1024 + 14, b"\0\0")	# checked again at the next boot
+		v.close()
+		st, out = host(["fsck.minix", "-f", part])
+		check(st == 0, "host fsck.minix -f after our fsck: clean (%s)"
+			% out.strip().replace("\n", " | "))
+		copy_part(img, start, size, part, True)
+		r = powercut.Run(0, 0, reuse=keep)
+		if not r.login():
+			check(False, "login after the repair")
+			return fails + 1
+		out = r.output("tail -1 /usr/adm/fsck.log", 60) or b""
+		check(b"fixed 0, left 0" in out, "fsck again: nothing to repair "
+			"(%s)" % out.strip().decode(errors="replace"))
+		return fails + 1
+		r.sh("cd /; umount /dev/hd4", 60)
+		out = r.output("fsck -a /dev/hd4 >/tmp/f.log 2>&1; echo st=$?",
+			900) or b""
+		log = r.output("cat /tmp/f.log", 60) or b""
+		print(log.decode(errors="replace"))
+		check(b"st=1" in out, "fsck -a repairs the V3 /home: %s"
+			% out.strip().decode(errors="replace"))
+		check(b"COUNT" in log, "the wrong link count was found")
+		check(b"out-of-range" in log, "the out-of-range zone was found")
+		check(b"missing" in log, "the lost file's inode was found")
+		out = r.output("fsck -a /dev/hd4 >/dev/null 2>&1; echo st=$?",
+			900) or b""
+		check(b"st=0" in out, "a second fsck is clean: %s"
+			% out.strip().decode(errors="replace"))
+		check(r.sh("mount /dev/hd4 /home && test -f /home/links && "
+			"test ! -f /home/badz && test ! -f /home/" + N57, 60) == 0,
+			"mounted: links kept, badz and the lost file gone")
+		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
+			"umount /home")
+		r.p.kill()
+		r.p.wait()
+		copy_part(img, start, size, part, False)
+		v = V3(part)
+		check(v.flags() & 1, "CLEAN at offset 14 of the V3 super block")
+		v.close()
+		st, out = host(["fsck.minix", "-f", part])
+		check(st == 0, "host fsck.minix -f after our fsck: clean (%s)"
+			% out.strip().replace("\n", " | "))
 		return fails
 	finally:
 		r.close()
