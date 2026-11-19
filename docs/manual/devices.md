@@ -135,9 +135,11 @@ prints the timings, `-n N` makes up to N attempts of half a second (default 4, m
 has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. When those
 short reads find nothing, `rfid` listens for up to 3 seconds more without a gap, which reads
 tags whose frames are longer than one short read (EM4100 at RF/32, FDX-B, Viking, Jablotron,
-Gallagher...). Without a tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
-62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
-use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
+Gallagher...) and the FSK ones (HID, AWID). That listening skips the first 450 ms, while the
+field settles, as the stock reader does. If there is still nothing, `rfid` switches the field to
+the one PSK tags need (62.5 kHz at 25 %) and listens 2 seconds more for Indala, Keri, Nexwatch
+and Idteck. Without a tag it says "no tag", after about 8 seconds. `rfid -c psk` starts with the
+PSK field, and `rfid -c 134` uses 134.2 kHz for FDX-B animal tags. Members of `gui`
 and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
 times between the changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)`
 chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
@@ -155,9 +157,9 @@ chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125
 | Jablotron | Jablotron | diphase RF/64 | yes | yes |
 | GProxII | Guardall | biphase RF/64 | yes | yes |
 | PAC/Stanley | | direct RF/32 | yes | yes |
-| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox | HID and others | FSK | **(planned)** | yes (run list) |
-| IoProxXSF | Kantech | FSK | **(planned)** | **(planned)** |
-| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | yes (run list) |
+| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox | HID and others | FSK | yes | yes (run list) |
+| IoProxXSF | Kantech | FSK | yes | **(planned)** |
+| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | yes | yes (run list) |
 
 Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
 tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
@@ -165,8 +167,13 @@ FSK and PSK frames are 540 to 3534 segments long, more than the 512 of the plain
 `rfid emulate` plays them as a run list instead (equal segments in a row are one run: 17 to 201
 runs), refilled into a small ring while the reader reads (`ioctl(RFIDIOCEMURUN)`). They have
 been checked on the PC, not yet with a reader. IoProxXSF's encoder never repeats exactly, so it
-has no loop to play yet. Reading the FSK and PSK ones waits for their decoders on the streaming
-capture (T19b).
+has no loop to play yet.
+
+Reading was checked on the device on 2026-11-19 with T5577 fobs written as HIDProx, AWID,
+Indala26, Keri, PAC/Stanley, Electra and EM4100: all seven read. From a second Flipper that
+emulates the tag, 18 of 25 protocols read; HIDProx, HIDExt, AWID, Pyramid and Indala224 do not
+that way (a Flipper's emulation is a weaker signal than a tag's), and EM4100 at RF/16 is too
+fast for the Flipper's receiver, on the stock firmware too.
 
 For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
 edges go round and round into a ring in the program's memory, `read` says which half is new, and
