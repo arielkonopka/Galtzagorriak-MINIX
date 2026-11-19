@@ -208,7 +208,7 @@ int mdm_rg_line(struct mdm_region *rg, const char *line, char *err, int max)
 static int load1(const char *dir, const char *cc, struct mdm_region *rg,
 	char *err, int max)
 {
-	char path[96], line[192], why[64];
+	char path[256], line[192], why[64];
 	FILE *fp;
 	int ln = 0;
 
@@ -242,25 +242,22 @@ static int load1(const char *dir, const char *cc, struct mdm_region *rg,
 int mdm_rg_load(const char *dir, const char *cc, struct mdm_region *rg,
 	char *err, int max)
 {
-	static struct mdm_region own;	/* the file's own rows */
-	int i;
+	/* No second table in memory: the file is read once for its Base:,
+	 * then the base, then the file again, its rows after the base's. */
+	char base[3];
 
-	mdm_rg_init(&own);
-	if (load1(dir, cc, &own, err, max) < 0) return -1;
 	mdm_rg_init(rg);
-	if (own.base[0]) {
-		if (strcmp(own.base, cc) == 0)
-			return fail(err, max, "Base: names the file itself");
-		if (load1(dir, own.base, rg, err, max) < 0) return -1;
-		if (rg->base[0])		/* one level only (Q.2) */
-			return fail(err, max, "Base: the base has a Base");
-	}
-	if (rg->n + own.n > MDM_RG_ROWS)
-		return fail(err, max, "more than 32 rows with the base");
-	for (i = 0; i < own.n; i++) rg->row[rg->n++] = own.row[i];
-	memcpy(rg->code, own.code, 3);
-	memcpy(rg->base, own.base, 3);
-	memcpy(rg->name, own.name, sizeof(rg->name));
+	if (load1(dir, cc, rg, err, max) < 0) return -1;
+	if (rg->base[0] == 0) return 0;
+	memcpy(base, rg->base, 3);
+	if (strcmp(base, cc) == 0)
+		return fail(err, max, "Base: names the file itself");
+	mdm_rg_init(rg);
+	if (load1(dir, base, rg, err, max) < 0) return -1;
+	if (rg->base[0])			/* one level only (Q.2) */
+		return fail(err, max, "Base: the base has a Base");
+	rg->code[0] = 0;
+	if (load1(dir, cc, rg, err, max) < 0) return -1;
 	return 0;
 }
 

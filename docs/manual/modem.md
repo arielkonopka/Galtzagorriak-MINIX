@@ -62,8 +62,8 @@ which frames it is missing, so the sender just repeats everything. A way back is
 | `wide` | 100 kBaud | ≈ 195 kHz | fast, shorter range |
 | `max` | 250 kBaud | ≈ 504 kHz | short range, only wide bands |
 
-`-f MHZ` chooses the frequency (default 433.92 MHz in the EU, 915 MHz in the US). The region
-(`/etc/flipper/region`, written by root: `EU` or `US`) decides what may be sent: the whole band
+`-f MHZ` chooses the frequency (default 433.92 MHz in Europe, 915 MHz in the US and Canada). The region
+(`/etc/flipper/region`, the country code written by root with `region set`; see [the region](subghz.md#the-region-what-may-be-sent)) decides what may be sent: the whole band
 the signal uses must lie inside a band the region allows for data, at no more than its power.
 In the EU most of these bands also limit the share of each hour a device may send (the duty
 cycle): 10 % at 433 MHz, 1 % at 868.0–868.6 MHz. A long transfer there pauses ("duty limit:

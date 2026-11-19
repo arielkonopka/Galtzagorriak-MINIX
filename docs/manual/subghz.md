@@ -29,7 +29,7 @@ The program is large (131 KB) and runs from flash, so it takes little RAM: about
 | `subghz tx KEY FREQ TE REPEAT` | send KEY (24-bit hex) as Princeton, TE µs per element, REPEAT times (stock's `subghz tx`) |
 | `subghz tx_from_file FILE [REPEAT]` | send a `.sub` file at the file's `Frequency`: a key file through its protocol's encoder, a RAW file as recorded |
 | `subghz chat FREQ` | text lines both ways, one packet per line (stock's `subghz chat`) |
-| `subghz region [EU\|US\|JP]` | show the radio region, or set it (once per boot; see below) |
+| `subghz region [CC]` | show the radio region, or set it (once per boot; see below) |
 | `subghz list` | every protocol, and whether it can decode, send, or is a rolling code |
 | `subghz heap` | the heap the decoders take (about 6 KB) |
 
@@ -40,23 +40,70 @@ time, so a long RAW recording needs no more RAM than a short one.
 ## The region: what may be sent
 
 Every frame and packet goes through the kernel, which checks it against the region's bands and
-their duty cycle for the hour (spec R8.2). With no region set **nothing can be sent**.
-`/etc/rc` sets it at boot from `/etc/flipper/region` (two letters); root can write that file:
+their duty cycle for the hour (spec R8.2). With no region set **nothing can be sent**. The
+region is the **country you are in**, as its ISO 3166 two-letter code. `/etc/rc` gives it to the
+kernel at boot from `/etc/flipper/region`; root sets it with `region set` (it shows the table
+and asks first):
 
 ```
-echo EU > /etc/flipper/region       # then reboot, or once: subghz region EU
+region list              # the countries with a table
+region show PL           # a country's bands, power, duty cycle and the law each row is from
+region set PL            # root: "I will use this device under the rules of PL [y/N]"; then reboot
+region check US 433.92   # would a 1 s data burst be allowed there?  Sends nothing
 ```
 
-| Region | Bands (MHz) and the share of each hour you may send |
-|---|---|
-| EU | 433.05–434.79 (10 %), 868.0–868.6 (1 %), 868.7–869.2 (0.1 %), 869.4–869.65 (10 %), 869.7–870.0 (100 %) |
-| US | 304.1–321.95, 433.05–434.79, 915–928 (50 %) |
-| JP | 312–315.25, 920.5–923.5 (50 %) |
+`region` with no argument prints the code in `/etc/flipper/region` and the one the kernel uses.
 
-The region is set once per boot: a second `subghz region` with another region is refused. A
-send outside the bands says "refused: outside the region's bands"; one past the hour's share
-says "the band's duty cycle for this hour is used up". Unleashed lifts these limits; MINIX keeps
-them for every program, ported ones included.
+| Countries | Tables (`/usr/share/region/`) | Law |
+|---|---|---|
+| PL, ES, FR, IE, FI, SE | `EU` + the country's own unchecked 870/915 MHz rows | Decision 2006/771/EC ((EU) 2022/180) |
+| NO | `NO` | ERC/REC 70-03, Nkom |
+| GB | `GB` | Ofcom IR 2030 |
+| AL | `AL` | ERC/REC 70-03, AKEP |
+| US | `US` | FCC part 15: 15.231, 15.247, 15.249 |
+| CA | `CA` (the US numbers) | ISED RSS-210, RSS-247 |
+
+Any other code is refused ("no table for XX; transmit stays off"). The European tables share the
+ERC/REC 70-03 bands:
+
+| Band (MHz) | Power | Share of each hour | Notes |
+|---|---|---|---|
+| 433.05–434.79 | 1 mW | no limit | |
+| 434.04–434.79 | 10 mW | no limit | only signals ≤ 25 kHz wide (`gmodem -p narrow`) |
+| 433.05–434.79 | 10 mW | 10 % | |
+| 863–865, 868.7–869.2 | 25 mW | 0.1 % | |
+| 865–868, 868.0–868.6, 869.7–870.0 | 25 mW | 1 % | |
+| 869.4–869.65 | 500 mW | 10 % | |
+| 869.7–870.0 | 5 mW | no limit | |
+| 862–863 | 25 mW | 0.1 % | EU only; `?` (not checked) in NO, GB |
+
+In the US and Canada 433.92 MHz is for **remote buttons** (at most 5 s, −15 dBm) or **short
+bursts** (at most 1 s, then a pause of 30 times as long and at least 10 s, −30 dBm); 902–928
+MHz allows any use at −2 dBm.
+
+What the words in `region show` mean:
+
+- **any use**: anything within the power and the share of the hour.
+- **remote buttons only**: a remote's code sent when you press a button, at most 5 s.
+- **short bursts with a pause**: any data, but each send at most 1 s and then a pause.
+- **?** (not checked): a row we know about but whose national text has not been checked yet;
+  it is shown and never used. The 870–873 and 915–918 MHz rows are all like this for now.
+
+The Flipper sends at most +10 dBm: the "PA" column is the step it uses. A send outside the
+bands says "refused: outside the region's bands"; one past the hour's share says "the band's
+duty cycle for this hour is used up", and `gmodem` waits. A long transfer in Europe belongs on a
+band with no limit. Unleashed lifts these limits, and the stock firmware's own region data allows
+more than the law (+12 dBm and 50 % everywhere); MINIX keeps the legal limits for every program,
+ported ones included. **You are responsible for using the radio legally: when you travel, set
+the region of the country you are in.**
+
+Today the kernel still has its own short band list: for Europe 433.05–434.79 (10 %),
+868.0–868.6 (1 %), 868.7–869.2 (0.1 %), 869.4–869.65 (10 %) and 869.7–870.0 MHz; for the US and
+Canada the stock bands (304.1–321.95, 433.05–434.79, 915–928 MHz, 50 %). It checks band and duty
+cycle only; the power, the bandwidth and the remote/burst rules of the tables are checked by
+`gmodem` and `region check`. Later (planned, spec RQ.2, T32b) `region set` writes the table once into the Flipper's
+internal flash, so it holds even without the card, and the first-boot wizard asks for the
+country. Transmit on the Flipper itself is still off until the CC1101 transmit path is written.
 
 ## Rolling codes and the keystore
 
