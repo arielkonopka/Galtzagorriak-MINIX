@@ -80,5 +80,5 @@ make -C flipper/mtpd test          # tools/mtphost.py against mtpd on a pipe
 make -C flipper/mtpd fuzz          # the container parser under libFuzzer
 ```
 
-In QEMU, `/dev/mtpline` is the second serial line; `make INIT=m2 minix-run` puts
+In QEMU, `/dev/mtpline` (minor 21 of major 6) is the second serial line; `make INIT=m2 minix-run` puts
 `tools/mtphost.py` on it and the M2 test checks the result.

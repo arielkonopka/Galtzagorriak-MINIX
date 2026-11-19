@@ -31,7 +31,7 @@ d--755 0 0
       hidkbd c--660 0 12 6 17
       hidmouse c--660 0 12 6 18
       hidcons c--660 0 12 6 19
-      mtpline c--600 0 0 6 20
+      mtpline c--600 0 0 6 21
       tty c--666 0 0 5 0
       null c--666 0 0 1 3
       random c--444 0 0 1 4

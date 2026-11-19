@@ -1,4 +1,4 @@
-/* The MTP test line (spec R10.4, T29a), QEMU only: /dev/mtpline, minor 20
+/* The MTP test line (spec R10.4, T29a), QEMU only: /dev/mtpline, minor 21
  * of major 6, part of the Flipper device task (flipdev.c includes this
  * file under BOARD_QEMU).  Raw bytes both ways on QEMU's second serial
  * line (the HAL's CMSDK UART1), for mtpd's stream transport: the PC side,
@@ -13,7 +13,7 @@
  * RAM (QEMU): the 64 B receive ring and the reader's state, ~84 B.
  */
 
-#define LINE_MINOR	20
+#define LINE_MINOR	21
 #define LINE_RING	64		/* divides 256: u8_t indices wrap */
 
 PRIVATE u8_t ln_ring[LINE_RING];

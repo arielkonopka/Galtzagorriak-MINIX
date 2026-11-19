@@ -101,6 +101,7 @@
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
 #define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+/* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
 #define NEVENTS		32		/* button event ring (power of 2) */

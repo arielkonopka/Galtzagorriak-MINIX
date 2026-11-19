@@ -425,6 +425,14 @@ names; `rand()` is not random. A read can be short while the radio core holds th
 loop until you have what you need. **On QEMU it is a weak fallback** (a xorshift seeded from the
 uptime), clearly not for keys.
 
+## 3.12a The MTP test line: `/dev/mtpline` (QEMU only)
+
+Minor 21, root only (`c--600`). Raw bytes both ways on QEMU's second serial line, with no tty
+processing: `mtpd -l /dev/mtpline` serves MTP on it and `tools/mtphost.py` sits on QEMU's
+socket at the other end ([Files to a PC over USB](../../manual/usb-files.md)). A read returns
+what has arrived (at least one byte, or `EAGAIN` with `O_NONBLOCK`). The Flipper kernel does not
+have it (`ENXIO`); there MTP goes over USB.
+
 ## 3.13 Who may use what: an example
 
 A program run from a login shell as an ordinary user, say `alex`, cannot write `/dev/vibro`
