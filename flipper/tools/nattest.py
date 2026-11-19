@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [badusb|jiggle|teklatua|subghz]  (only the AC11.3.1,
-       AC11.3.3, AC11.3.2 or Sub-GHz part)
+Usage: nattest.py [badusb|jiggle|teklatua|subghz|notes]  (only the AC11.3.1,
+       AC11.3.3, AC11.3.2, Sub-GHz or T23c part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -66,6 +66,16 @@ timed, remind and alarm packages and checks:
            "Princeton 24bit Key:7C5703"; tx_from_file sends the file's
            stream (QEMU's sg> tx lines); a 315 MHz transmit in region EU
            is refused; the RAM of subghz rx listening
+
+  T23c     the desktop's Notifications page (spec K.6) with fake
+           buttons: 10 notifications posted through libapp's
+           notify_post() (tests package: notepost, do-not-disturb on so
+           that no alert rings) -> NOTES lists only the newest 8, newest
+           first, each marked unread, and the status line says *8; OK
+           opens one (sender, title, text; *7), OK keeps it, Back clears
+           one (on the list and in the opened view); RUNNING says
+           nothing runs (R12.20 not there yet); the launcher's free RAM
+           with 8 notifications (ACK.4)
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -789,6 +799,146 @@ def sg_values(path):
 					out.append(v)
 	return out
 
+# The LCD's 4x6 font (hal/common/font4x6.c): to read text off a frame.
+def _font():
+	with open(os.path.join(HERE, "..", "hal", "common", "font4x6.c")) as f:
+		src = f.read()
+	return [bytes(int(v, 16) for v in m.group(1).split(","))
+		for m in re.finditer(r"\{(0x[0-9a-f]{2}(?:,0x[0-9a-f]{2}){5})\}",
+				     src)]
+
+
+FONT = _font()
+
+
+def lcd_frame(r):
+	"""The 1 KB frame of /dev/lcd (page-major, as m2test's lgrab)."""
+	out = clean(r.output("dd if=/dev/lcd bs=1024 count=1 2>/dev/null | "
+			     "od -bv", 30))	# MINIX od: octal bytes
+	b = bytes(int(h, 8) for h in re.findall(rb"(?<![0-9])[0-7]{3}(?![0-9])",
+						 out))
+	if len(b) != 1024:
+		print("  lcd_frame: %d bytes: %r" % (len(b), out[:300]))
+		return None
+	return b
+
+
+def lpix(fb, x, y):
+	return fb[(y >> 3) * 128 + x] >> (y & 7) & 1
+
+
+def show(fb):
+	"""A frame as text, for a failed check."""
+	if fb is not None:
+		for y in range(64):
+			print("  |" + "".join("#" if lpix(fb, x, y) else "."
+					      for x in range(128)))
+
+
+def text_at(fb, x, y, s, inv=False):
+	"""Whether s is drawn at x, y (gui_text; inv: white on black).  The
+	glyphs' top 5 rows: the 6th is under the next row's selection bar."""
+	if fb is None or x < 0 or x + 4 * len(s) > 128:
+		return False
+	for i, c in enumerate(s):
+		g = FONT[ord(c) - 32]
+		for gy in range(5):
+			for gx in range(4):
+				want = 1 if g[gy] & (0x80 >> gx) else 0
+				if lpix(fb, x + 4 * i + gx, y + gy) != want ^ inv:
+					return False
+	return True
+
+
+def text_in(fb, y, s, inv=False):
+	"""Whether s is drawn anywhere on the text line at y."""
+	return any(text_at(fb, x, y, s, inv) for x in range(0, 129 - 4 * len(s)))
+
+
+def notes(r):
+	"""T23c (spec K.6, K.3, K.4): the Notifications and Running pages of
+	the launcher of /etc/rc, driven by fake buttons, from APPS."""
+	if r.sh("test -x /usr/tests/notepost", 20) != 0:
+		check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 300) == 0,
+			"install the tests package (notepost)")
+	# do-not-disturb all day: notify_post() lists them, no alert rings
+	r.sh("rm -f /tmp/nc.bak; test -f /etc/notify.conf && "
+	     "cp /etc/notify.conf /tmp/nc.bak; "
+	     "echo 'Dnd: 00:00-23:59' > /etc/notify.conf", 20)
+	if hm(time.time()) == "23:59":
+		r.sh("sleep 61", 90)
+	tap(r, "back", lit=True)	# lights the screen
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True), "T23c: the launcher on APPS")
+	base = freebytes(r)
+	out = clean(r.output("/usr/tests/notepost 10; echo st=$?", 60))
+	check(out is not None and b"st=0" in out,
+		"T23c: notify_post() 10 times (notepost)")
+	r.sh("sleep 1", 20)
+	now = freebytes(r)
+	print("  RAM: launcher with 8 notifications: %d bytes more (free %d "
+	      "-> %d; the table is fixed, in its .bss)" % (base - now, base, now),
+	      flush=True)
+	check(base - now <= 0, "ACK.4: 8 notifications take no RAM beyond "
+	      "the launcher's fixed table")
+	tap(r, "right", lit=True)			# HOME
+	tap(r, "right", lit=True)			# NOTES
+	fb = lcd_frame(r)
+	rows = [text_at(fb, 11, 7 + 6 * i, "Note %d" % (10 - i), i == 0)
+		and text_at(fb, 6, 7 + 6 * i, "*", i == 0) for i in range(8)]
+	check(text_in(fb, 1, "NOTES", True) and all(rows),
+		"T23c: NOTES lists Note 10 .. Note 3, newest first, all unread")
+	if not all(rows):
+		print("  rows: %s" % rows)
+		show(fb)
+	check(not any(lpix(fb, 127, y) for y in range(13, 55))
+	      and text_in(fb, 1, "1/8", True),
+	      "T23c: only the last 8 are kept (no scroll mark, 1/8)")
+	check(text_in(fb, 1, "*8", True), "T23c: the status line: *8 unread")
+	check(text_in(fb, 58, "<Home OK Open Back Clear >Run"),
+		"T23c: the hint line of NOTES")
+	tap(r, "ok", lit=True)				# open Note 10
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "NOTE", True) and text_at(fb, 1, 7, "info")
+	      and text_at(fb, 1, 13, "Note 10")
+	      and text_at(fb, 1, 19, "Text of note 10")
+	      and text_in(fb, 1, "*7", True)
+	      and text_in(fb, 58, "OK Keep  Back Clear"),
+	      "T23c: OK opens it: sender, title, text; *7 unread")
+	tap(r, "ok", lit=True)				# keep it
+	fb = lcd_frame(r)
+	check(text_at(fb, 11, 7, "Note 10", True)
+	      and not text_at(fb, 6, 7, "*", True)
+	      and text_in(fb, 1, "*7", True),
+	      "T23c: OK keeps it, read now (no *), *7")
+	tap(r, "down", lit=True)
+	tap(r, "back", lit=True)			# clear Note 9
+	fb = lcd_frame(r)
+	check(text_at(fb, 11, 7, "Note 10") and text_at(fb, 11, 13, "Note 8", True)
+	      and text_at(fb, 11, 43, "Note 3") and not text_at(fb, 11, 49, "Note 3")
+	      and text_in(fb, 1, "*6", True) and text_in(fb, 1, "2/7", True),
+	      "T23c: Back on the list clears one (7 left, *6)")
+	if not text_at(fb, 11, 13, "Note 8", True): show(fb)
+	tap(r, "up", lit=True)
+	tap(r, "ok", lit=True)				# Note 10 again
+	tap(r, "back", lit=True)			# clear it from the view
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "NOTES", True) and text_at(fb, 11, 7, "Note 8", True)
+	      and text_in(fb, 1, "1/6", True) and text_in(fb, 1, "*6", True),
+	      "T23c: Back on an opened one clears it (6 left)")
+	tap(r, "right", lit=True)			# RUNNING
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "RUNNING", True)
+	      and text_in(fb, 24, "nothing running"),
+	      "T23c: RUNNING: nothing running (R12.20 not there yet)")
+	for _ in range(3):
+		tap(r, "left", lit=True)		# NOTES, HOME, APPS
+	fb = lcd_frame(r)
+	check(text_in(fb, 1, "APPS", True) and text_in(fb, 1, "*6", True),
+		"T23c: Left back to APPS, the count stays")
+	r.sh("rm -f /etc/notify.conf; test -f /tmp/nc.bak && "
+	     "cp /tmp/nc.bak /etc/notify.conf", 20)
+
 
 def subghz(r):
 	"""Issue #302: subghz in QEMU (package subghz, tests: sgfake).  A
@@ -864,7 +1014,7 @@ def subghz(r):
 
 
 PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua,
-	 "subghz": subghz}
+	 "subghz": subghz, "notes": notes}
 
 
 def main():
@@ -1027,6 +1177,7 @@ def main():
 		teklatua(r)
 		jiggle(r)
 		badusb(r)
+		notes(r)
 		if os.environ.get("NATTEST_LOG"):
 			with open(os.environ["NATTEST_LOG"], "wb") as f:
 				f.write(r.out)

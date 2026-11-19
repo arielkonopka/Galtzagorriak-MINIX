@@ -1,10 +1,11 @@
 # 7. Desktop modules and window apps
 
-> **Status.** Window apps (section 7.5, spec K.8) and the desktop core (task T23a: the HOME
+> **Status.** Window apps (section 7.5, spec K.8), the desktop core (task T23a: the HOME
 > page, the status line, the FIFO `/var/run/gui` with `tile`, `status`, `notify` and `close`,
-> `guimod`) are in the code. Still **planned**: the `window` record and reply FIFOs for
-> background modules, the Notifications page (T23c), the C helper in `libapp` and the Berry
-> binding.
+> `guimod`) and the Notifications page fed by `notify_post()` (T23c, section 7.6) are in the
+> code. Still **planned**: the `window` record and reply FIFOs for background modules, the
+> Running page's list (R12.20, park), the C helper in `libapp` (`gm_open`, `gm_tile`) and the
+> Berry binding.
 
 ## 7.1 The model
 
@@ -44,7 +45,7 @@ list and the app menu. Other programs extend it as **modules**:
   |---|---|
   | `tile NAME UID PID TEXT` | sets or changes the module's row on HOME (31 characters shown) |
   | `status NAME UID PID TEXT` | its short text on the status line (6 characters shown; the newest status wins) |
-  | `notify NAME UID PID TEXT` | counts a notification and shows the text for 2 s |
+  | `notify NAME UID PID TEXT [BODY]` | a notification on the Notifications page: TEXT its row (23 characters), BODY shown when it is opened (47); without BODY a TEXT longer than the row is the body too. Its text shows for 2 s; the desktop keeps the last 8 |
   | `close NAME UID PID` | removes the module's tile and status |
 
 - **A module is UID + NAME** (1–10 characters). A record changes only that module's entries, so
@@ -72,7 +73,7 @@ list and the app menu. Other programs extend it as **modules**:
   not dirty the FIFO's inode. A module may write as often as it likes without wearing the SD
   card or leaving the file system unclean (ACK.5: 0 sectors in M2).
 - Planned: the `window` record and per-module reply FIFOs with event records (`select`,
-  `back`, `input`, `redraw`), the Notifications page with the last 8 (T23c).
+  `back`, `input`, `redraw`).
 
 ## 7.3 Writing a module
 
@@ -241,3 +242,38 @@ and a form. Two things keep it at 4.0 KB open:
 (`gui> `) to the console; dropped records show as `gui! dropped`. The parser is
 `flipper/gui/winrec.c` (pure functions, host test `flipper/tests/host/wintest.c`), the server
 `flipper/gui/winsrv.c`.
+
+## 7.6 Notifications (T23c, spec K.3, K.4, K.6)
+
+A program tells the user something with **`notify_post()`** from `libapp` (`app.h`, in the
+shared furi library; chapter 6):
+
+```c
+#include "app.h"
+
+notify_post(TC_INFO, "Backup", "Backup done: 12 files", NULL);
+```
+
+- `TC_INFO` and `TC_REMINDER` go to the desktop as well: `notify_post()` writes one record
+  `notify CAT UID PID TITLE TEXT` (`notify_record()`, the category `info` or `reminder` as the
+  module name) to `/var/run/gui` with `O_NONBLOCK`, also while do-not-disturb holds the alert
+  back. No desktop, a full FIFO or a caller outside group `gui` (apps the launcher starts are
+  in it): the record is dropped, the alert is not affected.
+- The alert itself (sound, vibro, LED, the screen) follows the notification policy as before
+  (`/etc/notify.conf`, chapter 6); pass `opts` with `flags = 0` for a quiet one.
+- **`TC_ALARM` never goes to the desktop** (spec K.4): alarms ring through `alert` only, so an
+  alarm rings even with no desktop.
+- From the shell: `guimod notify NAME TEXT ...` (one TEXT, no body).
+
+The launcher keeps the **last 8** notifications, newest first, in a fixed table in its `.bss`
+(8 × 88 B: uid, the time it came, the unread mark, name, title, body); a ninth pushes the
+oldest out. Nothing is written to flash or the card; they are gone after a reboot. The status
+line shows the unread count (`*3`). On the **NOTES** page (Right of HOME) OK opens one (sender,
+time, title, the text wrapped) and marks it read; Back clears one, on the list or opened; OK in
+an opened one keeps it. `dk_unread()` and `dk_clear()` (`flipper/gui/desktop.c`) are the pure
+parts, tested by `tests/host/desktest.c`; `tools/nattest.py notes` drives the pages in QEMU with
+fake buttons (`/usr/tests/notepost N` posts N through `notify_post()`).
+
+The **RUNNING** page, Right of NOTES, will list the parked apps (spec R12.20) once parking is
+in; until then it says "nothing running".
+
