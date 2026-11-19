@@ -14,7 +14,7 @@ B	:= build
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
 	   pmstattest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz \
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey \
      run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
@@ -32,6 +32,10 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
+# libibkey (spec R6.7 part 3b): the Unleashed Cyfral and Metakom iButton
+# protocols, every key round trip (make ibkeytest).
+run-ibkey:
+	$(MAKE) -C $(MROOT)/flipper/tests/ibkey test
 # libmodem (spec section P, ACP.1, ACP.2): data modems between two
 # Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
 run-modem:
