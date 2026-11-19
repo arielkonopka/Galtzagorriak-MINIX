@@ -335,9 +335,18 @@ PATTERN = "1A2B3C4D5E6F708192A3B4C5D6E7F8091A2B3C4D5E6F708192A3B4C5D6E7F8"
 # canonical form, the bytes the Unleashed code itself gives back after
 # encoding and decoding it (found on the device 2026-11-19 and checked on
 # the host with the same code: Paradox drops the last nibble, Gallagher
-# bytes 2 and 5, Radio Key moves a parity bit, FDX-A needs its parity).
+# bytes 2 and 5, Radio Key moves a parity bit, FDX-A needs its parity,
+# Keri sets bit 31, Idteck has the fixed "IDTK" prefix).  Nexwatch, GProxII,
+# Noralsy and Indala224 do not take the pattern at all (their checks
+# fail): they use the fixed vectors of flipper/tests/lfrfid/lfrfidtest.c,
+# which make lfrfidtest round-trips.
 LF_CANONICAL = {"Paradox": "1A2B3C4D5E60", "Gallagher": "1A003C4D006F7081",
-	"Radio Key": "1A693C4D5E6F", "FDX-A": "1AABBCCD5E"}
+	"Radio Key": "1A693C4D5E6F", "FDX-A": "1AABBCCD5E",
+	"Keri": "9A2B3C4D", "Idteck": "4944544B5E6F7081",
+	"Nexwatch": "00345678DC0365AA",
+	"GProxII": "FA0093200C421A161D080A00",
+	"Noralsy": "BB0456789000AC1B1EA80000",
+	"Indala224": "80000001B23EAEB0FFE8063AB156010F19D3457F5A3C96E12D4B78A5"}
 
 
 def lf_data(proto, n):
@@ -447,8 +456,10 @@ def ul_read_lf(ul):
 
 
 def rfid_m2u(ul, mx, opt, proto, data):
+	# the run list of a long PSK frame takes a few seconds to find
+	# (Nexwatch 3.9 s on the device)
 	ok = mx.start(mx_lf_cmd("emulate", proto, data),
-		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 3)
+		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 8)
 	txt = mx.text(mx.started)
 	if missing(None, txt) or "needs T19b" in txt:
 		mx.stop()
