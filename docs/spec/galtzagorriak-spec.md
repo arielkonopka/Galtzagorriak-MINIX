@@ -504,7 +504,7 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (user, 2026-11-15). Details in next-tasks T14c.
-- **Wake, do the job, off again (user, 2026-11-17).** A timer file may say `After: off` (and
+- **Wake, do the job, off again (user, 2026-11-17; scheduled as Phase 23, at the end of the queue, user 2026-11-19).** A timer file may say `After: off` (and
   `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
   log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
   and the Flipper goes back to ship mode. The rules:
@@ -3017,6 +3017,7 @@ Phases are ordered by what the next one needs, and by the stock features they un
 | 20 | Continuous: 20a speed and power [7], 20b code modernization [8] | |
 | 21 | Install MINIX on another Flipper: over BLE by acting as the stock mobile app (21a); SWD rescue mode (21b) | a second Flipper |
 | 22 | Wi-Fi / ESP32 devboard work, deferred to the end (user decision 2026-11-15): `camfind`'s devboard firmware (R9.1.1, R9.1.8), the `wifi` canary (R9.2.4), ESP32 offload mode (R19.7) | Wi-Fi scans |
+| 23 | Wake-and-off and hibernation, at the end of the queue (user decision 2026-11-19): timed wake, job, off again (`After: off`, `Type: emergency`, the low-battery rules of `Type: wakeup`; F.3) and whole-RAM hibernation to the SD card with ship mode | gadget jobs that run from off; long standby |
 
 Phases 1–4 are the foundation and run in order (2a, 2c, 2d and 4a can overlap; 2d must be merged
 before Phase 3). From Phase 5 on,
@@ -6719,6 +6720,38 @@ slices below the interactive queue).
 RAM: kernel 0 B; `flipinst` ≈ 3–5 KB while running (RPC buffer, nanopb), 0 B after exit; SWD batch
 buffer 512 B only while 21b runs. Flash writes on our Flipper: none (reads from SD only; the
 optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and the SWD primitive.
+
+---
+
+## Phase 23: Wake-and-off and hibernation (user decision 2026-11-19)
+
+**Goal:** the Flipper can do a job from off and go back to off, and can sleep for a long time
+with its RAM saved to the SD card. **Depends on:** Phase 12 (swap, 12a and 12e), T14c (power-off
+in ship mode, alarm wake from off, boot lead), N (clean flags at halt). **Placed at the end of the
+queue** by the user (2026-11-19), with Phase 22: nothing before it depends on it, and it is not
+dispatched to the lanes until the phases before it are done.
+
+What stays where it is: plain power-off (`halt`, power menu, automatic power-off: ship mode, T14c)
+and the alarm that switches a Flipper on from off (F.3, T14c, the alarm clock 7b.2) are **not**
+part of this phase; they stay in Phases 6 and 7b.
+
+Scope:
+- **23a Wake, do the job, off again.** Everything in F.3 under "Wake, do the job, off again":
+  `After: off` and `timed --then-off`, the quiet boot, `Type: emergency` with its halving at low
+  battery, and the below-10 % rule of `Type: wakeup`. The rules are already written in F.3 and
+  in next-tasks T14c (the `After: off` item, moved out of T14c to here).
+- **23b Hibernation.** A whole-RAM image to the swap area on the SD card, then ship mode; on the
+  next power-on (button or RTC alarm) the image is read back and the system goes on where it
+  stopped. Wake time up to about 5 s is fine (user, 2026-11-16). An RTC wake may also run a
+  job and hibernate again. The swap rules apply to the image too (R12.29, R12.31, R12.32,
+  section 12g), and `Secret: yes` memory is never written out (or the owning process is ended
+  first). Analysis: thread "Analyze hibernation via swap" (2026-11-16).
+- A rescue-beacon end-user app (screen flash or Morse, then really off about 10 min, cyclic) is
+  the first user of 23a and 23b; it is specified when the final apps are discussed.
+
+Requirements and acceptance criteria are written when the phase is started. Rules that hold
+already: RAM 0 B when not in use (state in RTC backup registers), no internal-flash writes at run
+time, and the UI answers within L1 during the save and after the restore.
 
 ---
 
