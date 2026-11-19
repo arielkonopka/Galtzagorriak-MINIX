@@ -144,6 +144,12 @@ struct proc *p;			/* a runnable, shadowed process */
   if ((r = other_member(p, TRUE)) == NIL_PROC)
 	panic("unshadow: group has no resident process", proc_number(p));
   if (p->p_physio || r->p_physio) return;	/* try again later */
+  /* #331: swap only on the group's turn, when its resident member is at
+   * the head of USER_Q or blocked.  p goes to the head (ready()), so a
+   * swap while another process's turn (the launcher with a key to draw, a
+   * parent back from fork()) put p in front of it; with a swap every tick
+   * that process never ran again. */
+  if (r->p_flags == 0 && rdy_head[USER_Q] != r) return;
 
   /* Both change queues, so take them off their current queues first. */
   p_ready = (p->p_flags == 0);

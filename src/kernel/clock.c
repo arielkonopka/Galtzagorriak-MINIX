@@ -260,7 +260,14 @@ PRIVATE void do_clocktick()
 
   /* If a user process has been running too long, pick another one. */
   if (--sched_ticks == 0) {
-	if (bill_ptr == prev_ptr) lock_sched();	/* process has run too long */
+	if (bill_ptr == prev_ptr
+#if (SHADOWING == 1)
+	    /* #331: a shadow group's members take turns every tick (unshadow),
+	     * so the one billed changes; for the quantum they are one. */
+	    || (isuserp(bill_ptr) && isuserp(prev_ptr)
+		&& bill_ptr->p_map[D].mem_phys == prev_ptr->p_map[D].mem_phys)
+#endif
+	    ) lock_sched();			/* process has run too long */
 	sched_ticks = SCHED_RATE;		/* reset quantum */
 	prev_ptr = bill_ptr;			/* new previous process */
   }
