@@ -19,9 +19,11 @@ the image's sectors after it follow the hole.
        prwtest /dev/hd4 mounted: DIOCGETPS, DIOCGETP EOVERFLOW, bread()
          equals read(), bwrite() refused (EBADF, EBUSY)
        a file written to /home reads back the same (cksum)
-       umount, fsck, prwtest /dev/hd4 (bwrite round trip at its last
+       umount, prwtest /dev/hd4 (bwrite round trip at its last
          sector, past the end EINVAL), mount again
-       after a reboot the file is still the same
+       after a reboot /etc/rc's fsck finds no error and the file is
+       still the same (a full fsck after login has no room in QEMU's
+       RAM next to the running system: "no memory to start it")
 Exit status: the number of failures.
 """
 import importlib.util
@@ -110,8 +112,6 @@ def main():
 		check(a is not None and a == b, "same file read back (%s, %s)"
 			% (a, b))
 		check(r.sh("cd / && umount /dev/hd4", 60) == 0, "umount /home")
-		check(r.sh("fsck /dev/hd4 < /dev/null", 300) == 0,
-			"fsck /dev/hd4")
 		out = r.output("/usr/tests/prwtest /dev/hd4; echo st=$?",
 			60) or b""
 		print(out.decode(errors="replace"))
@@ -122,6 +122,9 @@ def main():
 		if not r.login():
 			check(False, "login after the reboot")
 			return fails
+		check(b"/dev/hd4 has errors" not in r.out
+			and b"cannot mount /dev/hd4" not in r.out,
+			"the boot's fsck of /dev/hd4 found nothing, /home mounted")
 		check(cksum(r, "/home/big") == a, "the file after a reboot")
 		return fails
 	finally:
