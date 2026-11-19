@@ -163,8 +163,9 @@ SECS` for longer, `-c psk` for PSK tags, Ctrl-C ends it early) writes the signal
 format as the Unleashed firmware (`.ask.raw`, `.psk.raw`), so the file can be looked at on a PC
 (`flipper/tools/lfrawdump.py FILE`) or on a Flipper with Unleashed.
 
-Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
-firmware does):
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, then the Hitag micro
+"magic" chips ID8265, ID8210 and H5.5 with their three passwords, as the Unleashed firmware does;
+`-hitag` goes straight to those):
 
 ```
 rfid write EM 00 DE AD BE EF

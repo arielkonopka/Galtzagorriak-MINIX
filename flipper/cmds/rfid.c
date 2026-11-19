@@ -16,6 +16,10 @@
  *					of `rfid list` (case, spaces and /
  *					do not matter; EM = EM4100); HEX:
  *					its data bytes, or a .rfid file
+ *		  -hitag		straight to the Hitag micro magic chips
+ *					(ID8265, ID8210, H5.5: R9.0.7), which
+ *					are otherwise tried after T5577 and
+ *					EM4305 (not with -pass, -with, -lock)
  *		rfid copy [OPTS]	read a tag, then write it to the
  *					blank one put on next
  *		  -n TRIES		rounds, default 20 (a tag that
@@ -209,15 +213,17 @@ static int em_decode(int nd, unsigned char id[5])
 #define T5577_EM4100	0x00148040UL	/* RF/64, Manchester, blocks 1-2 */
 #define T5577_PWD	0x00000010UL	/* block 0: a write needs block 7 */
 
-static int nt;			/* durations in d[], field on first */
+static int nt;			/* durations in dp[], field on first */
+static unsigned long *dp = d;	/* d[], or Hitag's longer list */
+static int dmax = MAXD;
 
 static void put_us(int on, unsigned long us)
 {
 	if (nt > 0 && ((nt - 1) & 1) == !on) {	/* the same state: longer */
-		d[nt - 1] += us;
+		dp[nt - 1] += us;
 		return;
 	}
-	if (nt < MAXD) d[nt++] = us;
+	if (nt < dmax) dp[nt++] = us;
 }
 
 static void put(int on, unsigned long tc)
@@ -239,6 +245,7 @@ static void wreset(void)
 }
 
 static int wlock;			/* -lock: the T5577 lock bit */
+static int whitag;			/* -hitag: straight to Hitag micro */
 static unsigned long wpass;		/* -pass: its password, or 0 */
 static unsigned long wsend;		/* -with HEX: the one it has now */
 
@@ -309,7 +316,7 @@ static void eword(int addr, unsigned long data)
 static int send(int fd)
 {
 	if (nt % 2 == 0) put_us(1, 8);		/* odd: ends with the field */
-	if (write(fd, d, nt * 4) != nt * 4) {
+	if (write(fd, dp, nt * 4) != nt * 4) {
 		perror("rfid: write");
 		return -1;
 	}
@@ -325,6 +332,128 @@ static int verify(int fd, unsigned char id[5], unsigned char got[5])
 		if (em_decode(n / 4, got)) return memcmp(got, id, 5) == 0 ? 1 : 0;
 	}
 	return -1;
+}
+
+/* ---- Hitag micro (ID8265, ID8210, H5.5): R9.0.7 ----
+ * "Magic" ID82xx chips that send an EM4100 number by themselves (TTF) once
+ * pages 0, 1 hold its 64 bits and page 0xFF the config.  The writer is
+ * Unleashed's lib/lfrfid/tools/hitagmicro.c (from Proxmark3): open loop,
+ * nothing is read back but the EM4100 afterwards.  Reader to tag is field
+ * gaps: every bit cell starts with a 64 us gap, then the field stays on
+ * 96 us (a 0) or 160 us (a 1); a frame starts with a 0 and a code
+ * violation (gap, 288 us on) and ends with a gap.  A frame is 5 flag bits,
+ * a 6-bit command, its data, a CRC-16 (0x1021, init 0, output reflected),
+ * fields LSB first, data and block bytes MSB first.  Each block is written
+ * in its own powered session (UID, SYSINFO, READ config, LOGIN, WRITE x2);
+ * config last, so a failed run keeps the old config; then a few clean
+ * power cycles latch it. */
+#define HM_GAP		64
+#define HM_B0		96
+#define HM_B1		160
+#define HM_VIOL		288
+#define HM_FLAGS	0x04
+#define HM_MAXD		1024		/* a session's durations (malloc) */
+
+static unsigned char hm_tx[80];		/* a frame's bits */
+static int hm_n;
+
+static void hm_lsb(unsigned v, int nbits)
+{
+	int i;
+
+	for (i = 0; i < nbits; i++) hm_tx[hm_n++] = (v >> i) & 1;
+}
+
+static void hm_msb(const unsigned char *b, int nbits)
+{
+	int i;
+
+	for (i = 0; i < nbits; i++) hm_tx[hm_n++] = b[i / 8] >> (7 - i % 8) & 1;
+}
+
+static void hm_crc(void)
+{
+	unsigned r = 0, out = 0;
+	int i;
+
+	for (i = 0; i < hm_n; i++) {		/* MSB-first, bit by bit */
+		unsigned top = (r >> 15 & 1) ^ hm_tx[i];
+
+		r = (r << 1) & 0xFFFF;
+		if (top) r ^= 0x1021;
+	}
+	for (i = 0; i < 16; i++) out |= ((r >> i) & 1) << (15 - i);	/* refout */
+	hm_lsb(out, 16);
+}
+
+/* The frame into the field list: SOF, the bits, EOF; then the field on
+ * for wait_us, while the tag answers (nobody listens). */
+static void hm_send(unsigned long wait_us)
+{
+	int i;
+
+	put_us(0, HM_GAP); put_us(1, HM_B0);		/* SOF: a 0, */
+	put_us(0, HM_GAP); put_us(1, HM_VIOL);		/* a violation */
+	for (i = 0; i < hm_n; i++) {
+		put_us(0, HM_GAP);
+		put_us(1, hm_tx[i] ? HM_B1 : HM_B0);
+	}
+	put_us(0, HM_GAP);				/* EOF */
+	put_us(1, wait_us);
+}
+
+static void hm_cmd(unsigned cmd, int page, const unsigned char *data)
+{
+	hm_n = 0;
+	hm_lsb(HM_FLAGS, 5);
+	hm_lsb(cmd, 6);
+	if (page >= 0) hm_lsb((unsigned) page, 8);
+	if (cmd == 0x12) hm_lsb(0, 8);			/* READ: count 0 */
+	if (data != NULL) hm_msb(data, 32);
+	hm_crc();
+}
+
+/* One block in a powered session.  Returns -1 on a device error. */
+static int hm_block(int fd, const unsigned char *pass, int page,
+						const unsigned char *data)
+{
+	nt = 0;
+	put_us(1, 3000);				/* charge */
+	hm_cmd(0x02, -1, NULL);	hm_send(21000);		/* READ UID */
+	hm_cmd(0x17, -1, NULL);	hm_send(13000);		/* SYSINFO */
+	hm_cmd(0x12, 0xFF, NULL); hm_send(17000);	/* READ config */
+	hm_cmd(0x28, -1, pass);	hm_send(9000);		/* LOGIN */
+	hm_cmd(0x14, page, data); hm_send(30000);	/* WRITE, twice: */
+	hm_send(30000);			/* the 8265 commits now and then */
+	if (send(fd) < 0) return -1;	/* the field goes off after it */
+	(void) poll((struct pollfd *) NULL, 0, 20);	/* the tag resets */
+	return 0;
+}
+
+/* Write an EM4100 frame (b[64]) to a Hitag micro chip with the password of
+ * one variant; clock: 64, 32 or 16 (the config's data rate). */
+static int hm_write(int fd, const unsigned char b[64], const unsigned char *pass,
+								int clock)
+{
+	unsigned char blk[2][4], cfg[4];
+	int i;
+
+	memset(blk, 0, sizeof blk);
+	for (i = 0; i < 64; i++)
+		if (b[i]) blk[i / 32][i % 32 / 8] |= 0x80 >> (i % 8);
+	cfg[0] = clock == 32 ? 0x85 : clock == 16 ? 0x45 : 0x05;
+	cfg[1] = cfg[2] = cfg[3] = 0;
+	(void) poll((struct pollfd *) NULL, 0, 100);	/* a cold chip */
+	if (hm_block(fd, pass, 0x00, blk[0]) < 0
+	    || hm_block(fd, pass, 0x01, blk[1]) < 0
+	    || hm_block(fd, pass, 0xFF, cfg) < 0) return -1;
+	for (i = 0; i < 6; i++) {			/* latch the config */
+		nt = 0;
+		put_us(1, 50000);
+		if (send(fd) < 0) return -1;
+		(void) poll((struct pollfd *) NULL, 0, 20);
+	}
+	return 0;
 }
 
 /* The 64 EM4100 bits of a number into b[64]: nine 1s, ten rows of 4 data
@@ -369,7 +498,7 @@ static int write_em(unsigned char id[5], int tries)
 	/* Rounds: a tag with a password answers a plain write only when the
 	 * gap happens to fall where it listens, which may take many tries
 	 * (the stock app does the same while the button is held). */
-	for (v = -1; tries-- > 0; ) {
+	for (v = -1; !whitag && tries-- > 0; ) {
 		nt = 0;				/* T5577 first, as stock */
 		wblock(1, blk[0]);		/* the data first and the */
 		wblock(2, blk[1]);		/* config last: once PWD is */
@@ -395,6 +524,37 @@ static int write_em(unsigned char id[5], int tries)
 				id[0], id[1], id[2], id[3], id[4]);
 			return 0;
 		}
+	}
+	if (!wpass && !wlock && !wsend) {	/* then Hitag micro (R9.0.7) */
+		static const struct { unsigned char pw[4]; const char *name; }
+		    hv[3] = { { { 0, 0, 0, 0 }, "8265" },
+			      { { 0x9A, 0xC4, 0x99, 0x9C }, "8210" },
+			      { { 0x49, 0x6B, 0x0E, 0x59 }, "H5.5" } };
+		unsigned long *hd = malloc(HM_MAXD * sizeof(unsigned long));
+
+		if (hd == NULL) {
+			fprintf(stderr, "rfid: no memory for Hitag\n");
+			return 1;
+		}
+		dp = hd;
+		dmax = HM_MAXD;
+		for (i = 0; i < 3; i++) {
+			if (hm_write(fd, b, hv[i].pw, 64) < 0) return 1;
+			dp = d;			/* the read-back uses d[] */
+			dmax = MAXD;
+			if ((v = verify(fd, id, got)) == 1) {
+				printf("written (Hitag micro %s): EM4100 %02X %02X "
+					"%02X %02X %02X\n", hv[i].name, id[0],
+					id[1], id[2], id[3], id[4]);
+				free(hd);
+				return 0;
+			}
+			dp = hd;
+			dmax = HM_MAXD;
+		}
+		dp = d;
+		dmax = MAXD;
+		free(hd);
 	}
 	if (v == 0)
 		printf("the tag still reads EM4100 %02X %02X %02X %02X %02X: "
@@ -1675,6 +1835,7 @@ int main(int argc, char **argv)
 
 			if (strcmp(argv[i], "-lock") == 0) wlock = 1;
 			else if (strcmp(argv[i], "-em4305") == 0) em_only = 1;
+			else if (strcmp(argv[i], "-hitag") == 0) whitag = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				tries = atoi(argv[++i]);
 			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
@@ -1692,6 +1853,11 @@ int main(int argc, char **argv)
 			return copy_any(tries);
 		}
 		if ((p = tag_args(argc, argv, i, data)) < 0) goto use;
+		/* -hitag: Hitag micro chips take an EM4100 frame only, and
+		 * not with a password, a lock or -em4305 (R9.0.7) */
+		if (whitag && (p != LFRFIDProtocolEM4100 || em_only || wlock
+							|| wpass || wsend))
+			goto use;
 		/* EM4100 at RF/64: its own writer, as before (R6.5) */
 		if (p == LFRFIDProtocolEM4100 && !em_only)
 			return write_em(data, tries);
@@ -1718,7 +1884,7 @@ int main(int argc, char **argv)
 use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 				"[-c 125|psk|134] [-s SECS]\n"
 				"       rfid write [-n N] [-pass HEX] [-with HEX] "
-				"[-lock] [-em4305] PROTO HEX...|-f FILE\n"
+				"[-lock] [-em4305] [-hitag] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
