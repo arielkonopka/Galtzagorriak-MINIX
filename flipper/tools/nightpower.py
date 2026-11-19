@@ -51,7 +51,7 @@ POWER_RX = re.compile(r"soc=\S+.*")
 # One Stop2 sleep is at most PM_MAX = HZ - 2 = 58 ticks (arm/klib.c), and
 # each one ends in a counted wake-up: so wake-ups >= Stop2 s / this.
 MAX_SLEEP_S = 58 / 60.0
-WRAP = 65536			# wbtn/wother are u16 in older kernels (#284)
+WRAP = 65536			# wbtn is u16; wother was u16 before #284
 
 
 def unwrap_wakes(wb, wo, stop2):
@@ -458,6 +458,8 @@ def selftest():
 	assert unwrap_wakes(0, 30000 - 65000, 29000) == (0, 30536, True)
 	assert unwrap_wakes(1, 37200, 35900) == (1, 37200, False)
 	assert unwrap_wakes(0, 200000, 190000) == (0, 200000, False)	# u32
+	# #284 kernels: both readings past 65535, a plain difference
+	assert unwrap_wakes(2, 130000 - 100000, 29000) == (2, 30000, False)
 	for i, (a, b, want) in enumerate(SELF):
 		lines, ok, row = judge(a or since_boot(b), b)
 		if ok != want:
