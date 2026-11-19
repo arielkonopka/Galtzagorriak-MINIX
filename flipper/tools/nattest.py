@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """nattest - the native apps remind and alarm (spec 7b.1, 7b.2) in QEMU.
 
-Usage: nattest.py [badusb|jiggle|teklatua]  (only the AC11.3.1, AC11.3.3
-       or AC11.3.2 part)
+Usage: nattest.py [badusb|jiggle|teklatua|subghz]  (only the AC11.3.1,
+       AC11.3.3, AC11.3.2 or Sub-GHz part)
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu, the real INIT) like tools/powercut.py, logs in as root, installs the
@@ -61,6 +61,11 @@ timed, remind and alarm packages and checks:
            once plugged in; the desktop's status line shows J while it
            runs and not after jiggle -k, which ends it; a second jiggle
            is refused; its RAM (free -v, memuse) is at most 1 KB
+  #302     subghz (only with the argument subghz): a recorded Princeton
+           capture fed to subghz rx (tests: sgfake, SGIOCFAKE) prints
+           "Princeton 24bit Key:7C5703"; tx_from_file sends the file's
+           stream (QEMU's sg> tx lines); a 315 MHz transmit in region EU
+           is refused; the RAM of subghz rx listening
 
 What needs the RTC alarm (AC7b.2.1, AC7b.R1) is on the device list.
 Exit status: the number of failures.
@@ -764,8 +769,102 @@ def badusb(r):
 	r.sh("rm -f /home/flipper/badusb/zwait.txt", 20)
 	win_restore(r)
 
+def sg_values(path):
+	"""The RAW_Data durations of a .sub capture, as the kernel takes
+	them from subghz tx_from_file: the same sign merged, the carrier
+	on first, each at most 1 s (SG_DURATION_MAX)."""
+	out = []
+	with open(path) as f:
+		for line in f:
+			if not line.startswith("RAW_Data:"):
+				continue
+			for v in map(int, line[9:].split()):
+				v = max(-1000000, min(1000000, v))
+				if v == 0 or not out and v < 0:
+					continue
+				if out and (out[-1] > 0) == (v > 0):
+					s = out[-1] + v
+					out[-1] = max(-1000000, min(1000000, s))
+				else:
+					out.append(v)
+	return out
 
-PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua}
+
+def subghz(r):
+	"""Issue #302: subghz in QEMU (package subghz, tests: sgfake).  A
+	recorded Princeton capture fed to subghz rx (SGIOCFAKE) decodes;
+	tx_from_file sends the file's stream (QEMU's sg> tx lines); a
+	transmit outside the region's bands is refused; the RAM of
+	subghz rx while it listens."""
+	vec = os.path.join(HERE, "..", "tests", "subghz", "vectors",
+		"princeton_raw.sub")
+	check(r.sh("pkg install /lib/pkg/tests_1.0.tar", 300) == 0,
+		"install the tests package (sgfake)")
+	check(r.sh("pkg install /lib/pkg/subghz_1.0.tar", 300) == 0,
+		"install the subghz package")
+	# the capture onto the disk, 12 values a line (the console's line)
+	with open(vec) as f:
+		lines = f.read().splitlines()
+	r.sh("rm -f /tmp/p.sub", 20)
+	for l in lines:
+		if not l.startswith("RAW_Data:"):
+			r.sh("echo '%s' >>/tmp/p.sub" % l, 20)
+			continue
+		v = l[9:].split()
+		for i in range(0, len(v), 12):
+			r.sh("echo 'RAW_Data: %s' >>/tmp/p.sub"
+			     % " ".join(v[i:i + 12]), 20)
+	out = r.output("subghz region; subghz region EU; subghz region", 20)
+	check(out is not None and out.split()[-1:] == [b"EU"],
+		"subghz region EU (once per boot)")
+	if fails: print(out)
+
+	base = freebytes(r)
+	r.sh("subghz rx 433920000 >/tmp/rx.out 2>&1 & rp=$!; sleep 2", 20)
+	now = freebytes(r)
+	with open(os.path.join(powercut.MB, "bin", "subghz"), "rb") as f:
+		hdr = f.read(16)
+	print("  RAM: subghz rx listening: %d bytes (free %d -> %d; text "
+	      "%d B in flash)" % (base - now, base, now,
+	      struct.unpack_from("<I", hdr, 8)[0]), flush=True)
+	out = r.output("subghz heap", 20)
+	check(out is not None and re.match(rb"heap: \d+ bytes for rx", out) is not None,
+	      "subghz heap: %s" % (out or b"").decode(errors="replace").strip())
+	out = r.output("/usr/tests/sgfake /tmp/p.sub; sleep 1; "
+		"kill -2 $rp; wait $rp; cat /tmp/rx.out", 120)
+	check(out is not None and b"Princeton 24bit Key:7C5703" in out
+		and b"Packets received" in out,
+		"subghz rx: the recorded Princeton capture (sgfake) decodes: "
+		"Princeton 24bit Key:7C5703")
+	if out is None or b"7C5703" not in out: print(out)
+
+	mark = len(r.out)
+	st = r.sh("subghz tx_from_file /tmp/p.sub", 120)
+	got = []
+	for m in re.finditer(rb"sg> tx 433920000 (\d+)((?:\r?\nsg>(?: -?\d+)+)*)",
+			r.out[mark:]):
+		vals = [int(x) for x in re.findall(rb"-?\d+", m.group(2))]
+		if len(vals) != int(m.group(1)):
+			got = None
+			break
+		got += vals
+	want = sg_values(vec)
+	check(st == 0 and got == want, "subghz tx_from_file: QEMU's sg> tx "
+	      "lines give back the file's stream (%d durations)" % len(want))
+	if fails and got != want:
+		print("  got %s ... (%s), want %s ..." % (got and got[:8],
+		      got and len(got), want[:8]))
+
+	out = r.output("subghz tx 7C5703 315000000 400 3; echo st=$?", 30)
+	check(out is not None and b"refused: outside the region's bands" in out
+		and b"st=1" in out and b"sg> tx 315" not in r.out[mark:],
+		"subghz tx at 315 MHz in region EU: refused")
+	if fails: print(out)
+	r.sh("rm -f /tmp/p.sub /tmp/rx.out", 20)
+
+
+PARTS = {"badusb": badusb, "jiggle": jiggle, "teklatua": teklatua,
+	 "subghz": subghz}
 
 
 def main():
@@ -779,7 +878,7 @@ def main():
 			return 1
 		part = sys.argv[1] if len(sys.argv) > 1 else None
 		if part is not None:
-			if part != "jiggle":
+			if part not in ("jiggle", "subghz"):
 				keyfiles(r)
 			PARTS[part](r)
 			if os.environ.get("NATTEST_LOG"):
