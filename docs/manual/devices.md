@@ -114,8 +114,10 @@ EM4100 04 00 98 3D C5
 The first line is the protocol and the tag's data as the stock app shows and saves it (`Data:` in
 its `.rfid` files); the lines under it are what the stock app's info screen shows. `rfid -r` also
 prints the timings, `-n N` makes up to N attempts of half a second (default 4, more while a tag
-has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. Without a
-tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
+has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. When those
+short reads find nothing, `rfid` listens for up to 3 seconds more without a gap, which reads
+tags whose frames are longer than one short read (EM4100 at RF/32, FDX-B, Viking, Jablotron,
+Gallagher...). Without a tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
 62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
 use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
 and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
@@ -155,6 +157,11 @@ tags) captures for 10 seconds and prints the halves, edges, overruns and the ran
 a quick check that nothing is lost. Long frames are emulated the same way in reverse: `ioctl(RFIDIOCEMURUN)` takes a list of runs
 (segments of equal length and load) and the kernel refills a small ring from it while the reader's
 own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
+
+A tag no decoder knows can be recorded as it is: `rfid raw /home/flipper/tag.ask.raw` (10 s; `-t
+SECS` for longer, `-c psk` for PSK tags, Ctrl-C ends it early) writes the signal in the same RAW
+format as the Unleashed firmware (`.ask.raw`, `.psk.raw`), so the file can be looked at on a PC
+(`flipper/tools/lfrawdump.py FILE`) or on a Flipper with Unleashed.
 
 Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, then the Hitag micro
 "magic" chips ID8265, ID8210 and H5.5 with their three passwords, as the Unleashed firmware does;
