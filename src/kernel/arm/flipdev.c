@@ -221,6 +221,10 @@ PRIVATE volatile u8_t rs_done;		/*   halves of its ring filled (mod 256) */
 PRIVATE u8_t rs_got;			/*   halves handed to its reads */
 PRIVATE u8_t rs_wait;			/*   a read waits (ir_caller/proc/buf) */
 #define SEL_RFID	8		/* sel_wait: a poller waits for a half */
+PRIVATE phys_bytes er_runs;		/* R9.0.6: the run list (0: none) */
+PRIVATE phys_bytes er_ring;		/*   the ring: ARR values, then CCR3 */
+PRIVATE u16_t er_nruns, er_n;		/*   runs; words in each half-ring x2 */
+PRIVATE u16_t er_i, er_left;		/*   the run playing, segments left */
 PRIVATE u8_t rf_settle;			/* ms-timer ticks before a held read
 					 * arms its capture (field settling) */
 PRIVATE volatile u8_t tx_on, tx_done, tx_err;
@@ -292,6 +296,8 @@ FORWARD _PROTOTYPE( int rs_start, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void rs_stop, (void)				);
 FORWARD _PROTOTYPE( int rs_take, (phys_bytes user)			);
 FORWARD _PROTOTYPE( int rs_int, (int irq)				);
+FORWARD _PROTOTYPE( int er_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( void er_fill, (int half)				);
 FORWARD _PROTOTYPE( int ow_run, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_emu, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void ib_stop, (void)				);
@@ -396,6 +402,10 @@ PUBLIC void flipdev_task()
 
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
+  }
+  if ((r = hal_rfid_emu_irq()) >= 0) {	/* R9.0.6, the same way */
+	put_irq_handler(r, ir_tx_int);
+	enable_irq(r);
   }
   if ((r = hal_rfid_stream_irq()) >= 0) {	/* R9.0.5 */
 	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
@@ -2714,6 +2724,7 @@ message *m_ptr;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCEMURUN) return(er_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
 	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
 						(vir_bytes) sizeof(on));
@@ -2742,6 +2753,85 @@ message *m_ptr;
   }
   return(OK);
 }
+
+/*===========================================================================*
+ *				er_start				     *
+ *===========================================================================*/
+PRIVATE int er_start(m_ptr)
+message *m_ptr;
+{
+/* RFIDIOCEMURUN (R9.0.6): emulate a long frame from a run list.  The DMA
+ * plays the ring at the reader's clock as RFIDIOCEMU does; each half is
+ * refilled from the runs in the interrupt after it has been played. */
+  struct rfid_emu_runs q;
+  struct rfid_emu_run *ru;
+  phys_bytes user, runs, ring;
+  unsigned k;
+
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(q));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&q), (phys_bytes) sizeof(q));
+  if (q.nruns < 1 || q.nruns > 512 || q.ring_n < 16 || q.ring_n > 512
+						|| (q.ring_n & 1))
+	return(EINVAL);
+  if (rf_emu != 0) return(EBUSY);		/* one tag at a time */
+  if (ir_rd || tx_on || as_proc != 0 || rf_held || rs_on) return(EBUSY);
+  runs = numap(m_ptr->PROC_NR, (vir_bytes) q.runs,
+		(vir_bytes) q.nruns * sizeof(struct rfid_emu_run));
+  ring = numap(m_ptr->PROC_NR, (vir_bytes) q.ring, (vir_bytes) q.ring_n * 8);
+  if (runs == 0 || ring == 0) return(EFAULT);
+  ru = (struct rfid_emu_run *) runs;	/* privileged, flat map */
+  for (k = 0; k < q.nruns; k++)
+	if (ru[k].count == 0 || ru[k].period_m1 == 0
+				|| ru[k].pulse > ru[k].period_m1 + 1)
+		return(EINVAL);
+  proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA and we read it */
+  er_runs = runs;
+  er_ring = ring;
+  er_nruns = q.nruns;
+  er_n = q.ring_n;
+  er_i = 0;
+  er_left = ru[0].count;
+  er_fill(0);
+  er_fill(1);
+  if (hal_rfid_emulate(ring, ring + (phys_bytes) q.ring_n * 4,
+				q.ring_n | HAL_RFID_REFILL) < 0) {
+	er_runs = 0;
+	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
+	return(ENXIO);
+  }
+  rf_emu = m_ptr->PROC_NR + 1;
+  lock();
+  pm_busy |= PM_PULSE;			/* the timer and DMA need the clocks */
+  unlock();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				er_fill					     *
+ *===========================================================================*/
+PRIVATE void er_fill(half)
+int half;
+{
+/* One half of the emulation ring from the runs (in the DMA interrupt, or
+ * before the start): er_n / 2 pairs, so its time is bounded and small. */
+  struct rfid_emu_run *ru = (struct rfid_emu_run *) er_runs;
+  u32_t *dur = (u32_t *) er_ring, *pul = dur + er_n;
+  unsigned i = half ? er_n / 2 : 0, end = i + er_n / 2;
+
+  for (; i < end; i++) {
+	if (er_left == 0) {
+		if (++er_i >= er_nruns) er_i = 0;
+		er_left = ru[er_i].count;
+	}
+	dur[i] = ru[er_i].period_m1;
+	pul[i] = ru[er_i].pulse;
+	er_left--;
+  }
+}
+
 
 /*===========================================================================*
  *				rs_start				     *
@@ -2893,6 +2983,8 @@ PRIVATE void rfid_emu_off()
 /* Stop emulating and let the pattern's memory go (and Stop2 in again). */
   int pr;
 
+  er_runs = 0;				/* R9.0.6: no more refills */
+
   if (rf_emu == 0) return;
   hal_rfid_emulate_stop();
   pr = rf_emu - 1;
@@ -3038,6 +3130,15 @@ int irq;
   int update;
 
   if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
+  if (irq == hal_rfid_emu_irq()) {	/* R9.0.6: a half played: refill */
+	unsigned k = hal_rfid_emu_ack();
+
+	if (er_runs != 0) {
+		if (k & 1) er_fill(0);
+		if (k & 2) er_fill(1);
+	}
+	return(1);
+  }
 
   if (ir_rd && !tx_on) {
 	int f = hal_pulse_ack();

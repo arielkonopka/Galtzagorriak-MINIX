@@ -242,6 +242,12 @@ void hal_rfid_capture_stop(void);
  * (CCR3), both physical, n words each, played round and round by DMA with no
  * CPU work.  The caller pins the memory. */
 int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n);
+/* R9.0.6: n | HAL_RFID_REFILL: the arrays are a ring the kernel refills;
+ * an interrupt (hal_rfid_emu_irq) at each half played, and
+ * hal_rfid_emu_ack() in it: bit 0 the first half done, bit 1 the second. */
+#define HAL_RFID_REFILL	0x10000
+int hal_rfid_emu_irq(void);
+unsigned hal_rfid_emu_ack(void);
 void hal_rfid_emulate_stop(void);
 uint32_t hal_cycles(void);
 

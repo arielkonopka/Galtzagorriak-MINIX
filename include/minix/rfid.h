@@ -77,4 +77,28 @@ struct rfid_stream {
 };
 #define RFIDIOCSTREAM	_IOW('r', 4, struct rfid_stream)
 
+/* RFIDIOCEMURUN (spec R9.0.6): emulation of long frames (FSK, PSK) as a
+ * run list.  A run is `count` equal segments of `period_m1` + 1 carrier
+ * periods with the antenna loaded for `pulse` of them (an FSK bit is one
+ * run, a PSK bit one or two); the list repeats.  `ring` is room for
+ * 2 * ring_n words in the caller's memory (ring_n even, 16..512; 128 is a
+ * good size), pinned while it runs: the DMA plays it at the reader's clock
+ * and the kernel refills each half from the runs as soon as it has been
+ * played (a short interrupt, no work per carrier period).  The run list
+ * stays the caller's too and must not change meanwhile.  Stop as
+ * RFIDIOCEMU (n = 0 there, a close or a cancel).  At most 512 runs. */
+struct rfid_emu_run {
+	unsigned short period_m1;	/* segment length, carrier periods - 1 */
+	unsigned short pulse;		/* periods loaded (0 .. period_m1 + 1) */
+	unsigned short count;		/* segments in a row (>= 1) */
+	unsigned short pad;
+};
+struct rfid_emu_runs {
+	struct rfid_emu_run *runs;
+	unsigned nruns;			/* 1..512 */
+	void *ring;			/* 2 * ring_n 32-bit words */
+	unsigned ring_n;		/* even, 16..512 */
+};
+#define RFIDIOCEMURUN	_IOW('r', 5, struct rfid_emu_runs)
+
 #endif /* _MINIX_RFID_H */
