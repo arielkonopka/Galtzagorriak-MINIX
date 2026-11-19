@@ -7,8 +7,10 @@ Usage:
         start MTPD (a PC build of mtpd, "flipper/mtpd/build/mtpd -r DIR")
         on a pipe and run the test below; --root lets the test also look
         at the files directly.
-  mtphost.py test --unix PATH [--name-max N] [--wait S]
+  mtphost.py test --unix PATH [--name-max N] [--wait S] [--quick]
         the same against mtpd on QEMU's second serial line (a socket).
+        --quick (M2): only a list, a send and get of etxea.sub and the
+        pulled cable; the line is slow and M2 has 240 s for everything.
   mtphost.py ls|get|put ... (--spawn/--unix as above): by hand.
 
 The test: GetDeviceInfo, sessions, storage; folders; send and get back
@@ -25,7 +27,7 @@ The last step leaves /galtzagorriak/etxea.sub (the example file of the
 manual) with known contents, then pulls the cable in the middle of a send
 (closes the stream): QEMU's m2test checks both after mtpd has exited.
 """
-import hashlib, os, socket, struct, subprocess, sys, time
+import hashlib, os, select, socket, struct, subprocess, sys, time
 
 # Container types, operations, responses, events, properties (mtpd/mtp.h)
 CMD, DATA, RESP, EVENT = 1, 2, 3, 4
@@ -278,6 +280,29 @@ class Mtp:
 		_, d = self.ok(OP["GetObjectPropValue"], [h, p])
 		return d
 
+	def hello(self):
+		"""The first GetDeviceInfo.  On QEMU's line (a socket) it is
+		sent again every 5 s until one is answered: the CMSDK UART
+		drops what comes before the kernel turns its RX on, and mtpd
+		starts late in M2.  Once RX is on nothing is lost, so the
+		answer to the last one sent is the one to wait for; the answers
+		to earlier ones that got through come first and are skipped."""
+		sock = getattr(self.l, "sock", None)
+		if sock is None:
+			return self.ok(OP["GetDeviceInfo"])
+		while True:
+			self.tid += 1
+			self.l.send(struct.pack("<IHHI", 12, CMD, OP["GetDeviceInfo"],
+				self.tid))
+			if select.select([sock], [], [], 5)[0]:
+				break
+		while True:
+			k = self.l.container()
+			n, t, cd, tid = struct.unpack_from("<IHHI", k)
+			if t == RESP and tid == self.tid:
+				assert cd == RC["OK"], "GetDeviceInfo: %#x" % cd
+				return
+
 	def events(self):
 		"""The events so far (one more transaction first: an event
 		follows the response that caused it)."""
@@ -301,7 +326,7 @@ def quick(m):
 	"""M2 under QEMU (--quick): one list, one send of etxea.sub, one get,
 	then the pulled cable; the full suite runs in make -C mtpd test."""
 	print("mtphost: quick: session, list, send, get, pulled cable")
-	m.ok(OP["GetDeviceInfo"])
+	m.hello()
 	t0 = time.time()		# (QEMU: mtpd has started now)
 	m.open()
 	ls = m.ls()
@@ -323,7 +348,7 @@ def quick(m):
 
 def test(m, root, name_max):
 	print("mtphost: GetDeviceInfo, sessions, storage")
-	m.ok(OP["GetDeviceInfo"])
+	m.hello()
 	t0 = time.time()		# (QEMU: mtpd has started now)
 	_, d = m.ok(OP["GetDeviceInfo"])
 	o = 8
@@ -622,7 +647,7 @@ def main():
 					"galtzagorriak", "pulled.bin")),
 					"the file it was receiving is gone")
 	except (AssertionError, Gone) as e:
-		print("MTPHOST FAIL: %s" % (e or "mtpd closed the stream"))
+		print("MTPHOST FAIL: %s" % (str(e) or "mtpd closed the stream"))
 		sys.exit(1)
 	print("MTPHOST PASS")
 
