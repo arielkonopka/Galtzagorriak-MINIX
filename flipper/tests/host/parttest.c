@@ -62,14 +62,14 @@ static void put_entry(uint32_t sector, int i, int sysind, uint32_t lowsec,
 	s[511] = 0xAA;
 }
 
-/* Inside [lo, hi) sectors, with the byte counts not wrapped. */
+/* Inside [lo, hi) sectors, with the counts not wrapped (R12.39: the
+ * driver's dv_base and dv_size are in sectors, DV_SECS). */
 static int inside(struct device *dv, uint64_t lo, uint64_t hi)
 {
 	uint64_t b = dv->dv_base, n = dv->dv_size;
 
 	if (n == 0) return 1;			/* empty: never read */
-	if (b % SECTOR_SIZE || n % SECTOR_SIZE) return 0;
-	return b / SECTOR_SIZE >= lo && (b + n) / SECTOR_SIZE <= hi;
+	return b >= lo && b + n <= hi;
 }
 
 static void check(const char *what)
@@ -79,7 +79,7 @@ static void check(const char *what)
 	memset(part, 0, sizeof part);
 	memset(sub, 0, sizeof sub);
 	part[0].dv_base = 0;
-	part[0].dv_size = NSECT * SECTOR_SIZE;
+	part[0].dv_size = NSECT;
 	reads = 0;
 	if (setjmp(stuck)) {
 		printf("FAIL %s: partition() still reading after %d sectors\n",
@@ -92,9 +92,9 @@ static void check(const char *what)
 		if (!inside(&part[p], 0, NSECT)) ok = 0;
 		for (s = 0; s < NR_PARTITIONS; s++) {
 			struct device *d = &sub[(p - 1) * NR_PARTITIONS + s];
-			uint64_t lo = part[p].dv_base / SECTOR_SIZE;
+			uint64_t lo = part[p].dv_base;
 
-			if (!inside(d, lo, lo + part[p].dv_size / SECTOR_SIZE))
+			if (!inside(d, lo, lo + part[p].dv_size))
 				ok = 0;
 		}
 	}
@@ -141,10 +141,54 @@ static int rnd_type(void)
 	return t[rand() % 5];
 }
 
+/* dv_sector (R12.39, review of #348): the sector of a 64-bit request
+ * position (HIGHPOS:POSITION) in a partition, or its size (EOF).  Bits
+ * 32-40 of the position are sector bits 23-31; HIGHPOS 512 and up is
+ * past 2 TiB and must be EOF, not wrap to a sector near the start. */
+static void sectors(void)
+{
+	static const struct {
+		unsigned high;
+		uint32_t pos, size, want;	/* want == size: EOF */
+	} t[] = {
+		{ 0, 0, 100, 0 },
+		{ 0, 99u * 512, 100, 99 },
+		{ 0, 100u * 512, 100, 100 },		/* at the end */
+		{ 1, 0, 0x01000000u, 0x00800000u },	/* 4 GiB */
+		{ 1, 1024, 0x01000000u, 0x00800002u },
+		{ 0x1FF, 0xFFFFFE00u, 0xFFFFFFFFu, 0xFFFFFFFFu }, /* end */
+		{ 0x1FF, 0xFFFFFC00u, 0xFFFFFFFFu, 0xFFFFFFFEu },
+		{ 512, 0, 0xFFFFFFFFu, 0xFFFFFFFFu },	/* 2 TiB: EOF */
+		{ 512, 0, 0x80000000u, 0x80000000u },	/* was sector 0 */
+		{ 513, 1024, 0xFFFFFFFFu, 0xFFFFFFFFu },/* was sector 0x800002 */
+		{ 1023, 0xFFFFFC00u, 0xFFFFFFFFu, 0xFFFFFFFFu }, /* FS's max */
+		{ 0xFFFF, 0, 0xFFFFFFFFu, 0xFFFFFFFFu },
+	};
+	struct device dv;
+	unsigned i;
+	uint32_t got;
+
+	for (i = 0; i < sizeof t / sizeof t[0]; i++) {
+		dv.dv_base = 1000;
+		dv.dv_size = t[i].size;
+		got = dv_sector(&dv, t[i].high, t[i].pos);
+		if (got != t[i].want) {
+			printf("FAIL dv_sector(%#x:%#x, size %#x) = %#x, "
+				"not %#x\n", t[i].high, t[i].pos, t[i].size,
+				got, t[i].want);
+			fails++;
+		}
+	}
+	printf("%s dv_sector: 64-bit positions, past 2 TiB is EOF\n",
+		fails ? "done:" : "PASS");
+}
+
 int main(void)
 {
 	int i, j, k;
 	char name[32];
+
+	sectors();
 
 	if ((card = malloc((size_t) NSECT * SECTOR_SIZE)) == NULL) return 1;
 

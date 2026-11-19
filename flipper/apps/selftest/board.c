@@ -61,7 +61,7 @@ static void rtc(void)
 static void sd(void)
 {
 	static char buf[512], save[512];
-	struct partition p;
+	struct part_range p;	/* DIOCGETPS: sectors (R12.39) */
 	struct tms tm;
 	clock_t t0, t;
 	unsigned long start, sec;
@@ -70,12 +70,12 @@ static void sd(void)
 	int fd, i, ok;
 
 	if ((fd = open("/dev/hd0", O_RDWR)) < 0
-	    || ioctl(fd, DIOCGETP, &p) != 0) {
+	    || ioctl(fd, DIOCGETPS, &p) != 0) {
 		if (fd >= 0) close(fd);
 		line("SD", "no card", 0);
 		return;
 	}
-	sprintf(b, "%lu MB", (unsigned long) (p.size >> 20));
+	sprintf(b, "%lu MB", (unsigned long) (p.count >> 11));
 	line("SD", b, 1);
 
 	/* 1 MB from the start of the card, through the FS cache (which is

@@ -172,6 +172,11 @@ message *m_ptr;			/* pointer to read or write message */
   ioreq.io_request = m_ptr->m_type;
   ioreq.io_buf = m_ptr->ADDRESS;
   ioreq.io_position = m_ptr->POSITION;
+  /* R12.39: the high 32 bits of the byte position; 16 of them are kept
+   * (positions up to 256 TiB).  Drivers with no use for them ignore
+   * io_high. */
+  if ((unsigned long) m_ptr->HIGHPOS > 0xFFFF) return(EINVAL);
+  ioreq.io_high = (unsigned short) m_ptr->HIGHPOS;
   ioreq.io_nbytes = m_ptr->COUNT;
 
   r = (*dp->dr_schedule)(m_ptr->PROC_NR, &ioreq);

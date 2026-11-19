@@ -99,7 +99,6 @@ static int in_use(dev_t target)
 
 int main(int argc, char **argv)
 {
-	struct partition geom;
 	struct part_range rg;
 	struct stat st;
 	char *dev;
@@ -119,9 +118,8 @@ int main(int argc, char **argv)
 	if (primary(st.st_rdev & 0xFF) == 0 || in_use(st.st_rdev))
 		die(dev, EBUSY);
 	if ((fd = open(dev, O_RDWR)) < 0) die(dev, errno);
-	if (ioctl(fd, DIOCGETP, &geom) < 0) die(dev, errno);
-	rg.first = 0;
-	rg.count = (u32_t) (geom.size / SECTOR);
+	if (ioctl(fd, DIOCGETPS, &rg) < 0) die(dev, errno);	/* R12.39 */
+	rg.first = 0;			/* from the partition's start */
 	if (rg.count == 0) die(dev, EINVAL);
 	if (ioctl(fd, DIOCERASE, &rg) < 0) {
 		if (errno == ENOTTY) {

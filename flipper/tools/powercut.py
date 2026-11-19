@@ -98,12 +98,17 @@ def frame_end(buf):
 
 
 class Run:
-	def __init__(self, n, mode, image="minix.bin"):
-		self.dir = tempfile.mkdtemp(prefix="powercut")
-		os.makedirs(os.path.join(self.dir, "build/qemu/minix"))
-		subprocess.check_call(["cp", "--sparse=always",	# 4 GB, 2 MB used
-			os.path.join(MB, "disk.img"),
-			os.path.join(self.dir, "build/qemu/minix/disk.img")])
+	def __init__(self, n, mode, image="minix.bin", reuse=None):
+		"""reuse: the directory of an earlier, stopped Run: its
+		card is booted again (tools/bigcard.py)."""
+		if reuse:
+			self.dir = reuse
+		else:
+			self.dir = tempfile.mkdtemp(prefix="powercut")
+			os.makedirs(os.path.join(self.dir, "build/qemu/minix"))
+			subprocess.check_call(["cp", "--sparse=always",	# 4 GB, 2 MB used
+				os.path.join(MB, "disk.img"),
+				os.path.join(self.dir, "build/qemu/minix/disk.img")])
 		cmd = QEMU + [
 		    "-device", "loader,file=%s,addr=0" %
 				os.path.abspath(os.path.join(MB, image)),

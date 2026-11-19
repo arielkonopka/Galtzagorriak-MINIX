@@ -28,11 +28,23 @@ struct driver {
 
 #endif /* CHIP == INTEL */
 
-/* Base and size of a partition in bytes. */
+/* Base and size of a partition.  The units are the driver's: bytes for
+ * the memory devices; for partitioned disks DV_SECS() and SECS_DV()
+ * convert to and from sectors.  On ARM_CM (R12.39) the SD card driver
+ * keeps them in sectors, so a partition may start and end anywhere in
+ * the first 2 TiB and be larger than 4 GiB. */
 struct device {
   unsigned long	dv_base;
   unsigned long dv_size;
 };
+
+#if (CHIP == ARM_CM)
+#define DV_SECS(x)	(x)			/* already sectors */
+#define SECS_DV(x)	(x)
+#else
+#define DV_SECS(x)	((x) >> SECTOR_SHIFT)	/* bytes -> sectors */
+#define SECS_DV(x)	((x) << SECTOR_SHIFT)
+#endif
 
 #define NIL_DEV		((struct device *) 0)
 
