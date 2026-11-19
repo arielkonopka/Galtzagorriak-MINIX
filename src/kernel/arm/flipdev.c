@@ -1051,7 +1051,7 @@ PRIVATE int adc_put(line, n, v)
 char *line;
 int n, v;
 {
-  char d[6];
+  char d[10];			/* an int's digits (review H8) */
   int j = 0;
 
   if (v == HAL_ADC_OVER) { line[n++] = '>'; return(n); }
@@ -2944,12 +2944,17 @@ PRIVATE void ir_rx_end(r)
 int r;			/* OK: the frame is in; 1: cancelled (no reply);
 			 * else an error for the reader */
 {
-  unsigned n = ir_count / 4 - hal_pulse_left();
+  unsigned n = ir_count / 4, left = hal_pulse_left();
 
+  /* Security review 2026-11-19, H3: a read cancelled before its capture
+   * was armed (a held RFID read still settling) sees the counter of an
+   * older transfer: never more than the buffer, and a cancelled read's
+   * memory is not touched at all. */
+  n = left > n ? 0 : n - left;
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
 	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
 	else hal_rfid_stop();		/* the DMA first, then the memory */
-	n = rf_durations(n);
+	if (r == OK) n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
   mt_arm(MT_PULSE, 0);			/* no poll after the frame */
