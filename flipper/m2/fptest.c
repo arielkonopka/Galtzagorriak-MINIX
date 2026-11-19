@@ -6,10 +6,12 @@
  * Exit status: the number of failures.
  */
 #include <sys/types.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static int fails;
@@ -120,11 +122,19 @@ static int fp_t_preempt(void)	/* two FP processes, time-sliced */
 	int i, bad = 0, st;
 	pid_t pid;
 	int seed;
+	struct tms tm;
+	clock_t t0;
 
 	pid = fork();
 	seed = pid == 0 ? 0x77 : 0x66;
 	fp_fill(seed);
-	for (i = 0; i < 300000; i++) bad += fp_check(seed) != 0;
+	/* 2 s of wall time, about 10 quanta each (the pair's members swap
+	 * once per quantum), not a fixed count: QEMU runs this loop many
+	 * times slower when it lies in a 1 KB page that an MPU region starts
+	 * in (#331: 45 s+ for 300000 checks after spin_test moved it). */
+	t0 = times(&tm);
+	for (i = 1; (i & 255) != 0 || times(&tm) - t0 < 2 * CLK_TCK; i++)
+		bad += fp_check(seed) != 0;
 	if (pid == 0) _exit(bad != 0);
 	if (waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return 96;
 	return (bad != 0) + WEXITSTATUS(st);

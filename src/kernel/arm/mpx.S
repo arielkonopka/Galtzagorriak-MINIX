@@ -348,7 +348,11 @@ user_st_begin:
 	bne	6f
 	orr	r3, r3, #CONTROL_FPLIVE	/* its registers from here on (also */
 	str	r3, [r12, #P_CONTROL]	/* half loaded: fp_flush clears them) */
-	sub	r2, r0, #FP_SAVE
+	/* Where fp_flush put them: at p_reg.sp, which is 4 below
+	 * frame - FP_SAVE when the CPU padded the frame (save_ctx).
+	 * frame - FP_SAVE read them 4 bytes off: S16 got S17's value,
+	 * S31 the padding word (#331, fptest time-sliced). */
+	ldr	r2, [r12, #P_SP]
 	ldrt	r4, [r2, #0]
 	ldrt	r5, [r2, #4]
 	ldrt	r6, [r2, #8]
@@ -443,6 +447,17 @@ fp_st_begin:
 	.global	fp_st_end
 fp_st_end:
 	b	fp_zero
+
+/* fp_save(rp): fp_flush for C, with interrupts off (unshadow: the image
+ * of rp, mpu_proc, is about to move; its FP registers must be saved into
+ * it first, not into whatever lies at its addresses later). */
+	.global	fp_save
+	.thumb_func
+fp_save:
+	push	{r3-r11, lr}
+	mov	r1, r0
+	bl	fp_flush
+	pop	{r3-r11, pc}
 
 /* Its FP context is not to be saved: cancel a pending lazy save
  * (its frame may be gone), then clear the FPU. */

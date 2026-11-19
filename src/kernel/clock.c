@@ -263,10 +263,14 @@ PRIVATE void do_clocktick()
 	if (bill_ptr == prev_ptr) lock_sched();	/* process has run too long */
 	sched_ticks = SCHED_RATE;		/* reset quantum */
 	prev_ptr = bill_ptr;			/* new previous process */
-  }
 #if (SHADOWING == 1)
-  if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q]);
+	/* A shadow group's members take turns once per quantum, like any
+	 * other processes (#331); a swap copies their images.  When the
+	 * resident member blocks and nothing else is ready, the idle task
+	 * has the swap done at once (shadow_kick). */
+	if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q]);
 #endif
+  }
 }
 
 
@@ -625,10 +629,10 @@ int irq;
 #endif
 #if (SHADOWING == 1) && (CHIP == ARM_CM)
       /* A shadowed process can only run after the clock task swapped it
-       * in; do not make it wait for the end of a quantum (on an idle
-       * system sched_ticks never gets there at all).
+       * in, at the end of a quantum (on an idle system sched_ticks never
+       * gets there otherwise; shadow_kick swaps at once when idle).
        */
-      rdy_head[SHADOW_Q] != NIL_PROC ||
+      rdy_head[SHADOW_Q] != NIL_PROC && sched_ticks == 1 ||
 #endif
       sched_ticks == 1 &&
       bill_ptr == prev_ptr &&
