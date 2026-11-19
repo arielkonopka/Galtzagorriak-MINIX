@@ -142,11 +142,8 @@ struct iorequest_s *iop;	/* pointer to read or write request */
   if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
   if ((r = w_card()) != OK) return(iop->io_nbytes = r);	/* N.6 */
 
-  /* The sector in the partition: bits 32-40 of the position give sector
-   * bits 23-31 (R12.39); a position past 2 TiB is past any partition. */
-  if (iop->io_high >= (1 << (32 - SECTOR_SHIFT))) return(OK);	/* at EOF */
-  sector = ((unsigned long) iop->io_high << (32 - SECTOR_SHIFT))
-						| (pos >> SECTOR_SHIFT);
+  /* The sector in the partition (R12.39, drvlib.c; past 2 TiB is EOF). */
+  sector = dv_sector(w_dv, iop->io_high, pos);
   if (sector >= w_dv->dv_size) return(OK);			/* at EOF */
   if ((nbytes >> SECTOR_SHIFT) > w_dv->dv_size - sector)
 	nbytes = (w_dv->dv_size - sector) << SECTOR_SHIFT;

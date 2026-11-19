@@ -228,9 +228,10 @@ PUBLIC int do_ioctl()
    * kernel does not know the caller's uid, so FS checks it here.  'Q' is
    * the Sub-GHz ioctl group only, so no other device sees this number. */
   if (m.TTY_REQUEST == SGIOCREGION && !super_user) return(EPERM);
-  /* R12.39: a raw sector write (DIOCPRW) needs a descriptor open for
-   * writing and a device that is not mounted (the cache would not see
-   * it).  The kernel cannot check either, so FS does. */
+  /* R12.39: a raw sector read (DIOCPRW) needs a descriptor open for
+   * reading; a write, one open for writing and a device that is not
+   * mounted (the cache would not see it).  The kernel cannot check
+   * either, so FS does. */
   if (m.TTY_REQUEST == DIOCPRW && (rip->i_mode & I_TYPE) == I_BLOCK_SPECIAL) {
 	struct part_rw rw;
 	struct super_block *sp;
@@ -238,8 +239,8 @@ PUBLIC int do_ioctl()
 	if (sys_copy(who, D, (phys_bytes) m.ADDRESS, FS_PROC_NR, D,
 			(phys_bytes) &rw, (phys_bytes) sizeof(rw)) != OK)
 		return(EFAULT);
+	if (!(f->filp_mode & (rw.write ? W_BIT : R_BIT))) return(EBADF);
 	if (rw.write) {
-		if (!(f->filp_mode & W_BIT)) return(EBADF);
 		for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
 			if (sp->s_dev == dev) return(EBUSY);
 	}

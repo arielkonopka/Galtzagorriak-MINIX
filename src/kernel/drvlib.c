@@ -237,3 +237,25 @@ struct part_entry *table;
 	}
   } while (--n > 0);
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				dv_sector				     *
+ *===========================================================================*/
+PUBLIC unsigned long dv_sector(dv, high, pos)
+struct device *dv;		/* the partition, in sectors (DV_SECS) */
+unsigned high;			/* position bits 32-47 (HIGHPOS, io_high) */
+unsigned long pos;		/* position bits 0-31 */
+{
+/* The sector in dv of byte position high:pos (R12.39), or dv->dv_size
+ * when it is at or past the end.  Position bits 32-40 are sector bits
+ * 23-31; a position of 2 TiB or more (high >= 512) is past any partition:
+ * shifted into 32 bits it would wrap to a sector near the start. */
+  unsigned long sector;
+
+  if (high >= (1 << SECTOR_SHIFT)) return(dv->dv_size);	/* past 2 TiB */
+  sector = ((unsigned long) high << (32 - SECTOR_SHIFT)) | (pos >> SECTOR_SHIFT);
+  return(sector < dv->dv_size ? sector : dv->dv_size);
+}
+#endif

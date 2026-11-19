@@ -5,6 +5,8 @@
 #include <ibm/partition.h>
 
 _PROTOTYPE( void partition, (struct driver *dr, int device, int style) );
+_PROTOTYPE( unsigned long dv_sector, (struct device *dv, unsigned high,
+							unsigned long pos) );
 
 /* BIOS parameter table layout. */
 #define bp_cylinders(t)		(* (u16_t *) (&(t)[0]))
