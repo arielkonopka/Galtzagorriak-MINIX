@@ -1004,9 +1004,12 @@ libc: $(MB)/libc.a
 QEMU_MINIX := qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native,userspace=on
 
+# The M2 self-test took 97 s under QEMU 10.0 (Debian 13) once #152 added
+# the FPU checks: 90 s cut it off at its last test.  Slower hosts and a
+# growing test list need room; a real hang still ends.
 minix-run: $(MB)/minix.bin $(MB)/disk.img
 	@test "$(BOARD)" = qemu || { echo "minix-run needs BOARD=qemu"; exit 1; }
-	timeout 90 $(QEMU_MINIX) -device loader,file=$<,addr=0
+	timeout 240 $(QEMU_MINIX) -device loader,file=$<,addr=0
 
 minix-flash: $(MB)/minix.bin
 	@test "$(BOARD)" = flipper || { echo "minix-flash needs BOARD=flipper"; exit 1; }
