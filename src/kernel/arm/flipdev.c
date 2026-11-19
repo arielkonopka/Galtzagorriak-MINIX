@@ -1458,18 +1458,25 @@ message *m_ptr;
 		if (fg_pre != 0 && pre_rd == 0) pre_rd = m_ptr->PROC_NR + 1;
 		return(SUSPEND);
 	}
-	if (ev_head != ev_tail) {
-		LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
-		return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
+	/* The empty test and rd_waiting under lock: a press between them
+	 * would be queued without a wakeup (btn_sample sees rd_waiting
+	 * still FALSE), and the reader would sleep until the next key
+	 * (#332, as /dev/mtpline in #330). */
+	lock();
+	if (ev_head == ev_tail && !(m_ptr->TTY_FLAGS & O_NONBLOCK)) {
+		if (rd_waiting) { unlock(); return(EIO); }  /* one reader */
+		rd_waiting = TRUE;
+		unlock();
+		rd_caller = m_ptr->m_source;
+		rd_proc = m_ptr->PROC_NR;
+		rd_vir = (vir_bytes) m_ptr->ADDRESS;
+		rd_count = count;
+		return(SUSPEND);
 	}
-	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
-	if (rd_waiting) return(EIO);		/* one reader at a time */
-	rd_waiting = TRUE;
-	rd_caller = m_ptr->m_source;
-	rd_proc = m_ptr->PROC_NR;
-	rd_vir = (vir_bytes) m_ptr->ADDRESS;
-	rd_count = count;
-	return(SUSPEND);
+	unlock();
+	if (ev_head == ev_tail) return(EAGAIN);
+	LAT_EVENT(LE_BREPLY, m_ptr->PROC_NR);
+	return(deliver(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, count));
 
   case VIBRO_MINOR: {
 	/* "0" off, "1" on (or a byte 0/1), "N" (2..999): on for N ms, ended
@@ -1538,12 +1545,18 @@ message *m_ptr;
 	if (m_ptr->m_type == DEV_READ) {
 		/* the levels; then (R6.4) '1' for each pin that changed
 		 * since the last read, which clears them */
+		unsigned chg;
+
 		if (count > 2 * HAL_GPIO_PINS) count = 2 * HAL_GPIO_PINS;
+		lock();		/* #332: an edge the tick records between
+				 * the look and the clear is not lost */
+		chg = gp_chg;
+		if (count > HAL_GPIO_PINS) gp_chg = 0;
+		unlock();
 		for (i = 0; i < HAL_GPIO_PINS; i++) {
 			gb[i] = '0' + hal_gpio_read(i);
-			gb[HAL_GPIO_PINS + i] = gp_chg & (1 << i) ? '1' : '0';
+			gb[HAL_GPIO_PINS + i] = chg & (1 << i) ? '1' : '0';
 		}
-		if (count > HAL_GPIO_PINS) gp_chg = 0;
 		phys_copy(vir2phys(gb), user, (phys_bytes) count);
 		return(count);
 	}
@@ -2856,14 +2869,21 @@ int count;
 
 	if (rs_on != m_ptr->PROC_NR + 1) return(EBUSY);
 	if (count < 4) return(EINVAL);
-	if ((r = rs_take(user)) != EAGAIN) return(r);
-	if (m_ptr->TTY_FLAGS & O_NONBLOCK) return(EAGAIN);
-	if (rs_wait) return(EIO);
-	rs_wait = 1;
-	ir_caller = m_ptr->m_source;
-	ir_proc = m_ptr->PROC_NR;
-	ir_buf = user;
-	return(SUSPEND);
+	/* The empty test and rs_wait under lock: a half that rs_int
+	 * finished between them would not wake the reader (#332); it
+	 * would wait for the next half and then get EOVERFLOW. */
+	lock();
+	if (rs_done == rs_got && !(m_ptr->TTY_FLAGS & O_NONBLOCK)) {
+		if (rs_wait) { unlock(); return(EIO); }
+		rs_wait = 1;
+		unlock();
+		ir_caller = m_ptr->m_source;
+		ir_proc = m_ptr->PROC_NR;
+		ir_buf = user;
+		return(SUSPEND);
+	}
+	unlock();
+	return(rs_take(user));		/* a half, EOVERFLOW or EAGAIN */
   }
   if (count < 8) return(EINVAL);
   if (ir_rd || tx_on || as_proc != 0) return(EBUSY);	/* TIM1, TIM2 */
