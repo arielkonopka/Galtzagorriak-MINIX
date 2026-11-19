@@ -184,8 +184,9 @@ Hardware facts (official main-PCB schematics, stock `furi_hal_power.c`, `furi_ha
 - **Power-off = BQ25896 ship mode**, as stock `furi_hal_power_off`: enable the RTC alarm output (Alarm A, open-drain, active low) **on PC13**, **switch ext3.3V on** (stock: "shutting down with ext 3V3 off is causing LSE to stop"), short vibro, then the ship-mode command. With USB attached ship mode cannot cut SYS: sleep instead.
 - **Alarm while off:** the RTC (on VBAT) pulls PC13 = Back = charger QON, the charger turns the BATFET on and the Flipper boots. This replaces F.3's "Standby or Shutdown". At boot, read the wake reason (RTC ALRAF, backup register) **before** reading boot key combos (Back looks pressed until the flag is cleared), then turn the alarm output off and send `SIGRTC` as F.2 says.
 - **Boot lead for alarms (user, 2026-11-15):** a start from off takes QON (~1 s) + L10, so at power-off `timed` arms Alarm A **early** by the boot lead and keeps the real due time in an RTC backup register (0 B RAM). After the boot `timed` waits for the real time, so the alarm rings on the second, not seconds late. The boot lead is measured at each start from off (RTC time at the first frame minus the alarm time, plus a 2 s margin) and kept in the same backup register; first default 10 s. `Missed` (F.2) applies only if the boot ends after the real time.
-- **`After: off` (F.3, user 2026-11-17):** a timer with `After: off` (or `timed --then-off`) powers the Flipper off again after its job, **only if this boot came from the RTC alarm** (wake-reason bit in a backup register), no button was pressed since and no user session is active; a Flipper that was already on stays on. Last of several close jobs; next timer < ≈ 4 min → Stop2 instead; `Timeout:` (default 60 s) ends a hung job and still powers off; USB attached → sleep; quiet boot (no splash, backlight, CPU2, launcher) when an `After: off` job is due, a button press makes it a normal boot. `Type: emergency` (user's name for the rescue-signal case) = `After: off` + ignores do-not-disturb, never skipped (`Missed: fire-once`), at low battery `timed` halves its rate per halving of the charge (below 20 % every 2nd skipped, below 10 % every 2nd of the rest, ... max 1/64; level + counter in RTC backup bits, level passed in `TIMED_LOWBAT`), only for packages with `Timers: emergency`. `Type: wakeup` (alarm clock): below 10 % (configurable) the alarm is not run; instead one minimal notice that it was skipped (LED blink by default, or a short beep, `lowbat_notice=`), logged, shown by the alarm app later. The `timed` part is `lane:cloud` (QEMU: fake wake reason), the wake-reason bit and quiet boot are local.
-- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on. With `After: off`: off → RTC wake → job → off again; the same timer while the Flipper is on → job runs, Flipper stays on; a button press during the quiet boot → stays on.
+- **`Type: wakeup` (alarm clock, F.3, user 2026-11-17):** below 10 % (configurable) the alarm is not run; instead one minimal notice that it was skipped (LED blink by default, or a short beep, `lowbat_notice=`), logged, shown by the alarm app later.
+- **`After: off` and `Type: emergency` moved to T36a** (user, 2026-11-19: end of the queue). T14c only reads the wake reason at boot and keeps it in the RTC backup register bit that T36a will use.
+- Acceptance: AC6.1, AC6.2; an alarm set 3 min ahead powers on a switched-off Flipper and rings within 1 s of its time (record the boot lead); Up+Back self test still works after a normal power-on.
 - RAM: kernel ≤ +32 B. Flash ≈ +3 KB.
 
 ### T14d. Screen-off state and peripheral power (after T14b)
@@ -411,6 +412,20 @@ Before T26b turns transmit on. T31 is the launcher style (#295).
 - Wizard step 3 (R18b.2) and the launcher SETTINGS line `Region`.
 - Before enabling transmit: check every number of Q.4/Q.5 against the original texts listed in Q.6 (EUR-Lex 2006/771/EC consolidated, ERC/REC 70-03 PDF pages 44-46 and Appendix 3 for AL/BA/MK, eCFR 15.205/231/247/249, RSS-210/247/Gen) and list in the PR what was checked. ACQ.3, ACQ.4 on the device.
 
+## T34. A small database `kutxa` (spec section R; user request 2026-11-17/18): not scheduled, the user starts it
+Designed and its tests written first (2026-11-18); the implementation waits until the user asks for it. Works on today's V2 `/home` (files up to 64 MB); big files need T27.
+
+### T34a (`lane:cloud`, host + QEMU)
+- `src/lib/kutxa/` (`kutxa.c`, `krec.c`) behind the existing `kutxa.h` (RR.1–RR.6): pages, CRC, copy on write with spill, commit, open with tail truncation and rollback, catalog, indexes, cursors, bulk load, compaction. No `malloc`. The header may get additions; a change to an existing declaration needs a note in the PR.
+- FS: `fcntl(F_FSYNC)` + libc `fsync()` (RR.7a) and `O_NOCACHE` with `ONE_SHOT` (RR.7b). FS is exactly at its 27 392 B budget, so this must be truly 0 B (no new statics, no deeper stack; `ramcheck`).
+- `src/commands/kutxa/kutxa.c` (RR.8), `flipper/tools/kutxa.py` (same format, `build`/`dump`/`check`), base package (RR.10a), `pkg install --flash kutxa` checked (RR.10b). Manual pages `kutxa(1)`, `kutxa(3)` and a manual chapter (R.13).
+- **Make `flipper/tests/kutxa` pass as written** (`kutxatest.c`, `clitest.sh`, ACR.1–ACR.10); do not loosen a check, say in the PR if one is wrong and why. Add the directory to `tests/host` (CI) and `make kutxatest`; run `clitest.sh` in QEMU too (the M2 tests package).
+- Text sizes (library, command) and the RR.11 RAM numbers in the PR.
+
+### T34b (`lane:local`, Flipper)
+- ACR.11 on the device: a 1 million record file built with `kutxa.py` and copied to `/home`; lookup p99, scan rate, commit time; `lat` L1 during a compaction and a `kutxa dump` in the background; numbers in PORTING.md and R.11.
+- Later, with Phase 7c: the Berry module (RR.9). With the second app that uses the library: `KUTXA=shared` (RR.10c).
+
 ## T28. USB gadgets as window apps (spec 11.3 with Phase 10 R10.1/R10.2; user pick 2026-11-18): milestone M3, after T25 and the open M3 fixes
 Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every PR updates `docs/manual/usb-gadgets.md` (new page, linked from the manual index) and follows K.2 for every screen.
 
@@ -443,6 +458,21 @@ Order: T28a and T28b in parallel → T28c, T28d, T28e (parallel, cloud). Every P
 - With `Style: stock` the launcher starts apps with `FURI_STYLE=stock` in their environment, so the `libfuri` modules draw as stock (T22b: `flipper/lib/furi/src/gui/pine.c`; Pine is their default).
 - AC5.5 still byte-identical in Pine style; AC5.7; ramcheck, flashcheck.
 - Manual: [Launcher](docs/manual/launcher.md) gets a "Stock style" section with a screenshot of each style.
+
+## T33. Signed update file `Galtzagorriak.update` (spec section S; user request 2026-11-18): milestone M3, after T29 (MTP)
+Goal: Windows users update by dragging one signed file onto the Flipper and pressing OK. No CPU2 needed.
+
+### T33a (`lane:cloud`, host + QEMU)
+- `tools/mkupdate.py`, `tools/gzsign` (`--new-key`), `tools/gzupdate-check.py`; `make BOARD=flipper update` (RS.17); format of RS.1/RS.2 documented in `flipper/PORTING.md`.
+- Ed25519 + SHA-512 verifier in C, shared by `atea` and libc's crypto part (RS.4); host tests with RFC 8032 vectors and the ACS.1 bad files (ASan/UBSan, `flipper/tests/host`).
+- `gzupdate check|apply|finish|commit` (RS.8–RS.10, RS.14 manifest, RS.15) `gztree` plus INIT's epoch check and exec (RS.14, INIT +0 B RAM), with `powercut.py` cut points (ACS.2, ACS.3). In QEMU `atea`'s flash step is simulated on the QEMU flash image.
+- CI: `release` job signs and attaches `Galtzagorriak-X.Y.Z.update` + `.sha512` (RS.18), secret `GZ_UPDATE_KEY` in the GitHub environment `release` (the user creates the key and the environment, RS.20; until then the job skips signing and says so). `GZ_EPOCH` + `versioncheck` (RS.19).
+- Manual: `install.md` §7 "Updating with the update file" (S.11).
+
+### T33b (`lane:local`, Flipper)
+- `atea` at 0x0800_0000 (≤ 16 KB): DFU checks as `hal_early_boot`, `BKP11R` (free on main; add it to the backup-register list in `board.c` and PORTING.md), polled SD SPI, LCD progress, page compare/erase/program with first-page-last, epoch and downgrade press, trial counter and rollback question (RS.11–RS.16). System image linked at 0x0800_4000; shared libc, libfuri/libapp and the installed region move up 16 KB (libc 0x0803_4000, programs 0x0804_C000; S.8; one full DFU flash, as #201).
+- `mtpd` hook (RS.7) and the confirmation window (RS.8, K.2 style).
+- ACS.4–ACS.8 on the device; measure verify time, `atea` size and stack, update time for a full and a one-program change; report page erases.
 
 ## T29. Files to a PC over MTP (spec R10.4, AC10.4.x; user decision 2026-11-18): milestone M3, after T28b
 Windows and Linux copy files with their own drivers, nothing installed on the PC; `/home` stays mounted. Order: T29a any time (no USB needed) → T29b after T28b (it extends the same composite descriptors). Every PR updates `docs/manual/usb-files.md` (new page, linked from the manual index).
@@ -508,6 +538,21 @@ The drivers wait for their milestones (BLE M7, `sensor` task M4), but the logic 
 - `flipper/apps/canary/gpiorules.c/.h`: debounce and the `loop` / `contact` / `pulse` / `volt` rules of R7b.4.4 on a stream of samples.
 - Host tests (`make -C flipper/apps/canary test`): beacon golden vectors (iBeacon, each Eddystone frame, AltBeacon, malformed lengths, a truncated packet); GPIO bounce and window cases.
 - No UI, no drivers. RAM on target: 0 B (code in flash, state owned by the caller). Flash ≈ 3 KB.
+
+## T36. Off after the job, and hibernation (spec F.3 `After: off`, 12i; user request 2026-11-19): milestone M9, **end of the queue**
+The user wants both as goals, but after everything else (2026-11-19). Background: the project report `hibernation-analysis.md` (Polish, not in the repo). Do T36a first; T36b only after it.
+
+### T36a. Wake, do the job, off again (spec F.3 `After: off`, `Type: emergency`): `timed` part `lane:cloud`, wake bit and quiet boot `lane:local`
+- A timer with `After: off` (or `timed --then-off`) powers the Flipper off again after its job, **only if this boot came from the RTC alarm** (wake-reason bit in a backup register, set by T14c), no button was pressed since and no user session is active; a Flipper that was already on stays on. Last of several close jobs; next timer < ≈ 4 min → Stop2 instead; `Timeout:` (default 60 s) ends a hung job and still powers off; USB attached → sleep; quiet boot (no splash, backlight, CPU2, launcher) when an `After: off` job is due, a button press makes it a normal boot.
+- `Type: emergency` (the user's name for the rescue-signal case) = `After: off` + ignores do-not-disturb, never skipped (`Missed: fire-once`), at low battery `timed` halves its rate per halving of the charge (below 20 % every 2nd skipped, below 10 % every 2nd of the rest, ... max 1/64; level + counter in RTC backup bits, level passed in `TIMED_LOWBAT`), only for packages with `Timers: emergency`.
+- QEMU: fake wake reason. Device: measure the quiet-boot lead separately from the normal boot lead (T14c) and keep both.
+- Acceptance: off → RTC wake → job → off again; the same timer while the Flipper is on → job runs, Flipper stays on; a button press during the quiet boot → stays on; a job that hangs → ended after `Timeout:`, Flipper off; emergency thinning checked in QEMU with a fake battery level.
+- RAM: 0 B (backup register bits). Flash: `timed` + INIT/`rc` ≈ 1 KB.
+
+### T36b. Hibernation: whole-RAM image on the card (spec 12i): `lane:local`, after T36a, 12a, T17 and the AES1 driver (R12.9)
+- Kernel PR: `SYS_HIBERNATE`, the image writer and the resume stub (R12.41–R12.44); MM/FS/INIT PR: sync, drop clean buffers, blockers, `SIGRESUME`, power-menu entry (R12.45, R12.46); driver PR: `resume()` hooks (R12.47); the device key and AES-GCM (R12.48).
+- Acceptance: AC12.20–AC12.24.
+- RAM: ≈ 0 B resident (R12.49). Flash ≈ 3–5 KB.
 
 ## Still open from reviews
 - IR (#46): `lat` while a frame goes out, a test against a real TV/remote, and the flipdev stack high-water after a long frame (`ir_write` keeps 64 B on it). (The kernel +64 B was won back in #49.)

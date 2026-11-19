@@ -166,7 +166,7 @@ every ~2 working days with a patch release if no phase closed (as 0.1.1). The us
 | **M6 Headroom and NFC** | 12b (swap encryption, then `crypt` by default), 13, 14 | Q: AES-GCM glue in MM, software GCM for QEMU, NFC protocol stacks. H: AES1 driver (R12.9), ST25R3916 driver | ≈ 0.22 | NFC apps run without OOM |
 | **M7 Bluetooth** | 15, 16 (`sbctl`, `btbridge`, mobile app link R15.7) | Q: RPC protobuf (`libflipperpb`), GATT logic. H: CPU2 stack bring-up | ≈ 0.25 | phone app connects; `sbctl` drives the user's Venty |
 | **M8 Trust and parity** | 17 (option bytes WRP/RDP1 after BLE), 18, 18b | Q: catalog, porting guide, wizard UI. H: U2F, updater, option bytes | **1.0.0** | Phase 18 ACs; rule 0.8 budgets met |
-| M9 After parity | 19, 21, 22, then 20 continuous | | 1.x | |
+| M9 After parity | 19, 21, 22, then 20 continuous; **last:** F.3 `After: off` (T36a), then 12i hibernation (T36b) (user, 2026-11-19) | | 1.x | |
 
 Within each milestone the H lane works in this priority: **(1)** anything the other lane is
 waiting for (a device check, a timer API), **(2)** the milestone's critical-path item, **(3)**

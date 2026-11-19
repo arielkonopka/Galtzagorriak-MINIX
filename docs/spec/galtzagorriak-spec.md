@@ -26,9 +26,19 @@ BLE: one link layer, four backends, the `gmodem` command; user request).
 Addition (2026-11-18): section Q (radio regions: per-country Sub-GHz limit tables for the EU and
 its member states, the USA, Canada, Albania, Bosnia and Herzegovina and North Macedonia, kept on
 the card and installed once into flash; user request).
+Addition (2026-11-18): section R (a small database `kutxa`: a copy-on-write B+tree appended
+to one file on `/home`, records without a schema, indexes added later, the `kutxa` command, no
+SQL; in the image, optionally in flash; tests written first; user request). Background: the
+project report `small-database-analysis.md` (Polish, not in the repo).
+Addition (2026-11-18): section S (signed update file `Galtzagorriak.update` over USB/MTP for
+Windows users: boot stage `atea`, Ed25519, staging on the swap partition, A/B switch of the SD
+files, rollback, CI signing; user request).
 Addition (2026-11-19): M.0 (intent and boundaries of the canaries, guidance for implementing
 agents), new canaries `beacon` (R16.5.7) and `gpio` (R7b.4.4), USB power quality (R11.2.10); a CAN
 bus canary is out of scope (user request 2026-11-17, user decision 2026-11-19).
+Addition (2026-11-19): 12i (hibernation: the whole RAM in an encrypted image on the card, resume
+in ≈ 2 s) and F.3 `After: off` both moved to milestone M9, the end of the queue (task T36; user
+request). Background: the project report `hibernation-analysis.md` (Polish, not in the repo).
 Baseline: `main` at `5e3d0f0` (flash text cache).
 Background, evidence and line references: `modernization-security-report.md` (same folder).
 Item IDs in brackets (S1, M3, A2 …) point into that report.
@@ -497,7 +507,8 @@ provides them as small shared services, so each new app is only its UI plus a fe
   the boot key combos (Back looks pressed until the flag is cleared). Because a start from off
   takes QON + L10, `timed` arms the alarm early by the measured boot lead and rings at the real time
   (user, 2026-11-15). Details in next-tasks T14c.
-- **Wake, do the job, off again (user, 2026-11-17).** A timer file may say `After: off` (and
+- **Wake, do the job, off again (user, 2026-11-17; milestone M9, end of the queue, task T36a,
+  user 2026-11-19).** A timer file may say `After: off` (and
   `timed --then-off` does the same for an app). It is for jobs like a rescue beacon or a weather
   log: the app adds the timer and powers the Flipper off (`halt`); the RTC wakes it, the job runs,
   and the Flipper goes back to ship mode. The rules:
@@ -2473,6 +2484,516 @@ region is kept in internal flash and survives a card change, that changing it ne
 logged, `#?` rows, custom tables and `-f`, and that the user is responsible for using the device
 legally (a note for travellers: set the region of the country you are in).
 
+## R. A small database: `kutxa` (user request, 2026-11-17/18)
+
+**Goal:** apps keep and query more data than fits in RAM (a diary and calendar, public holidays
+for the device's country, sensor logs, an IR code library) in one small library, safe against a
+power cut, with no internal flash writes and no harm to responsiveness. Analysis: project report
+`small-database-analysis.md` (Polish, not in the repo), which compares SQLite, LMDB, Berkeley
+DB 1.85, sdbm/ndbm, cdb, Bitcask, LSM and flash key-value stores and rejects them for size, the
+need for `mmap`, or no power-cut safety. **User decisions (2026-11-18):** a B+tree ("weźmy
+B-drzewa"); **no SQL** (Berry and the free console tools are enough); Berry only for special
+tasks, everyday apps use the C library; the command is in the image with an option to install
+it into flash (RR.10); tests for the discussed use cases are written first (RR.12).
+
+"Kutxa" is Basque for a chest. Swappable blocks (12h) are **not** the storage: they vanish with
+the process (R12.35). The database is a file on `/home` (MINIX V3, section O: files up to 4 GiB);
+blocks are only working memory for a bulk import (RR.8).
+
+### R.1 What goes in
+
+| Use | Key | Tree(s) | Notes |
+|---|---|---|---|
+| Diary and calendar | start time (`kt_key_i64`, UTC) + 4-byte id | `main`, index `main.id`, later `main.tag` | recurring events are stored as a rule and expanded for the visible window by the app; `.ics` import/export is the app's job |
+| Reminders and alarms | — | — | stay in `timed` timer files (spec F, #205); a reminder app with thousands of entries may keep them in `kutxa`, "next one" = first key ≥ now |
+| Logs (sensors H, canaries M, irrigation, Sub-GHz history) | time (+ source) | one file per month or `kt_delrange` | append path: only the right edge of the tree changes |
+| Public holidays | `CC/rule`, `CC-SUB/rule` (`PL/11-11`, `PL/E+60`, `DE-BY/01-06`) | `main` | read-only packed file built on the PC (from the MIT-licensed Python `holidays` data); the country comes from the region record (section Q), an optional subdivision from Settings; rules: fixed date, Easter ± n (Gregorian and Orthodox), n-th weekday, tables for lunar calendars |
+| Name days | `MM-DD` | second tree in the same file | per country |
+| Reference data | brand/model/button, OUI, BLE company id | `main` | IR codes, MIFARE dictionaries, vendors for the canaries; packed, read-only |
+
+Not in `kutxa`: the stock file formats (`.sub`, `.nfc`, `.ir`, `.rfid`) stay files for
+compatibility; secrets (no encryption here; `/home` is not encrypted).
+
+### R.2 The file (RR.1)
+
+- **RR.1 Format.** One file, pages of **1 KB** (= FS block), always written page-aligned and
+  never rewritten. Fields little-endian; keys compared with `memcmp` (big-endian helpers for
+  numbers and times, sign bit flipped). Each page starts with an 8-byte header: type (leaf,
+  branch, overflow, catalog, commit), entry count, CRC-32 of the page (hardware CRC unit, as
+  R12.28). Leaves hold key + value up to 400 B inline (longer values in overflow pages, a value
+  ≤ 64 KB), with prefix compression of keys; branches hold separator keys and 32-bit page
+  numbers. Height ≤ 6 (also the loop guard for damaged files).
+  - **Commit page:** magic `KTXA`, format version, commit number, page number of the catalog
+    root and of `main`'s root, page number of the previous commit, live bytes, CRC.
+  - **Catalog:** a tree "name → root page, kind (tree or index), source tree and field" (RR.5).
+    Any number of trees per file; up to 8 open per handle.
+  - **Open:** read the last page; if it is not a valid commit page, step back page by page
+    (at most to the previous commit's page) and **truncate** the torn tail (writer only).
+    Then verify every page the last commit wrote (the pages between the previous commit page
+    and it, usually a few KB; only when that span is ≤ 64 KB, so a bulk load is not re-read).
+    A bad page there means the card damaged it: open at the previous commit and report
+    `rollback` (`kt_stat`). Deeper damage is found when read (`EIO`) or by `kt_check`.
+  - Limit: file ≤ 4 GiB − 1 KB (`off_t`), ≈ 4 million pages; with small records that is
+    tens of millions of records per file.
+
+### R.3 Writes and commits (RR.2, RR.3)
+
+- **RR.2 Copy on write.** A change copies the path from the leaf to the root into the
+  handle's page cache (dirty). Later changes in the same transaction reuse those copies. When
+  the cache is full of dirty pages, the oldest are **spilled**: appended to the file now (they
+  are unreferenced, so harmless if no commit follows), so a transaction is not limited by RAM.
+- **RR.3 Commit** = append the dirty pages (one sequential write), `fsync`, append the commit
+  page, `fsync`. A power cut at any point leaves the last commit or the new one, nothing else
+  (ACR.1). Cost: (tree height + 1) pages per commit plus the changed leaves; a sensor log with
+  a commit every 10 minutes writes ≈ 0.6 MB a day, a reminder app ≈ 0.4 MB a day (12g puts swap
+  at ≈ 1 MB a day). Rule for app authors: group changes, do not commit per record unless needed.
+- **One writer per file**: a write lock on byte 0 (`fcntl(F_SETLK)`, FS lock table, 8 slots,
+  released when the process ends); a second writer gets `EBUSY` (the command waits up to 5 s).
+  **Readers** (`KT_RDONLY`) take no lock and see the commit that was newest when they opened
+  or last called `kt_refresh()`: old pages never change, so this is free.
+
+### R.4 Records and keys (RR.4)
+
+- **RR.4 No schema.** A value may be a record: fields `name → value`, each name length (1 B),
+  name, type (`s` UTF-8 text, `i` signed 64-bit, `t` UTC time, `b` bytes), value length
+  (LEB128), value. A field can be added to any record at any time; old records simply lack it.
+  Only the **key** (the order of the data) is chosen up front. `kr_next()` never reads past the
+  record (malformed → `EIO`, ACR.7). Plain byte values work too; records are a convention used
+  by indexes and the command.
+
+### R.5 Trees and indexes (RR.5)
+
+- **RR.5 Indexes added later.** `kt_index(db, t, name, field, steps)` creates tree `name`
+  (the command calls it `TREE.FIELD`) with one entry per record of tree `t` that has `field`:
+  key = type byte + the field value (numbers sign-flipped; text with `00` escaped as `00 FF`,
+  ended by `00 01`) + the primary key, value empty. It is built from the existing records in
+  steps (idle work), and from then on `kt_put`/`kt_del` on `t` keep it current (one extra read
+  of the old record per change). A query by field is then a range read, not a full scan.
+
+### R.6 Compaction (RR.6)
+
+- **RR.6** The file only grows; the commit page counts live bytes. When dead bytes pass 50 % and
+  the file is over 64 KB, the app (or the user with `kutxa compact`) copies the live trees of the
+  last commit **sequentially** into `PATH.new` (leaves 100 % full, the packed layout), `fsync`,
+  `rename` over `PATH`. Small steps (`kt_compact(db, steps)`, ≤ 16 pages a step), at idle
+  priority, paused for a second after any key (as R12.37). A power cut leaves the old file
+  intact; a stale `PATH.new` is removed when the next compaction starts. Needs free space ≈ the
+  live size.
+
+### R.7 Two small FS additions (RR.7)
+
+- FS is exactly at its RAM budget (27 392 B, `flipper/ram-budget.txt`, 2026-11-19), so both
+  additions must cost **0 B** of FS data, bss and stack growth, checked by `ramcheck`.
+- **RR.7a `fsync(fd)`.** MINIX 2.0 has only `sync()`. New `fcntl(fd, F_FSYNC)` (no new call
+  number) and libc `fsync()`: FS writes the dirty buffers of the file's device (at most 18) with
+  `rw_scattered` and the inode if dirty, then returns. RAM 0 B, text ≈ 0.2 KB. Until it exists
+  the library uses `sync()` (the same here, since the cache is 18 blocks).
+- **RR.7b `O_NOCACHE`.** A scan through a big file must not push other programs' directories
+  and inodes out of the shared 18-block cache. `F_SETFL` accepts a new flag `O_NOCACHE`
+  (010000); `rw_chunk` then releases that file's data blocks with `ONE_SHOT` (front of the LRU,
+  reused first; the flag already exists for the super block). RAM 0 B (a free bit of
+  `filp_flags`). The library sets it for range scans, imports and compaction, not for lookups
+  (the top of the tree is in the handle's own cache).
+
+### R.8 The `kutxa` command (RR.8)
+
+- **RR.8** One command for the console and scripts (`src/commands/kutxa`). Output is TSV:
+  the key, then `name=value` per field (`name#=` integer, `name@=` time, as the input), or with
+  `-f a,b` only those values as columns (empty when a record lacks one). Tab, newline and
+  backslash in values are written `\t`, `\n`, `\\` (as the TSV of section K). Times are
+  printed `2026-11-19T09:00:00Z` and read as `YYYY-MM-DD[THH:MM[:SS]][Z]`, always UTC.
+  Exit 0 ok, 1 not found, 2 error.
+
+```
+kutxa create FILE
+kutxa put FILE [-t TREE] [-k text|int|time] KEY [name=text] [name#=int] [name@=time]...
+kutxa get FILE [-t TREE] [-k ...] [-f FIELDS] KEY
+kutxa del FILE [-t TREE] [-k ...] KEY
+kutxa range FILE [-t TREE] [-k ...] [-f FIELDS] [-p PREFIX] [-r] [-n N] [LO [HI]]
+kutxa dump FILE [-t TREE] [-k ...] [-f FIELDS]
+kutxa delrange FILE [-t TREE] [-k ...] LO HI
+kutxa import FILE [-t TREE] [-k ...] <TSV        (first line: key, then field names)
+kutxa index FILE TREE FIELD                    (creates TREE.FIELD)
+kutxa find FILE [-k ...] [-f FIELDS] TREE FIELD VALUE
+kutxa trees FILE | info FILE | check FILE | compact FILE
+```
+
+  - `range` is `[LO, HI)`; `-r` newest (largest) first; `-n N` at most N lines; `-p` a key
+    prefix. `put` and `import` create a missing tree.
+  - `import` into an empty tree with ascending keys uses the bulk load (`kt_load`, packed);
+    otherwise it sorts in runs (in swappable blocks when 12h is on, else in `/tmp`) and loads.
+  - Examples (manual): `kutxa range cal.kutxa -k time -f title,tag 2026-11-19 2026-11-26`;
+    `kutxa dump cal.kutxa -k time -f title,tag | grep lana | cut -f2`.
+  - A PC twin `flipper/tools/kutxa.py` (same format) builds, dumps and checks files, so a
+    holiday or IR database can be made on the PC and copied to `/home` (Linux mounts it).
+- **No query language.** Conditions on several fields, joins and counts go to Berry (RR.9).
+
+### R.9 Berry (RR.9)
+
+- **RR.9** With Phase 7c, a module `kutxa` (C, ≈ 1.5 KB flash): `kutxa.open(path)`, `db[k]`,
+  `db.put(k, v)`, `db.commit()`, `db.range(lo, hi)` (an iterator), `db.select(fn)`. For special
+  tasks only (user, 2026-11-18): one-off reports, experiments. Apps with settled logic use the
+  C library.
+
+### R.10 In the image, optionally in flash (RR.10, user 2026-11-18)
+
+- **RR.10a In the base image.** Package `kutxa` is part of the base system on the card:
+  `/usr/bin/kutxa`, `/usr/lib/libkutxa.a`, `/usr/include/kutxa.h`, `kutxa(1)`, `kutxa(3)`.
+  Not in flash by default: the command runs rarely, and its text loads into RAM only while it
+  runs (or comes from the run-time cache, R1.4).
+- **RR.10b In flash on request.** `pkg install --flash kutxa` (R2b.5) puts the command's text in
+  the installed region: one install-time write, then it runs in place (0 B of text in RAM). The
+  launcher's package screen offers the same.
+- **RR.10c The library.** Apps link `libkutxa.a` statically (≈ 6–9 KB of text each, in flash
+  when the app is installed with `--flash`). When two or more installed apps use it, the build
+  option `KUTXA=shared` appends the `kt_*`/`kr_*` functions to the end of `furi.exports` (append
+  only, J.3), so every app calls one copy in the installed region; decided in the PR that adds
+  the second user.
+- **Data stays on the card** (L.1: no file data in internal flash), databases included, even
+  read-only ones such as the holidays.
+
+### R.11 RAM, flash, responsiveness (RR.11)
+
+- RAM: kernel and MM **0 B**, FS **0 B** (RR.7 uses free bits); per open handle `KT_MEM(n)` =
+  256 B + n × 1032 B, chosen by the app (minimum 3 pages; 4–8 recommended), stack ≈ 300 B.
+  No `malloc`.
+- Flash: library ≈ 6–9 KB, command ≈ 3 KB plus the library, Berry module ≈ 1.5 KB; **0
+  run-time writes** to internal flash (one install-time write only for RR.10b/c).
+- Times (SD, 64 MHz, estimates to be measured, ACR.11): a page ≈ 1.5–3 ms; a lookup in 1 million
+  records ≈ 5–12 ms (2–3 reads); a range scan ≈ 10 000–15 000 records/s; open O(1); a commit
+  ≈ 6–15 ms. A lookup fits inside L1, so an app may look up on a key press. Long scans are cut
+  into screen-sized pieces by the app; compaction and imports run at idle priority (R0.8a) in
+  ≤ 16-page steps. FS serves requests in order, so a foreground call waits for at most one
+  database block of a background scan.
+
+### R.12 Tests written first (RR.12, user 2026-11-18) and acceptance
+
+The tests for the use cases above are in the repo before the library: `flipper/tests/kutxa/`
+(`kutxatest.c` against `src/lib/kutxa/kutxa.h`, `clitest.sh` against the command; `make test`
+there says "not written yet" until T34a). T34a makes them pass without weakening them.
+
+- ACR.1 (host) Power cut at every write and every `fsync` of a random workload (puts, deletes,
+  values over 400 B, commits every 1–40 changes), with unsynced sectors kept, lost or torn
+  independently and the file size old or new: the file opens at the last commit or at the one
+  being made, `kt_check` passes and writing goes on. A damaged page of the last commit opens
+  at the commit before with `rollback` = 1.
+- ACR.2 (host) Calendar: 2 000 events over two years; "this week" by one seek and a short
+  scan; an event found by id through an index, moved, the index follows; an index on the tag
+  added later equals a full scan.
+- ACR.3 (host) Reminders: 10 000; "next one ≥ now" in at most (height) page reads; fired =
+  deleted; the next.
+- ACR.4 (host) Logs: 30 days, one reading a minute, a commit every 10 minutes; bytes written
+  ≤ commits × (height + 1) KB + 2 × data; the last 24 h read backwards; older than 7 days
+  deleted with `kt_delrange`; compaction to less than half, same contents.
+- ACR.5 (host) Holidays: a packed file with PL, DE, DE-BY and ES-PV rules; PL 2026 expands to
+  its 14 days (Easter 5 April, Corpus Christi 4 June); DE-BY = DE + its own; name days in a
+  second tree.
+- ACR.6 (host) IR library: 100 000 codes bulk loaded; with a 4-page cache a lookup reads ≤ 2.5
+  pages on average and never more than the height; the file ≤ 1.3 × the raw data.
+- ACR.7 (host) Records gain a field later; an index on it equals a scan; malformed records
+  never over-read (ASan).
+- ACR.8 (host) A reader keeps its snapshot until `kt_refresh`.
+- ACR.9 (host) 3 000 mutated, truncated and random files: no crash, no endless walk (ASan,
+  UBSan).
+- ACR.10 (host, QEMU) `clitest.sh`: calendar week with `-f`, `grep`/`cut`, an index and
+  `find`, reminders "next", holidays import and prefix, UTF-8, logs import/`-r -n`/`delrange`/
+  `compact`, TSV escapes, `check`, `info`, two writers one after the other.
+- ACR.11 (Flipper) On a 1 million record file on `/home`: lookup p99 ≤ 15 ms; L1 holds while
+  another process compacts a 10 MB file and while `kutxa dump` scans it; `ramcheck` 0 B for
+  kernel/MM/FS.
+
+### R.13 Notes for the system manual
+
+What `kutxa` is for and what not (R.1); keys and why the order matters; the command with the
+calendar, holidays and log examples; that a commit is the moment data is safe; that files grow
+until compacted; one writer, many readers; building a database on the PC with `kutxa.py`;
+`pkg install --flash kutxa`; the Berry module for special tasks.
+
+---
+
+## S. Update file over USB: `Galtzagorriak.update` (user request, 2026-11-18)
+
+**Goal:** a user with only Windows (nothing installed on the PC) can update the system. They
+drag one file, `Galtzagorriak.update`, onto the Flipper over MTP (R10.4), confirm on the Flipper
+with OK, and the Flipper updates itself: internal flash (kernel, servers, INIT, shared libc and
+the base programs in the installed region) **and** the files on the SD card, from one build, so
+the shared-libc id always matches (the `init: console: Exec format error` trap of PR #286 cannot
+happen). The file is **signed**; the Flipper refuses anything not signed by a key it trusts.
+CI produces the file for every release tag. The section letter R is skipped so it does not read
+like a requirement id.
+
+Answer to the question "how much crypto fits": all of it that matters. Checking an Ed25519
+signature costs about 6–8 KB of flash in the boot stage, **0 B of RAM while the system runs**
+(the boot stage uses RAM only before the kernel starts) and well under 2 s once per update.
+What a signature cannot do on its own: while the option bytes are open (no RDP1/WRP, R17.4,
+due after Bluetooth works), someone holding the Flipper can still flash anything over ROM DFU.
+The signature closes the paths a cable or radio can reach without the buttons: a malicious file
+dropped over MTP, BLE or the console, and a compromised root process that tries to install its
+own system.
+
+Nothing here needs CPU2, BLE or Phase 15: version 1 works with the radio core switched off.
+Later steps only add ways to deliver the same file (S.9).
+
+### S.1 The pieces
+
+| Piece | Where | Size | Runs |
+|---|---|---|---|
+| `atea` (Basque "door"), the boot stage | flash 0x0800_0000, 4 pages | ≤ 16 KB | at every reset, < 1 ms unless an update is pending |
+| System image (kernel, MM, FS, INIT) | moves to 0x0800_4000 | 192 KB region, unchanged size | as now |
+| `gzupdate` (command, base package) | installed region | ≈ 6 KB text | only when a file arrives or the user asks |
+| Staging area | start of the swap partition (`/dev/hd3`, disposable by design) | the file's size | written by `gzupdate`, read by `atea` |
+| `/.gzupdate/`, `/usr/.gzupdate/` | root and `/usr` file systems | size of the base files | the new (or previous) base files waiting to be switched |
+| `gztree` (command, base package) | `/sbin` | ≈ 3 KB text | started by INIT only when the base files must be switched (RS.14) |
+
+### S.2 The file format
+
+One file, sector aligned (512 B), little endian:
+
+```
+sector 0     header (signed part, 448 B) + Ed25519 signature (64 B)
+sector 1..   section table: up to 16 entries of 32 B
+             then the sections, each starting on a sector
+```
+
+- **RS.1 Header.** Magic `GZUPDATE`, format version (1), board (`flipper-f7`), release
+  `X.Y.Z` with build id (J.2), `GZ_ABI`, the shared-libc id and the libfuri id (#201), the
+  **epoch** (u32, +1 for every release, never reused; S.5), the oldest release this file may
+  update from (`from_min`, e.g. the first release that has `atea`), the key id (first 8 B of the
+  public key's SHA-512), the number of sections, and the **SHA-512 of the section table**. The
+  signature covers the 448 header bytes; the header covers the table; the table covers every
+  section (SHA-512 of each). So one signature check plus streaming hashes check everything, and
+  any section can be read and checked on its own.
+- **RS.2 Sections** (type, flags, offset, length, load address, SHA-512 prefix 16 B + full hash
+  in a trailer sector; the PR picks one layout and documents it):
+
+  | Type | Content | Used by |
+  |---|---|---|
+  | `flash` | `minix-base.bin` from 0x0800_4000 up: system image + the base part of the installed region (libc, libfuri, launcher, base programs, their directory pages) | `atea` |
+  | `root` | the base package tar (`base_X.Y.tar`) for `/` and `/usr` | `gzupdate`, INIT |
+  | `pkgs` | the app packages of the same build (`remind`, `alarm`, `timed`, …), one tar each | first boot after the update |
+  | `notes` | the `CHANGELOG.md` section of this release, plain text, ≤ 4 KB | shown before the OK |
+  | `radio` | reserved: a CPU2 stack image for `radio` (R16.0); not in version 1 | later |
+
+- **RS.3 Size.** About 1–3 MB with today's base (flash section ≈ 0.4–0.6 MB). MTP moves that in
+  seconds.
+
+### S.3 Algorithm and keys
+
+- **RS.4 Ed25519** (RFC 8032, pure, no context). Reasons: deterministic signatures (no random
+  nonce on the signing machine that could leak the key), 32 B public keys, one hash function
+  (SHA-512) for the signature and the section hashes, the same code on the Flipper, in QEMU and
+  in the host tests (the PKA is not emulated). The verifier is a small public-domain or
+  BSD/ISC implementation (candidates: Daniel Beer's `c25519`/`edsign`, Monocypher's
+  `crypto_eddsa_check` with unused parts left out); budget **≤ 8 KB of code, ≤ 2 s per check at
+  64 MHz, stack ≤ 2 KB**. The PR measures and reports all three.
+- **RS.5 R17.2 follows.** Signed packages use the same Ed25519 code and keys (the PKA stays for
+  U2F, R17.1, which needs P-256 anyway). One algorithm, one verifier in libc's crypto part and one
+  in `atea`.
+- **RS.6 Trusted keys live in `atea`**, two slots of 32 B:
+  1. the **release key** of the project (CI signs with it, S.6);
+  2. the **builder's own key**: a build made on the user's or the local agent's computer puts
+     the public key from `~/.config/galtzagorriak/update.pub` into slot 2 (`tools/gzsign
+     --new-key` makes the pair once, the private key never leaves that computer). Empty slot =
+     only release files install.
+  Changing a key means a new `atea`, which only ROM DFU writes (RS.12). A leaked release key is
+  handled the same way: new key, new `atea` over DFU, announced in the release notes.
+
+### S.4 The update, step by step
+
+- **RS.7 Delivery.** The file is copied into `/home/flipper` (the MTP storage, R10.4) under any
+  name ending in `.update` (`Galtzagorriak.update` in the manual). When `mtpd` finishes a
+  `SendObject` with that ending it starts `gzupdate check FILE` once (no polling, 0 B while
+  idle). Other ways in: `flsend` over the console, the card in a Linux PC, later BLE (S.9).
+- **RS.8 Check (old system, nothing changes yet).** `gzupdate check`, at low priority (L1/L2
+  hold, rule 0.8):
+  1. header magic, board, format; key id is one of `atea`'s two keys (read in place from flash);
+     **signature**; table hash; every section's SHA-512 (streamed, 4 KB at a time, ≈ 1–2 s per
+     MB);
+  2. epoch > the running epoch, unless downgrade (RS.13); `from_min` ≤ running release;
+  3. room: the staging area is big enough, the root and `/usr` file systems have room for the
+     base files twice;
+  A failure deletes nothing and says why in one line (`gzupdate: not signed by a trusted key`).
+  Success shows a window (Pine style, K.2): title `System update`, `0.8.2 → 0.9.0`, the first
+  lines of `notes` (scrollable), hint line `OK install  Back later`. **Only a button press on the
+  Flipper starts the update**: a file alone, a remote shell or an MTP host can never start it.
+  As root on the console `gzupdate apply FILE` asks the same question on the LCD.
+- **RS.9 Preconditions before applying:** battery ≥ 30 % or charging; no alarm or reminder due
+  within the next 3 minutes (asks `timed`; otherwise "after the alarm at 07:30"); apps that are
+  parked (12d) are asked to save their state (voluntary eviction) and the user is told which ones
+  will be restarted.
+- **RS.10 Stage (old system).**
+  1. `swapoff` (the swap partition holds nothing that must survive a reboot);
+  2. write the whole verified file to the staging area, raw, from sector 0; read it back and
+     compare hashes;
+  3. unpack the `root` section into `/.gzupdate/<epoch>/` and `/usr/.gzupdate/<epoch>/` (each
+     file system gets its own staging directory, so the later switch is a `rename` inside one
+     file system) and write the manifest `/.gzupdate/<epoch>/MANIFEST` (path, mode, owner,
+     SHA-256 per file) last;
+  4. keep the current update file as the rollback copy: `/usr/.gzupdate/prev.update` (only if
+     the running system came from an update file; a DFU-flashed system has none);
+  5. set the pending state (RS.11) and reboot.
+- **RS.11 Flash (`atea`, before the kernel).** At every reset `atea`:
+  1. keeps the existing first checks: Left held → ROM DFU (as `hal_early_boot` does now); the
+     `reboot -d` magic word → ROM DFU;
+  2. reads one RTC backup register (`BKP11R`: magic 0xE, state, flags) and checks that the
+     system image's first page is not erased. Nothing pending and the image complete → set VTOR
+     and MSP, jump to 0x0800_4000. **Cost: one register read and one word compare.**
+  3. Pending, or the image incomplete: start the SD card with its own small polled SPI driver
+     (sharing source with the kernel's driver), read the MBR, find the swap partition, read the
+     staged header, **check the signature and the `flash` section hash again** (the card could
+     have been swapped since `gzupdate` checked it), check the epoch rule (RS.13);
+  4. show progress on the LCD (one line, a bar, the LED breathing blue; ≈ 1.5 KB of code): the
+     user sees that it is working and must not pull the battery;
+  5. write the `flash` section with this order: **erase the system's first page first, program
+     it last** (as R21.3). Every other page: **compare first, erase and program only pages that
+     differ** (standing flash-write rule), then read back and compare;
+  6. clear the pending state, reset. Expected time: ≈ 70 ms per changed page, ≈ 10 s for a
+     full 0.5 MB, ≈ 1–3 s for a patch release.
+  CPU2 is not started yet, so no flash semaphore dance with the radio core (A16) is needed;
+  `atea` never touches CPU2, the option bytes, `SFSA` or anything at or above the guard.
+- **RS.12 `atea` is never changed by an update file.** It is written only by ROM DFU (the full
+  `minix-base.bin` starts with it), and gets WRP with R17.4. That is what makes the update
+  unbrickable: whatever happens to pages above 0x0800_4000, `atea` is still there and finishes
+  the job at the next reset.
+- **RS.13 Epoch and downgrade.** The system image carries its epoch in a fixed place of its
+  first page. `atea` installs a file only if its epoch is higher than the installed one (read from
+  flash), or, if the image is incomplete, than the epoch kept in `BKP11R` while staging.
+  Going back to an older release (lower epoch) is allowed **only with a button press inside
+  `atea`**: the LCD shows `0.9.0 → 0.8.2 (older). OK: yes, Back: no` and waits 30 s (Back or no
+  press: boot the installed system). So a root process alone can never install an older,
+  vulnerable release; a person holding the Flipper can (they could use DFU anyway).
+- **RS.14 Switch the SD files (helper started by the new INIT, before `/etc/rc`).** INIT itself
+  does no more than a check and an exec (it is at 764 of its 768 B RAM budget): if
+  `/etc/gz-tree` (one line: the epoch of the base files in place) differs from the epoch built
+  into the new system, it runs `/.gzupdate/<new epoch>/sbin/gztree` (the copy from the new tree,
+  so it matches the new shared libc; `/sbin/gztree` once the switch is done) and waits for it.
+  `gztree` (≈ 3 KB text, ≈ 2 KB RAM only while it runs, then 0) checks
+  `/.gzupdate/<new epoch>/MANIFEST` and switches the trees: for each manifest entry (`/` entries,
+  then `/usr` entries): `rename(file, /.gzupdate/<old epoch>/file)`, then
+  `rename(/.gzupdate/<new>/file, file)`; then it writes `/etc/gz-tree` by temp file + `rename`,
+  `sync`s and exits; INIT continues the boot. If `gztree` cannot start or fails, INIT logs it
+on the console and boots anyway (the next boot tries again; RS.16 counts the starts). Each step can be repeated after a power cut (a file
+  already in place with the right SHA-256 is skipped), so the switch simply finishes at the next
+  boot. The old base files stay in `/.gzupdate/<old epoch>/` for one rollback. INIT's only
+  addition is the epoch compare and one `fork`/`exec`/`wait` (+0 B static RAM).
+- **RS.15 First boot of the new system.** `/etc/rc` runs `gzupdate finish`: `pkg bind` (R2b.6
+  binds the new base programs by hash), then for each official package that was installed
+  before and whose libc/libfuri id changed, `pkg install --flash` from the `pkgs` section (the
+  launcher shows `Updating apps 2/3`); third-party packages built for the old libc are marked
+  `needs rebuild` in `pkg list` instead of failing at exec. Then `swapon`, then the staging
+  directories of the older epoch are kept, others removed. Last: `gzupdate commit` clears the
+  "trial" flag (RS.16) once the launcher is up.
+- **RS.16 Rollback after a failed start.** From staging until `commit`, `BKP11R` holds a trial
+  counter that `atea` increments at each reset. At 3 starts without `commit` (a crash loop, a
+  watchdog reset), `atea` shows `0.9.0 did not start. Go back to 0.8.2? OK / Back` and, on OK,
+  installs `prev.update` from the card (a signed file, so the same checks apply; the downgrade
+  press of RS.13 is this same press). The old INIT then has `gztree` switch the SD files back with RS.14
+  (the old tree is still in `/.gzupdate/<old epoch>/`). No previous file (the running system
+  came from DFU): `atea` says `Recovery: connect to a PC (DFU)` and offers DFU with OK.
+
+### S.5 Power loss, at every step
+
+| Cut during | What happens at the next start |
+|---|---|
+| check, stage 1–3 | old system boots; nothing pending; staged files are leftovers that the next `gzupdate` overwrites |
+| stage 4–5 (pending set) | `atea` sees pending, checks the staged file again, flashes |
+| `atea` flashing | the first page is erased until the very end, so the image counts as incomplete: `atea` starts over (only differing pages are written again) |
+| INIT switch | the switch continues where it stopped (RS.14) |
+| first-boot `finish` | `finish` runs again (each step is idempotent); trial counter limits loops |
+| card pulled during `atea` flashing | `atea` shows `Insert the SD card` and waits; Left + Back still give ROM DFU |
+
+The battery domain keeps `BKP11R` through a reset. If even the backup domain was lost (battery
+disconnected), the incomplete first page still tells `atea` to look on the card.
+
+### S.6 CI: every release tag produces a signed file
+
+- **RS.17** `tools/mkupdate.py` (host, Python, `cryptography` package) builds the file from
+  `minix-base.bin`, the base tar, the package tars and the changelog section; `tools/gzsign`
+  signs it; `tools/gzupdate-check.py` verifies it the way the Flipper does (shared test vectors
+  with the C verifier). `make BOARD=flipper update` runs all three. Without a private key it stops
+  and says how to make one (RS.20); the Flipper has no "unsigned allowed" switch.
+- **RS.18** In `.github/workflows/build.yml`, the `release` job (tag `v*`) builds the file,
+  signs it with the private key from the secret `GZ_UPDATE_KEY`, verifies it, and attaches
+  `Galtzagorriak-X.Y.Z.update` plus its `.sha512` to the GitHub release next to the images.
+  The secret lives in a GitHub **environment** `release` with the user as required reviewer, so
+  only a tag the user approves can be signed, and the PR jobs and the Claude worker
+  (`claude-worker.yml`) never see it. The public key is committed as
+  `flipper/keys/release.pub`; the build puts it into `atea` slot 1.
+- **RS.19** Epoch = a counter in `include/minix/gzversion.h` (`GZ_EPOCH`), raised by every
+  `release: X.Y.Z` PR; `versioncheck` (J.4) fails if it is not higher than the last tag's.
+- **RS.20** Key generation is a one-time step for the user (`tools/gzsign --new-key`, store the
+  private key offline and in the GitHub secret). The manual explains it; nothing is generated
+  in CI.
+
+### S.7 Flash writes, RAM, responsiveness
+
+- **Flash:** one update erases each changed page of the flash section once; a full release
+  ≈ 100–150 pages (one cycle each of 10,000), a patch release usually far fewer (compare before
+  erase). Nothing is written at run time; the update counts as an install-time write and
+  happens only after a button press. A rollback writes once more. Changed official apps are
+  reinstalled once (their own pages). The installed-region counter (`BKP16R`) counts `atea`'s
+  erases too.
+- **SD:** about 3 × the file size per update (staging, unpacked tree, MTP copy), once.
+- **RAM while the system runs: 0 B** (kernel, MM, FS unchanged; one backup register). `gzupdate`
+  ≈ 8–10 KB only while it checks or stages (4 KB hash buffer + SHA-512 state + Ed25519 stack).
+  `atea` uses RAM only before the kernel exists.
+- **Boot time:** + < 1 ms when nothing is pending.
+- **Responsiveness:** checking and staging run at low priority, L1/L2 hold; during `atea` the
+  system is not running (≈ 10 s with a progress bar, like the stock updater's screen).
+
+### S.8 Layout change, once
+
+`atea` takes the first 16 KB, so the system image starts at 0x0800_4000 (VTOR is set by `atea`)
+and keeps its 192 KB budget (it ends at 0x0803_4000). Everything with a fixed address above it
+moves up 16 KB with it: the shared libc from 0x0803_0000 to 0x0803_4000 (#167), libfuri from 0x0803_C000 to 0x0804_0000 and
+libapp by the same 16 KB (#201), and the start of installed programs from 0x0804_8000 to
+0x0804_C000. The image is not shrunk: the drivers of Phases 4b–15 need the 192 KB (Phase 2b
+table). Constants that change: `HAL_SYS_IMAGE` 0x30000 → 0x34000 (`hal/flipper/board.c` and its layout
+comment), the libc address in `<minix/shlibc.h>` and `shlibc.ld`, the libfuri/libapp addresses
+(`shfuri.ld`, `user-shfuri.ld`), the installed-region start, and `flipper.ld` (FLASH origin
+0x0800_4000; `atea` gets its own linker script). Moving libc changes its id, which is one more reason for the one-time full flash below. Like #201, the first build with `atea` needs a full
+DFU flash of `minix-base.bin` and the apps installed again; from then on, updates go through
+the file. Its `from_min` is that release.
+
+### S.9 Later, the same file over other paths (not in version 1)
+
+- the official mobile app or `rpcd` (R15.6) writes the file over BLE, then the same OK;
+- another MINIX Flipper sends it (R21.5); the stock-updater package of R21.2 stays the way in
+  from stock firmware;
+- a `radio` section updates the CPU2 stack through R16.0's maintenance swap, started by the new
+  system after the update, never by `atea`.
+
+### S.10 Acceptance
+
+- ACS.1 (host) `gzupdate-check.py` and the C verifier accept the CI-signed file and reject:
+  one flipped bit anywhere, a wrong key, a truncated file, a table/section hash mismatch, a wrong
+  board, a lower epoch; RFC 8032 test vectors pass.
+- ACS.2 (QEMU) `gzupdate check` on a good file shows the window text; on each bad file of ACS.1
+  prints one line and changes nothing (file systems' checksums before/after).
+- ACS.3 (QEMU, `tools/powercut.py`) power cut at every step of S.5, including every page of a
+  simulated `atea` flash run and every rename of RS.14: the next start always ends in the new
+  system or (before pending) the old one, never without a shell.
+- ACS.4 (Flipper, Windows 11, nothing installed) drag `Galtzagorriak.update` in Explorer, press
+  OK, 0.8.x → 0.9.0 boots, `ver` shows the new release, `/home` and settings unchanged, alarm
+  still set.
+- ACS.5 (Flipper) a build from another computer (another GCC, PR #286) updated through the file
+  boots to a shell: libc id, base files and apps match.
+- ACS.6 (Flipper) an older signed file needs the OK in `atea`; an unsigned or self-signed file
+  without slot 2 is refused before reboot and again by `atea` (staged by hand with `dd`).
+- ACS.7 (Flipper) a system that crashes at start (test build) leads after 3 resets to the
+  rollback question; OK returns to the previous release with its SD files.
+- ACS.8 Flash erases of an update between two builds that differ in one base program: only the
+  pages that differ (flash write counter).
+
+### S.11 Notes for the system manual
+
+A new section in `install.md` §7: "Updating with the update file" (download
+`Galtzagorriak-X.Y.Z.update` from the release page, drag it onto the Flipper in Explorer, OK on
+the Flipper, wait for the bar; don't remove the battery); what the messages mean; going back to
+an older release; when DFU is still needed (the first build with `atea`, a new key, a broken
+card). For builders: making a key, signing their own builds. Example release notes in the
+window: `0.9.0: alarm snooze, "Egun on!" on the welcome screen`.
+
 ---
 
 ## Roadmap: phase order
@@ -2628,8 +3149,9 @@ Package signatures (Phase 17, R17.2) become mandatory for this path once they ex
 
 | Region | Address | Size | Written when |
 |--------|---------|------|--------------|
-| System image (kernel, MM, FS, INIT) | 0x0800_0000 | **192 KB** (was 128 KB; drivers of Phases 4b–15 need ≈ +60 KB) | DFU only |
-| **Installed programs** (new) | 0x0803_0000 | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
+| Boot stage `atea` (section S, with T33) | 0x0800_0000 | 16 KB | ROM DFU only |
+| System image (kernel, MM, FS, INIT) | 0x0800_0000 (0x0800_4000 once `atea` exists) | **192 KB** (was 128 KB; drivers of Phases 4b–15 need ≈ +60 KB) | DFU only |
+| **Installed programs** (new) | 0x0803_0000 (0x0803_4000 once `atea` exists, S.8) | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
 | Run-time text cache | after the installed region | 128 KB default (`CACHE_SIZE`) | exec (as now) |
 | Guard | `SFSA − 16 pages` to `SFSA` | 64 KB | never |
 | CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except a stack swap (`radio use`, R16.0; same FUS path as R17.3) |
@@ -4807,9 +5329,8 @@ the foreground path (the AmigaOS feel: the UI always answers, whatever the rest 
   and a daily reserve budget (≈ 4 B in MM, within R12.26's budget but not 0 B), and rotating the
   slots over the 64 MB partition per boot (needs a stored offset; helps only very primitive FTLs).
   They can come back with the user's yes.
-- **Hibernation.** If a whole-RAM hibernation image is ever added (analysis
-  `reports/hibernation-analysis.md`, level 2), R12.29, R12.31 and R12.32 apply to it too; frequent
-  cycles should use the cold-boot level 1, which writes nothing.
+- **Hibernation** (12i): R12.29, R12.31 and R12.32 apply to the hibernation image too; frequent
+  wake-and-off cycles use F.3 `After: off` (cold boot), which writes no image.
 
 Acceptance criteria:
 - AC12.14 QEMU (`tests/swapwear`, counting sectors written through the WINCHESTER task): swap a
@@ -5097,8 +5618,85 @@ RAM budget (12h):
   −4…12 KB, Sub-GHz −3…6 KB, IR −2…4 KB, ports with history −2…8 KB), and parked images get
   smaller (faster L6, fewer swap writes).
 
+### 12i. Hibernation: the whole RAM on the card (user request 2026-11-19; milestone M9, end of the queue)
+
+The user's idea (2026-11-16): swap can give hibernation. Save the state on the card, power off in
+ship mode (F.3), and come back to the same place. Background: the project report
+`hibernation-analysis.md` (Polish, not in the repo). The user put it at the **end of the queue**
+(task T36b), after F.3 `After: off` (T36a). Jobs that wake the Flipper from off (alarms, beacons,
+weather logs) do **not** need hibernation: they are tier 0 and run after a cold boot. Hibernation
+adds one thing: the user's session (open apps, parked apps, stock ports) comes back, in about
+1.5–2.5 s instead of a 3–4 s cold boot.
+
+- **R12.41 One image of the whole RAM, not per-process swap.** Every process in its own slot is
+  not possible before 12c (the app in front waits in FS), and the kernel, MM and FS state must be
+  saved anyway. So the kernel writes the used RAM of CPU1 (kernel, MM, FS, INIT, all user
+  processes; MM's free holes and CPU2's shared tables in SRAM2a left out) to a raw **hibernation
+  partition** on the card (256 KB, its own partition, `/etc/rc.conf` `hibernate=`). It comes back
+  **at the same addresses**, so the missing MMU is no problem here. Swapped processes stay in
+  their swap slots and stay `P_SWAPPED`. Typical image 100–150 KB.
+- **R12.42 Entering.** INIT (power menu "Hibernate", `halt -h`, or the `power` app's idle ladder
+  instead of Stop2) runs the `RBT_HALT` path of N.5 **without** `SIGTERM` to processes: FS syncs,
+  sets the clean flags (N.2) and **drops its clean buffers** (smaller image, fewer file contents
+  on the card), then MM calls the new `SYS_HIBERNATE`. The kernel writes the image with interrupts
+  off, polled multi-block writes (R12.31), on a ≤ 512 B scratch stack that overlays a buffer that
+  is dead at that moment (0 B net), writes the header last, sets an "image valid" bit in an RTC
+  backup register, and enters ship mode as F.3. 0 internal flash writes.
+- **R12.43 Blockers.** `SYS_HIBERNATE` returns `EBUSY` with a reason, shown by INIT, when:
+  `pm_busy ≠ 0`; a radio, NFC, RFID or USB stream is open (tier 3); USB is attached (ship mode
+  cannot cut power: Stop2 instead, no error); no hibernation partition; a `Secret: yes` or
+  set-uid/set-gid process runs while no device key exists (R12.48): INIT asks to end it first.
+- **R12.44 Resuming.** The reset handler, **before** clearing `.bss`, reads the backup bit. Not
+  set: normal cold boot, no card access. Set: clocks, a small polled SD reader (≈ 1–2 KB flash),
+  header checks (R12.46), image read straight to its addresses, CRC-32 (CRC unit) and the
+  AES-GCM tag (R12.48), then **the bit is cleared before jumping** (one-shot: an image never
+  resumes twice, 0 card writes), then the kernel returns from `SYS_HIBERNATE`. Any failed check
+  → a normal cold boot; tier 0 jobs still run, only the session is lost.
+- **R12.45 Time and randomness.** Resume is a very long tickless sleep (T14b): the kernel moves
+  `realtime` on by the RTC difference since the header's time stamp and fires due timers;
+  INIT sends `SIGRTC` to `timed` (F.2, `Missed:` applies) and the new `SIGRESUME` (default:
+  ignore) to every process. The RNG state is reseeded from the RNG.
+- **R12.46 The image must match.** The header holds: format version; the build id of the system
+  region (CRC computed at build time); the installed region's generation and the ABI; the card
+  CID; a random stamp also written into a spare super block field (a cold-boot mount clears it, so
+  the image dies with any cold boot); a CRC-32 of the inode and zone bitmaps (catches the card
+  edited on a PC); the list of RAM ranges; the RTC time; CRC-32 and the GCM tag. Any mismatch →
+  cold boot (DFU update, `pkg` change, other card, edited card).
+- **R12.47 Hardware comes back through `resume()` hooks.** Every driver gets `resume()`: its boot
+  init plus the current settings from RAM. LCD from the kernel frame buffer (`fbcon`); LP5562 level
+  and patterns reloaded; CC1101 to SLEEP; charger profile re-written (R6.1, never above stock);
+  USB re-enumerates (`ttyACM` sessions get `SIGHUP`); **CPU2 restarts** (its RAM can't be saved:
+  BLE links drop, bonds stay; `bled` treats it as link loss); FPU state flushed before the write
+  (R5.7); MPU reloaded on the first switch; IWDG started again. Wake by the RTC with a due
+  `After: off` job → **quiet resume** (screen and backlight off, CPU2 only if a process needs it),
+  the job runs, and the Flipper hibernates again (a new image); a button press → normal.
+- **R12.48 The image is encrypted and authenticated with a device key.** The image holds kernel
+  RAM, so a changed image would run code with full privilege; a CRC can't stop that, and the
+  12b swap key dies at power-off. So: a device key made from the RNG **once** (first-boot setup
+  or the first `hibernate=on`) and stored once in internal flash or in CPU2's customer key storage
+  (one install-time write), loaded into AES1; AES-GCM over the image (R12.9 driver, ≈ 10 ms),
+  random 96-bit nonce in the header. With the key, `Secret: yes` processes may stay in the image.
+  `hibernate=plain` (no key, CRC only) exists only for development and prints a warning at
+  every hibernation.
+- **R12.49 Cost.** RAM resident ≈ 0 B (backup register bit, header on the card, scratch overlays a
+  dead buffer); flash ≈ 3–5 KB (writer + stub ≈ 2 KB, `resume()` hooks ≈ 1–2 KB, INIT/MM/FS a few
+  hundred bytes); card: 256 KB partition, ≈ 150 KB written per hibernation.
+
+Acceptance criteria:
+- AC12.20 Device: hibernate with the launcher, `alarm` and one parked app; power on with Back →
+  the same screen within 2.5 s of the QON; `lat` shows L1 unchanged after resume.
+- AC12.21 Device: 100 hibernate/resume cycles by RTC (`After: off` job every 5 min) with no lost
+  file data; `fsck -n` clean afterwards.
+- AC12.22 One byte of the image changed on a PC → cold boot, a console line says why; same for a
+  DFU update of the system region, a `pkg` install, another card, and a file added on a PC.
+- AC12.23 Power cut right after a resume, then power on → cold boot (the image never resumes twice).
+- AC12.24 Blockers: USB attached → Stop2, no image; a radio stream open → "Hibernate: radio in use".
+
 ### 12f. Notes for the system manual
 
+- Hibernation (12i): "Power off" ends programs, "Hibernate" keeps everything on the card and
+  comes back in about 2 s; why it sometimes starts from zero (system update, other card, card
+  edited on a PC) while alarms still work; that the Flipper may wake silently for a job.
 - The four background tiers in plain words: "starts when needed" (0), "sleeps on the card" (1),
   "parked" (2) and "runs in the radio chip or USB driver" (3). Which built-in apps use which tier.
 - The Running list: what `in RAM`, `on SD` and `waiting for memory` mean, and how to end an app.
@@ -5784,12 +6382,12 @@ RAM: kernel 0 B; `bled` +1 KB GATT client (shared with 16.1, only while running)
   - operands in the PKA's own RAM (A.6);
   - the attestation and device keys wrapped by the CPU2 secure enclave (AES2 key slots), as stock;
   - an authentication counter in an append-only flash page.
-- **R17.2** (old R9.1) Signed packages: SHA-256 of the tar, ECDSA P-256 verify on the PKA against a
-  public key in flash next to the system image; unsigned packages need `pkg install -u`. Required
+- **R17.2** (old R9.1) Signed packages: Ed25519 over the SHA-512 of the tar, with the same verifier
+  and keys as the update file (RS.5; was ECDSA P-256 on the PKA, changed 2026-11-18 so one
+  algorithm serves both); unsigned packages need `pkg install -u`. Required
   for runtime installs into the installed region (R2b.5).
-- **R17.3** Updater: a signed system image on the SD card is written to the system region by code
-  running from the installed region, with interrupts masked and a CRC check after writing.
-  Recovery is ROM DFU.
+- **R17.3** Updater: replaced by section S (signed `Galtzagorriak.update`, boot stage `atea`,
+  scheduled with T33, long before this phase; it needs no CPU2). Recovery stays ROM DFU.
 - **R17.4** Option bytes revisited (decision from 2026-11-14, now due): WRP for the system region,
   RDP level 1, PCROP if a secret needs it. Requires the user's sign-off.
 
@@ -6141,14 +6739,14 @@ RAM budget: **0 B** (R20b.5 up to −0.9 KB).
 ## Phase 21: Install MINIX on another Flipper (user request, 2026-11-15)
 
 **Depends on:** 16 (BLE central with passkey pairing, full stack R16.1.0), 17 (signed image R17.2,
-updater image format R17.3), 18b (first-boot wizard on the target). Last phase, after 20.
+update file format, section S), 18b (first-boot wizard on the target). Last phase, after 20.
 Analysis: `reports/flipper-to-flipper-install-analysis.md` in the project files (2026-11-15).
 
 Goal: a MINIX Flipper installs MINIX on a second Flipper (the user may buy one), with no PC.
 USB cannot do it: both Flippers are USB devices only.
 
 - **R21.1 Fresh image, never a copy.** The installer writes the signed release image from our SD
-  card (the R17.3 file), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
+  card (the `.update` file of section S), never the contents of our own flash: our U2F keys are wrapped by our CPU2,
   and passwords, settings and installed packages are ours. The signature (R17.2) is checked before
   the first byte goes out. The target starts in the first-boot wizard (18b).
 - **R21.2 (21a, main path) Over BLE, acting as the stock mobile app.** Stock firmware takes firmware
@@ -6213,7 +6811,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 
 ## Deferred (decided 2026-11-14)
 
-- WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4.
+- WRP on the system area, PCROP, RDP level 1 [A15]: after Bluetooth works. Scheduled as R17.4; WRP covers `atea` (RS.12) too.
 - nRF24L01+ on GPIO for 2.4 GHz dongle mice (G.3, question 3): optional, only if the user confirms.
 - Full BLE stack on CPU2 (R16.1.0, for 16.1, 16.3, 16.4): decided by the user (2026-11-14), installed at the start of Phase 16, after Phase 15.
 - Thread or Zigbee on CPU2 (R19.13): user decision, after Phase 15.
@@ -6254,6 +6852,7 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Swap (Part 4), A13 | 12 |
 | Background apps: tiers, park/hibernate API, Running list (user request) | 12d–12f (R12.18 may land with 7b) |
 | Swappable memory blocks for apps: `blk`, `libblk`, Berry `vbytes` (user request) | 12h |
+| Hibernation, whole RAM on the card (user request 2026-11-19, end of the queue) | 12i (task T36b, after F.3 `After: off`, T36a) |
 | NFC | 13 |
 | BLE, RPC, A16 (HSEM) | 15 |
 | A14 + S7 (signing), U2F, updater, A15 (WRP, PCROP, RDP) | 17 |
@@ -6268,7 +6867,9 @@ optional backup goes to the SD card). Flash: ≈ 8–12 KB for `flipinst` and th
 | Byte pipes kept; `-t` structured text; desktop + modules in C/Berry/shell (user discussion) | section K, T10 |
 | `mined` as default editor, safe and VT100-complete (user decision) | K.5, T8 |
 | Official mobile app connects: time sync (local → UTC), device info, file browsing; shared `libflipperpb` (user request) | R15.7, 21 |
+| Signed update file over USB for Windows users: `atea`, Ed25519, CI-signed release file, rollback (user request) | section S, T33 |
 | Install MINIX on another Flipper over BLE (stock mobile-app path), SWD rescue, SWD off by default (user request) | 21 |
 | SD card: clean flag, `fsck` at boot on the screen, sync before ship mode, card pulled out (user request; no journaling) | section N, T17 |
 | Data modems between two Flippers over RFID, NFC, Sub-GHz (selectable bandwidth, legal limits) and BLE; `libmodem`, `gmodem` (user request) | section P, T26; 8, 13, 15 |
+| Small database `kutxa`: B+tree file on `/home`, indexes, `kutxa` command, no SQL, tests first (user request) | section R, T34 |
 | M2 | done in `5e3d0f0` (secured by R1.4, extended by 2b) |
