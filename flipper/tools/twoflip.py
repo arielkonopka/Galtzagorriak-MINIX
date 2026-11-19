@@ -331,8 +331,17 @@ LF_PROTOCOLS = [("EM4100", 5), ("EM4100/32", 5), ("EM4100/16", 5),
 PATTERN = "1A2B3C4D5E6F708192A3B4C5D6E7F8091A2B3C4D5E6F708192A3B4C5D6E7F8"
 
 
+# Protocols that do not carry every bit of the pattern: the pattern's
+# canonical form, the bytes the Unleashed code itself gives back after
+# encoding and decoding it (found on the device 2026-11-19 and checked on
+# the host with the same code: Paradox drops the last nibble, Gallagher
+# bytes 2 and 5, Radio Key moves a parity bit, FDX-A needs its parity).
+LF_CANONICAL = {"Paradox": "1A2B3C4D5E60", "Gallagher": "1A003C4D006F7081",
+	"Radio Key": "1A693C4D5E6F", "FDX-A": "1AABBCCD5E"}
+
+
 def lf_data(proto, n):
-	return PATTERN[:2 * n]
+	return LF_CANONICAL.get(proto, PATTERN[:2 * n])
 
 
 # IR: one message per protocol; values from Unleashed's own infrared unit
@@ -441,7 +450,7 @@ def rfid_m2u(ul, mx, opt, proto, data):
 	ok = mx.start(mx_lf_cmd("emulate", proto, data),
 		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 3)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "needs T19b" in txt:
 		mx.stop()
 		return "MISSING", "rfid emulate: " + last(txt)
 	if not ok:
@@ -984,6 +993,27 @@ def rid(*parts):
 		for p in parts)
 
 
+# Sub-GHz: where the reference Flipper may transmit for a row.  The
+# Unleashed Flipper applies no region (it showed provisioned "00" with a
+# valid one), so the script must: by default only the EU short-range
+# bands (433.05-434.79, 868.0-868.6 MHz).  315 MHz is not allowed in the
+# EU; it ran once by mistake on 2026-11-18.  --region US or any to change.
+TX_BANDS = {"EU": [(433050000, 434790000), (868000000, 868600000)],
+	"US": [(304100000, 321950000), (433050000, 434790000),
+		(902000000, 928000000)]}
+
+
+def tx_allowed(opt, hz):
+	if opt.region == "any":
+		return True
+	return any(lo <= hz <= hi for lo, hi in TX_BANDS[opt.region])
+
+
+def tx_refused(ul, mx, opt, hz):
+	return "BLOCKED", "%.2f MHz is not a transmit band of region %s " \
+		"(--region)" % (hz / 1e6, opt.region)
+
+
 def build_rows(opt):
 	"""[(id, area, feature, dirn, fn, args)]: everything the Unleashed
 	Flipper can do with a partner."""
@@ -1016,12 +1046,16 @@ def build_rows(opt):
 		IB_VECTORS[0][1])
 	for fr in (315000000, 433920000, 868350000):
 		add("subghz", "level %.2f MHz" % (fr / 1e6), "u2m",
-			subghz_rssi_u2m, fr)
+			subghz_rssi_u2m if tx_allowed(opt, fr) else tx_refused, fr)
 	add("subghz", "raw timings", "u2m", subghz_raw_u2m)
 	add("subghz", "tx Princeton", "m2u", subghz_tx_m2u)
 	add("subghz", "chat", "u2m", subghz_chat, "u2m")
 	add("subghz", "chat", "m2u", subghz_chat, "m2u")
 	for f in sub_files():
+		if not tx_allowed(opt, f["freq"]):
+			for d in ("u2m", "m2u"):
+				add("subghz-decode", f["proto"], d, tx_refused, f["freq"])
+			continue
 		add("subghz-decode", f["proto"], "u2m", subghz_decode_u2m, f)
 		add("subghz-decode", f["proto"], "m2u", subghz_decode_m2u, f)
 	for f in nfc_files():
@@ -1225,6 +1259,8 @@ def main():
 	ap.add_argument("-u", "--unleashed", help="Unleashed Flipper's port")
 	ap.add_argument("-r", "--repeat", type=int, default=1)
 	ap.add_argument("--freq", type=int, default=433920000)
+	ap.add_argument("--region", choices=["EU", "US", "any"], default="EU",
+		help="Sub-GHz transmit bands the rows may use (default EU)")
 	ap.add_argument("--map")
 	ap.add_argument("--baseline")
 	ap.add_argument("--t5577", action="store_true")
@@ -1237,6 +1273,9 @@ def main():
 	ap.add_argument("--peer-minix", action="store_true")
 	ap.add_argument("patterns", nargs="*")
 	opt = ap.parse_args()
+	if not tx_allowed(opt, opt.freq):
+		ap.error("--freq %d is not a transmit band of region %s (use --region)"
+			% (opt.freq, opt.region))
 
 	rows = select_rows(build_rows(opt), opt.patterns)
 	if not rows:
