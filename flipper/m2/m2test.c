@@ -730,13 +730,58 @@ static void hid_tests(void)
  * gives the hash of that text, SGIOCFAKE makes the next write a received
  * frame or packet (the hid< / HIDIOCFAKE pattern).  The region is set
  * once; every transmit is checked against its bands and duty cycle. */
+/* The test's strings in one const struct (flash), as the pkg test's
+ * (PK_STRINGS below): each literal would cost a GOT word in every copy
+ * of m2test, and ACK.3's 4 flooders fork it with a few bytes to spare. */
+static const struct {
+	char s0[sizeof "/dev/subghz"];
+	char s1[sizeof "%lu"];
+	char s2[sizeof "/dev/subghzraw"];
+	char s3[sizeof "/dev/subghzpkt"];
+	char s4[sizeof "subghz: open the 3 files (pkt: minor 20)"];
+	char s5[sizeof "subghz: untuned EIO; tuned, no region: EPERM"];
+	char s6[sizeof "subghz: region XX EINVAL, EU set once (US: EPERM)"];
+	char s7[sizeof "tx 433920000 3 350 -700 350"];
+	char s8[sizeof "subghz: a frame goes out, its console line (sg> tx)"];
+	char s9[sizeof "yo"];
+	char s10[sizeof "subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)"];
+	char s11[sizeof "/bin/m2test"];
+	char s12[sizeof "m2test"];
+	char s13[sizeof "sg-read"];
+	char s14[sizeof "subghz: SGIOCFAKE: the reader gets the frame"];
+	char s15[sizeof "pkt 433920000 79 6f"];
+	char s16[sizeof "subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit"];
+} sg = {
+	"/dev/subghz",
+	"%lu",
+	"/dev/subghzraw",
+	"/dev/subghzpkt",
+	"subghz: open the 3 files (pkt: minor 20)",
+	"subghz: untuned EIO; tuned, no region: EPERM",
+	"subghz: region XX EINVAL, EU set once (US: EPERM)",
+	"tx 433920000 3 350 -700 350",
+	"subghz: a frame goes out, its console line (sg> tx)",
+	"yo",
+	"subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)",
+	"/bin/m2test",
+	"m2test",
+	"sg-read",
+	"subghz: SGIOCFAKE: the reader gets the frame",
+	"pkt 433920000 79 6f",
+	"subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit",
+};
+
 static int sg_tune(unsigned long hz)
 {
 	char t[12];
-	int fd = open("/dev/subghz", O_WRONLY), n, ok;
+	int fd = open(sg.s0, O_WRONLY), n, ok;
 
 	if (fd < 0) return 0;
-	n = sprintf(t, "%lu", hz);
+	n = sprintf(t, sg.s1, hz);
 	ok = write(fd, t, n) == n;
 	close(fd);
 	return ok;
@@ -759,18 +804,18 @@ static void subghz_tests(void)
 	pid_t pid;
 	char b[8];
 
-	s = open("/dev/subghz", O_RDWR);
-	r = open("/dev/subghzraw", O_RDWR);
-	k = open("/dev/subghzpkt", O_RDWR);
-	check(s >= 0 && r >= 0 && k >= 0 && stat("/dev/subghzpkt", &sb) == 0
-		&& (sb.st_rdev & 0xFF) == 20, "subghz: open the 3 files (pkt: minor 20)");
+	s = open(sg.s0, O_RDWR);
+	r = open(sg.s2, O_RDWR);
+	k = open(sg.s3, O_RDWR);
+	check(s >= 0 && r >= 0 && k >= 0 && stat(sg.s3, &sb) == 0
+		&& (sb.st_rdev & 0xFF) == 20, sg.s4);
 	if (s < 0 || r < 0 || k < 0) return;
 	f[0] = 350; f[1] = 700; f[2] = 350;
 	e = write(r, (char *) f, 12) < 0 && errno == EIO && sg_tune(433920000UL);
 	v = -1;
 	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
 		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
-	check(e, "subghz: untuned EIO; tuned, no region: EPERM");
+	check(e, sg.s5);
 	v = SG_REGION('X', 'X');
 	e = ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
 	v = SG_REGION('E', 'U');
@@ -779,10 +824,10 @@ static void subghz_tests(void)
 	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
 	v = 0;
 	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('E', 'U'),
-		"subghz: region XX EINVAL, EU set once (US: EPERM)");
+		sg.s6);
 	check(write(r, (char *) f, 12) == 12
-		&& sg_line(r, "tx 433920000 3 350 -700 350"),
-		"subghz: a frame goes out, its console line (sg> tx)");
+		&& sg_line(r, sg.s7),
+		sg.s8);
 	f[1] = 0;
 	e = write(r, (char *) f, 12) < 0 && errno == EINVAL;
 	f[1] = 2000000;
@@ -791,13 +836,12 @@ static void subghz_tests(void)
 	e = e && write(r, (char *) f, 10) < 0 && errno == EINVAL;
 	/* 315 MHz is not EU's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
 	e = e && sg_tune(315000000UL) && write(r, (char *) f, 12) < 0
-		&& errno == EPERM && write(k, "yo", 2) < 0 && errno == EPERM;
+		&& errno == EPERM && write(k, sg.s9, 2) < 0 && errno == EPERM;
 	f[0] = f[1] = f[2] = f[3] = 1000000;
 	e = e && sg_tune(868800000UL) && ioctl(r, SGIOCAIR, &air) == 0
 		&& air.limit_ms == 3600;
 	check(e && write(r, (char *) f, 16) < 0 && errno == EAGAIN,
-		"subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
-		"EAGAIN for 4 s at 868.8 MHz (0.1 %)");
+		sg.s10);
 
 	/* a received frame for a waiting reader: another program (a reader
 	 * is pinned while it waits, R4b.5, so a forked copy sharing our
@@ -805,7 +849,7 @@ static void subghz_tests(void)
 	(void) sg_tune(433920000UL);
 	fflush(stdout);
 	if ((pid = fork()) == 0) {
-		execl("/bin/m2test", "m2test", "sg-read", (char *) NULL);
+		execl(sg.s11, sg.s12, sg.s13, (char *) NULL);
 		_exit(99);
 	}
 	f[0] = 500; f[1] = 1000; f[2] = 500; f[3] = 2000;
@@ -818,19 +862,18 @@ static void subghz_tests(void)
 	}
 	check(e == 16 && pid > 0 && waitpid(pid, &st, 0) == pid
 		&& WIFEXITED(st) && WEXITSTATUS(st) == 0,
-		"subghz: SGIOCFAKE: the reader gets the frame");
+		sg.s14);
 
 	/* packets */
 	v = SG_FAKE_PKT;
 	e = ioctl(r, SGIOCFAKE, &v) < 0 && errno == EINVAL
-		&& write(k, "yo", 2) == 2 && sg_line(k, "pkt 433920000 79 6f")
+		&& write(k, sg.s9, 2) == 2 && sg_line(k, sg.s15)
 		&& read(k, b, sizeof(b)) < 0 && errno == EAGAIN;
-	check(e && ioctl(k, SGIOCFAKE, &v) == 0 && write(k, "yo", 2) == 2
+	check(e && ioctl(k, SGIOCFAKE, &v) == 0 && write(k, sg.s9, 2) == 2
 		&& read(k, b, sizeof(b)) == 2 && b[0] == 'y' && b[1] == 'o'
 		&& ioctl(r, SGIOCAIR, &air) == 0 && air.limit_ms == 360000
 		&& air.used_ms > 0 && air.used_ms < 100,
-		"subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
-		"heard (SGIOCFAKE); air time, 10 % limit");
+		sg.s16);
 	(void) sg_tune(0UL);
 	close(s);
 	close(r);
