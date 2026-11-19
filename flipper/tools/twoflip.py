@@ -479,9 +479,8 @@ def spacer_gate(opt, proto):
 
 
 def rfid_u2m(ul, mx, opt, proto, data):
-	g = spacer_gate(opt, proto)
-	if g:
-		return g
+	# reading is not gated by --spacer: with rfid from #357 ASK and PSK
+	# tags read at every spacer (FSK ones at some; devguide 6.4)
 	if " " in proto:
 		return "BLOCKED", "the Unleashed CLI cannot take a protocol name " \
 			"with a space"
