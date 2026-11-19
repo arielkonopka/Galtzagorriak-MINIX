@@ -504,6 +504,7 @@ static const struct {
 	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
 	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
 	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+	char st[sizeof "  mtpd: pid %d, status %#x, alarm %d, errno %d\n"];
 } mt = {
 	"Filetype: Flipper SubGhz Key File\n"
 		"Version: 1\nFrequency: 433920000\n"
@@ -522,6 +523,7 @@ static const struct {
 	"mtpd served mtphost and ended on the pulled cable",
 	"mtpd: etxea.sub sent from the PC, owned by bin",
 	"mtpd: the half-sent file is gone, nothing else left",
+	"  mtpd: pid %d, status %#x, alarm %d, errno %d\n",
 };
 
 static void mtpd_test(void)
@@ -553,8 +555,10 @@ static void mtpd_test(void)
 		status = -1;
 	}
 	alarm(0);
-	check(pid > 0 && got_sig == 0 && WIFEXITED(status)
-		&& WEXITSTATUS(status) == 0, mt.c1);
+	n = pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0;
+	if (!n) printf(mt.st, (int) pid, status, got_sig, errno);
+	check(n, mt.c1);
 	strcpy(path, mt.root);
 	strcat(path, mt.dir);			/* <root>/galtzagorriak */
 	leaf = path + strlen(path);
