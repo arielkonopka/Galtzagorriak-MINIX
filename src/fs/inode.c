@@ -172,7 +172,7 @@ PUBLIC struct inode *pipe_inode()
   register struct super_block *sp;
 
   sp = get_super(PIPE_DEV);
-  if ((long) sp->s_ninodes + NR_INODES >= (long) (ino_t) ~0)
+  if ((unsigned long) sp->s_ninodes + NR_INODES >= (unsigned long) MAX_INODE_NR)
 	return(alloc_inode(PIPE_DEV, I_REGULAR));	/* no number free */
   if (sp->s_rd_only) {
 	err_code = EROFS;

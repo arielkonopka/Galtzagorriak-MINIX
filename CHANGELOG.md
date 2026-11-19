@@ -6,6 +6,7 @@ Galtzagorriak, a MINIX 2.0.0 port for the Flipper Zero. Versioning rules: spec s
 
 ## Unreleased
 
+- (#306, T27a part 3: O.4d) **32-bit inode numbers, ABI 3.** `ino_t` is `unsigned long`, so `st_ino` and `d_ino` are 32-bit and a V3 `/home` may hold more than 65 535 files and directories (`v3card.py` now makes it with 200 000 inodes). **ABI change:** `GZ_ABI` is 3; every program is rebuilt, and an ABI 2 card needs a rewritten card. On-disk V1/V2 entries keep a 16-bit inode (`struct direct`). The flash install records stay 64 B: the binding word is `ino << 12 | dev` (20-bit inode, 12-bit device). FS reads the V1/V2 super block field by field. `readdir` tells V2 and V3 apart by name bytes only. `badusb` lists scripts on a V3 `/home`. Kernel, MM and FS RAM +0 B (ramcheck 14884 / 10224 / 27392); `mtpd` .bss +4 B; no run-time flash writes.
 - `tools/twoflip.py`: **`--spacer none|thin|thick|ask`** for the RFID rows. On the device no one distance suits all of them: with about 5 mm of card between the (cased) Flippers the ASK and FSK rows read and PSK mostly does not; with the cases touching all five PSK protocols read 5/5 and FSK 0/5. Rows that need another spacer are BLOCKED and say which; `ask` runs the thick rows first, then asks for the change; the map records the spacer. PSK emulation needed no code change (ETR edge and trim variants made no difference). Devguide 6.4 has the measured table for both directions.
 ## 0.1.2 (2026-11-19): interim release, two-Flipper tests still running
 

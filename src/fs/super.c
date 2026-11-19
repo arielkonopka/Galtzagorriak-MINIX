@@ -212,9 +212,20 @@ register struct super_block *sp; /* pointer to a superblock */
 
   dev = sp->s_dev;		/* save device (will be overwritten by copy) */
   bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
-  memcpy( (char *) sp, bp->b_data, (size_t) SUPER_SIZE);
   w = (u16_t *) bp->b_data;
   l = (u32_t *) bp->b_data;
+  /* The V1/V2 layout, field by field: the in-core s_ninodes is 32-bit
+   * (spec O.4), so the block is no longer copied as it is. */
+  sp->s_ninodes = (ino_t) w[0];
+  sp->s_nzones = w[1];
+  sp->s_imap_blocks = w[2];
+  sp->s_zmap_blocks = w[3];
+  sp->s_firstdatazone = w[4];
+  sp->s_log_zone_size = w[5];
+  sp->s_max_size = (off_t) l[3];
+  sp->s_magic = w[8];
+  sp->s_flags = w[9];
+  sp->s_zones = (zone_t) l[5];
   sp->s_dev = NO_DEV;		/* restore later */
   magic = sp->s_magic;		/* determines file system type */
 
@@ -233,13 +244,6 @@ register struct super_block *sp; /* pointer to a superblock */
 		printf("FS: V3 file system with %u-byte blocks, zone shift %u: "
 			"only 1024 and 0 work, not mounted\n",
 			(unsigned) w[14], (unsigned) w[6]);
-		put_block(bp, ZUPER_BLOCK);
-		return(EINVAL);
-	}
-	if (l[0] > (u32_t) MAX_INODE_NR) {
-		printf("FS: V3 file system with %lu inodes, at most %lu, "
-			"not mounted\n", (unsigned long) l[0],
-			(unsigned long) MAX_INODE_NR);
 		put_block(bp, ZUPER_BLOCK);
 		return(EINVAL);
 	}

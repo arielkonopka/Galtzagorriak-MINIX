@@ -22,10 +22,12 @@ EXTERN struct mproc {
   uid_t mp_effuid;		/* process' effective uid */
   gid_t mp_realgid;		/* process' real gid */
   gid_t mp_effgid;		/* process' effective gid */
+  dev_t mp_dev;			/* device number of the program's file system;
+				 * here, beside the 16-bit fields, so the
+				 * 32-bit mp_ino costs no padding (spec O.4) */
 
   /* File identification for sharing. */
   ino_t mp_ino;			/* inode number of file */
-  dev_t mp_dev;			/* device number of file system */
   ftime32_t mp_ctime;		/* inode changed time (as stored, R2d.3) */
 
   /* Signal handling information. */

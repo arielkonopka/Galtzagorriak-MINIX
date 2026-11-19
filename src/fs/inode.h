@@ -20,7 +20,6 @@ EXTERN struct inode {
   zone_t i_zone[V2_NR_TZONES];	/* zone numbers for direct, ind, and dbl ind */
   
   /* The following items are not present on the disk. */
-  dev_t i_dev;			/* which device is the inode on */
   ino_t i_num;			/* inode number on its (minor) device */
   int i_count;			/* # times inode used; 0 means slot is free */
   int i_ndzones;		/* # direct zones (Vx_NR_DZONES) */
@@ -31,6 +30,8 @@ EXTERN struct inode {
   char i_mount;			/* this bit is set if file mounted on */
   char i_seek;			/* set on LSEEK, cleared on READ/WRITE */
   char i_update;		/* the ATIME, CTIME, and MTIME bits are here */
+  dev_t i_dev;			/* which device is the inode on; beside the
+				 * chars, in their padding (spec O.4) */
 } inode[NR_INODES];
 
 

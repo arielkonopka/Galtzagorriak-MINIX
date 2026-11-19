@@ -56,7 +56,7 @@ typedef unsigned long sigset_t;
 /* Types used in disk, inode, etc. data structures. */
 typedef short          dev_t;	   /* holds (major|minor) device pair */
 typedef char           gid_t;	   /* group id */
-typedef unsigned short ino_t; 	   /* i-node number */
+typedef unsigned long  ino_t; 	   /* i-node number (32-bit, spec O.4) */
 typedef unsigned short mode_t;	   /* file type and permissions bits */
 typedef char         nlink_t;	   /* number of links to a file */
 typedef unsigned long  off_t;	   /* offset within a file */
@@ -108,14 +108,14 @@ typedef long            I32_t;
 #endif
 
 #if _EM_WSIZE == 2 || !defined(_ANSI)
-typedef unsigned int      Ino_t;
+typedef unsigned long     Ino_t;
 typedef unsigned int    Zone1_t;
 typedef unsigned int Bitchunk_t;
 typedef unsigned int      U16_t;
 typedef unsigned int  Mode_t;
 
 #else /* _EM_WSIZE == 4, or _EM_WSIZE undefined, or _ANSI defined */
-typedef int	          Ino_t;
+typedef unsigned long     Ino_t;
 typedef int 	        Zone1_t;
 typedef int	     Bitchunk_t;
 typedef int	          U16_t;

@@ -978,7 +978,8 @@ The system has changed enough to be its own system, so it gets its own name and 
   layouts, changed sizes or layouts of shared types (`time_t`, `struct stat`, `struct
   sigcontext`), a changed executable format or relocation rules, or a changed shared-libc entry
   table. It does not go up for new calls, new devices or new files.
-- **ABI 1** is today's main. **Phase 2d (64-bit `time_t`, R2d.1) raises it to 2.** Phase 2b (shared
+- **ABI 1** was the first main. **Phase 2d (64-bit `time_t`, R2d.1) raised it to 2**; **32-bit
+  `ino_t` (spec O.4, T27a) raised it to 3.** Phase 2b (shared
   libc) raises it again if its entry table is not frozen in the same release as 2d; try to land
   both in one ABI step.
 - **Executables:** `elf2mnx.py` writes `GZ_ABI` into the a.out header field `a_version`
@@ -1792,6 +1793,16 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
   - `struct stat.st_ino` and `struct dirent.d_ino` 32-bit: an **ABI change** (spec J: ABI number
     bump, every program rebuilt, which the base image and packages are anyway). The install-time
     binding (dev, ino, ctime) records widen; R2b.12 rebinds by SHA.
+    *Amended in T27a (2026-11-19):* the record stays 64 B (63 per directory page; a bigger record
+    would need a new directory format). Its binding word is `ino << 12 | dev`: a 20-bit inode
+    number (a V3 file system with 1 KB blocks has fewer than 2^20 inodes, because its inode table
+    ends below the 16-bit `s_firstdatazone`) and a 12-bit device (major < 16). A file outside
+    that is not installed (`EFBIG`) and runs from RAM. ABI 2 records (`ino << 16 | dev`) are not
+    matched by ABI 3 files (ctime, size and the text CRC differ too) and are dropped by R2b.12.
+  - FS reads the V1/V2 super block field by field (it was copied with `memcpy`); `s_magic`,
+    `s_flags` and `i_dev` moved into padding, so FS RAM is +0 B. Programs that read block 1 into
+    `struct super_block` (`mkfs`, `fsck`, `df`, `de`) still get the V1/V2 on-disk layout (the
+    FS-only layout is under `_FS_SERVER`). MM `mp_dev` moved beside the 16-bit ids: +0 B.
   - On-disk V1/V2 structures keep 16-bit fields (`d1_`/`d2_` inode, `struct direct` →
     explicit `u16_t`); V2 file systems still hold at most 65 535 inodes.
   - Practical V3 limit: the 16-bit `s_firstdatazone` keeps bit maps + inode table below 64 MB
@@ -1814,7 +1825,9 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
 - **Reading a directory:** `read()` on a V3 directory returns the raw 64-byte entries (FS does
   no translation). libc `readdir` finds the format once from the directory's first entry (always
   `.`: name at byte 2 on V2, byte 4 on V3; no system call, so a caller's own `DIR` such as
-  `mtpd`'s works too; amended in T27a, was `fstatfs()`); it parses V2
+  `mtpd`'s works too; amended in T27a, was `fstatfs()`). Only name bytes are looked at (V3 when
+  bytes 4-5 are `".\0"`; on V2 byte 4 is the zero padding of "."), never the inode number, so
+  any 32-bit inode number works. It parses V2
   entries (16 B, `u16_t` inode) or V3 entries (64 B, `u32_t` inode, 60-character name) into
   `struct dirent { ino_t d_ino; char d_name[61]; }`. The old "flex" format (never on our disks)
   is dropped; `d_extent` users are fixed. `DIR` stays 1 KB per open directory.
@@ -1822,6 +1835,10 @@ partitions. This section only uses them: FS `rw_block`/`rw_scattered` compute `b
   V2 stays as it is.
 - Programs that read raw `struct direct` are checked (`ash/dirent.c`, `sh4.c`, `tar`, `de`,
   `traverse`, `cgrep`, `atrun`, `readfs`, `fsck`, `mkfs`): each uses `readdir` or learns V3.
+  *Checked in T27a part 3:* `ash`, `tar` (`DIRECT_3`) and `mtpd` use `readdir`; `sh4.c` and
+  `badusb`'s `dir_scan` read both entry sizes; `remind` reads `/var/timers` on the root file
+  system, which stays V2; `de`, `traverse`, `cgrep`, `atrun` and `readfs` are not built for the
+  Flipper; `fsck` and `mkfs` learn V3 in O.6 (until then `/etc/rc` mounts a V3 `/home` read-only).
 - **RAM:** FS static ≤ +28 B (O.5, `s_ninodes`), MM ≤ +32 B (`mp_ino`), FS stack ≤ +200 B (longer
   name buffers on the deepest path, `rename`), measured by `ramcheck`. Flash: FS ≈ +3 KB, `fsck`/`mkfs` ≈ +2 KB
   each.
