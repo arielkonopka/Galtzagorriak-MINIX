@@ -543,6 +543,40 @@ int hal_disk_discard(uint32_t first, uint32_t last)
 	return 0;
 }
 
+/* R12.33 in QEMU: a disk image has no ERASE, so the range gets the erased
+ * value, 0x00 (a card whose DATA_STAT_AFTER_ERASE is 0), which tests can
+ * see.  Only the 64 KB pieces holding something else are written: a fresh
+ * (sparse) image stays sparse and the first boot's /etc/setup costs reads
+ * only.  The pieces pass through SSRAM2/3 far above the 192 KB MINIX uses
+ * (QEMU only; no RAM of the Flipper's).  One nap first, as discard. */
+#define ERASE_BUF	((uint32_t *) 0x20200000u)
+#define ERASE_SECTS	128u			/* 64 KB */
+
+int hal_disk_erase(uint32_t first, uint32_t last)
+{
+	const uint32_t *w, *e;
+	uint32_t n;
+
+	if (disk_fake == 1) return -1;
+	if (last < first) return 0;
+	hal_disk_nap();
+	while (first <= last) {
+		n = last - first + 1;
+		if (n > ERASE_SECTS) n = ERASE_SECTS;
+		if (hal_disk_read(first, ERASE_BUF, n) != 0) return -1;
+		e = ERASE_BUF + n * (HAL_SECTOR_SIZE / 4);
+		for (w = ERASE_BUF; w < e; w += 8)
+			if ((w[0] | w[1] | w[2] | w[3] | w[4] | w[5] | w[6]
+							| w[7]) != 0) break;
+		if (w < e) {
+			memset(ERASE_BUF, 0, n * HAL_SECTOR_SIZE);
+			if (hal_disk_write(first, ERASE_BUF, n) != 0) return -1;
+		}
+		first += n;
+	}
+	return 0;
+}
+
 /* No USB in QEMU: the console stays on the UART. */
 int hal_usb_init(void) { return -1; }
 int hal_usb_irq(void) { return -1; }

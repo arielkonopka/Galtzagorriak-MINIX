@@ -177,7 +177,11 @@ Avoid direct sunlight on the windows.
 
 ### Sub-GHz
 
-Nothing to set up: the antennas are inside, and a few centimetres is a very strong signal.
+The antennas are inside, but **take the stack apart for the Sub-GHz rows and put the two
+Flippers about 1 m apart** (both stay on USB; unplug the 17/18 wires). Back to back the
+receiver is overloaded: MINIX measures about -37 dBm during Unleashed's transmission, the
+CC1101's demodulated output is choppy noise, and almost nothing decodes. At about 1 m it reads
+-59 dBm and the frames are clean (checked 2026-11-19: 31 decode rows PASS, 0 back to back).
 Keep other 433 MHz remotes away during the test. The test sends a short burst (a few
 seconds, low power, in the 433 MHz band that remotes use); check that this is allowed where you
 are.
@@ -411,6 +415,8 @@ table is about FAIL and BLOCKED rows and about the script not starting.
 | `ir-*` FAIL "received nothing" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder or encoder bug: report it. |
 | `subghz-level_*` BLOCKED | Unleashed may not transmit at that frequency with its region settings. Normal for 315 or 868 MHz in some regions. |
 | Every Sub-GHz row BLOCKED with `Device 0 failed to start` (`subghz chat` works) | A bug in Unleashed `unlshd-095`'s command line, not the radio: the internal CC1101's driver has no `begin()` (`cc1101_int_interconnect.c`), `subghz_devices_begin()` then returns false, and the new start check in `subghz_cli.c` takes that as a failure, so `subghz tx`, `rx` and `tx_from_file` on device 0 always stop there. Install another Unleashed release on the reference Flipper (the script was written against `53818b1`). The region is not the cause: Unleashed reports `hardware.region.provisioned : 00` even with a valid `/int/.region_data`. |
+| `subghz-decode-*` MISSING "decoded nothing" for almost every protocol, levels PASS | The Flippers are too close: the receiver is overloaded. Put them about 1 m apart (6.4, Sub-GHz). |
+| `subghz-decode-Freezer`, `-Proteco` BLOCKED "reboots" | Unleashed `unlshd-093` says `Error transmitter` and reboots (its USB port goes away) on `tx_from_file` of these two files, which ended the whole run. The script skips them (`UL_TX_CRASH`). |
 | `subghz-level_*` FAIL with a small rise | Another transmitter nearby during the quiet reading; run that row again. |
 | A row hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun that row with `--log` and report the log. |
 
@@ -430,7 +436,7 @@ speed). The commands the script uses today, on main:
 | iButton U→M | `ikey emulate Dallas 01A1B2C3D4E5F68F` (Ctrl-C ends) | `od -b /dev/ibutton` |
 | Sub-GHz level | `subghz tx 74BADE 433920000 403 100 0` | `echo 433920000 > /dev/subghz`, `cat /dev/subghz`, `echo 0 > /dev/subghz` |
 | Sub-GHz raw | (as above) | `ir rx -r -n 1 -d /dev/subghzraw` |
-| Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 1 0`; `subghz rx 433920000 0` | (planned, 6.10) |
+| Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 10 0` (10 transmissions: most decoders report a frame only after seeing it twice in a row); `subghz rx 433920000 0` | `subghz rx 433920000`, `subghz tx_from_file FILE 10` |
 | NFC | `nfc`, then `emulate -f /ext/twoflip/Ntag215.nfc` or `scanner`, then `exit` | (planned, 6.10) |
 
 The Unleashed sources these were checked against: `applications/main/lfrfid/lfrfid_cli.c`,

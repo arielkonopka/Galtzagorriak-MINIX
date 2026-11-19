@@ -811,6 +811,16 @@ def judge_sub(f, out, who, nothing):
 		who, f["proto"])
 
 
+# A remote sends its frame several times; most decoders report a frame only
+# once they have seen it twice in a row (or after a first frame's guard
+# time), so one transmission is not enough.
+SUB_REPEAT = 10
+# Unleashed unlshd-093 says "Error transmitter" and then reboots (its USB
+# port goes away) on tx_from_file with these files.
+UL_TX_CRASH = {"Proteco": "Unleashed unlshd-093 reboots on tx_from_file of this file (its own bug)", "Freezer": "Unleashed unlshd-093 reboots on tx_from_file "
+	"of this file (its own bug)"}
+
+
 def subghz_decode_u2m(ul, mx, opt, f):
 	if not mx.exists("subghz"):
 		return "MISSING", "no subghz command (MINIX: subghz rx FREQ)"
@@ -823,7 +833,10 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	if missing(None, txt):
 		mx.stop()
 		return "MISSING", "subghz rx: " + last(txt)
-	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
+	if f["proto"] in UL_TX_CRASH:
+		mx.stop()
+		return "BLOCKED", UL_TX_CRASH[f["proto"]]
+	ok, uo = ul.run("subghz tx_from_file %s %d 0" % (path, SUB_REPEAT), 30)
 	if re.search(UL_TX_REFUSED.decode(), uo):
 		mx.stop()
 		return "BLOCKED", "Unleashed: " + ul_refused(uo)

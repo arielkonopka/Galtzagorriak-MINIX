@@ -309,7 +309,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   passwd su sum sync tail tar tee test touch tr tty umount uname uniq update \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
-PORTCMDS := mkpart pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
+PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
 	    swapon gmodem guimod jiggle
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
@@ -389,6 +389,7 @@ CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
+CHMEM_swapwear := 12288	# tests/swapwear: 20 KB of .bss + this: a 32 KB image (AC12.14)
 CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
 CHMEM_swaptime64 := 65536	# its helper: a 64 KB image to swap (#109)
 CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
@@ -823,7 +824,8 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 # Security tests (flipper/tests, spec rule 0.4), package tests: /usr/tests.
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
-	   swaptime swaptime64 regtest hidfake sgfake alarmrace notepost
+	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
+	   notepost
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
@@ -979,7 +981,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.39
+BASE_VER := 4.41
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst
