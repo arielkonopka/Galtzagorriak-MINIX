@@ -51,6 +51,9 @@ static void malformed(void)
 		"tile\tbat\t100\t0\tx",			/* pid 0 */
 		"tile\tbat\t100\t32768\tx",
 		"tile\tbat\t100\t99999999999999999999\tx",
+		"notify\tm\t1\t2",			/* no text */
+		"notify\tm\t1\t2\ta\tb\tc",		/* 7 fields */
+		"tile\tbat\t100\t7\tx\tbody",		/* a body: notify only */
 		(const char *) 0
 	};
 	struct desk d;
@@ -63,7 +66,7 @@ static void malformed(void)
 		snprintf(what, sizeof what, "malformed %d dropped", i);
 		T(feed(&d, bad[i]) == -1, what);
 	}
-	T(dk_tiles(&d) == 0 && d.unread == 0, "malformed: nothing stored");
+	T(dk_tiles(&d) == 0 && dk_unread(&d) == 0 && d.notes == 0, "malformed: nothing stored");
 	T(feed(&d, "tile\tabcdefghij\t65535\t32767\tok\n") == DC_TILES,
 		"the longest name, uid and pid");
 }
@@ -93,7 +96,10 @@ static void verbs(void)
 	T(feed(&d, "status\tbat\t100\t7\tREC") == 0, "status: same, no change");
 	T(feed(&d, "notify\tmail\t100\t7\tNew mail") == (DC_NOTE | DC_STATUS),
 		"notify: counted");
-	T(d.unread == 1 && strcmp(d.note, "New mail") == 0, "notify: count and text");
+	T(dk_unread(&d) == 1 && d.notes == 1
+		&& strcmp(d.n[0].title, "New mail") == 0
+		&& strcmp(d.n[0].name, "mail") == 0 && d.n[0].uid == 100
+		&& d.n[0].body[0] == 0, "notify: count and text");
 	T(feed(&d, "close\tbat\t100\t7") == (DC_TILES | DC_STATUS),
 		"close: the tile and the status go");
 	T(dk_tiles(&d) == 1 && d.st == -1, "close: only the other tile left");
@@ -102,7 +108,8 @@ static void verbs(void)
 		int i;
 
 		for (i = 0; i < 120; i++) feed(&d, "notify\tm\t1\t2\tx");
-		T(d.unread == 99, "notify: the count stops at 99");
+		T(dk_unread(&d) == DK_NNOTES && d.notes == DK_NNOTES,
+			"notify: only the last 8 are kept");
 	}
 }
 
@@ -208,12 +215,56 @@ static void full_and_purge(void)
 		"an exited module's status goes too");
 }
 
+/* T23c: the Notifications page's list: the last 8, newest first, a body,
+ * unread count, clear. */
+static void notes(void)
+{
+	struct desk d;
+	char line[DK_LINE];
+	int i;
+
+	init(&d);
+	for (i = 0; i < 10; i++) {
+		snprintf(line, sizeof line, "notify\treminder\t21\t5\tNote %d"
+			 "\tBody %d", i, i);
+		T(feed(&d, line) == (DC_NOTE | DC_STATUS), "notes: posted");
+	}
+	T(d.notes == 8 && dk_unread(&d) == 8, "notes: 10 posted, 8 kept, 8 unread");
+	T(strcmp(d.n[0].title, "Note 9") == 0 && strcmp(d.n[7].title, "Note 2") == 0
+		&& strcmp(d.n[0].body, "Body 9") == 0,
+		"notes: the newest first, the two oldest gone");
+	d.n[3].unread = 0;			/* opened */
+	T(dk_unread(&d) == 7, "notes: an opened one is not unread");
+	dk_clear(&d, 3);
+	T(d.notes == 7 && dk_unread(&d) == 7 && strcmp(d.n[3].title, "Note 5") == 0
+		&& strcmp(d.n[6].title, "Note 2") == 0, "notes: clear: the rest move up");
+	dk_clear(&d, 6);
+	dk_clear(&d, 7);			/* past the end: nothing */
+	dk_clear(&d, -1);
+	T(d.notes == 6 && strcmp(d.n[5].title, "Note 3") == 0, "notes: clear the oldest");
+	while (d.notes > 0) dk_clear(&d, 0);
+	T(dk_unread(&d) == 0, "notes: all cleared");
+	/* long fields are cut; a long TEXT without BODY is the body too */
+	feed(&d, "notify\tm\t1\t2\t0123456789012345678901234567890123456789");
+	T(strlen(d.n[0].title) == DK_TITLE
+		&& strcmp(d.n[0].body, "0123456789012345678901234567890123456789") == 0,
+		"notes: a long text: the row cut, the whole text as the body");
+	feed(&d, "notify\tm\t1\t2\tt\t0123456789012345678901234567890123456789"
+		"0123456789");
+	T(strlen(d.n[0].body) == DK_BODY, "notes: the body cut at 47");
+	feed(&d, "notify\tm\t1\t2\ta\\tb\tc\\nd");
+	T(strcmp(d.n[0].title, "a b") == 0 && strcmp(d.n[0].body, "c d") == 0,
+		"notes: escapes undone");
+	T(sizeof(struct dk_note) == 88, "notes: 88 B an entry");
+}
+
 int main(void)
 {
 	malformed();
 	verbs();
 	owners();
 	escapes();
+	notes();
 	full_and_purge();
 	printf("desktest: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

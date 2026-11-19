@@ -6,13 +6,18 @@
  *
  *	tile	NAME UID PID TEXT	the module's tile on the Home page
  *	status	NAME UID PID TEXT	its short text on the status line
- *	notify	NAME UID PID TEXT	a notification (count, last text)
+ *	notify	NAME UID PID TEXT [BODY]	a notification: TEXT its row on
+ *					the Notifications page, BODY the
+ *					rest, shown when it is opened
  *	close	NAME UID PID		its tiles and status go
  *
  * A module is its uid plus its name: it changes only its own entries.
  * PID is the module's process: when it has exited (dk_purge, kill(pid, 0)
  * in the launcher) its entries go, and its records are dropped.  The
- * table is fixed: 16 entries of 48 B, nothing allocated.
+ * table is fixed: 16 entries of 48 B, nothing allocated.  The last 8
+ * notifications are kept (T23c), the newest first, 88 B each: a ninth
+ * pushes the oldest out.  notify_post() (libapp) sends its info and
+ * reminder notifications here as well.
  *
  * Pure functions, no system calls: the launcher reads the FIFO and gives
  * the lines here; tests/host/desktest.c tests them on the PC.
@@ -20,7 +25,7 @@
 #include <string.h>
 #include "desktop.h"
 
-#define NFIELDS		5
+#define NFIELDS		6
 
 /* Split at the tabs in place, undo the escapes; the number of fields or
  * -1 for more than max.  Tabs and newlines in a field become spaces: a
@@ -78,7 +83,8 @@ int dk_parse(char *line, struct dk_rec *r)
 		: strcmp(f[0], "notify") == 0 ? DV_NOTIFY
 		: strcmp(f[0], "close") == 0 ? DV_CLOSE : -1;
 	if (r->verb < 0) return -1;
-	if (n != (r->verb == DV_CLOSE ? 4 : 5)) return -1;
+	if (r->verb == DV_NOTIFY ? n != 5 && n != 6
+	    : n != (r->verb == DV_CLOSE ? 4 : 5)) return -1;
 	ln = strlen(f[1]);
 	if (ln == 0 || ln > DK_NAME) return -1;
 	if ((uid = num(f[2], 65535L)) < 0) return -1;
@@ -86,7 +92,8 @@ int dk_parse(char *line, struct dk_rec *r)
 	r->name = f[1];
 	r->uid = (unsigned short) uid;
 	r->pid = (short) pid;
-	r->text = n == 5 ? f[4] : "";
+	r->text = n >= 5 ? f[4] : "";
+	r->body = n == 6 ? f[5] : "";
 	return r->verb;
 }
 
@@ -160,10 +167,22 @@ int dk_apply(struct desk *d, const struct dk_rec *r)
 			c = DC_TILES;
 		copy(t->text, r->text, DK_TEXT);
 		return c;
-	case DV_NOTIFY:
-		copy(d->note, r->text, DK_TEXT);
-		if (d->unread < 99) d->unread++;
+	case DV_NOTIFY: {
+		struct dk_note *e = &d->n[0];
+
+		memmove(d->n + 1, d->n, sizeof d->n - sizeof d->n[0]);
+		if (d->notes < DK_NNOTES) d->notes++;
+		e->uid = r->uid;
+		e->hm = 0;
+		e->unread = 1;
+		copy(e->name, r->name, DK_NAME);
+		copy(e->title, r->text, DK_TITLE);
+		/* no BODY and a TEXT too long for the row (guimod notify):
+		 * the whole TEXT is shown when it is opened */
+		copy(e->body, r->body[0] == 0 && strlen(r->text) > DK_TITLE
+			      ? r->text : r->body, DK_BODY);
 		return DC_NOTE | DC_STATUS;
+	}
 	case DV_CLOSE:
 		for (i = 0; i < DK_NTILES; i++)
 			if (d->t[i].kind != 0 && d->t[i].uid == r->uid
@@ -202,6 +221,24 @@ const struct dk_tile *dk_tile(const struct desk *d, int i)
 	for (j = 0; j < DK_NTILES; j++)
 		if (d->t[j].kind == DV_TILE && i-- == 0) return &d->t[j];
 	return (const struct dk_tile *) 0;
+}
+
+/* The notifications not opened yet (the status line's count). */
+int dk_unread(const struct desk *d)
+{
+	int i, n = 0;
+
+	for (i = 0; i < d->notes; i++) n += d->n[i].unread != 0;
+	return n;
+}
+
+/* Clear notification i (0: the newest); the later ones move up. */
+void dk_clear(struct desk *d, int i)
+{
+	if (i < 0 || i >= d->notes) return;
+	d->notes--;
+	memmove(d->n + i, d->n + i + 1,
+		(size_t) (d->notes - i) * sizeof d->n[0]);
 }
 
 /* Build a record in buf (guimod, C modules): its length with the '\n',
