@@ -109,6 +109,10 @@ cfcat /etc/motd 2>/dev/null
 # idle timeout, volume); a missing file keeps the defaults.
 settings apply
 
+# The boot screen goes: so does its LED, the ikurrina sequence the kernel
+# started with it.
+echo off >/dev/led
+
 # The main screen: replaces the boot screen on the LCD (runs as root, starts
 # the apps from /etc/apps with their own user rights).
 launcher &

@@ -261,6 +261,10 @@ FORWARD _PROTOTYPE( int rtc_int, (int irq)				);
 #define RB_MODE(r)	((r) >> 12 & 3)
 #define RB_COLOUR(r)	((r) >> 8 & 7)
 #define RB_STEPOF(r)	((r) & 0x7F)
+/* Ikurrina (owner 2026-11-20): the Basque flag's red, green and white,
+ * glided like the rainbow, while the boot splash is up.  It is mode 0 with
+ * RB_ALT, a bit the sequences leave free (the step needs only 0x7F). */
+#define RB_ALT		0x0080
 #define RB_MS		40
 /* The console-activity mode ("echo console COLOUR >/dev/led", owner
  * 2026-11-18): a short flash in rb_user[0] for USB console traffic.  It
@@ -286,10 +290,14 @@ PRIVATE const u8_t rb_col[6][3] = {	/* PWM, white = 200:128:96 */
 	{ 200, 0, 0 }, { 200, 32, 0 }, { 200, 128, 0 },
 	{ 0, 128, 0 }, { 0, 0, 96 }, { 120, 0, 96 },
 };
+PRIVATE const u8_t rb_iku[3][3] = {	/* red, green, white (PWM) */
+	{ 200, 0, 0 }, { 0, 128, 0 }, { 200, 128, 96 },
+};
 /* (rb, the rainbow's state, is declared next to the IR ring indices:
  * there it fills their padding, 0 B) */
 PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
+FORWARD _PROTOTYPE( void rb_iku_start, (void)			);
 FORWARD _PROTOTYPE( void ca_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
@@ -420,6 +428,7 @@ PUBLIC void flipdev_task()
 	hal_bl_state_set(st);
 	hal_backlight(HAL_BL_LEVEL(st));
   }
+  rb_iku_start();		/* the splash is up: ikurrina; rc ends it */
   if ((r = hal_rfid_emu_irq()) >= 0) {	/* R9.0.6, the same way */
 	put_irq_handler(r, ir_tx_int);
 	enable_irq(r);
@@ -1886,7 +1895,7 @@ PRIVATE void rb_step()
 {
 /* The sequence's next step (task work: the I2C writes).  The glide is
  * linear in PWM level, which the LP5562 shows on a logarithmic scale. */
-  unsigned m, c, n, k, g, i, v[3];
+  unsigned m, c, n, k, g, i, v[3], iku, nc;
   const u8_t *from, *to;
 
   lock();
@@ -1895,19 +1904,36 @@ PRIVATE void rb_step()
   c = RB_COLOUR(rb);
   k = RB_STEPOF(rb) + 1;
   g = rb_mode[m].glide;
+  iku = rb & RB_ALT;
+  nc = iku ? 3 : rb_mode[m].ncol;
   if (k > g) {				/* held: glide to the next colour */
 	k = 1;
-	if (++c == rb_mode[m].ncol) c = 0;
+	if (++c == nc) c = 0;
   }
-  rb = RB_ON | m << 12 | c << 8 | k;
+  rb = RB_ON | iku | m << 12 | c << 8 | k;
   mt_arm(MT_LED, k == g && rb_mode[m].hold ? rb_mode[m].hold : RB_MS);
   unlock();
-  n = c == 0 ? rb_mode[m].ncol - 1 : c - 1;	/* from the one before */
-  from = m == 0 ? rb_col[n] : rb_user[n];
-  to = m == 0 ? rb_col[c] : rb_user[c];
+  n = c == 0 ? nc - 1 : c - 1;		/* from the one before */
+  from = iku ? rb_iku[n] : m == 0 ? rb_col[n] : rb_user[n];
+  to = iku ? rb_iku[c] : m == 0 ? rb_col[c] : rb_user[c];
   for (i = 0; i < 3; i++)
 	v[i] = (from[i] * (g - k) + to[i] * k) / g;
   hal_led_pwm(v[0], v[1], v[2]);
+}
+
+
+/*===========================================================================*
+ *				rb_iku_start				     *
+ *===========================================================================*/
+PRIVATE void rb_iku_start()
+{
+/* The ikurrina sequence (task work): from the last colour, so the first
+ * step shows red. */
+  hal_led(0, 0, 0);			/* engines off, direct */
+  lock();
+  rb = RB_ON | RB_ALT | 2 << 8 | rb_mode[0].glide;
+  unlock();
+  rb_step();
 }
 
 
@@ -2068,6 +2094,10 @@ int count;
 	lock();
 	rb = RB_CONS;
 	unlock();
+	return(count);
+  }
+  if (nw == 1 && (led_streq(wd[0], "ikurrina") || led_streq(wd[0], "ikurina"))) {
+	rb_iku_start();
 	return(count);
   }
   for (m = 0; m < 4 && !led_streq(wd[0], rb_mode[m].name); m++) ;
