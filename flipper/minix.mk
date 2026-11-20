@@ -1018,6 +1018,48 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
+
+# make update: the signed update file (spec section S, RS.17).  mkupdate.py
+# builds it from minix-base.bin, the base package, the app packages and the
+# release notes; tools/gzsign signs it (key: GZ_UPDATE_KEY or
+# ~/.config/galtzagorriak/update.key; without one it stops and says how to
+# make one); gzupdate-check.py checks it with the keys atea will trust
+# (keys/release.pub and ~/.config/galtzagorriak/update.pub, RS.6).
+# Until atea (T33b) the flash section starts at the image's own address.
+UPDATE		:= $(MB)/Galtzagorriak.update
+UPDATE_BOARD	:= $(if $(filter flipper,$(BOARD)),flipper-f7,qemu-mps2)
+UPDATE_LOAD	:= $(if $(filter flipper,$(BOARD)),0x08000000,0)
+UPDATE_FROM_MIN	?= 0.1.2
+UPDATE_PKGS	:= $(filter-out %/tests_1.0.tar %/hello_1.0.tar,$(PKGS))
+UPDATE_KEYS	= $(wildcard keys/release.pub) \
+		  $(wildcard $(HOME)/.config/galtzagorriak/update.pub)
+.PHONY: update
+update: $(MB)/minix-base.bin $(BASEPKG) $(UPDATE_PKGS) $(GZBUILD) \
+	tools/mkupdate.py tools/gzsign tools/gzupdate-check.py
+	python3 -I tools/mkupdate.py -o $(UPDATE).tmp \
+	   --version-h $(MROOT)/include/minix/gzversion.h \
+	   --changelog $(MROOT)/CHANGELOG.md --gzbuild $(GZBUILD) \
+	   --libc $(SHL)/libc.json --furi $(SHF)/furi.json \
+	   --board $(UPDATE_BOARD) --flash $(MB)/minix-base.bin \
+	   --load $(UPDATE_LOAD) --root $(BASEPKG) \
+	   --from-min $(UPDATE_FROM_MIN) $(UPDATE_PKGS:%=--pkg %)
+	python3 -I tools/gzsign $(UPDATE).tmp || { rm -f $(UPDATE).tmp; exit 1; }
+	@keys="$(strip $(UPDATE_KEYS))"; \
+	if [ -z "$$keys" ]; then \
+	   keys=$$(python3 -I tools/gzsign --pub) || exit 1; \
+	   echo "update: no keys/release.pub or ~/.config/galtzagorriak/update.pub:" \
+	        "no atea slot would trust this file; checking with its own key"; \
+	fi; \
+	python3 -I tools/gzupdate-check.py --board $(UPDATE_BOARD) -v \
+	   $$(for k in $$keys; do printf -- '--key %s ' $$k; done) $(UPDATE).tmp \
+	   || { rm -f $(UPDATE).tmp; exit 1; }
+	mv $(UPDATE).tmp $(UPDATE)
+	cd $(MB) && sha512sum $(notdir $(UPDATE)) > $(notdir $(UPDATE)).sha512
+	@echo "update: $(UPDATE) and .sha512"
+# The ACS.1 bad files, checked on the host (needs no build).
+.PHONY: updatetest
+updatetest:
+	python3 -I tools/updatetest.py -o $(MB)/updatetest
 .PHONY: pkgs
 pkgs: $(PKGS)
 
