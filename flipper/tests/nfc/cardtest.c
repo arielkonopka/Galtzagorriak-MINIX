@@ -209,6 +209,29 @@ static void test_mizip(void) {
     nfc_free(nfc);
 }
 
+/* Microel (microel.c): key A of sectors 0-1 from the UID byte sum
+ * (odd sums + 2) XOR a constant, high nibble class XOR 0x40/0xC0; key B
+ * its complement; the rest FFFFFFFFFFFF.  Credit in blocks 4 and 5. */
+static void test_microel(void) {
+    static const uint8_t uid[4] = {0x01, 0x02, 0x03, 0x04}; /* sum 0x0A, class 0 */
+    static const uint8_t x[6] = {0x01, 0x92, 0xA7, 0x75, 0x2B, 0xF9};
+    uint64_t ka = 0;
+    for(int i = 0; i < 6; i++) ka = ka << 8 | (uint8_t)(0x0A ^ x[i]);
+    cm_mfc_init(&card, uid, 16);
+    for(int s = 0; s < 2; s++) {
+        cm_mfc_set_key(&card, s, 0, ka);
+        cm_mfc_set_key(&card, s, 1, ~ka & 0xFFFFFFFFFFFFULL);
+    }
+    card.block[4][5] = 2550 & 0xff, card.block[4][6] = 2550 >> 8;
+    card.block[5][5] = 500 & 0xff, card.block[5][6] = 500 >> 8;
+    int ok;
+    const char* t = nsc_run(uid, MfClassicType1k, "microel", &ok);
+    CHECK(ok, "microel: read with the UID-derived keys, parsed");
+    CHECK(strstr(t, "Microel Card") && strstr(t, "UID: 01 02 03 04") &&
+              strstr(t, "Current Credit: 25.50 E") && strstr(t, "Previous Credit: 5.00 E"),
+          "microel: UID and both credits");
+}
+
 /* ---- every parser in the table ----
  * Dumps no parser may claim (a blank, fully read 1K and 4K; an empty
  * DESFire), dumps of random bytes with random read masks that must not
@@ -338,6 +361,7 @@ int main(void) {
     test_datetime();
     test_sync();
     test_mizip();
+    test_microel();
     test_sweep();
     if(fails) {
         printf("%d FAILED\n", fails);
