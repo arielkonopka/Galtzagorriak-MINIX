@@ -1860,6 +1860,17 @@ long for `df` or the launcher's storage line.
 - Allocation itself is unchanged: `s_zsearch` keeps searches short; files are allocated from the
   bottom, so the used part of the map stays dense.
 
+*Done in T27a part 7 (#306, 2026-11-20):* `s_zfree`/`s_ifree` per slot; the small in-core super
+block fields became bytes and shorts, so FS RAM went down 24 B. The hint is 12 B at offset 48 of
+block 1 (tag `"GZFc"`, free zones, free inodes; past every super block layout), written by
+`put_sflags` when it sets CLEAN, used at mount only if it fits the totals. The recount keeps one
+partial sum (8 B with its cursor) instead of a delta: `alloc_bit`/`free_bit` in blocks already
+counted adjust it, so the result is exact. `FSTATFS` is call 44 (`m1_i1` fd, `FSTATFS_PATH` or
+`FSTATFS_RECOUNT`). There is no user-level idle priority, so `update` paces the recount itself:
+8 map blocks per call and a 20 ms `poll()` pause, at most 30 s per sync period (a foreground
+request waits at most one step). `libfuri` has no storage-info call yet; when one comes it uses
+`statfs()`.
+
 ### O.6 `fsck` on a big `/home`
 
 *Done in T27a part 4 (#306, 2026-11-19):* V3 check and repair (offset-14 flags, 64 B entries,

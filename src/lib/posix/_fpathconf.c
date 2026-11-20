@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/statfs.h>
 
 PUBLIC long fpathconf(fd, name)
 int fd;				/* file descriptor being interrogated */
@@ -36,8 +37,13 @@ int name;			/* property being inspected */
 	case _PC_MAX_INPUT:
 		return( (long) MAX_INPUT);
 
-	case _PC_NAME_MAX:
+	case _PC_NAME_MAX: {
+		/* Spec O.4/O.5: per file system, 14 on V1/V2, 60 on V3. */
+		struct statfs sfs;
+
+		if (fstatfs(fd, &sfs) == 0) return( (long) sfs.f_namemax);
 		return( (long) NAME_MAX);
+	}
 
 	case _PC_PATH_MAX:
 		return( (long) PATH_MAX);

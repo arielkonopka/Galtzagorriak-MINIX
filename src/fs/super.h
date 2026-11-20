@@ -49,13 +49,26 @@ EXTERN struct super_block {
   /* The following items are only used when the super_block is in memory. */
   struct inode *s_isup;		/* inode for root dir of mounted file sys */
   struct inode *s_imount;	/* inode mounted on */
-  unsigned s_inodes_per_block;	/* precalculated from magic number */
-  dev_t s_dev;			/* whose super block is this? */
 #ifdef _FS_SERVER
+  /* Spec O.5: the small fields are bytes and shorts, which pays for the
+   * free counters (FS RAM -8 B per slot, not +8 B). */
+  bit_t s_isearch;		/* inodes below this bit number are in use */
+  bit_t s_zsearch;		/* all zones below this bit number are in use*/
+  zone_t s_zfree;		/* free zones (spec O.5) */
+  ino_t s_ifree;		/* free inodes (spec O.5) */
+  unsigned short s_inodes_per_block;	/* precalculated from magic number */
+  dev_t s_dev;			/* whose super block is this? */
   unsigned short s_flags;	/* ex s_pad: SF_* below (spec N.1); here,
 				 * beside s_dev, so the 32-bit s_ninodes
 				 * costs nothing (spec O.4) */
-#endif
+  short s_nindirs;		/* # indirect zones per indirect block */
+  char s_rd_only;		/* set to 1 iff file sys mounted read only */
+  char s_native;		/* set to 1 iff not byte swapped file system */
+  char s_version;		/* file system version, zero means bad magic */
+  char s_ndzones;		/* # direct zones in an inode */
+#else
+  unsigned s_inodes_per_block;	/* precalculated from magic number */
+  dev_t s_dev;			/* whose super block is this? */
   int s_rd_only;		/* set to 1 iff file sys mounted read only */
   int s_native;			/* set to 1 iff not byte swapped file system */
   int s_version;		/* file system version, zero means bad magic */
@@ -63,6 +76,7 @@ EXTERN struct super_block {
   int s_nindirs;		/* # indirect zones per indirect block */
   bit_t s_isearch;		/* inodes below this bit number are in use */
   bit_t s_zsearch;		/* all zones below this bit number are in use*/
+#endif
 } super_block[NR_SUPERS];
 
 #define NIL_SUPER (struct super_block *) 0
@@ -84,7 +98,14 @@ EXTERN struct super_block {
 #define SF_CLEAN	0x0001	/* disk: nothing written since consistent */
 #define SF_CHECK	0x0002	/* disk: found unclean, not checked since */
 #define SF_DISK		0x00FF	/* the bits that live on the disk */
+#define SF_ESTIMATE	0x2000	/* core: s_zfree/s_ifree not recounted yet (O.5) */
 #define SF_DCLEAN	0x4000	/* core: CLEAN is set on the disk */
 #define SF_WRITTEN	0x8000	/* core: written since the last sync */
 #define IMAP		0	/* operating on the inode bit map */
 #define ZMAP		1	/* operating on the zone bit map */
+
+/* Spec O.5: the free-count hint in block 1, after every super block layout
+ * (V1/V2 end at 24, V3 at 31; Linux and util-linux keep these bytes).  It
+ * is written with CLEAN (put_sflags), so it costs no extra card write. */
+#define SB_HINT_OFF	48
+#define SB_HINT_TAG	0x63465A47L	/* "GZFc" */

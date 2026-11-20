@@ -87,6 +87,7 @@ _PROTOTYPE( int do_revive, (void)					);
 _PROTOTYPE( int do_inochk, (void)					);
 _PROTOTYPE( int do_set, (void)						);
 _PROTOTYPE( int do_sync, (void)						);
+_PROTOTYPE( int do_fstatfs, (void)					);
 
 /* mount.c */
 _PROTOTYPE( int do_mount, (void)					);

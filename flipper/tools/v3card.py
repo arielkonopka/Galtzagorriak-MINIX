@@ -138,6 +138,27 @@ class V3:
 	def flags(self):
 		return struct.unpack_from("<H", self.blk(1), 14)[0]
 
+	def free(self):
+		"""(free zones, free inodes) counted from the bit maps."""
+		def zeros(start, nblk, nbits):
+			n = 0
+			for i in range(nblk):
+				b = self.blk(start + i)
+				for j in range(8192):
+					bit = i * 8192 + j
+					if bit >= nbits:
+						return n
+					if not b[j >> 3] & (1 << (j & 7)):
+						n += 1
+			return n
+		zf = zeros(2 + self.imap, self.zmap, self.zones - self.first + 1)
+		inf = zeros(2, self.imap, self.ninodes + 1)
+		return zf, inf
+
+	def hint(self):
+		"""The spec O.5 hint at offset 48: (tag, zones, inodes)."""
+		return struct.unpack_from("<III", self.blk(1), 48)
+
 	def close(self):
 		self.f.close()
 
@@ -331,14 +352,42 @@ def main():
 		check(ok, "cp a 60-character name, a directory, a file in it")
 		a, b = cksum(r, "/bin/sh"), cksum(r, "%s/%s" % (d, N57))
 		check(a is not None and a == b, "same file read back")
+
+		# 7. statfs (spec O.5, T27a part 7): df answers from FS's
+		# counters; "~" until update's idle recount is done.
+		df = None
+		for i in range(20):
+			out = r.output("sync; df", 30) or b""
+			m = re.search(rb"^/dev/hd4 +(\d+) +(\d+) +(\d+)(.) +(\d+) "
+				rb"+(\d+) +(\d+)(.) +/home", out, re.M)
+			if m and m.group(4) != b"~" and m.group(8) != b"~":
+				df = m
+				break
+			r.sh("sleep 5", 30)
+		check(df is not None, "df /home: exact after the idle recount "
+			"(%s)" % (out.strip().decode(errors="replace")
+			.replace("\r\n", " | ")))
+		out = r.output("df /dev/hd4", 30) or b""
+		check(re.search(rb"/dev/hd4 .*/home", out) is not None,
+			"df /dev/hd4: from statfs (%s)" % out.strip().decode(
+			errors="replace").replace("\r\n", " | "))
 		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
-			"sync, umount /home")
+			"sync, umount /home (writes the O.5 hint)")
 		r.p.kill()
 		r.p.wait()
 		copy_part(img, start, size, part, False)
 		v = V3(part)
 		check(v.flags() & 3 == 1, "mkfs -3: CLEAN at offset 14 (%#x)"
 			% v.flags())
+		zf, inf = v.free()
+		tag, hz, hi = v.hint()
+		check(df is not None and (int(df.group(7)), int(df.group(3)))
+			== (zf, inf), "df free zones, inodes = the bit maps "
+			"(%s, %s)" % ((df.group(7), df.group(3)) if df else None,
+			(zf, inf)))
+		check((tag, hz, hi) == (0x63465A47, zf, inf),
+			"O.5 hint written with CLEAN at umount (%#x %d %d)"
+			% (tag, hz, hi))
 		v.close()
 		st, out = host(["fsck.minix", "-f", part])
 		check(st == 0, "host fsck.minix -f after mkfs -3: clean (%s)"

@@ -1,0 +1,75 @@
+.TH STATFS 2
+.SH NAME
+statfs, fstatfs \- free space of a mounted file system
+.SH SYNOPSIS
+.nf
+.ft B
+#include <sys/statfs.h>
+
+int statfs(const char *\fIpath\fP, struct statfs *\fIbuf\fP)
+int fstatfs(int \fIfd\fP, struct statfs *\fIbuf\fP)
+.ft R
+.fi
+.SH DESCRIPTION
+.B Statfs
+and
+.B fstatfs
+fill in
+.I buf
+for the mounted file system that holds
+.I path
+or the open file
+.IR fd :
+.PP
+.nf
+.ta +4n +10n
+	long	f_bsize;	/* block size: 1024 */
+	long	f_blocks;	/* data zones */
+	long	f_bfree;	/* free zones */
+	long	f_bavail;	/* free zones for ordinary users */
+	long	f_files;	/* inodes */
+	long	f_ffree;	/* free inodes */
+	dev_t	f_dev;	/* the device */
+	short	f_namemax;	/* longest name: 14 (V1/V2) or 60 (V3) */
+	short	f_version;	/* 1, 2 or 3 */
+	short	f_flag;	/* ST_RDONLY, ST_ESTIMATE */
+.fi
+.PP
+The answer comes from counters the file system server keeps up to date
+when it allocates and frees zones and inodes; no bit map is read, so it is
+quick on any size.  At mount the counters start from a hint stored in the
+super block when the file system was last marked clean, and
+.B ST_ESTIMATE
+is set until
+.BR update (8)
+has recounted the bit maps, a few blocks at a time while the system is
+idle.  Linux does not know the hint, so after Linux wrote to the file system
+the estimate can be off until the recount ends.
+.PP
+.BR fpathconf (3)
+and
+.BR pathconf (3)
+answer
+.B _PC_NAME_MAX
+from
+.BR f_namemax .
+.SH "RETURN VALUE"
+0, or \-1 with
+.I errno
+set.
+.SH ERRORS
+.TP 15
+[EBADF]
+.I fd
+is not an open file.
+.TP 15
+[EINVAL]
+The file is not on a mounted file system (a pipe).
+.TP 15
+[ENOENT]
+.I path
+does not exist.
+.SH "SEE ALSO"
+.BR df (1),
+.BR stat (2),
+.BR mount (2).

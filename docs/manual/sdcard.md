@@ -117,3 +117,13 @@ super block. Linux does not know it and leaves it as it is, so after writing to 
 computer, check it there with `fsck.minix -f` before you put the card back.
 
 `fsck.minix` (from util-linux) uses the same clean mark as the Flipper.
+
+### Free space (`df`)
+
+`df` answers at once on any size of card: the Flipper counts free blocks and files as it uses
+them and does not read the whole map of a big `/home`. Right after the Flipper starts, or after
+`mount`, the numbers come from a note the Flipper left on the card at its last clean stop, and
+`df` shows them with a `~`. A minute or so later `update` has counted again, a few blocks at a
+time while the Flipper is idle, and the `~` goes away. After Linux wrote to the card, the first
+numbers can be wrong until then. `df` counts the data blocks of a file system (without the maps
+and the inode table), so its "total" is a little smaller than the partition.
