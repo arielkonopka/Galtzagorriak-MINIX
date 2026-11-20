@@ -23,6 +23,8 @@ that brings them.
 14b. [NFC](nfc.md): reading, saving and emulating contactless cards, the MIFARE Classic dictionary, `mfkey` (the radio parts planned, spec Phase 14).
 15. [Desktop and modules](desktop.md): the desktop's pages (HOME, NOTES, RUNNING), notifications, writing a module in shell or C.
 16. [Radio stacks](radio.md): ST's CPU2 stacks on the SD card, `radio-fetch.py`, `radio list`/`add`/`rm`, the radio slot (`radio use` planned).
+17. [Infrared remotes](infrared.md): the `infrared` app (learn, saved and universal remotes, debug), stock `.ir` files, group `ir`.
+18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
