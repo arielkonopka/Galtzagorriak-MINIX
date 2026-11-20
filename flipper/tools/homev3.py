@@ -10,8 +10,9 @@ Usage: homev3.py
      and filled: copies of programs in a few directories.  The cksum list
      of its files is kept.  'sh /etc/setup -H' checks, writes the step
      and reboots; the boot copies /home to the swap partition.
-  3. Power cut: QEMU is killed while the next step (mkfs -3 and the copy
-     back) runs.  Booted again, /etc/rc goes on from that step.
+  3. Power cuts: QEMU is killed as soon as each step (copy, make,
+     check) prints its message.  Each boot after it goes on from the
+     step it was cut in; the last one runs to the end.
   4. After it: /home is V3, every file has the same cksum as before,
      /etc/.home-v3 is gone; on the host 'fsck.minix -f' finds /home
      clean.
@@ -21,7 +22,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -69,22 +69,21 @@ def main():
 		r.send("sh /etc/setup -H")
 		check(r.wait(rb"converted at the next boot", 300) is not None,
 			"setup -H starts")
-		check(r.wait(rb"setup -H: copying /home", 600) is not None,
-			"boot: copy to the swap partition")
-		m = r.wait(rb"setup -H: making a MINIX V3 /home|setup -H: the copy"
-			, 900)
-		ok = m is not None and b"making" in m.group(0)
-		check(ok, "the copy reads back the same")
-		if not ok:
-			return v3card.fails
-		time.sleep(1.5)		# into mkfs -3 / the copy back
-		r.p.kill()
-		r.p.wait()
-		check(True, "power cut in the mkfs -3 step")
-
-		r = R[0] = powercut.Run(0, 0, reuse=keep)
-		check(r.wait(rb"setup -H: making a MINIX V3 /home", 600)
-			is not None, "the next boot goes on with mkfs -3")
+		# A power cut in each step, right on the step's own message:
+		# the next boot goes on from the same step.
+		for msg, what in ((b"copying /home", "copy"),
+				(b"making a MINIX V3 /home", "make"),
+				(b"checking every file", "check")):
+			ok = r.wait(rb"setup -H: " + msg, 900) is not None
+			check(ok, "boot: setup -H step %s starts" % what)
+			if not ok:
+				return v3card.fails
+			r.p.kill()
+			r.p.wait()
+			check(True, "power cut in the %s step" % what)
+			r = R[0] = powercut.Run(0, 0, reuse=keep)
+		check(r.wait(rb"setup -H: checking every file", 900)
+			is not None, "the last boot checks again")
 		check(r.wait(rb"setup -H: /home is MINIX V3 now", 900)
 			is not None, "setup -H: done, every file the same")
 		if not r.login():

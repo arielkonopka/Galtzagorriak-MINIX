@@ -41,6 +41,7 @@ test $step = make && {
 	sync
 	step=check
 }
+test $step = check && echo "setup -H: checking every file"
 test $step = check && {
 	cd /home && find . -type f -exec cksum {} \; | sort >/tmp/home-v3.sum
 	cd /
