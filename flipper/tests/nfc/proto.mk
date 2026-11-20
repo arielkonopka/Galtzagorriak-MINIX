@@ -48,9 +48,10 @@ VHDR	+= cm_mfc.h proto.mk
 # supported_cards parsers, linked in through nfc_supported_cards.c.  The
 # parser list is src/lib/libnfc/nfc_supported_cards_list.h; NSC_PARSERS
 # must name the same files.
-NSC_PARSERS := mizip
+NSC_PARSERS := aime bambu csc gallagher hi hworld metromoney \
+	       microel mizip myki smartrider two_cities washcity zolotaya_korona_online
 CSRC	:= $(L)/nfc_device_defs_shim.c $(V)/nfc/nfc_device.c $(V)/nfc/nfc_device_i.c \
-	   $(L)/nfc_supported_cards.c \
+	   $(L)/nfc_supported_cards.c $(V)/api/gallagher/gallagher_util.c \
 	   $(patsubst %,$(V)/plugins/supported_cards/%.c,$(NSC_PARSERS))
 VHDR	+= $(L)/nfc_supported_cards.h $(L)/nfc_supported_cards_list.h
 # -Wno-unused-variable: mf_classic_poller.c keeps a few.

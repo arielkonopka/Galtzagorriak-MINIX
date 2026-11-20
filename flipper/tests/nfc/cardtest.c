@@ -14,7 +14,11 @@
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_device.h>
+#include <bit_lib/bit_lib.h>
 #include <nfc/protocols/mf_classic/mf_classic_poller_sync.h>
+
+#include <nfc/protocols/mf_desfire/mf_desfire.h>
+#include <plugins/supported_cards/nfc_supported_card_plugin.h>
 
 #include "nfc_supported_cards.h"
 
@@ -204,10 +208,115 @@ static void test_mizip(void) {
     nfc_free(nfc);
 }
 
+/* ---- every parser in the table ----
+ * Dumps no parser may claim (a blank, fully read 1K and 4K; an empty
+ * DESFire), dumps of random bytes with random read masks that must not
+ * crash or overrun any parser (ASan/UBSan are on), and a default-key card
+ * that no parser's verify() may take for its own. */
+static uint32_t sweep_rng = 0x9E3779B9u;
+static uint32_t sweep_rand(void) {
+    sweep_rng ^= sweep_rng << 13;
+    sweep_rng ^= sweep_rng >> 17;
+    sweep_rng ^= sweep_rng << 5;
+    return sweep_rng;
+}
+
+static NfcDevice* sweep_mfc(MfClassicType type, int random) {
+    static const uint8_t uid[4] = {0x04, 0x91, 0x7C, 0x22};
+    MfClassicData* d = mf_classic_alloc();
+    d->type = type;
+    mf_classic_set_uid(d, uid, 4);
+    uint16_t blocks = mf_classic_get_total_block_num(type);
+    for(uint16_t b = 0; b < blocks; b++) {
+        MfClassicBlock blk;
+        for(int i = 0; i < 16; i++) blk.data[i] = random ? (uint8_t)sweep_rand() : 0;
+        if(mf_classic_is_sector_trailer((uint8_t)b) && !random) {
+            memset(blk.data, 0xFF, 16);
+            blk.data[6] = 0xFF, blk.data[7] = 0x07, blk.data[8] = 0x80, blk.data[9] = 0x69;
+        }
+        if(!random || (sweep_rand() & 3)) mf_classic_set_block_read(d, (uint8_t)b, &blk);
+    }
+    uint8_t sectors = mf_classic_get_total_sectors_num(type);
+    for(uint8_t s = 0; s < sectors; s++) {
+        MfClassicSectorTrailer* t = mf_classic_get_sector_trailer_by_sector(d, s);
+        if(!random || (sweep_rand() & 1))
+            mf_classic_set_key_found(d, s, MfClassicKeyTypeA,
+                                     bit_lib_bytes_to_num_be(t->key_a.data, 6));
+        if(!random || (sweep_rand() & 1))
+            mf_classic_set_key_found(d, s, MfClassicKeyTypeB,
+                                     bit_lib_bytes_to_num_be(t->key_b.data, 6));
+    }
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfClassic, d);
+    mf_classic_free(d);
+    return dev;
+}
+
+static void test_sweep(void) {
+    size_t n = nfc_supported_cards_count();
+    FuriString* out = furi_string_alloc();
+    unsigned claimed_blank = 0, runs = 0, mfc = 0, desfire = 0;
+    static const MfClassicType types[] = {MfClassicTypeMini, MfClassicType1k, MfClassicType4k};
+
+    MfDesfireData* df = mf_desfire_alloc();
+    NfcDevice* dfdev = nfc_device_alloc();
+    nfc_device_set_data(dfdev, NfcProtocolMfDesfire, df);
+    mf_desfire_free(df);
+
+    for(size_t i = 0; i < n; i++) {
+        const NfcSupportedCardsPlugin* p = nfc_supported_cards_plugin(i);
+        if(p->protocol == NfcProtocolMfDesfire) {
+            desfire++;
+            furi_string_reset(out);
+            if(p->parse && p->parse(dfdev, out)) {
+                printf("     %s claims an empty DESFire\n", nfc_supported_cards_name(i));
+                claimed_blank++;
+            }
+            continue;
+        }
+        if(p->protocol != NfcProtocolMfClassic) continue;
+        mfc++;
+        for(size_t t = 0; t < COUNT_OF(types); t++) {
+            NfcDevice* dev = sweep_mfc(types[t], 0);
+            furi_string_reset(out);
+            if(p->parse && p->parse(dev, out)) {
+                printf("     %s claims a blank card\n", nfc_supported_cards_name(i));
+                claimed_blank++;
+            }
+            nfc_device_free(dev);
+            for(int r = 0; r < 40; r++) {
+                dev = sweep_mfc(types[t], 1);
+                furi_string_reset(out);
+                if(p->parse) (void)p->parse(dev, out);
+                runs++;
+                nfc_device_free(dev);
+            }
+        }
+    }
+    nfc_device_free(dfdev);
+    printf("     sweep: %zu parsers (%u Classic, %u DESFire), %u random dumps\n", n, mfc, desfire,
+           runs);
+    CHECK(claimed_blank == 0, "sweep: no parser claims a blank card");
+    CHECK(runs > 0, "sweep: random dumps parsed without a crash");
+
+    /* a fresh default-key 1K on the air: nobody's verify+read takes it */
+    static const uint8_t uid[4] = {0x04, 0x91, 0x7C, 0x22};
+    cm_mfc_init(&card, uid, 16);
+    Nfc* nfc = card_nfc();
+    NfcDevice* dev = nsc_device(uid, MfClassicType1k);
+    int r = nfc_supported_cards_read(nfc, dev);
+    if(r >= 0) printf("     read by %s\n", nfc_supported_cards_name((size_t)r));
+    CHECK(r < 0, "sweep: a default-key card is read by no parser");
+    nfc_device_free(dev);
+    nfc_free(nfc);
+    furi_string_free(out);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
     test_sync();
     test_mizip();
+    test_sweep();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;

@@ -31,6 +31,10 @@ struct FuriString;
 size_t nfc_supported_cards_count(void);
 const char* nfc_supported_cards_name(size_t i);
 
+/* Parser i's NfcSupportedCardsPlugin (as const void*: the type lives in
+ * the vendored plugin header), for tests and listings. */
+const void* nfc_supported_cards_plugin(size_t i);
+
 /* Read the card with the first parser of the device's protocol whose
  * verify() accepts it.  The device must hold the protocol's data (from a
  * plain read); it is replaced by the parser's read.  Returns the parser's

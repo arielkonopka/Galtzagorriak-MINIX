@@ -36,6 +36,10 @@ static const NfcSupportedCardsPlugin* nsc_plugin(size_t i) {
     return d->entry_point;
 }
 
+const void* nfc_supported_cards_plugin(size_t i) {
+    return i < COUNT_OF(nsc_table) ? nsc_plugin(i) : NULL;
+}
+
 int nfc_supported_cards_read(Nfc* nfc, NfcDevice* device) {
     furi_check(nfc && device);
     NfcProtocol protocol = nfc_device_get_protocol(device);
