@@ -132,6 +132,141 @@ Then `make BOARD=flipper flash` (= `dfu-util -a 0 -s 0x08000000:leave -D
 build/flipper/m0.bin`). Back to stock firmware: qFlipper → *Repair* from
 DFU mode. Iterating on MINIX never needs Repair.
 
+### The update file `Galtzagorriak.update` (spec section S, T33a)
+
+One signed file updates flash and SD card from one build (RS.1-RS.3).
+Format version 1, little endian, sector aligned (512 B). Host side:
+`tools/mkupdate.py` builds it, `tools/gzsign` signs it,
+`tools/gzupdate-check.py` checks it as the Flipper does; `make BOARD=flipper
+update` runs all three and writes `build/flipper/minix/Galtzagorriak.update`
+and its `.sha512`. `make updatetest` is ACS.1 on the host. On the Flipper
+`gzupdate` checks and stages it (T33a part 3, below); `atea`, which
+flashes it, is T33b.
+
+    sector 0     header, 448 signed bytes + Ed25519 signature (64 B)
+    sector 1     section table, 16 entries of 32 B
+    sector 2-3   full SHA-512 of each section, 16 x 64 B (entry i at i*64)
+    sector 4..   the sections in table order, each starting on a sector;
+                 the gaps and the end are zero-padded to a sector
+
+Header (sector 0):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `GZUPDATE` |
+| 8 | 2 | format version, 1 |
+| 10 | 2 | signed header size, 448 |
+| 12 | 4 | flags, 0 in version 1 |
+| 16 | 16 | board, NUL-padded: `flipper-f7` (QEMU: `qemu-mps2`) |
+| 32 | 4 | release: major, minor, patch, 0 |
+| 36 | 4 | `from_min`: the oldest release this file updates (same form) |
+| 40 | 4 | epoch (`GZ_EPOCH`, RS.13/RS.19) |
+| 44 | 4 | `GZ_ABI` |
+| 48 | 4 | shared-libc id (`libc.json` `id`, as in the a.out header) |
+| 52 | 4 | libfuri id (`furi.json` `id`) |
+| 56 | 8 | build time, s since 1970 (`GZ_BUILD_EPOCH`: the commit's time) |
+| 64 | 8 | key id: first 8 B of SHA-512 of the signer's public key |
+| 72 | 4 | number of sections, 1-16 |
+| 76 | 4 | file size in bytes (a multiple of 512) |
+| 80 | 64 | SHA-512 of sectors 1-3 (table + hashes) |
+| 144 | 32 | release text, NUL-padded: `0.1.2+17.g621a475` |
+| 176 | 272 | zero |
+| 448 | 64 | Ed25519 signature (RFC 8032, pure) of bytes 0-447 |
+
+Section entry (32 B): type (1 B), flags (1 B, 0), index (2 B, = its
+slot), offset (4 B, from the file's start, a multiple of 512), length (4 B,
+not 0), load address (4 B; `flash` only, a 2 KB page, else 0), the first
+16 B of the section's SHA-512 (the full hash is in sectors 2-3). Unused
+entries and their hash slots are zero. Types: 1 `flash` (`minix-base.bin`;
+until `atea` exists it starts at 0x0800_0000, afterwards at 0x0800_4000),
+2 `root` (the base package tar), 3 `pkg` (one app package tar each), 4
+`notes` (the release's CHANGELOG.md section, at most 4 KB; `Unreleased` for
+a build after the tag), 5 `radio` (reserved, refused by version 1). Exactly
+one `flash` and one `root`, at most one `notes`.
+
+Checks in this order (`gzupdate-check.py`, later the C verifier): magic,
+format, header size and flags, reserved bytes zero, key id names a trusted
+key (`atea`'s two slots, RS.6), **signature**; then board, file size, table
+hash, every entry (ascending, no overlap, inside the file, prefix = full
+hash), the padding is zero (no hash covers it), every section's SHA-512
+streamed 4 KB at a time; then epoch > running epoch (unless the downgrade
+press) and `from_min` <= running release. So a flipped bit anywhere is
+caught (`make updatetest` flips one at each byte).
+
+The C side is `src/lib/gzsig` (T33a part 2): `sha512.c` (FIPS 180-4,
+streaming), `ed25519.c` (RFC 8032 5.1.7 verification only, after the public
+domain TweetNaCl, field elements of 16 x 16-bit limbs in `int`, S < L and
+canonical points required) and `gzu.c` (the checks above in the same order
+with the same reasons; no libc, read through a callback, 512 B buffer or
+more). `gzupdate` and `atea` link the same three files; no secret key is in
+them. Measured with `arm-none-eabi-gcc -Os -mcpu=cortex-m4` (`-fstack-usage`):
+
+| Part | Code | Stack |
+|---|---|---|
+| `sha512.c` | 2.0 KB | 304 B (block) + 216 B state |
+| `ed25519.c` | 2.7 KB | 1.4 KB deepest (`gz_ed25519_verify` 640 + `unpackneg` 408 + `pack` 296 + 80) |
+| `gzu.c` | 3.1 KB | `gzu_check` 432 + 96 above the verifier, so about 2.0 KB in all |
+
+So the verifier is 4.7 KB of code (budget 8 KB, RS.4) and 1.4 KB of stack
+(budget 2 KB). One signature check is about 2 x 256 point doublings plus
+additions, about 9 000 field multiplications of 256 32x32->64 products; on
+the PC under ASan it takes 7 ms. The time at 64 MHz is measured on the
+Flipper with `atea` (T33b; budget 2 s). `make gzsigtest` (and tests/host,
+every 3rd byte) runs RFC 8032 7.1 tests 1-3 and SHA(abc), FIPS 180-4
+vectors, 64 signatures of Python's `cryptography` with bad variants (a bit
+flipped in R, S, message or key; S + L), every file of `make updatetest`
+with the same verdict as `gzupdate-check.py`, and a flipped bit at each byte
+of the good file, under ASan and UBSan.
+
+Keys: `tools/gzsign --new-key` writes `~/.config/galtzagorriak/update.key`
+(PKCS#8 PEM, mode 0600; never commit it) and `update.pub` (64 hex digits).
+`gzsign` takes the private key from `--key`, the environment variable
+`GZ_UPDATE_KEY` (the key file's text, the CI secret) or that file, and stops
+with a hint if there is none. The project's public release key goes to
+`flipper/keys/release.pub` once the user has made it (RS.20); `make update`
+checks with it and with `~/.config/galtzagorriak/update.pub`.
+
+On the Flipper (T33a part 3; `cmds/gzupdate.c`, `cmds/gztree.c`, INIT):
+
+1. `gzupdate check FILE` (RS.8): `gzu_check` with the keys built in
+   (`keys/release.pub`, the builder's `update.pub`; `atea`'s slots once it
+   exists), this system's board, epoch and release.  The window text on
+   the console; one line `gzupdate: <why>` and exit 1 on a bad file.
+2. `gzupdate apply FILE` (RS.10, root): the same check, the question (on
+   the console until `atea`'s LCD window, T33b), `swapon off`, the file raw
+   from sector 0 of `/dev/hd3` and read back (SHA-512 compared), the `root`
+   section unpacked into `/.gzupdate/E/` and `/usr/.gzupdate/E/` with
+   `/.gzupdate/E/MANIFEST` (`path mode uid gid` and the first 32 B of the
+   file's SHA-512 in hex) written last, `/usr/.gzupdate/cur.update` (the
+   running system's file) renamed to `prev.update` and the new file copied
+   to `cur.update`, `/usr/.gzupdate/trial`, then the **pending sector**,
+   the sector right after the staged file: `GZPEND1\0`, epoch (4 B), size
+   (4 B), the file's SHA-512 (64 B).  Then `reboot`.  Every step can run
+   again after a power cut; nothing is pending until the last write.
+3. `atea` (T33b; on QEMU `tools/ateasim.py` on the flash image): pending
+   sector found, or the first page erased: check the staged file again,
+   then flash.  The first page is erased first whenever any page differs
+   and programmed last; other pages are compared and only differing ones
+   erased and written; read back; the pending sector cleared.  `BKP11R`
+   (the one-word fast path and the trial counter) is T33b's.
+4. INIT (RS.14, +0 B static RAM, text +300 B): if `/etc/gz-tree` is not
+   `GZ_EPOCH` and `/.gzupdate/GZ_EPOCH/MANIFEST` exists, run
+   `/.gzupdate/E/bin/gztree` (else `/bin/gztree`) and wait.  `gztree`
+   mounts `/dev/hd2` on `/usr` itself, then per MANIFEST entry: in place
+   with that hash: skip; else the old file to `/.gzupdate/<old>/` (or
+   `/usr/.gzupdate/<old>/`; `<old>` from `/etc/gz-tree`, `0` if none) and
+   the staged one in; `/etc/gz-tree` last (temporary file, rename).
+5. `/etc/rc`: `gzupdate finish` after `pkg bind /bin/*` (the staged trees,
+   now only copies, are removed; the old files stay for one rollback),
+   `gzupdate commit` after the launcher (`trial` removed).
+
+`tools/gzapplytest.py` (QEMU) runs 2-5 on a real file of the build and
+cuts the power at each page operation of step 3 (ACS.3 for the flash
+step: 118 cuts, each finished by the next start).  Not yet: cuts inside
+`apply` and between `gztree`'s renames in QEMU, reinstalling official
+packages whose libc id changed (RS.15), the rollback (RS.16, needs
+`atea`).
+
 ### SD card layout
 
 One MBR partition (type 0x81, start 1 MiB, 4000 MiB) holding a MINIX V2

@@ -15,7 +15,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
-     run-mtpd
+     run-mtpd run-gzsig
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -61,6 +61,11 @@ run-mtpd:
 	if command -v clang >/dev/null; then \
 	  $(MAKE) -C $(MROOT)/flipper/mtpd fuzz FUZZTIME=60; \
 	else echo "mtpd fuzz: no clang, skipped"; fi
+
+# gzsig (spec RS.4, ACS.1, T33a part 2): the update file's verifier
+# (make gzsigtest); a flipped bit at every 3rd byte here, every byte there.
+run-gzsig:
+	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
 
 # test(1) (src/commands/simple/test.c, #118): the POSIX file tests.
 run-testcmd: $(B)/testcmd testcmd.sh

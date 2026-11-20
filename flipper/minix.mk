@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region
+	    swapon gmodem guimod jiggle region gzupdate gztree
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -357,6 +357,8 @@ CHMEM_sh     := 10240	# echo /bin/* (97 names) uses 5.7 KB, three such globs
 			# not copied, 2026-11-16); exec needs no heap
 			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
+CHMEM_gzupdate := 8192	# check: 4 KB read buffer (heap), verifier 2 KB stack, stdio
+CHMEM_gztree := 4096	# 1 KB hash buffer and SHA-512 state on the stack, stdio
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
@@ -610,6 +612,43 @@ $(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
 OBJS_gmodem = $(MB)/cmd/port/gmodem.o \
 	   $(filter-out $(MB)/modem/rgblob.o $(MB)/modem/rgsha.o,$(MODEM_OBJ))
+# gzupdate (spec section S, T33a part 3) links gzsig (src/lib/gzsig, the
+# verifier atea shares, part 2).  gzkeys.h: the public keys atea's slots
+# will hold (RS.6): keys/release.pub, the builder's update.pub, and for
+# the QEMU tests UPDATE_TESTKEY (a file with 64 hex digits).
+GZSIG_DIR := $(MROOT)/src/lib/gzsig
+GZSIG_OBJ := $(addprefix $(MB)/gzsig/,sha512.o ed25519.o gzu.o)
+$(MB)/gzsig/%.o: $(GZSIG_DIR)/%.c $(GZSIG_DIR)/gzsig.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+GZKEYS	:= $(MB)/gen/gzkeys.h
+# QEMU: the throw-away key of tools/updatetest.py, whose good and bad files
+# go to /lib/gzu for m2test's ACS.2 check (tools/gzucases.py).
+ifeq ($(BOARD),qemu)
+UPDATE_TESTKEY ?= $(MB)/updatetest/trusted.pub
+GZU_RUN	:= $(MB)/gzu/run
+$(MB)/updatetest/trusted.pub: tools/updatetest.py tools/mkupdate.py \
+		tools/gzsign tools/gzupdate-check.py
+	python3 -I tools/updatetest.py -o $(MB)/updatetest --board qemu-mps2
+$(GZU_RUN): $(MB)/updatetest/trusted.pub tools/gzucases.py
+	python3 -I tools/gzucases.py $(MB)/updatetest $(MB)/gzu
+endif
+GZKEY_FILES = $(strip $(UPDATE_KEYS) $(UPDATE_TESTKEY))
+.PHONY: gzkeys-check
+$(GZKEYS): gzkeys-check $(UPDATE_TESTKEY)
+	@mkdir -p $(dir $@)
+	@python3 -I tools/gzkeys.py $@ $(GZKEY_FILES)
+$(MB)/cmd/port/gzupdate.o: cmds/gzupdate.c $(GZSIG_DIR)/gzsig.h $(GZKEYS) \
+		$(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GZSIG_DIR) -MMD -MP -c $< -o $@
+OBJS_gzupdate = $(MB)/cmd/port/gzupdate.o $(GZSIG_OBJ)
+# gztree (RS.14): the base-file switch INIT runs; SHA-512 only.
+$(MB)/cmd/port/gztree.o: cmds/gztree.c $(GZSIG_DIR)/gzsig.h \
+		$(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GZSIG_DIR) -MMD -MP -c $< -o $@
+OBJS_gztree = $(MB)/cmd/port/gztree.o $(MB)/gzsig/sha512.o
 # region (spec section Q, issue #292): the radio region tables on the card.
 $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
 	@mkdir -p $(dir $@)
@@ -1027,6 +1066,65 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
+
+# make update: the signed update file (spec section S, RS.17).  mkupdate.py
+# builds it from minix-base.bin, the base package, the app packages and the
+# release notes; tools/gzsign signs it (key: GZ_UPDATE_KEY or
+# ~/.config/galtzagorriak/update.key; without one it stops and says how to
+# make one); gzupdate-check.py checks it with the keys atea will trust
+# (keys/release.pub and ~/.config/galtzagorriak/update.pub, RS.6).
+# Until atea (T33b) the flash section starts at the image's own address.
+UPDATE		:= $(MB)/Galtzagorriak.update
+UPDATE_BOARD	:= $(if $(filter flipper,$(BOARD)),flipper-f7,qemu-mps2)
+UPDATE_LOAD	:= $(if $(filter flipper,$(BOARD)),0x08000000,0)
+UPDATE_FROM_MIN	?= 0.1.2
+UPDATE_PKGS	:= $(filter-out %/tests_1.0.tar %/hello_1.0.tar,$(PKGS))
+UPDATE_KEYS	= $(wildcard keys/release.pub) \
+		  $(wildcard $(HOME)/.config/galtzagorriak/update.pub)
+.PHONY: update
+update: $(MB)/minix-base.bin $(BASEPKG) $(UPDATE_PKGS) $(GZBUILD) \
+	tools/mkupdate.py tools/gzsign tools/gzupdate-check.py
+	python3 -I tools/mkupdate.py -o $(UPDATE).tmp \
+	   --version-h $(MROOT)/include/minix/gzversion.h \
+	   --changelog $(MROOT)/CHANGELOG.md --gzbuild $(GZBUILD) \
+	   --libc $(SHL)/libc.json --furi $(SHF)/furi.json \
+	   --board $(UPDATE_BOARD) --flash $(MB)/minix-base.bin \
+	   --load $(UPDATE_LOAD) --root $(BASEPKG) \
+	   --from-min $(UPDATE_FROM_MIN) $(UPDATE_PKGS:%=--pkg %)
+	python3 -I tools/gzsign $(UPDATE).tmp || { rm -f $(UPDATE).tmp; exit 1; }
+	@keys="$(strip $(UPDATE_KEYS))"; \
+	if [ -z "$$keys" ]; then \
+	   keys=$$(python3 -I tools/gzsign --pub) || exit 1; \
+	   echo "update: no keys/release.pub or ~/.config/galtzagorriak/update.pub:" \
+	        "no atea slot would trust this file; checking with its own key"; \
+	fi; \
+	python3 -I tools/gzupdate-check.py --board $(UPDATE_BOARD) -v \
+	   $$(for k in $$keys; do printf -- '--key %s ' $$k; done) $(UPDATE).tmp \
+	   || { rm -f $(UPDATE).tmp; exit 1; }
+	mv $(UPDATE).tmp $(UPDATE)
+	cd $(MB) && sha512sum $(notdir $(UPDATE)) > $(notdir $(UPDATE)).sha512
+	@echo "update: $(UPDATE) and .sha512"
+# The ACS.1 bad files, checked on the host (needs no build).
+.PHONY: updatetest
+updatetest:
+	python3 -I tools/updatetest.py -o $(MB)/updatetest --board $(UPDATE_BOARD)
+# QEMU: a real update file for the apply test (tools/gzapplytest.py): this
+# build's minix-base.bin and base package, this build's epoch (the test
+# runs `gzupdate apply -e` with a lower one), signed with updatetest's
+# throw-away key, in /lib/gzu/apply.upd.
+ifeq ($(BOARD),qemu)
+GZU_APPLY := $(MB)/gzu/apply.upd
+$(GZU_APPLY): $(GZU_RUN) $(MB)/minix-base.bin $(BASEPKG) $(GZBUILD) \
+		tools/mkupdate.py tools/gzsign
+	python3 -I tools/mkupdate.py -o $@.tmp \
+	   --version-h $(MROOT)/include/minix/gzversion.h \
+	   --changelog $(MROOT)/CHANGELOG.md --gzbuild $(GZBUILD) \
+	   --libc $(SHL)/libc.json --furi $(SHF)/furi.json \
+	   --board qemu-mps2 --flash $(MB)/minix-base.bin --load 0 \
+	   --root $(BASEPKG)
+	python3 -I tools/gzsign --key $(MB)/updatetest/trusted.key $@.tmp
+	mv $@.tmp $@
+endif
 .PHONY: pkgs
 pkgs: $(PKGS)
 
@@ -1043,10 +1141,11 @@ $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
 # proto becomes one entry per program.
-$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS)
+$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN) \
+		$(GZU_APPLY)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
-	   "$(PKGS)" "$(SUIDPROGS)"
+	   "$(PKGS)" "$(SUIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
 # The QEMU disk is as big as the SD card (sparse), so the first boot can
 # partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \

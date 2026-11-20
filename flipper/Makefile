@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest gzsigtest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -77,6 +77,11 @@ ibkeytest:
 # libdht on the PC (issue #358): the AM2301/DHT21/DHT22 frame decoder.
 dhttest:
 	$(MAKE) -C tests/dht test
+
+# gzsig on the PC (spec RS.4, ACS.1): SHA-512, Ed25519 and the update-file
+# check against RFC 8032 vectors and the bad files of tools/updatetest.py.
+gzsigtest:
+	$(MAKE) -C tests/gzsig test
 
 # libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
 # the RFID line code, the Sub-GHz presets, legal check and duty counter.

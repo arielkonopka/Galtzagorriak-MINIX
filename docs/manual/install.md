@@ -324,15 +324,71 @@ before is not found at the new place.)
 (a hang) goes back to DFU mode, so a broken new image returns there by itself. Without dev mode
 a hang just reboots the Flipper, like the stock firmware.
 
-### Updating with the update file (planned)
+### Updating with the update file
 
-Each release will come with one signed file, `Galtzagorriak-X.Y.Z.update`, on its GitHub release
-page. Copy it onto the Flipper (in Windows Explorer: drag it onto the Flipper, which shows up as a
-portable device), press **OK** on the Flipper when it shows the new version and its notes, and wait
-for the progress bar (about 10 seconds; do not take the battery out). Your files in `/home`, your
-settings and your alarms stay. The Flipper installs only files signed by the project's key (or by
-your own key, if you build the system yourself), and an older release only after you confirm it
-with OK on the Flipper. Until this exists, use the steps above.
+Every release comes with one signed file, `Galtzagorriak-X.Y.Z.update`, on its GitHub release page,
+with a `.sha512` next to it. It holds the whole system from one build: the firmware for the
+Flipper's flash, the base programs on the SD card, the official apps and the release notes.
+
+> **Not finished yet.** The Flipper can already check the file and prepare the update. The step
+> that writes the flash at the next start is `atea`, the new boot stage, and it is not on the
+> Flipper yet (task T33b). Until it is, update with DFU as described above.
+
+**The steps:**
+
+1. Download `Galtzagorriak-X.Y.Z.update` from the release page.
+2. Connect the Flipper over USB. In Windows Explorer it shows up as a portable device. Drag the
+   file onto it. Any name ending in `.update` works.
+3. The Flipper checks the file (about 1–2 seconds per MB) and shows a window: `System update`,
+   `0.8.2 → 0.9.0`, the first lines of the release notes (for example
+   `0.9.0: alarm snooze, "Egun on!" on the welcome screen`), and `OK install  Back later`.
+   Nothing is installed until you press **OK** on the Flipper. A file on its own, an MTP host or a
+   remote shell cannot start an update.
+4. After OK the Flipper prepares the update and restarts. During the restart it shows a progress
+   bar (about 10 seconds for a full release, less for a small one). **Do not take the battery out
+   while the bar is showing.** If the power goes anyway, the next start carries on where it
+   stopped.
+5. The new system starts. On its first start it switches the base programs on the card (one line
+   `gztree: ...` per file on the console) and starts as usual. Your files in `/home`, your
+   settings and your alarms stay.
+
+From the console you can do the same as root:
+
+```
+gzupdate check /home/flipper/Galtzagorriak.update    # only check, change nothing
+gzupdate apply /home/flipper/Galtzagorriak.update    # check, ask, prepare, restart
+```
+
+**What the messages mean** (`gzupdate: ...`, one line, and nothing is changed):
+
+| Message | Meaning |
+|---|---|
+| `not signed by a trusted key` | The file was not signed by the project's key or your own key. It may come from somewhere else. |
+| `bad signature`, `... damaged (hash mismatch)`, `padding not zero`, `truncated file` | The file was changed or did not copy completely. Copy it again and check it against the `.sha512` file. |
+| `for another board (...)` | The file is for another device (for example the QEMU build). |
+| `already installed` | This release is already running. |
+| `older than the running system (...)` | This is an older release. See "Going back" below. |
+| `needs at least X.Y.Z (running ...)` | The release is too old to update from this file. First install release X.Y.Z, or use DFU. |
+| `not an update file` | The file is something else. |
+
+**Going back to an older release.** An older signed file is installed only after you confirm it on
+the Flipper itself: the screen shows `0.9.0 → 0.8.2 (older). OK: yes, Back: no`. A program cannot
+do this without your button press. If a new release does not start three times in a row, the
+Flipper asks `0.9.0 did not start. Go back to 0.8.2? OK / Back` and, on OK, installs the update file
+it came from (kept as `/usr/.gzupdate/prev.update`). Both questions come from `atea` (T33b).
+
+**When DFU is still needed:** the first time you install a build that has `atea` (it moves the
+system up by 16 KB in flash, so the whole `minix-base.bin` has to be written once, and the apps
+installed again); when the project's key changes; when the card is broken or missing (the Flipper
+then says `Insert the SD card`, or `Recovery: connect to a PC (DFU)`).
+
+**If you build the system yourself:** make a key pair once with `flipper/tools/gzsign --new-key`.
+It writes `~/.config/galtzagorriak/update.key` (private: keep it safe, never commit it or copy it
+to the Flipper) and `update.pub`. `make BOARD=flipper update` then builds
+`build/flipper/minix/Galtzagorriak.update`, signs it with your key and checks it. Your build
+trusts your `update.pub` as well as the project's key, so your Flipper accepts your own files. To
+sign in another place, pass the private key with `--key FILE` or the variable `GZ_UPDATE_KEY`.
+Without a key `make update` stops and says how to make one.
 
 ## 8. Recovery and going back to the stock firmware
 
