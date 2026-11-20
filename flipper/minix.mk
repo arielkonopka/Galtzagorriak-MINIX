@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate
+	    swapon gmodem guimod jiggle region gzupdate gztree
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -358,6 +358,7 @@ CHMEM_sh     := 10240	# echo /bin/* (97 names) uses 5.7 KB, three such globs
 			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
 CHMEM_gzupdate := 8192	# check: 4 KB read buffer (heap), verifier 2 KB stack, stdio
+CHMEM_gztree := 4096	# 1 KB hash buffer and SHA-512 state on the stack, stdio
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
@@ -641,6 +642,12 @@ $(MB)/cmd/port/gzupdate.o: cmds/gzupdate.c $(GZSIG_DIR)/gzsig.h $(GZKEYS) \
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GZSIG_DIR) -MMD -MP -c $< -o $@
 OBJS_gzupdate = $(MB)/cmd/port/gzupdate.o $(GZSIG_OBJ)
+# gztree (RS.14): the base-file switch INIT runs; SHA-512 only.
+$(MB)/cmd/port/gztree.o: cmds/gztree.c $(GZSIG_DIR)/gzsig.h \
+		$(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GZSIG_DIR) -MMD -MP -c $< -o $@
+OBJS_gztree = $(MB)/cmd/port/gztree.o $(MB)/gzsig/sha512.o
 # region (spec section Q, issue #292): the radio region tables on the card.
 $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
 	@mkdir -p $(dir $@)
@@ -1093,15 +1100,15 @@ update: $(MB)/minix-base.bin $(BASEPKG) $(UPDATE_PKGS) $(GZBUILD) \
 updatetest:
 	python3 -I tools/updatetest.py -o $(MB)/updatetest --board $(UPDATE_BOARD)
 # QEMU: a real update file for the apply test (tools/gzapplytest.py): this
-# build's minix-base.bin and base package, epoch GZ_EPOCH + 1, signed with
-# updatetest's throw-away key, in /lib/gzu/apply.upd.
+# build's minix-base.bin and base package, this build's epoch (the test
+# runs `gzupdate apply -e` with a lower one), signed with updatetest's
+# throw-away key, in /lib/gzu/apply.upd.
 ifeq ($(BOARD),qemu)
 GZU_APPLY := $(MB)/gzu/apply.upd
 $(GZU_APPLY): $(GZU_RUN) $(MB)/minix-base.bin $(BASEPKG) $(GZBUILD) \
 		tools/mkupdate.py tools/gzsign
-	awk '$$2 == "GZ_EPOCH" { $$3 = $$3 + 1 } 1' \
-	   $(MROOT)/include/minix/gzversion.h > $(MB)/gzu-apply.h
-	python3 -I tools/mkupdate.py -o $@.tmp --version-h $(MB)/gzu-apply.h \
+	python3 -I tools/mkupdate.py -o $@.tmp \
+	   --version-h $(MROOT)/include/minix/gzversion.h \
 	   --changelog $(MROOT)/CHANGELOG.md --gzbuild $(GZBUILD) \
 	   --libc $(SHL)/libc.json --furi $(SHF)/furi.json \
 	   --board qemu-mps2 --flash $(MB)/minix-base.bin --load 0 \

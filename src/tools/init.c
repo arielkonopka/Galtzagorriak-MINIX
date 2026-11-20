@@ -31,6 +31,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <minix/gzversion.h>
 #include <utmp.h>
 
 /* Command to execute as a response to the three finger salute. */
@@ -80,6 +81,7 @@ void onpwr(int sig);
 void onalrm(int sig);
 void power_off(void);
 void timed(void);
+void gztree(void);
 
 int main(void)
 {
@@ -123,6 +125,8 @@ int main(void)
   sigaction(SIGPWR, &sa, NULL);
   sa.sa_handler = onalrm;
   sigaction(SIGALRM, &sa, NULL);
+
+  gztree();
 
   /* Execute the /etc/rc file. */
   if ((pid = vfork()) != 0) {	/* R2c.2: the child opens and execs */
@@ -238,6 +242,45 @@ void onterm(int sig)
 void onrtc(int sig)
 {
   gotrtc = 1;
+}
+
+/* Spec RS.14: base files of another epoch than this system's (an update
+ * file was flashed by atea) are switched by gztree before /etc/rc.  INIT
+ * only compares /etc/gz-tree with GZ_EPOCH and, if the new tree is staged,
+ * runs its gztree (the staged copy, or /bin/gztree once the switch has
+ * moved it) and waits.  If gztree fails INIT boots anyway; the next boot
+ * tries again.  Stack only: +0 B static RAM. */
+#define GZ_S_(x)	#x
+#define GZ_S(x)		GZ_S_(x)
+#define GZ_DIR		"/.gzupdate/" GZ_S(GZ_EPOCH)
+
+void gztree(void)
+{
+  char *cmd[2], *env[1];
+  char ep[12];
+  int fd, n = 0;
+  pid_t pid;
+
+  if ((fd = open("/etc/gz-tree", O_RDONLY)) >= 0) {
+	n = read(fd, ep, sizeof(ep) - 1);
+	close(fd);
+  }
+  if (n >= (int) sizeof(GZ_S(GZ_EPOCH)) - 1
+	&& memcmp(ep, GZ_S(GZ_EPOCH), sizeof(GZ_S(GZ_EPOCH)) - 1) == 0
+	&& (n == (int) sizeof(GZ_S(GZ_EPOCH)) - 1
+	    || ep[sizeof(GZ_S(GZ_EPOCH)) - 1] == '\n'))
+	return;
+  if (access(GZ_DIR "/MANIFEST", R_OK) != 0) return;	/* nothing staged */
+  cmd[0] = "gztree";
+  cmd[1] = env[0] = NULL;		/* INIT has no environ */
+  if ((pid = vfork()) == 0) {
+	execve(GZ_DIR "/bin/gztree", cmd, env);
+	execve("/bin/gztree", cmd, env);
+	_exit(127);
+  }
+  n = -1;
+  if (pid < 0 || waitpid(pid, &n, 0) != pid || n != 0)
+	report(2, "gztree");
 }
 
 void timed(void)

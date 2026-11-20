@@ -447,22 +447,26 @@ int main(int argc, char **argv)
 	rel[1] = GZ_MINOR;
 	rel[2] = GZ_PATCH;
 #ifdef BOARD_QEMU
-	if (argc == 7 && strcmp(argv[1], "check") == 0
-	    && strcmp(argv[2], "-e") == 0 && strcmp(argv[4], "-r") == 0) {
+	/* QEMU tests: -e EPOCH -r X.Y.Z pretend to run that epoch and
+	 * release, -y answers apply's question. */
+	if (argc >= 4 && (strcmp(argv[1], "check") == 0
+			  || strcmp(argv[1], "apply") == 0)) {
+		int i, yes = 0, restart = 1;
 		unsigned x, y, z;
 
-		if (sscanf(argv[5], "%u.%u.%u", &x, &y, &z) != 3) goto usage;
-		epoch = atol(argv[3]);
-		rel[0] = x; rel[1] = y; rel[2] = z;
-		return check(argv[6], epoch, rel, 0);
-	}
-	/* QEMU tests: apply -y [-n] FILE answers the question. */
-	if (argc >= 4 && strcmp(argv[1], "apply") == 0
-	    && strcmp(argv[2], "-y") == 0) {
-		if (argc == 4) return apply(argv[3], 1, 1, epoch, rel);
-		if (argc == 5 && strcmp(argv[3], "-n") == 0)
-			return apply(argv[4], 1, 0, epoch, rel);
-		goto usage;
+		for (i = 2; i < argc - 1; i++) {
+			if (strcmp(argv[i], "-y") == 0) yes = 1;
+			else if (strcmp(argv[i], "-n") == 0) restart = 0;
+			else if (strcmp(argv[i], "-e") == 0 && i + 2 < argc)
+				epoch = atol(argv[++i]);
+			else if (strcmp(argv[i], "-r") == 0 && i + 2 < argc) {
+				if (sscanf(argv[++i], "%u.%u.%u", &x, &y, &z)
+				    != 3) goto usage;
+				rel[0] = x; rel[1] = y; rel[2] = z;
+			} else goto usage;
+		}
+		if (argv[1][0] == 'c') return check(argv[argc - 1], epoch, rel, 0);
+		return apply(argv[argc - 1], yes, restart, epoch, rel);
 	}
 #endif
 	if (argc == 3 && strcmp(argv[1], "check") == 0)

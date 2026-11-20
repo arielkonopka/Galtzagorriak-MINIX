@@ -3,7 +3,7 @@
 
 Boots a fresh copy of build/qemu/minix/disk.img (as tools/powercut.py
 does), logs in as root and runs `gzupdate apply -y -n /lib/gzu/apply.upd`
-(a real update file of this build, epoch GZ_EPOCH + 1, signed with the
+(a real update file of this build, its own epoch, with -e one lower, signed with the
 throw-away key of tools/updatetest.py; minix.mk).  Then it checks:
 
   - apply exits 0 and says "staged";
@@ -16,7 +16,10 @@ throw-away key of tools/updatetest.py; minix.mk).  Then it checks:
   - tools/ateasim.py (the simulated atea flash step) installs the flash
     section into a copy of the flash image and clears the pending sector;
     a second run has nothing to do;
-  - QEMU boots the flashed image to a root shell.
+  - QEMU boots the flashed image to a root shell; INIT ran gztree
+    (RS.14): /etc/gz-tree has the new epoch; /bin/sum and a /usr file,
+    changed before apply, are the update's again, the changed ones are
+    kept in /.gzupdate/0/ and /usr/.gzupdate/0/.
 
 Needs `make BOARD=qemu minix base-flash base disk`.
 
@@ -72,7 +75,13 @@ def main():
 	keep = r.dir
 	try:
 		check(r.login(), "login")
-		r.send("gzupdate apply -y -n /lib/gzu/apply.upd; echo @@$?@@")
+		# Two base files that differ from the update's, so gztree has
+		# something to switch (the rest is the same build: skipped).
+		sumref = r.output("echo hello | sum")
+		r.sh("cp /bin/od /bin/sum; mkdir /usr/share /usr/share/region; "
+		     "echo x > /usr/share/region/AL.reg; sync")
+		r.send("gzupdate apply -y -n -e %d /lib/gzu/apply.upd; echo @@$?@@"
+		       % (ep - 1))
 		m = r.wait(rb"@@(\d+)@@", 300)
 		out = r.out[-2000:].decode("latin-1")
 		check(m is not None and m.group(1) == b"0"
@@ -131,6 +140,24 @@ def main():
 		check(r2.login(), "the flashed image boots to a root shell")
 		v = r2.output("ver | head -1")
 		check(v is not None and len(v) > 0, "ver runs (%r)" % v)
+		# RS.14: INIT ran gztree before /etc/rc.
+		ok = b"gztree: done" in r2.out
+		if not ok:
+			print(r2.out[:3000].decode("latin-1"))
+		check(ok, "INIT ran gztree, it is done")
+		v = r2.output("cat /etc/gz-tree")
+		check(v == b"%d\n" % ep, "/etc/gz-tree is %d (%r)" % (ep, v))
+		v = r2.output("echo hello | sum")
+		check(v == sumref, "the staged /bin/sum is in place (%r)" % v)
+		v = r2.output("cmp /.gzupdate/0/bin/sum /bin/od && echo same")
+		check(v is not None and b"same" in v,
+		      "the old /bin/sum kept in /.gzupdate/0 (%r)" % v)
+		v = r2.output("cat /usr/.gzupdate/0/share/region/AL.reg")
+		check(v == b"x\n", "the old /usr file kept in "
+		      "/usr/.gzupdate/0 (%r)" % v)
+		v = r2.output("wc -c < /usr/share/region/AL.reg")
+		check(v is not None and v.strip().isdigit() and int(v) > 2,
+		      "the staged /usr file is in place (%r)" % v)
 		if pc.BAD.search(r2.out):
 			check(False, "console: %r" % pc.BAD.search(r2.out).group(0))
 	finally:
