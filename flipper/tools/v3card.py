@@ -28,6 +28,9 @@ Usage: v3card.py
      'fsck -p' repairs all three (its log, /usr/adm/fsck.log) and sets
      CLEAN; the host 'fsck.minix -f' is clean afterwards; at the next boot
      (CLEAN cleared again) fsck finds nothing.
+  6. mkfs -3 (spec O.6): MINIX makes a new V3 /home on /dev/hd4 (size by
+     DIOCGETPS), mounts it, writes a 60-character name and a directory
+     with a file; on the host 'fsck.minix -f' is clean and lists them.
 Exit status: the number of failures.
 """
 import importlib.util
@@ -313,6 +316,41 @@ def main():
 		out = r.output("tail -1 /usr/adm/fsck.log", 60) or b""
 		check(b"fixed 0, left 0" in out, "fsck again: nothing to repair "
 			"(%s)" % out.strip().decode(errors="replace"))
+
+		# 6. mkfs -3 (spec O.6, T27a part 6): our own V3 /home.
+		r.sh("cd /; umount /dev/hd4", 60)
+		out = r.output("mkfs -3 /dev/hd4; echo st=$?", 300) or b""
+		check(b"st=0" in out, "mkfs -3 /dev/hd4 (%s)"
+			% out.strip().decode(errors="replace").replace("\n", " | "))
+		check(r.sh("mount /dev/hd4 /home", 60) == 0,
+			"mount the new V3 /dev/hd4")
+		d = "/home/" + N57[:40]
+		ok = r.sh("cp /etc/rc /home/" + N60, 60) == 0
+		ok = ok and r.sh("mkdir " + d, 30) == 0
+		ok = ok and r.sh("cp /bin/sh %s/%s" % (d, N57), 60) == 0
+		check(ok, "cp a 60-character name, a directory, a file in it")
+		a, b = cksum(r, "/bin/sh"), cksum(r, "%s/%s" % (d, N57))
+		check(a is not None and a == b, "same file read back")
+		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
+			"sync, umount /home")
+		r.p.kill()
+		r.p.wait()
+		copy_part(img, start, size, part, False)
+		v = V3(part)
+		check(v.flags() & 3 == 1, "mkfs -3: CLEAN at offset 14 (%#x)"
+			% v.flags())
+		v.close()
+		st, out = host(["fsck.minix", "-f", part])
+		check(st == 0, "host fsck.minix -f after mkfs -3: clean (%s)"
+			% out.strip().replace("\n", " | "))
+		st, out = host(["fsck.minix", "-f", "-l", part])
+		check(N57 in out, "host fsck.minix -l lists the file made on "
+			"our mkfs -3 file system")
+		# fsck.minix -l prints at most 59 characters: read the entry.
+		v = V3(part)
+		check(v.lookup(N60)[1] is not None,
+			"the 60-character entry in the root directory")
+		v.close()
 		return fails
 	finally:
 		r.close()
