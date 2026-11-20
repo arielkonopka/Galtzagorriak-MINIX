@@ -9,9 +9,13 @@
 #include <nfc/protocols/nfc_poller_defs.h>
 
 #include <nfc/protocols/iso14443_3a/iso14443_3a_poller_defs.h>
+#include <nfc/protocols/iso14443_3b/iso14443_3b_poller_defs.h>
 #include <nfc/protocols/iso14443_4a/iso14443_4a_poller_defs.h>
+#include <nfc/protocols/iso14443_4b/iso14443_4b_poller_defs.h>
 
 const NfcPollerBase* const nfc_pollers_api[NfcProtocolNum] = {
     [NfcProtocolIso14443_3a] = &nfc_poller_iso14443_3a,
+    [NfcProtocolIso14443_3b] = &nfc_poller_iso14443_3b,
     [NfcProtocolIso14443_4a] = &nfc_poller_iso14443_4a,
+    [NfcProtocolIso14443_4b] = &nfc_poller_iso14443_4b,
 };

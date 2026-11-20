@@ -14,7 +14,14 @@ VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/protocols/iso14443_4a/iso14443_4a.c \
 	   $(V)/nfc/protocols/iso14443_4a/iso14443_4a_i.c \
 	   $(V)/nfc/protocols/iso14443_4a/iso14443_4a_poller.c \
-	   $(V)/nfc/protocols/iso14443_4a/iso14443_4a_poller_i.c
+	   $(V)/nfc/protocols/iso14443_4a/iso14443_4a_poller_i.c \
+	   $(V)/nfc/protocols/iso14443_3b/iso14443_3b.c \
+	   $(V)/nfc/protocols/iso14443_3b/iso14443_3b_poller.c \
+	   $(V)/nfc/protocols/iso14443_3b/iso14443_3b_poller_i.c \
+	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b.c \
+	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_i.c \
+	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_poller.c \
+	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_poller_i.c
 VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h
 
 prototest: $(B)/prototest

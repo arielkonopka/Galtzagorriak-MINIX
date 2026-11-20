@@ -180,4 +180,50 @@ static int cm_4a_xfer(void* ctx, const uint8_t* tx, size_t bits, uint8_t* rx, si
     return 0;
 }
 
+/* A whole ISO 14443-4B card: REQB -> ATQB, ATTRIB -> answer, ISO-DEP.
+ * CRC_B on every frame. */
+typedef struct {
+    uint8_t pupi[4], app_data[4], proto_info[3];
+    int ready, halted;
+    unsigned reqb_seen, attrib_seen;
+    cm_isodep_t dep;
+} cm_4b_t;
+
+static int cm_4b_xfer(void* ctx, const uint8_t* tx, size_t bits, uint8_t* rx, size_t room,
+                      size_t* rxb, uint32_t fwt, uint32_t flags) {
+    cm_4b_t* k = ctx;
+    (void)fwt;
+    (void)flags;
+    size_t n = bits / 8, out;
+    if(bits % 8 || !cm_crc_ok(tx, n, CM_CRC_B)) return -1;
+    n -= 2;
+    if(n == 3 && tx[0] == 0x05) { /* REQB/WUPB */
+        if(k->halted && !(tx[2] & 0x08)) return -1;
+        k->reqb_seen++;
+        k->halted = 0;
+        k->ready = 0;
+        rx[0] = 0x50;
+        memcpy(rx + 1, k->pupi, 4);
+        memcpy(rx + 5, k->app_data, 4);
+        memcpy(rx + 9, k->proto_info, 3);
+        out = 12;
+    } else if(n == 9 && tx[0] == 0x1D && !memcmp(tx + 1, k->pupi, 4)) {
+        k->attrib_seen++;
+        k->ready = 1;
+        rx[0] = tx[8] & 0x0F; /* MBLI 0, the CID given */
+        out = 1;
+    } else if(n == 5 && tx[0] == 0x50 && !memcmp(tx + 1, k->pupi, 4)) {
+        k->halted = 1;
+        k->ready = 0;
+        rx[0] = 0x00;
+        out = 1;
+    } else if(k->ready) {
+        if(cm_isodep(&k->dep, tx, n, rx, &out)) return -1;
+    } else
+        return -1;
+    if(8 * (out + 2) > room) return -5;
+    *rxb = 8 * cm_crc_add(rx, out, CM_CRC_B);
+    return 0;
+}
+
 #endif

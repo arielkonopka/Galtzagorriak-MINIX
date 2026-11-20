@@ -15,6 +15,7 @@
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
 #include <nfc/protocols/iso14443_4a/iso14443_4a_poller.h>
+#include <nfc/protocols/iso14443_4b/iso14443_4b_poller.h>
 #include <toolbox/bit_buffer.h>
 
 static int fails;
@@ -148,9 +149,81 @@ static void test_iso14443_4a(void) {
     nfc_free(nfc);
 }
 
+/* ---- ISO 14443-4B ---- */
+
+static NfcCommand t4b_cb(NfcGenericEvent event, void* context) {
+    t4a_ctx_t* c = context;
+    const Iso14443_4bPollerEvent* e = event.event_data;
+    if(event.protocol != NfcProtocolIso14443_4b) return NfcCommandContinue;
+    if(e->type != Iso14443_4bPollerEventTypeReady) {
+        c->errors++;
+        return NfcCommandStop;
+    }
+    c->ready++;
+    BitBuffer* tx = bit_buffer_alloc(64);
+    BitBuffer* rx = bit_buffer_alloc(64);
+    static const uint8_t apdu[] = {0x00, 0xB0, 0x00, 0x00, 0x04};
+    bit_buffer_copy_bytes(tx, apdu, sizeof apdu);
+    c->err2 = iso14443_4b_poller_send_block(event.instance, tx, rx);
+    if(c->err2 == Iso14443_4bErrorNone) {
+        c->resp_len = bit_buffer_get_size_bytes(rx);
+        bit_buffer_write_bytes(rx, c->resp, c->resp_len);
+    }
+    bit_buffer_free(tx);
+    bit_buffer_free(rx);
+    return NfcCommandStop;
+}
+
+static void test_iso14443_4b(void) {
+    static cm_4b_t k;
+    nfc_xfer_t x = {0};
+    t4a_ctx_t c;
+
+    printf("-- ISO 14443-4B\n");
+    memset(&k, 0, sizeof k);
+    memcpy(k.pupi, "\x1A\x2B\x3C\x4D", 4);
+    memcpy(k.app_data, "\x00\x00\x00\x00", 4);
+    /* 106 kbit/s only; FSCI 8 (256), ISO 14443-4; FWI 7, ADC 0, FO 0 */
+    memcpy(k.proto_info, "\x00\x81\x70", 3);
+    k.dep.app = app_echo;
+    x.transceive = cm_4b_xfer;
+    x.ctx = &k;
+
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolIso14443_4b);
+    memset(&c, 0, sizeof c);
+    nfc_poller_start(poller, t4b_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 1 && k.reqb_seen >= 1 && k.attrib_seen == 1, "4B: REQB, ATTRIB, ready");
+    const Iso14443_4bData* d = (const Iso14443_4bData*)nfc_poller_get_data(poller);
+    size_t uid_len = 0;
+    const uint8_t* uid = iso14443_4b_get_uid(d, &uid_len);
+    CHECK(uid_len == 4 && memcmp(uid, k.pupi, 4) == 0, "4B: PUPI as UID");
+    CHECK(c.err2 == Iso14443_4bErrorNone && c.resp_len == 7 && c.resp[0] == 0x00 &&
+              c.resp[1] == 0xB0 && c.resp[5] == 0x90,
+          "4B: I-block answered");
+    nfc_poller_free(poller);
+
+    /* Stock's 4B poller (unlike 4A) does not answer S(WTX): the exchange
+     * ends with a protocol error, not a hang or a wrong answer. */
+    memset(&k.dep, 0, sizeof k.dep);
+    k.halted = 0;
+    k.dep.app = app_echo;
+    k.dep.wtx_left = 1;
+    poller = nfc_poller_alloc(nfc, NfcProtocolIso14443_4b);
+    memset(&c, 0, sizeof c);
+    nfc_poller_start(poller, t4b_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 1 && c.err2 == Iso14443_4bErrorProtocol && c.resp_len == 0,
+          "4B: S(WTX) -> protocol error (stock behaviour)");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
 int main(void) {
     printf("libnfc vendored-poller tests (#404)\n");
     test_iso14443_4a();
+    test_iso14443_4b();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;
