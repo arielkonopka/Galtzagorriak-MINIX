@@ -1012,6 +1012,7 @@ int hal_pulse_ack(void) { return 0; }
 unsigned hal_pulse_left(void) { return 0; }
 void hal_pulse_stop(void) { }
 int hal_rfid_read(uint32_t d, unsigned n, unsigned c) { (void) d; (void) n; (void) c; return -1; }
+int hal_subghz_stream(uint32_t dst, unsigned n) { (void) dst; (void) n; return -1; }
 int hal_rfid_stream_irq(void) { return -1; }
 int hal_rfid_emu_irq(void) { return -1; }
 unsigned hal_rfid_emu_ack(void) { return 0; }
