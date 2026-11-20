@@ -5,8 +5,10 @@ step=`cat $st`
 test $step = copy && echo "setup -H: copying /home to the swap partition /dev/hd3"
 test $step = copy && {
 	cd /home && find . -type f -exec cksum {} \; | sort >$st.sum
-	set `tar cf - . | tee /dev/hd3 | cksum`
+	# two passes, no tee: one process less while swap is off
+	set `tar cf - . | cksum`
 	echo "$1 $2" >$st.tar
+	tar cf - . >/dev/hd3
 	cd /
 }
 test $step = copy && {
