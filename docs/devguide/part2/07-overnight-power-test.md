@@ -16,7 +16,7 @@ power modes (spec R6.8; `docs/spec/power-plan.md`, PR 2, test 2; first asked for
 | Check | Pass when | Why it can fail |
 |---|---|---|
 | **No reset** | uptime grew by the whole night, and `ver` does not say `reset: watchdog` | the independent watchdog keeps running in Stop2; a sleep that is too long or a wake that does not kick it resets the chip |
-| **Clock** | the Flipper's clock moved by at most **±2 s** against an NTP-synchronised computer (about 70 ppm over 8 h; the 32 kHz crystal is good for a few ppm) | ticks lost or counted twice around Stop2 entry and exit |
+| **Clock** | the Flipper's clock moved by at most **±2 s** against an NTP-synchronised computer (about 69 ppm over 8 h; the 32 kHz crystal is good for a few ppm). Over a longer run the limit grows with it: max(2 s, 69 ppm × the run), e.g. 6.5 s over 26 h, 23.8 s over 4 days (#395) | ticks lost or counted twice around Stop2 entry and exit |
 | **Deep sleep** | more than **99 %** of the time in Stop2 | something keeps the CPU awake: a driver's sleep blocker, a timer firing too often, a background program polling |
 
 and records the energy side:
@@ -51,10 +51,19 @@ The details are in `flipper/PORTING.md`, "How the sleep works". The short versio
   At least **62 wake-ups a minute** of Stop2 from the timer (`wother`) are therefore normal and
   expected (the device showed 64); a button press adds one `wbtn`. Every sleep ends in a counted
   wake-up, so `wbtn + wother` is never below `stop2 / 0.967`.
-- `wother` is 32-bit since #284 and does not wrap in a night. Older kernels kept it in 16 bits,
-  and it wrapped at 65536, about every 18 h. `wbtn` is still 16-bit (65536 presses). For readings
-  from an older kernel, `nightpower.py` corrects a wrapped count with the rule above; by hand, add
-  65536 until it holds.
+- How long each counter lasts before it starts again at 0 (`src/kernel/pmstat.h`, #110):
+
+  | Counter | Kept as | Lasts |
+  |---|---|---|
+  | `up` | clock ticks since boot, 32-bit | about 2.2 years at HZ 60 |
+  | `stop2` | whole minutes in Stop2 (`min`), u16, plus the clocks of the minute begun | 65 536 min, 45 days |
+  | `wother` | 32-bit | over 100 years of sleeps |
+  | `wbtn` | u16 | 65 536 button presses |
+
+  A kernel from before the #284 fix (PR #344) kept `wother` in 16 bits too, and it wrapped at
+  65536, about every 18 h. For readings from such a kernel `nightpower.py` corrects a wrapped
+  count with the rule above (it prints that it did); by hand, add 65536 until it holds. A
+  multi-day run (7.12) stays well inside all four limits.
 - Since R6.8 (#207, merged 2026-11-17) the kernel counts this in every build, and the last four
   fields of `/dev/power` show it:
 
@@ -164,7 +173,7 @@ do it by default), because the clock check compares the Flipper with it.
    them in `nightpower.json` in the current directory (`--state FILE` for another place). Keep
    that file: the morning compares with it.
 7. **Unplug the USB cable at once**, put the Flipper down, and do not press any key until the
-   morning. The minutes between `start` and unplugging count as awake, so keep them short.
+   morning (for a run of several days, see 7.12). The minutes between `start` and unplugging count as awake, so keep them short.
 
 ## 7.5 The morning
 
@@ -197,7 +206,7 @@ Morning, right after plugging in: the same four commands. Then:
 - **Reset:** `up` in the morning should be about `up` in the evening plus the night in seconds,
   and `ver` must not say `reset: watchdog`.
 - **Clock:** the difference to the reference in the morning minus the one in the evening, within
-  ±2 s. Reading a clock by eye is good to about a second; the script does better by catching the
+  ±2 s (over a run longer than 8 h: 69 ppm of it, 6 s a day). Reading a clock by eye is good to about a second; the script does better by catching the
   moment the second turns over.
 - **Stop2:** (stop2 morning − stop2 evening) / (up morning − up evening) above 0.99.
 - **Current:** (soc evening − soc morning) / 100 × 2100 mAh / hours.
@@ -222,7 +231,7 @@ A good night looks like this (made-up numbers in the shape of the real output):
 Night: 10.02 h (2026-11-18 21:40 to 2026-11-19 07:41 UTC)
 Build: Galtzagorriak 0.1.1+140.g1234567
 PASS no reset (cause software, up 36420 s)
-PASS clock: +0.4 s over the night (+11.1 ppm; offset +0.3 -> +0.7 s; limit +-2 s)
+PASS clock: +0.4 s over the night (+11.1 ppm; offset +0.3 -> +0.7 s; limit +-2.5 s = +-69 ppm)
   this computer's clock must be NTP-synchronised for this to mean anything
 PASS Stop2: 99.62 % (35890 of 36028 s; from /dev/power); wake-ups: 0 button, 37200 other (62.0 per minute)
 Charge: 82 % -> 80 % (2 %), 3998 -> 3975 mV; about 4.19 mA average from the charge (1 % = 21 mAh; coarse)
@@ -361,3 +370,38 @@ chapter.
    R6.2): propose it in the issue, do not add it silently.
 8. Results go into issue #109 (report attached) and `flipper/PORTING.md`, with the numbers above.
    The wording rule applies: "the user", never "the owner".
+
+## 7.12 A multi-day run
+
+The same test over several days (asked in #110): it gives a finer current (over 3 days 1 % of the
+charge is about 0.3 mA) and a better clock drift. The steps are those of 7.4 and 7.5; what changes:
+
+- **Start** as in 7.4 (`nightpower.py start`), unplug the cable at once, and **do not plug it in
+  again until the end**: with USB the Flipper does not sleep, and the minutes count as awake.
+- **Once a day you may press one key**, to see that the Flipper is alive. Press **Back** on the
+  launcher: with the backlight off the first key only wakes the backlight ([Buttons and
+  gestures](../../manual/buttons.md)). Do **not** press anything that starts an app (OK on the
+  launcher; the Power app below is the one exception) or sets the clock (`date`, the phone link, `rtc cal`): the drift
+  is measured against the start offset. Each press shows as one `wbtn`.
+- **Interim readings**, if you want them (not needed for the verdict), at most once a day:
+
+  ```
+  python3 -I tools/nightpower.py note            # --state FILE as for start; --ambient 21.5
+  ```
+
+  It reads only `/dev/power` (no `ver`, no `lat`, no clock offset), adds `host_utc, soc, mv, up,
+  stop2, wbtn, wother, usb` to the `notes` list in the state file and prints the Stop2 share since
+  the start. It needs the console, so the cable goes in for it: plug in, run `note`, unplug at
+  once. Those minutes on USB count as awake time, as the ones at the start and the end do; `note`
+  says so, and the verdict does not leave them out. Without the cable, look at the screen
+  instead: the Power app shows the charge in % (open it with OK, read, leave with a long Back at
+  once: it reads the gauge every 10 s while open, so it costs some awake seconds), but it shows
+  none of the counters (`up`, `stop2`, wake-ups) today.
+- **End** as in 7.5. The verdict comes first; then `end` prints the notes as a table, one line per
+  note and one for the end: the day since the start, the charge, and the Stop2 share since the
+  previous line (a note read on USB is marked `(read on USB: awake)`).
+- Over 36 h the report says `Run:` instead of `Night:` and the PORTING.md row starts with
+  `run N h` instead of `overnight N h`. The clock limit is max(2 s, 69 ppm × the run) (7.1), and
+  the row gives the drift in s and in **ppm**: the ppm is the number to compare between runs.
+- `MIN_HOURS` (8 h) is only the shortest run AC6.6 accepts; there is no upper limit within the
+  counter limits of 7.2 (45 days for `stop2`).
