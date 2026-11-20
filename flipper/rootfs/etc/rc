@@ -40,6 +40,9 @@ test -f /etc/.setup-done || sh /etc/setup
 # setup -H keeps the copy of /home on the swap partition: no scratch.
 scratch="-T /dev/hd3"
 test -f /etc/.home-v3 && scratch=
+# "sh /etc/fsckboot" asked for a full check and repair, now, with nothing
+# else running: /etc/fsckrun does it and restarts (issue #399).
+test -f /etc/.fsck-boot && test -f /etc/.setup-done && . /etc/fsckrun
 test -f /etc/.setup-done && {
 	rm -f /tmp/fsck.log
 	for fs in "$usr /usr" "$home /home"
