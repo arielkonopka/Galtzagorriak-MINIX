@@ -40,4 +40,6 @@
     X(sev_tk) /* sevppk_tk.c */ \
     X(sk_tk) \
     X(szppk_so) \
-    X(skylanders)
+    X(skylanders) \
+    X(disney_infinity) \
+    X(banapass) /* patched copy, patches/banapass.patch */

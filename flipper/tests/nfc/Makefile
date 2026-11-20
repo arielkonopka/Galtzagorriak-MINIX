@@ -15,7 +15,7 @@ CFLAGS	:= -std=gnu11 -O1 -g -Wall $(SAN)
 INC	:= -I$(L)
 SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c \
 	   $(L)/nfc_file.c $(L)/iso14443_3a.c $(L)/mf_ultralight.c \
-	   $(L)/nfc_poller.c
+	   $(L)/nfc_poller.c $(L)/nfc_sha1.c
 HDR	:= $(wildcard $(L)/*.h)
 B	:= build
 
