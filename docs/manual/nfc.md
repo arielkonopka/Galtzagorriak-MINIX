@@ -4,11 +4,14 @@ Reading, saving and emulating 13.56 MHz contactless cards (NFC): the `nfc` app, 
 key-recovery command and the MIFARE Classic dictionary. Behaviour follows the stock Flipper
 firmware (spec Phase 14).
 
-> **Status.** The protocol layer, the card-file format, the dictionary attack and the
-> key-recovery logic are in the code and tested on a PC (`src/lib/libnfc`). The parts that
-> need the radio — reading a real card, emulation, the field detector — wait for the
-> ST25R3916 driver (spec Phase 13), so the `nfc` **app** and the live commands below are
-> **(planned)** until that driver lands. Saved-card files and `mfkey` already work on dumps.
+> **Status.** The protocol layer is in the code and tested on a PC (`src/lib/libnfc`): card
+> activation (ISO 14443-3A: request, anticollision, select), telling a card's type from its
+> SAK, MIFARE Classic authentication, the dictionary attack and block read, and the MIFARE
+> Ultralight/NTAG page reader all run against software card models. The parts that need the
+> radio — reading a *real* card, emulation, the field detector — wait for the ST25R3916 driver
+> (spec Phase 13), so the `nfc` **app** and the live commands below are **(planned)** until
+> that driver lands. Saved-card files already work on dumps. The full `mfkey` key recovery
+> (Crypto-1 nonce/LFSR recovery) is still being ported and is **(planned)**.
 
 ## Card files
 

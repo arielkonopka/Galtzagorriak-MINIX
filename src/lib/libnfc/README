@@ -18,12 +18,27 @@ The one interface (this is the whole contract with the driver)
                     <= +200 B, Phase 13).  See
                     docs/devguide/nfc-driver-interface.md.
 
-Done so far (this session)
---------------------------
+Done so far
+----------
   crypto1.c/.h      MIFARE Classic Crypto-1 cipher and the tag PRNG.
                     D.3: ciphers are ported in full; no keys are shipped.
                     Public algorithm (Crapto1, GPL-2.0-or-later -> GPL-3.0),
                     reimplemented from the published polynomials.
+  mf_classic.c/.h   MIFARE Classic data model, reader-side three-pass
+                    authentication, block read, SAK -> type.
+  mf_dict.c/.h      the key dictionary read a line at a time (never whole).
+  mf_attack.c/.h    the dictionary attack as a streaming loop (AC14.2).
+  nfc_file.c/.h     the stock `.nfc` file reader/writer (AC14.1).
+  iso14443_3a.c/.h  the NFC-A poller: REQA, the anticollision cascade
+                    (4/7/10-byte UIDs) and SELECT.
+  mf_ultralight.c/.h  MIFARE Ultralight / NTAG: GET_VERSION -> subtype,
+                    page READ.
+  nfc_poller.c/.h   the top of the reader: poll -> identify by SAK ->
+                    read (MIFARE Classic with the found keys, Ultralight
+                    by page) into the nfc_device the file writer saves.
+
+All of the above is host-tested in flipper/tests/nfc (software 3A,
+MIFARE Classic 1K and NTAG215 card models) under ASan/UBSan.
 
 Memory rules (spec Phase 14)
 ----------------------------
@@ -31,9 +46,13 @@ No big buffer stays resident: every protocol context is allocated per use
 and freed; the libraries cost flash only (XIP).  The dictionary is streamed
 from /home/flipper/nfc/assets a line at a time, never loaded whole.
 
-Still to port (needs @claude continue; needs the Unleashed lib/nfc tree the
-way src/lib/subghz and src/lib/lfrfid were copied byte for byte):
-  - ISO 14443-3A/4A, MIFARE Classic poller, Ultralight/NTAG, DESFire,
-    ISO 15693, NFC-A/B/F/V poller structure, Unleashed's keyless parsers;
-  - the full `mfkey` nonce recovery (lfsr_recovery32/64, nested);
-  - .nfc file reader/writer and the dictionary/attack loop (started here).
+Still to port (needs the Unleashed lib/nfc tree copied byte for byte the
+way src/lib/subghz and src/lib/lfrfid were; that tree is not in this
+runner, so these are not reimplemented from memory):
+  - ISO 14443-4A, MIFARE DESFire, ISO 15693 (NFC-V), NFC-B/F pollers and
+    Unleashed's keyless transit/ID parsers;
+  - the full `mfkey` nonce recovery (lfsr_recovery32/64, nested): the
+    Crapto1 state-recovery, to be copied verbatim, not rewritten.
+Lane:local (the driver): the ST25R3916 /dev/nfc back end for nfc_xfer,
+card emulation (NFCIOCLISTEN), the field detector, the on-device `nfc`
+GUI app and `mfkey` nonce collection, and AC14.3 field tests.
