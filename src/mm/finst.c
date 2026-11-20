@@ -68,17 +68,22 @@ struct inrec {
   unsigned long dead0, dead1;
 };
 
-/* The only RAM: region base | active directory page (0, 1; 2: none yet),
- * 0: no region.  The size and the next seq are looked up when installing. */
+/* The only RAM: region base | (its pages - 1) << 2 | active directory
+ * page (0, 1; 2: none yet), 0: no region.  The base is page aligned and
+ * the region at most 256 pages, so the size fits in bits 2..9 (R2b.1a:
+ * records past the region's end are dead, at 0 B RAM).  The next seq is
+ * looked up when installing. */
 PRIVATE unsigned long in_st;
 #define ST_FLASH	0x08000000UL	/* where the slot's addresses count from */
 
 FORWARD _PROTOTYPE( int in_clock_set, (void)				);
 FORWARD _PROTOTYPE( unsigned long in_id, (struct stat *s)		);
+FORWARD _PROTOTYPE( int in_kill, (struct inrec *r)			);
 
-#define in_base		(in_st & ~3UL)
+#define in_base		(in_st & ~(PAGE - 1))
 #define in_dir		((int) (in_st & 3))
-#define SET_DIR(d)	(in_st = in_base | (d))
+#define in_end		(in_base + (((in_st >> 2) & 0xFF) + 1) * PAGE)
+#define SET_DIR(d)	(in_st = (in_st & ~3UL) | (d))
 #define DIRADDR(d)	(in_base + (d) * PAGE)
 #define RECP(d, i)	((struct inrec *) (DIRADDR(d) + HDR + (i) * REC))
 /* A record is written in ascending double words, seq last but one: a power
@@ -88,7 +93,13 @@ FORWARD _PROTOTYPE( unsigned long in_id, (struct stat *s)		);
  * dropped by the next compaction. */
 #define FREE_SLOT(r)	in_erased((unsigned long *) (r))
 #define WHOLE(r)	((r)->addr != 0xFFFFFFFFUL && (r)->seq != 0xFFFFFFFFUL)
-#define LIVE(r)		(WHOLE(r) && (r)->dead0 == 0xFFFFFFFFUL)
+/* R2b.1a: a record whose text is not wholly inside today's region (SFSA
+ * or the radio slot moved down: a CPU2 stack swap) is dead; nothing is
+ * written for it, the next compaction drops it. */
+#define IN_REG(r)	((r)->addr >= in_base + DIRPAGES * PAGE \
+			 && (r)->addr < in_end \
+			 && (r)->size <= in_end - (r)->addr)
+#define LIVE(r)		(WHOLE(r) && (r)->dead0 == 0xFFFFFFFFUL && IN_REG(r))
 #define MAGIC(d)	(((unsigned long *) DIRADDR(d))[0])
 #define GEN(d)		(((unsigned long *) DIRADDR(d))[1])
 #define UNBOUND(r)	((r)->id == 0xFFFFFFFFUL && (r)->ctime == 0xFFFFFFFFUL)
@@ -206,14 +217,18 @@ unsigned char *out;
   for (i = 0; i < 32; i++) out[i] = s->h[i / 4] >> (24 - 8 * (i % 4));
 }
 
-PRIVATE int in_region(sizep)	/* in_st = base | 2, *sizep = size */
+PRIVATE int in_region(sizep)	/* in_st = base | size | 2, *sizep = size */
 unsigned long *sizep;
 {
-  unsigned long base;
+  unsigned long base, n;
 
   if (sys_flash(FL_INFO, FL_LAYOUT_INST, NULL, 0, &base, sizep) != OK
-	|| base == 0) return(ENOSYS);
-  if ((in_st & ~3UL) != base) in_st = base | 2;
+	|| base == 0 || (base & (PAGE - 1)) != 0) return(ENOSYS);
+  if (*sizep > 256 * PAGE) *sizep = 256 * PAGE;	/* in_st, mjob.page */
+  n = *sizep / PAGE;
+  if (n == 0) return(ENOSYS);
+  if (in_base != base || in_end != base + n * PAGE)
+	in_st = base | (n - 1) << 2 | 2;
   return(OK);
 }
 
@@ -238,6 +253,26 @@ PUBLIC void in_init()
   if (ok0 && ok1) SET_DIR(h1[1] > h0[1]);
   else if (ok0 || ok1) SET_DIR(ok1);
   else SET_DIR(2);			/* none yet */
+
+  /* R2b.1a: records past today's end (a CPU2 stack swap moved SFSA down)
+   * are dead already (IN_REG); mark them so once, so that a swap back
+   * cannot bring them back over pages the cache or CPU2 used in the
+   * meantime.  A double word per record, only after a swap.  A seed
+   * directory (base-flash) holds only the base system, always inside. */
+  if (in_dir <= 1 && MAGIC(in_dir) == IN_MAGIC) {
+	struct inrec *r;
+	int i;
+
+	for (i = 0; i < NREC; i++) {
+		r = RECP(in_dir, i);
+		if (FREE_SLOT(r)) break;
+		if (WHOLE(r) && r->dead0 == 0xFFFFFFFFUL && !IN_REG(r)) {
+			printf("flash: program at 0x%lx past the region "
+				"(SFSA moved): dead\n", r->addr);
+			(void) in_kill(r);
+		}
+	}
+  }
 }
 
 /*===========================================================================*
@@ -423,6 +458,16 @@ unsigned long addr, n;
   return(FALSE);
 }
 
+PRIVATE unsigned long in_slot_end(slot, end)
+unsigned long slot;		/* /etc/radio.slot, an ST address; 0: none */
+unsigned long end;		/* the region's end */
+{
+/* Where programs must end with this radio slot (R2b.1a).  QEMU's flash is
+ * at 0. */
+  if (in_base < ST_FLASH && slot >= ST_FLASH) slot -= ST_FLASH;
+  return(slot > in_base && slot < end ? slot : end);
+}
+
 PRIVATE unsigned long in_find_run(npages, slot)
 unsigned long npages;
 unsigned long slot;		/* R2b.1a: none of it at or above (0: none) */
@@ -435,9 +480,7 @@ unsigned long slot;		/* R2b.1a: none of it at or above (0: none) */
   if (in_region(&size) != OK) return(0);
   if (size > 256 * PAGE) size = 256 * PAGE;	/* mjob.page is a byte */
   end = in_base + size;
-  /* The slot is an ST address (/etc/radio.slot); QEMU's flash is at 0. */
-  if (in_base < ST_FLASH && slot >= ST_FLASH) slot -= ST_FLASH;
-  if (slot > in_base && slot < end) end = slot;
+  end = in_slot_end(slot, end);
   a = in_base + DIRPAGES * PAGE;
   /* not the settings image (/dev/rom, L.2) after the directories */
   if (sys_flash(FL_INFO, FL_LAYOUT_ROM, NULL, 0, &rb, &rs) == OK
@@ -580,7 +623,7 @@ int which;			/* S_LIVE, S_UNBOUND, S_ANY */
   for (i = 0; i < NREC && in_dir <= 1; i++) {
 	r = RECP(in_dir, i);
 	if (FREE_SLOT(r)) break;
-	if ((which == S_ANY || LIVE(r)) && r->addr != 0xFFFFFFFFUL
+	if ((which == S_ANY || LIVE(r)) && WHOLE(r) && IN_REG(r)
 		&& r->size == size
 		&& (which != S_UNBOUND || UNBOUND(r))
 		&& (sha == NULL || memcmp(r->sha, sha, 32) == 0)) return(r);
@@ -674,6 +717,7 @@ unsigned long slot;		/* the radio slot (R2b.1a), 0: none */
   /* The same text already there (an alias): only a record. */
   if (in_text(fd, &hdr, sha) != OK) return(EIO);
   if ((r = in_same(size, sha, S_ANY)) != NULL
+	&& r->addr + size <= in_slot_end(slot, in_end)
 	&& in_flash_ok(addr = r->addr, size, sha))
 	return(in_record(addr, size, sha, s));
 
