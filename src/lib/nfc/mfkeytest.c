@@ -55,6 +55,32 @@ int main(void) {
     int n2 = mfkey_recover_file(nonce_path, found, 8, &e2);
     check(n2 == 1 && memcmp(found[0].key, key2, 6) == 0, "recovered the default transport key");
 
+    /* static_nested: one tag-static sector, two tag nonces with their first
+     * keystream words.  Plant a key, recover it from the nested-nonce log. */
+    const char* nested_path = "build/mf_classic_nested.log";
+    static const uint8_t nkey[6] = {0x13, 0x37, 0xC0, 0xDE, 0xBA, 0xBE};
+    const uint32_t nuid = 0xCAFEF00Du;
+    check(
+        mfkey_write_test_nested_nonces(nested_path, nkey, nuid, 1),
+        "write static_nested test nonces");
+    uint64_t ne = 0;
+    int nn = mfkey_recover_nested_file(nested_path, found, 8, &ne);
+    check(nn == 1, "recovered exactly one nested key");
+    check(nn >= 1 && memcmp(found[0].key, nkey, 6) == 0, "recovered nested key matches planted key");
+    check(nn >= 1 && found[0].uid == nuid, "recovered nested key carries the right uid");
+    if(nn >= 1)
+        printf(
+            "     static_nested key %02X%02X%02X%02X%02X%02X recovered in %" PRIu64
+            " us (%.3f s/key)\n",
+            found[0].key[0],
+            found[0].key[1],
+            found[0].key[2],
+            found[0].key[3],
+            found[0].key[4],
+            found[0].key[5],
+            ne,
+            ne / 1e6);
+
     /* AC14.2 report: time per key, for the on-device comparison later. */
     if(n >= 1)
         printf(

@@ -191,6 +191,47 @@ static bool parse_mfkey32_line(const char* line, MfClassicNonce* res) {
     return true;
 }
 
+/* ---- the stock nested-nonce parser (init_plugin.c:load_nested_nonces) ---- */
+
+/* "0101" -> bits, MSB first, as stock binaryStringToInt does. */
+static uint8_t parity_bits_from_str(const char* s) {
+    uint8_t v = 0;
+    for(int i = 0; s[i] == '0' || s[i] == '1'; i++) v = (uint8_t)((v << 1) | (s[i] - '0'));
+    return v;
+}
+
+/* Parse one static-nested line into a static_nested MfClassicNonce.  Returns
+ * false unless both nonces are present (a single nonce is static_encrypted,
+ * which this host path does not recover).  Mirrors load_nested_nonces. */
+static bool parse_nested_line(const char* line, MfClassicNonce* res) {
+    if(strncmp(line, "Sec", 3) != 0) return false;
+    memset(res, 0, sizeof(*res));
+    res->attack = static_encrypted;
+    int sector_num = 0;
+    char key_type = 'A';
+    int parsed = sscanf(
+        line,
+        "Sec %d key %c cuid %" PRIx32 " nt0 %" PRIx32 " ks0 %" PRIx32 " par0 %4[01] nt1 %" PRIx32
+        " ks1 %" PRIx32 " par1 %4[01]",
+        &sector_num,
+        &key_type,
+        &res->uid,
+        &res->nt0,
+        &res->ks1_1_enc,
+        res->par_1_str,
+        &res->nt1,
+        &res->ks1_2_enc,
+        res->par_2_str);
+    if(parsed != 9) return false; /* need both nonces for static_nested */
+    res->attack = static_nested;
+    res->key_idx = (uint8_t)(sector_num * 2 + (key_type == 'B' ? 1 : 0));
+    res->par_1 = parity_bits_from_str(res->par_1_str);
+    res->par_2 = parity_bits_from_str(res->par_2_str);
+    res->uid_xor_nt0 = res->uid ^ res->nt0;
+    res->uid_xor_nt1 = res->uid ^ res->nt1;
+    return true;
+}
+
 static bool key_is_new(const MfkeyFoundKey* out, int n, const uint8_t key[6]) {
     for(int i = 0; i < n; i++)
         if(memcmp(out[i].key, key, 6) == 0) return false;
@@ -215,6 +256,45 @@ int mfkey_recover_file(const char* path, MfkeyFoundKey* out, int out_cap, uint64
         /* mfkey32: ks2 from the first authentication, in = 0. */
         int ks2 = (int)(n.ar0_enc ^ n.p64);
         if(recover_one(&n, ks2, 0, &ps)) {
+            if(found < out_cap && key_is_new(out, found, n.key.data)) {
+                memcpy(out[found].key, n.key.data, 6);
+                out[found].uid = n.uid;
+                found++;
+            }
+        }
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    if(elapsed_us)
+        *elapsed_us =
+            (uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000ull + (t1.tv_nsec - t0.tv_nsec) / 1000;
+
+    fclose(f);
+    return found;
+}
+
+int mfkey_recover_nested_file(
+    const char* path,
+    MfkeyFoundKey* out,
+    int out_cap,
+    uint64_t* elapsed_us) {
+    FILE* f = fopen(path, "r");
+    if(!f) return -1;
+
+    ProgramState ps;
+    memset(&ps, 0, sizeof(ps));
+
+    int found = 0;
+    char line[256];
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    while(fgets(line, sizeof(line), f)) {
+        MfClassicNonce n;
+        if(!parse_nested_line(line, &n)) continue;
+        /* static_nested: ks2 from the second keystream word, state fed with
+         * uid^nt1 (mfkey.c: ks_enc = ks1_2_enc, nt_xor_uid = uid_xor_nt1). */
+        if(recover_one(&n, (int)n.ks1_2_enc, n.uid_xor_nt1, &ps)) {
             if(found < out_cap && key_is_new(out, found, n.key.data)) {
                 memcpy(out[found].key, n.key.data, 6);
                 out[found].uid = n.uid;
@@ -270,6 +350,45 @@ bool mfkey_write_test_nonces(const char* path, const uint8_t key[6], uint32_t ui
             (unsigned long)nt1,
             (unsigned long)nr1,
             (unsigned long)ar1);
+    }
+    fclose(f);
+    return true;
+}
+
+/* First keystream word of an auth with a static tag nonce: start at the key
+ * state and feed uid^nt (plain); the returned word is exactly the ks0/ks1
+ * the nested engine verifies and rebuilds the key from. */
+static uint32_t make_nested_ks(const uint8_t key[6], uint32_t uid, uint32_t nt) {
+    struct Crypto1State s;
+    state_from_key(key, &s);
+    return crypt_word_ret(&s, uid ^ nt, 0);
+}
+
+bool mfkey_write_test_nested_nonces(
+    const char* path,
+    const uint8_t key[6],
+    uint32_t uid,
+    int count) {
+    FILE* f = fopen(path, "w");
+    if(!f) return false;
+    uint32_t seed = 0x89abcdefu ^ uid;
+    for(int i = 0; i < count; i++) {
+        uint32_t nt0 = seed = seed * 1664525u + 1013904223u;
+        uint32_t nt1 = seed = seed * 1664525u + 1013904223u;
+        uint32_t ks0 = make_nested_ks(key, uid, nt0);
+        uint32_t ks1 = make_nested_ks(key, uid, nt1);
+        /* dist 0 (static) and a parity placeholder; the static_nested engine
+         * verifies on the keystream words, not the parity bits. */
+        fprintf(
+            f,
+            "Sec %d key A cuid %08lx nt0 %08lx ks0 %08lx par0 0000 nt1 %08lx ks1 %08lx par1 0000 "
+            "dist 0\n",
+            i,
+            (unsigned long)uid,
+            (unsigned long)nt0,
+            (unsigned long)ks0,
+            (unsigned long)nt1,
+            (unsigned long)ks1);
     }
     fclose(f);
     return true;
