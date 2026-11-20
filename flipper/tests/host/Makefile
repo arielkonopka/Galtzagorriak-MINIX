@@ -15,7 +15,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
-     run-mtpd run-gzsig run-nfc
+     run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -70,6 +70,22 @@ run-nfc:
 
 # gzsig (spec RS.4, ACS.1, T33a part 2): the update file's verifier
 # (make gzsigtest); a flipped bit at every 3rd byte here, every byte there.
+# libradio and radio-fetch.py (T30a, spec R16.0, R2b.1a).
+run-radio:
+	$(MAKE) -C $(MROOT)/flipper/tests/radio test
+
+# libflipperpb (#388): the stock RPC protobuf against golden frames.
+run-flipperpb:
+	$(MAKE) -C $(MROOT)/flipper/tests/flipperpb test
+
+# the rpcd core (#388, R15.5, R15.7): fake platform, golden frames.
+run-rpcd:
+	$(MAKE) -C $(MROOT)/flipper/tests/rpcd test
+
+# bled GATT serial service (#388): fake controller, rpcd behind it.
+run-bled:
+	$(MAKE) -C $(MROOT)/flipper/tests/bled test
+
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
 

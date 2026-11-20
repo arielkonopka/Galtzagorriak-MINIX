@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree
+	    swapon gmodem guimod jiggle region gzupdate gztree radio
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -320,7 +320,8 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid spectrum
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
-DAEMONS	:= mtpd
+# rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
+DAEMONS	:= mtpd rpcd
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
@@ -417,6 +418,9 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 			# all stack (no heap: its DIR is .bss, no stdio, no
 			# handler, so no MM gap); deepest a folder delete
 			# (rm_tree's 256 B path) or a move (two paths)
+CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
+			# 6272 B) and nanopb's request strings (a 1 KB ping,
+			# a 255 B path) from the heap, stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -443,9 +447,9 @@ $(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/i
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 HID_DIR	:= $(MROOT)/src/lib/hid
-$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h tests/flipperpb/golden.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -Itests/flipperpb -MMD -MP -c $< -o $@
 # libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
 # reports, the stock .kl layouts (US built in), static; m2test types with
 # it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
@@ -529,6 +533,32 @@ $(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
 OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
+# rpcd (spec R15.5, R15.7; issue #388): the core (src/lib/rpcd), the stock
+# protobuf (src/lib/flipperpb) and nanopb, built as C11 (nanopb needs
+# <stdint.h>/<stdbool.h>: GCC's freestanding ones, through -isystem
+# $(GCCINC)); the MINIX platform part is cmds/rpcd.c.  The same core runs
+# on the PC (make -C tests/rpcd test).
+NPB_DIR	:= $(MROOT)/src/lib/nanopb
+FPB_DIR	:= $(MROOT)/src/lib/flipperpb
+RPC_DIR	:= $(MROOT)/src/lib/rpcd
+RPC_CFLAGS := $(UCFLAGS) -std=gnu11 -DPB_ENABLE_MALLOC -I$(NPB_DIR) \
+	   -I$(FPB_DIR) -I$(FPB_DIR)/gen -I$(RPC_DIR)
+FPB_GEN	:= $(notdir $(basename $(wildcard $(FPB_DIR)/gen/*.pb.c)))
+$(MB)/rpcd/npb/%.o: $(NPB_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/fpb/%.o: $(FPB_DIR)/gen/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/core.o: $(RPC_DIR)/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/main.o: cmds/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_rpcd = $(MB)/rpcd/main.o $(MB)/rpcd/core.o \
+	   $(patsubst %,$(MB)/rpcd/npb/%.o,pb_common pb_decode pb_encode) \
+	   $(FPB_GEN:%=$(MB)/rpcd/fpb/%.o)
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -664,6 +694,16 @@ $(MB)/cmd/port/reghash.o: $(MB)/cmd/port/reghash.c $(MODEM_DIR)/modem.h
 OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/rgblob.o \
 	   $(MB)/modem/rgsha.o $(MB)/cmd/port/reghash.o $(MB)/modem/cc1101.o \
 	   $(MB)/modem/duty.o
+# radio (spec R16.0.2, R2b.1a; T30a): CPU2 stack images on the card;
+# libradio (src/lib/radio) and libmodem's SHA-256.
+RADIO_DIR := $(MROOT)/src/lib/radio
+$(MB)/cmd/port/radio.o: cmds/radio.c $(RADIO_DIR)/radio.h $(MODEM_DIR)/modem.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
+$(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
+OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -1052,7 +1092,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.63
+BASE_VER := 4.64
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)
