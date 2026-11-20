@@ -11,7 +11,7 @@
  *	subghzui FILE				(a .sub file's window)
  *
  * Menu as stock: Read, Read RAW, Saved, Add manually, Frequency analyzer,
- * Radio settings.  Saved lists /home/flipper/subghz/*.sub a page at a
+ * Radio settings.  Saved lists the .sub files of /home/flipper/subghz a page at a
  * time (a file is never read whole: subghz streams it).  Add manually
  * writes a stock Princeton key file.  Frequency and preset are the app's
  * (Radio settings), not kept after it ends (no new persistent state).
@@ -58,6 +58,7 @@ static char addkey[8] = "000000", addname[NAMEMAX + 1] = "Manual";
 static int fi = 5, pi = 1;		/* 433.92 MHz, AM650 (stock's default) */
 static int te = 400;
 static int lfirst;
+static char nfrom = 'm';		/* the note window's parent */
 static char top = 'm';			/* m l f r(un) s(et) a(dd) n(ote) */
 static const char *rtitle = "";		/* the run window's title */
 
@@ -126,6 +127,7 @@ static void w_note(const char *t, const char *l1, const char *l2)
 	gm_line(l1);
 	if (l2) gm_line(l2);
 	gm_show();
+	if (top != 'n') nfrom = top;
 	top = 'n';
 }
 
@@ -386,12 +388,12 @@ static void ok(const char *win, const char *key)
 /* Back from win: the desktop shows its parent. */
 static void back(const char *win)
 {
+	if (!strcmp(win, "note")) { top = nfrom; return; }
 	if (!strcmp(win, "run")) {
 		run_stop(&run);
 		top = rtitle[0] == 'R' ? 'm' : 'f';
 	} else if (!strcmp(win, "file")) top = file[0] ? 'l' : 'm';
 	else if (!strcmp(win, "delq")) top = 'f';
-	else if (!strcmp(win, "note")) top = 'm';
 	else top = 'm';
 }
 

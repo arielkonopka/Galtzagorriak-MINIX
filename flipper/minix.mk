@@ -322,7 +322,7 @@ GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive
 # Stock app ports part 2 (issue #413): window apps over the commands.
-WINBASE	+= subghzui
+WINBASE	+= subghzui ibuttonui gpioui
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
@@ -424,6 +424,9 @@ CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
 CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
 			# 1 KB of stack (records, two paths); subghz runs
 			# as its own process (CHMEM_subghz)
+CHMEM_ibuttonui := 4096	# as subghzui; ikey is its own process
+CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
+			# and MM's 1.5 KB gap
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
 			# (two 128 B paths, the record buffers)
@@ -592,11 +595,14 @@ $(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
 OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
 # issue #413: the window apps over subghz, ikey and gpio (gui/runwin.c:
 # the command's output on a pipe, live)
-$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o: $(MB)/cmd/gui/%.o: gui/%.c \
+$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
+		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
 		gui/runwin.h $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
@@ -1139,7 +1145,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.65
+BASE_VER := 4.66
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

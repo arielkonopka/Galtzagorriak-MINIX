@@ -14,4 +14,6 @@ RFID:nobody:@rfid:/bin/lfrfid
 Spectrum:nobody:@subghz:/bin/spectrum
 Sub-GHz:nobody:@subghz:=/bin/subghzui
 Infrared:nobody:@ir:/bin/infrared
+iButton:nobody:@ibutton:=/bin/ibuttonui
+GPIO:nobody:@gpio:=/bin/gpioui
 Archive:nobody:@file:=/bin/archive
