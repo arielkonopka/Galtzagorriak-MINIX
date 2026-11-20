@@ -15,113 +15,12 @@
 #				characters, any size; its zone map has room
 #				for a /home up to the end of the card)
 #
-# setup -H (spec O.7) for a card made before: swap off, /home copied to
-# the swap partition with tar and checked, mkfs -3, copied back, checked
-# again.  It runs at boot from /etc/rc (nothing else uses /home then); the
-# step is in /etc/.home-v3, so a power loss in between goes on from there
-# at the next boot.  The copy on the swap partition is kept until the end.
+# setup -H (spec O.7) converts /home of a card made before: /etc/homev3.
 
 PATH=/bin:/usr/bin
-st=/etc/.home-v3
 
-case "$1" in
--H)
-	# Started by the user: check, then go on at the next boot.
-	test -f $st && {
-		echo "setup -H: already started (step `cat $st`); it goes on at boot"
-		exit 1
-	}
-	test -f /etc/.setup-done || { echo "setup -H: the card is not set up"; exit 1; }
-	dd if=/dev/hd4 bs=8 skip=131 count=1 2>/dev/null | od -x | grep -s 4d5a && {
-		echo "setup -H: /home is MINIX V3 already"
-		exit 1
-	}
-	set `mkpart -l /dev/hd0 | grep '^3 '`
-	test "$3" = 82 || { echo "setup -H: /dev/hd3 is not a swap partition"; exit 1; }
-	swapkb=`expr $7 / 2`
-	set `du -s /home`
-	usedkb=$1
-	# tar needs 512 B per file and per directory on top of the data
-	files=`find /home -print | wc -l`
-	need=`expr $usedkb + $files + 1024`
-	test $need -lt $swapkb || {
-		echo "setup -H: /home holds about $need KB, the swap partition only $swapkb KB"
-		exit 1
-	}
-	# /home may grow up to the next partition after it (none if swap
-	# sits between /usr and /home); the kernel sees it after the reboot.
-	mkpart -g 4 /dev/hd0 >/dev/null || { echo "setup -H: mkpart -g failed"; exit 1; }
-	echo copy >$st
-	sync
-	echo "setup -H: /home is converted at the next boot (swap stays off until then)."
-	echo "Rebooting."
-	reboot
-	exit 0 ;;
--Hboot)
-	# From /etc/rc, after /usr and /home are mounted, before swapon.
-	test -f $st || exit 0
-	step=`cat $st`
-	case $step in
-	copy)
-		echo "setup -H: copying /home to the swap partition /dev/hd3"
-		cd /home || exit 1
-		find . -type f -exec cksum {} \; | sort >$st.sum
-		set `tar cf - . | tee /dev/hd3 | cksum`
-		crc=$1; len=$2
-		n=`expr $len / 512`
-		set `dd if=/dev/hd3 bs=512 count=$n 2>/dev/null | cksum`
-		cd /
-		test "$1" = "$crc" -a "$2" = "$len" -a $len -gt 1024 || {
-			echo "setup -H: the copy on /dev/hd3 does not read back the same:"
-			echo "  nothing was changed, /home stays MINIX V2"
-			rm -f $st $st.sum
-			exit 1
-		}
-		echo "$len $crc" >$st.tar
-		echo make >$st
-		sync
-		step=make ;;
-	esac
-	case $step in
-	make)
-		echo "setup -H: making a MINIX V3 /home on /dev/hd4 and copying it back"
-		cd /
-		umount /dev/hd4 >/dev/null 2>&1
-		set `mkpart -l /dev/hd0 | grep '^4 '`
-		mb=`mkpart -s /dev/hd0`
-		g=`expr $mb \* 1024 - $5 / 2`	# -g: /home's start to the card's end
-		mkfs -3 -g $g /dev/hd4 && mount /dev/hd4 /home &&
-		(cd /home && tar xopf /dev/hd3) || {
-			echo "setup -H: this step failed; it runs again at the next boot."
-			echo "  Your files are on /dev/hd3 (tar tvf /dev/hd3)."
-			exit 1
-		}
-		echo check >$st
-		sync
-		step=check ;;
-	esac
-	case $step in
-	check)
-		cd /home || exit 1
-		find . -type f -exec cksum {} \; | sort >/tmp/home-v3.sum
-		cd /
-		if cmp -s /tmp/home-v3.sum $st.sum
-		then
-			rm -f $st $st.sum $st.tar /tmp/home-v3.sum
-			sync
-			echo "setup -H: /home is MINIX V3 now; every file is the same."
-		else
-			echo failed >$st
-			sync
-			echo "setup -H: some files differ after the copy (/tmp/home-v3.sum,"
-			echo "  $st.sum).  The copy stays on /dev/hd3 and swap stays off:"
-			echo "  restore with: cd /home; tar xopf /dev/hd3"
-			exit 1
-		fi ;;
-	failed)	echo "setup -H: the last conversion failed: swap stays off, see $st.sum" ;;
-	esac
-	exit 0 ;;
-esac
+# sh's string space is small: setup -H is its own script, /etc/homev3.
+case "$1" in -H*) exec sh /etc/homev3 $1 ;; esac
 
 if test ! -f /etc/.setup-parted
 then
@@ -159,7 +58,8 @@ done
 echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
 set `mkpart -l /dev/hd0 | grep '^4 '`
 mb=`mkpart -s /dev/hd0`
-g=`expr $mb \* 1024 - $5 / 2`	# -g: /home's start to the card's end
+h=`expr $5 / 2`
+g=`expr $mb "*" 1024 - $h`	# -g: /home's start to the card's end
 mkfs /dev/hd2 && mkfs -3 -g $g /dev/hd4 || {
 	echo "setup: mkfs failed"
 	exit 1

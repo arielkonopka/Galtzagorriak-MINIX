@@ -55,6 +55,8 @@ d--755 0 0
       group ---644 0 0 rootfs/etc/group
       profile ---644 0 0 rootfs/etc/profile
       setup ---644 0 0 rootfs/etc/setup
+      homev3 ---644 0 0 rootfs/etc/homev3
+      homev3.b ---644 0 0 rootfs/etc/homev3.b
       fstab ---644 0 0 rootfs/etc/fstab
       hostname.file ---644 0 0 rootfs/etc/hostname.file
       apps ---644 0 0 rootfs/etc/apps
