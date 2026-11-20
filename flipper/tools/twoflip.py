@@ -874,6 +874,12 @@ def judge_sub(f, out, who, nothing):
 # once they have seen it twice in a row (or after a first frame's guard
 # time), so one transmission is not enough.
 SUB_REPEAT = 10
+# The reference's tx_from_file ends after about a second whatever the repeat
+# count says (found on the device, #365): a listening window of several
+# seconds holds one short burst, and a receiver that is deaf for a moment
+# (or a burst that comes before it listens) misses it.  So the file is sent
+# SUB_SENDS times in a row inside the window.
+SUB_SENDS = 4
 # Unleashed unlshd-093 says "Error transmitter" and then reboots (its USB
 # port goes away) on tx_from_file with these files.
 UL_TX_CRASH = {"Proteco": "Unleashed unlshd-093 reboots on tx_from_file of this file (its own bug)", "Freezer": "Unleashed unlshd-093 reboots on tx_from_file "
@@ -895,10 +901,11 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	if f["proto"] in UL_TX_CRASH:
 		mx.stop()
 		return "BLOCKED", UL_TX_CRASH[f["proto"]]
-	ok, uo = ul.run("subghz tx_from_file %s %d 0" % (path, SUB_REPEAT), 30)
-	if re.search(UL_TX_REFUSED.decode(), uo):
-		mx.stop()
-		return "BLOCKED", "Unleashed: " + ul_refused(uo)
+	for _ in range(SUB_SENDS):
+		ok, uo = ul.run("subghz tx_from_file %s %d 0" % (path, SUB_REPEAT), 30)
+		if re.search(UL_TX_REFUSED.decode(), uo):
+			mx.stop()
+			return "BLOCKED", "Unleashed: " + ul_refused(uo)
 	mx.wait(re.escape(f["proto"]).encode(), 3)
 	time.sleep(0.5)
 	out = mx.stop()
