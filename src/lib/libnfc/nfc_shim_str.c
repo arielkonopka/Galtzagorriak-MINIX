@@ -44,6 +44,13 @@ void furi_string_replace_all(FuriString* s, const char* from, const char* to) {
     furi_string_free(out);
 }
 
+size_t furi_string_utf8_length(FuriString* s) {
+    size_t n = 0;
+    for(size_t i = 0; i < s->len; i++)
+        if(((unsigned char)s->buf[i] & 0xC0) != 0x80) n++;
+    return n;
+}
+
 void furi_string_reserve(FuriString* s, size_t size) {
     (void)s;
     (void)size;

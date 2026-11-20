@@ -34,4 +34,10 @@
     X(ventra) \
     X(ndef_ul) \
     X(ndef_mfc) \
-    X(aic)
+    X(aic) \
+    X(mykey) \
+    X(plantain) \
+    X(sev_tk) /* sevppk_tk.c */ \
+    X(sk_tk) \
+    X(szppk_so) \
+    X(skylanders)

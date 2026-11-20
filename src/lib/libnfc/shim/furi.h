@@ -135,6 +135,8 @@ size_t nfcshim_str_search(const FuriString* s, const char* needle, size_t start)
 #define furi_string_search_str(s, n, ...) nfcshim_str_search(s, n, (0, ##__VA_ARGS__))
 void furi_string_mid(FuriString* s, size_t start, size_t len);
 void furi_string_replace_all(FuriString* s, const char* from, const char* to);
+/* Code points in the (UTF-8) string. */
+size_t furi_string_utf8_length(FuriString* s);
 /* The buffer is fixed (NFCSHIM_STR_MAX): nothing to reserve. */
 void furi_string_reserve(FuriString* s, size_t size);
 #define furi_string_trim_1(s) furi_string_trim_chars(s, " \n\r\t")
