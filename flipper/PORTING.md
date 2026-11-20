@@ -132,6 +132,74 @@ Then `make BOARD=flipper flash` (= `dfu-util -a 0 -s 0x08000000:leave -D
 build/flipper/m0.bin`). Back to stock firmware: qFlipper → *Repair* from
 DFU mode. Iterating on MINIX never needs Repair.
 
+### The update file `Galtzagorriak.update` (spec section S, T33a)
+
+One signed file updates flash and SD card from one build (RS.1-RS.3).
+Format version 1, little endian, sector aligned (512 B). Host side:
+`tools/mkupdate.py` builds it, `tools/gzsign` signs it,
+`tools/gzupdate-check.py` checks it as the Flipper does; `make BOARD=flipper
+update` runs all three and writes `build/flipper/minix/Galtzagorriak.update`
+and its `.sha512`. `make updatetest` is ACS.1 on the host. On the Flipper
+nothing reads the file yet (`gzupdate`: T33a part 3; `atea`: T33b).
+
+    sector 0     header, 448 signed bytes + Ed25519 signature (64 B)
+    sector 1     section table, 16 entries of 32 B
+    sector 2-3   full SHA-512 of each section, 16 x 64 B (entry i at i*64)
+    sector 4..   the sections in table order, each starting on a sector;
+                 the gaps and the end are zero-padded to a sector
+
+Header (sector 0):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `GZUPDATE` |
+| 8 | 2 | format version, 1 |
+| 10 | 2 | signed header size, 448 |
+| 12 | 4 | flags, 0 in version 1 |
+| 16 | 16 | board, NUL-padded: `flipper-f7` (QEMU: `qemu-mps2`) |
+| 32 | 4 | release: major, minor, patch, 0 |
+| 36 | 4 | `from_min`: the oldest release this file updates (same form) |
+| 40 | 4 | epoch (`GZ_EPOCH`, RS.13/RS.19) |
+| 44 | 4 | `GZ_ABI` |
+| 48 | 4 | shared-libc id (`libc.json` `id`, as in the a.out header) |
+| 52 | 4 | libfuri id (`furi.json` `id`) |
+| 56 | 8 | build time, s since 1970 (`GZ_BUILD_EPOCH`: the commit's time) |
+| 64 | 8 | key id: first 8 B of SHA-512 of the signer's public key |
+| 72 | 4 | number of sections, 1-16 |
+| 76 | 4 | file size in bytes (a multiple of 512) |
+| 80 | 64 | SHA-512 of sectors 1-3 (table + hashes) |
+| 144 | 32 | release text, NUL-padded: `0.1.2+17.g621a475` |
+| 176 | 272 | zero |
+| 448 | 64 | Ed25519 signature (RFC 8032, pure) of bytes 0-447 |
+
+Section entry (32 B): type (1 B), flags (1 B, 0), index (2 B, = its
+slot), offset (4 B, from the file's start, a multiple of 512), length (4 B,
+not 0), load address (4 B; `flash` only, a 2 KB page, else 0), the first
+16 B of the section's SHA-512 (the full hash is in sectors 2-3). Unused
+entries and their hash slots are zero. Types: 1 `flash` (`minix-base.bin`;
+until `atea` exists it starts at 0x0800_0000, afterwards at 0x0800_4000),
+2 `root` (the base package tar), 3 `pkg` (one app package tar each), 4
+`notes` (the release's CHANGELOG.md section, at most 4 KB; `Unreleased` for
+a build after the tag), 5 `radio` (reserved, refused by version 1). Exactly
+one `flash` and one `root`, at most one `notes`.
+
+Checks in this order (`gzupdate-check.py`, later the C verifier): magic,
+format, header size and flags, reserved bytes zero, key id names a trusted
+key (`atea`'s two slots, RS.6), **signature**; then board, file size, table
+hash, every entry (ascending, no overlap, inside the file, prefix = full
+hash), the padding is zero (no hash covers it), every section's SHA-512
+streamed 4 KB at a time; then epoch > running epoch (unless the downgrade
+press) and `from_min` <= running release. So a flipped bit anywhere is
+caught (`make updatetest` flips one at each byte).
+
+Keys: `tools/gzsign --new-key` writes `~/.config/galtzagorriak/update.key`
+(PKCS#8 PEM, mode 0600; never commit it) and `update.pub` (64 hex digits).
+`gzsign` takes the private key from `--key`, the environment variable
+`GZ_UPDATE_KEY` (the key file's text, the CI secret) or that file, and stops
+with a hint if there is none. The project's public release key goes to
+`flipper/keys/release.pub` once the user has made it (RS.20); `make update`
+checks with it and with `~/.config/galtzagorriak/update.pub`.
+
 ### SD card layout
 
 One MBR partition (type 0x81, start 1 MiB, 4000 MiB) holding a MINIX V2
