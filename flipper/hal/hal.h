@@ -440,6 +440,7 @@ void hal_dfu_request(void) __attribute__((noreturn));
 void hal_dev_mode(int on);
 int hal_dev(void);
 const char *hal_reset_cause(void);	/* of the last reset */
+void hal_charge_mode(void);	/* #407: after a power-on with USB: the charging screen, Back starts the system */
 /* T14a: the Sub-GHz and NFC chips asleep, at boot (hal_init).  The check
  * for the boot report: us the CC1101 took to wake (asleep: hundreds),
  * the ST25R3916's op-control (0: off) and id, SMPS step-down running. */

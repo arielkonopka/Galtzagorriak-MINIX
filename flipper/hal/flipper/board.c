@@ -645,6 +645,9 @@ static void spi2_wait_idle(void)
 static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
+static uint32_t boot_reg(void);
+static void boot_reg_set(uint32_t r);
+#define BOOT_POR	0x200u	/* this start follows a power-on (a fresh BOR flag): set by hal_early_boot at every start (BKP19R bit 9, with BOOT_DEV and BOOT_CAUSE below); the charging mode (#407) looks at it */
 static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
 static void rtc_boot(void);
@@ -712,6 +715,153 @@ int hal_lcd_flush(const uint8_t *fb)
 		LCD_CS(0);
 	}
 	return 0;
+}
+
+/*===========================================================================*
+ *				The charging mode (#407)		     *
+ *===========================================================================*/
+/* A Flipper switched off and then plugged into USB (the charger's ship mode
+ * ends with the VBUS and the CPU starts) does not boot the system: it shows
+ * the charging screen and waits.  Back held for a second starts the system
+ * (a software reset: the next start is a normal one); the cable pulled out
+ * switches the Flipper off again.  Only a start after a power-on (BOOT_POR)
+ * with VBUS present and Back not held: a start by Back (the charger's QON)
+ * is a normal start, and so is every reset, the watchdog's, a DFU leave. */
+extern const unsigned char charge_fb[];		/* hal/common/chargeart.c */
+extern const unsigned char font_4x6[95][6];	/* hal/common/font4x6.c */
+
+static void cm_pix(uint8_t *pg, unsigned page, int x, int y, int on)
+{
+	if ((unsigned) x >= LCD_W || (unsigned) y >> 3 != page) return;
+	if (on) pg[x] |= 1u << (y & 7);
+	else pg[x] &= ~(1u << (y & 7));
+}
+
+static void cm_text(uint8_t *pg, unsigned page, int x, int y, const char *s)
+{
+	int gx, gy, bits;
+
+	for (; *s; s++, x += 4)
+		for (gy = 0; gy < 6; gy++) {
+			bits = font_4x6[(unsigned char) *s - 32][gy];
+			for (gx = 0; gx < 4; gx++)
+				cm_pix(pg, page, x + gx, y + gy, bits & (0x80 >> gx));
+		}
+}
+
+/* The screen, page by page (128 B on the stack): the picture, the battery
+ * on the Flipper's screen in it filled to soc (12 columns; the last one off
+ * while charging in the odd phase), the percentage in a box at the top
+ * left.  soc < 0: no gauge value, the outline only. */
+static void cm_draw(int soc, int charging, int phase)
+{
+	uint8_t pg[LCD_W], addr[3];
+	char txt[5];
+	unsigned page;
+	int x, y, c, cols, n, w;
+
+	n = 0;
+	if (soc >= 100) { txt[n++] = '1'; txt[n++] = '0'; txt[n++] = '0'; }
+	else if (soc >= 10) { txt[n++] = '0' + soc / 10; txt[n++] = '0' + soc % 10; }
+	else if (soc >= 0) txt[n++] = '0' + soc;
+	if (soc >= 0) txt[n++] = '%';
+	txt[n] = 0;
+	w = n * 4 + 3;
+	cols = soc < 0 ? 0 : (soc * 12 + 50) / 100;
+	for (page = 0; page < LCD_H / 8; page++) {
+		for (x = 0; x < LCD_W; x++) pg[x] = charge_fb[page * LCD_W + x];
+		for (y = 46; y <= 49; y++)		/* dark inside ... */
+			for (x = 15; x <= 30; x++) cm_pix(pg, page, x, y, 1);
+		for (x = 15; x <= 28; x++) {		/* ... the battery light */
+			cm_pix(pg, page, x, 46, 0);
+			cm_pix(pg, page, x, 49, 0);
+		}
+		for (y = 46; y <= 49; y++) {
+			cm_pix(pg, page, 15, y, 0);
+			cm_pix(pg, page, 28, y, 0);
+		}
+		cm_pix(pg, page, 29, 47, 0);
+		cm_pix(pg, page, 29, 48, 0);
+		for (c = 0; c < cols; c++) {
+			if (charging && soc < 100 && c == cols - 1 && phase)
+				continue;
+			cm_pix(pg, page, 16 + c, 47, 0);
+			cm_pix(pg, page, 16 + c, 48, 0);
+		}
+		if (soc >= 0) {
+			for (y = 1; y <= 9; y++)	/* the box */
+				for (x = 1; x <= 1 + w; x++)
+					cm_pix(pg, page, x, y,
+					    y == 1 || y == 9 || x == 1 || x == 1 + w);
+			cm_text(pg, page, 3, 2, txt);
+		}
+		addr[0] = 0xB0 | page;
+		addr[1] = 0x10;
+		addr[2] = 0x00;
+		lcd_cmds(addr, sizeof addr);
+		LCD_DATA(1);
+		LCD_CS(1);
+		spi2_block(pg, NULL, LCD_W);
+		spi2_wait_idle();
+		LCD_CS(0);
+	}
+}
+
+/* The ikurrina sequence of the kernel (red, green, white; 1 s each, 0.2 s
+ * glide into the colour) in 40 ms steps, for the loops that run without the
+ * kernel's LED task. */
+static void cm_led(unsigned n)
+{
+	static const uint8_t col[3][3] = {
+		{ 200, 0, 0 }, { 0, 128, 0 }, { 200, 128, 96 } };
+	unsigned c = n / 30 % 3, k = n % 30, p = (c + 2) % 3, i, v[3];
+
+	for (i = 0; i < 3; i++)
+		v[i] = k < 5 ? (col[p][i] * (4 - k) + col[c][i] * (k + 1)) / 5
+			     : col[c][i];
+	hal_led_pwm(v[0], v[1], v[2]);
+}
+
+void hal_charge_mode(void)
+{
+	uint32_t back = 0, t0;
+	unsigned n = 0, gone = 0;
+	int r, soc;
+
+	if (!(boot_reg() & BOOT_POR)) return;
+	boot_reg_set(boot_reg() & ~BOOT_POR);	/* once per start */
+	if (hal_buttons() & BTN_BACK) return;	/* a start by Back */
+	if ((r = hal_charger_read(HAL_CHG_STATUS)) < 0 || (r >> 5) == 0)
+		return;				/* no VBUS */
+	hal_backlight(60);			/* dim: the charge is the point */
+	hal_led(0, 0, 0);			/* the LED engines off, direct */
+	for (;;) {
+		hal_wdt_kick();
+		t0 = DWT->CYCCNT;
+		cm_led(n);
+		if (n % 25 == 0) {		/* every second */
+			soc = hal_gauge_read(HAL_GAUGE_SOC);
+			r = hal_charger_read(HAL_CHG_STATUS);
+			cm_draw(soc > 100 ? 100 : soc,
+				r >= 0 && ((r >> 3) & 3) >= 1 && ((r >> 3) & 3) <= 2,
+				(n / 50) & 1);
+		}
+		r = hal_charger_read(HAL_CHG_STATUS);
+		gone = (r >= 0 && (r >> 5) == 0) ? gone + 1 : 0;
+		if (gone >= 12) {			/* the cable is out */
+			hal_led(0, 0, 0);
+			hal_power_off();
+		}
+		if (!(hal_buttons() & BTN_BACK)) back = 0;
+		else if (back == 0) back = t0 | 1;
+		else if (ms_since(back) >= 1000) {
+			hal_led(0, 0, 0);
+			hal_lcd_flush(charge_fb);	/* no stale level */
+			NVIC_SystemReset();		/* a normal start */
+		}
+		while (ms_since(t0) < 40) ;
+		n++;
+	}
 }
 
 int hal_lcd_save(int on)
@@ -2068,6 +2218,7 @@ void hal_early_boot(void)
 		*HAL_BOOT_WORD = 0;
 		left = 1;
 	}
+	br = (csr & RCC_CSR_BORRSTF) ? br | BOOT_POR : br & ~BOOT_POR;
 	boot_reg_set(br);
 	if (left) RCC->CSR |= RCC_CSR_RMVF;
 	if (!left) {
