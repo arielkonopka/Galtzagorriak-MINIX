@@ -64,6 +64,8 @@ For people changing the kernel, the servers, the drivers and the build.
 8. [Dev mode and the debug serial line](part2/08-debug-uart.md): `reboot -d` and what dev mode
    changes, the debug UART on pins 13/14, reading it through a second Flipper's USB-UART Bridge or
    a USB-serial adapter, and a debugging session with both lines.
+9. [Signing the update file in CI](release-update-job.md): the one-time key and GitHub
+   environment steps for the user, and the `release-update` job to add to `build.yml` (RS.18).
 
 ## Where else to look
 

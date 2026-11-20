@@ -81,5 +81,6 @@ d--755 0 0
       pkg d--755 0 0
          @PKGFILES@
       $
+      @GZUFILES@
    $
 $
