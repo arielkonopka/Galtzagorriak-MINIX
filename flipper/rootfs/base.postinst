@@ -164,6 +164,14 @@ then
 	chgrp usb /dev/hidcons 2>/dev/null
 	chmod 660 /dev/hidcons 2>/dev/null
 fi
+# Cards made before issue #389 (Phase 7, AC7.3) lack the group ir; /dev/ir
+# moves to it from gui (the infrared app is set-gid ir).
+grep '^ir:' /etc/group >/dev/null || {
+	echo 'ir:*:13:root,nobody' >> /etc/group
+	echo "base: /etc/group now has ir"
+}
+chgrp ir /dev/ir 2>/dev/null
+chmod 660 /dev/ir 2>/dev/null
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then
