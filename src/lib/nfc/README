@@ -1,0 +1,67 @@
+libnfc sources - the NFC library of the Unleashed firmware (spec D.1, D.3, D.4)
+=============================================================================
+
+Vendored for the NFC worker (#392, part 3: full protocol stacks, parsers,
+mfkey), as src/lib/lfrfid and src/lib/subghz were.  Nothing here is built
+yet: #392 wires it into flipper/minix.mk and adds the furi shim, the
+/dev/nfc HAL stubs and the host tests.  The small hand-written library of
+#387 stays in src/lib/libnfc until #392 replaces or merges it.
+
+Source: DarkFlippers/unleashed-firmware at commit
+53818b18f63e105baaf37ed8eac9a7def58ec8b1 (2026-11-16), GPLv3 (as this
+project), the same commit as src/lib/lfrfid and src/lib/subghz.  Every file
+is copied byte for byte (checked with cmp against that commit); the commit
+is named here, not in their headers, so `cmp` against a newer Unleashed
+shows what changed.  Layout:
+
+  nfc/                          all of lib/nfc (SConscript dropped): nfc.c,
+                                nfc_device*, nfc_poller/listener/scanner,
+                                nfc_mock.c, helpers/ (crypto1.*, the CRCs,
+                                iso14443_4_layer, nxp_native_command,
+                                nfc_data_generator, nfc_util) and
+                                protocols/ (iso14443_3a/3b/4a/4b,
+                                iso15693_3, felica, mf_classic, mf_desfire,
+                                mf_plus, mf_ultralight, ntag4xx, slix,
+                                st25tb, texkom, type_4_tag, emv)
+  mfkey/                        applications/system/mfkey: the MIFARE
+                                Classic key recovery (mfkey32 / static
+                                nested): mfkey_recovery.*, state expansion,
+                                bitsliced verify, batch prelude, attack,
+                                dedup, its own crypto1.*; init_plugin.c and
+                                application.fam are the stock app glue
+  plugins/supported_cards/      applications/main/nfc/plugins: the 45 card
+                                parsers (transport, hotel, toys, EMV, NDEF)
+  api/gallagher, api/mosgortrans
+                                applications/main/nfc/api: helpers the
+                                parsers include as ../../api/...
+  toolbox/                      lib/toolbox: bit_buffer, simple_array,
+                                keys_dict, pretty_format, strint, hex
+  bit_lib/                      lib/bit_lib (same as src/lib/lfrfid/bit_lib)
+  assets/                       aid.nfc, country_code.nfc, currency_code.nfc:
+                                public lookup tables (EMV AIDs, ISO codes)
+
+Crapto1: Unleashed has no lfsr_recovery32/64.  Its mfkey recovers keys
+with its own code (mfkey/mfkey_recovery.c, mfkey_state_expansion.c,
+mfkey_bs_verify.c); the Crypto1 cipher itself is nfc/helpers/crypto1.c.
+Those are what part 3 ports; no Crapto1 needs to be written from memory.
+
+Not taken:
+  - The key dictionaries (mf_classic_dict.nfc, mf_plus_dict.nfc,
+    mf_ultralight_c_dict.nfc, mf_ultralight_aes_dict.nfc) and the parsers'
+    ID lists (sev_id, sk_id, sz_id, skylanders, vendors).  D.3 lets the
+    public stock dictionary in, but Unleashed's lists are longer than
+    stock's and nobody has checked where the extra keys come from.  The
+    code reads the user's files from /home/flipper/nfc/assets as stock
+    does; stock's own mf_classic_dict.nfc can be added later from
+    flipperdevices/flipperzero-firmware.
+  - lib/flipper_format and lib/toolbox/stream: a shim of FlipperFormat is
+    already in src/lib/subghz/shim; #392 decides whether to share it.
+  - mbedTLS (aes, des, sha1; used by mf_desfire, mf_ultralight AES/3DES and
+    a few parsers): Apache-2.0, not vendored here; #392 adds what it needs.
+  - The GUI app (applications/main/nfc scenes, views) and furi_hal_nfc:
+    on MINIX the kernel's /dev/nfc (ST25R3916, local lane #390) and the
+    `nfc` command take that part.
+
+Code with keys in it: some parsers (plugins/supported_cards) and mfkey
+carry key constants or derivation code, as in the stock source.  Under
+D.3 that is code, not a secret data file, and is ported like the rest.
