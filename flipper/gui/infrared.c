@@ -80,7 +80,7 @@ static int field(const char *line, int f, char *out, int osz)
  * keeps 1.3 KB of buffers). */
 static int ir_member(void)
 {
-	char line[128], name[16], v[96], *p;
+	char line[128], name[16], v[96], sb[128], *p;
 	FILE *fp;
 	long gid = -1;
 	uid_t uid = getuid();
@@ -88,7 +88,10 @@ static int ir_member(void)
 
 	if (uid == 0) return 1;
 	name[0] = 0;
+	/* sb: a stack buffer for both files, not stdio's 1 KB from the heap
+	 * (it would stay a hole below the self-test's 4 KB, #389) */
 	if ((fp = fopen("/etc/passwd", "r")) != NULL) {
+		setvbuf(fp, sb, _IOFBF, sizeof sb);
 		while (fgets(line, sizeof line, fp))
 			if (field(line, 2, v, sizeof v) == 0
 				&& atol(v) == (long) uid) {
@@ -98,6 +101,7 @@ static int ir_member(void)
 		fclose(fp);
 	}
 	if ((fp = fopen("/etc/group", "r")) == NULL) return 0;
+	setvbuf(fp, sb, _IOFBF, sizeof sb);
 	while (fgets(line, sizeof line, fp)) {
 		if (field(line, 0, v, sizeof v) || strcmp(v, "ir")) continue;
 		field(line, 2, v, sizeof v);
@@ -615,18 +619,23 @@ static void debug(void)
 
 /* Every signal of path: send over the loopback, receive, decode; a parsed
  * one must come back as the same message, a raw one with its timings. */
+static uint32_t *selfbuf;	/* -t, -c FILE: 4 KB, malloc'd first in main */
+
 static int selftest(const char *path)
 {
-	uint32_t *keep = malloc(MAXT * 4);	/* -t only: not in .bss */
+	uint32_t *keep = selfbuf;
 	FILE *fp = fopen(path, "r");
+	char fb[256];		/* the file's buffer: stack, not 1 KB of heap */
 	struct irf f;
 	struct irf_sig s;
 	InfraredMessage m;
 	long n;
 	int r, ok = 0, bad = 0;
 
+	if (fp) setvbuf(fp, fb, _IOFBF, sizeof fb);
 	if (!keep || !fp || irf_open(&f, fp) < 0) {
 		fprintf(stderr, "infrared: %s: not an .ir file\n", path);
+		if (fp) fclose(fp);
 		return 2;
 	}
 	s.data = keep;
@@ -672,9 +681,22 @@ int main(int argc, char **argv)
 		"Saved Remotes", "Universal Remotes", "Debug" };
 	int sel = 0;
 
+	/* -c and -t: a few lines of output, unbuffered (no 1 KB stdout
+	 * buffer: the self-test's heap is its 4 KB and the codecs) */
+	if (argc > 1 && (!strcmp(argv[1], "-c") || !strcmp(argv[1], "-t")))
+		setvbuf(stdout, NULL, _IONBF, 0);
+	/* The self-test's 4 KB first, while the heap is empty and the stack
+	 * shallow: later, stdio's buffers and _doprnt's 1 KB of stack would
+	 * leave it no room in the 8 KB reserve (#389, M2) */
+	if (argc > 2 && (!strcmp(argv[1], "-c") || !strcmp(argv[1], "-t")))
+		selfbuf = malloc(MAXT * 4);
 	if (argc > 1 && !strcmp(argv[1], "-c")) {
 		ir_open();
-		printf("infrared: /dev/ir %s\n", irfd >= 0 ? "opened" : "refused");
+		/* fputs, not printf: _doprnt's 1 KB stack buffer would take
+		 * the room of the self-test's 4 KB (MM keeps a margin below
+		 * the deepest sp) */
+		fputs(irfd >= 0 ? "infrared: /dev/ir opened\n"
+			: "infrared: /dev/ir refused\n", stdout);
 		if (irfd < 0) return 1;
 		if (argc < 3) return 0;
 		close(irfd);		/* -c FILE: and the self-test */
