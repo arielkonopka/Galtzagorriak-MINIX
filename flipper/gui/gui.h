@@ -45,12 +45,14 @@ struct gui_in {
 	long t[6];			/* clock ticks at each key's press */
 	unsigned char raw;		/* gui_wait: releases too (GUI_UP) */
 	unsigned char rep;		/* keys that repeat while held (#361) */
+	unsigned short rep_ms;		/* their period; 0: GUI_REP_MS */
 	long next;			/* ticks of the next repeat */
 };
 /* In->rep: a key in it that is not in clicks (it is returned on its press)
  * and is held alone is returned again after GUI_REP_FIRST ms and then every
  * GUI_REP_MS ms until it goes up.  A caller sets rep before each gui_wait
- * (lists: KEY_UP | KEY_DOWN); 0 is no repeat, as before. */
+ * (lists: KEY_UP | KEY_DOWN) and may set rep_ms (the launcher's Repeat
+ * setting); 0 is no repeat, as before. */
 #define GUI_REP_FIRST	400
 #define GUI_REP_MS	152
 int gui_input(struct gui_in *in, int clicks, int ms);
