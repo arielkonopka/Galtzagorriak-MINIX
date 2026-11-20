@@ -447,9 +447,9 @@ $(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/i
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 HID_DIR	:= $(MROOT)/src/lib/hid
-$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h tests/flipperpb/golden.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -Itests/flipperpb -MMD -MP -c $< -o $@
 # libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
 # reports, the stock .kl layouts (US built in), static; m2test types with
 # it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
