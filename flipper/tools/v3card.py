@@ -371,6 +371,8 @@ def main():
 		check(re.search(rb"/dev/hd4 .*/home", out) is not None,
 			"df /dev/hd4: from statfs (%s)" % out.strip().decode(
 			errors="replace").replace("\r\n", " | "))
+		check(r.sh("sync; cd / && umount /dev/hd4", 60) == 0,
+			"sync, umount /home (writes the O.5 hint)")
 		r.p.kill()
 		r.p.wait()
 		copy_part(img, start, size, part, False)
