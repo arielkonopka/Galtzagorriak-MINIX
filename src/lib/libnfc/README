@@ -1,0 +1,39 @@
+libnfc - the NFC protocol stacks of the Flipper, as plain C (spec Phase 14)
+===========================================================================
+
+Issue #387, spec Phase 14 (R14.*, AC14.1, AC14.2), D.3, D.4.  The stock
+`nfc` app's protocol layer, over one abstract transceiver, so it is written
+and host-tested now and meets the ST25R3916 driver (Phase 13, lane:local)
+later at one small interface.  Stock is the behaviour reference; code is
+reused from stock `lib/nfc` and Unleashed `lib/nfc/protocols` (both GPL-3.0,
+D.3/D.4).
+
+The one interface (this is the whole contract with the driver)
+---------------------------------------------------------------
+  nfc_xfer.h        the transceiver: nfc_xfer_t.transceive(buf, bits,
+                    flags) plus field/poll/delay hooks.  Three things fill
+                    it in: the ST25R3916 driver (/dev/nfc, <minix/nfc.h>),
+                    a host card model (flipper/tests/nfc), a QEMU mock.
+  <minix/nfc.h>     the /dev/nfc ioctls the driver will give (kernel
+                    <= +200 B, Phase 13).  See
+                    docs/devguide/nfc-driver-interface.md.
+
+Done so far (this session)
+--------------------------
+  crypto1.c/.h      MIFARE Classic Crypto-1 cipher and the tag PRNG.
+                    D.3: ciphers are ported in full; no keys are shipped.
+                    Public algorithm (Crapto1, GPL-2.0-or-later -> GPL-3.0),
+                    reimplemented from the published polynomials.
+
+Memory rules (spec Phase 14)
+----------------------------
+No big buffer stays resident: every protocol context is allocated per use
+and freed; the libraries cost flash only (XIP).  The dictionary is streamed
+from /home/flipper/nfc/assets a line at a time, never loaded whole.
+
+Still to port (needs @claude continue; needs the Unleashed lib/nfc tree the
+way src/lib/subghz and src/lib/lfrfid were copied byte for byte):
+  - ISO 14443-3A/4A, MIFARE Classic poller, Ultralight/NTAG, DESFire,
+    ISO 15693, NFC-A/B/F/V poller structure, Unleashed's keyless parsers;
+  - the full `mfkey` nonce recovery (lfsr_recovery32/64, nested);
+  - .nfc file reader/writer and the dictionary/attack loop (started here).
