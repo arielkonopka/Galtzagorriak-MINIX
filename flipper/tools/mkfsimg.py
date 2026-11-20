@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Build a MINIX V2 file system image (14-char names, magic 0x2468) from a
 MINIX mkfs(1) prototype file, without root privileges or kernel support.
+With -3, a MINIX V3 image (60-char names, magic 0x4D5A, spec O.6) in the
+layout of util-linux 'mkfs.minix -3' and of MINIX's 'mkfs -3'.
 
 Usage:
-  mkfsimg.py PROTO OUT.img [--blocks N] [--inodes N] [--mbr DISK.img]
+  mkfsimg.py PROTO OUT.img [-3] [--blocks N] [--inodes N] [--mbr DISK.img]
              [--root DIR]
 
 PROTO uses the format of MINIX mkfs(1):
@@ -40,6 +42,7 @@ NAME_MAX = 14
 NR_DZONES = 7
 NINDIR = BLOCK // 4
 SUPER_V2 = 0x2468
+SUPER_V3 = 0x4D5A
 SF_CLEAN = 1		# s_flags: clean (spec N.1, Linux MINIX_VALID_FS)
 
 S_IFREG, S_IFDIR, S_IFCHR, S_IFBLK = 0o100000, 0o040000, 0o020000, 0o060000
@@ -58,9 +61,13 @@ class Inode:
 
 
 class FS:
-    def __init__(self, nblocks, ninodes):
-        if ninodes > 65535:
+    def __init__(self, nblocks, ninodes, v3=False):
+        if ninodes > 65535 and not v3:
             raise SystemExit("MINIX 2.0 supports at most 65535 inodes")
+        if nblocks > 0xFFFFFFFF:
+            raise SystemExit("too many blocks")
+        self.v3 = v3
+        self.dirent, self.name_max = (64, 60) if v3 else (DIRENT, NAME_MAX)
         self.nblocks, self.ninodes = nblocks, ninodes
         self.imap_blocks = (ninodes + 1 + BLOCK * 8 - 1) // (BLOCK * 8)
         itable = (ninodes + INODES_PER_BLOCK - 1) // INODES_PER_BLOCK
@@ -74,6 +81,9 @@ class FS:
             zmap = need
         self.zmap_blocks = zmap
         self.first = first
+        if first > 0xFFFF:
+            raise SystemExit("too many inodes: the first data zone is "
+                             "16-bit")
         if first >= nblocks:
             raise SystemExit("file system too small")
         # Metadata (boot, super, maps, inode table) is kept as one array;
@@ -145,8 +155,8 @@ class FS:
     def finish(self):
         for n, ino in self.inodes.items():
             if ino.mode & 0o170000 == S_IFDIR:
-                ino.data = b"".join(struct.pack("<H14s", num,
-                                                name.encode())
+                fmt = "<I60s" if self.v3 else "<H14s"
+                ino.data = b"".join(struct.pack(fmt, num, name.encode())
                                     for name, num in ino.entries)
             if ino.rdev is not None:
                 ino.zones[0] = ino.rdev
@@ -173,10 +183,17 @@ class FS:
                 list(range(nbits, self.zmap_blocks * BLOCK * 8)):
             self.img[zmap + bit // 8] |= 1 << (bit % 8)
         # super block; s_flags (ex s_pad) = 1: CLEAN (spec N.1)
-        sb = struct.pack("<HHhhHhIhHI", self.ninodes,
-                         min(self.nblocks, 0xFFFF), self.imap_blocks,
-                         self.zmap_blocks, self.first, 0, 0x7FFFFFFF,
-                         SUPER_V2, SF_CLEAN, self.nblocks)
+        if self.v3:
+            # V3: flags at offset 14 (spec O.4), blocksize at 28
+            sb = struct.pack("<IHHHHHHIIHHHB", self.ninodes, 0,
+                             self.imap_blocks, self.zmap_blocks,
+                             self.first, 0, SF_CLEAN, 0x7FFFFFFF,
+                             self.nblocks, SUPER_V3, 0, BLOCK, 0)
+        else:
+            sb = struct.pack("<HHhhHhIhHI", self.ninodes,
+                             min(self.nblocks, 0xFFFF), self.imap_blocks,
+                             self.zmap_blocks, self.first, 0, 0x7FFFFFFF,
+                             SUPER_V2, SF_CLEAN, self.nblocks)
         self.put_block(1, sb)
         return used
 
@@ -203,7 +220,7 @@ def build(fs, tokens, root):
             name = next(tokens)
             if name == "$":
                 return
-            if len(name) > NAME_MAX:
+            if len(name.encode()) > fs.name_max:
                 raise SystemExit(f"name too long: {name}")
             mode = parse_mode(next(tokens))
             uid, gid = int(next(tokens)), int(next(tokens))
@@ -234,6 +251,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("proto")
     ap.add_argument("out")
+    ap.add_argument("-3", dest="v3", action="store_true",
+                    help="MINIX V3 (60-character names, spec O.6)")
     ap.add_argument("--blocks", type=int, default=0)
     ap.add_argument("--inodes", type=int, default=0)
     ap.add_argument("--mbr")
@@ -253,7 +272,7 @@ def main():
     blocks, inodes = int(next(tokens)), int(next(tokens))
     blocks = a.blocks or blocks
     inodes = a.inodes or inodes or min(65535, max(64, blocks // 4))
-    fs = FS(blocks, inodes)
+    fs = FS(blocks, inodes, a.v3)
     build(fs, tokens, a.root or os.path.dirname(os.path.abspath(a.proto)))
     used = fs.finish()
     img = fs.image()

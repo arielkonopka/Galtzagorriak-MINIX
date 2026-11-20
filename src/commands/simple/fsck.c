@@ -1118,9 +1118,15 @@ void scropen()
   m.m1_p1 = (char *) si;
   m.m1_i1 = sizeof(*si);
   m.m1_i2 = MI_SWAPINFO;
-  i = _syscall(MM, MEMINFO, &m) >= 0 && (si->mode & 0x7F) != SW_OFF
-					&& si->dev == (int) ss.st_rdev;
+  /* Fail closed: if MM cannot say that swap is off there, the swap
+   * partition may be in use, so no scratch (#369 review). */
+  if (_syscall(MM, MEMINFO, &m) < 0) i = -1;
+  else i = (si->mode & 0x7F) != SW_OFF && si->dev == (int) ss.st_rdev;
   free((char *) si);
+  if (i < 0) {
+	printf("%s: cannot ask MM about swap: no scratch\n", scrname);
+	return;
+  }
   if (i) {
 	printf("%s: swap is on there: no scratch\n", scrname);
 	return;
@@ -1130,9 +1136,9 @@ void scropen()
 	return;
   }
   spmax = (long) sb.s_ninodes / SRECS + 1;
-  if (ioctl(scrfd, DIOCGETPS, (void *) &pr) == 0
-		&& (long) (pr.count / (BLOCK_SIZE / 512)) < spmax) {
-	printf("%s: too small for the scratch\n", scrname);
+  if (ioctl(scrfd, DIOCGETPS, (void *) &pr) < 0
+		|| (long) (pr.count / (BLOCK_SIZE / 512)) < spmax) {
+	printf("%s: size unknown or too small for the scratch\n", scrname);
 	close(scrfd);
 	scrfd = -1;
 	return;

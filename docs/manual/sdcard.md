@@ -110,7 +110,9 @@ The file systems are MINIX v2 file systems, which Linux understands. With the ca
 
 A `/home` made as MINIX V3 on a computer (`mkfs.minix -3`, 1 KB blocks; names up to 60
 characters) is checked and repaired by the Flipper's `fsck` too, at boot like the others, and
-`fsck.minix -f` checks it on the computer. The Flipper keeps its clean mark at byte 14 of the V3
+`fsck.minix -f` checks it on the computer. The Flipper can also make one itself: with `/home`
+unmounted, `mkfs -3 /dev/hd4` makes an empty MINIX V3 file system on all of the partition, also
+when it is larger than 4 GB (this erases everything on `/home`). The Flipper keeps its clean mark at byte 14 of the V3
 super block. Linux does not know it and leaves it as it is, so after writing to a V3 `/home` on a
 computer, check it there with `fsck.minix -f` before you put the card back.
 

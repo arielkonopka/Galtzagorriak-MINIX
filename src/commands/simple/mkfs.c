@@ -5,7 +5,13 @@
  * This program can make both version 1 and version 2 file systems, as follows:
  *	mkfs /dev/fd0 1200	# Version 2 (default)
  *	mkfs -1 /dev/fd0 360	# Version 1
+ *	mkfs -3 /dev/hd4	# MINIX V3 (Galtzagorriak spec O.6, T27a)
  *
+ * V3 is the layout of util-linux 'mkfs.minix -3' with 1 KB blocks: u32
+ * inode count, 64 B directory entries (u32 inode, 60 chars), a zone map
+ * for the data zones only, max file size 2 GiB - 1, and the N.1 flags at
+ * offset 14.  Its size comes from DIOCGETPS (O.3), so it can be larger
+ * than 4 GiB; blocks past 2 GiB go through bread()/bwrite().
  */
 
 #include <sys/types.h>
@@ -56,6 +62,8 @@
 #endif
 #define N_BLOCKS16	  (128L * 1024)
 #define INODE_MAX       ((unsigned) 65535)
+#define V3_BLOCKS	 0x1FFFFFFFL	/* 16-bit zmap count x 8192 bits */
+#define FAR_BLOCK	 0x200000L	/* past 2 GiB: lseek() cannot go */
 
 /* You can make a really large file system on a 16-bit system, but the array
  * of bits that get_block()/putblock() needs gets a bit big, so we can only
@@ -99,6 +107,7 @@ block_t zone_map;		/* where is zone map? (depends on # inodes) */
 int inodes_per_block;
 int fs_version;
 block_t max_nrblocks;
+int esize = 16;			/* bytes per directory entry: 16, V3 64 */
 
 FILE *proto;
 
@@ -134,6 +143,10 @@ _PROTOTYPE(void mx_read, (int blocknr, char buf[BLOCK_SIZE]));
 _PROTOTYPE(void mx_write, (int blocknr, char buf[BLOCK_SIZE]));
 _PROTOTYPE(void dexit, (char *s, int sectnum, int err));
 _PROTOTYPE(void usage, (void));
+_PROTOTYPE(void super3, (zone_t zones, Ino_t inodes));
+_PROTOTYPE(int far_rw, (block_t n, char *buf, int wr));
+_PROTOTYPE(unsigned long maxino3, (block_t blocks));
+_PROTOTYPE(void mark_tail, (block_t map, int nblk, unsigned long nbits));
 
 /*================================================================
  *                    mkfs  -  make filesystem
@@ -169,12 +182,17 @@ char *argv[];
   fs_version = 2;
   inodes_per_block = V2_INODES_PER_BLOCK;
   max_nrblocks = N_BLOCKS;
-  while ((ch = getopt(argc, argv, "1b:di:lot")) != EOF)
+  while ((ch = getopt(argc, argv, "13b:di:lot")) != EOF)
 	switch (ch) {
 	    case '1':
 		fs_version = 1;
 		inodes_per_block = V1_INODES_PER_BLOCK;
 		max_nrblocks = 0xFFFF;
+		break;
+	    case '3':
+		fs_version = 3;	/* d2_inode: 16 per block, as V2 */
+		max_nrblocks = V3_BLOCKS;
+		esize = 64;
 		break;
 	    case 'b':
 		blocks = strtoul(optarg, (char **) NULL, 0);
@@ -248,12 +266,16 @@ char *argv[];
 		if (blocks >= 100000) i = blocks / 8;
 		i += inodes_per_block - 1;
 		i = i / inodes_per_block * inodes_per_block;
-		if (i > INODE_MAX) i = INODE_MAX;
+		if (i > INODE_MAX && fs_version != 3) i = INODE_MAX;
+		if (fs_version == 3 && i > (ino_t) maxino3(blocks))
+			i = maxino3(blocks);
 	}
 	if (blocks < 5) pexit("Block count too small");
 	if (blocks > max_nrblocks) pexit("Block count too large");
 	if (i < 1) pexit("Inode count too small");
-	if (i > INODE_MAX) pexit("Inode count too large");
+	if (fs_version != 3 && i > INODE_MAX) pexit("Inode count too large");
+	if (fs_version == 3 && i > (ino_t) maxino3(blocks))
+		pexit("Inode count too large (the first data zone is 16-bit)");
 	inodes = (ino_t) i;
 
 	/* Make simple file system of the given size, using defaults. */
@@ -275,6 +297,19 @@ char *argv[];
 	if ((testb = (short *) calloc(1, BLOCK_SIZE)) == NULL)
 		pexit("out of memory");
 	/* Try writing the last block of partition or diskette. */
+	if (blocks - 1 >= FAR_BLOCK) {
+		testb[0] = 0x3245;
+		testb[1] = 0x11FF;
+		if (far_rw(blocks - 1, (char *) testb, 1) < 0)
+			pexit("File system is too big for minor device");
+		testb[0] = testb[1] = 0;
+		if (far_rw(blocks - 1, (char *) testb, 0) < 0
+				|| testb[0] != 0x3245 || testb[1] != 0x11FF)
+			pexit("File system is too big for minor device");
+		testb[0] = testb[1] = 0;
+		if (far_rw(blocks - 1, (char *) testb, 1) < 0)
+			pexit("File system is too big for minor device");
+	} else {
 	lseek(fd, (off_t) (blocks - 1) * BLOCK_SIZE, SEEK_SET);
 	testb[0] = 0x3245;
 	testb[1] = 0x11FF;
@@ -292,6 +327,7 @@ char *argv[];
 	testb[1] = 0;
 	if (write(fd, (char *) testb, BLOCK_SIZE) != BLOCK_SIZE)
 		pexit("File system is too big for minor device");
+	}
 	lseek(fd, 0L, SEEK_SET);
 	free(testb);
   }
@@ -324,7 +360,8 @@ char *argv[];
   zone_shift = 0;		/* for future use */
   zones = nrblocks >> zone_shift;
 
-  super(zones, inodes);
+  if (fs_version == 3) super3(zones, inodes);
+  else super(zones, inodes);
 
   root_inum = alloc_inode(mode, usrid, grpid);
   rootdir(root_inum);
@@ -347,7 +384,16 @@ char *device;
   int fd;
   struct partition entry;
 
+  struct part_range pr;
+  block_t n;
+
   if ((fd = open(device, O_RDONLY)) == -1) return 0;
+  if (fs_version == 3 && ioctl(fd, DIOCGETPS, &pr) == 0) {
+	/* O.3: in sectors, also past 4 GiB */
+	n = pr.count / (BLOCK_SIZE / 512);
+	close(fd);
+	return n > V3_BLOCKS ? V3_BLOCKS : n;
+  }
   if (ioctl(fd, DIOCGETP, &entry) == -1) entry.size = 0;
   close(fd);
   return entry.size / BLOCK_SIZE;
@@ -421,6 +467,105 @@ ino_t inodes;
 
 
 /*================================================================
+ *        super3  -  a MINIX V3 super block (spec O.6, T27a)
+ *===============================================================*/
+/* The most inodes a V3 file system of 'blocks' blocks can have: the inode
+ * table must end below block 65535 (s_firstdatazone is 16-bit). */
+unsigned long maxino3(blocks)
+block_t blocks;
+{
+  long avail;
+
+  avail = 65535L - 2 - bitmapsize((bit_t) blocks);
+  avail -= avail * V2_INODES_PER_BLOCK / (BLOCK_SIZE * 8) + 1;	/* imap */
+  if (avail < 1) return 0;
+  return (unsigned long) avail * V2_INODES_PER_BLOCK;
+}
+
+/* Bits nbits.. of the last block of a map mean nothing: set them, as
+ * util-linux does, so no allocator ever hands them out. */
+void mark_tail(map, nblk, nbits)
+block_t map;
+int nblk;
+unsigned long nbits;
+{
+  unsigned char buf[BLOCK_SIZE];
+  unsigned long b, end = (unsigned long) nblk * BLOCK_SIZE * 8;
+  block_t last = (block_t) -1, blk;
+
+  for (b = nbits; b < end; b++) {
+	blk = map + b / (BLOCK_SIZE * 8);
+	if (blk != last) {
+		if (last != (block_t) -1) put_block(last, (char *) buf);
+		get_block(blk, (char *) buf);
+		last = blk;
+	}
+	buf[(b % (BLOCK_SIZE * 8)) / 8] |= 1 << (b % 8);
+  }
+  if (last != (block_t) -1) put_block(last, (char *) buf);
+}
+
+/* The layout of util-linux mkfs.minix -3 with 1 KB blocks: u32 ninodes
+ * at 0, u16 imap 6, zmap 8, firstdatazone 10, log_zone_size 12, flags 14
+ * (N.1), u32 max_size 16, zones 20, u16 magic 24, blocksize 28. */
+void super3(zones, inodes)
+zone_t zones;
+ino_t inodes;
+{
+  unsigned char buf[BLOCK_SIZE];
+  u16_t w;
+  u32_t l;
+  int imap, zmap, inodeblks;
+  long first, ndata;
+  block_t i;
+
+  memset(buf, 0, sizeof(buf));
+  imap = bitmapsize((bit_t) inodes + 1);
+  inodeblks = (inodes + V2_INODES_PER_BLOCK - 1) / V2_INODES_PER_BLOCK;
+  /* The zone map holds bit 0 and the data zones only: the smallest map
+   * that holds the zones left after it. */
+  zmap = bitmapsize((bit_t) zones);
+  while (zmap > 1) {
+	first = 2L + imap + (zmap - 1) + inodeblks;
+	if ((long) zones - first + 1 > (long) (zmap - 1) * BLOCK_SIZE * 8)
+		break;
+	zmap--;
+  }
+  first = 2L + imap + zmap + inodeblks;
+  if (first > 65535L) pexit("Too many inodes for V3 (the first data zone is 16-bit)");
+  if (first + 1 >= (long) zones) pexit("Block count too small");
+  ndata = (long) zones - first;
+
+  l = inodes;		memcpy(&buf[0], &l, 4);
+  w = imap;		memcpy(&buf[6], &w, 2);
+  w = zmap;		memcpy(&buf[8], &w, 2);
+  w = first;		memcpy(&buf[10], &w, 2);
+  w = 0;		memcpy(&buf[12], &w, 2);	/* zone = block */
+  w = SF_CLEAN;		memcpy(&buf[14], &w, 2);	/* N.1: clean */
+  l = 0x7FFFFFFFL;	memcpy(&buf[16], &l, 4);	/* as mkfs.minix -3 */
+  l = zones;		memcpy(&buf[20], &l, 4);
+  w = SUPER_V3;		memcpy(&buf[24], &w, 2);
+  w = BLOCK_SIZE;	memcpy(&buf[28], &w, 2);
+  put_block((block_t) 1, (char *) buf);
+
+  /* Clear maps and inodes. */
+  for (i = 2; i < first; i++) put_block(i, zero);
+
+  inode_offset = 2 + imap + zmap;
+  zoff = first - 1;
+  zone_size = 1;
+  next_zone = first;
+  next_inode = 1;
+  zone_map = INODE_MAP + imap;
+
+  mark_tail((block_t) INODE_MAP, imap, (unsigned long) inodes + 1);
+  mark_tail(zone_map, zmap, (unsigned long) ndata + 1);
+  insert_bit(zone_map, 0);	/* bit zero must always be allocated */
+  insert_bit((block_t) INODE_MAP, 0);	/* inode zero: allocated */
+}
+
+
+/*================================================================
  *              rootdir  -  install the root directory
  *===============================================================*/
 void rootdir(inode)
@@ -429,7 +574,7 @@ ino_t inode;
   zone_t z;
 
   z = alloc_zone();
-  add_zone(inode, z, 32L, current_time);
+  add_zone(inode, z, 2L * esize, current_time);
   enter_dir(inode, ".", inode);
   enter_dir(inode, "..", inode);
   incr_link(inode);
@@ -464,14 +609,14 @@ ino_t parent;
 
 	/* Enter name in directory and update directory's size. */
 	enter_dir(parent, token[0], n);
-	incr_size(parent, 16L);
+	incr_size(parent, (long) esize);
 
 	/* Check to see if file is directory or special. */
 	incr_link(n);
 	if (*p == 'd') {
 		/* This is a directory. */
 		z = alloc_zone();	/* zone for new directory */
-		add_zone(n, z, 32L, current_time);
+		add_zone(n, z, 2L * esize, current_time);
 		enter_dir(n, ".", n);
 		enter_dir(n, "..", parent);
 		incr_link(parent);
@@ -539,7 +684,10 @@ char *name;
   block_t b;
   zone_t z;
   char *p1, *p2;
-  struct direct dir_entry[NR_DIR_ENTRIES];
+  char dir_entry[BLOCK_SIZE];	/* 16 B (u16 inode) or V3 64 B (u32) */
+  int nlen = esize == 64 ? 60 : 14, noff = esize == 64 ? 4 : 2;
+  u32_t din;
+  unsigned short dsh;
   d1_inode ino1[V1_INODES_PER_BLOCK];
   d2_inode ino2[V2_INODES_PER_BLOCK];
   int nr_dzones;
@@ -569,18 +717,30 @@ char *name;
 		}
 	}
 	for (l = 0; l < zone_size; l++) {
-		get_block((z << zone_shift) + l, (char *) dir_entry);
-		for (i = 0; i < NR_DIR_ENTRIES; i++) {
-			if (dir_entry[i].d_ino == 0) {
-				dir_entry[i].d_ino = child;
+		get_block((z << zone_shift) + l, dir_entry);
+		for (i = 0; i < BLOCK_SIZE; i += esize) {
+			if (esize == 64) {
+				memcpy(&din, &dir_entry[i], 4);
+			} else {
+				memcpy(&dsh, &dir_entry[i], 2);
+				din = dsh;
+			}
+			if (din == 0) {
+				if (esize == 64) {
+					din = child;
+					memcpy(&dir_entry[i], &din, 4);
+				} else {
+					dsh = child;
+					memcpy(&dir_entry[i], &dsh, 2);
+				}
 				p1 = name;
-				p2 = dir_entry[i].d_name;
-				j = 14;
+				p2 = &dir_entry[i + noff];
+				j = nlen;
 				while (j--) {
 					*p2++ = *p1;
 					if (*p1 != 0) p1++;
 				}
-				put_block((z << zone_shift) + l, (char *) dir_entry);
+				put_block((z << zone_shift) + l, dir_entry);
 				if (fs_version == 1) {
 					put_block(b, (char *) ino1);
 				} else {
@@ -1015,7 +1175,8 @@ void print_fs()
 				printf("%6ld", inode2[i].d2_size);
 				printf("  zone[0]=%ld\n", inode2[i].d2_zone[0]);
 			}
-			if ((inode2[i].d2_mode & I_TYPE) == I_DIRECTORY) {
+			if ((inode2[i].d2_mode & I_TYPE) == I_DIRECTORY
+							&& esize == 16) {
 				/* This is a directory */
 				get_block(inode2[i].d2_zone[0], (char *) dir);
 				for (j = 0; j < NR_DIR_ENTRIES; j++)
@@ -1052,7 +1213,7 @@ block_t n;
 void usage()
 {
   fprintf(stderr,
-	  "Usage: %s [-1dlot] [-b blocks] [-i inodes] special [proto]\n",
+	  "Usage: %s [-13dlot] [-b blocks] [-i inodes] special [proto]\n",
 	  progname);
   exit(1);
 }
@@ -1343,6 +1504,10 @@ char buf[BLOCK_SIZE];
 	copy(zero, buf, BLOCK_SIZE);
 	return;
   }
+  if (n >= FAR_BLOCK) {
+	if (far_rw(n, buf, 0) < 0) pexit("get_block couldn't read");
+	return;
+  }
   lseek(fd, (off_t) n * BLOCK_SIZE, SEEK_SET);
   k = read(fd, buf, BLOCK_SIZE);
   if (k != BLOCK_SIZE) {
@@ -1358,6 +1523,10 @@ char buf[BLOCK_SIZE];
 
   (void) read_and_set(n);
 
+  if (n >= FAR_BLOCK) {
+	if (far_rw(n, buf, 1) < 0) pexit("put_block couldn't write");
+	return;
+  }
   /* XXX - check other lseeks too. */
   if (lseek(fd, (off_t) n * BLOCK_SIZE, SEEK_SET) == (off_t) -1) {
 	pexit("put_block couldn't seek");
@@ -1367,6 +1536,21 @@ char buf[BLOCK_SIZE];
   }
 }
 
+
+/* A block past 2 GiB, where lseek() cannot go: DIOCPRW (spec O.3). */
+int far_rw(n, buf, wr)
+block_t n;
+char *buf;
+int wr;
+{
+#ifdef DIOCPRW
+  return wr ? bwrite(fd, (unsigned long) n * 2, buf, 2)
+	    : bread(fd, (unsigned long) n * 2, buf, 2);
+#else
+  errno = EFBIG;
+  return -1;
+#endif
+}
 
 /* Dummy routines to keep source file clean from #ifdefs */
 
