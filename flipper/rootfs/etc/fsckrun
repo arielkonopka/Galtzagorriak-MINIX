@@ -1,0 +1,26 @@
+# /etc/fsckrun - sourced by /etc/rc when /etc/.fsck-boot exists (the request
+# of "sh /etc/fsckboot", issue #399): check and repair /usr and /home now,
+# before they are mounted and before the launcher runs, then restart.  The
+# variables ($usr, $home, $scratch, $fsck_mem) are rc's.
+rm -f /etc/.fsck-boot	# first: a crash or a power cut cannot make a loop
+sync
+echo "Checking the card: do not switch off"
+echo rainbow >/dev/led
+rm -f /tmp/fsck.log
+for fs in "$usr /usr" "$home /home"
+do
+	set $fs
+	fsck -a -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
+done
+# keep what was found (as rc does after the normal check)
+test -s /tmp/fsck.log && mount $usr /usr && {
+	test -d /usr/adm || mkdir /usr/adm
+	cat /tmp/fsck.log >>/usr/adm/fsck.log
+	umount $usr
+}
+rm -f /tmp/fsck.log
+echo off >/dev/led
+sync
+echo "The card was checked: restarting"
+reboot
+exit 0

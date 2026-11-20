@@ -1,0 +1,8 @@
+# sh /etc/fsckboot (root): check and repair /usr and /home at the next start.
+# A running system has no room to start fsck by hand (issue #399): /etc/rc
+# sees /etc/.fsck-boot, runs /etc/fsckrun first, restarts, and then starts
+# normally.
+>/etc/.fsck-boot || { echo "fsckboot: cannot write /etc/.fsck-boot (root only)"; exit 1; }
+echo "Restarting to check and repair the card..."
+sync
+reboot
