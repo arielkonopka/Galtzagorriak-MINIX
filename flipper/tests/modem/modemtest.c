@@ -754,6 +754,118 @@ static int rg_try(const struct mdm_region *rg, struct mdm_rgstate *st,
 		mode, air, now, &row, wait);
 }
 
+/* T32b (issue #382): a row is verified when it is active (no "#?") and its
+ * ref starts with "[id]", the file docs/regulation/<id>.md that quotes the
+ * limit; an unverified row starts with "#?" and its ref with "unverified".
+ * No unverified row is ever chosen for a transmit, from the text or from
+ * the compiled record (RQ.2: only active rows are compiled). */
+#ifndef REG_DOCS
+#define REG_DOCS "../../../docs/regulation"
+#endif
+static void test_region_verified(void)
+{
+	static struct mdm_region rg, back;
+	static struct mdm_rgstate st;
+	static unsigned char blob[MDM_RGB_MAX];
+	static const int dbms[] = { -30, -20, -15, -6, 0, 5, 7, 10 };
+	char err[96], path[256], id[32], t[512];
+	const char *e;
+	unsigned i;
+	int j, k, d, m, n, row, rc, active, unv = 0, tries = 0;
+	unsigned long f, step;
+	long w;
+	FILE *fp;
+
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		CHECK(mdm_rg_load(REGION_DIR, rg_codes[i], &rg, err,
+			(int) sizeof(err)) == 0, "%s: %s", rg_codes[i], err);
+		for (j = active = 0; j < rg.n; j++) {
+			const struct mdm_rgrow *r = &rg.row[j];
+
+			if (r->flags & MDM_RG_UNCHECKED) {
+				unv++;
+				CHECK(strncmp(r->ref, "unverified", 10) == 0,
+					"%s row %d: \"#?\" ref \"%s\"",
+					rg_codes[i], j + 1, r->ref);
+				continue;
+			}
+			active++;
+			e = strchr(r->ref, ']');
+			CHECK(r->ref[0] == '[' && e != NULL && e - r->ref > 1
+				&& e - r->ref < (int) sizeof(id),
+				"%s row %d: active, ref \"%s\" names no source",
+				rg_codes[i], j + 1, r->ref);
+			if (r->ref[0] != '[' || e == NULL
+			    || e - r->ref >= (int) sizeof(id)) continue;
+			memcpy(id, r->ref + 1, (size_t) (e - r->ref - 1));
+			id[e - r->ref - 1] = 0;
+			snprintf(path, sizeof(path), "%s/%s.md", REG_DOCS, id);
+			fp = fopen(path, "r");
+			CHECK(fp != NULL, "%s row %d: no %s", rg_codes[i], j + 1,
+				path);
+			if (fp) fclose(fp);
+		}
+		/* the record holds the verified rows only */
+		n = mdm_rg_compile(&rg, blob, (int) sizeof(blob));
+		CHECK(n == MDM_RGB_HDR + active * MDM_RGB_ROW
+			&& mdm_rg_blob_load(blob, n, &back) == 0
+			&& back.n == active, "%s: record %d B, %d verified rows",
+			rg_codes[i], n, active);
+		for (j = 0; j < back.n; j++)
+			CHECK(!(back.row[j].flags & MDM_RG_UNCHECKED),
+				"%s: record row %d unverified", rg_codes[i], j);
+		/* sweep every unverified row: each admitted transmit must
+		 * come from a verified row that admits it on its own */
+		for (j = 0; j < rg.n; j++) {
+			const struct mdm_rgrow *u = &rg.row[j];
+
+			if (!(u->flags & MDM_RG_UNCHECKED)) continue;
+			step = (u->hi - u->lo) / 16;
+			for (f = u->lo + step / 2; f < u->hi; f += step)
+			for (d = 0; d < (int) (sizeof(dbms) / sizeof(dbms[0])); d++)
+			for (m = 0; m < 2; m++) {
+				mdm_rg_state_init(&st);
+				rc = mdm_rg_tx(&rg, &st, f, 12000, dbms[d],
+					m ? MDM_SG_CTL : MDM_SG_DATA, 10, 0, &row, &w);
+				tries++;
+				if (rc != MDM_SG_OK) continue;
+				CHECK(row >= 0 && row < rg.n
+					&& !(rg.row[row].flags & MDM_RG_UNCHECKED)
+					&& f > rg.row[row].lo && f < rg.row[row].hi
+					&& dbms[d] <= rg.row[row].dbm,
+					"%s: %lu Hz %d dBm went to row %d",
+					rg_codes[i], f, dbms[d], row + 1);
+			}
+		}
+	}
+	printf("region: %d unverified rows swept (%d transmits), none chosen\n",
+		unv, tries);
+	/* the marker alone blocks a row: the same table with and without "#?" */
+	for (k = 0; k < 2; k++) {
+		snprintf(t, sizeof(t), "Filetype: Galtzagorriak region\nVersion: 1\n"
+			"Region: XX\n%s871.000\t872.000\t10\t1%%\t600\tany\t%s\n",
+			k ? "" : "#?", k ? "[erc-70-03] h2" : "unverified: test");
+		mdm_rg_init(&rg);
+		for (e = t; *e; ) {
+			char line[160];
+
+			for (n = 0; e[n] && e[n] != '\n'; n++) line[n] = e[n];
+			line[n] = 0;
+			e += n + (e[n] == '\n');
+			CHECK(mdm_rg_line(&rg, line, err, (int) sizeof(err)) == 0,
+				"marker table: %s", err);
+		}
+		mdm_rg_state_init(&st);
+		rc = mdm_rg_tx(&rg, &st, 871500000UL, 12000, 0, MDM_SG_DATA, 10,
+			0, &row, &w);
+		CHECK(k ? (rc == MDM_SG_OK && row == 0) : rc == MDM_SG_BAND,
+			"marker %s: rc %d row %d", k ? "off" : "on", rc, row);
+		n = mdm_rg_compile(&rg, blob, (int) sizeof(blob));
+		CHECK(k ? n == MDM_RGB_HDR + MDM_RGB_ROW : n < 0,
+			"marker %s: record %d", k ? "off" : "on", n);
+	}
+}
+
 static void test_region_tx(int via_blob)
 {
 	static struct mdm_region rg;
@@ -895,12 +1007,12 @@ static void test_region_blob(void)
 	static const struct { double lo, hi; int dbm, bw, use; } us[] = {
 		{ 902, 928, -2, 0, MDM_USE_ANY },
 		{ 902, 928, 10, 250, MDM_USE_FHSS },
-		{ 300, 308.56, -21, 750, MDM_USE_CTL },
-		{ 308.56, 322, -20, 771, MDM_USE_CTL },
+		{ 300, 308.565, -21, 750, MDM_USE_CTL },
+		{ 308.565, 322, -20, 771, MDM_USE_CTL },
 		{ 335.4, 348, -19, 838, MDM_USE_CTL },
 		{ 387, 399.9, -17, 967, MDM_USE_CTL },
-		{ 410, 416.4, -16, 1025, MDM_USE_CTL },
-		{ 416.4, 464, -15, 1041, MDM_USE_CTL },
+		{ 410, 416.406, -16, 1025, MDM_USE_CTL },
+		{ 416.406, 464, -15, 1041, MDM_USE_CTL },
 		{ 300, 322, -29, 750, MDM_USE_PER },
 		{ 335.4, 348, -27, 838, MDM_USE_PER },
 		{ 387, 399.9, -25, 967, MDM_USE_PER },
@@ -1087,6 +1199,7 @@ int main(int argc, char **argv)
 	test_region_files();
 	test_region_tx(0);
 	test_region_tx(1);
+	test_region_verified();
 	test_region_blob();
 	test_region_sha();
 	test_fuzz();

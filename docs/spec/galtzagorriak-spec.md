@@ -2353,22 +2353,22 @@ PA = the CC1101 step the kernel uses. "Duty" uses the duty-cycle alternative of 
 the "spectrum access and mitigation techniques" alternative (LBT + AFA per EN 300 220) is not
 implemented, CCA alone is not enough for it.
 
-**`EU` (all 27 member states; Decision 2006/771/EC, annex as replaced by (EU) 2022/180; the
+**`EU` (all 27 member states; Decision 2006/771/EC, annex as replaced by (EU) 2025/105, which replaced (EU) 2022/180; the
 ERC/REC 70-03 Annex 1 band in brackets):**
 
 | Band (MHz) | Power | PA | Duty | Bandwidth | Use | Source |
 |---|---|---|---|---|---|---|
-| 433.050–434.790 | 1 mW e.r.p. (−13 dBm/10 kHz above 250 kHz bandwidth) | 0 | none | – | any | 2022/180 row 44a (g2) |
-| 434.040–434.790 | 10 mW e.r.p. | 10 | none | ≤ 25 kHz | any | 2022/180 row 45c (g3) |
-| 433.050–434.790 | 10 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 44b (g1) |
-| 869.700–870.000 | 5 mW e.r.p. | 7 | none | – | any | 2022/180 row 56a (h1.8) |
-| 862.000–863.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | ≤ 350 kHz | any | 2022/180 row 87 (h0) |
-| 863.000–865.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 46a (h1.3) |
-| 865.000–868.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 47 (h1.4) |
-| 868.000–868.600 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 48 (h1.5) |
-| 868.700–869.200 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2022/180 row 50 (h1.6) |
-| 869.400–869.650 | 500 mW e.r.p. | 10 | ≤ 10 % | – | any | 2022/180 row 54 (h1.7) |
-| 869.700–870.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2022/180 row 56b (h1.9) |
+| 433.050–434.790 | 1 mW e.r.p. | 0 | none | – | any | 2025/105 row 44a (g2) |
+| 434.040–434.790 | 10 mW e.r.p. | 10 | none | ≤ 25 kHz | any | 2025/105 row 45c (g3) |
+| 433.050–434.790 | 10 mW e.r.p. | 10 | ≤ 10 % | – | any | 2025/105 row 44b (g1) |
+| 869.700–870.000 | 5 mW e.r.p. (6 dBm) | 5 | none | – | any | 2025/105 row 56a (h1.8) |
+| 862.000–863.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | ≤ 350 kHz | any | 2025/105 row 87 (h0) |
+| 863.000–865.000 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2025/105 row 46a (h1.3) |
+| 865.000–868.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2025/105 row 47 (h1.4) |
+| 868.000–868.600 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2025/105 row 48 (h1.5) |
+| 868.700–869.200 | 25 mW e.r.p. | 10 | ≤ 0.1 % | – | any | 2025/105 row 50 (h1.6) |
+| 869.400–869.650 | 500 mW e.r.p. | 10 | ≤ 10 % | – | any | 2025/105 row 54 (h1.7) |
+| 869.700–870.000 | 25 mW e.r.p. | 10 | ≤ 1 % | – | any | 2025/105 row 56b (h1.9) |
 
 Not used: the alarm-only and social-alarm sub-bands 868.6–868.7 and 869.2–869.4 MHz
 (rows 49, 51–53), 869.65–869.7 MHz (row 55, alarms), the wideband-data and RFID rows (84, 47a,
@@ -2384,12 +2384,12 @@ at 1 mW with any preset, and 869.7–870.0 MHz at 5 mW.
 |---|---|---|---|---|---|---|
 | 902.000–928.000 | 50 mV/m | −1.2 dBm → −2 | −6 | – | any | 15.249(a) |
 | 902.000–928.000 | 1 W conducted, ≥ 50 hop channels, ≤ 0.4 s per channel in 20 s | +30 dBm | 10 | 20 dB bandwidth < 250 kHz | fhss | 15.247(a)(1)(i), (b)(2) |
-| 300.000–308.560 | 5,417–5,767 µV/m | −21 | −30 | ≤ 750 kHz (0.25 %) | ctl | 15.231(a)–(c) |
-| 308.560–322.000 | up to 6,333 µV/m | −20 | −20 | ≤ 771 kHz | ctl | 15.231(a)–(c) |
+| 300.000–308.565 | 5,417–5,767 µV/m | −21 | −30 | ≤ 750 kHz (0.25 %) | ctl | 15.231(a)–(c) |
+| 308.565–322.000 | up to 6,333 µV/m | −20 | −20 | ≤ 771 kHz | ctl | 15.231(a)–(c) |
 | 335.400–348.000 | 6,892–7,417 µV/m | −19 | −20 | ≤ 838 kHz | ctl | 15.231(a)–(c) |
 | 387.000–399.900 | 9,042–9,579 µV/m | −17 | −20 | ≤ 967 kHz | ctl | 15.231(a)–(c) |
-| 410.000–416.400 | 10,000–10,267 µV/m | −16 | −20 | ≤ 1,025 kHz | ctl | 15.231(a)–(c) |
-| 416.400–464.000 | 10,267–12,250 µV/m | −15 | −15 | ≤ 1,041 kHz | ctl | 15.231(a)–(c) |
+| 410.000–416.406 | 10,000–10,267 µV/m | −16 | −20 | ≤ 1,025 kHz | ctl | 15.231(a)–(c) |
+| 416.406–464.000 | 10,267–12,250 µV/m | −15 | −15 | ≤ 1,041 kHz | ctl | 15.231(a)–(c) |
 | 300.000–322.000 | 2,167–2,533 µV/m | −29 | −30 | ≤ 750 kHz | per | 15.231(e) |
 | 335.400–348.000 | 2,757–2,967 µV/m | −27 | −30 | ≤ 838 kHz | per | 15.231(e) |
 | 387.000–399.900 | 3,617–3,832 µV/m | −25 | −30 | ≤ 967 kHz | per | 15.231(e) |
@@ -2499,6 +2499,21 @@ own text has been checked and cited in its `ref` (Q.6).
 ### Q.6 Keeping the tables right
 
 - Every row carries its source; `Checked:` in the header is the date the file was checked.
+- **Checked (T32b cloud part, issue #382, 2026-11-20).** Every row was compared with the texts
+  in `docs/regulation/` (one file per source: URL, retrieval date, version, section or page,
+  the quoted limit): Decision 2006/771/EC with the annex of (EU) **2025/105** (which replaced
+  2022/180; same numbers), ERC/REC 70-03 **edition of October 2026** (Appendix 1 changed since
+  March 2024), eCFR part 15 of 2026-11-01, RSS-210 **Issue 11** and RSS-Gen Issue 6. A row is
+  **verified** when it is active and its `ref` starts with `[id]`, the file
+  `docs/regulation/<id>.md`; an unverified row is `#?` and its `ref` starts with `unverified:`
+  and the reason. No change to the Q.2 format or the RQ.2 record: `#?` rows are never compiled
+  into the record, so the kernel can transmit only on verified rows. `make modemtest` enforces
+  both rules for every shipped table. Corrected then: the US/CA `ctl` split points
+  308.56 → 308.565 and 416.4 → 416.406 MHz (the interpolated limit was a hair under −20/−15 dBm
+  there); h0 862–863 MHz is "Y" for NO and GB (now active); the CA `fhss` row is `#?` (RSS-247,
+  now Issue 4, not read); the h2/h3 rows follow the 2026 Appendix 1 (MT and RO h2 now "N": left
+  out). The tables above are the March 2024 reading; where they differ, `docs/regulation/` and
+  the `.reg` files win.
 - **Before transmit is enabled (T32b)** every number is checked once more against the original
   texts: the EUR-Lex consolidated 2006/771/EC, ERC/REC 70-03 (PDF pages 44–46 for Appendix 1,
   Appendix 3 for national restrictions), 47 CFR 15.205/15.231/15.247/15.249 (eCFR), RSS-210,

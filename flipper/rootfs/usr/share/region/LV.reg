@@ -4,6 +4,7 @@ Region: LV
 Name: Latvija
 Base: EU
 Checked: 2026-11-20
-Source: Decision 2006/771/EC ((EU) 2022/180); ERC/REC 70-03 (03.2024) App. 1; Decision (EU) 2018/1538
-# 870-876 and 915-921 MHz: 70-03 App. 1 status "N", no extra rows
+Source: Decision 2006/771/EC ((EU) 2025/105); ERC/REC 70-03 (10.2026) App. 1, 2; Decision (EU) 2018/1538
+# 870-876 and 915-921 MHz: 70-03 App. 1 status "N" for h2, h3, no row
+# 870-873, 915-918 MHz: active only after the national text is checked (Q.5)
 # lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
