@@ -15,7 +15,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
-     run-mtpd run-gzsig run-radio
+     run-mtpd run-gzsig run-radio run-flipperpb
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -67,6 +67,10 @@ run-mtpd:
 # libradio and radio-fetch.py (T30a, spec R16.0, R2b.1a).
 run-radio:
 	$(MAKE) -C $(MROOT)/flipper/tests/radio test
+
+# libflipperpb (#388): the stock RPC protobuf against golden frames.
+run-flipperpb:
+	$(MAKE) -C $(MROOT)/flipper/tests/flipperpb test
 
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
