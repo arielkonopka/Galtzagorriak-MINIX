@@ -807,6 +807,21 @@ static void cm_draw(int soc, int charging, int phase)
 	}
 }
 
+/* The ikurrina sequence of the kernel (red, green, white; 1 s each, 0.2 s
+ * glide into the colour) in 40 ms steps, for the loops that run without the
+ * kernel's LED task. */
+static void cm_led(unsigned n)
+{
+	static const uint8_t col[3][3] = {
+		{ 200, 0, 0 }, { 0, 128, 0 }, { 200, 128, 96 } };
+	unsigned c = n / 30 % 3, k = n % 30, p = (c + 2) % 3, i, v[3];
+
+	for (i = 0; i < 3; i++)
+		v[i] = k < 5 ? (col[p][i] * (4 - k) + col[c][i] * (k + 1)) / 5
+			     : col[c][i];
+	hal_led_pwm(v[0], v[1], v[2]);
+}
+
 void hal_charge_mode(void)
 {
 	uint32_t back = 0, t0;
@@ -819,26 +834,32 @@ void hal_charge_mode(void)
 	if ((r = hal_charger_read(HAL_CHG_STATUS)) < 0 || (r >> 5) == 0)
 		return;				/* no VBUS */
 	hal_backlight(60);			/* dim: the charge is the point */
+	hal_led(0, 0, 0);			/* the LED engines off, direct */
 	for (;;) {
 		hal_wdt_kick();
 		t0 = DWT->CYCCNT;
-		if (n % 10 == 0) {		/* every second */
+		cm_led(n);
+		if (n % 25 == 0) {		/* every second */
 			soc = hal_gauge_read(HAL_GAUGE_SOC);
 			r = hal_charger_read(HAL_CHG_STATUS);
 			cm_draw(soc > 100 ? 100 : soc,
 				r >= 0 && ((r >> 3) & 3) >= 1 && ((r >> 3) & 3) <= 2,
-				(n / 20) & 1);
+				(n / 50) & 1);
 		}
 		r = hal_charger_read(HAL_CHG_STATUS);
 		gone = (r >= 0 && (r >> 5) == 0) ? gone + 1 : 0;
-		if (gone >= 5) hal_power_off();		/* the cable is out */
+		if (gone >= 12) {			/* the cable is out */
+			hal_led(0, 0, 0);
+			hal_power_off();
+		}
 		if (!(hal_buttons() & BTN_BACK)) back = 0;
 		else if (back == 0) back = t0 | 1;
 		else if (ms_since(back) >= 1000) {
+			hal_led(0, 0, 0);
 			hal_lcd_flush(charge_fb);	/* no stale level */
 			NVIC_SystemReset();		/* a normal start */
 		}
-		while (ms_since(t0) < 100) ;
+		while (ms_since(t0) < 40) ;
 		n++;
 	}
 }
