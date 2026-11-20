@@ -523,6 +523,8 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 OBJS_spectrum += $(MB)/cmd/gui/specmath.o
 # the Infrared app (issue #389): libir (src/lib/infrared) and the list UI
 OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
+# lfrfid on the shared list, message and keyboard screens (issue #413)
+OBJS_lfrfid += $(MB)/cmd/gui/ui.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
