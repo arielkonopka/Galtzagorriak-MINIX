@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "nfc_shim.h"
 #include "cm_mfc.h"
@@ -22,6 +24,7 @@
 #include <nfc/protocols/mf_desfire/mf_desfire.h>
 #include <nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.h>
 #include <nfc/protocols/felica/felica.h>
+#include <flipper_format/flipper_format.h>
 #include <plugins/supported_cards/nfc_supported_card_plugin.h>
 
 #include "nfc_supported_cards.h"
@@ -506,6 +509,81 @@ static void test_ndef_ul(void) {
     nfc_free(nfc);
 }
 
+/* ID lists (#412, D.3): the user's own file, written here; missing file. */
+static void test_id_lists(void) {
+    char dir[] = "/tmp/nfclistXXXXXX";
+    CHECK(mkdtemp(dir) != NULL, "lists: temp home");
+    char path[200];
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    mkdir(path, 0755);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    mkdir(path, 0755);
+    char home[64];
+    snprintf(home, sizeof home, "%s/", dir);
+    nfcshim_ext_dir = home;
+
+    /* A figure: sector 0 key A is the Skylanders key, ID 0x0123 in block 1. */
+    MfClassicData* d = mf_classic_alloc();
+    static const uint8_t uid[4] = {0x21, 0x43, 0x65, 0x87};
+    d->type = MfClassicType1k;
+    mf_classic_set_uid(d, uid, 4);
+    MfClassicBlock b = {0};
+    b.data[0] = 0x23;
+    b.data[1] = 0x01;
+    mf_classic_set_block_read(d, 1, &b);
+    MfClassicSectorTrailer* st = mf_classic_get_sector_trailer_by_sector(d, 0);
+    bit_lib_num_to_bytes_be(0x4b0b20107ccbULL, 6, st->key_a.data);
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfClassic, d);
+    mf_classic_free(d);
+    FuriString* out = furi_string_alloc();
+
+    int r = nfc_supported_cards_parse(dev, out);
+    CHECK(r < 0, "lists: no skylanders.nfc -> the figure is not named");
+    furi_string_reset(out);
+    int n = nfc_supported_cards_list_notes(dev, r, out);
+    CHECK(n >= 1 && strstr(furi_string_get_cstr(out), "skylanders.nfc), showing the raw card"),
+          "lists: 'No ID list found (...skylanders.nfc), showing the raw card'");
+    CHECK(strstr(furi_string_get_cstr(out), dir) != NULL, "lists: the note names the user's path");
+
+    snprintf(path, sizeof path, "%s/nfc/assets/skylanders.nfc", dir);
+    FILE* f = fopen(path, "w");
+    fputs("Filetype: Flipper NFC resources\nVersion: 1\n# test list\n0122: Not This One\n0123: Test Figure\n", f);
+    fclose(f);
+    furi_string_reset(out);
+    r = nfc_supported_cards_parse(dev, out);
+    CHECK(r >= 0 && !strcmp(nfc_supported_cards_name((size_t)r), "skylanders") &&
+              strstr(furi_string_get_cstr(out), "Test Figure"),
+          "lists: with the user's skylanders.nfc the figure is named");
+    furi_string_reset(out);
+    CHECK(nfc_supported_cards_list_notes(dev, r, out) == 0, "lists: no note when the list is there");
+
+    /* The reader itself: from the current position on, rewind, header. */
+    FlipperFormat* ff = flipper_format_file_alloc(NULL);
+    FuriString* v = furi_string_alloc();
+    uint32_t ver = 0;
+    CHECK(flipper_format_file_open_existing(ff, "/ext/nfc/assets/skylanders.nfc"), "ff: /ext maps to the home");
+    CHECK(flipper_format_read_header(ff, v, &ver) && ver == 1 &&
+              !strcmp(furi_string_get_cstr(v), "Flipper NFC resources"),
+          "ff: header");
+    CHECK(flipper_format_read_string(ff, "0123", v) && !strcmp(furi_string_get_cstr(v), "Test Figure"), "ff: read_string");
+    CHECK(!flipper_format_read_string(ff, "0122", v), "ff: no wrap without rewind (as stock)");
+    CHECK(flipper_format_rewind(ff) && flipper_format_read_string(ff, "0122", v), "ff: rewind");
+    CHECK(!flipper_format_file_open_existing(ff, "/ext/nfc/assets/none.nfc"), "ff: missing file fails");
+    furi_string_free(v);
+    flipper_format_free(ff);
+
+    remove(path);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    rmdir(path);
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    rmdir(path);
+    rmdir(dir);
+    nfcshim_ext_dir = "/home/flipper/";
+    furi_string_free(out);
+    nfc_device_free(dev);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
     test_datetime();
@@ -516,6 +594,7 @@ int main(void) {
     test_sweep();
     test_p5_sweep();
     test_ndef_ul();
+    test_id_lists();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;
