@@ -44,6 +44,16 @@
 *       repair, a summary.  The long messages go to /dev/null.
 *   -m KB  memory for the maps (fsck_mem, default 64).  The computed zone
 *       map is a window of the zones; more windows mean more passes.
+*       Windows past the first are walked only for the inodes whose
+*       2-byte record (first and last window) covers them.  -p stops at
+*       the high-water mark: above it the only possible error is a leaked
+*       zone (space, not danger).
+*   -S  the leak sweep (spec O.6): as -p, also on a CLEAN file system, and
+*       the zone map above the high-water mark is compared too, so a leak
+*       there is freed.  On a mounted file system it only counts.
+*   -T dev  scratch on the swap partition dev (swap off there): past about
+*       fsck_mem / 6 inodes in use the link counts and window records go
+*       to its first blocks, 16 KB of pages in RAM (spec O.6).
 *   -L file  append the -v lines to file.  -k  Back (on /dev/buttons)
 *       stops the check (exit 8, CHECK set).  -w s  after repairs, keep
 *       the summary on the screen until a key or s seconds.
@@ -54,7 +64,9 @@
 *   only with -c/-i/-z; link counts up to the highest inode in use.
 */
 
+#include <lib.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/dir.h>
 #include <sys/stat.h>
 #include <sys/times.h>
@@ -213,10 +225,31 @@ int vfd = -1;			/* /dev/buttons for -k */
 int ismounted, isroot;		/* the device is mounted; it is / */
 int nfixed, nleft;		/* repairs made, errors not repaired */
 int stopped;			/* Back pressed */
-ino_t maxino;			/* count[] and winmask[] cover 0..maxino */
+ino_t maxino;			/* count[] and winrec[] cover 0..maxino */
 long nused;			/* inodes in use in the disk map */
 ino_t cur_ino;			/* inode whose zones are being marked */
-unsigned char *winmask;		/* per inode: the windows its zones touch */
+unsigned char *winrec;		/* per inode: first and last window (O.6) */
+int sweep;			/* -S: compare above the high-water mark */
+char *scrname;			/* -T: scratch on the (unused) swap partition */
+int scrfd = -1;			/* open while count[]/winrec[] live there */
+
+/* Spec O.6: past ~30 000 inodes in use the link count and the window
+ * record (4 B an inode, 256 a page) live in a scratch area at the start
+ * of the swap partition, 1 KB pages through a small LRU. */
+#define SPAGES		16	/* pages in RAM (16 KB on top of fsck_mem) */
+#define SRECS		(BLOCK_SIZE / 4)	/* records a page */
+struct spage {
+  long pno;			/* page number, -1: none */
+  unsigned long use;		/* LRU stamp */
+  unsigned char *buf;
+} *spg;
+unsigned char *sinit;		/* a bit per page: on the device already */
+unsigned long suse;		/* LRU clock */
+long spmax;			/* pages the swap partition holds */
+
+/* The link count and the 2-byte window record of inode i. */
+#define CNT(i)	(*(scrfd >= 0 ? (nlink_t *) srec((ino_t) (i)) : &count[i]))
+#define WREC(i)	(scrfd >= 0 ? srec((ino_t) (i)) + 1 : winrec + 2 * (long) (i))
 bit_nr wlo, whi, wbits;		/* zmap holds zone bits wlo..whi-1 */
 int nwin, curwin;		/* number of windows; the current one */
 char *vphase = "";		/* -v: what is going on */
@@ -300,6 +333,10 @@ _PROTOTYPE(void vtick, (int force));
 _PROTOTYPE(void vset, (char *phase, long total));
 _PROTOTYPE(void needino, (Ino_t ino));
 _PROTOTYPE(void findmaxino, (void));
+_PROTOTYPE(unsigned char *srec, (ino_t ino));
+_PROTOTYPE(void spageio, (struct spage *p, int wr));
+_PROTOTYPE(void scropen, (void));
+_PROTOTYPE(void scrclose, (void));
 _PROTOTYPE(void getwindow, (void));
 _PROTOTYPE(void setwindow, (int w));
 _PROTOTYPE(void wzones, (zone_nr *zlist, int len, int level, off_t *pos, off_t size, int *dirty));
@@ -929,9 +966,9 @@ void putbitmaps()
   if (spec_imap) freebitmap(spec_imap);
   if (spec_zmap) freebitmap(spec_zmap);
   freebitmap(dirmap);
-  if (winmask) free((char *) winmask);
+  if (winrec) free((char *) winrec);
   spec_imap = spec_zmap = 0;
-  winmask = 0;
+  winrec = 0;
 }
 
 /* `w1' and `w2' are differing words from two bitmaps that should be
@@ -1054,10 +1091,117 @@ void chkilist()
 /* Allocate an array to maintain the inode reference counts in. */
 void getcount()
 {
-  count = (nlink_t *) alloc((unsigned) (maxino + 1), sizeof(nlink_t));
+  /* Spec O.6: the records would take over half of fsck_mem: scratch on
+   * the swap partition (-T), if there is one and swap is off. */
+  if (scrname != 0 && 3L * (maxino + 1) > fsck_mem / 2) scropen();
+  if (scrfd < 0)
+	count = (nlink_t *) alloc((unsigned) (maxino + 1), sizeof(nlink_t));
 }
 
-/* Spec N.4: count[] (and winmask[]) cover the inodes up to the highest
+/* Spec O.6: the scratch area at the start of the swap partition.  It is
+ * used only while swap is off on it (the boot checks run before swapon);
+ * swap keeps nothing there between boots (R12.34: disposable). */
+void scropen()
+{
+  struct stat sd, ss;
+  struct part_range pr;
+  struct swinfo *si;
+  message m;
+  int i;
+
+  if (stat(scrname, &ss) < 0 || !S_ISBLK(ss.st_mode)) {
+	printf("%s: not a block device: no scratch\n", scrname);
+	return;
+  }
+  if (stat(device, &sd) == 0 && sd.st_rdev == ss.st_rdev) return;
+  si = (struct swinfo *) alloc(1, sizeof(*si));
+  m.m1_p1 = (char *) si;
+  m.m1_i1 = sizeof(*si);
+  m.m1_i2 = MI_SWAPINFO;
+  i = _syscall(MM, MEMINFO, &m) >= 0 && (si->mode & 0x7F) != SW_OFF
+					&& si->dev == (int) ss.st_rdev;
+  free((char *) si);
+  if (i) {
+	printf("%s: swap is on there: no scratch\n", scrname);
+	return;
+  }
+  if ((scrfd = open(scrname, O_RDWR)) < 0) {
+	printf("%s: cannot open: no scratch\n", scrname);
+	return;
+  }
+  spmax = (long) sb.s_ninodes / SRECS + 1;
+  if (ioctl(scrfd, DIOCGETPS, (void *) &pr) == 0
+		&& (long) (pr.count / (BLOCK_SIZE / 512)) < spmax) {
+	printf("%s: too small for the scratch\n", scrname);
+	close(scrfd);
+	scrfd = -1;
+	return;
+  }
+  spg = (struct spage *) alloc(SPAGES, sizeof(struct spage));
+  for (i = 0; i < SPAGES; i++) {
+	spg[i].pno = -1;
+	spg[i].buf = (unsigned char *) alloc(1, BLOCK_SIZE);
+  }
+  sinit = (unsigned char *) alloc((unsigned) (spmax / 8 + 1), 1);
+  suse = 0;
+  if (verbose) vline("fsck: scratch on swap");
+}
+
+void scrclose()
+{
+  int i;
+
+  if (scrfd < 0) return;
+  for (i = 0; i < SPAGES; i++) free((char *) spg[i].buf);
+  free((char *) spg);
+  free((char *) sinit);
+  close(scrfd);
+  scrfd = -1;
+}
+
+void spageio(p, wr)
+struct spage *p;
+int wr;
+{
+  int n;
+
+  if (lseek(scrfd, (off_t) p->pno * BLOCK_SIZE, SEEK_SET) < 0)
+	fatal("scratch: seek");
+  n = wr ? write(scrfd, (char *) p->buf, BLOCK_SIZE)
+	 : read(scrfd, (char *) p->buf, BLOCK_SIZE);
+  if (n != BLOCK_SIZE) fatal("scratch: i/o error");
+  if (wr) sinit[p->pno >> 3] |= 1 << (int) (p->pno & 7);
+}
+
+/* The 4-byte record of inode `ino' (count, first and last window).  The
+ * page stays in RAM at least until the next call (LRU, SPAGES >= 2); a
+ * page taken out is written back (every loaded page may be changed). */
+unsigned char *srec(ino)
+ino_t ino;
+{
+  long pno = (long) (ino / SRECS);
+  register struct spage *p, *v;
+  int i;
+
+  for (i = 0, p = v = spg; i < SPAGES; i++, p++) {
+	if (p->pno == pno) {
+		p->use = ++suse;
+		return(p->buf + (int) (ino % SRECS) * 4);
+	}
+	if (p->use < v->use) v = p;
+  }
+  if (pno >= spmax) fatal("scratch: inode out of range");
+  if (v->pno >= 0) spageio(v, 1);
+  v->pno = pno;
+  if (sinit[pno >> 3] & (1 << (int) (pno & 7)))
+	spageio(v, 0);
+  else
+	memset((void *) v->buf, 0, BLOCK_SIZE);
+  v->use = ++suse;
+  return(v->buf + (int) (ino % SRECS) * 4);
+}
+
+/* Spec N.4: count[] and winrec[] (or the scratch) cover the inodes up to the highest
  * in use in the disk map; an entry naming a higher one grows them. */
 void needino(ino)
 ino_t ino;
@@ -1068,17 +1212,22 @@ ino_t ino;
   if (ino <= maxino) return;
   newmax = ino | 0xFF;
   if (newmax > sb.s_ninodes) newmax = sb.s_ninodes;
+  if (scrfd >= 0) {	/* the scratch holds every inode */
+	maxino = newmax;
+	growmaps(newmax);
+	return;
+  }
   if ((p = realloc((char *) count, (size_t) (newmax + 1) * sizeof(nlink_t)))
 							== NULL)
 	fatal("out of memory");
   count = (nlink_t *) p;
   memset(p + (maxino + 1) * sizeof(nlink_t), 0,
 			(size_t) (newmax - maxino) * sizeof(nlink_t));
-  if (winmask != 0) {
-	if ((p = realloc((char *) winmask, (size_t) newmax + 1)) == NULL)
+  if (winrec != 0) {
+	if ((p = realloc((char *) winrec, (size_t) (newmax + 1) * 2)) == NULL)
 		fatal("out of memory");
-	winmask = (unsigned char *) p;
-	memset(p + maxino + 1, 0, (size_t) (newmax - maxino));
+	winrec = (unsigned char *) p;
+	memset(p + (maxino + 1) * 2, 0, (size_t) (newmax - maxino) * 2);
   }
   maxino = newmax;
   growmaps(newmax);
@@ -1136,7 +1285,8 @@ void getwindow()
   long left;
   int wblk;
 
-  left = fsck_mem - 2L * imblk * BLOCK_SIZE - 2L * (maxino + 1)
+  left = fsck_mem - 2L * imblk * BLOCK_SIZE
+		- (scrfd >= 0 ? 0L : 3L * (maxino + 1))
 					- 4L * BLOCK_SIZE;	/* growth */
   if (spec_imap) left -= (long) N_IMAP * BLOCK_SIZE;
   if (spec_zmap) left -= (long) N_ZMAP * BLOCK_SIZE;
@@ -1148,7 +1298,8 @@ void getwindow()
   if (zmap == 0) fatal("out of memory");
   wbits = (bit_nr) wblk * BLOCK_SIZE * 8;
   nwin = (N_ZMAP + wblk - 1) / wblk;
-  if (nwin > 1) winmask = (unsigned char *) alloc((unsigned) maxino + 1, 1);
+  if (nwin > 1 && scrfd < 0)
+	winrec = (unsigned char *) alloc((unsigned) maxino + 1, 2);
   setwindow(0);
 }
 
@@ -1174,10 +1325,10 @@ ino_t ino;
 	firstcnterr = 0;
   }
   devread(inoaddr(ino), (char *) &inode, INODE_SIZE);
-  count[ino] += inode.i_nlinks;	/* it was already subtracted; add it back */
-  printf("%5u %5u %5u", ino, (unsigned) inode.i_nlinks, count[ino]);
+  CNT(ino) += inode.i_nlinks;	/* it was already subtracted; add it back */
+  printf("%5u %5u %5u", ino, (unsigned) inode.i_nlinks, CNT(ino));
   if (yes(" adjust")) {
-	if ((inode.i_nlinks = count[ino]) == 0) {
+	if ((inode.i_nlinks = CNT(ino)) == 0) {
 		fatal("internal error (counterror)");
 		inode.i_mode = I_NOT_ALLOC;
 		clrbit(imap, (bit_nr) ino);
@@ -1198,14 +1349,16 @@ void chkcount()
   register ino_t ino;
 
   for (ino = 1; ino <= maxino; ino++)
-	if (count[ino] != 0) counterror(ino);
+	if (CNT(ino) != 0) counterror(ino);
   if (!firstcnterr) printf("\n");
 }
 
 /* Deallocate the `count' array. */
 void freecount()
 {
-  free((char *) count);
+  if (count) free((char *) count);
+  count = 0;
+  scrclose();
 }
 
 /* Print the inode permission bits given by mode and shift. */
@@ -1277,7 +1430,7 @@ dir_struct *dp;
 {
   specset(spec_imap, (bit_nr) dp->d_inum);
   if (yes(". remove entry")) {
-	count[dp->d_inum]--;
+	CNT(dp->d_inum)--;
 	memset((void *) dp, 0, sizeof(dir_struct));
 	return(1);
   }
@@ -1338,9 +1491,9 @@ dir_struct *dp;
 	specset(spec_imap, (bit_nr) dp->d_inum);
 	specset(spec_imap, (bit_nr) exp);
 	if (yes(". repair")) {
-		count[dp->d_inum]--;
+		CNT(dp->d_inum)--;
 		dp->d_inum = exp;
-		count[exp]++;
+		CNT(exp)++;
 		return(0);
 	}
   } else if (pos != (dp->d_name[1] ? esize : 0)) {
@@ -1405,7 +1558,7 @@ dir_struct *dp;
 	return(1);
   }
   needino(dp->d_inum);
-  if ((unsigned) count[dp->d_inum] == LINK_MAX) {
+  if ((unsigned) CNT(dp->d_inum) == LINK_MAX) {
 	printf("too many links to ino %u\n", dp->d_inum);
 	printf("discovered at entry '");
 	printname(dp->d_name);
@@ -1413,7 +1566,7 @@ dir_struct *dp;
 	printpath(0, 1);
 	if (Remove(dp)) return(0);
   }
-  count[dp->d_inum]++;
+  CNT(dp->d_inum)++;
   if (strcmp(dp->d_name, ".") == 0) {
 	ftop->st_presence |= DOT;
 	return(chkdots(ino, pos, dp, ino));
@@ -1514,7 +1667,13 @@ off_t pos;
   }
   if (bit > hwm) hwm = bit;	/* spec O.6 */
   if (bit >= whi) {	/* a later window (spec N.4): note it, go on */
-	winmask[cur_ino] |= 1 << (int) ((bit / wbits) & 7);
+	/* the 2-byte record: first and last window (1..255, 255 also
+	 * means "and every later one"; 0: none) */
+	unsigned char *r = WREC(cur_ino);
+	int w = bit / wbits > 255 ? 255 : (int) (bit / wbits);
+
+	if (r[0] == 0 || w < r[0]) r[0] = w;
+	if (w > r[1]) r[1] = w;
 	return(1);
   }
   if (bitset(zmap, bit)) {
@@ -1760,10 +1919,10 @@ d_inode *ip;
 	printf("link count too big in ");
 	printpath(1, 0);
 	printf("cnt = %u)\n", (unsigned) ip->i_nlinks);
-	count[ino] -= LINK_MAX;
+	CNT(ino) -= LINK_MAX;
 	specset(spec_imap, (bit_nr) ino);
   } else {
-	count[ino] -= (unsigned) ip->i_nlinks;
+	CNT(ino) -= (unsigned) ip->i_nlinks;
   }
   return chkmode(ino, ip);
 }
@@ -1794,7 +1953,7 @@ dir_struct *dp;
 		specset(spec_imap, (bit_nr) ino);
 		cur_ino = ino;		/* -v: the inode removed */
 		if (yes("remove")) {
-			count[ino] += inode.i_nlinks - 1;
+			CNT(ino) += inode.i_nlinks - 1;
 			clrbit(imap, (bit_nr) ino);
 			devwrite(inoaddr(ino), nullbuf, INODE_SIZE);
 			memset((void *) dp, 0, sizeof(dir_struct));
@@ -1902,13 +2061,16 @@ void winpass()
   d_inode inode;
   register ino_t ino;
   off_t pos;
-  int i, level, dirty;
+  int i, level, dirty, cw = curwin > 255 ? 255 : curwin;
+  unsigned char *r;
 
   vset("zones", (long) maxino);
   for (ino = ROOT_INODE; ino <= maxino && !stopped; ino++) {
 	vdone = ino;
-	if (!bitset(imap, (bit_nr) ino)
-			|| !(winmask[ino] & (1 << (curwin & 7)))) continue;
+	if (!bitset(imap, (bit_nr) ino)) continue;
+	r = WREC(ino);
+	if (r[0] == 0 || cw < r[0] || (r[1] != 255 && curwin > r[1]))
+		continue;
 	devread(inoaddr(ino), (char *) &inode, INODE_SIZE);
 	switch (inode.i_mode & I_TYPE) {
 	    case I_REGULAR: case I_DIRECTORY: case I_NAMED_PIPE:
@@ -2036,7 +2198,7 @@ char *f, **clist, **ilist, **zlist;
   char line[40];
   struct tms tms;
   long t;
-  int w, rw;
+  int w, rw, nb;
 
   if (automatic || preen) repair = automatic = 1;
   device = f;
@@ -2050,11 +2212,14 @@ char *f, **clist, **ilist, **zlist;
   hwm = 0;
 
   whereis();
+  /* -S (spec O.6) on a mounted file system only counts: FS may change a
+   * zone map block between the check and the write. */
+  if (sweep && ismounted) repair = automatic = 0;
   devopen();
   getsuper();
 
-  /* -p: a clean file system needs nothing (one block read). */
-  if (preen && (sb.s_flags & (SF_CLEAN | SF_CHECK)) == SF_CLEAN) {
+  /* -p: a clean file system needs nothing (one block read); -S checks it. */
+  if (preen && !sweep && (sb.s_flags & (SF_CLEAN | SF_CHECK)) == SF_CLEAN) {
 	devclose();
 	return(0);
   }
@@ -2086,18 +2251,22 @@ char *f, **clist, **ilist, **zlist;
   chktree();
   for (w = 0; w < nwin && !stopped; w++) {
 	if (w > 0) {
+		/* Spec O.6: above the high-water mark no inode owns a zone:
+		 * the only error there is a leak (space, not danger).  -p
+		 * stops at the mark; without -p, and with -S, the map there
+		 * is compared (a leak is freed). */
+		if (preen && !sweep && (bit_nr) w * wbits > hwm) break;
 		setwindow(w);
-		/* Spec O.6: above the high-water mark no inode owns a zone;
-		 * the map is only compared (a leak there is freed). */
 		if (wlo <= hwm) winpass();
 	}
 	if (stopped) break;
-	vset("zone map", (long) (w == nwin - 1 ? N_ZMAP - w * (wbits / 8
-		/ BLOCK_SIZE) : wbits / 8 / BLOCK_SIZE));
+	nb = w == nwin - 1 ? (int) (N_ZMAP - wlo / (BLOCK_SIZE * 8))
+			   : (int) (wbits / (BLOCK_SIZE * 8));
+	if (preen && !sweep && (hwm - wlo) / (BLOCK_SIZE * 8) + 1 < nb)
+		nb = (int) ((hwm - wlo) / (BLOCK_SIZE * 8) + 1);
+	vset("zone map", (long) nb);
 	chkmap(zmap, (int) (wbits / (BLOCK_SIZE * 8)), (bit_nr) FIRST - 1 + wlo,
-		BLK_ZMAP + (block_nr) (wlo / (BLOCK_SIZE * 8)),
-		w == nwin - 1 ? (int) (N_ZMAP - wlo / (BLOCK_SIZE * 8))
-			      : (int) (wbits / (BLOCK_SIZE * 8)),
+		BLK_ZMAP + (block_nr) (wlo / (BLOCK_SIZE * 8)), nb,
 		(bit_nr) N_DATA + 1 - wlo, "zone");
   }
   if (!stopped) {
@@ -2212,6 +2381,10 @@ char **argv;
 								< 8192L)
 				fsck_mem = 8192L;	/* the minimum */
 			break;
+		    case 'S':	sweep = preen = 1;	break;
+		    case 'T':
+			if (*argv != 0) scrname = *argv++;
+			break;
 		    case 'L':
 			if (*argv == 0) break;
 			logname = *argv++;
@@ -2231,7 +2404,7 @@ char **argv;
 		devgiven = 1;
 	}
   if (!devgiven) {
-	printf("Usage: fsck [-acilprsvz] [-m KB] [-L log] file\n");
+	printf("Usage: fsck [-acilprSsvz] [-m KB] [-L log] [-T swapdev] file\n");
 	exit(8);
   }
   return(worst);
