@@ -662,7 +662,10 @@ static void test_arq_z(void)
 #define REGION_DIR "../../rootfs/usr/share/region"
 #endif
 static const char rg_codes[][3] = {
-	"EU", "PL", "ES", "FR", "IE", "FI", "SE", "NO", "GB", "AL", "US", "CA"
+	"EU", "PL", "ES", "FR", "IE", "FI", "SE", "NO", "GB", "AL", "US", "CA",
+	"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "DE", "GR",
+	"HU", "IT", "LV", "LT", "LU", "MT", "NL", "PT", "RO", "SK",
+	"SI", "BA", "MK"
 };
 
 static int rg_bad(const char *text, int want_line)

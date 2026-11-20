@@ -112,10 +112,12 @@ region check US 433.92   # would a 1 s data burst be allowed there?  Sends nothi
 
 | Countries | Tables (`/usr/share/region/`) | Law |
 |---|---|---|
-| PL, ES, FR, IE, FI, SE | `EU` + the country's own unchecked 870/915 MHz rows | Decision 2006/771/EC ((EU) 2022/180) |
+| AT, BE, BG, CY, CZ, DE, DK, EE, ES, FI, FR, GR, HR, HU, IE, IT, LT, LU, LV, MT, NL, PL, PT, RO, SE, SI, SK (the 27 EU member states) | `EU` + the country's own unchecked 870/915 MHz rows (none for DE, FR, LV, NL) | Decision 2006/771/EC ((EU) 2022/180) |
 | NO | `NO` | ERC/REC 70-03, Nkom |
 | GB | `GB` | Ofcom IR 2030 |
 | AL | `AL` | ERC/REC 70-03, AKEP |
+| BA | `BA` (no 865–868 MHz, no 869.7–870 MHz at 25 mW) | ERC/REC 70-03, RAK |
+| MK | `MK` | ERC/REC 70-03, AEK |
 | US | `US` | FCC part 15: 15.231, 15.247, 15.249 |
 | CA | `CA` (the US numbers) | ISED RSS-210, RSS-247 |
 
@@ -131,7 +133,7 @@ ERC/REC 70-03 bands:
 | 865–868, 868.0–868.6, 869.7–870.0 | 25 mW | 1 % | |
 | 869.4–869.65 | 500 mW | 10 % | |
 | 869.7–870.0 | 5 mW | no limit | |
-| 862–863 | 25 mW | 0.1 % | EU only; `?` (not checked) in NO, GB |
+| 862–863 | 25 mW | 0.1 % | `?` (not checked) in NO, GB, BA |
 
 In the US and Canada 433.92 MHz is for **remote buttons** (at most 5 s, −15 dBm) or **short
 bursts** (at most 1 s, then a pause of 30 times as long and at least 10 s, −30 dBm); 902–928

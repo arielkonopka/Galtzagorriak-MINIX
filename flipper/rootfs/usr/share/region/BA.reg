@@ -1,0 +1,18 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: BA
+Name: Bosna i Hercegovina
+Checked: 2026-11-20
+Source: ERC/REC 70-03 (03.2024) Annex 1, App. 1; RAK
+# the ERC/REC 70-03 Annex 1 conditions, as in EU.reg; dbm capped at +10 dBm
+# left out (App. 1 status "N"): h1.4 865-868, h1.9 869.7-870 25 mW, h2, h3
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+433.050	434.790	0	none	0	any	70-03 Annex 1 (g2)
+434.040	434.790	10	none	25	any	70-03 Annex 1 (g3)
+433.050	434.790	10	10%	0	any	70-03 Annex 1 (g1)
+869.700	870.000	6	none	0	any	70-03 Annex 1 (h1.8)
+#?862.000	863.000	10	0.1%	350	any	70-03 Annex 1 (h0): status "*", not checked
+#?863.000	865.000	10	0.1%	0	any	70-03 Annex 1 (h1.3): status "*", not checked
+868.000	868.600	10	1%	0	any	70-03 Annex 1 (h1.5)
+868.700	869.200	10	0.1%	0	any	70-03 Annex 1 (h1.6)
+869.400	869.650	10	10%	0	any	70-03 Annex 1 (h1.7)
