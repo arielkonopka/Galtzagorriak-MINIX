@@ -137,8 +137,9 @@ Launcher, on the SETTINGS page:
 | Hints | the button line at the bottom and the position in the title bar |
 | Battery | the battery on the title bar |
 | Style | `pine` (the look above) or `stock` (the look of the stock firmware's menus, see [Stock style](#stock-style)) |
+| Repeat | how fast a held Up or Down moves through a list: `off`, or a period of 350, 300, 250, 200, 152 (the default), 120 or 90 ms; the first step comes after 0.4 s. OK or Right: faster (and round from the fastest to `off`), Left: slower. It takes effect at once, on this same page |
 
-Up/Down choose a setting, OK (or Left/Right) switches it, Back returns to SETTINGS. The
+Up/Down choose a setting (hold them to go on), OK (or Left/Right) switches it, Back returns to SETTINGS. The
 settings are kept in `/etc/launcher.conf` on the SD card, which is written only when you go back
 to the app list with something changed:
 
@@ -147,6 +148,7 @@ Icons: on
 Hints: on
 Battery: on
 Style: pine
+Repeat: 152
 ```
 
 You can also edit that file from the shell; the launcher reads it again after the next app ends.

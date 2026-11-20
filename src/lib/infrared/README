@@ -1,0 +1,53 @@
+libir - the infrared protocols of the Unleashed firmware (spec Phase 7)
+=======================================================================
+
+The stock Flipper Zero infrared encoders and decoders and a reader/writer
+for the stock .ir files, for the `infrared` app (flipper/gui/infrared.c)
+and the host test (flipper/tests/infrared, `make irtest`).  Issue #389.
+
+Source: DarkFlippers/unleashed-firmware, lib/infrared at commit
+53818b18f63e105baaf37ed8eac9a7def58ec8b1 (2026-11-16), GPLv3 (as this
+project), the same commit as src/lib/subghz and src/lib/lfrfid.  Copied
+byte for byte (checked with cmp against that commit):
+
+  encoder_decoder/*             all of lib/infrared/encoder_decoder: NEC,
+                                NECext, NEC42, NEC42ext, Samsung32, RC5,
+                                RC5X, RC6, SIRC, SIRC15, SIRC20, Kaseikyo,
+                                RCA, Pioneer, the common pulse-distance
+                                and Manchester engines, the timing tables
+
+Not taken:
+
+  worker/                       infrared_worker.c (a FuriThread with a
+                                stream buffer fed by the HAL's capture
+                                interrupt) and infrared_transmit.c (a
+                                DMA-fed HAL transmitter).  On MINIX the
+                                kernel's /dev/ir does that part: it
+                                captures marks and spaces into a ring and
+                                plays a list of durations (flipdev.c).
+  signal/                       infrared_signal.c and infrared_brute_force.c
+                                read with FlipperFormat and keep whole
+                                raw lines in FuriStrings and the button
+                                index of a database in an m-dict.
+                                irfile.c below does both as a stream.
+
+Ours (GPLv3):
+
+  shim/irshim.h, irshim.c       furi_assert/furi_check/furi_crash, COUNT_OF,
+                                MIN, MAX and stock's malloc (zeroed, never
+                                NULL).  Given to the compiler with
+                                -include irshim.h; shim/core/*.h point to it.
+  irfile.h, irfile.c            the .ir file formats ("IR signals file",
+                                "IR library file", "IR tests file", version
+                                1) read one key at a time with getc and
+                                written byte for byte as stock writes them.
+                                A raw signal's timings go straight into
+                                the caller's buffer (stock's limit, 1024);
+                                no line and no file is held in memory, so
+                                the universal databases are searched
+                                signal by signal (irf_find).
+
+RAM (heap, measured by irtest on the 64-bit host, less with the Flipper's
+32-bit pointers): all decoders 712 B, the encoder set 16 B (each encoder's
+state comes when a message is first encoded).  irfile needs no heap; the
+caller gives the timing buffer (4 B a timing).

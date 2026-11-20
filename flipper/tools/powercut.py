@@ -98,9 +98,10 @@ def frame_end(buf):
 
 
 class Run:
-	def __init__(self, n, mode, image="minix.bin", reuse=None):
+	def __init__(self, n, mode, image="minix.bin", reuse=None, extra=()):
 		"""reuse: the directory of an earlier, stopped Run: its
-		card is booted again (tools/bigcard.py)."""
+		card is booted again (tools/bigcard.py).  extra: more QEMU
+		arguments (tools/radioslot.py: the fake SFSA)."""
 		if reuse:
 			self.dir = reuse
 		else:
@@ -114,7 +115,7 @@ class Run:
 				os.path.abspath(os.path.join(MB, image)),
 		    "-device", "loader,addr=0x%x,data=%d,data-len=4" % (CFG, n),
 		    "-device", "loader,addr=0x%x,data=%d,data-len=4" %
-							(CFG + 4, mode)]
+							(CFG + 4, mode)] + list(extra)
 		self.p = subprocess.Popen(cmd, cwd=self.dir, stdin=subprocess.PIPE,
 			stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 		self.out = b""		# the console without LCD frames

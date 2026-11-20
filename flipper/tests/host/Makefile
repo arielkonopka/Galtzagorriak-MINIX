@@ -14,8 +14,8 @@ B	:= build
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
 	   spectest pmstattest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
-     run-mtpd run-gzsig run-nfc
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
+     run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -52,6 +52,10 @@ run-hid:
 # (make subghztest).
 run-subghz:
 	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
+# libir (Phase 7, issue #389): the stock infrared codecs against the stock
+# .irtest vectors, .ir files round trip (make irtest).
+run-ir:
+	$(MAKE) -C $(MROOT)/flipper/tests/infrared test
 
 # mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
 # pipe, then a short libFuzzer run of the container parser (AC10.4.6;
@@ -70,6 +74,22 @@ run-nfc:
 
 # gzsig (spec RS.4, ACS.1, T33a part 2): the update file's verifier
 # (make gzsigtest); a flipped bit at every 3rd byte here, every byte there.
+# libradio and radio-fetch.py (T30a, spec R16.0, R2b.1a).
+run-radio:
+	$(MAKE) -C $(MROOT)/flipper/tests/radio test
+
+# libflipperpb (#388): the stock RPC protobuf against golden frames.
+run-flipperpb:
+	$(MAKE) -C $(MROOT)/flipper/tests/flipperpb test
+
+# the rpcd core (#388, R15.5, R15.7): fake platform, golden frames.
+run-rpcd:
+	$(MAKE) -C $(MROOT)/flipper/tests/rpcd test
+
+# bled GATT serial service (#388): fake controller, rpcd behind it.
+run-bled:
+	$(MAKE) -C $(MROOT)/flipper/tests/bled test
+
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
 
@@ -171,4 +191,4 @@ $(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ir
