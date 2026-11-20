@@ -168,8 +168,10 @@ memory hole big enough (`fsck: no memory to start it`). Ask for the check at the
 instead (as root):
 
 ```
-sh /etc/fsckboot
+reboot fsck
 ```
+
+(`sh /etc/fsckboot` does the same.)
 
 The Flipper restarts, checks and repairs `/usr` and `/home` before anything else runs (rainbow LED,
 the progress on the console; a 113 GB card takes a minute or two), restarts again, and then
