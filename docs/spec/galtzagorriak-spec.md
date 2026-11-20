@@ -1874,6 +1874,12 @@ the 3 B per inode (count + window record) would take more than half of `fsck_mem
 inodes at the default 64 KB), only while swap is off on `dev` (MI_SWAPINFO), 4 B records, 16 pages
 of 1 KB in an LRU (+16 KB); `/etc/rc` passes `-T /dev/hd3` for `/usr` and `/home`. `fsck -S` is
 run by hand; starting it from `update` at idle needs `/home` unmounted, so it is not automatic.
+*Done in T27a part 6 (#306, 2026-11-20):* `mkfs -3` (util-linux layout with 1 KB blocks: u32
+inodes, 64 B entries, zone map for bit 0 and the data zones, unused tail bits of both maps set,
+`s_max_size` 2 GiB − 1, CLEAN at offset 14; size from `DIOCGETPS`; inodes capped so the inode
+table ends below block 65 535) and `tools/mkfsimg.py -3`. The `-T` scratch is used only when MM
+answers that swap is off there and `DIOCGETPS` gives the size (fails closed). O.7's room for the
+largest zone map is not in `mkfs -3` yet: it comes with `setup -H`.
 
 N.4's zone windows grow with the partition (100 GiB: ≈ 200 windows of 64 KB). Because the FS
 allocates from the bottom, the used zones lie below a **high-water mark** (the highest zone any
