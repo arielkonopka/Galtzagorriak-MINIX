@@ -19,12 +19,14 @@ SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c \
 HDR	:= $(wildcard $(L)/*.h)
 B	:= build
 
-test: $(B)/nfctest
+test: $(B)/nfctest prototest
 	cd . && ./$(B)/nfctest
 
 $(B)/nfctest: nfctest.c $(SRC) $(HDR)
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) $(INC) -o $@ nfctest.c $(SRC)
+
+include proto.mk
 
 clean:
 	rm -rf $(B)
