@@ -1,0 +1,5 @@
+nanopb 0.4.9.1 runtime (https://github.com/nanopb/nanopb, tag 0.4.9.1),
+unchanged; zlib licence (LICENSE.txt).  The generator is the PyPI package
+`nanopb==0.4.9.1` (pip install nanopb==0.4.9.1), used by
+flipper/tools/mkflipperpb.sh.  Built with PB_ENABLE_MALLOC, as the stock
+firmware (its .options files use FT_POINTER for strings and bytes).
