@@ -19,6 +19,7 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <ctype.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -134,6 +135,8 @@ size_t nfcshim_str_search(const FuriString* s, const char* needle, size_t start)
 #define furi_string_search_str(s, n, ...) nfcshim_str_search(s, n, (0, ##__VA_ARGS__))
 void furi_string_mid(FuriString* s, size_t start, size_t len);
 void furi_string_replace_all(FuriString* s, const char* from, const char* to);
+/* The buffer is fixed (NFCSHIM_STR_MAX): nothing to reserve. */
+void furi_string_reserve(FuriString* s, size_t size);
 #define furi_string_trim_1(s) furi_string_trim_chars(s, " \n\r\t")
 #define furi_string_trim_2(s, c) furi_string_trim_chars(s, c)
 #define furi_string_trim_x(a, b, f, ...) f

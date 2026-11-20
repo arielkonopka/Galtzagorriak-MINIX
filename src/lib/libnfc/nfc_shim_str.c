@@ -44,6 +44,11 @@ void furi_string_replace_all(FuriString* s, const char* from, const char* to) {
     furi_string_free(out);
 }
 
+void furi_string_reserve(FuriString* s, size_t size) {
+    (void)s;
+    (void)size;
+}
+
 bool flipper_format_write_empty_line(FlipperFormat* ff) {
     (void)ff;
     return false;

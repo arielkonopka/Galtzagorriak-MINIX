@@ -27,4 +27,11 @@
     X(umarsh) \
     X(washcity) \
     X(zolotaya_korona) \
-    X(zolotaya_korona_online)
+    X(zolotaya_korona_online) \
+    X(all_in_one) \
+    X(sonicare) \
+    X(trt) \
+    X(ventra) \
+    X(ndef_ul) \
+    X(ndef_mfc) \
+    X(aic)

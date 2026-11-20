@@ -11,6 +11,7 @@
 
 #include "nfc_shim.h"
 #include "cm_mfc.h"
+#include "cm_mful.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_device.h>
@@ -19,6 +20,8 @@
 #include <nfc/protocols/mf_classic/mf_classic_poller_sync.h>
 
 #include <nfc/protocols/mf_desfire/mf_desfire.h>
+#include <nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.h>
+#include <nfc/protocols/felica/felica.h>
 #include <plugins/supported_cards/nfc_supported_card_plugin.h>
 
 #include "nfc_supported_cards.h"
@@ -392,6 +395,117 @@ static void test_datetime(void) {
     furi_string_free(s);
 }
 
+/* ---- part 5 (#412): Ultralight / FeliCa parsers ---- */
+
+static NfcDevice* sweep_mful(MfUltralightType type, uint16_t pages, int random) {
+    MfUltralightData* d = mf_ultralight_alloc();
+    d->type = type;
+    d->pages_total = pages;
+    d->pages_read = pages;
+    d->iso14443_3a_data->uid_len = 7;
+    for(uint16_t p = 0; p < pages; p++)
+        for(int i = 0; i < 4; i++) d->page[p].data[i] = random ? (uint8_t)sweep_rand() : 0;
+    if(random) d->pages_read = (uint16_t)(sweep_rand() % (pages + 1u));
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfUltralight, d);
+    mf_ultralight_free(d);
+    return dev;
+}
+
+static NfcDevice* sweep_felica(int random) {
+    FelicaData* d = felica_alloc();
+    d->workflow_type = FelicaLite;
+    d->blocks_total = FELICA_BLOCKS_TOTAL_COUNT;
+    d->blocks_read = random ? (uint8_t)(sweep_rand() % 29) : FELICA_BLOCKS_TOTAL_COUNT;
+    for(size_t i = 0; i < sizeof d->data.dump; i++) d->data.dump[i] = random ? (uint8_t)sweep_rand() : 0;
+    for(int i = 0; i < 8; i++) d->pmm.data[i] = random ? (uint8_t)sweep_rand() : 0;
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolFelica, d);
+    felica_free(d);
+    return dev;
+}
+
+static void test_p5_sweep(void) {
+    size_t n = nfc_supported_cards_count();
+    FuriString* out = furi_string_alloc();
+    unsigned claimed = 0, runs = 0, ul = 0, fe = 0;
+    static const struct { MfUltralightType t; uint16_t pages; } ul_types[] = {
+        {MfUltralightTypeOrigin, 16}, {MfUltralightTypeMfulC, 48}, {MfUltralightTypeNTAG213, 45},
+        {MfUltralightTypeNTAG215, 135}, {MfUltralightTypeNTAG216, 231}};
+    for(size_t i = 0; i < n; i++) {
+        const NfcSupportedCardsPlugin* p = nfc_supported_cards_plugin(i);
+        if(p->protocol == NfcProtocolMfUltralight) {
+            ul++;
+            for(size_t t = 0; t < COUNT_OF(ul_types); t++) {
+                NfcDevice* dev = sweep_mful(ul_types[t].t, ul_types[t].pages, 0);
+                furi_string_reset(out);
+                if(p->parse && p->parse(dev, out)) {
+                    printf("     %s claims a blank %u-page Ultralight\n", nfc_supported_cards_name(i), ul_types[t].pages);
+                    claimed++;
+                }
+                nfc_device_free(dev);
+                for(int r = 0; r < 40; r++) {
+                    dev = sweep_mful(ul_types[t].t, ul_types[t].pages, 1);
+                    furi_string_reset(out);
+                    if(p->parse) (void)p->parse(dev, out);
+                    runs++;
+                    nfc_device_free(dev);
+                }
+            }
+        } else if(p->protocol == NfcProtocolFelica) {
+            fe++;
+            NfcDevice* dev = sweep_felica(0);
+            furi_string_reset(out);
+            if(p->parse && p->parse(dev, out)) {
+                printf("     %s claims a blank FeliCa\n", nfc_supported_cards_name(i));
+                claimed++;
+            }
+            nfc_device_free(dev);
+            for(int r = 0; r < 40; r++) {
+                dev = sweep_felica(1);
+                furi_string_reset(out);
+                if(p->parse) (void)p->parse(dev, out);
+                runs++;
+                nfc_device_free(dev);
+            }
+        }
+    }
+    printf("     part-5 sweep: %u Ultralight, %u FeliCa parsers, %u random dumps\n", ul, fe, runs);
+    CHECK(ul >= 5 && fe >= 1, "p5 sweep: Ultralight and FeliCa parsers linked in");
+    CHECK(claimed == 0, "p5 sweep: no parser claims a blank card");
+    CHECK(runs > 0, "p5 sweep: random dumps parsed without a crash");
+    furi_string_free(out);
+}
+
+/* NDEF end to end: a URI record on the software NTAG215, read by the
+ * vendored Ultralight poller, parsed by ndef_ul. */
+static void test_ndef_ul(void) {
+    static cm_mful_t k;
+    nfc_xfer_t x = {0};
+    cm_mful_ntag215(&k);
+    static const uint8_t tlv[] = {0x03, 0x10, 0xD1, 0x01, 0x0C, 0x55, 0x04, 'e', 'x', 'a',
+                                  'm',  'p',  'l',  'e',  '.',  'o',  'r', 'g', 0xFE, 0x00};
+    memcpy(k.mem[4], tlv, sizeof tlv);
+    x.transceive = cm_mful_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    MfUltralightData* d = mf_ultralight_alloc();
+    MfUltralightError e = mf_ultralight_poller_sync_read_card(nfc, d, NULL);
+    CHECK(e == MfUltralightErrorNone && d->type == MfUltralightTypeNTAG215, "ndef: NTAG215 read by the vendored poller");
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfUltralight, d);
+    mf_ultralight_free(d);
+    FuriString* out = furi_string_alloc();
+    int r = nfc_supported_cards_parse(dev, out);
+    const char* name = r >= 0 ? nfc_supported_cards_name((size_t)r) : "none";
+    CHECK(r >= 0 && !strcmp(name, "ndef_ul"), "ndef: the URI tag is parsed by ndef_ul");
+    CHECK(strstr(furi_string_get_cstr(out), "https://example.org") != NULL, "ndef: URI https://example.org shown");
+    if(r < 0 || !strstr(furi_string_get_cstr(out), "example.org")) printf("     parser %s:\n%s\n", name, furi_string_get_cstr(out));
+    furi_string_free(out);
+    nfc_device_free(dev);
+    nfc_free(nfc);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
     test_datetime();
@@ -400,6 +514,8 @@ int main(void) {
     test_microel();
     test_no_card();
     test_sweep();
+    test_p5_sweep();
+    test_ndef_ul();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;
