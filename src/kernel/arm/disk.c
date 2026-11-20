@@ -257,6 +257,7 @@ PRIVATE int w_init()
 {
   struct wini *wn = &wini[0];
   unsigned long sectors;
+  int why;
 
   {	/* SD data by DMA, the task asleep meanwhile (T4b step 2) */
 	int irq = hal_disk_dma_irq();
@@ -266,8 +267,11 @@ PRIVATE int w_init()
 		enable_irq(irq);
 	}
   }
-  if (hal_disk_init() != 0) {
-	printf("%s: no card\n", w_name());
+  if ((why = hal_disk_init()) != 0) {
+	why = -why;
+	if (why < 256) printf("%s: no card\n", w_name());
+	else printf("%s: no card (init step %d, R1 0x%x)\n", w_name(),
+						why >> 8, why & 0xFF);
 	return(ENXIO);
   }
   sectors = hal_disk_sectors();

@@ -277,4 +277,54 @@ const char *mdm_rg_msg(int rc);
 /* The highest CC1101 PATABLE step <= dbm. */
 int mdm_pa_step(int dbm);
 
+/* ---- the compiled region record (RQ.2; rgblob.c) ----
+ * Header 16 B ("RGN1", version, rows, code, CRC-32, size) and 16 B per
+ * active row ("#?" rows are left out), at most 32: <= 528 B.  Bytes are
+ * little-endian; a row is struct mdm_rgrec, aligned, read in place from
+ * flash by the kernel (RQ.3, T32b). */
+#define MDM_RGB_VERSION	1
+#define MDM_RGB_HDR	16
+#define MDM_RGB_ROW	16
+#define MDM_RGB_MAX	(MDM_RGB_HDR + MDM_RG_ROWS * MDM_RGB_ROW)
+struct mdm_rgrec {			/* one row, as in the record */
+	unsigned int lo, hi;		/* Hz */
+	signed char dbm;
+	unsigned char use;		/* MDM_USE_* */
+	unsigned short duty;		/* 0.01 % of any hour; 10000 none */
+	unsigned short bw_khz;		/* 0 any */
+	unsigned char flags, pad;
+};
+unsigned long mdm_crc32(const unsigned char *p, int n, unsigned long crc);
+/* rg (from mdm_rg_load) -> out: the record's length, or -1 (no active
+ * row, more than 32, a bad row, or max too small). */
+int mdm_rg_compile(const struct mdm_region *rg, unsigned char *out, int max);
+/* Magic, version, size, CRC and every row: the record's length, or -1. */
+int mdm_rg_blob_check(const unsigned char *b, int len);
+unsigned long mdm_rg_blob_crc(const unsigned char *b);
+/* A checked record back into rg (no refs, no names): for mdm_rg_tx. */
+int mdm_rg_blob_load(const unsigned char *b, int len, struct mdm_region *rg);
+
+/* ---- the shipped tables (RQ.5; rgsha.c, flipper/tools/mkreghash.py) ---- */
+struct mdm_sha256 {
+	unsigned long h[8];
+	unsigned char buf[64];
+	unsigned long len;		/* bytes hashed so far */
+};
+void mdm_sha_init(struct mdm_sha256 *c);
+void mdm_sha_add(struct mdm_sha256 *c, const void *data, unsigned long n);
+void mdm_sha_done(struct mdm_sha256 *c, unsigned char out[32]);
+struct mdm_rghash {
+	char cc[2];			/* no NUL: 34 B an entry */
+	unsigned char sha[32];
+};
+/* The list the build makes of the shipped .reg files (const, in flash). */
+extern const struct mdm_rghash mdm_rg_shipped[];
+extern const int mdm_rg_nshipped;
+/* SHA-256 of dir/CC.reg: 0, or -1 if it cannot be read. */
+int mdm_rg_sha_file(const char *dir, const char *cc, unsigned char out[32]);
+/* 1: sha is a shipped CC.reg; 0: it is not (custom).  *same_code: the
+ * index of a shipped CC.reg, -1 if none was shipped. */
+int mdm_rg_sha_find(const struct mdm_rghash *list, int n, const char *cc,
+	const unsigned char sha[32], int *same_code);
+
 #endif /* _MODEM_H */

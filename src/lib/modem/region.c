@@ -24,6 +24,12 @@ static const char countries[][2][3] = {
 	{ "EU", "EU" }, { "PL", "EU" }, { "ES", "EU" }, { "FR", "EU" },
 	{ "IE", "EU" }, { "FI", "EU" }, { "SE", "EU" }, { "NO", "EU" },
 	{ "GB", "EU" }, { "AL", "EU" }, { "US", "US" }, { "CA", "US" },
+	{ "AT", "EU" }, { "BE", "EU" }, { "BG", "EU" }, { "HR", "EU" },
+	{ "CY", "EU" }, { "CZ", "EU" }, { "DK", "EU" }, { "EE", "EU" },
+	{ "DE", "EU" }, { "GR", "EU" }, { "HU", "EU" }, { "IT", "EU" },
+	{ "LV", "EU" }, { "LT", "EU" }, { "LU", "EU" }, { "MT", "EU" },
+	{ "NL", "EU" }, { "PT", "EU" }, { "RO", "EU" }, { "SK", "EU" },
+	{ "SI", "EU" }, { "BA", "EU" }, { "MK", "EU" },
 };
 
 const char *mdm_rg_bandset(const char *cc)

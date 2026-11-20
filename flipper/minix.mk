@@ -610,7 +610,8 @@ $(MB)/modem/hs/%.o: $(MODEM_DIR)/heatshrink/%.c
 $(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
-OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
+OBJS_gmodem = $(MB)/cmd/port/gmodem.o \
+	   $(filter-out $(MB)/modem/rgblob.o $(MB)/modem/rgsha.o,$(MODEM_OBJ))
 # gzupdate (spec section S, T33a part 3) links gzsig (src/lib/gzsig, the
 # verifier atea shares, part 2).  gzkeys.h: the public keys atea's slots
 # will hold (RS.6): keys/release.pub, the builder's update.pub, and for
@@ -652,9 +653,17 @@ OBJS_gztree = $(MB)/cmd/port/gztree.o $(MB)/gzsig/sha512.o
 $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
-OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/cc1101.o \
-	   $(MB)/modem/duty.o
 REGION_FILES := $(sort $(wildcard rootfs/usr/share/region/*.reg))
+# RQ.5: the SHA-256 of every shipped table, a const list linked into region
+# (34 B a table, flash); a changed table needs `region set -f`.
+$(MB)/cmd/port/reghash.c: tools/mkreghash.py $(REGION_FILES)
+	@mkdir -p $(dir $@)
+	python3 -I tools/mkreghash.py $@ $(REGION_FILES)
+$(MB)/cmd/port/reghash.o: $(MB)/cmd/port/reghash.c $(MODEM_DIR)/modem.h
+	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -c $< -o $@
+OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/rgblob.o \
+	   $(MB)/modem/rgsha.o $(MB)/cmd/port/reghash.o $(MB)/modem/cc1101.o \
+	   $(MB)/modem/duty.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -1043,7 +1052,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.59
+BASE_VER := 4.61
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)
