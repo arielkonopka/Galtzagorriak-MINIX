@@ -190,6 +190,10 @@ When the launcher starts an app it makes it the **foreground app** with
   seconds later if it is still there. This is the stock "leave the app" gesture, and it works
   even if the app hangs.
 
+Only root (the launcher) may name any process. An app that is not root may name itself, nobody
+(`pid` 0), or a process running under its own user id, such as a child it started; for anybody
+else's process `FGIOCSET` fails with `EPERM`.
+
 What that means for an app:
 
 - **A short Back press is yours.** Use it for "back one level" and quit from the top level.

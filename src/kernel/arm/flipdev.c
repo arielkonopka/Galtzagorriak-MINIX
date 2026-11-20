@@ -297,7 +297,7 @@ FORWARD _PROTOTYPE( void do_hardint, (void)				);
 FORWARD _PROTOTYPE( int fg_preempt, (int proc)				);
 FORWARD _PROTOTYPE( void fg_release, (void)				);
 FORWARD _PROTOTYPE( int do_select, (message *m_ptr)			);
-FORWARD _PROTOTYPE( int rs_start, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int rs_start, (message *m_ptr, int sg)		);
 FORWARD _PROTOTYPE( void rs_stop, (void)				);
 FORWARD _PROTOTYPE( int rs_take, (phys_bytes user)			);
 FORWARD _PROTOTYPE( int rs_int, (int irq)				);
@@ -464,6 +464,8 @@ PUBLIC void flipdev_task()
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
 				&& ie.proc == fm.PROC_NR + 1) ib_stop();
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SGRAW_MINOR
+				&& rs_on == fm.PROC_NR + 1) rs_stop();	/* #302 */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
 			rf_carrier = RFID_CARRIER_125;	/* R9.0.4 */
 			if (rs_on == fm.PROC_NR + 1) rs_stop();	/* R9.0.5 */
@@ -676,6 +678,7 @@ PUBLIC void subghz_minute()
 /* The clock task, once a minute (pm_minute): a radio left listening with
  * nobody reading goes back to sleep. */
   if (ir_rd && pu_input == 1) return;	/* a raw reader waits */
+  if (rs_on) return;			/* #302: a stream is reading it */
   if (sg_state == SG_ON) {
 	hal_subghz_off();
 	sg_state = 0;
@@ -911,6 +914,12 @@ message *m_ptr;
   u32_t hz, limit, st;
   int v, size, r;
 
+  if (m_ptr->TTY_REQUEST == SGIOCSTREAM) {	/* #302: gapless /dev/subghzraw */
+	if (m_ptr->DEVICE != SGRAW_MINOR) return(ENOTTY);
+	if (!(sg_state & SG_ON)) return(EIO);	/* tune with /dev/subghz first */
+	sg_state |= SG_READ;
+	return(rs_start(m_ptr, 1));
+  }
   switch (m_ptr->TTY_REQUEST) {
   case SGIOCREGION: case SGIOCGREGION: case SGIOCFAKE: size = sizeof(int); break;
   case SGIOCLINE: size = sizeof(long); break;
@@ -1051,7 +1060,7 @@ PRIVATE int adc_put(line, n, v)
 char *line;
 int n, v;
 {
-  char d[6];
+  char d[10];			/* an int's digits (review H8) */
   int j = 0;
 
   if (v == HAL_ADC_OVER) { line[n++] = '>'; return(n); }
@@ -1757,6 +1766,7 @@ message *m_ptr;
 	 * durations, high (carrier) first; tune with /dev/subghz first.
 	 * A write sends such a frame (R8.2). */
 	if (m_ptr->m_type == DEV_WRITE) return(sg_raw_write(user, count));
+	if (rs_on) return(rfid_read(m_ptr, user, count));	/* #302: a stream's half */
 	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
 	sg_state |= SG_READ;			/* in use: it stays on */
 	return(pulse_read(m_ptr, user, count, 1));
@@ -2944,12 +2954,17 @@ PRIVATE void ir_rx_end(r)
 int r;			/* OK: the frame is in; 1: cancelled (no reply);
 			 * else an error for the reader */
 {
-  unsigned n = ir_count / 4 - hal_pulse_left();
+  unsigned n = ir_count / 4, left = hal_pulse_left();
 
+  /* Security review 2026-11-19, H3: a read cancelled before its capture
+   * was armed (a held RFID read still settling) sees the counter of an
+   * older transfer: never more than the buffer, and a cancelled read's
+   * memory is not touched at all. */
+  n = left > n ? 0 : n - left;
   if (pu_input == 2) {			/* RFID: timestamps, made durations */
 	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
 	else hal_rfid_stop();		/* the DMA first, then the memory */
-	n = rf_durations(n);
+	if (r == OK) n = rf_durations(n);
   } else hal_pulse_stop();
   lock();
   mt_arm(MT_PULSE, 0);			/* no poll after the frame */
@@ -3093,7 +3108,7 @@ message *m_ptr;
   int on;
 
   if (m_ptr->TTY_REQUEST == RFIDIOCEMU) return(rfid_emu_start(m_ptr));
-  if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr));
+  if (m_ptr->TTY_REQUEST == RFIDIOCSTREAM) return(rs_start(m_ptr, 0));
   if (m_ptr->TTY_REQUEST == RFIDIOCEMURUN) return(er_start(m_ptr));
   if (m_ptr->TTY_REQUEST == RFIDIOCCARRIER) {	/* R9.0.4 */
 	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
@@ -3206,8 +3221,9 @@ int half;
 /*===========================================================================*
  *				rs_start				     *
  *===========================================================================*/
-PRIVATE int rs_start(m_ptr)
+PRIVATE int rs_start(m_ptr, sg)
 message *m_ptr;
+int sg;			/* 1: /dev/subghzraw's (#302), else the 125 kHz field's */
 {
 /* RFIDIOCSTREAM (R9.0.5): the field on, the comparator's edges into the
  * caller's ring by circular DMA, an interrupt at each half (rs_int counts
@@ -3231,7 +3247,8 @@ message *m_ptr;
   if (ring == 0) return(EFAULT);
   proc_addr(m_ptr->PROC_NR)->p_physio = TRUE;	/* the DMA writes it */
   rs_done = rs_got = rs_wait = 0;
-  if ((lvl = hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
+  if ((lvl = sg ? hal_subghz_stream(ring, st.words)
+	: hal_rfid_read(ring, st.words, rf_carrier | HAL_RFID_STREAM)) < 0) {
 	proc_addr(m_ptr->PROC_NR)->p_physio = FALSE;
 	return(ENXIO);
   }

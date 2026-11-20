@@ -201,6 +201,11 @@ Avoid direct sunlight on the windows.
 
 ### Sub-GHz
 
+**Where the antenna is.** Each Flipper's Sub-GHz antenna (a small spring) is in the corner next to the screen on the top edge: the upper right corner seen from the front. For these rows lay the Flippers flat, **antennas facing each other, about 5 cm apart**: MINIX then reads -44 to -55 dBm while the reference sends. Top edges facing each other put the antennas on opposite sides, and the level was -80 dBm (noise).
+
+**The reference's transmission is short.** `subghz tx KEY FREQ TE REPEAT` and `tx_from_file FILE REPEAT` of the reference end after about a second, whatever REPEAT says. A receiver that listens for several seconds sees a burst and then silence, and results then depend on the burst falling into the listening window. Send several times inside the window (`tools/twoflip.py` sends each file 10 times; a longer window needs a loop of such commands).
+
+
 The antennas are inside, but **take the stack apart for the Sub-GHz rows and put the two
 Flippers about 1 m apart** (both stay on USB; unplug the 17/18 wires). Back to back the
 receiver is overloaded: MINIX measures about -37 dBm during Unleashed's transmission, the

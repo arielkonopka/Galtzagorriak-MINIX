@@ -53,6 +53,24 @@
 #define SG_FAKE_RAW	1
 #define SG_FAKE_PKT	2
 
+/* SGIOCSTREAM (R4b.7, #302): /dev/subghzraw without gaps, as RFIDIOCSTREAM
+ * (<minix/rfid.h>) is for the 125 kHz field.  The receiver must be tuned
+ * (/dev/subghz).  The DMA writes the demodulated data's edges as 32-bit
+ * timestamps (us, a free-running counter) round and round into `ring`,
+ * `words` long (even, 64..65534), in the caller's memory, pinned while it
+ * runs; edges under about 16 us are not recorded.  read() blocks until a
+ * half of the ring is full and returns 4 bytes, 0 or 1 (which half is new);
+ * a reader that falls more than a half behind gets EOVERFLOW once.  The
+ * durations are the differences of the timestamps (mod 2^32); `level` is
+ * the data pin before the first edge (1: that edge falls).  words 0, close
+ * or the caller's exit stop it.  QEMU: ENOTTY (use read() of frames). */
+struct sg_stream {
+	void *ring;
+	unsigned words;
+	int level;			/* out */
+};
+#define SGIOCSTREAM	_IOW('Q', 6, struct sg_stream)
+
 struct sg_air {
 	unsigned long used_ms;		/* sent this hour (all bands) */
 	unsigned long limit_ms;		/* the tuned band's duty cycle */

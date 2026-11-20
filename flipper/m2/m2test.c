@@ -1287,6 +1287,35 @@ static void preempt_body(void)
 	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0,
 		"fg: an exited foreground app holds nothing");
+	/* Security review 2026-11-19, H5 and H1: root may do everything,
+	 * others not.  A user of group gui names itself or nobody as the
+	 * foreground, never somebody else's process (here: us, root's);
+	 * and may not move /dev/rom's window (DIOCSETP) over the RAM. */
+	fflush(stdout);
+	if ((c = fork()) == 0) {
+		struct partition pe;
+		int e1, e2, e3, rom;
+
+		setgid(10);
+		setuid(9999);
+		n = getppid();
+		e1 = ioctl(l, FGIOCSET, &n) < 0 && errno == EPERM;
+		n = getpid();
+		e2 = ioctl(l, FGIOCSET, &n) == 0;
+		n = 0;
+		e2 = e2 && ioctl(l, FGIOCSET, &n) == 0;
+		memset(&pe, 0, sizeof pe);
+		pe.base = 0x20000000UL;
+		pe.size = 0x00030000UL;
+		rom = open("/dev/rom", O_RDONLY);
+		e3 = rom >= 0 && ioctl(rom, DIOCSETP, &pe) < 0
+			&& errno == EPERM;
+		_exit((e1 ? 0 : 1) | (e2 ? 0 : 2) | (e3 ? 0 : 4));
+	}
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0,
+		"fg, rom: a user names only its own processes; "
+		"DIOCSETP is root's (H5, H1)");
 	close(pr[0]); close(pr[1]);
 	close(b); close(nb); close(l);
 }
@@ -1498,6 +1527,26 @@ static void ibmisc_tests(void)
 	check(fd >= 0 && ibm_capt(fd, 256) == -1 && errno == ENODEV,
 		"ibmisc: after close nothing plays (ENODEV)");
 	if (fd >= 0) close(fd);
+
+	/* Security review 2026-11-19, H2: exec gives the old image's memory
+	 * away, so what the process played from it stops, although the
+	 * descriptor stays open in the new program. */
+	fflush(stdout);
+	if ((p = fork()) == 0) {
+		int f = open("/dev/ibutton", O_RDWR);
+
+		if (f < 0 || ioctl(f, IBIOCPLAY, &q) < 0) _exit(1);
+		execl("/bin/sleep", "sleep", "2", (char *) NULL);
+		_exit(2);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 700);
+	fd = open("/dev/ibutton", O_RDWR);
+	errno = 0;
+	e1 = fd >= 0 && ibm_capt(fd, 256) == -1 && errno == ENODEV;
+	if (fd >= 0) close(fd);
+	check(e1 && p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0,
+		"ibmisc: exec stops what the old image played (H2)");
 
 	/* ikey end to end: emulate Metakom, read it */
 	p = ibm_run("/tmp/ike.out", "emulate", "-t", "3", "Metakom",

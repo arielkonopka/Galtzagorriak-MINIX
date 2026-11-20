@@ -91,6 +91,7 @@ int hal_buttons_fake(unsigned mask);	/* QEMU tests: these held; -1 else */
 #define HAL_SUBGHZ_OFF	(-1000)
 long hal_subghz_rx(uint32_t hz);
 int hal_subghz_rssi(uint32_t *hz);
+int hal_subghz_stream(uint32_t dst, unsigned n);	/* #302: the data pin's edges, circular DMA (like hal_rfid_read's STREAM); the pin's level, or -1 */
 void hal_subghz_off(void);
 
 /* Sub-GHz transmit (R8.2, issue #302), behind the kernel's band and

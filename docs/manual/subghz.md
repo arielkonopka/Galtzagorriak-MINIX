@@ -28,6 +28,8 @@ pkg flash /usr/bin/subghz     # only after a new system image was flashed
 pkg bind /usr/bin/subghz
 ```
 
+**Listening without gaps.** `subghz rx` takes every edge of the receiver into a 4 KB buffer while it decodes the one before, as the stock firmware does; a short burst of a remote is no longer lost while the previous one is being decoded. It needs 4 KB more heap while it listens. In a test with a Flipper sending five stock remotes, it decoded about a quarter more packets than reading frames one by one.
+
 **Distance.** A remote held right against the Flipper can be too strong: the receiver is
 overloaded and nothing decodes. A second Flipper lying back to back with this one was too
 close in the check; about 1 m away worked.
