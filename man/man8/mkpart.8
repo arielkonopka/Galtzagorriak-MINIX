@@ -1,0 +1,82 @@
+.TH MKPART 8
+.SH NAME
+mkpart \- add partitions after the existing ones
+.SH SYNOPSIS
+.nf
+\fBmkpart\fR [\fB\-n \fIsectors\fR] \fIdevice type\fB:\fIsize\fR[\fB@end\fR] ...
+\fBmkpart \-l\fR \fIdevice\fR
+\fBmkpart \-s\fR \fIdevice\fR
+\fBmkpart\fR [\fB\-n \fIsectors\fR] \fB\-g \fIN device\fR
+.fi
+.SH DESCRIPTION
+.B Mkpart
+keeps the partitions already in the MBR of
+.I device
+(the root file system the system runs from) and fills the following
+empty slots with new partitions, one per argument.
+Each starts on a 4 MiB boundary after the one before it, the usual
+erase unit of an SD card (Galtzagorriak MINIX, spec R12.32).
+It never moves an existing partition.
+The kernel reads the new table at the next boot.
+.PP
+.I type
+is hex: 81 for MINIX, 82 for swap.
+.I size
+is in MB,
+.IB N %
+for that share of the space that is left, or
+.B *
+for all that is left.
+.B @end
+puts the partition at the end of the card (on a 4 MiB boundary); the
+arguments after it fill the space before it.
+The MBR slots follow the order of the arguments, whatever the place on
+the card.
+A swap partition (82) stays below 4 GiB \- 1 MiB (a
+.B %
+or
+.B *
+size is cut to that); a MINIX partition may be larger (a MINIX V3
+.BR /home ,
+up to 2 TiB).
+.SH OPTIONS
+.TP
+.B \-l
+List the partition table: slot, type, start and size in sectors, size in MB.
+.TP
+.B \-s
+Print the size of
+.I device
+in MB.
+.TP
+.BI \-g " N"
+Make partition
+.I N
+reach up to the next partition after it, or the end of the card.
+.B "setup \-H"
+uses it to give a MINIX V3
+.B /home
+the space that swap had on a card made before.
+.TP
+.BI \-n " sectors"
+A dry run: as if
+.I device
+had that many sectors.
+It prints the new table and writes nothing.
+.SH EXAMPLES
+.TP 30
+.B "mkpart /dev/hd0 81:2048 82:64 81:*"
+/usr (2 GB), swap (64 MB), /home (the rest): the first boot on a card
+below 8 GB.
+.TP
+.B "mkpart /dev/hd0 81:2048 82:50%@end 81:*"
+/usr, then swap at the end of the card (half of what is left after
+/usr, at most 4 GiB \- 1 MiB), /home between them: the first boot on
+an 8 GB or larger card (spec R12.34).
+.TP
+.B "mkpart -n 62333952 /dev/hd0 81:2048 82:50%@end 81:*"
+The same, as a dry run for a 32 GB card.
+.SH "SEE ALSO"
+.BR mkfs (1),
+.BR erase (8),
+.BR part (8).

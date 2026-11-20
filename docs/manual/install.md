@@ -145,11 +145,16 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    |---|---|---|---|
    | `/dev/hd1` | `/` | 32 MB | the system, `/etc` settings |
    | `/dev/hd2` | `/usr` | 2 GB | programs and packages |
-   | `/dev/hd3` | (swap) | 64 MB | swap for idle programs, off by default ([Swap](swap.md)) |
-   | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
+   | `/dev/hd3` | (swap) | see below | swap for idle programs, off by default ([Swap](swap.md)) |
+   | `/dev/hd4` | `/home` | the rest | your files, MINIX V3 |
 
-   **(planned)** `/home` as a MINIX V3 file system that fills the whole card, also past 4 GB
-   (spec section O).
+   On a card below 8 GB swap is 64 MB, right after `/usr`, and `/home` takes the rest. On an
+   8 GB or larger card swap sits **at the end of the card** and takes half of the space after
+   `/usr`, at most 4 GiB − 1 MiB; `/home` lies between `/usr` and swap. `/home` is a MINIX V3
+   file system (names up to 60 characters, larger than 4 GB), and its block map already has
+   room up to the end of the card, so it can later take swap's space too (`setup -H`, see
+   [The SD card](sdcard.md#converting-home-to-minix-v3-setup--h)). Before this version `/home`
+   was MINIX V2, at most 4 GB.
 
 2. After the reboot it shows "Preparing the card..." and tells the card that `/usr`, swap and
    `/home` are empty (`erase`, see [Swap](swap.md)): a card that was full before, from a camera
