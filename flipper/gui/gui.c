@@ -300,17 +300,30 @@ int gui_wait(struct gui_in *in, int clicks, int ms, int fd)
 	struct pollfd p[2];
 	long end = ms < 0 ? 0 : ticks() + ((long) ms * CLK_TCK + 999) / 1000;
 	long left;
-	int k, b, r;
+	int k, b, r, rk;
 
 	if (btn_fd < 0) return 0;
 	for (;;) {
-		if (ms >= 0 || fd >= 0) {	/* a timed wait or two fds: poll */
+		/* a held repeating key: the poll wakes up for the next repeat */
+		rk = in->rep & in->down & ~in->spoilt;
+		if (rk != 0 && (rk & (rk - 1)) != 0) rk = 0;	/* one key only */
+		if (ms >= 0 || fd >= 0 || rk != 0) {	/* a timed wait, two fds or a repeat: poll */
 			left = ms < 0 ? -1 : end - ticks();
 			if (ms >= 0 && left <= 0) return 0;
+			if (rk != 0) {
+				long w = in->next - ticks();
+
+				if (w < 0) w = 0;
+				if (left < 0 || w < left) left = w;
+			}
 			p[0].fd = btn_fd; p[0].events = POLLIN; p[0].revents = 0;
 			p[1].fd = fd; p[1].events = POLLIN; p[1].revents = 0;
 			r = poll(p, fd >= 0 ? 2 : 1,
-				 ms < 0 ? -1 : (int) (left * 1000 / CLK_TCK));
+				 left < 0 ? -1 : (int) (left * 1000 / CLK_TCK));
+			if (r == 0 && rk != 0 && ticks() >= in->next) {
+				in->next += ((long) GUI_REP_MS * CLK_TCK + 999) / 1000;
+				return rk;
+			}
 			if (r <= 0) continue;	/* the time is checked above */
 			/* the buttons first: a key is never kept waiting
 			 * behind the other side's records */
@@ -327,6 +340,8 @@ int gui_wait(struct gui_in *in, int clicks, int ms, int fd)
 			if (in->down & ~k) in->spoilt |= in->down | k;
 			in->down |= k;
 			in->t[b] = ticks();
+			in->next = in->t[b]
+				+ ((long) GUI_REP_FIRST * CLK_TCK + 999) / 1000;
 			if (!(clicks & k) || in->raw) return k;
 		} else {				/* up */
 			int alone = !(in->spoilt & k);

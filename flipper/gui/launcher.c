@@ -857,6 +857,7 @@ int main(int argc, char **argv)
 			dirty = 1;
 			continue;
 		}
+		in.rep = KEY_UP | KEY_DOWN;	/* hold = repeat (#361) */
 		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, i, dk_rfd);
 		if (k == GUI_FD) {		/* records from modules */
 			dk_new = 0;
