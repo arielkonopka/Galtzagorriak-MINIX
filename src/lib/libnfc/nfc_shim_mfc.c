@@ -2,7 +2,8 @@
  * nfc_shim.c (#404): thread flags without threads, and the storage, stream
  * and key-dictionary calls of its dictionary/nested attack modes, which
  * fail here (no file system in the library; libnfc's own mf_attack.c does
- * the attacks).  Its read mode and mf_classic_poller_sync use none of
+ * the attacks), and the file half of nfc_device.c (nfc_file.c reads and
+ * writes .nfc files).  Its read mode and mf_classic_poller_sync use none of
  * them.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -10,6 +11,7 @@
 #include <furi.h>
 #include <stream/buffered_file_stream.h>
 #include <toolbox/keys_dict.h>
+#include <flipper_format/flipper_format.h>
 
 static uint32_t nfcshim_flags;
 
@@ -60,5 +62,24 @@ void keys_dict_free(KeysDict* d) { (void)d; }
 bool keys_dict_rewind(KeysDict* d) { (void)d; return false; }
 bool keys_dict_get_next_key(KeysDict* d, uint8_t* key, size_t size) {
     (void)d; (void)key; (void)size;
+    return false;
+}
+
+FlipperFormat* flipper_format_buffered_file_alloc(Storage* st) { (void)st; return NULL; }
+bool flipper_format_buffered_file_open_always(FlipperFormat* ff, const char* p) {
+    (void)ff; (void)p;
+    return false;
+}
+bool flipper_format_buffered_file_open_existing(FlipperFormat* ff, const char* p) {
+    (void)ff; (void)p;
+    return false;
+}
+void flipper_format_free(FlipperFormat* ff) { (void)ff; }
+bool flipper_format_read_header(FlipperFormat* ff, FuriString* t, uint32_t* v) {
+    (void)ff; (void)t; (void)v;
+    return false;
+}
+bool flipper_format_write_header_cstr(FlipperFormat* ff, const char* t, uint32_t v) {
+    (void)ff; (void)t; (void)v;
     return false;
 }

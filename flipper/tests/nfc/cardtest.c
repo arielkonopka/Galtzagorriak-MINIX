@@ -13,7 +13,10 @@
 #include "cm_mfc.h"
 
 #include <nfc/nfc.h>
+#include <nfc/nfc_device.h>
 #include <nfc/protocols/mf_classic/mf_classic_poller_sync.h>
+
+#include "nfc_supported_cards.h"
 
 static int fails;
 #define CHECK(c, msg)                         \
@@ -120,9 +123,91 @@ static void test_sync(void) {
     nfc_free(nfc);
 }
 
+/* ---- supported_cards: the pattern ----
+ * A card the way the reader app sees it: a plain read gave the UID and
+ * type (here set directly), then nfc_supported_cards_read() finds the
+ * parser whose verify() accepts the card, the parser reads it with its
+ * own keys, and nfc_supported_cards_parse() turns the dump into text. */
+static NfcDevice* nsc_device(const uint8_t* uid, MfClassicType type) {
+    MfClassicData* d = mf_classic_alloc();
+    d->type = type;
+    mf_classic_set_uid(d, uid, 4);
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfClassic, d);
+    mf_classic_free(d);
+    return dev;
+}
+
+/* Run read + parse on the card in `card`; returns the text (static). */
+static const char* nsc_run(const uint8_t* uid, MfClassicType type, const char* want, int* ok) {
+    static char text[NFCSHIM_STR_MAX + 1];
+    Nfc* nfc = card_nfc();
+    NfcDevice* dev = nsc_device(uid, type);
+    FuriString* out = furi_string_alloc();
+    int r = nfc_supported_cards_read(nfc, dev);
+    int p = nfc_supported_cards_parse(dev, out);
+    *ok = r >= 0 && p == r && !strcmp(nfc_supported_cards_name((size_t)p), want);
+    if(!*ok)
+        printf("     %s: read by %s, parsed by %s\n", want,
+               r >= 0 ? nfc_supported_cards_name((size_t)r) : "none",
+               p >= 0 ? nfc_supported_cards_name((size_t)p) : "none");
+    snprintf(text, sizeof text, "%s", furi_string_get_cstr(out));
+    furi_string_free(out);
+    nfc_device_free(dev);
+    nfc_free(nfc);
+    return text;
+}
+
+/* MiZIP (mizip.c): keys of sectors 1-4 derived from the UID by XOR
+ * tables, written here again from the published derivation. */
+static void test_mizip(void) {
+    static const uint8_t uid[4] = {0xDE, 0xAD, 0x12, 0x34};
+    static const uint8_t xa[4][6] = {{0x09, 0x12, 0x5A, 0x25, 0x89, 0xE5},
+                                     {0xAB, 0x75, 0xC9, 0x37, 0x92, 0x2F},
+                                     {0xE2, 0x72, 0x41, 0xAF, 0x2C, 0x09},
+                                     {0x31, 0x7A, 0xB7, 0x2F, 0x44, 0x90}};
+    static const uint8_t xb[4][6] = {{0xF1, 0x2C, 0x84, 0x53, 0xD8, 0x21},
+                                     {0x73, 0xE7, 0x99, 0xFE, 0x32, 0x41},
+                                     {0xAA, 0x4D, 0x13, 0x76, 0x56, 0xAE},
+                                     {0xB0, 0x13, 0x27, 0x27, 0x2D, 0xFD}};
+    static const uint8_t oa[6] = {0, 1, 2, 3, 0, 1}, ob[6] = {2, 3, 0, 1, 2, 3};
+    cm_mfc_init(&card, uid, 5);
+    card.a.sak = 0x09; /* MIFARE Mini */
+    cm_mfc_set_key(&card, 0, 0, 0xA0A1A2A3A4A5ULL);
+    cm_mfc_set_key(&card, 0, 1, 0xB4C132439EEFULL);
+    for(int s = 1; s < 5; s++) {
+        uint64_t ka = 0, kb = 0;
+        for(int i = 0; i < 6; i++) {
+            ka = ka << 8 | (uint8_t)(uid[oa[i]] ^ xa[s - 1][i]);
+            kb = kb << 8 | (uint8_t)(uid[ob[i]] ^ xb[s - 1][i]);
+        }
+        cm_mfc_set_key(&card, s, 0, ka);
+        cm_mfc_set_key(&card, s, 1, kb);
+    }
+    card.block[8][1] = 1234 & 0xff, card.block[8][2] = 1234 >> 8;  /* current */
+    card.block[9][1] = 1000 & 0xff, card.block[9][2] = 1000 >> 8;  /* previous */
+    card.block[10][0] = 0x00;                                      /* 8 is current */
+    int ok;
+    const char* t = nsc_run(uid, MfClassicTypeMini, "mizip", &ok);
+    CHECK(ok, "mizip: verified, read with derived keys, parsed");
+    CHECK(strstr(t, "MiZIP Card") && strstr(t, "UID: DE AD 12 34"), "mizip: title and UID");
+    CHECK(strstr(t, "Current Credit: 12.34 E") && strstr(t, "Previous Credit: 10.00 E"),
+          "mizip: current and previous credit");
+    card.block[10][0] = 0x55; /* the pointer swaps the two */
+    t = nsc_run(uid, MfClassicTypeMini, "mizip", &ok);
+    CHECK(ok && strstr(t, "Current Credit: 10.00 E"), "mizip: credit pointer in block 10");
+    cm_mfc_set_key(&card, 0, 1, 0x112233445566ULL); /* not a MiZIP */
+    Nfc* nfc = card_nfc();
+    NfcDevice* dev = nsc_device(uid, MfClassicTypeMini);
+    CHECK(nfc_supported_cards_read(nfc, dev) < 0, "mizip: other card not taken");
+    nfc_device_free(dev);
+    nfc_free(nfc);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
     test_sync();
+    test_mizip();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;

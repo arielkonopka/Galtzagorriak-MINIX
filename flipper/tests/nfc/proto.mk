@@ -43,9 +43,21 @@ VSRC	+= $(L)/nfc_shim_mfc.c \
 	   $(V)/nfc/protocols/mf_classic/mf_classic_poller.c \
 	   $(V)/nfc/protocols/mf_classic/mf_classic_poller_i.c \
 	   $(V)/nfc/protocols/mf_classic/mf_classic_poller_sync.c
-VHDR	+= cm_mfc.h
+VHDR	+= cm_mfc.h proto.mk
+# NfcDevice (vendored nfc_device.c over a reduced table) and the
+# supported_cards parsers, linked in through nfc_supported_cards.c.  The
+# parser list is src/lib/libnfc/nfc_supported_cards_list.h; NSC_PARSERS
+# must name the same files.
+NSC_PARSERS := mizip
+CSRC	:= $(L)/nfc_device_defs_shim.c $(V)/nfc/nfc_device.c $(V)/nfc/nfc_device_i.c \
+	   $(L)/nfc_supported_cards.c \
+	   $(patsubst %,$(V)/plugins/supported_cards/%.c,$(NSC_PARSERS))
+VHDR	+= $(L)/nfc_supported_cards.h $(L)/nfc_supported_cards_list.h
 # -Wno-unused-variable: mf_classic_poller.c keeps a few.
-VWARN	:= -Wno-format -Wno-unused-variable -Wno-unused-function
+# -fno-sanitize=shift-base: stock builds the CUID as uid[0] << 24 (an int
+# shift into the sign bit for UIDs from 0x80); GCC defines that shift
+# (manual, "Integers implementation"), so only this one check is off.
+VWARN	:= -Wno-format -Wno-unused-variable -Wno-unused-function -fno-sanitize=shift-base
 
 prototest: $(B)/prototest
 	./$(B)/prototest
