@@ -561,6 +561,21 @@ PRIVATE int recount_step()
   sp->s_zfree = (zone_t) rc_count;
   sp->s_flags &= ~SF_ESTIMATE;
   rc_slot = RC_NONE;
+  /* A file system that stays CLEAN (not written since the mount) gets no
+   * CLEAN write at umount, so the exact counts go out now: once per mount,
+   * and only if they differ from the hint on the disk.  put_sflags writes
+   * through dev_io, not the cache, so SF_WRITTEN stays as it was. */
+  if ((sp->s_flags & SF_DCLEAN) && !sp->s_rd_only && sp->s_native) {
+	u32_t *h;
+	int same;
+
+	bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
+	h = (u32_t *) &bp->b_data[SB_HINT_OFF];
+	same = bp->b_dev != sp->s_dev || (h[0] == SB_HINT_TAG
+		&& h[1] == (u32_t) sp->s_zfree && h[2] == (u32_t) sp->s_ifree);
+	put_block(bp, ZUPER_BLOCK & ~WRITE_IMMED);
+	if (!same) (void) put_sflags(sp, SF_CLEAN, 0);
+  }
   return(1);			/* another file system may need one */
 }
 
