@@ -78,3 +78,29 @@ $(B)/cardtest: cardtest.c $(VSRC) $(CSRC) $(VHDR)
 	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ cardtest.c $(VSRC) $(CSRC) -lm
 
 .PHONY: prototest cardtest
+# Part 5 (#412): MIFARE Ultralight/NTAG (poller and sync layer; mbedTLS
+# AES/3DES failed closed by nfc_shim_crypto.c), FeliCa, ST25TB, EMV.
+P5SRC	:= $(L)/nfc_shim_crypto.c $(L)/mf_ultralight.c \
+	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight.c \
+	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_aes_crypto.c \
+	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller.c \
+	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller_i.c \
+	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.c
+# -fshort-enums: MfUltralightConfigPages has an enum bit-field (mirror_conf)
+# in an unpacked inner struct; with 4-byte enums the MIRROR union is 4
+# bytes and AUTH0/ACCESS/PWD/PACK land on the wrong bytes.  The struct
+# must be 16 bytes (one config page set), checked in p5test.c.
+P5FLAGS	:= -fshort-enums
+VSRC	+= $(P5SRC)
+VHDR	+= cm_mful.h $(wildcard $(L)/shim/mbedtls/*.h $(L)/shim/mbedtls/include/mbedtls/*.h)
+# The poller/device tables list Ultralight, so every test links it.
+VWARN	+= $(P5FLAGS)
+
+p5test: $(B)/p5test
+	./$(B)/p5test
+
+$(B)/p5test: p5test.c $(VSRC) $(VHDR)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ p5test.c $(VSRC) -lm
+
+.PHONY: p5test
