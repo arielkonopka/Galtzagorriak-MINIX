@@ -13,7 +13,8 @@ CC	?= cc
 SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -std=gnu11 -O1 -g -Wall $(SAN)
 INC	:= -I$(L)
-SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c
+SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c \
+	   $(L)/nfc_file.c
 HDR	:= $(wildcard $(L)/*.h)
 B	:= build
 

@@ -17,6 +17,7 @@
 #include "mf_classic.h"
 #include "mf_dict.h"
 #include "mf_attack.h"
+#include "nfc_file.h"
 
 static int fails;
 #define CHECK(c, msg) do { if(!(c)) { printf("FAIL: %s\n", msg); fails++; } } while(0)
@@ -221,6 +222,67 @@ static void test_attack(void)
 	}
 }
 
+/* ---- .nfc file format (AC14.1) ---- */
+
+static int dev_data_eq(const nfc_device_t *a, const nfc_device_t *b)
+{
+	if(a->type != b->type) return 0;
+	if(a->uid_len != b->uid_len || memcmp(a->uid, b->uid, a->uid_len)) return 0;
+	if(memcmp(a->atqa, b->atqa, 2) || a->sak != b->sak) return 0;
+	if(a->type == NFC_DEV_MF_CLASSIC) {
+		if(a->mfc.block_count != b->mfc.block_count) return 0;
+		return memcmp(a->mfc.block, b->mfc.block,
+			      a->mfc.block_count * sizeof(mf_block_t)) == 0;
+	}
+	if(a->type == NFC_DEV_MF_ULTRALIGHT) {
+		if(a->ul_pages != b->ul_pages) return 0;
+		return memcmp(a->ul_page, b->ul_page, a->ul_pages * 4) == 0;
+	}
+	return 1;
+}
+
+static void test_nfc_file(void)
+{
+	static nfc_device_t a, b, v2, v3;
+	const char *err = NULL;
+	const char *tmp = "build/roundtrip.nfc";
+
+	/* a stock-format v4 MIFARE Classic 1K loads */
+	CHECK(nfc_file_load(&a, "vectors/mfc_1k_v4.nfc", &err) == 0, "load mfc v4");
+	CHECK(a.type == NFC_DEV_MF_CLASSIC, "device type mifare classic");
+	CHECK(a.uid_len == 4 && a.uid[0] == 0xA2 && a.uid[3] == 0x11, "mfc UID");
+	CHECK(a.atqa[1] == 0x04 && a.sak == 0x08, "mfc ATQA/SAK");
+	CHECK(a.mfc.type == MF_TYPE_1K && a.mfc.block_count == 64, "mfc 1K 64 blocks");
+	CHECK(a.mfc.block[1].data[0] == 0x10, "mfc block 1 data");
+
+	/* write it back and reload: the data is identical (round trip) */
+	CHECK(nfc_file_save(&a, tmp) == 0, "save mfc");
+	CHECK(nfc_file_load(&b, tmp, &err) == 0, "reload mfc");
+	CHECK(dev_data_eq(&a, &b), "mfc round-trips");
+
+	/* older versions load to the same data as v4 (AC14.1 reverse) */
+	CHECK(nfc_file_load(&v2, "vectors/mfc_1k_v2.nfc", &err) == 0, "load mfc v2");
+	CHECK(nfc_file_load(&v3, "vectors/mfc_1k_v3.nfc", &err) == 0, "load mfc v3");
+	CHECK(dev_data_eq(&a, &v2), "v2 == v4 data");
+	CHECK(dev_data_eq(&a, &v3), "v3 == v4 data");
+
+	/* NTAG215 (Ultralight family) loads and round-trips */
+	CHECK(nfc_file_load(&a, "vectors/ntag215_v4.nfc", &err) == 0, "load ntag215");
+	CHECK(a.type == NFC_DEV_MF_ULTRALIGHT, "device type ultralight");
+	CHECK(a.ul_pages == 135, "ntag215 135 pages");
+	CHECK(a.uid_len == 7, "ntag215 7-byte UID");
+	CHECK(nfc_file_save(&a, tmp) == 0, "save ntag215");
+	CHECK(nfc_file_load(&b, tmp, &err) == 0, "reload ntag215");
+	CHECK(dev_data_eq(&a, &b), "ntag215 round-trips");
+
+	/* a non-NFC file is refused */
+	{
+		FILE *f = fopen("build/bad.nfc", "w");
+		fputs("hello: world\n", f); fclose(f);
+		CHECK(nfc_file_load(&b, "build/bad.nfc", &err) != 0, "non-NFC refused");
+	}
+}
+
 int main(void)
 {
 	printf("libnfc host tests (Phase 14, #387)\n");
@@ -228,6 +290,7 @@ int main(void)
 	test_dict_stream();
 	test_wrong_key();
 	test_attack();
+	test_nfc_file();
 	if(fails) { printf("%d FAILED\n", fails); return 1; }
 	printf("all libnfc tests passed\n");
 	return 0;
