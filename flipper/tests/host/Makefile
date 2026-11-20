@@ -14,7 +14,7 @@ B	:= build
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
 	   spectest pmstattest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
      run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
@@ -52,6 +52,10 @@ run-hid:
 # (make subghztest).
 run-subghz:
 	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
+# libir (Phase 7, issue #389): the stock infrared codecs against the stock
+# .irtest vectors, .ir files round trip (make irtest).
+run-ir:
+	$(MAKE) -C $(MROOT)/flipper/tests/infrared test
 
 # mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
 # pipe, then a short libFuzzer run of the container parser (AC10.4.6;
@@ -187,4 +191,4 @@ $(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ir
