@@ -63,7 +63,7 @@ VHDR	+= $(L)/nfc_supported_cards.h $(L)/nfc_supported_cards_list.h
 # -fno-sanitize=shift-base: stock builds the CUID as uid[0] << 24 (an int
 # shift into the sign bit for UIDs from 0x80); GCC defines that shift
 # (manual, "Integers implementation"), so only this one check is off.
-VWARN	:= -Wno-format -Wno-unused-variable -Wno-unused-function -fno-sanitize=shift-base
+VWARN	:= -Wno-format -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function -fno-sanitize=shift-base
 
 prototest: $(B)/prototest
 	./$(B)/prototest
