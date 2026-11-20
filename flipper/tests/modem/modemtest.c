@@ -1011,6 +1011,62 @@ static void test_region_blob(void)
 	rmdir(dir);
 }
 
+/* RQ.5: the shipped tables are known by their SHA-256; a changed one is
+ * a custom table (ACQ.4's -f is the region command's) */
+static void test_region_sha(void)
+{
+	static const unsigned char abc[32] = {
+		0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,
+		0x5d,0xae,0x22,0x23,0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,
+		0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad };
+	struct mdm_sha256 c;
+	unsigned char h[32];
+	char dir[64], path[96], line[192];
+	unsigned i;
+	int same;
+	FILE *in, *out;
+
+	mdm_sha_init(&c);
+	mdm_sha_add(&c, "abc", 3);
+	mdm_sha_done(&c, h);
+	CHECK(memcmp(h, abc, 32) == 0, "SHA-256 of abc");
+	CHECK(mdm_rg_nshipped == (int) (sizeof(rg_codes) / sizeof(rg_codes[0])),
+		"%d shipped tables, %d tested", mdm_rg_nshipped,
+		(int) (sizeof(rg_codes) / sizeof(rg_codes[0])));
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		CHECK(mdm_rg_sha_file(REGION_DIR, rg_codes[i], h) == 0
+			&& mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped,
+			rg_codes[i], h, &same) == 1 && same >= 0,
+			"%s: not in the shipped list", rg_codes[i]);
+	}
+	printf("region: %d shipped tables, %d B of hash list\n",
+		mdm_rg_nshipped, mdm_rg_nshipped * (int) sizeof(mdm_rg_shipped[0]));
+	CHECK(sizeof(mdm_rg_shipped[0]) == 34, "34 B an entry");
+	/* PL.reg with one more comment line: custom, shipped PL known */
+	snprintf(dir, sizeof(dir), "/tmp/rgsha.%d", (int) getpid());
+	CHECK(mkdir(dir, 0700) == 0, "mkdir %s", dir);
+	snprintf(path, sizeof(path), "%s/PL.reg", dir);
+	in = fopen(REGION_DIR "/PL.reg", "r");
+	out = fopen(path, "w");
+	CHECK(in && out, "copy PL.reg");
+	if (in && out) {
+		while (fgets(line, sizeof(line), in)) fputs(line, out);
+		fputs("# changed\n", out);
+	}
+	if (in) fclose(in);
+	if (out) fclose(out);
+	CHECK(mdm_rg_sha_file(dir, "PL", h) == 0
+		&& mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped, "PL", h,
+		&same) == 0 && same >= 0
+		&& strncmp(mdm_rg_shipped[same].cc, "PL", 2) == 0,
+		"changed PL.reg taken as shipped");
+	CHECK(mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped, "XX", h,
+		&same) == 0 && same == -1, "XX shipped");
+	CHECK(mdm_rg_sha_file(dir, "XX", h) < 0, "XX.reg read");
+	unlink(path);
+	rmdir(dir);
+}
+
 int main(int argc, char **argv)
 {
 	(void) argc; (void) argv;
@@ -1032,6 +1088,7 @@ int main(int argc, char **argv)
 	test_region_tx(0);
 	test_region_tx(1);
 	test_region_blob();
+	test_region_sha();
 	test_fuzz();
 	test_z();
 	test_arq_z();

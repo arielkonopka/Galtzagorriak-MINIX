@@ -304,4 +304,27 @@ unsigned long mdm_rg_blob_crc(const unsigned char *b);
 /* A checked record back into rg (no refs, no names): for mdm_rg_tx. */
 int mdm_rg_blob_load(const unsigned char *b, int len, struct mdm_region *rg);
 
+/* ---- the shipped tables (RQ.5; rgsha.c, flipper/tools/mkreghash.py) ---- */
+struct mdm_sha256 {
+	unsigned long h[8];
+	unsigned char buf[64];
+	unsigned long len;		/* bytes hashed so far */
+};
+void mdm_sha_init(struct mdm_sha256 *c);
+void mdm_sha_add(struct mdm_sha256 *c, const void *data, unsigned long n);
+void mdm_sha_done(struct mdm_sha256 *c, unsigned char out[32]);
+struct mdm_rghash {
+	char cc[2];			/* no NUL: 34 B an entry */
+	unsigned char sha[32];
+};
+/* The list the build makes of the shipped .reg files (const, in flash). */
+extern const struct mdm_rghash mdm_rg_shipped[];
+extern const int mdm_rg_nshipped;
+/* SHA-256 of dir/CC.reg: 0, or -1 if it cannot be read. */
+int mdm_rg_sha_file(const char *dir, const char *cc, unsigned char out[32]);
+/* 1: sha is a shipped CC.reg; 0: it is not (custom).  *same_code: the
+ * index of a shipped CC.reg, -1 if none was shipped. */
+int mdm_rg_sha_find(const struct mdm_rghash *list, int n, const char *cc,
+	const unsigned char sha[32], int *same_code);
+
 #endif /* _MODEM_H */
