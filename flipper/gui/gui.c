@@ -321,7 +321,8 @@ int gui_wait(struct gui_in *in, int clicks, int ms, int fd)
 			r = poll(p, fd >= 0 ? 2 : 1,
 				 left < 0 ? -1 : (int) (left * 1000 / CLK_TCK));
 			if (r == 0 && rk != 0 && ticks() >= in->next) {
-				in->next += ((long) GUI_REP_MS * CLK_TCK + 999) / 1000;
+				in->next += ((long) (in->rep_ms ? in->rep_ms : GUI_REP_MS)
+						* CLK_TCK + 999) / 1000;
 				return rk;
 			}
 			if (r <= 0) continue;	/* the time is checked above */
