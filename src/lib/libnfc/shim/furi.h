@@ -121,6 +121,12 @@ uint32_t furi_thread_flags_set(FuriThreadId id, uint32_t flags);
 uint32_t furi_thread_flags_clear(uint32_t flags);
 uint32_t furi_thread_flags_wait(uint32_t flags, uint32_t options, uint32_t timeout);
 void furi_string_trim_chars(FuriString* s, const char* chars);
+/* FeliCa's file loader (#412). */
+#define FURI_STRING_FAILURE ((size_t)-1)
+size_t nfcshim_str_search(const FuriString* s, const char* needle, size_t start);
+#define furi_string_search_str(s, n, ...) nfcshim_str_search(s, n, (0, ##__VA_ARGS__))
+void furi_string_mid(FuriString* s, size_t start, size_t len);
+void furi_string_replace_all(FuriString* s, const char* from, const char* to);
 #define furi_string_trim_1(s) furi_string_trim_chars(s, " \n\r\t")
 #define furi_string_trim_2(s, c) furi_string_trim_chars(s, c)
 #define furi_string_trim_x(a, b, f, ...) f

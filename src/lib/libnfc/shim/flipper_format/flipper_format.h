@@ -20,6 +20,7 @@ bool flipper_format_write_bool(FlipperFormat*, const char*, const bool*, uint16_
 bool flipper_format_rewind(FlipperFormat*);
 bool flipper_format_read_hex_uint64(FlipperFormat*, const char*, uint64_t*, uint16_t);
 bool flipper_format_write_hex_uint64(FlipperFormat*, const char*, const uint64_t*, uint16_t);
+bool flipper_format_write_empty_line(FlipperFormat*);
 /* nfc_device_save/_load (vendored nfc_device.c): no files here, opening
  * fails, so both return false. */
 typedef struct Storage Storage;

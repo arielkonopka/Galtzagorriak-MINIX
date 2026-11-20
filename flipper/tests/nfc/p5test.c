@@ -12,11 +12,14 @@
 #include "nfc_shim.h"
 #include "mf_ultralight.h" /* libnfc's own reader (#387) */
 #include "cm_mful.h"
+#include "cm_felica.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
 #include <nfc/protocols/mf_ultralight/mf_ultralight_poller.h>
 #include <nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.h>
+#include <nfc/protocols/felica/felica_poller.h>
+#include <nfc/protocols/felica/felica_poller_sync.h>
 
 _Static_assert(sizeof(MfUltralightConfigPages) == 16, "config pages: 4 pages, 16 bytes");
 
@@ -139,8 +142,75 @@ static void test_mful(void) {
     }
 }
 
+/* ---- FeliCa (Lite-S) ---- */
+
+typedef struct {
+    int ready, incomplete, error, auth_req;
+} felica_ctx_t;
+
+static NfcCommand felica_cb(NfcGenericEvent event, void* context) {
+    felica_ctx_t* c = context;
+    const FelicaPollerEvent* e = event.event_data;
+    if(event.protocol != NfcProtocolFelica) return NfcCommandContinue;
+    switch(e->type) {
+    case FelicaPollerEventTypeRequestAuthContext:
+        c->auth_req++;
+        e->data->auth_context->skip_auth = true; /* no card key here */
+        return NfcCommandContinue;
+    case FelicaPollerEventTypeReady: c->ready++; break;
+    case FelicaPollerEventTypeIncomplete: c->incomplete++; break;
+    default: c->error++; break;
+    }
+    return NfcCommandStop;
+}
+
+static void test_felica(void) {
+    static cm_felica_t k;
+    nfc_xfer_t x = {0};
+    felica_ctx_t c = {0};
+
+    printf("-- FeliCa\n");
+    cm_felica_lite_s(&k);
+    x.transceive = cm_felica_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolFelica);
+    nfc_poller_start(poller, felica_cb, &c);
+    nfc_poller_stop(poller);
+    const FelicaData* d = (const FelicaData*)nfc_poller_get_data(poller);
+    CHECK(c.auth_req == 1 && c.error == 0, "FeliCa: polled, auth context asked once");
+    /* Without the card key the poller reports the Lite-S read incomplete. */
+    CHECK(c.incomplete == 1 && c.ready == 0, "FeliCa: Lite-S read, incomplete without CK");
+    CHECK(d->workflow_type == FelicaLite, "FeliCa: PMm F1 -> Lite workflow");
+    CHECK(!memcmp(d->idm.data, k.idm, 8) && !memcmp(d->pmm.data, k.pmm, 8), "FeliCa: IDm, PMm");
+    CHECK(d->blocks_total == 28, "FeliCa: all 28 Lite-S blocks asked");
+    CHECK(!memcmp(d->data.fs.spad[5].data, k.blk[5], 16) && d->data.fs.spad[5].SF1 == 0,
+          "FeliCa: S_PAD5 contents");
+    CHECK(!memcmp(d->data.fs.id.data, k.idm, 8), "FeliCa: ID block");
+    CHECK(d->data.fs.ck.SF1 == 0x01 && d->data.fs.ck.SF2 == 0xA8, "FeliCa: CK unreadable (01 A8)");
+    nfc_poller_free(poller);
+
+    FelicaData* sd = felica_alloc();
+    FelicaError se = felica_poller_sync_read(nfc, sd, NULL);
+    CHECK((se == FelicaErrorNone || se == FelicaErrorNotPresent) && !memcmp(sd->idm.data, k.idm, 8),
+          "FeliCa sync: read gives IDm");
+    felica_free(sd);
+    nfc_free(nfc);
+
+    k.lost = 1;
+    nfc = nfc_alloc_xfer(&x);
+    memset(&c, 0, sizeof c);
+    poller = nfc_poller_alloc(nfc, NfcProtocolFelica);
+    nfc_poller_start(poller, felica_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 0 && c.incomplete == 0, "FeliCa: no card, no read, no hang");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
 int main(void) {
     test_mful();
+    test_felica();
     if(fails) {
         printf("%d part-5 test(s) FAILED\n", fails);
         return 1;
