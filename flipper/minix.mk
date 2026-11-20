@@ -1092,6 +1092,23 @@ update: $(MB)/minix-base.bin $(BASEPKG) $(UPDATE_PKGS) $(GZBUILD) \
 .PHONY: updatetest
 updatetest:
 	python3 -I tools/updatetest.py -o $(MB)/updatetest --board $(UPDATE_BOARD)
+# QEMU: a real update file for the apply test (tools/gzapplytest.py): this
+# build's minix-base.bin and base package, epoch GZ_EPOCH + 1, signed with
+# updatetest's throw-away key, in /lib/gzu/apply.upd.
+ifeq ($(BOARD),qemu)
+GZU_APPLY := $(MB)/gzu/apply.upd
+$(GZU_APPLY): $(GZU_RUN) $(MB)/minix-base.bin $(BASEPKG) $(GZBUILD) \
+		tools/mkupdate.py tools/gzsign
+	awk '$$2 == "GZ_EPOCH" { $$3 = $$3 + 1 } 1' \
+	   $(MROOT)/include/minix/gzversion.h > $(MB)/gzu-apply.h
+	python3 -I tools/mkupdate.py -o $@.tmp --version-h $(MB)/gzu-apply.h \
+	   --changelog $(MROOT)/CHANGELOG.md --gzbuild $(GZBUILD) \
+	   --libc $(SHL)/libc.json --furi $(SHF)/furi.json \
+	   --board qemu-mps2 --flash $(MB)/minix-base.bin --load 0 \
+	   --root $(BASEPKG)
+	python3 -I tools/gzsign --key $(MB)/updatetest/trusted.key $@.tmp
+	mv $@.tmp $@
+endif
 .PHONY: pkgs
 pkgs: $(PKGS)
 
@@ -1108,7 +1125,8 @@ $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
 # proto becomes one entry per program.
-$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN)
+$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN) \
+		$(GZU_APPLY)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
 	   "$(PKGS)" "$(SUIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))

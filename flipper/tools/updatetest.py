@@ -8,7 +8,10 @@ wrong board, a lower or equal epoch, a from_min above the running release.
 The good and bad files and cases.txt (file, running epoch, running release,
 expected first word of the answer) stay in DIR for the C verifier's test
 (T33a part 2).  Nothing here is a secret: the key is made for the run and
-thrown away (only its public half is written to DIR).
+thrown away.  Its public half goes to DIR/trusted.pub (the QEMU build's
+gzupdate trusts it), its private half to DIR/trusted.key, mode 0600, for
+the QEMU apply test only (tools/gzapplytest.py signs a real file with it;
+build/ is never committed and the Flipper build never trusts this key).
 
 Usage: updatetest.py [-o DIR] [--board flipper-f7|qemu-mps2]"""
 
@@ -145,6 +148,10 @@ def main():
     pub2 = bytes.fromhex(open(os.path.join(kdir2, "update.pub")).read())
     with open(os.path.join(out, "trusted.pub"), "w") as f:
         f.write(pub.hex() + "\n")
+    tk = os.path.join(out, "trusted.key")
+    with open(os.open(tk, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
+              "wb") as f:
+        f.write(open(os.path.join(kdir, "update.key"), "rb").read())
 
     def build(name, epoch=7, board=None, from_min="0.8.0",
               key=kdir, sign=True):

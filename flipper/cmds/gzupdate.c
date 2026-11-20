@@ -2,13 +2,23 @@
  * T33a part 3).
  *
  *	gzupdate check FILE	check it as atea will; print what it updates
+ *	gzupdate apply [-n] FILE	check, ask, stage it and set it pending
+ *				(root; RS.10); -n: do not restart
  *
  * On QEMU only, `check -e EPOCH -r X.Y.Z FILE` pretends to run that epoch
  * and release (the ACS.2 test of m2test, flipper/tools/gzucases.py); the
  * Flipper build has no such option.
  *
- * Step 1 of part 3: `check` (RS.8 step 1-2).  apply, finish and commit
- * follow.  The checks are src/lib/gzsig's gzu_check, the code atea uses;
+ * `apply` (RS.10): check again, ask (the LCD window and its OK are T33b's;
+ * until then the question is asked on the console, `-y` on QEMU answers it
+ * for the tests), swap off, write the file raw to the start of the swap
+ * partition and read it back, unpack the `root` section into
+ * /.gzupdate/<epoch>/ and /usr/.gzupdate/<epoch>/ with MANIFEST last, keep
+ * the update file of the running system as /usr/.gzupdate/prev.update, then
+ * write the pending sector (the sector after the staged file, below) and
+ * restart.  atea (T33b) flashes at the next reset; on QEMU
+ * tools/ateasim.py does it on the flash image.  Every step can run again
+ * after a power cut.  finish and commit follow.  The checks are src/lib/gzsig's gzu_check, the code atea uses;
  * the trusted keys are the ones the build puts into atea's two slots
  * (RS.6: keys/release.pub, the builder's ~/.config/galtzagorriak/
  * update.pub), compiled in until atea exists (T33b reads them in place).
@@ -18,8 +28,12 @@
  * RAM while it runs: the 4 KB read buffer (heap), the file's table
  * (1.3 KB) and the verifier's 2 KB of stack; 0 B when it is not running.
  */
+#include <lib.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <minix/callnr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,7 +101,8 @@ static void show(int fd)
 	printf("OK install  Back later\n");
 }
 
-static int check(const char *path, long epoch, const unsigned char *rel)
+static int check(const char *path, long epoch, const unsigned char *rel,
+		 int keep)
 {
 	struct gzu_running run;
 	const char *why;
@@ -128,8 +143,297 @@ static int check(const char *path, long epoch, const unsigned char *rel)
 		return 1;
 	}
 	show(fd);
+	if (keep) return 0x100 | fd;	/* apply goes on with it */
 	close(fd);
 	return 0;
+}
+
+/* ---- apply (RS.10) ---- */
+
+#define STAGE	"/dev/hd3"	/* the swap partition (spec S.1) */
+#define TOPDIR	"/.gzupdate"
+#define USRDIR	"/usr/.gzupdate"
+#define CUR	USRDIR "/cur.update"	/* the running system's file */
+#define PREV	USRDIR "/prev.update"	/* the rollback copy (RS.16) */
+#define PEND_MAGIC "GZPEND1"		/* 8 bytes with the 0 */
+
+static char path1[128], path2[128];
+static gz_u8 fhash[64];		/* the whole file's SHA-512 */
+
+static int fail(const char *what, const char *arg)
+{
+	printf("gzupdate: %s%s%s\n", what, arg ? " " : "", arg ? arg : "");
+	return 2;
+}
+
+static int mmcall(int req, int i1, int i3, void *p)
+{
+	message m;
+
+	m.m1_i1 = i1;
+	m.m1_i2 = req;
+	m.m1_i3 = i3;
+	m.m1_p1 = p;
+	return _syscall(MM, MEMINFO, &m);
+}
+
+static int wr(int fd, const void *b, unsigned n)
+{
+	return write(fd, b, n) == (int) n ? 0 : -1;
+}
+
+static void le32(gz_u8 *p, gz_u32 v)
+{
+	p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
+}
+
+/* Copies n bytes at off of fd to out (a file or the staging device) and
+ * hashes them; 0 or -1. */
+static int copy_out(int fd, gz_u32 off, gz_u32 n, int out,
+		    struct gz_sha512 *h)
+{
+	long r;
+	unsigned k;
+
+	while (n > 0) {
+		k = n < BUFSZ ? n : BUFSZ;
+		if ((r = rd(&fd, off, buf, k)) != (long) k) return -1;
+		if (h) gz_sha512_update(h, buf, k);
+		if (out >= 0 && wr(out, buf, k) < 0) return -1;
+		off += k;
+		n -= k;
+	}
+	return 0;
+}
+
+/* Step 2: the whole file, raw, from sector 0 of the staging partition,
+ * then read back and compare the hashes.  The sector after it is the
+ * pending sector: cleared before, written last (pend). */
+static int stage(int fd)
+{
+	struct gz_sha512 h;
+	gz_u8 want[64], got[64];
+	int dev;
+	gz_u32 n = info.size;
+
+	if ((dev = open(STAGE, O_RDWR)) < 0) return fail("cannot open", STAGE);
+	memset(buf, 0, GZU_SECTOR);
+	if (lseek(dev, (off_t) n, SEEK_SET) != (off_t) n
+	    || wr(dev, buf, GZU_SECTOR) < 0 || lseek(dev, 0L, SEEK_SET) != 0) {
+		close(dev);
+		return fail("cannot write", STAGE);
+	}
+	gz_sha512_init(&h);
+	if (copy_out(fd, 0, n, dev, &h) < 0) {
+		close(dev);
+		return fail("cannot write", STAGE);
+	}
+	gz_sha512_final(&h, want);
+	gz_sha512_init(&h);
+	if (copy_out(dev, 0, n, -1, &h) < 0) {
+		close(dev);
+		return fail("cannot read back", STAGE);
+	}
+	gz_sha512_final(&h, got);
+	close(dev);
+	if (memcmp(want, got, 64) != 0)
+		return fail("the staged copy does not read back:", STAGE);
+	memcpy(fhash, want, 64);
+	return 0;
+}
+
+static void mkparents(char *p)
+{
+	char *s;
+
+	for (s = p + 1; *s; s++) {
+		if (*s != '/') continue;
+		*s = 0;
+		mkdir(p, 0755);
+		*s = '/';
+	}
+}
+
+static unsigned long oct(const gz_u8 *p, int n)
+{
+	unsigned long v = 0;
+
+	for (; n > 0 && *p == ' '; p++, n--) ;
+	for (; n > 0 && *p >= '0' && *p <= '7'; p++, n--) v = v * 8 + *p - '0';
+	return v;
+}
+
+static void hex(char *o, const gz_u8 *p, int n)
+{
+	static const char d[] = "0123456789abcdef";
+
+	while (n-- > 0) { *o++ = d[*p >> 4]; *o++ = d[*p++ & 15]; }
+	*o = 0;
+}
+
+/* Step 3: the root section (the base package, a ustar archive) into
+ * /.gzupdate/E/ and /usr/.gzupdate/E/ (each file system its own, so
+ * gztree's switch is a rename inside one file system), and MANIFEST
+ * (path mode uid gid sha512-first-32-bytes, one file a line) last, by a
+ * temporary file and rename.  CONTROL/ is the package's own and stays out. */
+static int unpack(int fd, const struct gzu_sect *s)
+{
+	gz_u8 hd[GZU_SECTOR], dg[64];
+	char name[101], hx[65];
+	struct gz_sha512 h;
+	unsigned long size, mode, uid, gid;
+	gz_u32 off = s->off, end = s->off + s->len;
+	FILE *man;
+	int out;
+
+	sprintf(path1, TOPDIR "/%lu/MANIFEST.new", (unsigned long) info.epoch);
+	mkparents(path1);
+	sprintf(path2, USRDIR "/%lu/x", (unsigned long) info.epoch);
+	mkparents(path2);
+	if (!(man = fopen(path1, "w"))) return fail("cannot write", path1);
+	while (off + GZU_SECTOR <= end) {
+		if (rd(&fd, off, hd, GZU_SECTOR) != GZU_SECTOR) break;
+		off += GZU_SECTOR;
+		if (hd[0] == 0) break;		/* the end blocks */
+		memcpy(name, hd, 100);
+		name[100] = 0;
+		size = oct(hd + 124, 11);
+		mode = oct(hd + 100, 7) & 07777;
+		uid = oct(hd + 108, 7);
+		gid = oct(hd + 116, 7);
+		if ((hd[156] == '0' || hd[156] == 0)
+		    && strncmp(name, "CONTROL/", 8) != 0 && name[0] != '/'
+		    && !strstr(name, "..")) {
+			if (strncmp(name, "usr/", 4) == 0)
+				sprintf(path2, USRDIR "/%lu/%s",
+					(unsigned long) info.epoch, name + 4);
+			else
+				sprintf(path2, TOPDIR "/%lu/%s",
+					(unsigned long) info.epoch, name);
+			mkparents(path2);
+			unlink(path2);
+			if ((out = open(path2, O_WRONLY | O_CREAT | O_TRUNC,
+					0600)) < 0) {
+				fclose(man);
+				return fail("cannot write", path2);
+			}
+			gz_sha512_init(&h);
+			if (copy_out(fd, off, (gz_u32) size, out, &h) < 0) {
+				close(out);
+				fclose(man);
+				return fail("cannot write", path2);
+			}
+			close(out);
+			gz_sha512_final(&h, dg);
+			chown(path2, (int) uid, (int) gid);
+			chmod(path2, (mode_t) mode);
+			hex(hx, dg, 32);
+			fprintf(man, "/%s %lo %lu %lu %s\n", name, mode, uid, gid,
+				hx);
+		}
+		off += (gz_u32) ((size + GZU_SECTOR - 1) / GZU_SECTOR * GZU_SECTOR);
+	}
+	if (fclose(man) != 0) return fail("cannot write", path1);
+	strcpy(path2, path1);
+	path2[strlen(path2) - 4] = 0;		/* .../MANIFEST */
+	if (rename(path1, path2) < 0) return fail("cannot write", path2);
+	return 0;
+}
+
+/* Step 4: the running system's update file becomes the rollback copy, the
+ * new one the running system's (a DFU-flashed system has no cur.update, so
+ * no prev.update either).  Run again after a cut: cur.update already the
+ * new file (same signed sector 0) is left as it is. */
+static int keep_prev(int fd)
+{
+	gz_u8 a[GZU_SECTOR];
+	int c, same = 0, out;
+
+	if ((c = open(CUR, O_RDONLY)) >= 0) {
+		same = read(c, a, GZU_SECTOR) == GZU_SECTOR
+		    && rd(&fd, 0, buf, GZU_SECTOR) == GZU_SECTOR
+		    && memcmp(a, buf, GZU_SECTOR) == 0
+		    && lseek(c, 0L, SEEK_END) == (off_t) info.size;
+		close(c);
+		if (same) return 0;
+		if (rename(CUR, PREV) < 0) return fail("cannot write", PREV);
+	}
+	if ((out = open(USRDIR "/cur.new", O_WRONLY | O_CREAT | O_TRUNC,
+			0600)) < 0
+	    || copy_out(fd, 0, info.size, out, NULL) < 0) {
+		if (out >= 0) close(out);
+		return fail("cannot write", USRDIR "/cur.new");
+	}
+	close(out);
+	if (rename(USRDIR "/cur.new", CUR) < 0) return fail("cannot write", CUR);
+	return 0;
+}
+
+/* Step 5: the pending sector, right after the staged file: "GZPEND1",
+ * epoch, size, the file's SHA-512.  atea (T33b) also keeps the pending
+ * state in BKP11R, its one-word fast path; that needs atea's kernel call
+ * and comes with it.  atea re-checks the staged file before it flashes
+ * and clears this sector after. */
+static int pend(void)
+{
+	int dev;
+
+	memset(buf, 0, GZU_SECTOR);
+	memcpy(buf, PEND_MAGIC, 8);
+	le32(buf + 8, info.epoch);
+	le32(buf + 12, info.size);
+	memcpy(buf + 16, fhash, 64);
+	if ((dev = open(STAGE, O_RDWR)) < 0
+	    || lseek(dev, (off_t) info.size, SEEK_SET) != (off_t) info.size
+	    || wr(dev, buf, GZU_SECTOR) < 0) {
+		if (dev >= 0) close(dev);
+		return fail("cannot write", STAGE);
+	}
+	close(dev);
+	sync();
+	return 0;
+}
+
+static int apply(const char *path, int yes, int restart, long epoch,
+		 const unsigned char *rel)
+{
+	char ans[8];
+	int fd, r, i;
+
+	if (geteuid() != 0) return fail("apply needs root", NULL);
+	if ((r = check(path, epoch, rel, 1)) < 0x100) return r;
+	fd = r & 0xff;
+	if (!yes) {
+		printf("Install? (y/N) ");
+		fflush(stdout);
+		if (!fgets(ans, sizeof ans, stdin) || ans[0] != 'y') {
+			close(fd);
+			printf("gzupdate: not installed\n");
+			return 1;
+		}
+	}
+	/* 1: swap off; nothing on it must survive a restart (S.1). */
+	if (mmcall(MI_SWAPON, 0, SW_OFF, NULL) < 0 && errno != EINVAL) {
+		close(fd);
+		return fail("cannot turn swap off", NULL);
+	}
+	printf("gzupdate: staging\n");
+	if ((r = stage(fd)) != 0) goto out;
+	printf("gzupdate: unpacking the base files\n");
+	for (i = 0; i < (int) info.nsect; i++)
+		if (info.sect[i].type == GZU_ROOT
+		    && (r = unpack(fd, &info.sect[i])) != 0) goto out;
+	if ((r = keep_prev(fd)) != 0) goto out;
+	sync();
+	if ((r = pend()) != 0) goto out;
+	close(fd);
+	printf("gzupdate: %s staged, restarting to install\n", info.release);
+	fflush(stdout);
+	if (restart) reboot(RBT_REBOOT);
+	return 0;
+out:
+	close(fd);
+	return r;
 }
 
 int main(int argc, char **argv)
@@ -150,14 +454,27 @@ int main(int argc, char **argv)
 		if (sscanf(argv[5], "%u.%u.%u", &x, &y, &z) != 3) goto usage;
 		epoch = atol(argv[3]);
 		rel[0] = x; rel[1] = y; rel[2] = z;
-		return check(argv[6], epoch, rel);
+		return check(argv[6], epoch, rel, 0);
+	}
+	/* QEMU tests: apply -y [-n] FILE answers the question. */
+	if (argc >= 4 && strcmp(argv[1], "apply") == 0
+	    && strcmp(argv[2], "-y") == 0) {
+		if (argc == 4) return apply(argv[3], 1, 1, epoch, rel);
+		if (argc == 5 && strcmp(argv[3], "-n") == 0)
+			return apply(argv[4], 1, 0, epoch, rel);
+		goto usage;
 	}
 #endif
 	if (argc == 3 && strcmp(argv[1], "check") == 0)
-		return check(argv[2], epoch, rel);
+		return check(argv[2], epoch, rel, 0);
+	if (argc == 3 && strcmp(argv[1], "apply") == 0)
+		return apply(argv[2], 0, 1, epoch, rel);
+	if (argc == 4 && strcmp(argv[1], "apply") == 0
+	    && strcmp(argv[2], "-n") == 0)
+		return apply(argv[3], 0, 0, epoch, rel);
 #ifdef BOARD_QEMU
 usage:
 #endif
-	fprintf(stderr, "usage: gzupdate check FILE\n");
+	fprintf(stderr, "usage: gzupdate check FILE | apply [-n] FILE\n");
 	return 2;
 }
