@@ -619,11 +619,8 @@ static void debug(void)
 
 /* Every signal of path: send over the loopback, receive, decode; a parsed
  * one must come back as the same message, a raw one with its timings. */
-static uint32_t *selfbuf;	/* -t, -c FILE: 4 KB, malloc'd first in main */
-
-static int selftest(const char *path)
+static int selftest(const char *path, uint32_t *keep)	/* keep: 4 KB */
 {
-	uint32_t *keep = selfbuf;
 	FILE *fp = fopen(path, "r");
 	char fb[256];		/* the file's buffer: stack, not 1 KB of heap */
 	struct irf f;
@@ -680,6 +677,7 @@ int main(int argc, char **argv)
 	static const char *const items[] = { "Learn New Remote",
 		"Saved Remotes", "Universal Remotes", "Debug" };
 	int sel = 0;
+	uint32_t *keep = NULL;	/* -t, -c FILE: the self-test's 4 KB */
 
 	/* -c and -t: a few lines of output, unbuffered (no 1 KB stdout
 	 * buffer: the self-test's heap is its 4 KB and the codecs) */
@@ -689,7 +687,7 @@ int main(int argc, char **argv)
 	 * shallow: later, stdio's buffers and _doprnt's 1 KB of stack would
 	 * leave it no room in the 8 KB reserve (#389, M2) */
 	if (argc > 2 && (!strcmp(argv[1], "-c") || !strcmp(argv[1], "-t")))
-		selfbuf = malloc(MAXT * 4);
+		keep = malloc(MAXT * 4);
 	if (argc > 1 && !strcmp(argv[1], "-c")) {
 		ir_open();
 		/* fputs, not printf: _doprnt's 1 KB stack buffer would take
@@ -704,14 +702,14 @@ int main(int argc, char **argv)
 		loopback = 1;
 		dec = infrared_alloc_decoder();
 		enc = infrared_alloc_encoder();
-		return selftest(argv[2]);
+		return selftest(argv[2], keep);
 	}
 	if (argc > 1 && (!strcmp(argv[1], "-L") || !strcmp(argv[1], "-t")))
 		loopback = 1;
 	ir_open();
 	dec = infrared_alloc_decoder();
 	enc = infrared_alloc_encoder();
-	if (argc > 2 && !strcmp(argv[1], "-t")) return selftest(argv[2]);
+	if (argc > 2 && !strcmp(argv[1], "-t")) return selftest(argv[2], keep);
 	if (argc > 1 && !loopback) {
 		fprintf(stderr, "Usage: infrared [-L | -t FILE | -c [FILE]]\n");
 		return 2;
