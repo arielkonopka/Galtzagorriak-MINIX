@@ -71,6 +71,7 @@ struct inrec {
 /* The only RAM: region base | active directory page (0, 1; 2: none yet),
  * 0: no region.  The size and the next seq are looked up when installing. */
 PRIVATE unsigned long in_st;
+#define ST_FLASH	0x08000000UL	/* where the slot's addresses count from */
 
 FORWARD _PROTOTYPE( int in_clock_set, (void)				);
 FORWARD _PROTOTYPE( unsigned long in_id, (struct stat *s)		);
@@ -422,10 +423,11 @@ unsigned long addr, n;
   return(FALSE);
 }
 
-PRIVATE unsigned long in_find_run(npages)
+PRIVATE unsigned long in_find_run(npages, slot)
 unsigned long npages;
+unsigned long slot;		/* R2b.1a: none of it at or above (0: none) */
 {
-/* First fit: npages free pages in a row. */
+/* First fit: npages free pages in a row, below the radio slot. */
   unsigned long a, end, size;
 
   unsigned long rb, rs;
@@ -433,6 +435,9 @@ unsigned long npages;
   if (in_region(&size) != OK) return(0);
   if (size > 256 * PAGE) size = 256 * PAGE;	/* mjob.page is a byte */
   end = in_base + size;
+  /* The slot is an ST address (/etc/radio.slot); QEMU's flash is at 0. */
+  if (in_base < ST_FLASH && slot >= ST_FLASH) slot -= ST_FLASH;
+  if (slot > in_base && slot < end) end = slot;
   a = in_base + DIRPAGES * PAGE;
   /* not the settings image (/dev/rom, L.2) after the directories */
   if (sys_flash(FL_INFO, FL_LAYOUT_ROM, NULL, 0, &rb, &rs) == OK
@@ -644,9 +649,10 @@ PRIVATE int in_clock_set()
 /*===========================================================================*
  *				in_install				     *
  *===========================================================================*/
-PRIVATE int in_install(fd, s)
+PRIVATE int in_install(fd, s, slot)
 int fd;				/* the program, open */
 struct stat *s;
+unsigned long slot;		/* the radio slot (R2b.1a), 0: none */
 {
 /* Start an install: 1 if the caller must go on with MI_INSTALL op 4 (one
  * flash step per call, in_step), else done (OK or an error).  The steps
@@ -672,7 +678,7 @@ struct stat *s;
 	return(in_record(addr, size, sha, s));
 
   npages = (size + PAGE - 1) / PAGE;
-  if ((addr = in_find_run(npages)) == 0) return(ENOSPC);
+  if ((addr = in_find_run(npages, slot)) == 0) return(ENOSPC);
   if ((i = fc_lend()) != OK) return(i);
   mjob.fd = fd;				/* do_install leaves it open */
   mjob.state = J_INST_ERASE;
@@ -795,7 +801,9 @@ PUBLIC int do_install()
  * flash region, 1: mark its records dead (their pages are free once no
  * process runs from them), 2: bind it to a built-in record (in_bind), 3: return
  * the number of built-in records not bound yet (no path), 4: the next step
- * of the caller's install (op 0 answered 1: call again until not 1). */
+ * of the caller's install (op 0 answered 1: call again until not 1).
+ * Op 0: m1_p2 = the radio slot (R2b.1a, /etc/radio.slot; 0: none), pkg
+ * reads it: no program is put at or above it. */
   struct stat s;
   struct inrec *r;
   int fd, i, len = mm_in.m1_i1, rv;
@@ -820,7 +828,8 @@ PUBLIC int do_install()
 
   if (mm_in.m1_i3 == 0 || mm_in.m1_i3 == 2) {	/* install, bind */
 	if ((fd = allowed(mbuf + 3584, &s, X_BIT)) < 0) return(fd);
-	rv = mm_in.m1_i3 == 0 ? in_install(fd, &s) : in_bind(fd, &s);
+	rv = mm_in.m1_i3 == 0 ? in_install(fd, &s,
+			(unsigned long) mm_in.m1_p2) : in_bind(fd, &s);
 	if (rv != 1) close(fd);		/* 1: the install job keeps it */
 	return(rv);
   }
