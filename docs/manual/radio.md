@@ -126,3 +126,51 @@ to `pkg`.
 
 Nothing here writes internal flash or talks to CPU2. `radio` keeps nothing
 in memory after it exits.
+
+## 3. The phone link (planned)
+
+The official Flipper mobile app will talk to MINIX over Bluetooth LE, using
+its own protocol: the stock serial service and a subset of the stock RPC
+(spec R15.7). Nothing has to be installed on the phone. This needs CPU2
+running a BLE stack (Phase 15), so it does not work on the Flipper yet.
+What exists is the part above the radio, tested on a PC:
+
+- **libflipperpb**: the stock protobuf (version 0.25, the one stock firmware
+  1.3.4 uses), generated with nanopb.
+- **The RPC core** (`src/lib/rpcd`): one frame up to 1100 B in each
+  direction, 6.1 KB of state per session. It answers:
+  - `ping`, `protobuf_version` (0.25), `device_info` (the stock keys plus
+    `firmware_origin: Galtzagorriak MINIX`), `power_info`;
+  - get and set date and time. A date the phone sends is checked first
+    (2000–2099, a real day of the month); it is never taken blindly as
+    stock does;
+  - storage `info`, `stat`, `list`, `read`, only below `/ext` (paths with
+    `..` are refused).
+  Anything else gets `ERROR_NOT_IMPLEMENTED` and the link stays up, so the
+  app uses what is there.
+- **The BLE serial service** (`src/lib/bled`): the stock service and its
+  characteristics, MTU handling, and the flow-control credit (the phone
+  never sends more than the 1 KB receive buffer has room for).
+
+Pairing data will be kept on the SD card (R15.4), never in internal flash.
+
+### Testing with `rpc.py`
+
+`flipper/tools/rpc.py` speaks the same frames as the app. Today it talks to
+the PC build of the RPC core. Later it will talk to the Flipper's second
+USB serial port, and over BLE through a bridge:
+
+```
+$ python3 flipper/tools/rpc.py --exec 'RPCD_EXT=/media/sd flipper/tests/rpcd/build/rpcdhost' info
+format_major: 3
+...
+firmware_origin: Galtzagorriak MINIX
+$ python3 flipper/tools/rpc.py --exec ... ls /ext
+d          0 radio
+-          6 agurra.txt
+$ python3 flipper/tools/rpc.py --port /dev/ttyACM1 ping kaixo     (planned)
+```
+
+Commands: `ping`, `version`, `info`, `power`, `time`, `settime`, `ls`,
+`stat`, `df`, `cat`. Build the PC side with
+`make -C flipper/tests/rpcd test`.
