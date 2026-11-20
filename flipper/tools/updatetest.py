@@ -10,7 +10,8 @@ expected first word of the answer) stay in DIR for the C verifier's test
 (T33a part 2).  Nothing here is a secret: the key is made for the run and
 thrown away (only its public half is written to DIR).
 
-Usage: updatetest.py [-o DIR]"""
+Usage: updatetest.py [-o DIR] [--board flipper-f7|qemu-mps2]"""
+
 import argparse
 import contextlib
 import hashlib
@@ -25,6 +26,7 @@ import tempfile
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 SECTOR = 512
+BOARD, OTHER = "flipper-f7", "qemu-mps2"
 
 
 def tool(name):
@@ -53,10 +55,10 @@ gzcheck = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gzcheck)
 
 
-def verdict(path, keys, epoch=None, release=None, board="flipper-f7"):
+def verdict(path, keys, epoch=None, release=None, board=None):
     """'good' or the reason the checker gives."""
     try:
-        r = gzcheck.check(path, keys, board, epoch, release, False)
+        r = gzcheck.check(path, keys, board or BOARD, epoch, release, False)
         r["f"].close()
         return "good"
     except gzcheck.Bad as e:
@@ -103,7 +105,12 @@ def sigvectors(out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out")
+    ap.add_argument("--board", default="flipper-f7",
+                    help="the board of the good file (QEMU: qemu-mps2)")
     a = ap.parse_args()
+    global BOARD, OTHER
+    BOARD = a.board
+    OTHER = "qemu-mps2" if BOARD == "flipper-f7" else "flipper-f7"
     tmp = tempfile.TemporaryDirectory()
     out = a.out or os.path.join(tmp.name, "out")
     os.makedirs(out, exist_ok=True)
@@ -139,13 +146,13 @@ def main():
     with open(os.path.join(out, "trusted.pub"), "w") as f:
         f.write(pub.hex() + "\n")
 
-    def build(name, epoch=7, board="flipper-f7", from_min="0.8.0",
+    def build(name, epoch=7, board=None, from_min="0.8.0",
               key=kdir, sign=True):
         p = os.path.join(out, name)
         run(tool("mkupdate.py"), "-o", p, "--version-h", version_h(epoch),
             "--changelog", os.path.join(w, "CHANGELOG.md"),
             "--libc", os.path.join(w, "libc.json"),
-            "--furi", os.path.join(w, "furi.json"), "--board", board,
+            "--furi", os.path.join(w, "furi.json"), "--board", board or BOARD,
             "--flash", flash, "--load", "0x08004000", "--root", root,
             "--from-min", from_min, *sum((["--pkg", q] for q in pkgs), []))
         if sign:
@@ -186,7 +193,7 @@ def main():
         print("FAIL: second trusted key (atea slot 2) not accepted")
     expect(build("unsigned.update", sign=False),
            "not signed by a trusted key")
-    expect(build("wrongboard.update", board="qemu-mps2"), "for another board")
+    expect(build("wrongboard.update", board=OTHER), "for another board")
     expect(good, "older than the running system", epoch=8)
     cases[-1] = ("good.update", 8, "0.8.2", "bad")
     expect(good, "already installed", epoch=7)

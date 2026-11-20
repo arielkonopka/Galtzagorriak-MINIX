@@ -3,6 +3,10 @@
  *
  *	gzupdate check FILE	check it as atea will; print what it updates
  *
+ * On QEMU only, `check -e EPOCH -r X.Y.Z FILE` pretends to run that epoch
+ * and release (the ACS.2 test of m2test, flipper/tools/gzucases.py); the
+ * Flipper build has no such option.
+ *
  * Step 1 of part 3: `check` (RS.8 step 1-2).  apply, finish and commit
  * follow.  The checks are src/lib/gzsig's gzu_check, the code atea uses;
  * the trusted keys are the ones the build puts into atea's two slots
@@ -83,7 +87,7 @@ static void show(int fd)
 	printf("OK install  Back later\n");
 }
 
-static int check(const char *path)
+static int check(const char *path, long epoch, const unsigned char *rel)
 {
 	struct gzu_running run;
 	const char *why;
@@ -110,12 +114,12 @@ static int check(const char *path)
 		return 1;
 	}
 	run.board = GZ_BOARD;
-	run.epoch = GZ_EPOCH;
+	run.epoch = epoch;
 	run.downgrade = 0;
 	run.have_rel = 1;
-	run.rel[0] = GZ_MAJOR;
-	run.rel[1] = GZ_MINOR;
-	run.rel[2] = GZ_PATCH;
+	run.rel[0] = rel[0];
+	run.rel[1] = rel[1];
+	run.rel[2] = rel[2];
 	why = gzu_check(rd, &fd, (gz_u32) size, keys, GZ_NKEYS, &run, &info,
 			buf, BUFSZ);
 	if (why) {
@@ -132,8 +136,28 @@ int main(int argc, char **argv)
 {
 	/* RS.8 low priority: a user process runs below the device tasks
 	 * and servers, so key presses (L1/L2) go first. */
+	unsigned char rel[3];
+	long epoch = GZ_EPOCH;
+
+	rel[0] = GZ_MAJOR;
+	rel[1] = GZ_MINOR;
+	rel[2] = GZ_PATCH;
+#ifdef BOARD_QEMU
+	if (argc == 7 && strcmp(argv[1], "check") == 0
+	    && strcmp(argv[2], "-e") == 0 && strcmp(argv[4], "-r") == 0) {
+		unsigned x, y, z;
+
+		if (sscanf(argv[5], "%u.%u.%u", &x, &y, &z) != 3) goto usage;
+		epoch = atol(argv[3]);
+		rel[0] = x; rel[1] = y; rel[2] = z;
+		return check(argv[6], epoch, rel);
+	}
+#endif
 	if (argc == 3 && strcmp(argv[1], "check") == 0)
-		return check(argv[2]);
+		return check(argv[2], epoch, rel);
+#ifdef BOARD_QEMU
+usage:
+#endif
 	fprintf(stderr, "usage: gzupdate check FILE\n");
 	return 2;
 }

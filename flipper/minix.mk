@@ -620,9 +620,20 @@ $(MB)/gzsig/%.o: $(GZSIG_DIR)/%.c $(GZSIG_DIR)/gzsig.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 GZKEYS	:= $(MB)/gen/gzkeys.h
+# QEMU: the throw-away key of tools/updatetest.py, whose good and bad files
+# go to /lib/gzu for m2test's ACS.2 check (tools/gzucases.py).
+ifeq ($(BOARD),qemu)
+UPDATE_TESTKEY ?= $(MB)/updatetest/trusted.pub
+GZU_RUN	:= $(MB)/gzu/run
+$(MB)/updatetest/trusted.pub: tools/updatetest.py tools/mkupdate.py \
+		tools/gzsign tools/gzupdate-check.py
+	python3 -I tools/updatetest.py -o $(MB)/updatetest --board qemu-mps2
+$(GZU_RUN): $(MB)/updatetest/trusted.pub tools/gzucases.py
+	python3 -I tools/gzucases.py $(MB)/updatetest $(MB)/gzu
+endif
 GZKEY_FILES = $(strip $(UPDATE_KEYS) $(UPDATE_TESTKEY))
 .PHONY: gzkeys-check
-$(GZKEYS): gzkeys-check
+$(GZKEYS): gzkeys-check $(UPDATE_TESTKEY)
 	@mkdir -p $(dir $@)
 	@python3 -I tools/gzkeys.py $@ $(GZKEY_FILES)
 $(MB)/cmd/port/gzupdate.o: cmds/gzupdate.c $(GZSIG_DIR)/gzsig.h $(GZKEYS) \
@@ -1080,7 +1091,7 @@ update: $(MB)/minix-base.bin $(BASEPKG) $(UPDATE_PKGS) $(GZBUILD) \
 # The ACS.1 bad files, checked on the host (needs no build).
 .PHONY: updatetest
 updatetest:
-	python3 -I tools/updatetest.py -o $(MB)/updatetest
+	python3 -I tools/updatetest.py -o $(MB)/updatetest --board $(UPDATE_BOARD)
 .PHONY: pkgs
 pkgs: $(PKGS)
 
@@ -1097,10 +1108,10 @@ $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
 # and disk.img (MBR + partition 1, the QEMU "SD card").  @BINFILES@ in the
 # proto becomes one entry per program.
-$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS)
+$(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
-	   "$(PKGS)" "$(SUIDPROGS)"
+	   "$(PKGS)" "$(SUIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
 # The QEMU disk is as big as the SD card (sparse), so the first boot can
 # partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \

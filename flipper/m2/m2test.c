@@ -2295,6 +2295,46 @@ static long fc_budget(int pages)
 	return (long) fc.budget;
 }
 
+/* ACS.2 (spec S.10, T33a part 3): gzupdate check on the ACS.1 files of
+ * tools/updatetest.py (/lib/gzu, tools/gzucases.py): the good one shows
+ * the window text, each bad one prints one line and exits 1, and nothing
+ * is written to the card (DIOCFAKECARD 3 counts the sectors).  Strings in
+ * one const struct (flash), for the GOT reason below. */
+#define GZ_STRINGS(S) \
+	S(sh, "/bin/sh") \
+	S(scr, "/lib/gzu/run") \
+	S(ran, "  gzupdate check: case %d wrong (sh exit %d)\n") \
+	S(what, "ACS.2: gzupdate check accepts the good file, refuses each bad one") \
+	S(nowr, "ACS.2: gzupdate check writes nothing")
+#define GZ_DECL(n, s)	char n[sizeof s];
+#define GZ_INIT(n, s)	s,
+static const struct { GZ_STRINGS(GZ_DECL) } gz = { GZ_STRINGS(GZ_INIT) };
+
+static int sectors_written(void);
+
+static void __attribute__((noinline)) gzupdate_test(void)
+{
+	int st = -1, w0, w1;
+	pid_t pid;
+
+	if (access(gz.scr, R_OK) != 0) return;	/* not a QEMU disk */
+	w0 = sectors_written();
+	w0 = sectors_written();		/* the first one may see old writes */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(gz.sh, gz.sh + 5, gz.scr, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st))
+		st = WEXITSTATUS(st);
+	else
+		st = -1;
+	w1 = sectors_written();
+	if (st != 0) printf(gz.ran, st - 1, st);
+	check(st == 0, gz.what);
+	check(w0 >= 0 && w1 == w0, gz.nowr);
+}
+
 /* #118: test(1)'s file tests -e -b -c -p -L -h -u -g -k, through sh as
  * a postinst runs them.  Before, an unknown operator was a non-empty
  * string: "test -c /nofile" was true.  The script exits with the number
@@ -3449,6 +3489,7 @@ int main(int argc, char **argv)
 	discard_tests();
 	preempt_tests();
 	testop_tests();
+	gzupdate_test();
 	pkg_tests();
 	mtpd_test();
 #endif
