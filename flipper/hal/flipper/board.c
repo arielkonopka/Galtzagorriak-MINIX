@@ -1413,6 +1413,38 @@ static int sd_discard_probe(uint8_t *buf)
 	return crc == (uint16_t) (t << 8 | spi2_xfer(0xFF)) ? yes : 0;
 }
 
+/* The card's power off and on, as stock's furi_hal_sd_init(power_reset):
+ * the peripheral 3.3 V switch (PA3, on unless pulled low) off, the bus
+ * and card detect low so that the card is not fed through its pins, 250 ms;
+ * then all back and 100 ms for the card to start.  The LCD shares SCK and
+ * MOSI: no other task may run meanwhile, so the wait is a busy one. */
+static void sd_power_cycle(void)
+{
+	uint32_t start;
+
+	gpio_set(GPIOA, 3, 0);
+	gpio_cfg(GPIOA, 3, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOD, 1, 0);
+	gpio_set(GPIOB, 15, 0);
+	gpio_set(GPIOC, 2, 0);
+	gpio_set(GPIOC, 10, 0);
+	gpio_set(GPIOC, 12, 0);
+	gpio_cfg(GPIOD, 1, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOB, 15, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOC, 2, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOC, 10, MODE_OUT, PULL_NONE, 0);
+	start = DWT->CYCCNT;
+	while (ms_since(start) < 250) ;
+	gpio_set(GPIOC, 12, 1);
+	gpio_cfg(GPIOD, 1, MODE_AF, PULL_NONE, 5);
+	gpio_cfg(GPIOB, 15, MODE_AF, PULL_NONE, 5);
+	gpio_cfg(GPIOC, 2, MODE_AF, PULL_UP, 5);
+	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);
+	gpio_cfg(GPIOA, 3, MODE_ANALOG, PULL_NONE, 0);
+	start = DWT->CYCCNT;
+	while (ms_since(start) < 100) ;
+}
+
 /* hal_disk_init returns 0, or minus why it failed: the step (1 CMD0, 2 CMD59,
  * 3 CMD8, 4 ACMD41 timed out, 5 CMD58, 6 CMD16, 7 CMD9/CSD) << 8 and the
  * last R1 the card sent (0xFF: nothing), for the kernel's "no card (init
@@ -1432,14 +1464,17 @@ int hal_disk_init(void)
 	DMAMUX1_Channel1->CCR = 9;		/* DMA1 ch 2: SPI2_TX */
 	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);	/* card detect */
 	spi2_speed(SPI_DIV_SD_INIT);
-	/* CMD0 until the card says idle: some cards (a 128 GB SDXC on the
-	 * bench) do not answer the first one after power-up.  The clocks
-	 * with CS high again before each try; 20 tries, about 200 ms. */
+	/* CMD0 until the card says idle: some cards do not answer the first
+	 * one after power-up.  The clocks with CS high again before each
+	 * try; 20 tries, about 200 ms.  A card that still says nothing (a
+	 * 128 GB SDXC on the bench, after any reset of the CPU alone) gets
+	 * what stock gives every card: its power off, then 20 tries more. */
 	for (v2 = 0; ; v2++) {
+		if (v2 == 20) sd_power_cycle();
 		SD_CS(0);
 		for (i = 0; i < 10; i++) spi2_xfer(0xFF);	/* >= 74 clocks */
 		if ((r = sd_cmd(CMD0, 0)) == R1_IDLE) break;
-		if (v2 == 19) SD_FAIL(1, r);
+		if (v2 == 39) SD_FAIL(1, r);
 		sd_select(0);
 		start = DWT->CYCCNT;
 		while (ms_since(start) < 10) ;
