@@ -48,8 +48,8 @@ by `up` is the share of time asleep; take two readings and their differences for
 connected the Flipper does not go into deep sleep. `wother` counts to 4294967295 (over 100 years
 of sleeps); `wbtn` counts to 65535 and starts again at 0, which takes 65536 button presses. Before
 #284, `wother` also started again at 0 after 65535 (about every 18 hours asleep);
-`flipper/tools/nightpower.py` still allows for that with older kernels. For a whole night measured and judged from the
-computer, see the development guide's
+`flipper/tools/nightpower.py` still allows for that with older kernels. For a whole night (or a multi-day run, with
+`nightpower.py note` once a day) measured and judged from the computer, see the development guide's
 [overnight battery test](../devguide/part2/07-overnight-power-test.md).
 
 ## Screen power save
