@@ -93,7 +93,7 @@ esac
 
 # The radio region (spec R8.2): the Sub-GHz transmit bands; set once per
 # boot, a transmit is refused until it is.  /etc/flipper/region holds the
-# country code (PL, ES, FR, IE, FI, SE, NO, GB, AL, US, CA or EU; spec
+# country code (EU, the 27 member states, NO, GB, AL, BA, MK, US, CA; spec
 # section Q); no file, or a country without a table: no transmit.
 test -r /etc/flipper/region && test -x /usr/bin/subghz &&
 	/usr/bin/subghz region `cat /etc/flipper/region`

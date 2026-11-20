@@ -7,7 +7,8 @@ region \- the radio region: which country's Sub-GHz rules apply
 \fBregion list\fR
 \fBregion show\fR [\fICC\fR]
 \fBregion check\fR \fICC MHZ\fR [\fB\-p\fR \fIpreset\fR] [\fB\-P\fR \fIdbm\fR] [\fB\-c\fR] [\fB\-a\fR \fIms\fR]
-\fBregion set\fR [\fB\-y\fR] \fICC\fR
+\fBregion set\fR [\fB\-y\fR] [\fB\-f\fR] \fICC\fR
+\fBregion compile\fR \fICC file\fR
 .fi
 .SH DESCRIPTION
 Every Sub-GHz transmit is checked against the rules of one country, the
@@ -50,13 +51,41 @@ a remote's code instead of data,
 the airtime in ms (default 1000).
 .PP
 .B set
-(root only) checks the table, prints it, asks
-"I will use this device under the rules of CC" (\fB\-y\fR answers yes),
-and writes the code to
-.BR /etc/flipper/region ;
+(root only) checks the table (and its
+.B Base:
+file), prints it, compiles it into the region record, checks the
+files' SHA-256 against the list of the tables shipped with this firmware,
+asks "I will use this device under the rules of CC" (\fB\-y\fR answers
+yes), writes the code to
+.B /etc/flipper/region
+and logs the change, with the hashes, to
+.BR /usr/adm/messages .
 .B /etc/rc
-gives it to the kernel at the next boot.
+gives the code to the kernel at the next boot.
 A code without a table is refused: transmit stays off.
+.PP
+A file whose hash is not in the list is a
+.IR "custom table" :
+.B set
+says so, prints its hash and the shipped one of the same code, and
+refuses unless
+.B \-f
+is given.
+You are responsible for a custom table; the log line says
+.B custom
+and gives its hash.
+.PP
+The record (16 bytes, plus 16 for each row not marked
+.BR ? ,
+at most 528 bytes) carries the magic RGN1, the code, the row count and
+a CRC-32; \fBset\fR prints its size and CRC.
+.B compile
+writes it to
+.I file
+(any user; for tests and tools).
+The flash copy of the record, written once per change of region so the
+limits hold without the card, comes with the installed-region record of
+task T32b; until then the kernel keeps its own band set per country.
 .SH FILES
 .TP 25
 .B /usr/share/region/*.reg
@@ -64,6 +93,9 @@ the tables (base package)
 .TP
 .B /etc/flipper/region
 the code set
+.TP
+.B /usr/adm/messages
+the log of every \fBregion set\fR
 .SH "SEE ALSO"
 .BR gmodem (1),
 .BR subghz (1).
@@ -72,5 +104,5 @@ You are responsible for using the radio legally where you are: when you
 travel, set the region of the country you are in.
 The tables follow the law, not the stock firmware's region data, which
 allows more.
-Writing the table into internal flash, so it holds without the card, is
-planned (spec RQ.2).
+Tables exist for the 27 EU member states (each is the EU table plus its
+own unchecked 870/915 MHz rows), EU, NO, GB, AL, BA, MK, US and CA.

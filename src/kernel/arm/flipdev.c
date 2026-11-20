@@ -790,6 +790,9 @@ PRIVATE const struct sg_band {
 PRIVATE const char sg_countries[][4] = {	/* code, band set */
   "EUEU", "PLEU", "ESEU", "FREU", "IEEU", "FIEU", "SEEU", "NOEU", "GBEU",
   "ALEU", "USUS", "CAUS",
+  "ATEU", "BEEU", "BGEU", "HREU", "CYEU", "CZEU", "DKEU", "EEEU",
+  "DEEU", "GREU", "HUEU", "ITEU", "LVEU", "LTEU", "LUEU", "MTEU",
+  "NLEU", "PTEU", "ROEU", "SKEU", "SIEU", "BAEU", "MKEU",
 };
 #define SG_NCOUNTRIES	(sizeof(sg_countries) / sizeof(sg_countries[0]))
 

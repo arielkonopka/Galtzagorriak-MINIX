@@ -1,0 +1,21 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: MK
+Name: Severna Makedonija
+Checked: 2026-11-20
+Source: ERC/REC 70-03 (03.2024) Annex 1, App. 1; AEK
+# the ERC/REC 70-03 Annex 1 conditions, as in EU.reg; dbm capped at +10 dBm
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+433.050	434.790	0	none	0	any	70-03 Annex 1 (g2)
+434.040	434.790	10	none	25	any	70-03 Annex 1 (g3)
+433.050	434.790	10	10%	0	any	70-03 Annex 1 (g1)
+869.700	870.000	6	none	0	any	70-03 Annex 1 (h1.8)
+862.000	863.000	10	0.1%	350	any	70-03 Annex 1 (h0)
+863.000	865.000	10	0.1%	0	any	70-03 Annex 1 (h1.3)
+865.000	868.000	10	1%	0	any	70-03 Annex 1 (h1.4)
+868.000	868.600	10	1%	0	any	70-03 Annex 1 (h1.5)
+868.700	869.200	10	0.1%	0	any	70-03 Annex 1 (h1.6)
+869.400	869.650	10	10%	0	any	70-03 Annex 1 (h1.7)
+869.700	870.000	10	1%	0	any	70-03 Annex 1 (h1.9)
+#?870.000	873.000	10	1%	600	any	70-03 Annex 1 (h2): status "Y", not checked
+#?915.000	918.000	10	1%	600	any	70-03 Annex 1 (h3): status "Y", not checked

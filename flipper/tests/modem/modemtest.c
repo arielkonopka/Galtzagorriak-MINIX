@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -662,7 +663,10 @@ static void test_arq_z(void)
 #define REGION_DIR "../../rootfs/usr/share/region"
 #endif
 static const char rg_codes[][3] = {
-	"EU", "PL", "ES", "FR", "IE", "FI", "SE", "NO", "GB", "AL", "US", "CA"
+	"EU", "PL", "ES", "FR", "IE", "FI", "SE", "NO", "GB", "AL", "US", "CA",
+	"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "DE", "GR",
+	"HU", "IT", "LV", "LT", "LU", "MT", "NL", "PT", "RO", "SK",
+	"SI", "BA", "MK"
 };
 
 static int rg_bad(const char *text, int want_line)
@@ -750,9 +754,10 @@ static int rg_try(const struct mdm_region *rg, struct mdm_rgstate *st,
 		mode, air, now, &row, wait);
 }
 
-static void test_region_tx(void)
+static void test_region_tx(int via_blob)
 {
 	static struct mdm_region rg;
+	static unsigned char blob[MDM_RGB_MAX];
 	static struct mdm_rgstate st;
 	const struct mdm_preset *std = mdm_preset("std");
 	struct mdm_cc1101 c;
@@ -768,7 +773,22 @@ static void test_region_tx(void)
 		us = strcmp(mdm_rg_bandset(cc), "US") == 0;
 		CHECK(mdm_rg_load(REGION_DIR, cc, &rg, err, (int) sizeof(err))
 			== 0, "%s: %s", cc, err);
+		if (via_blob) {
+			/* ACQ.2 on the record the kernel will read (RQ.2) */
+			n = mdm_rg_compile(&rg, blob, (int) sizeof(blob));
+			CHECK(n > 0 && mdm_rg_blob_load(blob, n, &rg) == 0,
+				"%s: blob %d", cc, n);
+		}
 		mdm_rg_state_init(&st);
+		/* ACQ.2: BA has no 865-868 MHz row */
+		if (strcmp(cc, "BA") == 0) {
+			rc = rg_try(&rg, &st, 866.0, 0, -30, MDM_SG_CTL, 1, 0, &w);
+			CHECK(rc == MDM_SG_BAND, "BA: 866 MHz %d", rc);
+		} else if (!us) {
+			rc = rg_try(&rg, &st, 866.0, 0, -30, MDM_SG_CTL, 1, 0, &w);
+			CHECK((rc == MDM_SG_OK) == (strcmp(cc, "AL") != 0),
+				"%s: 866 MHz %d", cc, rc);
+		}
 		CHECK(mdm_cc1101_regs(433920000UL, &std->phy, &c) == 0, "regs");
 		occ = mdm_occupied(&c);
 		/* 1. a frequency outside every band: EPERM, with the message */
@@ -866,6 +886,187 @@ static void test_region_tx(void)
 		&& mdm_pa_step(-21) == -30 && mdm_pa_step(6) == 5, "PA steps");
 }
 
+/* RQ.2: the compiled record; ACQ.1: US = the Q.4 table, Base loops */
+static void test_region_blob(void)
+{
+	static struct mdm_region rg, back;
+	static struct mdm_rgstate s1, s2;
+	static unsigned char b[MDM_RGB_MAX];
+	static const struct { double lo, hi; int dbm, bw, use; } us[] = {
+		{ 902, 928, -2, 0, MDM_USE_ANY },
+		{ 902, 928, 10, 250, MDM_USE_FHSS },
+		{ 300, 308.56, -21, 750, MDM_USE_CTL },
+		{ 308.56, 322, -20, 771, MDM_USE_CTL },
+		{ 335.4, 348, -19, 838, MDM_USE_CTL },
+		{ 387, 399.9, -17, 967, MDM_USE_CTL },
+		{ 410, 416.4, -16, 1025, MDM_USE_CTL },
+		{ 416.4, 464, -15, 1041, MDM_USE_CTL },
+		{ 300, 322, -29, 750, MDM_USE_PER },
+		{ 335.4, 348, -27, 838, MDM_USE_PER },
+		{ 387, 399.9, -25, 967, MDM_USE_PER },
+		{ 410, 464, -24, 1025, MDM_USE_PER },
+	};
+	static const double mhz[] = { 300.5, 315.0, 330.0, 345.0, 390.0,
+		415.0, 433.92, 434.5, 450.0, 862.5, 864.0, 866.0, 868.3, 868.65,
+		869.0, 869.525, 869.85, 871.5, 902.5, 915.0, 916.0, 927.9 };
+	static const int dbms[] = { -30, -24, -15, -6, 0, 5, 7, 10 };
+	char err[96], dir[64], path[96];
+	unsigned i, f, d;
+	int n, j, active, r1, r2, row1, row2, mode;
+	long w1, w2;
+	FILE *fp;
+
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		mdm_rg_load(REGION_DIR, rg_codes[i], &rg, err, (int) sizeof(err));
+		for (j = active = 0; j < rg.n; j++)
+			if (!(rg.row[j].flags & MDM_RG_UNCHECKED)) active++;
+		n = mdm_rg_compile(&rg, b, (int) sizeof(b));
+		CHECK(n == MDM_RGB_HDR + active * MDM_RGB_ROW && n <= 528
+			&& memcmp(b, "RGN1", 4) == 0 && b[6] == rg_codes[i][0]
+			&& b[7] == rg_codes[i][1], "%s: record %d B", rg_codes[i], n);
+		CHECK(mdm_rg_blob_check(b, n) == n, "%s: check", rg_codes[i]);
+		CHECK(mdm_rg_compile(&rg, b, n - 1) < 0, "%s: short buffer",
+			rg_codes[i]);
+		n = mdm_rg_compile(&rg, b, (int) sizeof(b));
+		printf("region %s: record %d B, CRC %08lx\n", rg_codes[i], n,
+			mdm_rg_blob_crc(b));
+		/* the same answers from the record as from the text */
+		CHECK(mdm_rg_blob_load(b, n, &back) == 0 && back.n == active,
+			"%s: load", rg_codes[i]);
+		for (j = 0; j < back.n; j++) {
+			const struct mdm_rgrec *x = (const struct mdm_rgrec *)
+				(b + MDM_RGB_HDR + j * MDM_RGB_ROW);
+			/* the kernel reads rows in place (little-endian) */
+			CHECK(x->lo == back.row[j].lo && x->hi == back.row[j].hi
+				&& x->dbm == back.row[j].dbm
+				&& x->duty == back.row[j].duty_pm * 10
+				&& x->bw_khz == back.row[j].bw_khz
+				&& x->use == back.row[j].use, "%s row %d as struct",
+				rg_codes[i], j);
+		}
+		for (mode = 0; mode < 2; mode++)
+		for (d = 0; d < sizeof(dbms) / sizeof(dbms[0]); d++) {
+			mdm_rg_state_init(&s1);
+			mdm_rg_state_init(&s2);
+			for (f = 0; f < sizeof(mhz) / sizeof(mhz[0]); f++) {
+				unsigned long hz = (unsigned long) (mhz[f] * 1e6);
+
+				r1 = mdm_rg_tx(&rg, &s1, hz, 20000, dbms[d], mode,
+					100, f * 7, &row1, &w1);
+				r2 = mdm_rg_tx(&back, &s2, hz, 20000, dbms[d], mode,
+					100, f * 7, &row2, &w2);
+				CHECK(r1 == r2 && w1 == w2 && (r1 != MDM_SG_OK
+					|| (back.row[row2].lo == rg.row[row1].lo
+					&& back.row[row2].dbm == rg.row[row1].dbm)),
+					"%s: %.3f MHz %d dBm: text %d, record %d",
+					rg_codes[i], mhz[f], dbms[d], r1, r2);
+			}
+		}
+		/* any flipped bit is refused */
+		for (j = 0; j < n * 8; j += 5) {
+			b[j / 8] ^= (unsigned char) (1 << (j % 8));
+			CHECK(mdm_rg_blob_check(b, n) < 0, "%s: bit %d",
+				rg_codes[i], j);
+			b[j / 8] ^= (unsigned char) (1 << (j % 8));
+		}
+		CHECK(mdm_rg_blob_check(b, n - 1) < 0, "%s: truncated",
+			rg_codes[i]);
+	}
+	CHECK(mdm_crc32((const unsigned char *) "123456789", 9, 0)
+		== 0xCBF43926UL, "CRC-32 check value");
+	/* ACQ.1: the US table is the one of Q.4, row by row */
+	mdm_rg_load(REGION_DIR, "US", &rg, err, (int) sizeof(err));
+	CHECK(rg.n == (int) (sizeof(us) / sizeof(us[0])), "US rows %d", rg.n);
+	for (i = 0; i < sizeof(us) / sizeof(us[0]) && (int) i < rg.n; i++)
+		CHECK(rg.row[i].lo == (unsigned long) (us[i].lo * 1e3 + 0.5) * 1000UL
+			&& rg.row[i].hi == (unsigned long) (us[i].hi * 1e3 + 0.5) * 1000UL
+			&& rg.row[i].dbm == us[i].dbm
+			&& (int) rg.row[i].bw_khz == us[i].bw
+			&& rg.row[i].use == us[i].use && rg.row[i].ref[0]
+			&& rg.row[i].duty_pm == 1000, "US row %u", i + 1);
+	/* ACQ.1: a Base loop (A -> B -> A) and a Base of itself are refused */
+	snprintf(dir, sizeof(dir), "/tmp/rgloop.%d", (int) getpid());
+	CHECK(mkdir(dir, 0700) == 0, "mkdir %s", dir);
+	for (i = 0; i < 3; i++) {
+		static const char *nm[] = { "AA", "BB", "CC" };
+		static const char *base[] = { "BB", "AA", "CC" };
+
+		snprintf(path, sizeof(path), "%s/%s.reg", dir, nm[i]);
+		if ((fp = fopen(path, "w")) == NULL) continue;
+		fprintf(fp, "Filetype: Galtzagorriak region\nVersion: 1\n"
+			"Region: %s\nBase: %s\n"
+			"433.050\t434.790\t0\tnone\t0\tany\tx\n", nm[i], base[i]);
+		fclose(fp);
+	}
+	CHECK(mdm_rg_load(dir, "AA", &rg, err, (int) sizeof(err)) < 0
+		&& strstr(err, "Base") != NULL, "Base loop: %s", err);
+	CHECK(mdm_rg_load(dir, "CC", &rg, err, (int) sizeof(err)) < 0
+		&& strstr(err, "Base") != NULL, "Base itself: %s", err);
+	for (i = 0; i < 3; i++) {
+		static const char *nm[] = { "AA", "BB", "CC" };
+
+		snprintf(path, sizeof(path), "%s/%s.reg", dir, nm[i]);
+		unlink(path);
+	}
+	rmdir(dir);
+}
+
+/* RQ.5: the shipped tables are known by their SHA-256; a changed one is
+ * a custom table (ACQ.4's -f is the region command's) */
+static void test_region_sha(void)
+{
+	static const unsigned char abc[32] = {
+		0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,
+		0x5d,0xae,0x22,0x23,0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,
+		0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad };
+	struct mdm_sha256 c;
+	unsigned char h[32];
+	char dir[64], path[96], line[192];
+	unsigned i;
+	int same;
+	FILE *in, *out;
+
+	mdm_sha_init(&c);
+	mdm_sha_add(&c, "abc", 3);
+	mdm_sha_done(&c, h);
+	CHECK(memcmp(h, abc, 32) == 0, "SHA-256 of abc");
+	CHECK(mdm_rg_nshipped == (int) (sizeof(rg_codes) / sizeof(rg_codes[0])),
+		"%d shipped tables, %d tested", mdm_rg_nshipped,
+		(int) (sizeof(rg_codes) / sizeof(rg_codes[0])));
+	for (i = 0; i < sizeof(rg_codes) / sizeof(rg_codes[0]); i++) {
+		CHECK(mdm_rg_sha_file(REGION_DIR, rg_codes[i], h) == 0
+			&& mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped,
+			rg_codes[i], h, &same) == 1 && same >= 0,
+			"%s: not in the shipped list", rg_codes[i]);
+	}
+	printf("region: %d shipped tables, %d B of hash list\n",
+		mdm_rg_nshipped, mdm_rg_nshipped * (int) sizeof(mdm_rg_shipped[0]));
+	CHECK(sizeof(mdm_rg_shipped[0]) == 34, "34 B an entry");
+	/* PL.reg with one more comment line: custom, shipped PL known */
+	snprintf(dir, sizeof(dir), "/tmp/rgsha.%d", (int) getpid());
+	CHECK(mkdir(dir, 0700) == 0, "mkdir %s", dir);
+	snprintf(path, sizeof(path), "%s/PL.reg", dir);
+	in = fopen(REGION_DIR "/PL.reg", "r");
+	out = fopen(path, "w");
+	CHECK(in && out, "copy PL.reg");
+	if (in && out) {
+		while (fgets(line, sizeof(line), in)) fputs(line, out);
+		fputs("# changed\n", out);
+	}
+	if (in) fclose(in);
+	if (out) fclose(out);
+	CHECK(mdm_rg_sha_file(dir, "PL", h) == 0
+		&& mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped, "PL", h,
+		&same) == 0 && same >= 0
+		&& strncmp(mdm_rg_shipped[same].cc, "PL", 2) == 0,
+		"changed PL.reg taken as shipped");
+	CHECK(mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped, "XX", h,
+		&same) == 0 && same == -1, "XX shipped");
+	CHECK(mdm_rg_sha_file(dir, "XX", h) < 0, "XX.reg read");
+	unlink(path);
+	rmdir(dir);
+}
+
 int main(int argc, char **argv)
 {
 	(void) argc; (void) argv;
@@ -884,7 +1085,10 @@ int main(int argc, char **argv)
 	test_duty(10);
 	test_duty(1);
 	test_region_files();
-	test_region_tx();
+	test_region_tx(0);
+	test_region_tx(1);
+	test_region_blob();
+	test_region_sha();
 	test_fuzz();
 	test_z();
 	test_arq_z();

@@ -1,5 +1,5 @@
 /* region - the radio region: which country's Sub-GHz rules apply
- * (spec section Q, RQ.1, RQ.4; issue #292).
+ * (spec section Q, RQ.1, RQ.2, RQ.4, RQ.5; issue #292, T32a).
  *
  *	region			the region set, and the kernel's
  *	region list		the countries with a table
@@ -8,15 +8,20 @@
  *				(defaults: std, -30 dBm, data, 1 s)
  *				whether a transmit would be allowed; never
  *				sends anything
- *	region set [-y] CC	(root) check the table, ask, and write the
- *				code to /etc/flipper/region; /etc/rc gives it
+ *	region compile CC FILE	write CC's record (RQ.2) to FILE
+ *	region set [-y] [-f] CC	(root) check the table and its SHA-256
+ *				against the shipped list (RQ.5; a custom table
+ *				needs -f), compile the record, ask, write the
+ *				code to /etc/flipper/region and log the change
+ *				to /usr/adm/messages; /etc/rc gives the code
  *				to the kernel at the next boot
  *
  * The tables are /usr/share/region/<CC>.reg (Q.2), read with libmodem's
- * parser, so `show` and `check` print what the library allows.  Until the
- * flash record of T32b the kernel keeps its own const band set per
- * country (R8.2); the flash record will make `set` write the table itself.
- * RAM: one table (≈ 2.7 KB, malloc'd) while it runs; nothing resident.
+ * parser, so `show` and `check` print what the library allows.  `set`
+ * compiles the table into the record of RQ.2 (16 B + 16 B per active row,
+ * <= 528 B); MM writes it into flash with T32b, once per change of region.
+ * Until then the kernel keeps its own const band set per country (R8.2).
+ * RAM: one table (~2.7 KB, malloc'd) while it runs; nothing resident.
  */
 #include <sys/types.h>
 #include <dirent.h>
@@ -25,19 +30,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <minix/subghz.h>
 #include "modem.h"
 
 #define DIR_RG	"/usr/share/region"
 #define FILE_RG	"/etc/flipper/region"
+#define LOG_DIR	"/usr/adm"
+#define LOG_RG	"/usr/adm/messages"
 
 static struct mdm_region *rg;
+static unsigned char rec[MDM_RGB_MAX];	/* the record of RQ.2 */
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: region [list | show [CC] | set [-y] CC |\n"
+	fprintf(stderr, "usage: region [list | show [CC] | set [-y] [-f] CC |\n"
+		"              compile CC FILE |\n"
 		"              check CC MHZ [-p PRESET] [-P DBM] [-c] [-a MS]]\n");
 	return 2;
 }
@@ -187,12 +198,105 @@ static int check(int argc, char **argv)
 	return 0;
 }
 
+static void hex(char *out, const unsigned char *h, int n)
+{
+	static const char x[] = "0123456789abcdef";
+	int i;
+
+	for (i = 0; i < n; i++) {
+		out[2 * i] = x[h[i] >> 4];
+		out[2 * i + 1] = x[h[i] & 15];
+	}
+	out[2 * n] = 0;
+}
+
+/* RQ.5: is dir/cc.reg the shipped file?  1 yes, 0 custom (said why),
+ * -1 unreadable.  Its hash in sum (65 B). */
+static int shipped(const char *cc, char *sum)
+{
+	unsigned char h[32];
+	char want[65];
+	int same;
+
+	if (mdm_rg_sha_file(DIR_RG, cc, h) < 0) {
+		fprintf(stderr, "region: %s/%s.reg: %s\n", DIR_RG, cc,
+			strerror(errno));
+		return -1;
+	}
+	hex(sum, h, 32);
+	if (mdm_rg_sha_find(mdm_rg_shipped, mdm_rg_nshipped, cc, h, &same))
+		return 1;
+	printf("custom table: %s.reg, sha256 %s\n", cc, sum);
+	if (same >= 0) {
+		hex(want, mdm_rg_shipped[same].sha, 32);
+		printf("  differs from the shipped %s.reg, sha256 %s\n", cc, want);
+	} else {
+		printf("  no %s.reg was shipped with this firmware\n", cc);
+	}
+	return 0;
+}
+
+static int compile(const char *cc, unsigned char *b)
+{
+	int n;
+
+	if (load(cc) < 0) return -1;
+	if ((n = mdm_rg_compile(rg, b, MDM_RGB_MAX)) < 0
+	    || mdm_rg_blob_check(b, n) != n) {
+		fprintf(stderr, "region: %s: no active row, or more than %d\n",
+			cc, MDM_RG_ROWS);
+		return -1;
+	}
+	return n;
+}
+
+static int compile_to(int argc, char **argv)
+{
+	unsigned char *b = rec;
+	int n, fd;
+
+	if (argc != 4) return usage();
+	if ((n = compile(argv[2], b)) < 0) return 1;
+	if ((fd = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0
+	    || write(fd, b, (size_t) n) != n || close(fd) < 0) {
+		fprintf(stderr, "region: %s: %s\n", argv[3], strerror(errno));
+		return 1;
+	}
+	printf("%s: record %d B, CRC %08lx\n", argv[2], n, mdm_rg_blob_crc(b));
+	return 0;
+}
+
+static void logit(const char *cc, const char *base, int custom,
+	const char *sum, const char *bsum, int n, unsigned long crc)
+{
+	char t[32];
+	time_t now = time(NULL);
+	FILE *fp;
+
+	strftime(t, sizeof(t), "%b %d %H:%M:%S", localtime(&now));
+	mkdir(LOG_DIR, 0755);
+	if ((fp = fopen(LOG_RG, "a")) == NULL) {
+		fprintf(stderr, "region: %s: %s\n", LOG_RG, strerror(errno));
+		return;
+	}
+	fprintf(fp, "%s region: set %s by uid %d, %s table, %s.reg sha256 %s",
+		t, cc, (int) getuid(), custom ? "custom" : "shipped", cc, sum);
+	if (base[0]) fprintf(fp, ", %s.reg sha256 %s", base, bsum);
+	fprintf(fp, ", record %d B CRC %08lx\n", n, crc);
+	fclose(fp);
+}
+
 static int set(int argc, char **argv)
 {
-	char line[16];
-	int yes = 0, fd, i = 2;
+	unsigned char *b = rec;
+	char line[16], sum[65], bsum[65], base[3];
+	int yes = 0, force = 0, fd, i = 2, n, ok;
 
-	if (i < argc && strcmp(argv[i], "-y") == 0) { yes = 1; i++; }
+	for (; i < argc && argv[i][0] == '-'; i++) {
+		if (strcmp(argv[i], "-y") == 0) yes = 1;
+		else if (strcmp(argv[i], "-f") == 0) force = 1;
+		else return usage();
+	}
 	if (i + 1 != argc) return usage();
 	if (geteuid() != 0) {
 		fprintf(stderr, "region: set needs root\n");
@@ -204,6 +308,24 @@ static int set(int argc, char **argv)
 		return 1;
 	}
 	if (show(argv[i]) != 0) return 1;
+	memcpy(base, rg->base, 3);
+	if ((n = compile(argv[i], b)) < 0) return 1;
+	/* RQ.5: the file and its base, against the list made at build time */
+	if ((ok = shipped(argv[i], sum)) < 0) return 1;
+	bsum[0] = 0;
+	if (base[0]) {
+		int k = shipped(base, bsum);
+
+		if (k < 0) return 1;
+		ok = ok && k;
+	}
+	if (!ok && !force) {
+		fprintf(stderr, "region: a custom table needs -f; you are "
+			"responsible for it\n");
+		return 1;
+	}
+	printf("record: %d B, CRC %08lx (written to flash once, with T32b)\n",
+		n, mdm_rg_blob_crc(b));
 	if (!yes) {
 		printf("I will use this device under the rules of %s [y/N] ",
 			argv[i]);
@@ -217,6 +339,7 @@ static int set(int argc, char **argv)
 		return 1;
 	}
 	close(fd);
+	logit(argv[i], base, !ok, sum, bsum, n, mdm_rg_blob_crc(b));
 	printf("region %s: applies from the next boot\n", argv[i]);
 	return 0;
 }
@@ -252,5 +375,6 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "check") == 0) return check(argc, argv);
 	if (strcmp(argv[1], "set") == 0) return set(argc, argv);
+	if (strcmp(argv[1], "compile") == 0) return compile_to(argc, argv);
 	return usage();
 }

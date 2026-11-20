@@ -20,10 +20,16 @@ B	:= build
 test: $(B)/modemtest
 	./$(B)/modemtest
 
-$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h $(L)/mdmz.h \
-	    $(wildcard $(MROOT)/flipper/rootfs/usr/share/region/*.reg)
+REGS	:= $(wildcard $(MROOT)/flipper/rootfs/usr/share/region/*.reg)
+
+# RQ.5: the shipped tables' SHA-256, made as for the Flipper (minix.mk)
+$(B)/reghash.c: $(MROOT)/flipper/tools/mkreghash.py $(REGS)
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) -I$(L) -o $@ modemtest.c $(SRC)
+	python3 -I $< $@ $(REGS)
+
+$(B)/modemtest: modemtest.c $(SRC) $(L)/modem.h $(L)/mdmz.h $(B)/reghash.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -I$(L) -o $@ modemtest.c $(SRC) $(B)/reghash.c
 
 clean:
 	rm -rf $(B)
