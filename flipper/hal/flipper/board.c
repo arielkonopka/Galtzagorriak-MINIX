@@ -2394,14 +2394,24 @@ static void rtc_alarm_out(int on)
 void hal_power_off(void)
 {
 	uint8_t b[2];
+	int r;
 
 	__disable_irq();
 	hal_tone(0, 0);
-	hal_backlight(0);		/* it looks off at once, also on USB */
-	{
-		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
+	/* On USB the Flipper stays powered (below): the screen stays as the
+	 * kernel left it (flipdev_off_notice: the boot screen and 'You can now
+	 * unplug the USB cable'), so that one sees the kernel is alive and
+	 * that Back starts it again (the owner, 2026-11-20).  On the battery
+	 * it is off in a moment: dark at once. */
+	if ((r = hal_charger_read(0x0B)) >= 0 && (r >> 5) != 0)
+		;			/* the screen stays as the kernel left it */
+	else {
+		hal_backlight(0);
+		{
+			static const uint8_t off[] = { 0xAE, 0xA5 }; /* LCD sleeps */
 
-		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+			if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+		}
 	}
 	rtc_off();				/* the alarm, early by the lead */
 	rtc_alarm_out(1);
@@ -2413,9 +2423,18 @@ void hal_power_off(void)
 		i2c1_write(BQ25896_ADDR, b, 2);
 	}
 	hal_vibro(0);
-	for (;;) {		/* on USB: powered until the cable goes */
-		hal_usb_poll();
-		hal_wdt_kick();
+	{	/* on USB: powered until the cable goes.  Back held for a second
+		 * starts the system again (the owner, 2026-11-20: it stayed dark
+		 * and Back did nothing; only Left + Back, a reset, woke it). */
+		uint32_t back = 0;
+
+		for (;;) {
+			hal_usb_poll();
+			hal_wdt_kick();
+			if (!(hal_buttons() & BTN_BACK)) back = 0;
+			else if (back == 0) back = DWT->CYCCNT | 1;
+			else if (ms_since(back) >= 1000) NVIC_SystemReset();
+		}
 	}
 }
 

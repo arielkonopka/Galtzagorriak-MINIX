@@ -298,6 +298,7 @@ PRIVATE const u8_t rb_iku[3][3] = {	/* red, green, white (PWM) */
 PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( void rb_iku_start, (void)			);
+extern const unsigned char splash_fb[];	/* hal/common/splash.c */
 FORWARD _PROTOTYPE( void ca_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
@@ -2638,6 +2639,10 @@ PRIVATE void ge_task()
 		mt_arm(MT_VIBRO, 150);		/* a longer buzz */
 		unlock();
 		hal_vibro(1);
+		/* at once: the boot screen and the ikurrina LED, so that one sees
+		 * the kernel is alive while init ends the programs (owner) */
+		hal_lcd_flush(splash_fb);
+		rb_iku_start();
 		cause_sig(INIT_PROC_NR, SIGPWR);	/* init: the orderly halt */
 	} else if ((a = ge_match(b)) != 0) {
 		st = hal_bl_state();
@@ -2846,6 +2851,20 @@ char *l1, *l2;
   nt_text(l1, 23);
   nt_text(l2, 34);
 }
+
+PUBLIC void flipdev_off_notice()
+{
+/* wreboot, before the power off: on USB the Flipper stays powered until the
+ * cable goes, so the screen says so, over the boot screen (owner,
+ * 2026-11-20): one sees the kernel is alive; Back held 1 s starts it again. */
+  int r, i;
+
+  if ((r = hal_charger_read(HAL_CHG_STATUS)) < 0 || (r >> 5) == 0) return;
+  for (i = 0; i < FB_SIZE; i++) fbuf[i] = splash_fb[i];
+  nt_box("You can now unplug", "the USB cable");
+  hal_lcd_flush(fbuf);
+}
+
 
 PRIVATE void nt_over()
 {

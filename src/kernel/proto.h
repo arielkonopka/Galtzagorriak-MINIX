@@ -306,6 +306,7 @@ _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( void flipdev_off_notice, (void)				);
 _PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);

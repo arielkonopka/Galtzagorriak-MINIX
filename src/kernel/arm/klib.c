@@ -1065,6 +1065,7 @@ int how;
 	/* T14c: power off (the charger's ship mode); hold Back, or plug in
 	 * USB, to start again.  On USB the power stays until the cable goes. */
 	printf("Power off.\n");
+	flipdev_off_notice();	/* on USB: "You can now unplug the cable" */
 	hal_power_off();
   }
   if (how == RBT_MONITOR) {
