@@ -13,3 +13,5 @@ Power:nobody:@power:/bin/power
 RFID:nobody:@rfid:/bin/lfrfid
 Spectrum:nobody:@subghz:/bin/spectrum
 Charging:nobody:@battery:/bin/chargescreen
+Infrared:nobody:@ir:/bin/infrared
+Archive:nobody:@file:=/bin/archive
