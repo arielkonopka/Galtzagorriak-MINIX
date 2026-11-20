@@ -116,6 +116,15 @@ and the running stack is the **radio slot**:
 - After a switch, only the text cache (copies that can be thrown away) is
   lost. *Planned:* the cache also uses the slot while a smaller stack runs.
   Today the cache keeps its fixed 128 KB.
+- If CPU2 ever starts lower than before (a bigger stack), at the next boot
+  MINIX treats every installed program and cache copy that now lies past
+  the end as gone. Such a program runs from RAM again until you
+  `pkg flash` it once more. The console says
+  `flash: program at 0x… past the region (SFSA moved): dead`. MINIX
+  marks these programs dead in flash once (8 bytes each), so switching
+  back to the smaller stack cannot bring back a copy that CPU2 or the
+  cache has overwritten in the meantime. With the slot this does not
+  happen, because no program is put there in the first place.
 - `radio add` refuses a stack that would leave less than 32 KB of cache or
   reach the system, the shared libraries or the launcher. Example: on a
   1 MB part, `ble-thread` (static, 0x0806B000) fits, `ble-thread-dyn`
@@ -132,8 +141,9 @@ in memory after it exits.
 The official Flipper mobile app will talk to MINIX over Bluetooth LE, using
 its own protocol: the stock serial service and a subset of the stock RPC
 (spec R15.7). Nothing has to be installed on the phone. This needs CPU2
-running a BLE stack (Phase 15), so it does not work on the Flipper yet.
-What exists is the part above the radio, tested on a PC:
+running a BLE stack (Phase 15), so it does not work over the air yet.
+What exists is the part above the radio: the `rpcd` program on MINIX and
+the same code on a PC:
 
 - **libflipperpb**: the stock protobuf (version 0.25, the one stock firmware
   1.3.4 uses), generated with nanopb.
@@ -154,11 +164,41 @@ What exists is the part above the radio, tested on a PC:
 
 Pairing data will be kept on the SD card (R15.4), never in internal flash.
 
+### `rpcd` on MINIX
+
+```
+rpcd [device]       serve one RPC session on device (default: standard
+                    input and output) until it closes or hangs up
+```
+
+`rpcd` is the RPC core with the MINIX side added: `device_info` gives
+`firmware_version` (the Galtzagorriak release), `firmware_origin` and
+`firmware_base`; `power_info` reads `/dev/power` (charge, voltage,
+current). Storage requests see `/ext` as `/home/flipper`, the same tree
+the stock firmware calls `/ext`. `rpcd` has the rights of the user who
+starts it, so it reads only what that user may read.
+
+Setting the time follows R15.7. The phone sends its local time, and MINIX
+uses its own `TZ`:
+
+- a difference of 2 s or less is only logged;
+- a difference close to a whole number of quarter hours, 45 minutes or
+  more, means the phone is in another time zone: `rpcd` logs a notice
+  and leaves the clock alone;
+- any other difference steps the clock, but only if `rpcd` runs as root.
+  Otherwise the app gets an error.
+
+It needs about 16 KB of memory while it runs (6.1 KB of that is the
+session) and writes nothing to internal flash. Nothing starts `rpcd` yet.
+The second USB serial port and BLE will start it when they exist (planned).
+The QEMU self-test (`m2test`) sends it stock frames through a pipe.
+
 ### Testing with `rpc.py`
 
 `flipper/tools/rpc.py` speaks the same frames as the app. Today it talks to
-the PC build of the RPC core. Later it will talk to the Flipper's second
-USB serial port, and over BLE through a bridge:
+the PC build of the RPC core, or to any command that runs `rpcd` with its
+input and output on a pipe (`--exec`). Later it will talk to the Flipper's
+second USB serial port, and over BLE through a bridge:
 
 ```
 $ python3 flipper/tools/rpc.py --exec 'RPCD_EXT=/media/sd flipper/tests/rpcd/build/rpcdhost' info
