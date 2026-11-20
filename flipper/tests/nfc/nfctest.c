@@ -18,6 +18,9 @@
 #include "mf_dict.h"
 #include "mf_attack.h"
 #include "nfc_file.h"
+#include "iso14443_3a.h"
+#include "mf_ultralight.h"
+#include "nfc_poller.h"
 
 static int fails;
 #define CHECK(c, msg) do { if(!(c)) { printf("FAIL: %s\n", msg); fails++; } } while(0)
@@ -283,6 +286,253 @@ static void test_nfc_file(void)
 	}
 }
 
+/* ---- ISO 14443-3A activation (poller) ---- */
+
+/* A stateless 3A mock: REQA, the anticollision cascade and SELECT for a
+ * 4- or 7-byte UID.  atqa/sak/uid are the card's. */
+typedef struct card_a {
+	uint8_t uid[10], uid_len, atqa[2], sak;
+} card_a_t;
+
+static int card_a_activate(card_a_t *k,
+	const uint8_t *tx, size_t tx_bits,
+	uint8_t *rx, size_t *rx_bits)
+{
+	if(tx_bits == 7 && (tx[0] == 0x26 || tx[0] == 0x52)) {	/* REQA/WUPA */
+		rx[0] = k->atqa[0]; rx[1] = k->atqa[1];
+		*rx_bits = 16;
+		return NFC_OK;
+	}
+	if(tx_bits == 16 && tx[1] == 0x20) {		/* anticollision */
+		int lvl = (tx[0] == 0x93) ? 0 : (tx[0] == 0x95) ? 1 : 2;
+		if(k->uid_len == 4 && lvl == 0) {
+			memcpy(rx, k->uid, 4);
+		} else if(k->uid_len == 7 && lvl == 0) {
+			rx[0] = 0x88;			/* cascade tag */
+			memcpy(rx + 1, k->uid, 3);
+		} else if(k->uid_len == 7 && lvl == 1) {
+			memcpy(rx, k->uid + 3, 4);
+		} else return NFC_ERR_TIMEOUT;
+		rx[4] = rx[0] ^ rx[1] ^ rx[2] ^ rx[3];	/* BCC */
+		*rx_bits = 40;
+		return NFC_OK;
+	}
+	if(tx_bits == 56 && tx[1] == 0x70) {		/* SELECT */
+		int lvl = (tx[0] == 0x93) ? 0 : (tx[0] == 0x95) ? 1 : 2;
+		if(k->uid_len == 7 && lvl == 0) rx[0] = 0x04;	/* cascade on */
+		else rx[0] = k->sak;
+		*rx_bits = 8;
+		return NFC_OK;
+	}
+	return NFC_ERR_TIMEOUT;
+}
+
+static int card_a_xfer(void *ctx,
+	const uint8_t *tx, size_t tx_bits,
+	uint8_t *rx, size_t rx_room, size_t *rx_bits,
+	uint32_t fwt, uint32_t flags)
+{
+	(void)fwt; (void)flags; (void)rx_room;
+	return card_a_activate(ctx, tx, tx_bits, rx, rx_bits);
+}
+
+static void test_iso14443_3a(void)
+{
+	card_a_t k4 = { {0xA2,0x45,0x07,0x11}, 4, {0x00,0x04}, 0x08 };
+	card_a_t k7 = { {0x04,0x11,0x22,0x33,0x44,0x55,0x66}, 7, {0x00,0x44}, 0x00 };
+	nfc_xfer_t x;
+	iso14443_3a_tag_t t;
+
+	memset(&x, 0, sizeof x); x.transceive = card_a_xfer; x.ctx = &k4;
+	CHECK(iso14443_3a_poll(&x, 0, &t) == NFC_OK, "3A poll 4-byte");
+	CHECK(t.uid_len == 4 && memcmp(t.uid, k4.uid, 4) == 0, "4-byte UID");
+	CHECK(t.sak == 0x08 && t.atqa[1] == 0x04, "SAK/ATQA 4-byte");
+	CHECK(mf_type_from_sak(t.sak) == MF_TYPE_1K, "SAK 0x08 -> 1K");
+
+	x.ctx = &k7;
+	CHECK(iso14443_3a_poll(&x, 0, &t) == NFC_OK, "3A poll 7-byte cascade");
+	CHECK(t.uid_len == 7 && memcmp(t.uid, k7.uid, 7) == 0, "7-byte UID");
+	CHECK(t.sak == 0x00, "SAK 7-byte ultralight");
+	CHECK(mf_type_from_sak(t.sak) < 0, "SAK 0x00 is not classic");
+}
+
+/* ---- MIFARE Ultralight / NTAG (poller + file round-trip) ---- */
+
+typedef struct card_ul {
+	card_a_t a;
+	uint16_t pages;
+	uint8_t mem[MFUL_MAX_PAGES][4];
+	uint8_t version[8];
+	int has_version;
+} card_ul_t;
+
+static int card_ul_xfer(void *ctx,
+	const uint8_t *tx, size_t tx_bits,
+	uint8_t *rx, size_t rx_room, size_t *rx_bits,
+	uint32_t fwt, uint32_t flags)
+{
+	card_ul_t *k = ctx;
+	(void)fwt; (void)flags; (void)rx_room;
+
+	if(tx_bits == 8 && tx[0] == MFUL_CMD_GET_VERSION) {
+		if(!k->has_version) return NFC_ERR_TIMEOUT;
+		memcpy(rx, k->version, 8);
+		*rx_bits = 64;
+		return NFC_OK;
+	}
+	if(tx_bits == 16 && tx[0] == MFUL_CMD_READ) {
+		uint8_t p = tx[1];
+		int i;
+		if(p >= k->pages) return NFC_ERR_TIMEOUT;
+		for(i = 0; i < 4; i++)			/* 4 pages, wrapping */
+			memcpy(rx + i * 4, k->mem[(p + i) % k->pages], 4);
+		*rx_bits = NFC_BITS(16);
+		return NFC_OK;
+	}
+	return card_a_activate(&k->a, tx, tx_bits, rx, rx_bits);
+}
+
+static void test_ultralight(void)
+{
+	static card_ul_t k;
+	static nfc_device_t d, d2;
+	nfc_xfer_t x;
+	const char *err = NULL;
+	const char *tmp = "build/ul_roundtrip.nfc";
+	const mful_type_t *t;
+	int p;
+
+	memset(&k, 0, sizeof k);
+	k.a = (card_a_t){ {0x04,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF}, 7, {0x00,0x44}, 0x00 };
+	k.pages = 135;				/* NTAG215 */
+	k.has_version = 1;
+	/* NTAG215 GET_VERSION: NXP, NTAG (0x04), storage 0x11. */
+	memcpy(k.version, "\x00\x04\x04\x02\x01\x00\x11\x03", 8);
+	for(p = 0; p < k.pages; p++) {
+		k.mem[p][0] = (uint8_t)p; k.mem[p][1] = 0x5A;
+		k.mem[p][2] = (uint8_t)(p ^ 0xFF); k.mem[p][3] = 0xA5;
+	}
+	memset(&x, 0, sizeof x); x.transceive = card_ul_xfer; x.ctx = &k;
+
+	t = mful_get_version(&x);
+	CHECK(t && strcmp(t->name, "NTAG215") == 0, "GET_VERSION -> NTAG215");
+	CHECK(t && t->total_pages == 135, "NTAG215 135 pages");
+
+	CHECK(nfc_poll_identify(&x, &d) == NFC_OK, "UL identify");
+	CHECK(d.type == NFC_DEV_MF_ULTRALIGHT, "identified as ultralight");
+	CHECK(d.uid_len == 7, "UL 7-byte UID");
+	CHECK(nfc_poll_read_ul(&x, &d) == NFC_OK, "UL read");
+	CHECK(d.ul_pages == 135, "read 135 pages");
+	CHECK(strcmp(d.ul_subtype, "NTAG215") == 0, "subtype NTAG215");
+	CHECK(d.ul_page[7][0] == 7 && d.ul_page[7][1] == 0x5A, "page 7 content");
+
+	/* save and reload: the pages survive the .nfc round trip */
+	CHECK(nfc_file_save(&d, tmp) == 0, "save read UL");
+	CHECK(nfc_file_load(&d2, tmp, &err) == 0, "reload UL");
+	CHECK(d2.ul_pages == 135 &&
+	      memcmp(d.ul_page, d2.ul_page, 135 * 4) == 0, "UL pages round-trip");
+}
+
+/* ---- MIFARE Classic read over Crypto-1 (poller) ---- */
+
+/* A full auth+read mock: a 4-byte card, one known key on sector 0, each
+ * block filled with a pattern.  The state machine follows the reader's
+ * strict auth -> {nr,ar} -> encrypted-read per block. */
+typedef struct card_rw {
+	card_a_t a;
+	uint32_t uid;
+	mf_key_t keya0;
+	mf_block_t block[64];
+	int phase;			/* 0 idle, 1 awaiting {nr,ar}, 2 authed */
+	uint8_t sector;
+	uint32_t nt, rng;
+	crypto1_t c;
+} card_rw_t;
+
+static int card_rw_xfer(void *ctx,
+	const uint8_t *tx, size_t tx_bits,
+	uint8_t *rx, size_t rx_room, size_t *rx_bits,
+	uint32_t fwt, uint32_t flags)
+{
+	card_rw_t *k = ctx;
+	(void)fwt; (void)flags; (void)rx_room;
+
+	if(k->phase == 2) {		/* encrypted READ(0x30, block) */
+		uint8_t cmd, blk;
+		int i;
+		k->phase = 0;
+		if(tx_bits != 16) return NFC_ERR_PROTO;
+		cmd = tx[0] ^ crypto1_byte(&k->c, tx[0], 1);
+		blk = tx[1] ^ crypto1_byte(&k->c, tx[1], 1);
+		if(cmd != 0x30 || blk >= 64) return NFC_ERR_PROTO;
+		for(i = 0; i < 16; i++)
+			rx[i] = k->block[blk].data[i] ^ crypto1_byte(&k->c, 0, 0);
+		*rx_bits = NFC_BITS(16);
+		return NFC_OK;
+	}
+	if(k->phase == 0) {
+		if(tx_bits == 16 && (tx[0] == MF_KEY_A || tx[0] == MF_KEY_B)) {
+			k->sector = (uint8_t)mf_block_to_sector(tx[1]);
+			k->rng = k->rng * 1103515245u + 12345u;
+			k->nt = k->rng ? k->rng : 0x1234abcdu;
+			k->phase = 1;
+			put32(rx, k->nt);
+			*rx_bits = 32;
+			return NFC_OK;
+		}
+		return card_a_activate(&k->a, tx, tx_bits, rx, rx_bits);
+	}
+	/* phase 1: the reader's {nr}{ar}. */
+	k->phase = 0;
+	if(tx_bits != 64) return NFC_ERR_PROTO;
+	{
+		uint32_t nr_enc = be32(tx), ar_enc = be32(tx + 4), ar, at;
+		crypto1_init(&k->c, mf_key_to_num(&k->keya0));
+		(void)crypto1_word(&k->c, k->uid ^ k->nt, 0);
+		(void)crypto1_word(&k->c, nr_enc, 1);
+		ar = ar_enc ^ crypto1_word(&k->c, 0, 0);
+		if(k->sector != 0 || ar != crypto1_prng_successor(k->nt, 64))
+			return NFC_ERR_TIMEOUT;		/* wrong/unknown key */
+		at = crypto1_prng_successor(k->nt, 96);
+		put32(rx, at ^ crypto1_word(&k->c, 0, 0));
+		*rx_bits = 32;
+		k->phase = 2;				/* ready for the read */
+		return NFC_OK;
+	}
+}
+
+static void test_mfc_read(void)
+{
+	static card_rw_t k;
+	static nfc_device_t d;
+	nfc_xfer_t x;
+	mf_found_t f;
+	int blk, got;
+
+	memset(&k, 0, sizeof k);
+	k.a = (card_a_t){ {0xA2,0x45,0x07,0x11}, 4, {0x00,0x04}, 0x08 };
+	k.uid = 0xA2450711u;
+	mf_num_to_key(0xFFFFFFFFFFFFULL, &k.keya0);
+	for(blk = 0; blk < 64; blk++) {
+		int i;
+		for(i = 0; i < 16; i++) k.block[blk].data[i] = (uint8_t)(blk * 16 + i);
+	}
+	memset(&x, 0, sizeof x); x.transceive = card_rw_xfer; x.ctx = &k;
+
+	CHECK(nfc_poll_identify(&x, &d) == NFC_OK, "MFC identify");
+	CHECK(d.type == NFC_DEV_MF_CLASSIC && d.mfc.type == MF_TYPE_1K,
+	      "identified as MIFARE Classic 1K");
+
+	/* only sector 0's key is known: blocks 0..3 should read. */
+	mf_found_init(&f, MF_TYPE_1K);
+	f.have_a[0] = 1; f.key_a[0] = k.keya0;
+	got = nfc_poll_read_mfc(&x, &d, &f);
+	CHECK(got == 4, "read 4 blocks of sector 0");
+	CHECK((d.mfc.block_read & 0xF) == 0xF, "blocks 0..3 marked read");
+	CHECK(d.mfc.block[2].data[0] == 2 * 16 && d.mfc.block[3].data[15] == 3*16+15,
+	      "block contents decrypted correctly");
+}
+
 int main(void)
 {
 	printf("libnfc host tests (Phase 14, #387)\n");
@@ -291,6 +541,9 @@ int main(void)
 	test_wrong_key();
 	test_attack();
 	test_nfc_file();
+	test_iso14443_3a();
+	test_ultralight();
+	test_mfc_read();
 	if(fails) { printf("%d FAILED\n", fails); return 1; }
 	printf("all libnfc tests passed\n");
 	return 0;

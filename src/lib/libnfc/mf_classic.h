@@ -73,4 +73,7 @@ int mf_authenticate(
 /* Read a 16-byte block after a successful mf_authenticate (cipher in `c`). */
 int mf_read_block(const nfc_xfer_t *x, crypto1_t *c, uint8_t block, mf_block_t *out);
 
+/* The type a SAK byte names, or -1 if it is not a MIFARE Classic SAK. */
+int mf_type_from_sak(uint8_t sak);
+
 #endif /* _LIBNFC_MF_CLASSIC_H */

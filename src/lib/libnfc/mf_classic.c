@@ -95,6 +95,18 @@ int mf_authenticate(
 	return NFC_OK;
 }
 
+/* The SAK values stock maps to MIFARE Classic (ISO 14443-3A, bit 5 set,
+ * UID complete).  0x09 Mini, 0x08 1K, 0x18 4K. */
+int mf_type_from_sak(uint8_t sak)
+{
+	switch(sak & 0x7f) {	/* ignore the cascade bit */
+	case 0x09: return MF_TYPE_MINI;
+	case 0x08: return MF_TYPE_1K;
+	case 0x18: return MF_TYPE_4K;
+	}
+	return -1;
+}
+
 int mf_read_block(const nfc_xfer_t *x, crypto1_t *c, uint8_t block, mf_block_t *out)
 {
 	uint8_t tx[4], rx[18];
