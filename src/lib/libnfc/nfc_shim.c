@@ -11,6 +11,8 @@
 
 #include "nfc_shim.h"
 
+#define NFC_SHIM_HARD_STEPS 65536u
+
 #undef malloc
 
 /* ---- furi ---- */
@@ -146,6 +148,7 @@ struct Nfc {
     uint32_t fdt_poll_fc;
     unsigned max_steps;
     unsigned frames;
+    unsigned answers; /* frames the card answered */
 };
 
 Nfc* nfc_alloc_xfer(const nfc_xfer_t* x) {
@@ -191,10 +194,19 @@ void nfc_start(Nfc* instance, NfcEventCallback callback, void* context) {
     furi_check(callback);
     uint32_t tech = nfc_shim_tech(instance->tech);
     (void)nfc_field(instance->x, 1, tech);
-    for(unsigned step = 0; step < instance->max_steps; step++) {
+    /* max_steps counts the steps in a row in which the card answered no
+     * frame (so a missing card ends the poll); NFC_SHIM_HARD_STEPS caps a
+     * poll that keeps talking (a whole 4K read is a few hundred steps). */
+    unsigned idle = 0, seen = instance->answers;
+    for(unsigned step = 0; step < NFC_SHIM_HARD_STEPS && idle < instance->max_steps; step++) {
         NfcEvent event = {.type = NfcEventTypePollerReady};
         NfcCommand cmd = callback(event, context);
         if(cmd == NfcCommandStop) break;
+        if(instance->answers != seen) {
+            seen = instance->answers;
+            idle = 0;
+        } else
+            idle++;
         if(cmd == NfcCommandReset) {
             (void)nfc_field(instance->x, 0, tech);
             (void)nfc_field(instance->x, 1, tech);
@@ -225,7 +237,10 @@ static NfcError nfc_shim_trx(
     if(r == NFC_OK) {
         if(rx_bits > NFC_BITS(room)) r = NFC_ERR_OVERFLOW;
         else if(rx_bits == 0) r = NFC_ERR_TIMEOUT;
-        else bit_buffer_copy_bits(rx, buf, rx_bits);
+        else {
+            bit_buffer_copy_bits(rx, buf, rx_bits);
+            n->answers++;
+        }
     }
     free(buf);
     return nfc_shim_err(r);
@@ -272,6 +287,7 @@ NfcError nfc_iso14443a_poller_trx_custom_parity(
     if(r == NFC_OK) {
         if(rx_bits > room * 9) r = NFC_ERR_OVERFLOW;
         else if(rx_bits < 9) r = (rx_bits == 0) ? NFC_ERR_TIMEOUT : NFC_OK;
+        if(r == NFC_OK && rx_bits) instance->answers++;
         if(r == NFC_OK && rx_bits >= 9) bit_buffer_copy_bytes_with_parity(rx_buffer, rx, rx_bits);
         else if(r == NFC_OK) bit_buffer_copy_bits(rx_buffer, rx, rx_bits); /* 4-bit ACK/NAK */
     }

@@ -8,8 +8,9 @@
  * says stop.  This shim gives them the same `Nfc` API (<nfc/nfc.h>) over
  * the one transceiver of libnfc, nfc_xfer_t, and runs that loop in the
  * caller: nfc_start() returns when the chain answers NfcCommandStop (or
- * after max_steps PollerReady events, so a missing card cannot hang the
- * caller).  No threads, no RTOS objects; the pollers are allocated per
+ * after max_steps PollerReady events in a row in which the card answered
+ * no frame, so a missing card cannot hang the caller; 65536 steps in all
+ * at most).  No threads, no RTOS objects; the pollers are allocated per
  * poll by the vendored nfc_poller.c and freed after.
  *
  * Frames go to nfc_xfer as stock's HAL sends them: the pollers add and
@@ -29,7 +30,7 @@ struct Nfc;
 
 /* An Nfc over x (kept by pointer; x must outlive it). */
 struct Nfc* nfc_alloc_xfer(const nfc_xfer_t* x);
-/* Cap on PollerReady events per nfc_start (default 64). */
+/* Cap on PollerReady events in a row without an answer (default 64). */
 void nfc_shim_set_max_steps(struct Nfc* nfc, unsigned max_steps);
 /* Transceive calls made since nfc_alloc_xfer (for tests). */
 unsigned nfc_shim_frames(const struct Nfc* nfc);

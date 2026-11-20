@@ -42,7 +42,6 @@ static Nfc* card_nfc(void) {
     xf.field = cm_mfc_field;
     xf.ctx = &card;
     Nfc* nfc = nfc_alloc_xfer(&xf);
-    nfc_shim_set_max_steps(nfc, 4096);
     return nfc;
 }
 
@@ -125,6 +124,43 @@ static void test_sync(void) {
     mf_classic_free(d);
     printf("     sync: %u auths, %u reads, %u frames\n", card.auths, card.reads,
            nfc_shim_frames(nfc));
+    nfc_free(nfc);
+}
+
+static NfcDevice* nsc_device(const uint8_t* uid, MfClassicType type);
+
+/* No card in the field: every call ends, with an error, in a bounded
+ * number of frames (the shim's idle-step cap). */
+static int no_card_xfer(void* ctx, const uint8_t* tx, size_t bits, uint8_t* rx, size_t room,
+                        size_t* rxb, uint32_t fwt, uint32_t flags) {
+    (void)ctx, (void)tx, (void)bits, (void)rx, (void)room, (void)fwt, (void)flags;
+    *rxb = 0;
+    return -1;
+}
+
+static void test_no_card(void) {
+    nfc_xfer_t x = {.transceive = no_card_xfer};
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    MfClassicKey k;
+    MfClassicBlock blk;
+    MfClassicType type;
+    key_of(0xFFFFFFFFFFFFULL, &k);
+    CHECK(mf_classic_poller_sync_read_block(nfc, 4, &k, MfClassicKeyTypeA, &blk) ==
+              MfClassicErrorNotPresent,
+          "no card: read_block says not present");
+    CHECK(mf_classic_poller_sync_detect_type(nfc, &type) != MfClassicErrorNone,
+          "no card: detect_type fails");
+    MfClassicDeviceKeys keys = {.key_a_mask = 1};
+    MfClassicData* d = mf_classic_alloc();
+    CHECK(mf_classic_poller_sync_read(nfc, &keys, d) == MfClassicErrorNotPresent,
+          "no card: whole read says not present");
+    mf_classic_free(d);
+    static const uint8_t uid[4] = {1, 2, 3, 4};
+    NfcDevice* dev = nsc_device(uid, MfClassicType1k);
+    CHECK(nfc_supported_cards_read(nfc, dev) < 0, "no card: no parser reads");
+    nfc_device_free(dev);
+    printf("     no card: %u frames in all\n", nfc_shim_frames(nfc));
+    CHECK(nfc_shim_frames(nfc) < 20000, "no card: bounded");
     nfc_free(nfc);
 }
 
@@ -362,6 +398,7 @@ int main(void) {
     test_sync();
     test_mizip();
     test_microel();
+    test_no_card();
     test_sweep();
     if(fails) {
         printf("%d FAILED\n", fails);
