@@ -320,7 +320,8 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid spectrum
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
-DAEMONS	:= mtpd
+# rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
+DAEMONS	:= mtpd rpcd
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
@@ -417,6 +418,9 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 			# all stack (no heap: its DIR is .bss, no stdio, no
 			# handler, so no MM gap); deepest a folder delete
 			# (rm_tree's 256 B path) or a move (two paths)
+CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
+			# 6272 B) and nanopb's request strings (a 1 KB ping,
+			# a 255 B path) from the heap, stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -529,6 +533,32 @@ $(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
 OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
+# rpcd (spec R15.5, R15.7; issue #388): the core (src/lib/rpcd), the stock
+# protobuf (src/lib/flipperpb) and nanopb, built as C11 (nanopb needs
+# <stdint.h>/<stdbool.h>: GCC's freestanding ones, through -isystem
+# $(GCCINC)); the MINIX platform part is cmds/rpcd.c.  The same core runs
+# on the PC (make -C tests/rpcd test).
+NPB_DIR	:= $(MROOT)/src/lib/nanopb
+FPB_DIR	:= $(MROOT)/src/lib/flipperpb
+RPC_DIR	:= $(MROOT)/src/lib/rpcd
+RPC_CFLAGS := $(UCFLAGS) -std=gnu11 -DPB_ENABLE_MALLOC -I$(NPB_DIR) \
+	   -I$(FPB_DIR) -I$(FPB_DIR)/gen -I$(RPC_DIR)
+FPB_GEN	:= $(notdir $(basename $(wildcard $(FPB_DIR)/gen/*.pb.c)))
+$(MB)/rpcd/npb/%.o: $(NPB_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/fpb/%.o: $(FPB_DIR)/gen/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/core.o: $(RPC_DIR)/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/main.o: cmds/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_rpcd = $(MB)/rpcd/main.o $(MB)/rpcd/core.o \
+	   $(patsubst %,$(MB)/rpcd/npb/%.o,pb_common pb_decode pb_encode) \
+	   $(FPB_GEN:%=$(MB)/rpcd/fpb/%.o)
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
