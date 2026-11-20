@@ -101,9 +101,42 @@ as plain `write()` always could. Do not do that.
 - Programs that write the card very often keep it "not clean" all the time. If you write such a
   program (a logger, for example), collect the data in memory and write it every few minutes.
 
+## Converting `/home` to MINIX V3 (`setup -H`)
+
+A card set up before this version has a MINIX V2 `/home` (names up to 14 characters, at most
+4 GB). As root,
+
+    # sh /etc/setup -H
+
+converts it to MINIX V3 and keeps your files. It first checks that `/home` is V2, that
+`/dev/hd3` is the swap partition and that `/home`'s files fit on it (`du -s /home` plus 1 KB
+per file and directory), makes `/home`'s partition reach up to the next partition after it,
+and reboots. The rest runs at that boot, before swap is turned on, with these messages:
+
+1. `setup -H: copying /home to the swap partition /dev/hd3`: a `tar` archive of `/home` on
+   `/dev/hd3`, read back and compared with its checksum. If it differs, nothing was changed
+   and `/home` stays V2.
+2. `setup -H: making a MINIX V3 /home on /dev/hd4 and copying it back`: `mkfs -3` and the copy
+   back from `/dev/hd3`.
+3. `setup -H: checking every file`: every file's checksum (`cksum`) is compared with the list
+   made in step 1.
+
+Then it says `setup -H: /home is MINIX V3 now; every file is the same.` The step it is in is
+kept in `/etc/.home-v3`: if the power goes off, the next boot goes on from that step. Until
+the end, the copy on `/dev/hd3` is kept: swap stays off, and the boot check of `/home` does
+not use `/dev/hd3` for its counts. If the check finds a file that differs, it says so and
+leaves the copy there (`cd /home; tar xopf /dev/hd3` gets the files back by hand; remove
+`/etc/.home-v3` afterwards to turn swap on again). Back up `/home` before you start anyway.
+
+On a card where swap is right after `/usr` (cards below 8 GB, or any card set up before), the
+partition after `/home` is none, so `/home` grows to the end of the card. There swap is only
+64 MB, so `setup -H` converts a `/home` of up to about 60 MB; with more it says how much it
+needs and changes nothing (copy the rest to a computer first).
+
 ## Checking the card on a computer
 
-The file systems are MINIX v2 file systems, which Linux understands. With the card in a reader
+`/` and `/usr` are MINIX V2 file systems and `/home` is MINIX V3 (V2 on a card set up before;
+see above); Linux understands both. With the card in a reader
 (here as `/dev/sdX`), unmounted:
 
     sudo fsck.minix -av /dev/sdX4      # /home; sdX1 is /, sdX2 is /usr

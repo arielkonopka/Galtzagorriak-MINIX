@@ -12,6 +12,9 @@
  * for the data zones only, max file size 2 GiB - 1, and the N.1 flags at
  * offset 14.  Its size comes from DIOCGETPS (O.3), so it can be larger
  * than 4 GiB; blocks past 2 GiB go through bread()/bwrite().
+ * -g blocks (V3 only, spec O.7): make the zone map big enough for a file
+ * system of that many blocks, so the file system can later grow into the
+ * space after it (swap, R12.34) without moving the inode table.
  */
 
 #include <sys/types.h>
@@ -107,6 +110,7 @@ block_t zone_map;		/* where is zone map? (depends on # inodes) */
 int inodes_per_block;
 int fs_version;
 block_t max_nrblocks;
+block_t growto;			/* -g: zone map room for this size */
 int esize = 16;			/* bytes per directory entry: 16, V3 64 */
 
 FILE *proto;
@@ -182,7 +186,7 @@ char *argv[];
   fs_version = 2;
   inodes_per_block = V2_INODES_PER_BLOCK;
   max_nrblocks = N_BLOCKS;
-  while ((ch = getopt(argc, argv, "13b:di:lot")) != EOF)
+  while ((ch = getopt(argc, argv, "13b:dg:i:lot")) != EOF)
 	switch (ch) {
 	    case '1':
 		fs_version = 1;
@@ -196,6 +200,9 @@ char *argv[];
 		break;
 	    case 'b':
 		blocks = strtoul(optarg, (char **) NULL, 0);
+		break;
+	    case 'g':
+		growto = strtoul(optarg, (char **) NULL, 0);
 		break;
 	    case 'd':
 		dflag = 1;
@@ -217,6 +224,8 @@ char *argv[];
    * block size has already been specified.
    */
   if (argc - optind != 2 && (argc - optind != 1 || blocks == 0)) usage();
+  if (growto != 0 && fs_version != 3) pexit("-g is for V3 only (-3)");
+  if (growto > V3_BLOCKS) growto = V3_BLOCKS;
 
   /* Check special. */
   check_mtab(argv[optind]);
@@ -476,6 +485,7 @@ block_t blocks;
 {
   long avail;
 
+  if (growto > blocks) blocks = growto;	/* the zone map's room, -g */
   avail = 65535L - 2 - bitmapsize((bit_t) blocks);
   avail -= avail * V2_INODES_PER_BLOCK / (BLOCK_SIZE * 8) + 1;	/* imap */
   if (avail < 1) return 0;
@@ -489,20 +499,24 @@ block_t map;
 int nblk;
 unsigned long nbits;
 {
+/* Whole bytes at once: with -g the map can have thousands of blocks past
+ * the end, all of them set. */
   unsigned char buf[BLOCK_SIZE];
-  unsigned long b, end = (unsigned long) nblk * BLOCK_SIZE * 8;
-  block_t last = (block_t) -1, blk;
+  unsigned long b;
+  block_t blk;
+  int i;
 
-  for (b = nbits; b < end; b++) {
-	blk = map + b / (BLOCK_SIZE * 8);
-	if (blk != last) {
-		if (last != (block_t) -1) put_block(last, (char *) buf);
+  for (blk = map + nbits / (BLOCK_SIZE * 8); blk < map + nblk; blk++) {
+	b = (unsigned long) (blk - map) * BLOCK_SIZE * 8;
+	if (b >= nbits) {
+		memset(buf, 0xFF, BLOCK_SIZE);
+	} else {
 		get_block(blk, (char *) buf);
-		last = blk;
+		for (i = 0; i < BLOCK_SIZE * 8; i++)
+			if (b + i >= nbits) buf[i / 8] |= 1 << (i % 8);
 	}
-	buf[(b % (BLOCK_SIZE * 8)) / 8] |= 1 << (b % 8);
+	put_block(blk, (char *) buf);
   }
-  if (last != (block_t) -1) put_block(last, (char *) buf);
 }
 
 /* The layout of util-linux mkfs.minix -3 with 1 KB blocks: u32 ninodes
@@ -531,6 +545,9 @@ ino_t inodes;
 		break;
 	zmap--;
   }
+  /* -g: room for the zone map of a later, larger file system (O.7) */
+  if (growto > zones && bitmapsize((bit_t) growto) > zmap)
+	zmap = bitmapsize((bit_t) growto);
   first = 2L + imap + zmap + inodeblks;
   if (first > 65535L) pexit("Too many inodes for V3 (the first data zone is 16-bit)");
   if (first + 1 >= (long) zones) pexit("Block count too small");
@@ -1213,7 +1230,7 @@ block_t n;
 void usage()
 {
   fprintf(stderr,
-	  "Usage: %s [-13dlot] [-b blocks] [-i inodes] special [proto]\n",
+	  "Usage: %s [-13dlot] [-b blocks] [-i inodes] [-g blocks] special [proto]\n",
 	  progname);
   exit(1);
 }

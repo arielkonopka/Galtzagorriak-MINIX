@@ -170,6 +170,12 @@ What eats the reserve, from experience in this tree:
     the parent's saved registers), and `setjmp`/`longjmp` do not save the FP registers, so a
     `float` local that lives across a `longjmp` is undefined (as C says for non-`volatile`
     locals anyway).
+  - **File names** (spec O.4, O.5): `/` and `/usr` are MINIX V2 (names up to 14 characters),
+    `/home` on a card set up now is MINIX V3 (up to 60). `NAME_MAX` is 60, but ask the file
+    system: `pathconf(dir, _PC_NAME_MAX)` says 14 or 60. A name over 60 characters fails with
+    `ENAMETOOLONG`; on V2, as in MINIX always, a name over 14 is cut to 14, so check first. Read directories with `readdir()`, never by reading
+    `struct direct` entries yourself: V2 entries are 16 bytes, V3 entries 64. `ino_t` is 32
+    bits. `statfs()`/`fstatfs()` (`<sys/statfs.h>`) give the free blocks and files at once.
 - **Headers**: `<minix/...>` for system-specific things such as `<minix/fg.h>` (foreground
   app), and the port's own `flipper/gui/gui.h` for screen apps.
 

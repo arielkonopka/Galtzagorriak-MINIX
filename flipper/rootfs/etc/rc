@@ -37,6 +37,9 @@ test -f /etc/.setup-done || sh /etc/setup
 # Check /usr and /home before mounting them (spec N.3; Back skips one),
 # then mount them (see /etc/fstab).  One with errors left, or not
 # checked, is mounted read-only and checked again at the next boot.
+# setup -H keeps the copy of /home on the swap partition: no scratch.
+scratch="-T /dev/hd3"
+test -f /etc/.home-v3 && scratch=
 test -f /etc/.setup-done && {
 	rm -f /tmp/fsck.log
 	for fs in "$usr /usr" "$home /home"
@@ -44,7 +47,7 @@ test -f /etc/.setup-done && {
 		set $fs
 		# swap is still off: past ~30 000 inodes in use fsck keeps
 		# its counts on the swap partition (spec O.6)
-		fsck -p -v -k -w 5 -m $fsck_mem -T /dev/hd3 -L /tmp/fsck.log $1
+		fsck -p -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
 		case $? in
 		0|1)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
 		*)	echo "rc: $1 has errors: mounted read-only, run fsck"
@@ -61,6 +64,8 @@ test -f /etc/.setup-done && {
 	}
 	rm -f /tmp/fsck.log
 }
+# setup -H (spec O.7): the next step of converting /home to MINIX V3.
+test -f /etc/.home-v3 && sh /etc/setup -Hboot
 # The launcher says "Card has errors: run fsck" while this file is there.
 if test -n "$fsck_err"; then >/etc/.fsck-errors; else rm -f /etc/.fsck-errors; fi
 
@@ -77,10 +82,11 @@ fi
 test -n "$fcache_budget" && pkg budget $fcache_budget >/dev/null
 
 # Swap to the SD card's swap partition (spec Phase 12): swap=off|plain|crypt.
+# Off while setup -H keeps /home's copy there (/etc/.home-v3).
 # plain: no encryption, set-uid programs and Secret: yes packages are never
 # swapped.  crypt needs swap encryption (12b), not there yet: off.
 case "$swap" in
-plain)	test -f /etc/.setup-done && swapon /dev/hd3 plain &&
+plain)	test -f /etc/.setup-done && test ! -f /etc/.home-v3 && swapon /dev/hd3 plain &&
 		{ test -z "$swap_reserve" || swapon -r $swap_reserve; } ;;
 crypt)	echo "rc: swap=crypt is not available yet (no swap encryption): swap is off" ;;
 esac

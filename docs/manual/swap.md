@@ -8,7 +8,11 @@ something to do again (its wait ends, a signal arrives), its memory comes back t
 place before it runs. The program never notices.
 
 Swap is **off** by default. It uses only the swap partition `/dev/hd3` that the first boot made
-on the card (64 MB, partition type 82). It never writes to the Flipper's internal flash.
+on the card (partition type 82). On a card below 8 GB it is 64 MB, right after `/usr`; on an 8 GB
+or larger card it is at the end of the card and takes half of the space after `/usr`, at most
+4 GiB − 1 MiB (`mkpart -l /dev/hd0` shows it). It never writes to the Flipper's internal flash.
+While `setup -H` converts `/home` ([The SD card](sdcard.md)), the partition holds the copy of
+`/home` and swap stays off until the conversion is done.
 
 ## Turning it on
 

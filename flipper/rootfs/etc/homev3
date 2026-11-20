@@ -1,0 +1,43 @@
+# /etc/homev3 - "setup -H" (sh /etc/setup -H): convert /home to MINIX V3
+# (spec O.7).  -H checks, writes the step and reboots; at boot /etc/rc
+# runs "-Hboot" after /usr and /home are mounted and before swap is on:
+#   copy   /home to the swap partition /dev/hd3 with tar, read it back
+#   make   mkfs -3 /dev/hd4, the copy back (again after a power loss)
+#   check  every file's cksum as before; then the step file goes
+# The step is in /etc/.home-v3: a power loss goes on from it at the next
+# boot, and the copy on /dev/hd3 is kept (swap off, no fsck scratch)
+# until the check passes.  Flat on purpose: sh's string space is small.
+
+PATH=/bin:/usr/bin
+st=/etc/.home-v3
+test "$1" = -Hboot && { test -f $st || exit 0; }
+test "$1" = -H -a -f $st && {
+	echo "setup -H: already started (step `cat $st`); it goes on at boot"
+	exit 1
+}
+test "$1" = -H -a ! -f /etc/.setup-done && { echo "setup -H: the card is not set up"; exit 1; }
+test "$1" = -H || exec sh /etc/homev3.b
+dd if=/dev/hd4 bs=8 skip=131 count=1 2>/dev/null | od -x | grep -s 4d5a && {
+	echo "setup -H: /home is MINIX V3 already"
+	exit 1
+}
+set `mkpart -l /dev/hd0 | grep '^3 '`
+test "$3" = 82 || { echo "setup -H: /dev/hd3 is not a swap partition"; exit 1; }
+swapkb=`expr $7 / 2`
+set `du -s /home`
+# tar needs 512 B per file and per directory on top of the data
+used=$1
+files=`find /home -print | wc -l`
+need=`expr $used + $files + 1024`
+test $need -lt $swapkb || {
+	echo "setup -H: /home needs about $need KB, the swap partition has $swapkb KB"
+	exit 1
+}
+# /home may grow up to the next partition after it (none when swap sits
+# between /usr and /home); the kernel reads the table at the reboot.
+mkpart -g 4 /dev/hd0 >/dev/null || { echo "setup -H: mkpart -g failed"; exit 1; }
+echo copy >$st
+sync
+echo "setup -H: /home is converted at the next boot (swap stays off until then)."
+echo "Rebooting."
+reboot
