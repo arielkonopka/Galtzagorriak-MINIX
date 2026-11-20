@@ -11,12 +11,15 @@
 
 #include "nfc_shim.h"
 #include "cardmodel.h"
+#include "cm_desfire.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
 #include <nfc/protocols/iso14443_4a/iso14443_4a_poller.h>
 #include <nfc/protocols/iso14443_4b/iso14443_4b_poller.h>
+#include <nfc/protocols/mf_desfire/mf_desfire_poller.h>
 #include <toolbox/bit_buffer.h>
+#include <toolbox/simple_array.h>
 
 static int fails;
 #define CHECK(c, msg)                         \
@@ -220,10 +223,100 @@ static void test_iso14443_4b(void) {
     nfc_free(nfc);
 }
 
+/* ---- MIFARE DESFire (vendored poller on 4A) ---- */
+
+typedef struct {
+    int success, failed;
+} tdf_ctx_t;
+
+static NfcCommand tdf_cb(NfcGenericEvent event, void* context) {
+    tdf_ctx_t* c = context;
+    const MfDesfirePollerEvent* e = event.event_data;
+    if(event.protocol != NfcProtocolMfDesfire) return NfcCommandContinue;
+    if(e->type == MfDesfirePollerEventTypeReadSuccess) c->success++;
+    else if(e->type == MfDesfirePollerEventTypeReadFailed) c->failed++;
+    else return NfcCommandContinue;
+    return NfcCommandStop;
+}
+
+static void desfire_read(cm_desfire_t* df, const char* tag) {
+    static cm_4a_t k;
+    nfc_xfer_t x = {0};
+    tdf_ctx_t c = {0};
+    char msg[96];
+
+    cm_4a_init(&k);
+    memcpy(k.a.uid, df->uid, 7);
+    k.dep.app = cm_df_app;
+    k.dep.app_ctx = df;
+    x.transceive = cm_4a_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    nfc_shim_set_max_steps(nfc, 256);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolMfDesfire);
+    nfc_poller_start(poller, tdf_cb, &c);
+    nfc_poller_stop(poller);
+
+    snprintf(msg, sizeof msg, "DESFire %s: read success", tag);
+    CHECK(c.success == 1 && c.failed == 0, msg);
+    const MfDesfireData* d = (const MfDesfireData*)nfc_poller_get_data(poller);
+    snprintf(msg, sizeof msg, "DESFire %s: version (hw EV1, 4K) and UID", tag);
+    CHECK(d->version.hw_type == 0x01 && d->version.hw_storage == 0x18 && d->version.sw_major == 0x01 &&
+              !memcmp(d->version.uid, df->uid, 7) && d->version.prod_year == 0x23,
+          msg);
+    snprintf(msg, sizeof msg, "DESFire %s: free memory 4096", tag);
+    CHECK(d->free_memory.bytes_free == 4096, msg);
+    snprintf(msg, sizeof msg, "DESFire %s: one application 563412", tag);
+    CHECK(simple_array_get_count(d->application_ids) == 1 &&
+              !memcmp(((const MfDesfireApplicationId*)simple_array_cget(d->application_ids, 0))->data,
+                      "\x56\x34\x12", 3),
+          msg);
+    if(simple_array_get_count(d->applications) == 1) {
+        const MfDesfireApplication* app = simple_array_cget(d->applications, 0);
+        snprintf(msg, sizeof msg, "DESFire %s: three files with settings", tag);
+        CHECK(simple_array_get_count(app->file_ids) == 3 &&
+                  simple_array_get_count(app->file_settings) == 3,
+              msg);
+        const MfDesfireFileData* f1 = simple_array_cget(app->file_data, 0);
+        const MfDesfireFileData* f2 = simple_array_cget(app->file_data, 1);
+        const MfDesfireFileData* f3 = simple_array_cget(app->file_data, 2);
+        snprintf(msg, sizeof msg, "DESFire %s: free file 1 read (32 bytes)", tag);
+        CHECK(simple_array_get_count(f1->data) == 32 &&
+                  !memcmp(simple_array_cget_data(f1->data), df->file1, 32),
+              msg);
+        snprintf(msg, sizeof msg, "DESFire %s: value file 2 = 100", tag);
+        CHECK(simple_array_get_count(f2->data) == 4 &&
+                  ((const uint8_t*)simple_array_cget_data(f2->data))[0] == 100,
+              msg);
+        snprintf(msg, sizeof msg, "DESFire %s: keyed file 3 not read, no command sent", tag);
+        CHECK(simple_array_get_count(f3->data) == 0 && df->refused == 0, msg);
+    } else {
+        snprintf(msg, sizeof msg, "DESFire %s: application read", tag);
+        CHECK(0, msg);
+    }
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
+static void test_desfire(void) {
+    static cm_desfire_t df;
+    printf("-- MIFARE DESFire\n");
+    memset(&df, 0, sizeof df);
+    memcpy(df.uid, "\x04\x5A\x6B\x7C\x8D\x9E\xAF", 7);
+    for(int i = 0; i < 32; i++) df.file1[i] = (uint8_t)(0xA0 + i);
+    desfire_read(&df, "native");
+    memset(&df, 0, sizeof df);
+    memcpy(df.uid, "\x04\x01\x02\x03\x04\x05\x06", 7);
+    for(int i = 0; i < 32; i++) df.file1[i] = (uint8_t)(3 * i);
+    df.iso_only = 1;
+    desfire_read(&df, "ISO-wrapped fallback");
+}
+
 int main(void) {
     printf("libnfc vendored-poller tests (#404)\n");
     test_iso14443_4a();
     test_iso14443_4b();
+    test_desfire();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;

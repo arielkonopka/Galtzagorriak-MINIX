@@ -4,6 +4,7 @@
 # it after nfctest.  Vendored files are compiled unchanged.
 V	:= $(MROOT)/src/lib/nfc
 VINC	:= -I$(L)/shim -I$(L) -I$(V) -I$(V)/nfc -I.
+# -Wno-format: stock prints uint32_t with %lu (unsigned long on ARM).
 VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/nfc_poller.c $(V)/nfc/protocols/nfc_protocol.c \
 	   $(V)/toolbox/bit_buffer.c $(V)/toolbox/simple_array.c \
@@ -21,14 +22,19 @@ VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b.c \
 	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_i.c \
 	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_poller.c \
-	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_poller_i.c
-VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h
+	   $(V)/nfc/protocols/iso14443_4b/iso14443_4b_poller_i.c \
+	   $(V)/nfc/helpers/nxp_native_command.c $(V)/bit_lib/bit_lib.c \
+	   $(V)/nfc/protocols/mf_desfire/mf_desfire.c \
+	   $(V)/nfc/protocols/mf_desfire/mf_desfire_i.c \
+	   $(V)/nfc/protocols/mf_desfire/mf_desfire_poller.c \
+	   $(V)/nfc/protocols/mf_desfire/mf_desfire_poller_i.c
+VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h cm_desfire.h
 
 prototest: $(B)/prototest
 	./$(B)/prototest
 
 $(B)/prototest: prototest.c $(VSRC) $(VHDR)
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) $(VINC) -o $@ prototest.c $(VSRC)
+	$(CC) $(CFLAGS) -Wno-format $(VINC) -o $@ prototest.c $(VSRC)
 
 .PHONY: prototest
