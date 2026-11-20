@@ -355,7 +355,7 @@ void hal_line_rx_irq(int on);
  * file on the host (semihosting) in QEMU.  512-byte sectors, polled.
  * All return 0 on success, -1 on error. */
 #define HAL_SECTOR_SIZE 512
-int hal_disk_init(void);		/* (re)detect and initialise the card */
+int hal_disk_init(void);		/* (re)detect and initialise the card: 0, or minus (step << 8 | the last R1) of the failure (flipper; QEMU: -1) */
 uint32_t hal_disk_sectors(void);	/* capacity, valid after init */
 int hal_disk_read_part(uint32_t sector, unsigned off, unsigned len, void *buf);
 /* Provided by the kernel's disk task: let the other tasks run while the
