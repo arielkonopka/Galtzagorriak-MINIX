@@ -192,6 +192,31 @@ streamed 4 KB at a time; then epoch > running epoch (unless the downgrade
 press) and `from_min` <= running release. So a flipped bit anywhere is
 caught (`make updatetest` flips one at each byte).
 
+The C side is `src/lib/gzsig` (T33a part 2): `sha512.c` (FIPS 180-4,
+streaming), `ed25519.c` (RFC 8032 5.1.7 verification only, after the public
+domain TweetNaCl, field elements of 16 x 16-bit limbs in `int`, S < L and
+canonical points required) and `gzu.c` (the checks above in the same order
+with the same reasons; no libc, read through a callback, 512 B buffer or
+more). `gzupdate` and `atea` link the same three files; no secret key is in
+them. Measured with `arm-none-eabi-gcc -Os -mcpu=cortex-m4` (`-fstack-usage`):
+
+| Part | Code | Stack |
+|---|---|---|
+| `sha512.c` | 2.0 KB | 304 B (block) + 216 B state |
+| `ed25519.c` | 2.7 KB | 1.4 KB deepest (`gz_ed25519_verify` 640 + `unpackneg` 408 + `pack` 296 + 80) |
+| `gzu.c` | 3.1 KB | `gzu_check` 432 + 96 above the verifier, so about 2.0 KB in all |
+
+So the verifier is 4.7 KB of code (budget 8 KB, RS.4) and 1.4 KB of stack
+(budget 2 KB). One signature check is about 2 x 256 point doublings plus
+additions, about 9 000 field multiplications of 256 32x32->64 products; on
+the PC under ASan it takes 7 ms. The time at 64 MHz is measured on the
+Flipper with `atea` (T33b; budget 2 s). `make gzsigtest` (and tests/host,
+every 3rd byte) runs RFC 8032 7.1 tests 1-3 and SHA(abc), FIPS 180-4
+vectors, 64 signatures of Python's `cryptography` with bad variants (a bit
+flipped in R, S, message or key; S + L), every file of `make updatetest`
+with the same verdict as `gzupdate-check.py`, and a flipped bit at each byte
+of the good file, under ASan and UBSan.
+
 Keys: `tools/gzsign --new-key` writes `~/.config/galtzagorriak/update.key`
 (PKCS#8 PEM, mode 0600; never commit it) and `update.pub` (64 hex digits).
 `gzsign` takes the private key from `--key`, the environment variable

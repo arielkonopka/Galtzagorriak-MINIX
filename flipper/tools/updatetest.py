@@ -63,6 +63,43 @@ def verdict(path, keys, epoch=None, release=None, board="flipper-f7"):
         return str(e)
 
 
+def sigvectors(out):
+    """sigs.txt for the C verifier: Ed25519 signatures made by the
+    `cryptography` package (another implementation) over messages of 0-300
+    bytes, each followed by bad variants: a flipped bit in R, in S, in the
+    message, in the key, and S + L (the same point, refused by RFC 8032)."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import \
+        Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization as ser
+    L = 2**252 + 27742317777372353535851937790883648493
+    with open(os.path.join(out, "sigs.txt"), "w") as f:
+        f.write("# good|bad public-key message signature (hex; '-' = empty"
+                " message; written by tools/updatetest.py)\n")
+        for i in range(64):
+            k = Ed25519PrivateKey.from_private_bytes(blob(f"k{i}", 32))
+            pk = k.public_key().public_bytes(ser.Encoding.Raw,
+                                             ser.PublicFormat.Raw)
+            m = blob(f"m{i}", (i * 37) % 301)
+            sig = k.sign(m)
+
+            def line(tag, pk, m, sig):
+                f.write(f"{tag} {pk.hex()} {m.hex() or '-'} {sig.hex()}\n")
+
+            def fl(b, j):
+                b = bytearray(b)
+                b[j % len(b)] ^= 1 << (j % 8)
+                return bytes(b)
+            line("good", pk, m, sig)
+            line("bad", pk, m, fl(sig, i % 32))
+            line("bad", pk, m, fl(sig, 32 + i % 31))
+            if m:
+                line("bad", pk, fl(m, i), sig)
+            line("bad", fl(pk, i), m, sig)
+            s = int.from_bytes(sig[32:], "little") + L
+            if s < 2**256:
+                line("bad", pk, m, sig[:32] + s.to_bytes(32, "little"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out")
@@ -198,6 +235,7 @@ def main():
         print(f"FAIL: {len(accepted)} one-bit flips accepted, first at "
               f"{accepted[0]:#x}")
 
+    sigvectors(out)
     with open(os.path.join(out, "cases.txt"), "w") as f:
         f.write("# file running-epoch running-release expect "
                 "(written by tools/updatetest.py)\n")
