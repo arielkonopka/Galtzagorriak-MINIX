@@ -362,6 +362,11 @@ brackets on the right and a hint line that names the buttons for the row under t
 - Long lists are loaded a page (at most 16 rows) at a time; the title bar shows the position in the
   whole list, e.g. `17/40`.
 - A **clock** screen shows the time in large digits and redraws once a minute while it is shown.
+- **Opening a file in another app** (issue #413): a window app may send `run LABEL FILE`
+  (`gm_run()`), as Archive's Open does. Its window ends, and the launcher starts the app of
+  `/etc/apps` whose label is LABEL, as that line's user, with FILE (an absolute path) as its
+  last argument. Only apps on the list can be started this way, and an app opened like this
+  cannot open a further one. An unknown label shows `no such app`.
 
 **Watching the traffic.** With `GuiLog: on` in `/etc/launcher.conf` the launcher copies every
 record it gets from a window app (`gui< ...`) and every event it sends (`gui> ...`) to the
