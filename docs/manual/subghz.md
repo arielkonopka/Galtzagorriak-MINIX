@@ -121,14 +121,14 @@ compiled: 16 bytes plus 16 for each row without `?` (192 bytes for an EU country
 
 | Countries | Tables (`/usr/share/region/`) | Law |
 |---|---|---|
-| AT, BE, BG, CY, CZ, DE, DK, EE, ES, FI, FR, GR, HR, HU, IE, IT, LT, LU, LV, MT, NL, PL, PT, RO, SE, SI, SK (the 27 EU member states) | `EU` + the country's own unchecked 870/915 MHz rows (none for DE, FR, LV, NL) | Decision 2006/771/EC ((EU) 2022/180) |
-| NO | `NO` | ERC/REC 70-03, Nkom |
-| GB | `GB` | Ofcom IR 2030 |
-| AL | `AL` | ERC/REC 70-03, AKEP |
-| BA | `BA` (no 865–868 MHz, no 869.7–870 MHz at 25 mW) | ERC/REC 70-03, RAK |
-| MK | `MK` | ERC/REC 70-03, AEK |
+| AT, BE, BG, CY, CZ, DE, DK, EE, ES, FI, FR, GR, HR, HU, IE, IT, LT, LU, LV, MT, NL, PL, PT, RO, SE, SI, SK (the 27 EU member states) | `EU` + the country's own unchecked 870/915 MHz rows (none for DE, FR, LV, MT, NL) | Decision 2006/771/EC ((EU) 2025/105) |
+| NO | `NO` | ERC/REC 70-03 (Nkom's text not read yet) |
+| GB | `GB` | ERC/REC 70-03 (Ofcom IR 2030 not read yet) |
+| AL | `AL` | ERC/REC 70-03 (AKEP's text not read yet) |
+| BA | `BA` (no 865–868 MHz, no 869.7–870 MHz at 25 mW) | ERC/REC 70-03 (RAK's text not read yet) |
+| MK | `MK` | ERC/REC 70-03 (AEK's text not read yet) |
 | US | `US` | FCC part 15: 15.231, 15.247, 15.249 |
-| CA | `CA` (the US numbers) | ISED RSS-210, RSS-247 |
+| CA | `CA` (the US numbers; no hopping row yet) | ISED RSS-210, RSS-Gen |
 
 Any other code is refused ("no table for XX; transmit stays off"). The European tables share the
 ERC/REC 70-03 bands:
@@ -142,7 +142,7 @@ ERC/REC 70-03 bands:
 | 865–868, 868.0–868.6, 869.7–870.0 | 25 mW | 1 % | |
 | 869.4–869.65 | 500 mW | 10 % | |
 | 869.7–870.0 | 5 mW | no limit | |
-| 862–863 | 25 mW | 0.1 % | `?` (not checked) in NO, GB, BA |
+| 862–863 | 25 mW | 0.1 % | `?` (not checked) in BA |
 
 In the US and Canada 433.92 MHz is for **remote buttons** (at most 5 s, −15 dBm) or **short
 bursts** (at most 1 s, then a pause of 30 times as long and at least 10 s, −30 dBm); 902–928
@@ -155,6 +155,9 @@ What the words in `region show` mean:
 - **short bursts with a pause**: any data, but each send at most 1 s and then a pause.
 - **?** (not checked): a row we know about but whose national text has not been checked yet;
   it is shown and never used. The 870–873 and 915–918 MHz rows are all like this for now.
+  Every other row was checked against the law it names (November 2026); the texts and the
+  exact places are listed in `docs/regulation/` in the source tree. The last column of
+  `region show` says which: `[eu-2025-105] row 44a` is checked, `unverified: ...` is not.
 
 The Flipper sends at most +10 dBm: the "PA" column is the step it uses. A send outside the
 bands says "refused: outside the region's bands"; one past the hour's share says "the band's
