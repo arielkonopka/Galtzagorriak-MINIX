@@ -823,7 +823,8 @@ void chksuper()
   if (sb.s_zmap_blocks < bitmapsize((bit_t) N_DATA + 1))
 	fatal("too few zmap blocks");
   n = v3 ? bitmapsize((bit_t) N_DATA + 1) : bitmapsize((bit_t) sb.s_zones);
-  if (sb.s_zmap_blocks != n) {
+  /* V3: mkfs -3 -g leaves room for a larger file system (spec O.7) */
+  if (sb.s_zmap_blocks != n && !(v3 && sb.s_zmap_blocks > n)) {
 	pr("warning: expected %d zmap_block%s", n, "", "s");
 	printf(" instead of %d\n", sb.s_zmap_blocks);
   }
