@@ -14,6 +14,7 @@
 #include "cm_mful.h"
 #include "cm_felica.h"
 #include "cm_st25tb.h"
+#include "cm_emv.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
@@ -23,6 +24,7 @@
 #include <nfc/protocols/felica/felica_poller_sync.h>
 #include <nfc/protocols/st25tb/st25tb_poller.h>
 #include <nfc/protocols/st25tb/st25tb_poller_sync.h>
+#include <nfc/protocols/emv/emv_poller.h>
 
 _Static_assert(sizeof(MfUltralightConfigPages) == 16, "config pages: 4 pages, 16 bytes");
 
@@ -291,10 +293,91 @@ static void test_st25tb(void) {
     nfc_free(nfc);
 }
 
+/* ---- EMV ---- */
+
+static size_t app_none(void* ctx, const uint8_t* cmd, size_t n, uint8_t* resp) {
+    (void)ctx; (void)cmd; (void)n;
+    resp[0] = 0x6A;
+    resp[1] = 0x82;
+    return 2;
+}
+
+typedef struct {
+    int success, failed;
+} emv_ctx_t;
+
+static NfcCommand emv_cb(NfcGenericEvent event, void* context) {
+    emv_ctx_t* c = context;
+    const EmvPollerEvent* e = event.event_data;
+    if(event.protocol != NfcProtocolEmv) return NfcCommandContinue;
+    if(e->type == EmvPollerEventTypeReadSuccess) c->success++;
+    else c->failed++;
+    return NfcCommandStop;
+}
+
+static void test_emv(void) {
+    static cm_4a_t k;
+    static cm_emv_t app;
+    nfc_xfer_t x = {0};
+    emv_ctx_t c = {0};
+
+    printf("-- EMV\n");
+    memset(&k, 0, sizeof k);
+    memset(&app, 0, sizeof app);
+    k.a = (cm_3a_t){{0x08, 0x12, 0x34, 0x56}, 4, {0x04, 0x00}, 0x20, 0, 0};
+    static const uint8_t ats[] = {0x05, 0x78, 0x80, 0x70, 0x02};
+    memcpy(k.ats, ats, sizeof ats);
+    k.dep.app = cm_emv_app;
+    k.dep.app_ctx = &app;
+    x.transceive = cm_4a_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolEmv);
+    nfc_poller_start(poller, emv_cb, &c);
+    nfc_poller_stop(poller);
+    const EmvData* d = (const EmvData*)nfc_poller_get_data(poller);
+    const EmvApplication* a = &d->emv_application;
+    CHECK(c.success == 1 && c.failed == 0, "EMV: PPSE, SELECT AID, GPO, READ RECORD");
+    CHECK(a->aid_len == 7 && !memcmp(a->aid, cm_emv_aid, 7), "EMV: AID from the PPSE directory");
+    CHECK(!strcmp(a->application_label, "TESTAPP"), "EMV: application label");
+    CHECK(a->afl.size == 4 && a->application_interchange_profile[0] == 0x20, "EMV: GPO format 2 (AIP, AFL)");
+    static const uint8_t pan[8] = {0x40, 0, 0, 0, 0, 0, 0, 0x02};
+    CHECK(a->pan_len == 8 && !memcmp(a->pan, pan, 8), "EMV: PAN from SFI 2 record 1 (synthetic)");
+    CHECK(a->exp_year == 0x30 && a->exp_month == 0x12, "EMV: expiry YYMM");
+    CHECK(a->pin_try_counter == 3, "EMV: GET DATA 9F17");
+    CHECK(app.records >= 1, "EMV: records read (SFI 2-3 tried for the name)");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+
+    /* A 4A card with no payment application: no EMV. */
+    k.dep.app = app_none;
+    memset(&c, 0, sizeof c);
+    nfc = nfc_alloc_xfer(&x);
+    poller = nfc_poller_alloc(nfc, NfcProtocolEmv);
+    nfc_poller_start(poller, emv_cb, &c);
+    nfc_poller_stop(poller);
+    /* Stock's read_fail handler sends the event without setting its type
+     * (it keeps ReadSuccess, 0), so the test looks at the data. */
+    d = (const EmvData*)nfc_poller_get_data(poller);
+    CHECK(c.success + c.failed == 1 && d->emv_application.aid_len == 0 &&
+              d->emv_application.pan_len == 0,
+          "EMV: no PPSE -> no application read, no hang");
+    nfc_poller_free(poller);
+    poller = nfc_poller_alloc(nfc, NfcProtocolEmv);
+    CHECK(!nfc_poller_detect(poller), "EMV: detect says no on a non-payment 4A card");
+    nfc_poller_free(poller);
+    k.dep.app = cm_emv_app;
+    poller = nfc_poller_alloc(nfc, NfcProtocolEmv);
+    CHECK(nfc_poller_detect(poller), "EMV: detect says yes on the payment card");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
 int main(void) {
     test_mful();
     test_felica();
     test_st25tb();
+    test_emv();
     if(fails) {
         printf("%d part-5 test(s) FAILED\n", fails);
         return 1;

@@ -72,6 +72,13 @@ void nfcshim_crash(const char* msg, const char* file, int line) __attribute__((n
 #define FURI_LOG_I(tag, ...) ((void)(tag))
 #define FURI_LOG_D(tag, ...) ((void)(tag))
 #define FURI_LOG_T(tag, ...) ((void)(tag))
+/* Log level: never Trace, so the EMV poller's APDU trace (card data) is
+ * never printed (#412). */
+typedef enum {
+    FuriLogLevelDefault, FuriLogLevelNone, FuriLogLevelError, FuriLogLevelWarn,
+    FuriLogLevelInfo, FuriLogLevelDebug, FuriLogLevelTrace,
+} FuriLogLevel;
+static inline FuriLogLevel furi_log_get_level(void) { return FuriLogLevelNone; }
 #define FURI_LOG_RAW_D(...)  ((void)0)
 #define FURI_LOG_RAW_T(...)  ((void)0)
 #define FURI_LOG_RAW_I(...)  ((void)0)

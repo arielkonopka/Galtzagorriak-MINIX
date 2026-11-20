@@ -91,14 +91,16 @@ P5SRC	:= $(L)/nfc_shim_crypto.c $(L)/mf_ultralight.c \
 	   $(V)/nfc/protocols/felica/felica_poller.c $(V)/nfc/protocols/felica/felica_poller_i.c \
 	   $(V)/nfc/protocols/felica/felica_poller_sync.c \
 	   $(V)/nfc/protocols/st25tb/st25tb.c $(V)/nfc/protocols/st25tb/st25tb_poller.c \
-	   $(V)/nfc/protocols/st25tb/st25tb_poller_i.c $(V)/nfc/protocols/st25tb/st25tb_poller_sync.c
+	   $(V)/nfc/protocols/st25tb/st25tb_poller_i.c $(V)/nfc/protocols/st25tb/st25tb_poller_sync.c \
+	   $(V)/nfc/protocols/emv/emv.c $(V)/nfc/protocols/emv/emv_poller.c \
+	   $(V)/nfc/protocols/emv/emv_poller_i.c
 # -fshort-enums: MfUltralightConfigPages has an enum bit-field (mirror_conf)
 # in an unpacked inner struct; with 4-byte enums the MIRROR union is 4
 # bytes and AUTH0/ACCESS/PWD/PACK land on the wrong bytes.  The struct
 # must be 16 bytes (one config page set), checked in p5test.c.
 P5FLAGS	:= -fshort-enums
 VSRC	+= $(P5SRC)
-VHDR	+= cm_mful.h cm_felica.h cm_st25tb.h $(wildcard $(L)/shim/mlib/*.h) $(wildcard $(L)/shim/mbedtls/*.h $(L)/shim/mbedtls/include/mbedtls/*.h)
+VHDR	+= cm_mful.h cm_felica.h cm_st25tb.h cm_emv.h $(wildcard $(L)/shim/mlib/*.h) $(wildcard $(L)/shim/mbedtls/*.h $(L)/shim/mbedtls/include/mbedtls/*.h)
 # The poller/device tables list Ultralight, so every test links it.
 VWARN	+= $(P5FLAGS)
 
