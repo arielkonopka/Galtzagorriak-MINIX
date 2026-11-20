@@ -353,7 +353,7 @@ FORWARD _PROTOTYPE( int fg_other, (int proc) );
 FORWARD _PROTOTYPE( int fg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( void fg_hold, (unsigned now) );
 FORWARD _PROTOTYPE( int ge_match, (unsigned now) );
-FORWARD _PROTOTYPE( int ge_blink_on, (clock_t e) );
+FORWARD _PROTOTYPE( int ge_blink_on, (clock_t e, clock_t hold_ticks) );
 FORWARD _PROTOTYPE( void ge_hold, (void) );
 FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
@@ -2535,12 +2535,36 @@ unsigned now;
   return(0);
 }
 
-PRIVATE int ge_blink_on(e)
+/* The power-off gesture (issue #398): Back and Right pressed together, Back
+ * let go within FG_LONG_T (so R4b.8's long Back never starts), then Right
+ * held alone for GE_POWER_HOLD from that release.  It has no flag of its own:
+ * a chord is on and the only button down is Right (no table chord is
+ * that).  The action is init's: SIGPWR, the orderly power off of N.5. */
+#define GE_POWER_HOLD	(3 * HZ)	/* 3 s, in ticks */
+
+PRIVATE int ge_power(now, was)
+unsigned now, was;		/* buttons down now / before this edge */
+{
+/* At a button edge (interrupt; k_input is this edge): does it start the
+ * power-off hold?  Back just went up, Right is still down. */
+  if ((now & BTN_ALL) != BTN_RIGHT || (was & BTN_ALL) != (BTN_BACK | BTN_RIGHT))
+	return(0);
+  return((((unsigned) k_input - FG_STAMP(was)) & 0xFF) < FG_LONG_T);
+}
+
+PRIVATE clock_t ge_hold_len(b)
+unsigned b;
+{
+  return((b & BTN_ALL) == BTN_RIGHT ? GE_POWER_HOLD : GE_HOLD);
+}
+
+PRIVATE int ge_blink_on(e, hold_ticks)
 clock_t e;			/* ticks into the hold */
+clock_t hold_ticks;		/* the gesture's hold time, ticks */
 {
 /* The red blink: half-periods max(30, 200 - 170 * t / hold) ms, the first
  * one lit; so faster and faster up to the threshold. */
-  long ms = (long) e * 1000 / HZ, hold = (long) GE_HOLD * 1000 / HZ, t = 0, h;
+  long ms = (long) e * 1000 / HZ, hold = (long) hold_ticks * 1000 / HZ, t = 0, h;
   int k = 0;
 
   while (t <= ms) {
@@ -2560,10 +2584,10 @@ PRIVATE void ge_hold()
 
   if (!(b & GE_CHORD)) return;
   e = TDIFF(uptime_irq(), k_input);
-  if (e >= GE_HOLD) {
+  if (e >= ge_hold_len(b)) {
 	last_buttons = (b & ~GE_CHORD) | GE_FIRE;	/* once per chord */
 	interrupt(PRINTER);
-  } else if (ge_blink_on(e) != ((b & GE_BLINK) != 0))
+  } else if (ge_blink_on(e, ge_hold_len(b)) != ((b & GE_BLINK) != 0))
 	interrupt(PRINTER);
 }
 
@@ -2579,7 +2603,13 @@ PRIVATE void ge_task()
 	lock();
 	last_buttons &= ~GE_FIRE;
 	unlock();
-	if ((a = ge_match(b)) != 0) {
+	if ((b & BTN_ALL) == BTN_RIGHT) {	/* the power-off hold (#398) */
+		lock();
+		mt_arm(MT_VIBRO, 150);		/* a longer buzz */
+		unlock();
+		hal_vibro(1);
+		cause_sig(INIT_PROC_NR, SIGPWR);	/* init: the orderly halt */
+	} else if ((a = ge_match(b)) != 0) {
 		st = hal_bl_state();
 		a = HAL_BL_MODE(st) == (u32_t) a ? 0 : a;	/* again: auto */
 		hal_bl_state_set((st & ~HAL_BL_MODES) | (u32_t) a << 14);
@@ -2591,7 +2621,7 @@ PRIVATE void ge_task()
 	}
 	b = last_buttons;
   } else if (b & GE_CHORD) {
-	on = ge_blink_on(TDIFF(get_uptime(), k_input));
+	on = ge_blink_on(TDIFF(get_uptime(), k_input), ge_hold_len(b));
 	if (on == ((b & GE_BLINK) != 0)) return;
 	if (!(b & GE_SAVED)) hal_led_get(ge_led);
 	hal_led(on ? GE_RED : 0, 0, 0);
@@ -2696,7 +2726,8 @@ PRIVATE unsigned btn_sample()
 	flags = (flags & ~FG_STAMPS) | ((unsigned) k_input & 0xFF) << 8;
   /* R6.10: a gesture chord starts (exactly its buttons) or ends; the
    * hold counts from k_input, the change just now */
-  if (!(flags & GE_OFF) && ge_match(now)) flags |= GE_CHORD;
+  if (!(flags & GE_OFF) && (ge_match(now) || ge_power(now, last_buttons)))
+	flags |= GE_CHORD;
   else if (flags & GE_CHORD) {
 	flags &= ~GE_CHORD;		/* cancelled: the LED back (task) */
 	interrupt(PRINTER);
