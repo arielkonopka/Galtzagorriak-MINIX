@@ -28,7 +28,13 @@ sys.path.insert(0, HERE)
 import v3card				# noqa: E402  (check, part4, copy_part)
 
 powercut = v3card.powercut
-check = v3card.check
+R = [None]		# the running QEMU, for the console on a failure
+
+
+def check(ok, what):
+	v3card.check(ok, what)
+	if not ok and R[0] is not None:
+		print(R[0].out[-1500:].decode(errors="replace"), flush=True)
 
 FILL = ("cd /; mkdir /home/a /home/a/b /home/c && "
 	"for f in sh ls cp tar find sort cksum; do cp /bin/$f /home/a/$f; "
@@ -39,7 +45,7 @@ MAGIC = "dd if=/dev/hd4 bs=8 skip=131 count=1 2>/dev/null | od -x"
 
 
 def main():
-	r = powercut.Run(0, 0)
+	r = R[0] = powercut.Run(0, 0)
 	keep = r.dir
 	img = os.path.join(keep, "build/qemu/minix/disk.img")
 	part = tempfile.mktemp(prefix="homev3")
@@ -76,7 +82,7 @@ def main():
 		r.p.wait()
 		check(True, "power cut in the mkfs -3 step")
 
-		r = powercut.Run(0, 0, reuse=keep)
+		r = R[0] = powercut.Run(0, 0, reuse=keep)
 		check(r.wait(rb"setup -H: making a MINIX V3 /home", 600)
 			is not None, "the next boot goes on with mkfs -3")
 		check(r.wait(rb"setup -H: /home is MINIX V3 now", 900)
