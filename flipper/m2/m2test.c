@@ -426,6 +426,61 @@ static void phase3_tests(void)
 		"may its own (AC3.5)");
 }
 
+/* Phase 7 (issue #389): the infrared app.  /dev/ir is group "ir" (13),
+ * infrared is setgid "ir"; a user outside the group cannot open /dev/ir
+ * through it (AC7.3: daemon, uid 1), one in it can (nobody, listed in
+ * /etc/group).  infrared -c FILE: then stock signals through encode ->
+ * /dev/ir frame -> decode over the app's loopback (QEMU has no IR
+ * hardware).  Two runs only: a third would copy the app into the flash
+ * text cache (T2) and break the M2 erase budget. */
+static int ir_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/infrared", "infrared", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void infrared_tests(void)
+{
+	static const char sig[] =
+		"Filetype: IR signals file\nVersion: 1\n"
+		"#\nname: Piztu\ntype: parsed\nprotocol: NECext\n"
+		"address: EE 87 00 00\ncommand: 5D A0 00 00\n"
+		"#\nname: Bolumena_gora\ntype: raw\nfrequency: 38000\n"
+		"duty_cycle: 0.330000\ndata: 504 3432 502 483 500 484 510\n"
+		"#\nname: Itzali\ntype: parsed\nprotocol: SIRC\n"
+		"address: 01 00 00 00\ncommand: 15 00 00 00\n"
+		"#\nname: Kanala\ntype: parsed\nprotocol: RC6\n"
+		"address: 00 00 00 00\ncommand: 0C 00 00 00\n";
+	struct stat sb, sd;
+	int fd;
+
+	check(stat("/dev/ir", &sd) == 0 && sd.st_gid == 13
+		&& (sd.st_mode & 0777) == 0660
+		&& stat("/bin/infrared", &sb) == 0 && sb.st_gid == 13
+		&& (sb.st_mode & S_ISGID) != 0,
+		"infrared: /dev/ir is group ir, the app setgid ir (AC7.3)");
+	check(ir_run(1, 1, "-c", NULL) == 1,
+		"infrared: daemon (not in group ir) cannot open /dev/ir (AC7.3)");
+	fd = creat("/tmp/m2ir.ir", 0644);
+	if (fd >= 0) { write(fd, sig, sizeof sig - 1); close(fd); }
+	check(fd >= 0 && ir_run(99, 9999, "-c", "/tmp/m2ir.ir") == 0,
+		"infrared: nobody (in group ir) opens /dev/ir; stock signals "
+		"encode, loop back, decode (libir)");
+	unlink("/tmp/m2ir.ir");
+}
+
 /* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
  * program, m2/fptest.c, built for the FPU; m2test itself stays soft-float. */
 static void fpu_tests(void)
@@ -3545,6 +3600,7 @@ int main(int argc, char **argv)
 	ibutton_tests();
 	hid_tests();
 	subghz_tests();
+	infrared_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();
