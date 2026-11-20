@@ -82,6 +82,12 @@ int napps;
 static char fsck_err;	/* /etc/rc found errors on the card (spec N.3) */
 static unsigned short has_icon, has10;	/* 16 bits: MAXAPPS */
 static unsigned char opt;		/* OPT_* below */
+/* Repeat (#361): the period of a held Up/Down in the lists, in ms; 0 is
+ * off.  rep_lvl indexes rep_tab; 5 (152 ms) is the owner's default. */
+static const unsigned short rep_tab[] = { 0, 350, 300, 250, 200, 152, 120, 90 };
+#define REP_N	((int) (sizeof rep_tab / sizeof rep_tab[0]))
+#define REP_DEF	5
+static unsigned char rep_lvl = REP_DEF;
 #define OPT_ICONS	1
 #define OPT_HINTS	2
 #define OPT_BATT	4
@@ -171,6 +177,7 @@ static void load_conf(const char *conf_file)
 	char line[40];
 
 	opt = OPT_ICONS | OPT_HINTS | OPT_BATT;
+	rep_lvl = REP_DEF;
 	if ((f = cfopen(conf_file, "r")) == NULL) return;
 	while (fgets(line, sizeof line, f) != NULL) {
 		int bit = strncmp(line, "Icons:", 6) == 0 ? OPT_ICONS
@@ -180,6 +187,19 @@ static void load_conf(const char *conf_file)
 			: strncmp(line, "Style:", 6) == 0 ? OPT_STOCK : 0;
 		char *v = strchr(line, ':') + 1;
 
+		if (strncmp(line, "Repeat:", 7) == 0) {	/* ms, or off */
+			int ms, j, best = REP_DEF;
+
+			while (*v == ' ' || *v == '\t') v++;
+			ms = strncmp(v, "off", 3) == 0 ? 0 : atoi(v);
+			if (ms <= 0) best = 0;
+			else for (j = 1; j < REP_N; j++)	/* the nearest step */
+				if (abs(ms - (int) rep_tab[j])
+				    < abs(ms - (int) rep_tab[best == 0 ? j : best]))
+					best = j;
+			rep_lvl = best;
+			continue;
+		}
 		if (bit == 0) continue;
 		while (*v == ' ' || *v == '\t') v++;
 		if (bit == OPT_STOCK) {
@@ -203,6 +223,8 @@ static void save_conf(const char *conf_file)
 		opt & OPT_BATT ? "on" : "off");
 	if (opt & OPT_LOG) fprintf(f, "GuiLog: on\n");
 	fprintf(f, "Style: %s\n", opt & OPT_STOCK ? "stock" : "pine");
+	if (rep_lvl == 0) fprintf(f, "Repeat: off\n");
+	else fprintf(f, "Repeat: %u\n", rep_tab[rep_lvl]);
 	fclose(f);
 }
 
@@ -262,7 +284,8 @@ static const struct {
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
 #define SYS_LAUNCHER	7
 
-#define SET_N	4			/* rows of the launcher's own page */
+#define SET_N	5			/* rows of the launcher's own page */
+#define SET_REP	4			/* the Repeat row */
 
 /* "HH:MM" of hm (hour * 60 + minute) into b[6]. */
 static char *hm_text(char *b, unsigned hm)
@@ -284,9 +307,24 @@ static int page_rows(int pg)
 			desk.n[nsel].body) + NOTE_COLS - 1) / NOTE_COLS : SET_N;
 }
 
-static const char set_name[SET_N][8] = { "Icons", "Hints", "Battery", "Style" };
+static const char set_name[SET_N][8] = { "Icons", "Hints", "Battery", "Style",
+									"Repeat" };
 static const unsigned char set_bit[SET_N] = { OPT_ICONS, OPT_HINTS, OPT_BATT,
-					     OPT_STOCK };
+					     OPT_STOCK, 0 };
+
+/* The value of row i of the settings page ("[on]", "[pine]", "[152ms]"). */
+static const char *set_value(int i, char *b)
+{
+	int on = opt & set_bit[i];
+
+	if (i == SET_REP) {
+		if (rep_lvl == 0) return "[off]";
+		sprintf(b, "[%ums]", (unsigned) rep_tab[rep_lvl]);
+		return b;
+	}
+	return set_bit[i] == OPT_STOCK ? (on ? "[stock]" : "[pine]")
+		: on ? "[on]" : "[off]";
+}
 
 /* Draw row i of page pg at y. */
 static void page_row(int pg, int i, int y, int inv)
@@ -322,10 +360,10 @@ static void page_row(int pg, int i, int y, int inv)
 		if (sys_tab[i].cmd[0] == 0 && i != SYS_LAUNCHER)
 			gui_text(50, y, "(later)", inv);
 	} else if (pg == PG_SET) {
-		on = opt & set_bit[i];
+		char vb[10];
+
 		gui_text(6, y, set_name[i], inv);
-		gui_text(42, y, set_bit[i] == OPT_STOCK ? (on ? "[stock]" : "[pine]")
-			 : on ? "[on]" : "[off]", inv);
+		gui_text(42, y, set_value(i, vb), inv);
 	} else if (opt & OPT_ICONS) {
 		if (has_icon & (1 << i)) gui_bits8(6, y, ICON(i), ICON_H, inv);
 		gui_text(16, y, apps[i].label, inv);
@@ -354,11 +392,11 @@ static void stock_sys(int i, struct stock_row *r)
 
 static void stock_set(int i, struct stock_row *r)
 {
-	int on = opt & set_bit[i];
+	char vb[10];
 
 	strcpy(r->text, set_name[i]);
-	strcat(r->text, set_bit[i] == OPT_STOCK ? (on ? " [stock]" : " [pine]")
-		: on ? " [on]" : " [off]");
+	strcat(r->text, " ");
+	strcat(r->text, set_value(i, vb));
 	r->label = r->text;
 }
 
@@ -857,6 +895,8 @@ int main(int argc, char **argv)
 			dirty = 1;
 			continue;
 		}
+		in.rep = rep_lvl ? KEY_UP | KEY_DOWN : 0;	/* hold = repeat (#361) */
+		in.rep_ms = rep_tab[rep_lvl];
 		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, i, dk_rfd);
 		if (k == GUI_FD) {		/* records from modules */
 			dk_new = 0;
@@ -901,7 +941,7 @@ int main(int argc, char **argv)
 				bat_stale();
 			} else if (k == KEY_LEFT && pages[pg].left >= 0) {
 				was = sel;
-				saved = opt;
+				saved = opt | rep_lvl << 8;
 				pg = pages[pg].left;
 				sel = top = 0;
 			} else if (k == KEY_RIGHT && pages[pg].right >= 0) {
@@ -960,13 +1000,17 @@ int main(int argc, char **argv)
 				note = "not there yet";
 				note_t = now_ticks();
 			} else if (k == KEY_BACK) {
-				if (opt != saved) save_conf(conf_file);	/* only a change */
+				if ((opt | rep_lvl << 8) != saved) save_conf(conf_file);	/* only a change */
 				pg = PG_APPS;
 				sel = was;
 				top = 0;
 			}
 		} else if (pg == PG_SET) {
-			if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
+			if (sel == SET_REP && (k == KEY_OK || k == KEY_LEFT
+							|| k == KEY_RIGHT))
+				rep_lvl = (rep_lvl + (k == KEY_LEFT ? REP_N - 1 : 1))
+						% REP_N;	/* right: faster */
+			else if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
 				opt ^= set_bit[sel];
 			else if (k == KEY_BACK) {
 				pg = PG_SYS;
