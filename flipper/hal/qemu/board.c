@@ -747,7 +747,7 @@ unsigned hal_disk_mhz;
 #define QFL_INST	0x00048000u
 #define QFL_CACHE	0x00020000u
 #define QFL_GUARD	(16u * 4096u)
-#define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xC000u)
+#define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xB000u)	/* dirs, /dev/rom, a page */
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
