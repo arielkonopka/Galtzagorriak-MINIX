@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree
+	    swapon gmodem guimod jiggle region gzupdate gztree radio
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -664,6 +664,16 @@ $(MB)/cmd/port/reghash.o: $(MB)/cmd/port/reghash.c $(MODEM_DIR)/modem.h
 OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/rgblob.o \
 	   $(MB)/modem/rgsha.o $(MB)/cmd/port/reghash.o $(MB)/modem/cc1101.o \
 	   $(MB)/modem/duty.o
+# radio (spec R16.0.2, R2b.1a; T30a): CPU2 stack images on the card;
+# libradio (src/lib/radio) and libmodem's SHA-256.
+RADIO_DIR := $(MROOT)/src/lib/radio
+$(MB)/cmd/port/radio.o: cmds/radio.c $(RADIO_DIR)/radio.h $(MODEM_DIR)/modem.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
+$(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
+OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@

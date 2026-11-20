@@ -9,9 +9,10 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -std=gnu11 -O1 -g -Wall -Wextra $(SAN)
 B	:= build
 
-test: $(B)/radiotest
+test: $(B)/radiotest $(B)/radio
 	./$(B)/radiotest
 	sh ./fetchtest.sh $(MROOT)/flipper/tools/radio-fetch.py
+	sh ./clitest.sh ./$(B)/radio
 
 online:
 	python3 -I $(MROOT)/flipper/tools/radio-fetch.py list --check
@@ -24,3 +25,9 @@ clean:
 	rm -rf $(B)
 
 .PHONY: test online clean
+
+# The command itself on the PC (paths under $RADIO_ROOT): clitest.sh.
+$(B)/radio: $(MROOT)/flipper/cmds/radio.c $(L)/radio.c $(L)/radio.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -DHOST -I$(L) -I$(MROOT)/src/lib/modem -o $@ \
+	  $(MROOT)/flipper/cmds/radio.c $(L)/radio.c $(MROOT)/src/lib/modem/rgsha.c
