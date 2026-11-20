@@ -44,6 +44,11 @@ void furi_string_replace_all(FuriString* s, const char* from, const char* to) {
     furi_string_free(out);
 }
 
+size_t furi_string_search_rchar(const FuriString* s, char c, ...) {
+    const char* p = strrchr(s->buf, c);
+    return p ? (size_t)(p - s->buf) : FURI_STRING_FAILURE;
+}
+
 size_t furi_string_utf8_length(FuriString* s) {
     size_t n = 0;
     for(size_t i = 0; i < s->len; i++)

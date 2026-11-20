@@ -53,7 +53,7 @@ NSC_PARSERS := aime bambu bip charliecard clipper csc gallagher \
 	       mizip myki opal smartrider social_moscow troika two_cities \
 	       umarsh washcity zolotaya_korona zolotaya_korona_online \
 	       all_in_one sonicare trt aic mykey plantain sevppk_tk sk_tk szppk_so skylanders \
-	       disney_infinity
+	       disney_infinity emv
 CSRC	:= $(L)/nfc_device_defs_shim.c $(V)/nfc/nfc_device.c $(V)/nfc/nfc_device_i.c \
 	   $(L)/nfc_supported_cards.c $(V)/api/gallagher/gallagher_util.c \
 	   $(V)/api/mosgortrans/mosgortrans_util.c $(L)/nfc_shim_time.c $(V)/toolbox/strint.c \
@@ -114,7 +114,7 @@ P5SRC	:= $(L)/nfc_shim_crypto.c $(L)/mf_ultralight.c $(L)/nfc_sha1.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller_i.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.c \
-	   $(L)/nfc_shim_str.c $(L)/nfc_shim_ff.c $(V)/nfc/helpers/felica_crc.c $(V)/toolbox/pretty_format.c \
+	   $(L)/nfc_shim_str.c $(L)/nfc_shim_ff.c $(L)/nfc_emv_parser.c $(V)/nfc/helpers/felica_crc.c $(V)/toolbox/pretty_format.c \
 	   $(V)/nfc/protocols/felica/felica.c $(V)/nfc/protocols/felica/felica_i.c \
 	   $(V)/nfc/protocols/felica/felica_poller.c $(V)/nfc/protocols/felica/felica_poller_i.c \
 	   $(V)/nfc/protocols/felica/felica_poller_sync.c \

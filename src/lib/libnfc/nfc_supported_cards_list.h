@@ -42,4 +42,5 @@
     X(szppk_so) \
     X(skylanders) \
     X(disney_infinity) \
+    X(emv) \
     X(banapass) /* patched copy, patches/banapass.patch */

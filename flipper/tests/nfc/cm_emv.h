@@ -7,7 +7,8 @@
  * Book 1/3 commands the vendored poller sends: SELECT 2PAY.SYS.DDF01
  * (PPSE) -> FCI with one directory entry; SELECT AID -> FCI with the
  * label; GET PROCESSING OPTIONS -> format 2 (77: AIP, AFL = SFI 2 record
- * 1); READ RECORD SFI 2 rec 1 -> 70 (PAN, expiry, name); GET DATA 9F17 ->
+ * 1); READ RECORD SFI 2 rec 1 -> 70 (PAN, expiry, name, country 0250,
+ * currency 0978); GET DATA 9F17 ->
  * PIN try counter 3, 9F36 ATC; anything else -> 6A 82.  All values are
  * synthetic (PAN 4000 0000 0000 0002, a test number); nothing is a real
  * card's, and nothing is written anywhere.
@@ -60,9 +61,10 @@ static size_t cm_emv_app(void* ctx, const uint8_t* c, size_t n, uint8_t* resp) {
         k->records++;
         if(c[2] == 1 && c[3] == ((2 << 3) | 4)) {
             static const uint8_t rec[] = {
-                0x70, 0x1C, 0x5A, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x5F,
+                0x70, 0x26, 0x5A, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x5F,
                 0x24, 0x03, 0x30, 0x12, 0x31, 0x5F, 0x20, 0x09, 'T', 'E', 'S', 'T', '/', 'C',
-                'A', 'R', 'D'};
+                'A', 'R', 'D', 0x5F, 0x28, 0x02, 0x02, 0x50, 0x9F, 0x42, 0x02, 0x09,
+                0x78};
             return cm_emv_ok(resp, rec, sizeof rec);
         }
         resp[0] = 0x6A;
