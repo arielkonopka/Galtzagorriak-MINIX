@@ -482,7 +482,7 @@ register char *pp;
 	char *name, *gp, *dp;
 	int dn, j, n, k;
 	char ent[NDENT * 16];	/* raw entries: V1/V2 16 B, V3 64 B (O.4) */
-	int es = 16, nl = 14, first = 1;
+	int es = 16, nlen = 14, first = 1;	/* not nl: the word list */
 	char dname[NAME_MAX+1];
 	struct stat dbuf;
 
@@ -509,7 +509,7 @@ register char *pp;
 		if (first && n >= 64 && ent[4] == '.'
 					&& !(ent[2] == '.' && ent[3] == 0)) {
 			es = 64;
-			nl = 60;
+			nlen = 60;
 		}
 		first = 0;
 		n /= es;
@@ -519,11 +519,11 @@ register char *pp;
 				&& (es == 16 || (e[2] == 0 && e[3] == 0)))
 				continue;
 			memset(dname, 0, sizeof(dname));
-			strncpy(dname, e + es - nl, nl);
+			strncpy(dname, e + es - nlen, nlen);
 			if (dname[0] == '.')
 				if (*gp != '.')
 					continue;
-			for(k=0; k<nl; k++)
+			for(k=0; k<nlen; k++)
 				if (any(dname[k], spcl))
 					dname[k] |= QUOTE;
 			if (gmatch(dname, gp)) {
