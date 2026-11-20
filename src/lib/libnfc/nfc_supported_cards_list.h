@@ -5,15 +5,26 @@
 #define NFC_SUPPORTED_CARDS(X) \
     X(aime) \
     X(bambu) \
+    X(bip) \
+    X(charliecard) \
+    X(clipper) \
     X(csc) \
     X(gallagher) \
     X(hi) \
+    X(hid) \
     X(hworld) \
+    X(itso) \
+    X(kazan) \
     X(metromoney) \
     X(microel) \
     X(mizip) \
     X(myki) \
+    X(opal) \
     X(smartrider) \
+    X(social_moscow) \
+    X(troika) \
     X(two_cities) \
+    X(umarsh) \
     X(washcity) \
+    X(zolotaya_korona) \
     X(zolotaya_korona_online)

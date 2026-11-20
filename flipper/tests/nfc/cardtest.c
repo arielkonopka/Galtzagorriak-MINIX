@@ -15,6 +15,7 @@
 #include <nfc/nfc.h>
 #include <nfc/nfc_device.h>
 #include <bit_lib/bit_lib.h>
+#include <locale/locale.h>
 #include <nfc/protocols/mf_classic/mf_classic_poller_sync.h>
 
 #include <nfc/protocols/mf_desfire/mf_desfire.h>
@@ -312,8 +313,29 @@ static void test_sweep(void) {
     furi_string_free(out);
 }
 
+/* ---- the datetime/locale shim the dated parsers print with ---- */
+static void test_datetime(void) {
+    DateTime dt;
+    FuriString* s = furi_string_alloc();
+    datetime_timestamp_to_datetime(0, &dt);
+    CHECK(dt.year == 1970 && dt.month == 1 && dt.day == 1 && dt.weekday == 4,
+          "datetime: epoch is Thursday 1970-01-01");
+    datetime_timestamp_to_datetime(951825599u, &dt); /* 2000-02-29 11:59:59 */
+    CHECK(dt.year == 2000 && dt.month == 2 && dt.day == 29 && dt.hour == 11 && dt.second == 59,
+          "datetime: leap day 2000");
+    CHECK(datetime_datetime_to_timestamp(&dt) == 951825599u, "datetime: round trip");
+    locale_format_date(s, &dt, locale_get_date_format(), ".");
+    CHECK(!strcmp(furi_string_get_cstr(s), "29.02.2000"), "locale: D.M.Y");
+    locale_format_time(s, &dt, locale_get_time_format(), true);
+    CHECK(!strcmp(furi_string_get_cstr(s), "11:59:59"), "locale: 24 h");
+    CHECK(!datetime_is_leap_year(1900) && datetime_get_days_per_month(true, 2) == 29,
+          "datetime: 1900 not leap, Feb 29 days in leap years");
+    furi_string_free(s);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
+    test_datetime();
     test_sync();
     test_mizip();
     test_sweep();

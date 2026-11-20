@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,6 +89,7 @@ void nfcshim_crash(const char* msg, const char* file, int line) __attribute__((n
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 #define EXT_PATH(p) "/ext/" p
+#define REVERSE_BYTES_U32(x) __builtin_bswap32(x)
 #define FURI_PACKED __attribute__((packed))
 #define FURI_BIT(x, n) (((x) >> (n)) & 1)
 #define FURI_BIT_SET(x, n) ((x) |= (1UL << (n)))
