@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region
+	    swapon gmodem guimod jiggle region gzupdate
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -357,6 +357,7 @@ CHMEM_sh     := 10240	# echo /bin/* (97 names) uses 5.7 KB, three such globs
 			# not copied, 2026-11-16); exec needs no heap
 			# (MM gathers argv/envp, mm/exec.c gather())
 CHMEM_update := 2048
+CHMEM_gzupdate := 8192	# check: 4 KB read buffer (heap), verifier 2 KB stack, stdio
 CHMEM_tail   := 8192	# reading a pipe it keeps a 4 KB ring
 CHMEM_ed     := 10240	# used 5.3 KB editing a small file
 CHMEM_sort   := 12288	# mallocs its 8 KB work area
@@ -609,6 +610,26 @@ $(MB)/cmd/port/gmodem.o: cmds/gmodem.c $(MODEM_DIR)/modem.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
 OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
+# gzupdate (spec section S, T33a part 3) links gzsig (src/lib/gzsig, the
+# verifier atea shares, part 2).  gzkeys.h: the public keys atea's slots
+# will hold (RS.6): keys/release.pub, the builder's update.pub, and for
+# the QEMU tests UPDATE_TESTKEY (a file with 64 hex digits).
+GZSIG_DIR := $(MROOT)/src/lib/gzsig
+GZSIG_OBJ := $(addprefix $(MB)/gzsig/,sha512.o ed25519.o gzu.o)
+$(MB)/gzsig/%.o: $(GZSIG_DIR)/%.c $(GZSIG_DIR)/gzsig.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+GZKEYS	:= $(MB)/gen/gzkeys.h
+GZKEY_FILES = $(strip $(UPDATE_KEYS) $(UPDATE_TESTKEY))
+.PHONY: gzkeys-check
+$(GZKEYS): gzkeys-check
+	@mkdir -p $(dir $@)
+	@python3 -I tools/gzkeys.py $@ $(GZKEY_FILES)
+$(MB)/cmd/port/gzupdate.o: cmds/gzupdate.c $(GZSIG_DIR)/gzsig.h $(GZKEYS) \
+		$(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GZSIG_DIR) -MMD -MP -c $< -o $@
+OBJS_gzupdate = $(MB)/cmd/port/gzupdate.o $(GZSIG_OBJ)
 # region (spec section Q, issue #292): the radio region tables on the card.
 $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
 	@mkdir -p $(dir $@)
