@@ -72,6 +72,8 @@ if test -n "$fsck_err"; then >/etc/.fsck-errors; else rm -f /etc/.fsck-errors; f
 # Programs built into the firmware's flash (make base-flash): bind them to
 # their files the first time (one hash each), then exec finds them directly.
 pkg bind /bin/*
+# After an update (spec RS.15): the staged copies left over by gztree go.
+test -f /etc/gz-tree && gzupdate finish
 
 # Local settings (sh variables), e.g. fcache_budget=8: the run-time text
 # cache may erase at most that many flash pages a day (default 32).  The
@@ -110,3 +112,5 @@ settings apply
 # The main screen: replaces the boot screen on the LCD (runs as root, starts
 # the apps from /etc/apps with their own user rights).
 launcher &
+# The new system started (RS.15, RS.16): no more rollback question.
+test -f /usr/.gzupdate/trial && gzupdate commit

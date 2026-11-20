@@ -4,6 +4,8 @@
  *	gzupdate check FILE	check it as atea will; print what it updates
  *	gzupdate apply [-n] FILE	check, ask, stage it and set it pending
  *				(root; RS.10); -n: do not restart
+ *	gzupdate finish		first boot of the new system (rc, RS.15)
+ *	gzupdate commit		the new system started (rc, RS.16)
  *
  * On QEMU only, `check -e EPOCH -r X.Y.Z FILE` pretends to run that epoch
  * and release (the ACS.2 test of m2test, flipper/tools/gzucases.py); the
@@ -18,7 +20,17 @@
  * write the pending sector (the sector after the staged file, below) and
  * restart.  atea (T33b) flashes at the next reset; on QEMU
  * tools/ateasim.py does it on the flash image.  Every step can run again
- * after a power cut.  finish and commit follow.  The checks are src/lib/gzsig's gzu_check, the code atea uses;
+ * after a power cut.
+ *
+ * `finish` (RS.15, run by /etc/rc after `pkg bind` binds the new
+ * base programs): when /etc/gz-tree has this system's epoch, removes the
+ * staged trees /.gzupdate/<epoch>/ and /usr/.gzupdate/<epoch>/ (gztree
+ * left only copies identical to the files in place); the old files in
+ * /.gzupdate/<old>/ stay for one rollback.  Run again it finds nothing.
+ * `commit` (RS.16): removes /usr/.gzupdate/trial, which apply wrote; the
+ * trial counter itself is atea's (BKP11R, T33b).
+ *
+ * The checks are src/lib/gzsig's gzu_check, the code atea uses;
  * the trusted keys are the ones the build puts into atea's two slots
  * (RS.6: keys/release.pub, the builder's ~/.config/galtzagorriak/
  * update.pub), compiled in until atea exists (T33b reads them in place).
@@ -31,6 +43,7 @@
 #include <lib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <minix/callnr.h>
@@ -155,6 +168,7 @@ static int check(const char *path, long epoch, const unsigned char *rel,
 #define USRDIR	"/usr/.gzupdate"
 #define CUR	USRDIR "/cur.update"	/* the running system's file */
 #define PREV	USRDIR "/prev.update"	/* the rollback copy (RS.16) */
+#define TRIAL	USRDIR "/trial"		/* from apply until commit */
 #define PEND_MAGIC "GZPEND1"		/* 8 bytes with the 0 */
 
 static char path1[128], path2[128];
@@ -424,6 +438,11 @@ static int apply(const char *path, int yes, int restart, long epoch,
 		if (info.sect[i].type == GZU_ROOT
 		    && (r = unpack(fd, &info.sect[i])) != 0) goto out;
 	if ((r = keep_prev(fd)) != 0) goto out;
+	if ((i = open(TRIAL, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0) {
+		sprintf(path1, "%lu\n", (unsigned long) info.epoch);
+		(void) wr(i, path1, strlen(path1));
+		close(i);
+	}
 	sync();
 	if ((r = pend()) != 0) goto out;
 	close(fd);
@@ -434,6 +453,51 @@ static int apply(const char *path, int yes, int restart, long epoch,
 out:
 	close(fd);
 	return r;
+}
+
+static int rm_r(const char *dir)
+{
+	pid_t pid;
+	int st = -1;
+
+	if (access(dir, F_OK) != 0) return 0;
+	if ((pid = fork()) == 0) {
+		execl("/bin/rm", "rm", "-rf", dir, (char *) NULL);
+		_exit(127);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || st != 0)
+		return fail("cannot remove", dir);
+	return 0;
+}
+
+static int finish(void)
+{
+	char ep[12];
+	int fd, n = -1, r;
+
+	if (geteuid() != 0) return fail("finish needs root", NULL);
+	if ((fd = open("/etc/gz-tree", O_RDONLY)) >= 0) {
+		n = read(fd, ep, sizeof ep - 1);
+		close(fd);
+	}
+	if (n <= 0 || atol((ep[n] = 0, ep)) != GZ_EPOCH) return 0;
+	sprintf(path1, TOPDIR "/%ld", (long) GZ_EPOCH);
+	sprintf(path2, USRDIR "/%ld", (long) GZ_EPOCH);
+	if (access(path1, F_OK) != 0 && access(path2, F_OK) != 0) return 0;
+	printf("gzupdate: finishing the update to epoch %ld\n",
+	       (long) GZ_EPOCH);
+	if ((r = rm_r(path1)) != 0 || (r = rm_r(path2)) != 0) return r;
+	sync();
+	return 0;
+}
+
+static int commit(void)
+{
+	if (geteuid() != 0) return fail("commit needs root", NULL);
+	if (unlink(TRIAL) < 0 && errno != ENOENT)
+		return fail("cannot remove", TRIAL);
+	sync();
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -469,6 +533,8 @@ int main(int argc, char **argv)
 		return apply(argv[argc - 1], yes, restart, epoch, rel);
 	}
 #endif
+	if (argc == 2 && strcmp(argv[1], "finish") == 0) return finish();
+	if (argc == 2 && strcmp(argv[1], "commit") == 0) return commit();
 	if (argc == 3 && strcmp(argv[1], "check") == 0)
 		return check(argv[2], epoch, rel, 0);
 	if (argc == 3 && strcmp(argv[1], "apply") == 0)
@@ -479,6 +545,6 @@ int main(int argc, char **argv)
 #ifdef BOARD_QEMU
 usage:
 #endif
-	fprintf(stderr, "usage: gzupdate check FILE | apply [-n] FILE\n");
+	fprintf(stderr, "usage: gzupdate check FILE | apply [-n] FILE | finish | commit\n");
 	return 2;
 }

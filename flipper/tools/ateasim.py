@@ -149,8 +149,11 @@ def main():
     try:
         first = pages[0]
         want0 = new[:PAGE].ljust(PAGE, b"\xff")
-        if img[first:first + PAGE] != want0 or erased:
-            img[first:first + PAGE] = b"\xff" * PAGE	# erase first
+        # Any page to change: the first page is erased first (even if it
+        # is the same), so a cut never leaves a complete-looking mix.
+        if bytes(img[load:end]) != new.ljust(end - load, b"\xff") \
+                and img[first:first + PAGE] != b"\xff" * PAGE:
+            img[first:first + PAGE] = b"\xff" * PAGE
             save()
             op()
         for p in pages[1:]:

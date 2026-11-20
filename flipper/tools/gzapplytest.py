@@ -19,7 +19,11 @@ throw-away key of tools/updatetest.py; minix.mk).  Then it checks:
   - QEMU boots the flashed image to a root shell; INIT ran gztree
     (RS.14): /etc/gz-tree has the new epoch; /bin/sum and a /usr file,
     changed before apply, are the update's again, the changed ones are
-    kept in /.gzupdate/0/ and /usr/.gzupdate/0/.
+    kept in /.gzupdate/0/ and /usr/.gzupdate/0/;
+  - ACS.3 for atea's flash step: a cut at every page operation leaves the
+    first page erased or the whole new image, and the next run finishes;
+  - /etc/rc ran `gzupdate finish` (staged trees removed) and `commit`
+    (/usr/.gzupdate/trial removed).
 
 Needs `make BOARD=qemu minix base-flash base disk`.
 
@@ -122,6 +126,41 @@ def main():
 		check(pend[:8] == at.PEND
 		      and pend[16:80] == hashlib.sha512(data).digest(),
 		      "the pending sector follows it")
+		# ACS.3 (S.5 "atea flashing"): a power cut at every page
+		# operation of the flash step.  Each cut leaves either the
+		# first page erased (the image counts as incomplete) or the
+		# whole new image; the next start finishes the job.
+		base = open(os.path.join(MB, "minix-base.bin"), "rb").read()
+		cutf = os.path.join(keep, "cut.bin")
+		bad_cut, n = None, 0
+		while True:
+			n += 1
+			with open(os.path.join(MB, "minix.bin"), "rb") as f, \
+			     open(cutf, "wb") as g:
+				g.write(f.read())
+			rc, msg = ateasim(disk, cutf, "--cut", str(n))
+			if rc == 0:
+				break		# no operation left to cut
+			img = open(cutf, "rb").read()
+			if rc != 3 or not (img[:4096] == b"\xff" * 4096
+					   or img[:len(base)] == base):
+				bad_cut = "cut %d: %s" % (n, msg)
+				break
+			rc, msg = ateasim(disk, cutf)
+			img = open(cutf, "rb").read()
+			if rc != 0 or img[:len(base)] != base:
+				bad_cut = "after cut %d: %s" % (n, msg)
+				break
+			with open(disk, "r+b") as d:	# pending again
+				d.seek(part[0] + len(data))
+				d.write(pend)
+		check(bad_cut is None and n > 2,
+		      "ACS.3: a cut at each of the %d page operations of atea's "
+		      "flash step, the next start finishes it%s" %
+		      (n - 1, "" if bad_cut is None else " (" + bad_cut + ")"))
+		with open(disk, "r+b") as d:
+			d.seek(part[0] + len(data))
+			d.write(pend)
 		flash = os.path.join(keep, "flash.bin")
 		with open(os.path.join(MB, "minix.bin"), "rb") as f, \
 		     open(flash, "wb") as g:
@@ -129,7 +168,6 @@ def main():
 		rc, msg = ateasim(disk, flash)
 		print("      " + msg.replace("\n", "\n      "))
 		check(rc == 0 and "installed" in msg, "atea installs it")
-		base = open(os.path.join(MB, "minix-base.bin"), "rb").read()
 		check(open(flash, "rb").read()[:len(base)] == base,
 		      "the flash image is this build's minix-base.bin")
 		rc, msg = ateasim(disk, flash)
@@ -143,8 +181,16 @@ def main():
 		# RS.14: INIT ran gztree before /etc/rc.
 		ok = b"gztree: done" in r2.out
 		if not ok:
-			print(r2.out[:3000].decode("latin-1"))
+			print(r2.out[-3000:].decode("latin-1"))
 		check(ok, "INIT ran gztree, it is done")
+		check(b"finishing the update" in r2.out,
+		      "rc ran gzupdate finish (RS.15)")
+		v = r2.output("ls -d /.gzupdate/%d /usr/.gzupdate/%d "
+			      "/usr/.gzupdate/trial 2>&1 | grep -c 'No such'"
+			      % (ep, ep))
+		check(v is not None and v.strip() == b"3", "the staged trees "
+		      "and the trial flag are gone after finish and commit "
+		      "(%r)" % v)
 		v = r2.output("cat /etc/gz-tree")
 		check(v == b"%d\n" % ep, "/etc/gz-tree is %d (%r)" % (ep, v))
 		v = r2.output("echo hello | sum")
