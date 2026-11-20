@@ -33,7 +33,10 @@
 
 #include <sys/ioctl.h>
 
-/* Technologies, a bitmask for NFCIOCPOLL and the field modes. */
+/* Technologies, a bitmask for NFCIOCPOLL and the field modes.  These and
+ * the NFC_XF_* / NFC_FC below mirror <libnfc/nfc_xfer.h> (same values, kept
+ * in step); the replacement lists are identical, so including both headers
+ * is a legal benign redefinition. */
 #define NFC_TECH_A	0x01		/* ISO 14443-A (and MIFARE) */
 #define NFC_TECH_B	0x02		/* ISO 14443-B */
 #define NFC_TECH_F	0x04		/* FeliCa (NFC-F) */

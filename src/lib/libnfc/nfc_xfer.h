@@ -22,7 +22,25 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <minix/nfc.h>		/* NFC_XF_*, NFC_TECH_*, NFC_FC */
+
+/* The protocol constants.  <minix/nfc.h> (the /dev/nfc ioctl ABI) mirrors
+ * these same values, so the driver passes the flags straight through; they
+ * are defined here too so the library and its host tests need no kernel
+ * header.  Keep the two in step. */
+#ifndef NFC_XF_CRC_TX
+#define NFC_TECH_A	0x01		/* ISO 14443-A (and MIFARE) */
+#define NFC_TECH_B	0x02		/* ISO 14443-B */
+#define NFC_TECH_F	0x04		/* FeliCa (NFC-F) */
+#define NFC_TECH_V	0x08		/* ISO 15693 (NFC-V) */
+
+#define NFC_XF_CRC_TX	0x01		/* append CRC to the sent frame */
+#define NFC_XF_CRC_RX	0x02		/* check and strip CRC on receive */
+#define NFC_XF_PARITY	0x04		/* keep per-byte parity (transparent) */
+#define NFC_XF_NO_RX	0x08		/* send only, do not wait for a reply */
+#define NFC_XF_SHORT	0x10		/* a 7-bit short frame (REQA/WUPA) */
+
+#define NFC_FC		13560000UL	/* 13.56 MHz; ISO 14443 timing unit */
+#endif
 
 /* Result of a transceive. */
 enum nfc_err {
