@@ -27,8 +27,15 @@ VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/protocols/mf_desfire/mf_desfire.c \
 	   $(V)/nfc/protocols/mf_desfire/mf_desfire_i.c \
 	   $(V)/nfc/protocols/mf_desfire/mf_desfire_poller.c \
-	   $(V)/nfc/protocols/mf_desfire/mf_desfire_poller_i.c
-VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h cm_desfire.h
+	   $(V)/nfc/protocols/mf_desfire/mf_desfire_poller_i.c \
+	   $(V)/nfc/helpers/iso13239_crc.c \
+	   $(V)/nfc/protocols/iso15693_3/iso15693_3.c \
+	   $(V)/nfc/protocols/iso15693_3/iso15693_3_i.c \
+	   $(V)/nfc/protocols/iso15693_3/iso15693_3_poller.c \
+	   $(V)/nfc/protocols/iso15693_3/iso15693_3_poller_i.c \
+	   $(V)/nfc/protocols/slix/slix.c $(V)/nfc/protocols/slix/slix_i.c \
+	   $(V)/nfc/protocols/slix/slix_poller.c $(V)/nfc/protocols/slix/slix_poller_i.c
+VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h cm_desfire.h cm_15693.h
 
 prototest: $(B)/prototest
 	./$(B)/prototest

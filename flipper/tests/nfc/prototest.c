@@ -12,12 +12,15 @@
 #include "nfc_shim.h"
 #include "cardmodel.h"
 #include "cm_desfire.h"
+#include "cm_15693.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
 #include <nfc/protocols/iso14443_4a/iso14443_4a_poller.h>
 #include <nfc/protocols/iso14443_4b/iso14443_4b_poller.h>
 #include <nfc/protocols/mf_desfire/mf_desfire_poller.h>
+#include <nfc/protocols/iso15693_3/iso15693_3_poller.h>
+#include <nfc/protocols/slix/slix_poller.h>
 #include <toolbox/bit_buffer.h>
 #include <toolbox/simple_array.h>
 
@@ -312,11 +315,95 @@ static void test_desfire(void) {
     desfire_read(&df, "ISO-wrapped fallback");
 }
 
+/* ---- ISO 15693 / SLIX ---- */
+
+typedef struct {
+    int ready, errors, privacy_asked;
+} tv_ctx_t;
+
+static NfcCommand tv_cb(NfcGenericEvent event, void* context) {
+    tv_ctx_t* c = context;
+    if(event.protocol == NfcProtocolIso15693_3) {
+        const Iso15693_3PollerEvent* e = event.event_data;
+        if(e->type == Iso15693_3PollerEventTypeReady) c->ready++;
+        else c->errors++;
+        return NfcCommandStop;
+    }
+    if(event.protocol == NfcProtocolSlix) {
+        const SlixPollerEvent* e = event.event_data;
+        if(e->type == SlixPollerEventTypePrivacyUnlockRequest) {
+            c->privacy_asked++; /* no password given: read on as is */
+            return NfcCommandContinue;
+        }
+        if(e->type == SlixPollerEventTypeReady) c->ready++;
+        else c->errors++;
+        return NfcCommandStop;
+    }
+    return NfcCommandContinue;
+}
+
+static void test_iso15693(void) {
+    static cm_15693_t k;
+    nfc_xfer_t x = {0};
+    tv_ctx_t c;
+
+    printf("-- ISO 15693 / SLIX\n");
+    cm_15693_slix2(&k);
+    x.transceive = cm_15693_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolIso15693_3);
+    memset(&c, 0, sizeof c);
+    nfc_poller_start(poller, tv_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 1 && c.errors == 0, "15693: inventory + system info + read");
+    const Iso15693_3Data* d = (const Iso15693_3Data*)nfc_poller_get_data(poller);
+    size_t ul = 0;
+    const uint8_t* uid = iso15693_3_get_uid(d, &ul);
+    CHECK(ul == 8 && uid[0] == 0xE0 && uid[1] == 0x04 && uid[7] == 0x78, "15693: UID (MSB first)");
+    CHECK(d->system_info.block_count == 80 && d->system_info.block_size == 4 &&
+              d->system_info.ic_ref == 0x01,
+          "15693: 80 blocks of 4 bytes");
+    CHECK(k.reads == 80 && !memcmp(simple_array_cget_data(d->block_data), k.mem, 320),
+          "15693: all 80 blocks read");
+    CHECK(((const uint8_t*)simple_array_cget_data(d->block_security))[3] == 0x01,
+          "15693: block 3 locked");
+    nfc_poller_free(poller);
+
+    poller = nfc_poller_alloc(nfc, NfcProtocolSlix);
+    memset(&c, 0, sizeof c);
+    k.reads = 0;
+    nfc_poller_start(poller, tv_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 1 && c.errors == 0, "SLIX: read on 15693");
+    const SlixData* sd = (const SlixData*)nfc_poller_get_data(poller);
+    CHECK(slix_get_type(sd) == SlixTypeSlix2, "SLIX: identified as SLIX2 from the UID");
+    CHECK(k.custom == 2 && !memcmp(sd->signature, k.signature, 32),
+          "SLIX: NXP system info + originality signature read");
+    CHECK(c.privacy_asked == 1, "SLIX: privacy password asked once, none given");
+    CHECK(slix_get_counter(sd) == (uint16_t)(k.mem[79 * 4] | k.mem[79 * 4 + 1] << 8),
+          "SLIX: counter block 79");
+    nfc_poller_free(poller);
+
+    /* A non-NXP 15693 tag is no SLIX. */
+    k.uid[6] = 0x07; /* TI */
+    k.nxp = 0;
+    poller = nfc_poller_alloc(nfc, NfcProtocolSlix);
+    memset(&c, 0, sizeof c);
+    nfc_poller_start(poller, tv_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.ready == 0 && c.errors >= 1, "SLIX: TI tag refused");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
 int main(void) {
     printf("libnfc vendored-poller tests (#404)\n");
     test_iso14443_4a();
     test_iso14443_4b();
     test_desfire();
+    test_iso15693();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;
