@@ -11,8 +11,9 @@ CFLAGS	:= -std=gnu11 -O1 -g -Wall $(SAN) -DPB_ENABLE_MALLOC
 SRC	:= $(wildcard $(NPB)/pb_*.c) $(wildcard $(FPB)/gen/*.pb.c) $(RPC)/rpcd.c
 B	:= build
 
-test: $(B)/rpctest
+test: $(B)/rpctest $(B)/rpcdhost
 	./$(B)/rpctest
+	sh ./rpcclient.sh ./$(B)/rpcdhost
 
 $(B)/rpctest: rpctest.c $(SRC) $(RPC)/rpcd.h ../flipperpb/golden.h
 	@mkdir -p $(B)
@@ -22,3 +23,8 @@ clean:
 	rm -rf $(B)
 
 .PHONY: test clean
+
+# rpcd on the PC over stdin/stdout, and tools/rpc.py against it.
+$(B)/rpcdhost: rpcdhost.c $(SRC) $(RPC)/rpcd.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -I$(NPB) -I$(FPB) -I$(FPB)/gen -I$(RPC) -o $@ rpcdhost.c $(SRC)
