@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +87,7 @@ void nfcshim_crash(const char* msg, const char* file, int line) __attribute__((n
 #ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
+#define EXT_PATH(p) "/ext/" p
 #define FURI_PACKED __attribute__((packed))
 #define FURI_BIT(x, n) (((x) >> (n)) & 1)
 #define FURI_BIT_SET(x, n) ((x) |= (1UL << (n)))
@@ -101,6 +103,27 @@ void nfcshim_crash(const char* msg, const char* file, int line) __attribute__((n
 typedef enum {
     FuriWaitForever = 0xFFFFFFFFU,
 } FuriWait;
+
+/* Thread flags without threads (#404): nfc_start() runs the poller chain
+ * in the caller and returns, so by the time a vendored sync wrapper waits,
+ * the callback has already set its flag.  One word for the one caller;
+ * waiting on a flag nobody set returns FuriFlagErrorTimeout at once
+ * instead of blocking. */
+typedef void* FuriThreadId;
+#define FuriFlagWaitAny 0x0U
+#define FuriFlagWaitAll 0x1U
+#define FuriFlagNoClear 0x2U
+#define FuriFlagErrorTimeout 0xFFFFFFFEU
+FuriThreadId furi_thread_get_current_id(void);
+uint32_t furi_thread_flags_set(FuriThreadId id, uint32_t flags);
+uint32_t furi_thread_flags_clear(uint32_t flags);
+uint32_t furi_thread_flags_wait(uint32_t flags, uint32_t options, uint32_t timeout);
+void furi_string_trim_chars(FuriString* s, const char* chars);
+#define furi_string_trim_1(s) furi_string_trim_chars(s, " \n\r\t")
+#define furi_string_trim_2(s, c) furi_string_trim_chars(s, c)
+#define furi_string_trim_x(a, b, f, ...) f
+#define furi_string_trim(...) \
+    furi_string_trim_x(__VA_ARGS__, furi_string_trim_2, furi_string_trim_1, )(__VA_ARGS__)
 
 void furi_delay_ms(uint32_t ms);
 void furi_delay_us(uint32_t us);

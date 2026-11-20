@@ -244,7 +244,12 @@ NfcError nfc_poller_trx(Nfc* instance, const BitBuffer* tx_buffer, BitBuffer* rx
 
 NfcError nfc_iso14443a_poller_trx_short_frame(
     Nfc* instance, NfcIso14443aShortFrame frame, BitBuffer* rx_buffer, uint32_t fwt) {
-    uint8_t cmd = (frame == NfcIso14443aShortFrameAllReqa) ? 0x52 : 0x26;
+    /* As stock's furi_hal_nfc does it: SensReq, the frame every 3A
+     * activation sends, goes out as WUPA so a card the poller halted
+     * (mf_classic halts after each sector) answers again; AllReqa is the
+     * plain REQA.  A REQA here leaves a halted card silent and the poller
+     * reports it lost. */
+    uint8_t cmd = (frame == NfcIso14443aShortFrameAllReqa) ? 0x26 : 0x52;
     return nfc_shim_trx(instance, &cmd, 7, rx_buffer, fwt, NFC_XF_SHORT);
 }
 

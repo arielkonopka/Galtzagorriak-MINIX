@@ -19,7 +19,7 @@ SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c \
 HDR	:= $(wildcard $(L)/*.h)
 B	:= build
 
-test: $(B)/nfctest prototest
+test: $(B)/nfctest prototest cardtest
 	cd . && ./$(B)/nfctest
 
 $(B)/nfctest: nfctest.c $(SRC) $(HDR)

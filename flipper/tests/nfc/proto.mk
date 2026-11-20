@@ -36,12 +36,29 @@ VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/protocols/slix/slix.c $(V)/nfc/protocols/slix/slix_i.c \
 	   $(V)/nfc/protocols/slix/slix_poller.c $(V)/nfc/protocols/slix/slix_poller_i.c
 VHDR	:= $(wildcard $(L)/shim/*.h $(L)/shim/*/*.h) cardmodel.h cm_desfire.h cm_15693.h
+# MIFARE Classic: the vendored poller and its sync layer (part 4, second half).
+VSRC	+= $(L)/nfc_shim_mfc.c \
+	   $(V)/nfc/helpers/crypto1.c $(V)/nfc/helpers/nfc_util.c $(V)/toolbox/hex.c \
+	   $(V)/nfc/protocols/mf_classic/mf_classic.c \
+	   $(V)/nfc/protocols/mf_classic/mf_classic_poller.c \
+	   $(V)/nfc/protocols/mf_classic/mf_classic_poller_i.c \
+	   $(V)/nfc/protocols/mf_classic/mf_classic_poller_sync.c
+VHDR	+= cm_mfc.h
+# -Wno-unused-variable: mf_classic_poller.c keeps a few.
+VWARN	:= -Wno-format -Wno-unused-variable -Wno-unused-function
 
 prototest: $(B)/prototest
 	./$(B)/prototest
 
 $(B)/prototest: prototest.c $(VSRC) $(VHDR)
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) -Wno-format $(VINC) -o $@ prototest.c $(VSRC)
+	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ prototest.c $(VSRC) -lm
 
-.PHONY: prototest
+cardtest: $(B)/cardtest
+	./$(B)/cardtest
+
+$(B)/cardtest: cardtest.c $(VSRC) $(CSRC) $(VHDR)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ cardtest.c $(VSRC) $(CSRC) -lm
+
+.PHONY: prototest cardtest
