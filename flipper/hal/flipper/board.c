@@ -2041,8 +2041,18 @@ void hal_early_boot(void)
 	(void) RCC->AHB2ENR;
 	GPIOB->PUPDR = (GPIOB->PUPDR & ~(3u << 22)) | (1u << 22);	/* PB11 pull-up */
 	GPIOB->MODER &= ~(3u << 22);					/* PB11 input */
+	/* The Left button has an RC debounce: after a cold start (the charger's
+	 * ship mode, then USB plugged in) its capacitor is empty and the
+	 * internal pull-up needs several ms to charge it, so a pin read after
+	 * 2000 loops (~2 ms at the reset clock) said 'held' and the start went
+	 * to ST's DFU loader: dark, Back did nothing (owner, 2026-11-20).  Held
+	 * means low after the settle time too: read it again, ~40 ms on. */
 	for (settle = 0; settle < 2000; settle++) ;
 	left = !(GPIOB->IDR & (1u << 11));
+	if (left) {
+		for (settle = 0; settle < 40000; settle++) ;
+		left = !(GPIOB->IDR & (1u << 11));
+	}
 
 	/* Put PB11 and the GPIOB clock back to their reset state. */
 	GPIOB->MODER |= 3u << 22;
