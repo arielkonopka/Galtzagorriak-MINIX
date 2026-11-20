@@ -12,5 +12,6 @@ Lights:nobody:@light:/bin/lights
 Power:nobody:@power:/bin/power
 RFID:nobody:@rfid:/bin/lfrfid
 Spectrum:nobody:@subghz:/bin/spectrum
+Sub-GHz:nobody:@subghz:=/bin/subghzui
 Infrared:nobody:@ir:/bin/infrared
 Archive:nobody:@file:=/bin/archive

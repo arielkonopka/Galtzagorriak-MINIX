@@ -321,6 +321,8 @@ ZMODEM	:= rz sz
 GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive
+# Stock app ports part 2 (issue #413): window apps over the commands.
+WINBASE	+= subghzui
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
@@ -419,6 +421,9 @@ CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
 			# decoders and encoders (~0.5 KB), stdio buffers for
 			# the remote file (1 KB), opendir's 1 KB DIR; Learn
 			# and Debug fork a reader child (a copy of the app)
+CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
+			# 1 KB of stack (records, two paths); subghz runs
+			# as its own process (CHMEM_subghz)
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
 			# (two 128 B paths, the record buffers)
@@ -585,6 +590,13 @@ $(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
+# issue #413: the window apps over subghz, ikey and gpio (gui/runwin.c:
+# the command's output on a pipe, live)
+$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o: $(MB)/cmd/gui/%.o: gui/%.c \
+		gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
