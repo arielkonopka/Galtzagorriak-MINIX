@@ -40,6 +40,7 @@
 #define DUP		  41 
 #define PIPE		  42 
 #define TIMES		  43
+#define FSTATFS		  44	/* to FS: free space (spec O.5) */
 #define POLL		  45	/* to FS (R4b.6) */
 #define SETGID		  46
 #define GETGID		  47

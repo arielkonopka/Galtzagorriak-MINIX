@@ -12,6 +12,7 @@
  *   put_sflags:      change the CLEAN/CHECK bits on the disk (spec N.1)
  *   sf_mounted:      a file system was mounted read-write (N.1)
  *   sf_clean:        mark a file system clean when idle or at shutdown (N.2)
+ *   do_fstatfs:      the FSTATFS call: free space, and the idle recount (O.5)
  */
 
 #include "fs.h"
@@ -21,9 +22,49 @@
 #include "buf.h"
 #include "inode.h"
 #include "super.h"
+#include "file.h"
+#include "fproc.h"
+#include "param.h"
+#include <sys/statfs.h>
 
 #define BITCHUNK_BITS	(usizeof(bitchunk_t) * CHAR_BIT)
 #define BITS_PER_BLOCK	(BITMAP_CHUNKS * BITCHUNK_BITS)
+
+/* Spec O.5: the idle recount of one file system's maps, a few blocks per
+ * FSTATFS_RECOUNT call from update.  rc_count holds the free bits of the
+ * map blocks below rc_block; alloc_bit/free_bit in those blocks adjust it
+ * (the "delta"), so the result is exact when the last block is done.  One
+ * recount at a time: 8 B. */
+#define RC_NONE		0xFF	/* rc_slot: no recount running */
+#define RC_STEP		8	/* map blocks per call (8 KB, a few ms) */
+PRIVATE u32_t rc_count;		/* free bits below rc_block */
+PRIVATE u16_t rc_block;		/* next map block to count */
+PRIVATE unsigned char rc_slot = RC_NONE;	/* super_block[] index */
+PRIVATE unsigned char rc_map;	/* IMAP or ZMAP */
+
+FORWARD _PROTOTYPE( void count_free, (struct super_block *sp, int map,
+					unsigned block, int delta)	);
+FORWARD _PROTOTYPE( int recount_step, (void)				);
+
+/*===========================================================================*
+ *				count_free				     *
+ *===========================================================================*/
+PRIVATE void count_free(sp, map, block, delta)
+struct super_block *sp;
+int map;			/* IMAP or ZMAP */
+unsigned block;			/* map block of the bit that changed */
+int delta;			/* +1 a bit freed, -1 a bit allocated */
+{
+/* Spec O.5: keep the free counters, and the recount's partial sum, true. */
+  if (map == IMAP) {
+	if (delta > 0 || sp->s_ifree > 0) sp->s_ifree += delta;
+  } else {
+	if (delta > 0 || sp->s_zfree > 0) sp->s_zfree += delta;
+  }
+  if (rc_slot == (unsigned) (sp - &super_block[0]) && rc_map == map
+		&& block < rc_block && (delta > 0 || rc_count > 0))
+	rc_count += delta;
+}
 
 /*===========================================================================*
  *				alloc_bit				     *
@@ -92,6 +133,7 @@ bit_t origin;			/* number of bit to start searching at */
 		*wptr = conv2(sp->s_native, (int) k);
 		bp->b_dirt = DIRTY;
 		put_block(bp, MAP_BLOCK);
+		count_free(sp, map, block, -1);
 		return(b);
 	}
 	put_block(bp, MAP_BLOCK);
@@ -151,6 +193,7 @@ bit_t bit_returned;		/* number of bit to insert into the map */
   bp->b_dirt = DIRTY;
 
   put_block(bp, MAP_BLOCK);
+  count_free(sp, map, block, 1);
 }
 
 
@@ -209,6 +252,7 @@ register struct super_block *sp; /* pointer to a superblock */
   int version, native;
   u16_t *w;
   u32_t *l;
+  u32_t htag, hz, hi;
 
   dev = sp->s_dev;		/* save device (will be overwritten by copy) */
   bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
@@ -227,6 +271,9 @@ register struct super_block *sp; /* pointer to a superblock */
   sp->s_flags = w[9];
   sp->s_zones = (zone_t) l[5];
   sp->s_dev = NO_DEV;		/* restore later */
+  htag = l[SB_HINT_OFF / 4];	/* O.5: the free-count hint */
+  hz = l[SB_HINT_OFF / 4 + 1];
+  hi = l[SB_HINT_OFF / 4 + 2];
   magic = sp->s_magic;		/* determines file system type */
 
   /* Get file system version and type. */
@@ -331,6 +378,16 @@ register struct super_block *sp; /* pointer to a superblock */
 	printf("FS: inconsistent super block, not mounted\n");
 	return(EINVAL);
   }
+  /* Spec O.5: the counters start from the hint (0 if it is missing or
+   * does not fit) and are an estimate until the idle recount is done. */
+  if (!native || htag != SB_HINT_TAG
+		|| hz > (u32_t) (sp->s_zones - sp->s_firstdatazone)
+		|| hi > (u32_t) sp->s_ninodes)
+	hz = hi = 0;
+  sp->s_zfree = (zone_t) hz;
+  sp->s_ifree = (ino_t) hi;
+  sp->s_flags |= SF_ESTIMATE;
+  if (rc_slot == (unsigned) (sp - &super_block[0])) rc_slot = RC_NONE;
   sp->s_dev = dev;		/* restore device number */
   return(OK);
 }
@@ -361,6 +418,13 @@ int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
   old = (unsigned) conv2(sp->s_native, (int) SB_FLAGS(sp, bp)) & 0xFFFF;
   new = ((old | set) & ~clr) & SF_DISK;
   SB_FLAGS(sp, bp) = conv2(sp->s_native, (int) new);
+  if ((set & SF_CLEAN) && sp->s_native) {
+	/* Spec O.5: the free-count hint rides on the CLEAN write. */
+	u32_t *h = (u32_t *) &bp->b_data[SB_HINT_OFF];
+	h[0] = SB_HINT_TAG;
+	h[1] = (u32_t) sp->s_zfree;
+	h[2] = (u32_t) sp->s_ifree;
+  }
   r = dev_io(DEV_WRITE, FALSE, sp->s_dev, (off_t) SUPER_BLOCK * BLOCK_SIZE,
 					BLOCK_SIZE, FS_PROC_NR, bp->b_data);
   if (r == BLOCK_SIZE) {
@@ -428,4 +492,121 @@ int force;			/* shutdown or unmount: no idle period */
 	if (!force && (rip->i_nlinks & BYTE) == 0) return;
   }
   (void) put_sflags(sp, SF_CLEAN, 0);
+}
+
+
+/*===========================================================================*
+ *				recount_step				     *
+ *===========================================================================*/
+PRIVATE int recount_step()
+{
+/* Spec O.5: count the free bits of up to RC_STEP map blocks of the file
+ * system being recounted (start one if a file system needs it).  1 while
+ * work is left, 0 when every mounted file system is exact.
+ */
+  struct super_block *sp;
+  struct buf *bp;
+  bit_t map_bits, b, base;
+  unsigned blocks, n, w, i;
+  block_t start;
+  bitchunk_t k;
+
+  if (rc_slot != RC_NONE) {
+	sp = &super_block[rc_slot];
+	if (sp->s_dev == NO_DEV || !(sp->s_flags & SF_ESTIMATE))
+		rc_slot = RC_NONE;		/* unmounted meanwhile */
+  }
+  if (rc_slot == RC_NONE) {
+	for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+		if (sp->s_dev != NO_DEV && (sp->s_flags & SF_ESTIMATE)) break;
+	if (sp == &super_block[NR_SUPERS]) return(0);
+	rc_slot = sp - &super_block[0];
+	rc_map = IMAP;
+	rc_block = 0;
+	rc_count = 0;
+  }
+  sp = &super_block[rc_slot];
+  if (rc_map == IMAP) {
+	start = SUPER_BLOCK + 1;
+	map_bits = sp->s_ninodes + 1;
+	blocks = sp->s_imap_blocks;
+  } else {
+	start = SUPER_BLOCK + 1 + sp->s_imap_blocks;
+	map_bits = sp->s_zones - (sp->s_firstdatazone - 1);
+	blocks = sp->s_zmap_blocks;
+  }
+  for (n = 0; n < RC_STEP && rc_block < blocks; n++, rc_block++) {
+	/* ONE_SHOT: the block goes to the front of the LRU, so a recount
+	 * reuses one buffer and does not push out the working set. */
+	bp = get_block(sp->s_dev, start + rc_block, NORMAL);
+	base = (bit_t) rc_block * BITS_PER_BLOCK;
+	for (w = 0; w < BITMAP_CHUNKS; w++) {
+		b = base + (bit_t) w * BITCHUNK_BITS;
+		if (b >= map_bits) break;
+		k = conv2(sp->s_native, (int) bp->b_bitmap[w]);
+		if (k == (bitchunk_t) ~0) continue;
+		for (i = 0; i < BITCHUNK_BITS && b + i < map_bits; i++)
+			if (!(k & (1 << i))) rc_count++;
+	}
+	put_block(bp, MAP_BLOCK | ONE_SHOT);
+  }
+  if (rc_block < blocks) return(1);
+  if (rc_map == IMAP) {
+	sp->s_ifree = (ino_t) rc_count;
+	rc_map = ZMAP;
+	rc_block = 0;
+	rc_count = 0;
+	return(1);
+  }
+  sp->s_zfree = (zone_t) rc_count;
+  sp->s_flags &= ~SF_ESTIMATE;
+  rc_slot = RC_NONE;
+  return(1);			/* another file system may need one */
+}
+
+
+/*===========================================================================*
+ *				do_fstatfs				     *
+ *===========================================================================*/
+PUBLIC int do_fstatfs()
+{
+/* Spec O.5: fstatfs(fd, buf), statfs(path, buf) (m1_i1 FSTATFS_PATH), or
+ * one step of the idle recount (FSTATFS_RECOUNT, update).  The answer
+ * comes from the counters: no bit map is read.
+ */
+  struct statfs st;
+  struct super_block *sp;
+  struct inode *rip;
+  struct filp *f;
+  dev_t dev;
+
+  if (m.m1_i1 == FSTATFS_RECOUNT) {
+	if (!super_user) return(EPERM);
+	return(recount_step());
+  }
+  if (m.m1_i1 == FSTATFS_PATH) {
+	if (fetch_name(m.m1_p1, m.m1_i2, M1) != OK) return(err_code);
+	if ((rip = eat_path(user_path)) == NIL_INODE) return(err_code);
+	dev = rip->i_dev;
+	put_inode(rip);
+  } else {
+	if ((f = get_filp(m.m1_i1)) == NIL_FILP) return(err_code);
+	dev = f->filp_ino->i_dev;
+  }
+  for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+	if (sp->s_dev == dev && dev != NO_DEV) break;
+  if (sp == &super_block[NR_SUPERS]) return(EINVAL);	/* e.g. a pipe */
+
+  st.f_bsize = BLOCK_SIZE << sp->s_log_zone_size;
+  st.f_blocks = (long) (sp->s_zones - sp->s_firstdatazone);
+  st.f_bfree = st.f_bavail = (long) sp->s_zfree;
+  st.f_files = (long) sp->s_ninodes;
+  st.f_ffree = (long) sp->s_ifree;
+  st.f_dev = sp->s_dev;
+  st.f_namemax = DIR_NLEN(sp);
+  st.f_version = sp->s_version;
+  st.f_flag = (sp->s_rd_only ? ST_RDONLY : 0)
+	    | ((sp->s_flags & SF_ESTIMATE) ? ST_ESTIMATE : 0);
+  return(sys_copy(FS_PROC_NR, D, (phys_bytes) &st,
+		who, D, (phys_bytes) m.m1_p2, (phys_bytes) sizeof(st)));
 }
