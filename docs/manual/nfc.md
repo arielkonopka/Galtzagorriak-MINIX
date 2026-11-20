@@ -12,6 +12,13 @@ firmware (spec Phase 14).
 > (spec Phase 13), so the `nfc` **app** and the live commands below are **(planned)** until
 > that driver lands. Saved-card files already work on dumps. The full `mfkey` key recovery
 > (Crypto-1 nonce/LFSR recovery) is still being ported and is **(planned)**.
+>
+> The stock (Unleashed) protocol stacks in `src/lib/nfc` now run on the PC as well, unchanged,
+> through a small adapter (#404): **ISO 14443-4A** (RATS/ATS, I-blocks, the card's "wait"
+> request), **ISO 14443-4B**, **MIFARE DESFire** (version, free memory, applications and every
+> file the card lets you read without a key; DESFire Light's wrapped commands too) and
+> **ISO 15693 / ICODE SLIX** (UID, memory blocks, lock status, NXP signature). Like the rest,
+> they reach real cards once the driver is there.
 
 ## Card files
 
