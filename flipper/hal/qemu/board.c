@@ -734,8 +734,42 @@ uint32_t hal_flash_sr;
 uint32_t hal_disk_errors;
 unsigned hal_disk_mhz;
 
+/* A fake SFSA (T30a, R2b.1a): tools/radioslot.py puts one at FAKE_SFSA
+ * (-device loader) and carries the installed region from one QEMU run to
+ * the next (monitor pmemsave, then a loader file), as a CPU2 stack swap
+ * would leave it.  The layout is then worked out from it as on the
+ * Flipper (hal/flipper/board.c): the cache's 128 KB right below the 16
+ * guard pages, the programs from 0x48000 up to the cache.  Taken only up
+ * to 0xD0000 and page aligned (else, and when 0, today's fixed layout);
+ * below QFL_MIN neither region is used.  The word sits in the guard,
+ * below CUT_CFG. */
+#define FAKE_SFSA	((volatile uint32_t *) 0x000CFFE0)
+#define QFL_INST	0x00048000u
+#define QFL_CACHE	0x00020000u
+#define QFL_GUARD	(16u * 4096u)
+#define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xB000u)	/* dirs, /dev/rom, a page */
+
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
+	uint32_t sfsa = FAKE_SFSA[0], top;
+
+	if (sfsa != 0 && sfsa <= 0x000D0000u && (sfsa & 4095u) == 0) {
+		l[HAL_FL_SFSA] = sfsa;
+		if (sfsa < QFL_MIN) {	/* no room: neither region */
+			l[HAL_FL_INST] = l[HAL_FL_INST_SIZE] = 0;
+			l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+			l[HAL_FL_ROM] = l[HAL_FL_ROM_SIZE] = 0;
+			return;
+		}
+		top = sfsa - QFL_GUARD;
+		l[HAL_FL_INST] = QFL_INST;
+		l[HAL_FL_INST_SIZE] = top - QFL_CACHE - QFL_INST;
+		l[HAL_FL_CACHE] = top - QFL_CACHE;
+		l[HAL_FL_CACHE_SIZE] = QFL_CACHE;
+		l[HAL_FL_ROM] = QFL_INST + HAL_ROM_OFF;
+		l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
+		return;
+	}
 	l[HAL_FL_SFSA] = 0x000D0000;
 	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
 						 * 96 KB of shared libc and
