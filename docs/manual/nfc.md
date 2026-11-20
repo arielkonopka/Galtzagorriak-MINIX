@@ -23,9 +23,31 @@ firmware (spec Phase 14).
 > clipper, csc, gallagher, hi, hid, hworld, itso, kazan, metromoney, microel, mizip, myki,
 > opal, smartrider, social_moscow, troika, two_cities, umarsh, washcity, zolotaya_korona and
 > zolotaya_korona_online. A parser that knows its card's keys (MiZIP and Microel derive them
-> from the UID) reads the card with them. Dates are shown as day.month.year, 24 h. Parsers that
-> need ID or station lists (which would come from your own files on the SD card) are not
-> included yet. Like the rest, all of this reaches real cards once the driver is there.
+> from the UID) reads the card with them. Dates are shown as day.month.year, 24 h.
+>
+> Part 5 (#412) adds stock's **MIFARE Ultralight / NTAG** reader (version, every page,
+> signature, counter; it tries the default password only when the card allows unlimited
+> tries), **FeliCa** (IDm/PMm, the FeliCa Lite-S blocks), **ST25TB / SRIX** (every block and the
+> system block) and **EMV** (the payment application's label, card number, expiry, PIN tries;
+> shown on screen only, never written to a file by the reader). MIFARE Ultralight C and
+> Ultralight AES cards need a cipher library this port does not have yet: their protected pages
+> show as not read, the open ones are read. More parsers: all_in_one, ndef (Ultralight and MIFARE
+> Classic tags: URLs, text, Wi-Fi, vCards), sonicare, trt, ventra, aic, mykey, disney_infinity,
+> banapass and emv, 40 in all.
+>
+> **ID lists are your own files.** plantain, sevppk_tk, sk_tk, szppk_so and skylanders show
+> station or figure names from lists, and emv shows country and currency names; none of these
+> lists is shipped (D.3). Put your own in `/home/flipper/nfc/assets/` with the names stock uses
+> (`sz_id.nfc`, `sev_id.nfc`, `sk_id.nfc`, `skylanders.nfc`, `country_code.nfc`,
+> `currency_code.nfc`, `aid.nfc`). Without the file the card is still shown, with a line saying
+> so:
+>
+> ```
+> No ID list found (/home/flipper/nfc/assets/skylanders.nfc), showing the raw card.
+> No ID list found (/home/flipper/nfc/assets/sz_id.nfc): codes shown instead of names.
+> ```
+>
+> Like the rest, all of this reaches real cards once the driver is there.
 
 ## Card files
 
