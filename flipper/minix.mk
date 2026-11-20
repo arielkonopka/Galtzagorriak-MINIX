@@ -367,6 +367,8 @@ CHMEM_sed    := 10240	# R2a.5: cmds[], labels and the RE pool are malloc'd
 CHMEM_find   := 10240	# 6 KB: "can't read directory" already at /etc
 CHMEM_du     := 8192	# 6 KB: did not descend at all
 CHMEM_cp     := 8192	# cpdir /etc: 1.3 KB left of 6 KB (also rm -r, mv)
+CHMEM_tar    := 10240	# 6 KB: "cannot getcwd()" at the 2nd level, the
+			# subdirectories were left out (setup -H, T27a part 8)
 # Small one-shot tools used < 1 KB of the default 6 KB.
 SMALLCMDS    := basename dirname echo cat cmp date id kill backlight cfcat \
 		mkdir mkfifo mknod pwd rmdir sleep sync test touch tr tty \
