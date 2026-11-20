@@ -319,9 +319,11 @@ EDITCMDS := mined
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
+# archive (issue #389): a window app (K.8), libgm statically, no gui.c.
+WINBASE	:= archive
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 DAEMONS	:= mtpd
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) $(WINBASE) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
@@ -416,6 +418,9 @@ CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
 			# decoders and encoders (~0.5 KB), stdio buffers for
 			# the remote file (1 KB), opendir's 1 KB DIR; Learn
 			# and Debug fork a reader child (a copy of the app)
+CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
+			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
+			# (two 128 B paths, the record buffers)
 CHMEM_spectrum := 2048	# issue #157: all stack (no malloc, no stdio, no
 			# handler); the frame buffer and the waterfall are bss
 CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
@@ -546,6 +551,10 @@ GM_DIR	:= $(MROOT)/src/lib/gm
 $(MB)/gm/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
