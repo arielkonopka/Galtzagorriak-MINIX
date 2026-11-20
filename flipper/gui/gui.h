@@ -18,6 +18,8 @@
 #define KEY_LONG	0x80		/* not reported any more (keys come on press) */
 
 int gui_open(void);			/* 0 or -1 */
+int gui_open_lcd(void);			/* the LCD only: no buttons (bootscreen) */
+void gui_image(const unsigned char *fb);	/* the whole screen, page layout */
 void gui_close(void);
 void gui_clear(void);
 void gui_pixel(int x, int y, int on);

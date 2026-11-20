@@ -7,11 +7,17 @@ sync
 echo "Checking the card: do not switch off"
 echo rainbow >/dev/led
 rm -f /tmp/fsck.log
-for fs in "$usr /usr" "$home /home"
-do
-	set $fs
-	fsck -a -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
-done
+# the picture and the progress line on the LCD (bootscreen, #399); the text
+# also goes to the console.  Without bootscreen just the console.
+show=cat
+test -x /bin/bootscreen && show=bootscreen
+(
+	for fs in "$usr /usr" "$home /home"
+	do
+		set $fs
+		fsck -a -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
+	done
+) 2>&1 | $show
 # keep what was found (as rc does after the normal check)
 test -s /tmp/fsck.log && mount $usr /usr && {
 	test -d /usr/adm || mkdir /usr/adm
