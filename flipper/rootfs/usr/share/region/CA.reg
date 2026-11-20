@@ -2,20 +2,22 @@ Filetype: Galtzagorriak region
 Version: 1
 Region: CA
 Name: Canada
-Checked: 2026-11-19
-Source: ISED RSS-210 Issue 10 (Amendment 04.2020), RSS-247 Issue 3, RSS-Gen Issue 6 7.5
+Checked: 2026-11-20
+Source: ISED RSS-210 Issue 11 (06.2024); RSS-Gen Issue 6 Amdt 1 (09.2026) 7.5; RSS-247 not read
 # the numbers are those of US.reg (Q.4); the sources differ
-# restricted bands (RSS-Gen 7.5) 322-335.4 and 399.9-410 MHz: no row touches them
+# restricted bands (RSS-Gen 7.5 Table 6) 322-335.4 and 399.9-410 MHz: no row touches them
+# Table A1/A2 note: 225-328.6 and 335.4-399.9 MHz are Government of Canada bands
+# ref: [id] = docs/regulation/<id>.md, where the limit is quoted
 # lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
-902.000	928.000	-2	none	0	any	RSS-210 Annex B Table B2
-902.000	928.000	10	none	250	fhss	RSS-247 5.1 c), 5.4 a)
-300.000	308.560	-21	none	750	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
-308.560	322.000	-20	none	771	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
-335.400	348.000	-19	none	838	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
-387.000	399.900	-17	none	967	ctl	RSS-210 A.1.1-A.1.3 Table A1 (Government of Canada band: no protection)
-410.000	416.400	-16	none	1025	ctl	RSS-210 A.1.1-A.1.3 Table A1
-416.400	464.000	-15	none	1041	ctl	RSS-210 A.1.1-A.1.3 Table A1
-300.000	322.000	-29	none	750	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
-335.400	348.000	-27	none	838	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
-387.000	399.900	-25	none	967	per	RSS-210 A.1.4 Table A2 (Government of Canada band: no protection)
-410.000	464.000	-24	none	1025	per	RSS-210 A.1.4 Table A2
+902.000	928.000	-2	none	0	any	[rss-210] B.10 Table B2
+#?902.000	928.000	10	none	250	fhss	unverified: RSS-247 (now Issue 4) not read
+300.000	308.565	-21	none	750	ctl	[rss-210] A.1.2-A.1.4 Table A1 (Gov. of Canada band)
+308.565	322.000	-20	none	771	ctl	[rss-210] A.1.2-A.1.4 Table A1 (Gov. of Canada band)
+335.400	348.000	-19	none	838	ctl	[rss-210] A.1.2-A.1.4 Table A1 (Gov. of Canada band)
+387.000	399.900	-17	none	967	ctl	[rss-210] A.1.2-A.1.4 Table A1 (Gov. of Canada band)
+410.000	416.406	-16	none	1025	ctl	[rss-210] A.1.2-A.1.4 Table A1
+416.406	464.000	-15	none	1041	ctl	[rss-210] A.1.2-A.1.4 Table A1
+300.000	322.000	-29	none	750	per	[rss-210] A.1.5 Table A2, A.1.4 (Gov. of Canada band)
+335.400	348.000	-27	none	838	per	[rss-210] A.1.5 Table A2, A.1.4 (Gov. of Canada band)
+387.000	399.900	-25	none	967	per	[rss-210] A.1.5 Table A2, A.1.4 (Gov. of Canada band)
+410.000	464.000	-24	none	1025	per	[rss-210] A.1.5 Table A2, A.1.4

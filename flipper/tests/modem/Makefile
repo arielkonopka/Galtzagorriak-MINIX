@@ -13,7 +13,8 @@ L	:= $(MROOT)/src/lib/modem
 CC	?= cc
 SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -std=gnu11 -O2 -g -Wall -Wextra $(SAN) \
-	   -DREGION_DIR=\"$(abspath $(MROOT)/flipper/rootfs/usr/share/region)\"
+	   -DREGION_DIR=\"$(abspath $(MROOT)/flipper/rootfs/usr/share/region)\" \
+	   -DREG_DOCS=\"$(abspath $(MROOT)/docs/regulation)\"
 SRC	:= $(wildcard $(L)/*.c $(L)/heatshrink/*.c)
 B	:= build
 

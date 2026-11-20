@@ -2,19 +2,20 @@ Filetype: Galtzagorriak region
 Version: 1
 Region: EU
 Name: European Union
-Checked: 2026-11-19
-Source: Decision 2006/771/EC, annex as replaced by (EU) 2022/180
+Checked: 2026-11-20
+Source: Decision 2006/771/EC, annex as replaced by (EU) 2025/105
 # dbm: e.r.p., capped at the CC1101's +10 dBm (25 mW = 14 dBm, 500 mW = 27 dBm)
 # the duty-cycle alternative of each row; LBT + AFA is not implemented
+# ref: [id] = docs/regulation/<id>.md, where the limit is quoted
 # lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
-433.050	434.790	0	none	0	any	2022/180 row 44a (g2)
-434.040	434.790	10	none	25	any	2022/180 row 45c (g3)
-433.050	434.790	10	10%	0	any	2022/180 row 44b (g1)
-869.700	870.000	6	none	0	any	2022/180 row 56a (h1.8)
-862.000	863.000	10	0.1%	350	any	2022/180 row 87 (h0)
-863.000	865.000	10	0.1%	0	any	2022/180 row 46a (h1.3)
-865.000	868.000	10	1%	0	any	2022/180 row 47 (h1.4)
-868.000	868.600	10	1%	0	any	2022/180 row 48 (h1.5)
-868.700	869.200	10	0.1%	0	any	2022/180 row 50 (h1.6)
-869.400	869.650	10	10%	0	any	2022/180 row 54 (h1.7)
-869.700	870.000	10	1%	0	any	2022/180 row 56b (h1.9)
+433.050	434.790	0	none	0	any	[eu-2025-105] row 44a (70-03 g2)
+434.040	434.790	10	none	25	any	[eu-2025-105] row 45c (70-03 g3)
+433.050	434.790	10	10%	0	any	[eu-2025-105] row 44b (70-03 g1)
+869.700	870.000	6	none	0	any	[eu-2025-105] row 56a (70-03 h1.8)
+862.000	863.000	10	0.1%	350	any	[eu-2025-105] row 87 (70-03 h0)
+863.000	865.000	10	0.1%	0	any	[eu-2025-105] row 46a (70-03 h1.3)
+865.000	868.000	10	1%	0	any	[eu-2025-105] row 47 (70-03 h1.4)
+868.000	868.600	10	1%	0	any	[eu-2025-105] row 48 (70-03 h1.5)
+868.700	869.200	10	0.1%	0	any	[eu-2025-105] row 50 (70-03 h1.6)
+869.400	869.650	10	10%	0	any	[eu-2025-105] row 54 (70-03 h1.7)
+869.700	870.000	10	1%	0	any	[eu-2025-105] row 56b (70-03 h1.9)
