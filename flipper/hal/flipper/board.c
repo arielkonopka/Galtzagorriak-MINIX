@@ -2971,6 +2971,46 @@ int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us)
 	return 0;
 }
 
+/* #302: the CC1101's GDO0 (PA1, TIM2_CH2) as a gapless stream, as stock's
+ * furi_hal_subghz_start_async_rx does it (an ISR per edge; here circular
+ * DMA, the interrupt per half is hal_rfid_stream_irq's).  TIM2 runs free at
+ * 1 MHz and channel 2 captures both edges of TI2 straight into the caller's
+ * ring; stock's input filter (fDTS/4/32, 8 samples: 16 us) drops shorter
+ * spikes.  Returns the pin's level before the first edge. */
+int hal_subghz_stream(uint32_t dst, unsigned n)
+{
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	ir_ready = 0;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	TIM2->OR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 29;			/* TIM2_CH2 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR2;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1->IFCR = DMA_IFCR_CGIF4;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+		| DMA_CCR_CIRC | DMA_CCR_HTIE | DMA_CCR_TCIE | DMA_CCR_EN;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = (1u << TIM_CCMR1_CC2S_Pos) | (15u << TIM_CCMR1_IC2F_Pos);
+	TIM2->CCMR2 = 0;
+	TIM2->CCER = TIM_CCER_CC2E | TIM_CCER_CC2P | TIM_CCER_CC2NP;
+	TIM2->CNT = 0;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	gpio_cfg(GPIOA, 1, MODE_AF, PULL_NONE, 1);	/* TIM2_CH2 */
+	TIM2->DIER = TIM_DIER_CC2DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN | (2u << TIM_CR1_CKD_Pos);
+	return gpio_get(GPIOA, 1) ? 1 : 0;
+}
+
 int hal_pulse_ack(void)
 {
 	uint32_t sr = TIM2->SR, dier = TIM2->DIER, cap, gap, de;
@@ -3240,11 +3280,13 @@ void hal_rfid_stop(void)
 	TIM2->DIER = 0;
 	TIM2->CR1 = 0;
 	TIM2->CCER = 0;
+	TIM2->CCMR1 = 0;				/* (#302: the Sub-GHz stream's) */
 	TIM2->CCMR2 = 0;
 	TIM2->OR = 0;
 	TIM2->SR = 0;
 	DMA1_Channel4->CCR = 0;
 	DMAMUX1_Channel3->CCR = 0;
+	gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);	/* GDO0, as stock */
 	COMP1->CSR = 0;
 	TIM1->CR1 = 0;
 	TIM1->CCER = 0;

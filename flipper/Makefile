@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -73,6 +73,10 @@ lfrfidtest:
 # encoder -> the line -> decoders.
 ibkeytest:
 	$(MAKE) -C tests/ibkey test
+
+# libdht on the PC (issue #358): the AM2301/DHT21/DHT22 frame decoder.
+dhttest:
+	$(MAKE) -C tests/dht test
 
 # libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
 # the RFID line code, the Sub-GHz presets, legal check and duty counter.

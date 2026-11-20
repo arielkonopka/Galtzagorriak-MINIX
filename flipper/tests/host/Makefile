@@ -14,7 +14,7 @@ B	:= build
 TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
 	   spectest pmstattest
 
-all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey \
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
      run-mtpd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
@@ -36,6 +36,9 @@ run-lfrfid:
 # protocols, every key round trip (make ibkeytest).
 run-ibkey:
 	$(MAKE) -C $(MROOT)/flipper/tests/ibkey test
+# libdht (issue #358): the AM2301/DHT21/DHT22 frame decoder (make dhttest).
+run-dht:
+	$(MAKE) -C $(MROOT)/flipper/tests/dht test
 # libmodem (spec section P, ACP.1, ACP.2): data modems between two
 # Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
 run-modem:

@@ -163,6 +163,95 @@ static SubGhzReceiver *receiver(SubGhzEnvironment **env)
 	return rx;
 }
 
+/* ---- receive without gaps (#302) ----
+ * As stock's SubGhzWorker: the kernel records every edge of the data pin
+ * (SGIOCSTREAM, circular DMA, a ring of RS_WORDS timestamps); here the
+ * halves are decoded as they come.  Capturing never stops while a half is
+ * decoded, so a short burst that falls into the decoding time of the one
+ * before is no longer lost (the frame reads were: ~60 ms deaf per 512
+ * durations, and the remotes' bursts are ~150 ms).  The filter is stock's:
+ * a level shorter than 30 us joins the one before, and equal levels merge
+ * (subghz_worker.c). */
+#define RS_WORDS	1024		/* 2 halves of 512 edges: 4 KB */
+#define FILTER_US	30
+
+static SubGhzReceiver *fl_rx;
+static bool fl_level;
+static uint32_t fl_dur;
+
+static void fl_feed(bool level, uint32_t dur)
+{
+	if (dur < FILTER_US || fl_level == level) {
+		fl_dur += dur;
+	} else {
+		subghz_receiver_decode(fl_rx, fl_level, fl_dur);
+		fl_dur = dur;
+		fl_level = level;
+	}
+}
+
+/* 0 when it ran until Ctrl-C, -1 when the kernel has no stream (QEMU) */
+static int rx_stream(int fd, SubGhzReceiver *rx)
+{
+	struct sg_stream st;
+	uint32_t *ring = malloc(RS_WORDS * sizeof(uint32_t)), prev = 0;
+	int h, i, first = 1, lv;
+
+	if (ring == NULL) return -1;
+	st.ring = ring;
+	st.words = RS_WORDS;
+	if (ioctl(fd, SGIOCSTREAM, &st) != 0) {
+		free(ring);
+		return -1;
+	}
+	fl_rx = rx;
+	fl_level = false;
+	fl_dur = 0;
+	lv = !st.level;			/* the level after the first edge */
+	while (!stop) {
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno == EINTR) break;
+			if (errno != EOVERFLOW) {
+				bad("/dev/subghzraw", strerror(errno));
+				break;
+			}
+			/* whole halves of 512 edges were lost: an even number,
+			 * so the levels alternate on, one more */
+			first = 1;
+			lv = !lv;
+			fl_dur = 0;
+			subghz_receiver_reset(rx);
+			continue;
+		}
+		for (i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2); i++) {
+			if (!first) {
+				uint32_t d = ring[i] - prev;
+
+				/* The ring holds timestamps of both edges and no
+				 * level: the first level was read from the pin at
+				 * the start, which noise can get wrong (then every
+				 * level is the other one and most protocols read
+				 * nothing).  A silence of more than 4 ms is the
+				 * carrier off, a low level; if it came out high,
+				 * the phase is the other one. */
+				if (d > 4000 && lv) {
+					lv = 0;
+					fl_dur = 0;
+					subghz_receiver_reset(rx);
+				}
+				fl_feed(lv, d);
+				lv = !lv;
+			}
+			prev = ring[i];
+			first = 0;
+		}
+	}
+	st.words = 0;
+	(void) ioctl(fd, SGIOCSTREAM, &st);
+	free(ring);
+	return 0;
+}
+
 static int cmd_rx(int argc, char **argv)
 {
 	SubGhzEnvironment *env;
@@ -182,6 +271,7 @@ static int cmd_rx(int argc, char **argv)
 	signal(SIGTERM, onsig);
 	printf("Listening at %lu. Press Ctrl+C to stop.\n", hz);
 	fflush(stdout);
+	if (rx_stream(fd, rx) == 0) goto done;	/* the Flipper: no gaps */
 	while (!stop) {
 		n = read(fd, (char *) frame, sizeof(frame));
 		if (n < 0) {
@@ -196,6 +286,7 @@ static int cmd_rx(int argc, char **argv)
 		if (n < (int) sizeof(frame))
 			subghz_receiver_decode(rx, false, GAP_US);
 	}
+done:
 	close(fd);
 	untune();
 	printf("Packets received %ld\n", packets);
