@@ -613,7 +613,8 @@ OBJS_gmodem = $(MB)/cmd/port/gmodem.o $(MODEM_OBJ)
 $(MB)/cmd/port/region.o: cmds/region.c $(MODEM_DIR)/modem.h $(MROOT)/include/minix/subghz.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
-OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/cc1101.o \
+OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/rgblob.o \
+	   $(MB)/modem/cc1101.o \
 	   $(MB)/modem/duty.o
 REGION_FILES := $(sort $(wildcard rootfs/usr/share/region/*.reg))
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
