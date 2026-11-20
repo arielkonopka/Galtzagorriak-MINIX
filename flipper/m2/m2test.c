@@ -2802,7 +2802,8 @@ static void __attribute__((noinline)) stock_test(int b, int l)
 
 	style_toggle(b, l);
 	lgrab(l, st.s2);
-	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 51) && !lpix(127, 1),
+	/* five rows now (Repeat, #361): the list scrolls, Style's bar is at y 40 */
+	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 40),
 		st.s3);
 	furi_tap(b, 0x20);			/* Back: SETTINGS */
 	furi_tap(b, 0x20);			/* Back: APPS, written */
