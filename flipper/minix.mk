@@ -318,7 +318,7 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid spectrum bootscreen
+GUIAPPS	:= launcher info lights console power lfrfid spectrum bootscreen chargescreen
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 DAEMONS	:= mtpd
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
@@ -404,6 +404,7 @@ CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 CHMEM_subghz := 16384	# every decoder's state (malloc'd once, ~5 KB),
 			# key files (<= 4 KB), stdio; the 2 KB frame buffer
 			# is bss
+CHMEM_chargescreen := 2048
 CHMEM_bootscreen := 2048	# issue #399: stdin 64 B, two 25 B lines, stdio; fsck is running beside it
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),

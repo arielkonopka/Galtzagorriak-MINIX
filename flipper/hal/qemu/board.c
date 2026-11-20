@@ -137,6 +137,8 @@ void hal_line_rx_irq(int on)
 	}
 }
 
+void hal_charge_mode(void) { }
+
 void hal_lcd_init(void)
 {
 }
