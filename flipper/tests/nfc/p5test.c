@@ -13,6 +13,7 @@
 #include "mf_ultralight.h" /* libnfc's own reader (#387) */
 #include "cm_mful.h"
 #include "cm_felica.h"
+#include "cm_st25tb.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_poller.h>
@@ -20,6 +21,8 @@
 #include <nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.h>
 #include <nfc/protocols/felica/felica_poller.h>
 #include <nfc/protocols/felica/felica_poller_sync.h>
+#include <nfc/protocols/st25tb/st25tb_poller.h>
+#include <nfc/protocols/st25tb/st25tb_poller_sync.h>
 
 _Static_assert(sizeof(MfUltralightConfigPages) == 16, "config pages: 4 pages, 16 bytes");
 
@@ -208,9 +211,90 @@ static void test_felica(void) {
     nfc_free(nfc);
 }
 
+/* ---- ST25TB ---- */
+
+typedef struct {
+    int ready, success, failure;
+    St25tbType type;
+} st25tb_ctx_t;
+
+static NfcCommand st25tb_cb(NfcGenericEvent event, void* context) {
+    st25tb_ctx_t* c = context;
+    const St25tbPollerEvent* e = event.event_data;
+    if(event.protocol != NfcProtocolSt25tb) return NfcCommandContinue;
+    switch(e->type) {
+    case St25tbPollerEventTypeReady:
+        c->ready++;
+        c->type = e->data->ready.type;
+        return NfcCommandContinue;
+    case St25tbPollerEventTypeRequestMode:
+        e->data->mode_request.mode = St25tbPollerModeRead;
+        return NfcCommandContinue;
+    case St25tbPollerEventTypeSuccess: c->success++; break;
+    default: c->failure++; break;
+    }
+    return NfcCommandStop;
+}
+
+static void test_st25tb(void) {
+    static cm_st25tb_t k;
+    nfc_xfer_t x = {0};
+    st25tb_ctx_t c = {0};
+
+    printf("-- ST25TB\n");
+    cm_st25tb_init(&k, 7, 128); /* ST25TB04K */
+    x.transceive = cm_st25tb_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolSt25tb);
+    nfc_poller_start(poller, st25tb_cb, &c);
+    nfc_poller_stop(poller);
+    const St25tbData* d = (const St25tbData*)nfc_poller_get_data(poller);
+    CHECK(c.ready == 1 && c.type == St25tbType04k, "ST25TB: INITIATE, SELECT, GET_UID -> 04K");
+    CHECK(c.success == 1 && c.failure == 0, "ST25TB: read in Read mode");
+    CHECK(!memcmp(d->uid, k.uid, 8), "ST25TB: UID byte order (D0 first)");
+    int same = 1;
+    for(int i = 0; i < 128; i++)
+        if(d->blocks[i] != k.blk[i]) same = 0;
+    CHECK(same && k.reads == 129, "ST25TB: 128 blocks + system block, little-endian");
+    CHECK(d->system_otp_block == 0xFFFFFFFFu, "ST25TB: system/OTP block");
+    nfc_poller_free(poller);
+
+    uint32_t v = 0;
+    St25tbType t = St25tbTypeNum;
+    CHECK(st25tb_poller_sync_detect_type(nfc, &t) == St25tbErrorNone && t == St25tbType04k,
+          "ST25TB sync: detect_type");
+    CHECK(st25tb_poller_sync_read_block(nfc, 9, &v) == St25tbErrorNone && v == k.blk[9],
+          "ST25TB sync: read_block 9");
+    St25tbData* sd = st25tb_alloc();
+    CHECK(st25tb_poller_sync_read(nfc, sd) == St25tbErrorNone && sd->blocks[100] == k.blk[100],
+          "ST25TB sync: read");
+    st25tb_free(sd);
+    nfc_free(nfc);
+
+    cm_st25tb_init(&k, 6, 16); /* ST25TB512-AC */
+    nfc = nfc_alloc_xfer(&x);
+    memset(&c, 0, sizeof c);
+    poller = nfc_poller_alloc(nfc, NfcProtocolSt25tb);
+    nfc_poller_start(poller, st25tb_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.success == 1 && c.type == St25tbType512Ac && k.reads == 17, "ST25TB: 512-AC, 16 blocks");
+    nfc_poller_free(poller);
+
+    k.lost = 1;
+    memset(&c, 0, sizeof c);
+    poller = nfc_poller_alloc(nfc, NfcProtocolSt25tb);
+    nfc_poller_start(poller, st25tb_cb, &c);
+    nfc_poller_stop(poller);
+    CHECK(c.success == 0, "ST25TB: no card, no read, no hang");
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+}
+
 int main(void) {
     test_mful();
     test_felica();
+    test_st25tb();
     if(fails) {
         printf("%d part-5 test(s) FAILED\n", fails);
         return 1;
