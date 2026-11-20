@@ -43,6 +43,7 @@
 #define LOG_RG	"/usr/adm/messages"
 
 static struct mdm_region *rg;
+static unsigned char rec[MDM_RGB_MAX];	/* the record of RQ.2 */
 
 static int usage(void)
 {
@@ -251,7 +252,7 @@ static int compile(const char *cc, unsigned char *b)
 
 static int compile_to(int argc, char **argv)
 {
-	static unsigned char b[MDM_RGB_MAX];
+	unsigned char *b = rec;
 	int n, fd;
 
 	if (argc != 4) return usage();
@@ -287,7 +288,7 @@ static void logit(const char *cc, const char *base, int custom,
 
 static int set(int argc, char **argv)
 {
-	static unsigned char b[MDM_RGB_MAX];
+	unsigned char *b = rec;
 	char line[16], sum[65], bsum[65], base[3];
 	int yes = 0, force = 0, fd, i = 2, n, ok;
 

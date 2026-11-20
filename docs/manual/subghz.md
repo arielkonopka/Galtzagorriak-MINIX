@@ -106,7 +106,16 @@ region list              # the countries with a table
 region show PL           # a country's bands, power, duty cycle and the law each row is from
 region set PL            # root: "I will use this device under the rules of PL [y/N]"; then reboot
 region check US 433.92   # would a 1 s data burst be allowed there?  Sends nothing
+region set -f PL         # root: the same with a table you changed yourself (a "custom table")
 ```
+
+`region set` also checks that the table is the one shipped with this firmware: the build keeps
+the SHA-256 of every shipped `.reg` file. If you edited `PL.reg` (or `EU.reg`, which every EU
+country's table includes), `region set PL` says "custom table", prints the hashes of your file
+and of the shipped one, and refuses unless you add `-f`; a custom table is your responsibility.
+Every `region set` is logged to `/usr/adm/messages` with the time, your uid, "shipped" or
+"custom" and the files' hashes. `set` also prints the size and CRC of the region record it
+compiled: 16 bytes plus 16 for each row without `?` (192 bytes for an EU country, 528 at most).
 
 `region` with no argument prints the code in `/etc/flipper/region` and the one the kernel uses.
 
@@ -160,9 +169,9 @@ Today the kernel still has its own short band list: for Europe 433.05–434.79 (
 Canada the stock bands (304.1–321.95, 433.05–434.79, 915–928 MHz, 50 %). It checks band and duty
 cycle only; the power, the bandwidth and the remote/burst rules of the tables are checked by
 `region check` (`gmodem` still uses its own short list, spec P.4, until T32a moves it to the
-tables). Later (planned, spec RQ.2, T32b) `region set` writes the table once into the Flipper's
-internal flash, so it holds even without the card, and the first-boot wizard asks for the
-country. Transmit on the Flipper itself is still off until the CC1101 transmit path is written.
+tables). Later (planned, spec RQ.2, T32b) `region set` writes that record once into the Flipper's
+internal flash (one flash write per change of region, nothing at run time), so it holds even
+without the card or after a card swap, and the first-boot wizard asks for the country. Transmit on the Flipper itself is still off until the CC1101 transmit path is written.
 
 ## Rolling codes and the keystore
 
