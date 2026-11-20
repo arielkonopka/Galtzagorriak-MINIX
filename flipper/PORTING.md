@@ -140,7 +140,8 @@ Format version 1, little endian, sector aligned (512 B). Host side:
 `tools/gzupdate-check.py` checks it as the Flipper does; `make BOARD=flipper
 update` runs all three and writes `build/flipper/minix/Galtzagorriak.update`
 and its `.sha512`. `make updatetest` is ACS.1 on the host. On the Flipper
-nothing reads the file yet (`gzupdate`: T33a part 3; `atea`: T33b).
+`gzupdate` checks and stages it (T33a part 3, below); `atea`, which
+flashes it, is T33b.
 
     sector 0     header, 448 signed bytes + Ed25519 signature (64 B)
     sector 1     section table, 16 entries of 32 B
@@ -224,6 +225,47 @@ Keys: `tools/gzsign --new-key` writes `~/.config/galtzagorriak/update.key`
 with a hint if there is none. The project's public release key goes to
 `flipper/keys/release.pub` once the user has made it (RS.20); `make update`
 checks with it and with `~/.config/galtzagorriak/update.pub`.
+
+On the Flipper (T33a part 3; `cmds/gzupdate.c`, `cmds/gztree.c`, INIT):
+
+1. `gzupdate check FILE` (RS.8): `gzu_check` with the keys built in
+   (`keys/release.pub`, the builder's `update.pub`; `atea`'s slots once it
+   exists), this system's board, epoch and release.  The window text on
+   the console; one line `gzupdate: <why>` and exit 1 on a bad file.
+2. `gzupdate apply FILE` (RS.10, root): the same check, the question (on
+   the console until `atea`'s LCD window, T33b), `swapon off`, the file raw
+   from sector 0 of `/dev/hd3` and read back (SHA-512 compared), the `root`
+   section unpacked into `/.gzupdate/E/` and `/usr/.gzupdate/E/` with
+   `/.gzupdate/E/MANIFEST` (`path mode uid gid` and the first 32 B of the
+   file's SHA-512 in hex) written last, `/usr/.gzupdate/cur.update` (the
+   running system's file) renamed to `prev.update` and the new file copied
+   to `cur.update`, `/usr/.gzupdate/trial`, then the **pending sector**,
+   the sector right after the staged file: `GZPEND1\0`, epoch (4 B), size
+   (4 B), the file's SHA-512 (64 B).  Then `reboot`.  Every step can run
+   again after a power cut; nothing is pending until the last write.
+3. `atea` (T33b; on QEMU `tools/ateasim.py` on the flash image): pending
+   sector found, or the first page erased: check the staged file again,
+   then flash.  The first page is erased first whenever any page differs
+   and programmed last; other pages are compared and only differing ones
+   erased and written; read back; the pending sector cleared.  `BKP11R`
+   (the one-word fast path and the trial counter) is T33b's.
+4. INIT (RS.14, +0 B static RAM, text +300 B): if `/etc/gz-tree` is not
+   `GZ_EPOCH` and `/.gzupdate/GZ_EPOCH/MANIFEST` exists, run
+   `/.gzupdate/E/bin/gztree` (else `/bin/gztree`) and wait.  `gztree`
+   mounts `/dev/hd2` on `/usr` itself, then per MANIFEST entry: in place
+   with that hash: skip; else the old file to `/.gzupdate/<old>/` (or
+   `/usr/.gzupdate/<old>/`; `<old>` from `/etc/gz-tree`, `0` if none) and
+   the staged one in; `/etc/gz-tree` last (temporary file, rename).
+5. `/etc/rc`: `gzupdate finish` after `pkg bind /bin/*` (the staged trees,
+   now only copies, are removed; the old files stay for one rollback),
+   `gzupdate commit` after the launcher (`trial` removed).
+
+`tools/gzapplytest.py` (QEMU) runs 2-5 on a real file of the build and
+cuts the power at each page operation of step 3 (ACS.3 for the flash
+step: 118 cuts, each finished by the next start).  Not yet: cuts inside
+`apply` and between `gztree`'s renames in QEMU, reinstalling official
+packages whose libc id changed (RS.15), the rollback (RS.16, needs
+`atea`).
 
 ### SD card layout
 
