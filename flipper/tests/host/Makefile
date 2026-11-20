@@ -15,7 +15,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht \
-     run-mtpd run-gzsig run-radio run-flipperpb
+     run-mtpd run-gzsig run-radio run-flipperpb run-rpcd
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -71,6 +71,10 @@ run-radio:
 # libflipperpb (#388): the stock RPC protobuf against golden frames.
 run-flipperpb:
 	$(MAKE) -C $(MROOT)/flipper/tests/flipperpb test
+
+# the rpcd core (#388, R15.5, R15.7): fake platform, golden frames.
+run-rpcd:
+	$(MAKE) -C $(MROOT)/flipper/tests/rpcd test
 
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
