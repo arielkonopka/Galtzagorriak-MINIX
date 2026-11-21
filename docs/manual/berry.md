@@ -40,8 +40,8 @@ when the script starts so that the default 8 KB heap (`-m`) always fits. One run
 takes about 13.3 KB; two take twice that. `free -v` shows the library ("shared Berry: 84 KB at
 ...") and its data per process.
 
-Only use `-n 0` for testing: two endless scripts without a budget can still make the system stop
-answering (being looked into).
+`-n 0` is for scripts that must run for a long time. A script without a budget still shares the
+processor with the rest: the shell and the other programs keep answering, and `kill` stops it.
 
 ## Bytecode
 

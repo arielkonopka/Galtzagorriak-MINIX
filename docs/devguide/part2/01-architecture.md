@@ -53,7 +53,7 @@ Messages are MINIX's: fixed-size `message` structs, `send`/`receive`/`sendrec`, 
    images their memory maps (virtual = physical); the first process is entered with `svc`.
 4. MM and FS initialise. FS mounts the root file system from the SD card.
 5. INIT runs `/etc/rc`: mounts `/rom` (default settings), runs `/etc/setup` on the first boot,
-   mounts `/usr` and `/home`, binds the programs built into flash (`pkg bind /bin/*`), reads
+   mounts `/usr` and `/home`, binds the programs built into flash (`pkg bind /bin`), reads
    `rc.conf`, starts `update` and the launcher. Then INIT starts the logins of `/etc/ttytab`.
 
 Budget L10 (boot to launcher menu) is 3 s.

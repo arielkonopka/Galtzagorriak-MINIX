@@ -94,6 +94,9 @@ struct driver *dp;	/* Device dependent entry points. */
 		 * a process's image straight, as FS does for its buffers. */
 		if (mess.m_type == DEV_OPEN || mess.m_type == DEV_READ
 				|| mess.m_type == DEV_WRITE) break;
+		/* R12.40: DISCARD of ended block runs, at MM's idle. */
+		if (mess.m_type == DEV_IOCTL && mess.REQUEST == DIOCDISCARD)
+			break;
 		continue;
 #endif
 	default:

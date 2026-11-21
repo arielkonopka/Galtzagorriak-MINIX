@@ -160,3 +160,20 @@ them and does not read the whole map of a big `/home`. Right after the Flipper s
 time while the Flipper is idle, and the `~` goes away. After Linux wrote to the card, the first
 numbers can be wrong until then. `df` counts the data blocks of a file system (without the maps
 and the inode table), so its "total" is a little smaller than the partition.
+
+## Checking and repairing the card by hand
+
+`fsck` cannot be started from the shell on a running system: the launcher and the shell leave no
+memory hole big enough (`fsck: no memory to start it`). Ask for the check at the next start
+instead (as root):
+
+```
+reboot fsck
+```
+
+(`sh /etc/fsckboot` does the same.)
+
+The Flipper restarts, checks and repairs `/usr` and `/home` before anything else runs (rainbow LED,
+the progress on the console; a 113 GB card takes a minute or two), restarts again, and then
+starts normally. Do not switch it off meanwhile. What was found is appended to
+`/usr/adm/fsck.log`.

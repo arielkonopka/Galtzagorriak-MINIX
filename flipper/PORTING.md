@@ -1368,13 +1368,24 @@ MM's MPU map.  Not reachable with the shipped chmem in these tests, but
 any user program that uses the FPU and faults could do it: needs its own
 issue (kernel, R5.7).
 
-**Open finding.**  Two runaway scripts with `-n 0` (no budget) make QEMU
-stop answering about 1 s after the second one starts; one runaway script,
-or two `sh -c 'while :; do :; done'` loops, do not, and a soft-float
-build (`make BERRY_FP=`) hangs the same way, so it is not the FPU state.
-`BERRYTEST_TWO=1 tools/berrytest.py` reproduces it.  With the default
-budget every loop ends in 0.5 s, so the default configuration is not
-affected; keep `-n 0` for debugging until this is understood.
+**The `-n 0` hang (found in part 1, fixed in #429).**  Two runaway
+scripts with `-n 0` made QEMU stop answering.  The cause was the
+kernel, not the VM: the login `sh` and its fork child for the second
+`&` (not exec'd yet) share their addresses, a shadow group (#331).
+At the end of a quantum `sched()` moved the runaway to the tail, so
+the group's resident member came to the head, and then `unshadow()`
+swapped it out before it had run; the member swapped in went to the
+tail, behind the runaway, and at the next quantum the two traded places
+again.  Neither ran.  The same happens without Berry
+(`sh -c 'while :; do :; done' & (while :; do :; done) &`), and the
+main merges had hidden the two-script case only by changing the layout.
+Fix: `unshadow(p, ran)` (`src/kernel/arm/shadow.c`) swaps a ready
+resident member out only after its own quantum (`ran`, from
+`do_clocktick`); a blocked one goes at once as before.  Each member
+gets every other turn of the group; 0 B kernel RAM.
+`tools/berrytest.py` checks both cases (two loops; a loop and a
+subshell loop): the shell answers in 0.12 s and 0.51 s (QEMU).
+`-n 0` stays an explicit opt-in.
 
 ## Status
 

@@ -40,6 +40,10 @@
 	.equ	FP_SAVE,	64	/* S16-S31, below the hardware frame */
 	.equ	FPCCR,		0xE000EF34
 	.equ	FPCCR_LSPACT,	0x1	/* a lazy S0-S15 save is pending */
+	.equ	SHCSR,		0xE000ED24
+	.equ	SHCSR_MEMFAULTPENDED, 0x2000
+	.equ	CFSR,		0xE000ED28
+	.equ	CFSR_MLSPERR,	0x20	/* MemManage in a lazy FP save */
 
 	.syntax	unified
 	.thumb
@@ -421,6 +425,16 @@ fp_flush:
 	.global	fp_st_begin
 fp_st_begin:
 	vmov	r4, r5, s16, s17	/* takes the lazy save first */
+	/* #434: a fault in the lazy save is not taken here: the CPU only
+	 * pends MemManage (FPCCR.MMRDY), drops the save and goes on, and
+	 * the next process (MM) would take it and panic.  Seen when a
+	 * push into the break guard (mpu_switch) left the frame's lower
+	 * part in the heap and its S0-S15 area in the guard.  Nothing
+	 * else pends a MemManage here (priority 0: a fault escalates). */
+	ldr	r2, =SHCSR
+	ldr	r3, [r2]
+	tst	r3, #SHCSR_MEMFAULTPENDED
+	bne	fp_lazy_fail
 	vmov	r6, r7, s18, s19
 	vmov	r8, r9, s20, s21
 	vmov	r10, r11, s22, s23
@@ -447,6 +461,17 @@ fp_st_begin:
 	.global	fp_st_end
 fp_st_end:
 	b	fp_zero
+
+/* The lazy save into mpu_proc's frame failed: un-pend the fault and
+ * clear its flag, then the same as a fault in the stores above. */
+	.thumb_func
+fp_lazy_fail:
+	bic	r3, r3, #SHCSR_MEMFAULTPENDED
+	str	r3, [r2]
+	ldr	r2, =CFSR
+	movs	r3, #CFSR_MLSPERR
+	str	r3, [r2]		/* write 1 to clear */
+	b	fp_frame_recover
 
 /* fp_save(rp): fp_flush for C, with interrupts off (unshadow: the image
  * of rp, mpu_proc, is about to move; its FP registers must be saved into

@@ -25,6 +25,7 @@
 #include "libhid.h"
 #include "ibkey.h"
 #include <minix/partition.h>
+#include <blk.h>
 #include <a.out.h>
 #include <time.h>
 #include <utime.h>
@@ -1437,6 +1438,24 @@ static void discard_tests(void)
 	check(r1 == 0, "discard: DIOCDISCARD of the last sector");
 	check(zero, "discard: the range reads back as zeros (QEMU)");
 	check(r0 < 0 && i < 0, "discard: empty and too-long ranges refused");
+}
+
+
+/* Spec 12h (R12.38, AC12.22): M2 boots with swap and blocks off, so every
+ * block call fails with ENOSYS and nothing reaches the card. */
+static void blk_tests(void)
+{
+	static char b[BLK_SIZE];
+	struct blkinfo bi;
+	int bi_ok, get_ok, open_ok;
+
+	errno = 0;
+	bi_ok = blk_info(&bi) < 0 && errno == ENOSYS;
+	errno = 0;
+	get_ok = blk_get(0, b) < 0 && errno == ENOSYS;
+	errno = 0;
+	open_ok = blk_open(4096, 0) < 0 && errno == ENOSYS;
+	check(bi_ok && get_ok && open_ok, "blk: blocks off: blk_info, blk_get, blk_open ENOSYS");
 }
 
 
@@ -3812,6 +3831,7 @@ int main(int argc, char **argv)
 	card_tests();
 	sflag_tests();
 	discard_tests();
+	blk_tests();
 	preempt_tests();
 	testop_tests();
 	gzupdate_test();
