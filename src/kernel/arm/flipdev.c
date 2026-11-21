@@ -78,6 +78,7 @@
 #include <minix/ibutton.h>
 #include <minix/hid.h>
 #include <minix/subghz.h>
+#include <minix/nfc.h>
 #include <signal.h>
 #include "ibemu.c"		/* the Dallas key's 1-Wire slave (R6.7) */
 
@@ -377,6 +378,7 @@ FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
 FORWARD _PROTOTYPE( void rfid_field_off, (void)				);
 FORWARD _PROTOTYPE( int rfid_ioctl, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int nfc_ioctl, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rfid_emu_start, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void rfid_emu_off, (void)				);
 FORWARD _PROTOTYPE( void ir_stop_tx, (void)				);
@@ -474,6 +476,9 @@ PUBLIC void flipdev_task()
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
 				&& ie.proc == fm.PROC_NR + 1) ib_stop();
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == NFC_MINOR
+							&& hal_nfc_active())
+			hal_nfc_stop();		/* the field off (#390) */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == SGRAW_MINOR
 				&& rs_on == fm.PROC_NR + 1) rs_stop();	/* #302 */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == RFID_MINOR) {
@@ -502,6 +507,7 @@ PUBLIC void flipdev_task()
 		r = IS_HID(fm.DEVICE) ? hid_ioctl(&fm)
 		  : fm.DEVICE == RTC_MINOR ? rtc_ioctl(&fm)
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
+		  : fm.DEVICE == NFC_MINOR ? nfc_ioctl(&fm)
 		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
 		  : fm.DEVICE == SUBGHZ_MINOR || fm.DEVICE == SGRAW_MINOR
 		    || fm.DEVICE == SGPKT_MINOR ? sg_ioctl(&fm)
@@ -1756,7 +1762,9 @@ message *m_ptr;
   case NFC_MINOR:			/* #390 bring-up: one report line */
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (m_ptr->POSITION != 0) return(0);
-	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0) return(EBUSY);
+	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0
+						|| hal_nfc_active())
+		return(EBUSY);
 	{
 		char line[110];
 		int n = hal_nfc_report(line, sizeof line);
@@ -3174,6 +3182,81 @@ PRIVATE void rfid_field_off()
   pm_busy &= ~PM_PULSE;			/* Stop2 again, also after a close */
   unlock();
 }
+
+/*===========================================================================*
+ *				nfc_ioctl				     *
+ *===========================================================================*/
+PRIVATE int nfc_ioctl(m_ptr)
+message *m_ptr;
+{
+/* /dev/nfc (#390, R13.1, <minix/nfc.h>): the ST25R3916 as an NFC-A poller.
+ * No state here: the chip's own (hal_nfc_active).  The frames go between
+ * the chip's FIFO and the caller's buffers, nothing is copied in between.
+ * Exclusive with the 125 kHz RFID and the IR/pulse engine in use, and with
+ * the Sub-GHz radio (SPI1; hal_nfc_start says so). */
+  struct nfc_xfer_io io;
+  phys_bytes user, tx = 0, rx = 0;
+  unsigned rb;
+  int v, r;
+
+  switch (m_ptr->TTY_REQUEST) {
+  case NFCIOCFEAT:
+  case NFCIOCPOLL:
+	if (m_ptr->TTY_REQUEST == NFCIOCFEAT) v = NFC_TECH_A;
+	else {
+		if (!hal_nfc_active()) return(EIO);
+		v = hal_nfc_reqa((u32_t *) 0, 0) >= 0 ? NFC_TECH_A : 0;
+	}
+	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(v));
+	if (user == 0) return(EFAULT);
+	phys_copy(vir2phys(&v), user, (phys_bytes) sizeof(v));
+	return(OK);
+  case NFCIOCFIELD:
+	user = numap_src(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(v));
+	if (user == 0) return(EFAULT);
+	phys_copy(user, vir2phys(&v), (phys_bytes) sizeof(v));
+	if (v == 0) {
+		if (hal_nfc_active()) hal_nfc_stop();
+		return(OK);
+	}
+	if (!(v & NFC_TECH_A)) return(ENOTTY);
+	if (hal_nfc_active()) return(OK);
+	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0) return(EBUSY);
+	if ((r = hal_nfc_start((unsigned *) 0)) < 0)
+		return(r == -3 ? EBUSY : EIO);
+	hal_nfc_mode_a();
+	hal_nfc_field(1);
+	return(OK);
+  case NFCIOCXFER:
+	if (!hal_nfc_active()) return(EIO);
+	user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS,
+						(vir_bytes) sizeof(io));
+	if (user == 0) return(EFAULT);
+	phys_copy(user, vir2phys(&io), (phys_bytes) sizeof(io));
+	if (io.tx_bits == 0 || io.tx_bits > 512 * 8 || io.rx_bits > 512 * 8)
+		return(EINVAL);
+	tx = numap_src(m_ptr->PROC_NR, (vir_bytes) io.tx,
+					(vir_bytes) ((io.tx_bits + 7) / 8));
+	if (tx == 0) return(EFAULT);
+	if (!(io.flags & NFC_XF_NO_RX)) {
+		if (io.rx_bits < 8) return(EINVAL);
+		rx = numap(m_ptr->PROC_NR, (vir_bytes) io.rx,
+					(vir_bytes) ((io.rx_bits + 7) / 8));
+		if (rx == 0) return(EFAULT);
+	}
+	r = hal_nfc_xfer((u8_t *) tx, io.tx_bits, (u8_t *) rx, io.rx_bits,
+						&rb, io.fwt, io.flags);
+	if (r < 0) return(r == -1 ? ETIMEDOUT : r == -3 ? EOVERFLOW
+						: r == -4 ? ENOTTY : EIO);
+	io.rx_bits = rb;
+	phys_copy(vir2phys(&io), user, (phys_bytes) sizeof(io));
+	return(OK);
+  }
+  return(ENOTTY);		/* listen, transparent: later steps */
+}
+
 
 /*===========================================================================*
  *				rfid_ioctl				     *

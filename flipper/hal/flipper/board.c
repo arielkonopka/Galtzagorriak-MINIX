@@ -379,11 +379,21 @@ static void nr_fifo_r(uint8_t *p, unsigned n)
 }
 
 /* The chip ready to poll: 0; -1 no ST25R3916 answers; -2 the oscillator
- * does not start.  *mv: the supply it measured. */
+ * does not start; -3 SPI1 is in use (Sub-GHz).  *mv: the supply it
+ * measured. */
+/* Is the chip up as a poller?  The state is SPI1 itself: on, in mode 1
+ * (the CC1101 uses mode 0), so it costs no RAM. */
+int hal_nfc_active(void)
+{
+	return (RCC->APB2ENR & RCC_APB2ENR_SPI1EN)
+				&& (SPI1->CR1 & SPI_CR1_CPHA) != 0;
+}
+
 int hal_nfc_start(unsigned *mv)
 {
 	unsigned ad, v;
 
+	if (RCC->APB2ENR & RCC_APB2ENR_SPI1EN) return -3;	/* the CC1101's */
 	spi1_on(1);
 	nr_cmd(0xC1);				/* SET_DEFAULT */
 	hal_delay_ms(2);
@@ -480,6 +490,97 @@ int hal_nfc_reqa(uint32_t *seen, int wupa)
 	if (n != 2) return -1;
 	nr_fifo_r(b, 2);
 	return b[0] | b[1] << 8;
+}
+
+static unsigned nr_crc_a(const uint8_t *p, unsigned n)	/* ISO 14443-3 A */
+{
+	unsigned c = 0x6363;
+	uint8_t b;
+
+	while (n-- > 0) {
+		b = (uint8_t) (*p++ ^ c);
+		b ^= (uint8_t) (b << 4);
+		c = (c >> 8) ^ ((unsigned) b << 8) ^ ((unsigned) b << 3) ^ (b >> 4);
+		c &= 0xFFFF;
+	}
+	return c;
+}
+
+/* One frame out and, unless HAL_NFC_NO_RX, the answer in; lengths in bits
+ * (<minix/nfc.h> NFCIOCXFER, the flags are its NFC_XF_*).  The CRC is
+ * made and checked here, as the stock firmware does it in software; the
+ * chip keeps the parity.  fwt in 1/13.56 MHz, 0: 10 ms; polled, at most
+ * 100 ms (longer waits need the chip's timer and its interrupt: later).
+ * 0 and *rx_bits; -1 no answer; -2 CRC, parity or framing; -3 the answer is
+ * longer than the room; -4 not supported (transparent parity). */
+int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
+	unsigned rx_room, unsigned *rx_bits, unsigned fwt, unsigned flags)
+{
+	uint8_t crc[2];
+	uint32_t acc;
+	unsigned n, lb, c, i, tmo;
+
+	*rx_bits = 0;
+	if (flags & 0x04) return -4;		/* NFC_XF_PARITY */
+	nr_cmd(0xDB);				/* clear the FIFO */
+	nr_mod(0x12, 0x02, 0x00);		/* no EMV no-response timer */
+	nr_mod(0x0A, 0x80, 0x80);		/* the CRC is ours */
+	nr_mod(0x05, 0xC0, 0x00);		/* the parity is the chip's */
+	(void) nr_irq();
+	nr_enable(NR_IRQ_TXE | NR_IRQ_RXE | NR_IRQ_ERR);
+	if (flags & 0x10) {			/* NFC_XF_SHORT: REQA, WUPA */
+		nr_w(0x23, 0);
+		nr_cmd(tx[0] == 0x52 ? 0xC7 : 0xC6);
+	} else {
+		n = (tx_bits + 7) / 8;
+		if ((flags & 0x01) && (tx_bits & 7)) return -4;
+		if (n + 2 > 512) return -3;
+		c = (flags & 0x01) ? nr_crc_a(tx, n) : 0;	/* NFC_XF_CRC_TX */
+		i = tx_bits + ((flags & 0x01) ? 16 : 0);
+		nr_w(0x23, (uint8_t) i);	/* the bits to send */
+		nr_w(0x22, (uint8_t) (i >> 8));
+		NFC_CS(1);
+		(void) spi1_xfer(0x80);		/* FIFO load */
+		for (i = 0; i < n; i++) (void) spi1_xfer(tx[i]);
+		if (flags & 0x01) {
+			(void) spi1_xfer((uint8_t) c);
+			(void) spi1_xfer((uint8_t) (c >> 8));
+		}
+		while (SPI1->SR & SPI_SR_BSY) ;
+		NFC_CS(0);
+		nr_cmd(0xC5);			/* TRANSMIT_WITHOUT_CRC */
+	}
+	acc = nr_wait(NR_IRQ_TXE | NR_IRQ_RXE, 20);
+	if (!(acc & (NR_IRQ_TXE | NR_IRQ_RXE))) { nr_enable(0); return -2; }
+	if (flags & 0x08) { nr_enable(0); return 0; }	/* NFC_XF_NO_RX */
+	tmo = fwt != 0 ? fwt / 13560 + 2 : 10;
+	if (tmo > 100) tmo = 100;
+	if (!(acc & NR_IRQ_RXE)) acc |= nr_wait(NR_IRQ_RXE, tmo);
+	nr_enable(0);
+	if (!(acc & NR_IRQ_RXE)) return (acc & 0x20) ? -2 : -1;	/* RXS only */
+	if (acc & NR_IRQ_ERR) return -2;
+	i = nr_r(0x1F);
+	n = nr_r(0x1E) | (i & 0xC0) << 2;	/* bytes in the FIFO */
+	lb = i >> 1 & 7;			/* bits of an incomplete last byte */
+	if (n == 0) return -1;
+	if (flags & 0x02) {			/* NFC_XF_CRC_RX */
+		if (n < 3 || lb != 0) return -2;
+		n -= 2;
+	}
+	if (n * 8 > rx_room + 7) return -3;
+	NFC_CS(1);
+	(void) spi1_xfer(0x9F);			/* FIFO read */
+	for (i = 0; i < n; i++) rx[i] = spi1_xfer(0);
+	if (flags & 0x02) {
+		crc[0] = spi1_xfer(0);
+		crc[1] = spi1_xfer(0);
+	}
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	if ((flags & 0x02) && nr_crc_a(rx, n) != (crc[0] | (unsigned) crc[1] << 8))
+		return -2;
+	*rx_bits = lb != 0 ? (n - 1) * 8 + lb : n * 8;
+	return 0;
 }
 
 void hal_nfc_stop(void)

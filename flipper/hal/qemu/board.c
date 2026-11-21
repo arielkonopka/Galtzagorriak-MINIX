@@ -144,6 +144,14 @@ void hal_nfc_field(int on) { (void) on; }
 int hal_nfc_reqa(uint32_t *seen, int wupa) { (void) seen; (void) wupa; return -1; }
 void hal_nfc_stop(void) { }
 int hal_nfc_report(char *b, int n) { (void) b; (void) n; return 0; }
+int hal_nfc_active(void) { return 0; }
+int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
+	unsigned rx_room, unsigned *rx_bits, unsigned fwt, unsigned flags)
+{
+	(void) tx; (void) tx_bits; (void) rx; (void) rx_room; (void) fwt; (void) flags;
+	*rx_bits = 0;
+	return -4;
+}
 
 void hal_lcd_init(void)
 {
