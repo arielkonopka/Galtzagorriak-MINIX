@@ -16,7 +16,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
      run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
-     run-music
+     run-music run-u2f
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -25,6 +25,10 @@ run-libfuri:
 # libapp (spec R7b.4): the timer rules, the notification policy, the spool.
 run-libapp:
 	$(MAKE) -C $(MROOT)/flipper/lib/app test
+
+# libu2f (issue #420): U2F messages and U2FHID framing (make -C tests/u2f).
+run-u2f:
+	$(MAKE) -C $(MROOT)/flipper/tests/u2f test
 
 # The Music Player's song parser (issue #420): FMF and RTTTL, a fuzz.
 run-music:
