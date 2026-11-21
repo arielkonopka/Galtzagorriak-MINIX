@@ -33,6 +33,7 @@ static void check(int ok, const char *what)
 int fpu_calc(int n);
 void fp_load(const unsigned *v);
 void fp_store(unsigned *v);
+void fp_dig(void);
 
 /* S0-S31 = seed << 8 | n, FPSCR = RMode (seed & 3) and the IOC flag. */
 static void fp_pattern(unsigned *v, int seed)
@@ -224,6 +225,30 @@ static int fp_t_exec(void)	/* exec clears the FP registers */
 	return 99;
 }
 
+/* #434: an FP process that faults is killed, the system runs on.  The
+ * stack running into the break guard leaves the lazy FP save to fail in
+ * the kernel (it used to panic in the next process, MM). */
+static int fp_fault(void (*fn)(void))	/* the signal that killed fn */
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		fp_fill(9);
+		fn();
+		_exit(0);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFSIGNALED(st))
+		return -1;
+	return WTERMSIG(st);
+}
+
+static void fp_f_kernel(void)	/* write to kernel data */
+{
+	*(volatile int *) 0x20000100 = 0;
+}
+
 static void fpu_tests(void)
 {
 	int r;
@@ -239,6 +264,11 @@ static void fpu_tests(void)
 	check(r == 0, "fpu: signal handler with its own FP context");
 	r = fp_child(fp_t_fork);
 	check(r == 0, "fpu: fork copies the FP context");
+	check(fp_fault(fp_f_kernel) == SIGSEGV,
+		"fpu: FP process writes to kernel memory -> SIGSEGV");
+	check(fp_fault(fp_dig) == SIGSEGV,
+		"fpu: FP process's stack into the guard -> SIGSEGV (#434)");
+	check(fp_child(fp_t_calc) == 0, "fpu: still running after the faults");
 	r = fp_child(fp_t_exec);
 	check(r == 0, "fpu: exec clears the FP registers");
 }
