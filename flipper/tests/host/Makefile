@@ -177,7 +177,7 @@ $(B)/desktest: desktest.c $(MROOT)/flipper/gui/desktop.c $(MROOT)/flipper/gui/de
 # settings time and about (spec K.7, T24b, T24d): the zone table, /etc/TZ,
 # local time from a rule, the About rows, a group's file.
 SETDIR	:= $(MROOT)/src/commands/settings
-SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c
+SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c led.c power.c
 $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)

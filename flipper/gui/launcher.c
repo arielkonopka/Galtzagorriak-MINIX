@@ -264,8 +264,9 @@ static int nsel;			/* PG_NOTE: the notification shown */
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
  * like an app, the groups of setgroup as window apps ("=", K.8: the
- * launcher draws them); "" = not there yet.  Power is today's app until
- * its group comes (T24c). */
+ * launcher draws them); "" = not there yet.  Power is today's app (the
+ * battery, T24c); its delays are the "Auto off" group (#419).  Auto off and
+ * Region come after Launcher so the rows above keep their places. */
 static const struct {
 	char name[9];
 	char user[7];
@@ -273,12 +274,14 @@ static const struct {
 } sys_tab[] = {
 	{ "Display", "root", "=/bin/setgroup display" },
 	{ "Sound", "root", "=/bin/setgroup sound" },
-	{ "LED", "", "" },
+	{ "LED", "root", "=/bin/setgroup led" },
 	{ "Time", "root", "=/bin/setgroup time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
+	{ "Auto off", "root", "=/bin/setgroup power" },
+	{ "Region", "root", "=/bin/setgroup region" },
 	{ "About", "root", "=/bin/setgroup about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))

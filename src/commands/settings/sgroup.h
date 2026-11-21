@@ -52,7 +52,7 @@ struct srow {			/* const, in flash */
 extern short sg_val[SG_ROWS];
 
 /* The groups (groups.c): their number, name, title and rows; the call. */
-#define SG_N		4
+#define SG_N		7
 const char *sg_name(int g);
 const char *sg_title(int g);
 const struct srow *sg_rows(int g, int *n);
@@ -73,9 +73,12 @@ void sg_show(int g);
 
 int display_fn(int op, int row, void *buf);
 int sound_fn(int op, int row, void *buf);
+int led_fn(int op, int row, void *buf);
 int time_fn(int op, int row, void *buf);
+int power_fn(int op, int row, void *buf);
+int region_fn(int op, int row, void *buf);
 int about_fn(int op, int row, void *buf);
-extern const struct srow display_rows[], sound_rows[], time_rows[],
-	about_rows[];
+extern const struct srow display_rows[], sound_rows[], led_rows[],
+	time_rows[], power_rows[], region_rows[], about_rows[];
 
 #endif
