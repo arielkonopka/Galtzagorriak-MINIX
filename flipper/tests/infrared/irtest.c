@@ -248,44 +248,76 @@ static void run_encdec(const char *file, struct item *in)
 		roundtrip(what, &in->m[k], !in->m[k].repeat);
 }
 
+static int nd, ne, ned;
+
+/* One .irtest file, with a fresh encoder and decoder as stock's test
+ * setup gives each test: the RC5 encoder keeps its toggle bit across
+ * messages (as a remote does), so test_rc5 and test_rc5x, which share
+ * that encoder, must not see each other's presses (#421). */
+static void irtest_file(const char *dir, const char *name)
+{
+	char path[512];
+	struct item *a, *b;
+	int k;
+
+	infrared_free_encoder(enc);
+	infrared_free_decoder(dec);
+	enc = infrared_alloc_encoder();
+	dec = infrared_alloc_decoder();
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	load(path);
+	for (k = 1; k < 100; k++) {
+		if ((a = find("decoder_input", k)) != NULL) {
+			b = find("decoder_expected", k);
+			CHECK(b != NULL, "%s: no decoder_expected%d", path, k);
+			if (b) { run_decoder(name, a, b); nd++; }
+		}
+		if ((a = find("encoder_input", k)) != NULL) {
+			b = find("encoder_expected", k);
+			CHECK(b != NULL, "%s: no encoder_expected%d", path, k);
+			if (b) { run_encoder(name, a, b); ne++; }
+		}
+		if ((a = find("encoder_decoder_input", k)) != NULL) {
+			run_encdec(name, a);
+			ned++;
+		}
+	}
+	unload();
+}
+
+static int irtest_sel(const struct dirent *e)
+{
+	size_t l = strlen(e->d_name);
+
+	return l >= 8 && !strcmp(e->d_name + l - 7, ".irtest");
+}
+
+/* Every .irtest in name order (readdir's order depends on the file
+ * system), then the RC5 pair the other way round and test_rc5x twice:
+ * the results must not depend on what ran before (#421). */
 static void irtests(const char *dir)
 {
-	DIR *d = opendir(dir);
-	struct dirent *e;
-	char path[512];
-	int k, nd = 0, ne = 0, ned = 0;
-	struct item *a, *b;
+	static const char *const again[] = {
+		"test_rc5x.irtest", "test_rc5.irtest", "test_rc5x.irtest",
+		"test_rc5x.irtest",
+	};
+	struct dirent **list;
+	int i, n, f0;
 
-	CHECK(d != NULL, "opendir %s", dir);
-	if (!d) return;
-	while ((e = readdir(d)) != NULL) {
-		size_t l = strlen(e->d_name);
-
-		if (l < 8 || strcmp(e->d_name + l - 7, ".irtest")) continue;
-		snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
-		load(path);
-		for (k = 1; k < 100; k++) {
-			if ((a = find("decoder_input", k)) != NULL) {
-				b = find("decoder_expected", k);
-				CHECK(b != NULL, "%s: no decoder_expected%d", path, k);
-				if (b) { run_decoder(e->d_name, a, b); nd++; }
-			}
-			if ((a = find("encoder_input", k)) != NULL) {
-				b = find("encoder_expected", k);
-				CHECK(b != NULL, "%s: no encoder_expected%d", path, k);
-				if (b) { run_encoder(e->d_name, a, b); ne++; }
-			}
-			if ((a = find("encoder_decoder_input", k)) != NULL) {
-				run_encdec(e->d_name, a);
-				ned++;
-			}
-		}
-		unload();
+	n = scandir(dir, &list, irtest_sel, alphasort);
+	CHECK(n >= 0, "scandir %s", dir);
+	if (n < 0) return;
+	for (i = 0; i < n; i++) {
+		irtest_file(dir, list[i]->d_name);
+		free(list[i]);
 	}
-	closedir(d);
+	free(list);
 	printf("irtest: %d decoder, %d encoder, %d encoder-decoder vectors\n",
 		nd, ne, ned);
 	CHECK(nd == 45 && ne == 5 && ned == 11, "vector count changed");
+	f0 = fails;
+	for (i = 0; i < 4; i++) irtest_file(dir, again[i]);
+	CHECK(fails == f0, "RC5/RC5X results depend on the order (#421)");
 }
 
 /* Copy a whole .ir file through irf_next/irf_write.  Signals read. */
