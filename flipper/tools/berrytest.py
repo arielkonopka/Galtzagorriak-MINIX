@@ -23,8 +23,12 @@ and checks:
          case is open, issue #385)
   R7c.5  berry -i: the REPL evaluates lines typed on the console, keeps
          its variables, and ends on end of input
-  RAM    free -v with one script running, and the VM's heap at start
-         (printed as "RAM:" lines; AC7c.1's 6 KB is checked on the device)
+  R7c.1  the shared Berry library (issue #431): free -v shows it in
+         flash and its per-script data area
+  RAM    free -v with one script running, and the VM's heap at start;
+         two idle scripts (REPLs reading a FIFO) at once, the second
+         costs no more than the first (printed as "RAM:" lines;
+         AC7c.1's 6 KB is checked on the device)
 
 Exit status: the number of failures.
 """
@@ -185,14 +189,44 @@ def main():
 		     "sleep 1", 30)
 		now = freebytes(r)
 		r.sh("kill `cat /tmp/p1`; sleep 1", 20)
+		one = base - now
 		print("  RAM: one berry process: %6d bytes (free %d -> %d)" %
-			(base - now, base, now), flush=True)
+			(one, base, now), flush=True)
 		st, out = status(r, "berry -e 'import gc print(gc.allocated())'")
 		print("  RAM: VM heap at start: %s bytes" % out.strip().decode(),
 			flush=True)
-		check(st == 0 and 0 < base - now <= 20480,
-			"RAM: one script process <= 20 KB in QEMU (AC7c.1's 6 KB "
-			"is not met yet: PORTING.md Berry)")
+		out = r.output("free -v", 20) or b""
+		m = re.search(rb"shared Berry: (\d+) KB at (\S+), id \S+, \d+ "
+			      rb"functions, (\d+) bytes of data per process", out)
+		check(m is not None and int(m.group(3)) <= 512,
+			"R7c.1: the shared Berry library is in flash (%s KB at %s), "
+			"%s bytes of data per script" % (m.group(1).decode(),
+			m.group(2).decode(), m.group(3).decode()) if m else
+			"R7c.1: free -v shows the shared Berry library")
+		check(0 < one <= 15360,
+			"AC7c.1: one script process <= 15 KB in QEMU (%d B; the "
+			"8 KB default heap is reserved up front, PORTING.md Berry)"
+			% one)
+
+		# Two idle scripts at once (REPLs blocked reading a FIFO that
+		# a sleep holds open): the second costs the same as the
+		# first, nothing of the VM is copied per script.
+		r.sh("rm -f /tmp/bf; mkfifo /tmp/bf; (sleep 120 >/tmp/bf &); "
+		     "berry -i </tmp/bf >/dev/null & echo $! >/tmp/p1; sleep 2",
+		     30)
+		f1 = freebytes(r)
+		r.sh("berry -i </tmp/bf >/dev/null & echo $! >>/tmp/p1; sleep 2",
+		     30)
+		f2 = freebytes(r)
+		two = f1 - f2
+		print("  RAM: second idle script: %6d bytes (free %d -> %d)"
+			% (two, f1, f2), flush=True)
+		out = r.output("echo alive", 20)
+		check(out == b"alive\n" and 0 < two <= one + 256,
+			"AC7c.1: two scripts at once; the second takes %d B, "
+			"like the first (%d B)" % (two, one))
+		r.sh("kill `cat /tmp/p1`; sleep 1", 20)
+		r.sh("rm -f /tmp/bf", 20)
 		print("%d failed" % fails)
 		if os.environ.get("BERRYTEST_LOG"):
 			with open(os.environ["BERRYTEST_LOG"], "wb") as f:
