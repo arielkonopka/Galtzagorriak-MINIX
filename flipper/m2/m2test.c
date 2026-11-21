@@ -25,6 +25,7 @@
 #include "libhid.h"
 #include "ibkey.h"
 #include <minix/partition.h>
+#include <a.out.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -479,6 +480,60 @@ static void infrared_tests(void)
 		"infrared: nobody (in group ir) opens /dev/ir; stock signals "
 		"encode, loop back, decode (libir)");
 	unlink("/tmp/m2ir.ir");
+}
+
+/* Phase 14 (issue #412 item 4): the nfc app.  Group nfc (14), the app
+ * set-gid nfc, opens /dev/nfc only for a member (AC7.3's rule; there is
+ * no /dev/nfc in QEMU, the driver is lane:local): daemon (uid 1) is told
+ * "not in group nfc".  nfc -t DICT, as nobody: the loopback cards read
+ * (Classic 1K with the dictionary's key, NTAG215), saved, read back, Add
+ * manually.  AC14.3: the whole image (data + bss + CHMEM, a_total) is at
+ * most 35 KB.  Two runs, as infrared (flash text cache, M2 budget). */
+static int nfc_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/nfc", "nfc", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void nfc_tests(void)
+{
+	static const char dict[] = "# m2test\nA0A1A2A3A4A5\nFFFFFFFFFFFF\n";
+	struct exec hd;
+	struct stat sb;
+	int fd, n = -1;
+
+	check(stat("/bin/nfc", &sb) == 0 && sb.st_gid == 14
+		&& (sb.st_mode & S_ISGID) != 0,
+		"nfc: the app is setgid nfc (14)");
+	if ((fd = open("/bin/nfc", O_RDONLY)) >= 0) {
+		n = read(fd, &hd, sizeof hd);
+		close(fd);
+	}
+	printf("nfc: image %ld B (data %ld, bss %ld)\n",
+		n == (int) sizeof hd ? hd.a_total : -1L,
+		n == (int) sizeof hd ? hd.a_data : -1L,
+		n == (int) sizeof hd ? hd.a_bss : -1L);
+	check(n == (int) sizeof hd && hd.a_total > 0 && hd.a_total <= 35L * 1024,
+		"nfc: the whole image <= 35 KB (AC14.3)");
+	check(nfc_run(1, 1, "-c", NULL) == 1,
+		"nfc: daemon (not in group nfc) is refused /dev/nfc (AC7.3)");
+	fd = creat("/tmp/m2nfc.dic", 0644);
+	if (fd >= 0) { write(fd, dict, sizeof dict - 1); close(fd); }
+	check(fd >= 0 && nfc_run(99, 9999, "-t", "/tmp/m2nfc.dic") == 0,
+		"nfc: loopback cards read, saved, read back (nfc -t, libnfc)");
+	unlink("/tmp/m2nfc.dic");
 }
 
 /* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
@@ -3601,6 +3656,7 @@ int main(int argc, char **argv)
 	hid_tests();
 	subghz_tests();
 	infrared_tests();
+	nfc_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();

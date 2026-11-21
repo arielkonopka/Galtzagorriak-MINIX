@@ -1,0 +1,15 @@
+--- a/banapass.c
++++ b/banapass.c
+@@ -10,8 +10,10 @@
+ 
+ #define TAG "Banapass"
+ 
+-static const uint64_t banapass_key_b_value_block = 0x019761AA8082;
+-static const uint64_t banapass_key_b_access_code = 0x574343467632;
++/* Galtzagorriak MINIX (#412): case labels need integer constant
++ * expressions, which a static const object is not in C. */
++#define banapass_key_b_value_block (0x019761AA8082ULL)
++#define banapass_key_b_access_code (0x574343467632ULL)
+ typedef struct {
+     uint64_t a;
+     uint64_t b;
