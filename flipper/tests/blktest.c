@@ -15,6 +15,7 @@
  *   blktest -c		AC12.20: sectors written (QEMU's WINCHESTER counter):
  *			a whole-block PUT 9, BLK_IFCHANGED of the same data 0,
  *			exit 0
+ *   blktest -g		cards >= 32 GB: blocks over hd3a, hd3b, hd3d (R12.34)
  *   blktest -l		<blk.h> and libblk (R12.38) on the real MM: the
  *			libc calls, then 256 KB through 1 KB frames
  *
@@ -315,6 +316,67 @@ static int lib(void)
 	return t_fail;
 }
 
+/* Cards >= 32 GB (R12.34), tools/blktest.py: swap on hd3a, blocks over
+ * hd3a, hd3b and hd3d (hd3c is not a swap partition): 64 extents each, a
+ * run never crosses a subpartition, data goes to the right one. */
+static int big(void)
+{
+	struct blkinfo bi;
+	int p[2], st;
+	long run = -1;
+	pid_t c;
+
+	t_result("R12.34: INFO: 3 of the 4 subpartitions (hd3c is not swap)",
+		info(&bi) == 0 && bi.extent > 0 && bi.space == 192 * bi.extent,
+		NULL);
+	t_result("R12.34: BLK_ANY: one subpartition at most (64 extents)",
+		blk(BLK_OPEN, BLK_ANY, 0xFFFFFFF0UL, 0, 0, NULL)
+			== (int) (64 * bi.extent)
+		&& info(&bi) == 0 && bi.run == 0, NULL);
+	pipe(p);
+	if ((c = fork()) == 0) {
+		pid_t g;
+
+		/* hd3b, then its child gets hd3d */
+		if (blk(BLK_OPEN, BLK_ANY, 0xFFFFFFF0UL, 0, 0, NULL) <= 0
+				|| info(&bi) != 0) _exit(1);
+		write(p[1], &bi.run, sizeof(bi.run));
+		if ((g = fork()) == 0) {
+			unsigned long last;
+
+			if (blk(BLK_OPEN, BLK_ANY, 0xFFFFFFF0UL, 0, 0, NULL)
+				<= 0 || info(&bi) != 0) _exit(1);
+			write(p[1], &bi.run, sizeof(bi.run));
+			last = bi.blocks - 1;
+			fill(buf, BLK_SIZE, 7);
+			if ((st = blk(BLK_PUT, 0, last, 0, 0, buf)) != 0)
+				printf("PUT %lu: %d errno %d\n", last, st, errno);
+			if (blk(BLK_PUT, 0, 0, 0, 0, buf) != 0) _exit(2);
+			memset(buf2, 0, BLK_SIZE);
+			if ((st = blk(BLK_GET, 0, last, 0, 0, buf2)) != 0)
+				printf("GET %lu: %d errno %d\n", last, st, errno);
+			if (st != 0 || memcmp(buf, buf2, BLK_SIZE) != 0) _exit(3);
+			_exit(0);
+		}
+		waitpid(g, &st, 0);
+		_exit(WIFEXITED(st) ? WEXITSTATUS(st) : 1);
+	}
+	close(p[1]);
+	if (read(p[0], &run, sizeof(run)) != sizeof(run)) run = -1;
+	t_result("R12.34: the next run is hd3b's (extent 64)", run == 64, NULL);
+	if (read(p[0], &run, sizeof(run)) != sizeof(run)) run = -1;
+	t_result("R12.34: then hd3d's (extent 192; hd3c skipped)", run == 192,
+		NULL);
+	close(p[0]);
+	waitpid(c, &st, 0);
+	t_result("R12.34: PUT/GET of hd3d's last block",
+		WIFEXITED(st) && WEXITSTATUS(st) == 0, NULL);
+	blk(BLK_CLOSE, 0, 0, 0, 0, NULL);
+	printf("blktest -g: %d failures\n", t_fail);
+	return t_fail;
+}
+
+
 int main(int argc, char **argv)
 {
 	struct blkinfo bi;
@@ -327,6 +389,7 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "-p") == 0) return all_eperm();
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
 	if (argc > 1 && strcmp(argv[1], "-l") == 0) return lib();
+	if (argc > 1 && strcmp(argv[1], "-g") == 0) return big();
 	if (argc > 1 && strcmp(argv[1], "-d") == 0) return !wipe(0);
 	if (argc > 1 && strcmp(argv[1], "-c") == 0) return count();
 	if (argc > 1 && strcmp(argv[1], "-D") == 0) {

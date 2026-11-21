@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """blktest - swappable memory blocks for apps (spec 12h) in QEMU.
 
-Usage: blktest.py
+Usage: blktest.py [-g]
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu) like tools/swaptest.py, through the first boot (swap partition
@@ -20,12 +20,20 @@ qemu) like tools/swaptest.py, through the first boot (swap partition
   R12.38   blk=on in /etc/rc.conf: /etc/rc switches blocks on at boot
   R12.38   blocks only (swapon /dev/hd3 blk, swap off) work too
   R12.40   MMSWAPON discards the whole space at idle (QEMU zero-fills)
+
+With -g, cards >= 32 GB (R12.34) instead: after the first boot the swap
+partition hd3 becomes a 0x81 one with the subpartitions hd3a, hd3b and
+hd3d of type 82 (hd3c is not swap), and a 60 GiB hole of the QEMU HAL in
+front of it (a sparse 64 GB card, as tools/bigcard.py).  Booted again,
+swapon /dev/hd3a plain blk, and blktest -g: 64 extents per subpartition,
+runs on hd3a, hd3b and hd3d, a block on hd3d read back.
 Exit status: the number of failures.
 """
 import importlib.util
 import os
 import re
 import signal
+import struct
 import sys
 import time
 
@@ -52,9 +60,93 @@ def tests(r, cmd, what, timeout=120):
 	print("  ...  " + cmd, flush=True)
 	out = r.output(cmd + "; echo st=$?", timeout) or b""
 	for line in out.splitlines():
+		if line.startswith(b"PUT") or line.startswith(b"GET"):
+			print("       " + line.decode("latin-1"), flush=True)
 		if line.startswith(b"PASS") or line.startswith(b"FAIL"):
 			print("       " + line.decode("latin-1"), flush=True)
 	check(b"st=0" in out and b"FAIL" not in out, what)
+
+BIG_HOLE = 60 * 2 * 1024 * 1024		# 60 GiB in sectors
+SUB = 32760				# sectors per subpartition
+
+
+def make_big(img):
+	"""hd3 (swap) -> 0x81 with hd3a, hd3b, hd3d of type 82, past 60 GiB."""
+	with open(img, "r+b") as f:
+		mbr = bytearray(f.read(512))
+		e = 0x1BE + 16 * 2
+		start, size = struct.unpack_from("<II", mbr, e + 8)
+		if mbr[e + 4] != 0x82 or size < 8 + 4 * SUB:
+			return None
+		mbr[0x1A8:0x1B8] = b"GZ-HOLE!" + struct.pack("<II", start,
+								BIG_HOLE)
+		for i in range(4):
+			o = 0x1BE + 16 * i
+			s0, n = struct.unpack_from("<II", mbr, o + 8)
+			if n and s0 >= start:
+				struct.pack_into("<I", mbr, o + 8, s0 + BIG_HOLE)
+		mbr[e + 4] = 0x81
+		f.seek(0)
+		f.write(mbr)
+		sub = bytearray(512)
+		base = start + BIG_HOLE
+		for i in range(4):
+			o = 0x1BE + 16 * i
+			sub[o + 4] = 0x82 if i != 2 else 0x83
+			struct.pack_into("<II", sub, o + 8, base + 8 + i * SUB, SUB)
+		sub[510:512] = b"\x55\xaa"
+		f.seek(start * 512)
+		f.write(sub)
+	return start + BIG_HOLE
+
+
+def main_big():
+	r = powercut.Run(0, 0)
+	keep = r.dir
+	try:
+		if not r.login():
+			check(False, "first boot and login")
+			return 1
+		check(r.sh("pkg install /lib/pkg/tests_1.0.tar && sync", 120)
+			== 0, "install the tests package")
+		r.p.kill()
+		r.p.wait()
+		start = make_big(os.path.join(keep, "build/qemu/minix/disk.img"))
+		check(start is not None, "hd3 (type 81, hd3a-hd3d) at sector %s"
+			% start)
+		if start is None:
+			return fails
+		r = powercut.Run(0, 0, reuse=keep)
+		if not r.login():
+			check(False, "login on the 64 GB card")
+			return fails + 1
+		out = r.output("mkpart -l /dev/hd0", 30) or b""
+		check(re.search(rb"^3 +type 81 +start +%d " % start, out, re.M)
+			is not None, "mkpart -l: %s" % out.strip().decode(
+				errors="replace").replace("\r\n", " | "))
+		out = r.output("mknod /dev/hd3a b 3 136; mknod /dev/hd3b b 3 137;"
+			" ls -l /dev/hd3a /dev/hd3b; echo st=$?", 30) or b""
+		print(out.decode(errors="replace"))
+		check(b"st=0" in out, "mknod /dev/hd3a, /dev/hd3b")
+		out = r.output("swapon off; swapon /dev/hd3a plain blk && swapon "
+			"-r 0; echo st=$?; swapon", 30) or b""
+		print(out.decode(errors="replace"))
+		check(b"st=0" in out, "swapon /dev/hd3a plain blk")
+		r.sh("sleep 3", 30)	# the DISCARD at MMSWAPON first
+		tests(r, "/usr/tests/blktest -g",
+			"R12.34: blocks over hd3a, hd3b, hd3d", 300)
+		out = r.output("swapon off; swapon /dev/hd3b plain; echo st=$?",
+			30) or b""
+		check(b"st=0" not in out, "swapon /dev/hd3b is refused")
+	finally:
+		log = os.environ.get("BLKTEST_LOG")
+		if log:
+			with open(log, "wb") as f:
+				f.write(r.out)
+		r.close()
+	print("blktest -g: %d failures" % fails)
+	return fails
+
 
 
 def main():
@@ -125,4 +217,4 @@ def main():
 
 
 if __name__ == "__main__":
-	sys.exit(main())
+	sys.exit(main_big() if sys.argv[1:] == ["-g"] else main())
