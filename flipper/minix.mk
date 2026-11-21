@@ -116,7 +116,7 @@ SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
-	   lrand getopt gmtime bread
+	   lrand getopt gmtime bread blk
 SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
 LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
 	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))
@@ -193,7 +193,7 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c
+	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c blk.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
 	   protect.c time.c lock.c misc.c utility.c table.c putk.c poll.c
@@ -310,7 +310,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree
+	    swapon gmodem guimod jiggle region gzupdate gztree radio
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -318,10 +318,19 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid spectrum bootscreen
+GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared bootscreen
+# archive (issue #389): a window app (K.8), libgm statically, no gui.c.
+WINBASE	:= archive nfc
+# Stock app ports part 2 (issue #413): window apps over the commands.
+WINBASE	+= subghzui ibuttonui gpioui
+# Stock app ports part 5 (issue #424): Snake, a window game (K.8); the game
+# loop is src/lib/snake (host-tested).  subrem: the Sub-GHz Remote (maps a
+# saved .sub to the pad's buttons, sends via the subghz command).
+WINBASE	+= snakeui subrem
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
-DAEMONS	:= mtpd
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+# rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
+DAEMONS	:= mtpd rpcd
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) $(WINBASE) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
@@ -331,13 +340,17 @@ endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su guimod
+# Set-gid programs, PROG:GID: infrared opens /dev/ir as group ir (13) when
+# the user is in that group, then goes back to its own (AC7.3, issue #389).
+SGIDPROGS := infrared:13 nfc:14
+sgid_of = $(word 2,$(subst :, ,$(filter $(1):%,$(SGIDPROGS))))
 # guimod (spec K.6, T23a): set-uid root only to write the real uid into a
 # desktop record (a FIFO does not say who wrote it); root's rights end
 # right after it opens /var/run/gui.
 # Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
 # never swapped to the card in plain mode (spec R12.28).  login runs as
 # root without set-uid, so the set-uid rule alone would not cover it.
-SECRETPROGS := login passwd su swapsecret
+SECRETPROGS := login passwd su swapsecret blksecret
 LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
@@ -392,6 +405,8 @@ CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
+CHMEM_blktest := 3072	# tests/blktest: parent + 2 holders in the 29+27 KB holes QEMU leaves
+CHMEM_blksecret := 3072
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
 CHMEM_swapwear := 12288	# tests/swapwear: 20 KB of .bss + this: a 32 KB image (AC12.14)
 CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
@@ -409,6 +424,28 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
+			# decoders and encoders (~0.5 KB), stdio buffers for
+			# the remote file (1 KB), opendir's 1 KB DIR; Learn
+			# and Debug fork a reader child (a copy of the app)
+CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
+			# 1 KB of stack (records, two paths); subghz runs
+			# as its own process (CHMEM_subghz)
+CHMEM_ibuttonui := 4096	# as subghzui; ikey is its own process
+CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
+CHMEM_snakeui := 3072	# issue #424: the Snake state (SNAKE_MAX points in
+			# .bss) plus the records' and event buffers
+CHMEM_subrem := 4096	# issue #424: opendir's DIR for the map list, two
+			# paths, subghz runs as its own process (CHMEM_subghz)
+			# and MM's 1.5 KB gap
+CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
+			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
+			# (two 128 B paths, the record buffers)
+CHMEM_nfc := 16384	# issue #412 (AC14.3, <= 35 KB in all): a read's card
+			# (nfc_device_t 5.3 KB) and keys found (0.6 KB), the
+			# loopback cards (-L, 1.6 KB), stdio for a .nfc file or
+			# a dictionary (1 KB each), opendir's 1 KB DIR; all
+			# malloc'd while used, freed after
 CHMEM_spectrum := 2048	# issue #157: all stack (no malloc, no stdio, no
 			# handler); the frame buffer and the waterfall are bss
 CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
@@ -418,6 +455,9 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 			# all stack (no heap: its DIR is .bss, no stdio, no
 			# handler, so no MM gap); deepest a folder delete
 			# (rm_tree's 256 B path) or a move (two paths)
+CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
+			# 6272 B) and nanopb's request strings (a 1 KB ping,
+			# a 255 B path) from the heap, stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -444,9 +484,9 @@ $(MB)/cmd/port/ikey.o: cmds/ikey.c $(IBKEY_DIR)/ibkey.h $(MROOT)/include/minix/i
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 HID_DIR	:= $(MROOT)/src/lib/hid
-$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h
+$(MB)/cmd/m2test.o: m2/m2test.c $(HID_DIR)/libhid.h $(IBKEY_DIR)/ibkey.h tests/flipperpb/golden.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -I$(HID_DIR) -I$(IBKEY_DIR) -Itests/flipperpb -MMD -MP -c $< -o $@
 # libhid (spec R11.3.2, src/lib/hid): text and pointer actions as USB HID
 # reports, the stock .kl layouts (US built in), static; m2test types with
 # it (R11.3.1), badusb and Teklatua (T28c, T28d) link it too.
@@ -497,6 +537,10 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 		 $(MB)/cmd/gui/desktop.o $(MB)/cmd/gui/launcher_stock.o
 # the Spectrum app's steps, scale and zoom (issue #157; tests/host spectest)
 OBJS_spectrum += $(MB)/cmd/gui/specmath.o
+# the Infrared app (issue #389): libir (src/lib/infrared) and the list UI
+OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
+# lfrfid on the shared list, message and keyboard screens (issue #413)
+OBJS_lfrfid += $(MB)/cmd/gui/ui.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
@@ -530,6 +574,39 @@ $(MB)/cmd/mtpd/%.o: mtpd/%.c mtpd/mtp.h
 	@$(CC) $(UCFLAGS) -fno-data-sections -fno-merge-constants -MMD -MP \
 	   -c $< -o $@
 OBJS_mtpd = $(MTPD_SRC:%=$(MB)/cmd/mtpd/%.o)
+# rpcd (spec R15.5, R15.7; issue #388): the core (src/lib/rpcd), the stock
+# protobuf (src/lib/flipperpb) and nanopb, built as C11 (nanopb needs
+# <stdint.h>/<stdbool.h>: GCC's freestanding ones, through -isystem
+# $(GCCINC)); the MINIX platform part is cmds/rpcd.c.  The same core runs
+# on the PC (make -C tests/rpcd test).
+NPB_DIR	:= $(MROOT)/src/lib/nanopb
+FPB_DIR	:= $(MROOT)/src/lib/flipperpb
+RPC_DIR	:= $(MROOT)/src/lib/rpcd
+RPC_CFLAGS := $(UCFLAGS) -std=gnu11 -DPB_ENABLE_MALLOC -I$(NPB_DIR) \
+	   -I$(FPB_DIR) -I$(FPB_DIR)/gen -I$(RPC_DIR)
+FPB_GEN	:= $(notdir $(basename $(wildcard $(FPB_DIR)/gen/*.pb.c)))
+$(MB)/rpcd/npb/%.o: $(NPB_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/fpb/%.o: $(FPB_DIR)/gen/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/core.o: $(RPC_DIR)/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/rpcd/main.o: cmds/rpcd.c $(RPC_DIR)/rpcd.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(RPC_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_rpcd = $(MB)/rpcd/main.o $(MB)/rpcd/core.o \
+	   $(patsubst %,$(MB)/rpcd/npb/%.o,pb_common pb_decode pb_encode) \
+	   $(FPB_GEN:%=$(MB)/rpcd/fpb/%.o)
+# libblk (spec 12h, R12.38, src/lib/blk): frames over the swappable memory
+# blocks of <blk.h>.  Static, one object: no malloc, no stdio, no data.
+BLK_DIR	:= $(MROOT)/src/lib/blk
+$(MB)/blk/libblk.o: $(BLK_DIR)/libblk.c $(MROOT)/include/libblk.h \
+		$(MROOT)/include/blk.h $(MROOT)/include/minix/blk.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -537,6 +614,56 @@ GM_DIR	:= $(MROOT)/src/lib/gm
 $(MB)/gm/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
+# issue #413: the window apps over subghz, ikey and gpio (gui/runwin.c:
+# the command's output on a pipe, live)
+$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
+		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
+		gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
+# issue #424: Snake (gui/snakeui.c over src/lib/snake) and the Sub-GHz
+# Remote (gui/subrem.c, maps a .sub to the pad's buttons and runs the
+# subghz command through runwin.c).
+SNAKE_DIR := $(MROOT)/src/lib/snake
+$(MB)/snake/snakecore.o: $(SNAKE_DIR)/snakecore.c $(SNAKE_DIR)/snakecore.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(SNAKE_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/snakeui.o: gui/snakeui.c $(GM_DIR)/gm.h $(SNAKE_DIR)/snakecore.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -I$(SNAKE_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/subrem.o: gui/subrem.c gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_snakeui = $(MB)/cmd/gui/snakeui.o $(MB)/snake/snakecore.o $(MB)/gm/gm.o
+OBJS_subrem = $(MB)/cmd/gui/subrem.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+# nfc (spec Phase 14, issue #412 item 4): a window app (K.8) on the
+# hand-written libnfc reader (src/lib/libnfc: poller, Crypto-1, the
+# streaming dictionary, the .nfc files), C11 as that library is.
+NFCL_DIR := $(MROOT)/src/lib/libnfc
+NFCL_SRC := crypto1 iso14443_3a mf_classic mf_ultralight mf_dict mf_attack \
+	    nfc_file nfc_poller
+NFCL_HDR := $(wildcard $(NFCL_DIR)/*.h)
+NFCL_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 -I$(NFCL_DIR) \
+	    -I$(GM_DIR) -Igui
+$(MB)/libnfc/%.o: $(NFCL_DIR)/%.c $(NFCL_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/nfc.o: gui/nfc.c gui/nfcloop.h $(GM_DIR)/gm.h $(NFCL_HDR) \
+		$(MROOT)/include/minix/nfc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/nfcloop.o: gui/nfcloop.c gui/nfcloop.h $(NFCL_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_nfc = $(MB)/cmd/gui/nfc.o $(MB)/cmd/gui/nfcloop.o $(MB)/gm/gm.o \
+	   $(NFCL_SRC:%=$(MB)/libnfc/%.o)
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
@@ -546,7 +673,7 @@ $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 # of the launcher's SETTINGS page (K.8).  Their objects as the window
 # apps' (WIN_CFLAGS below): one GOT word per section, unused rodata in
 # flash.
-SETGROUPS := groups conf display sound time about zones afmt
+SETGROUPS := groups conf display sound led time power region about zones afmt
 SET_OBJ	:= $(SETGROUPS:%=$(MB)/cmd/settings/%.o) $(MB)/cmd/settings/gm.o
 OBJS_settings = $(MB)/cmd/port/settings.o $(SET_OBJ)
 OBJS_setgroup = $(MB)/cmd/settings/win.o $(SET_OBJ)
@@ -574,6 +701,22 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
+# libir (spec Phase 7, issue #389, src/lib/infrared): the Unleashed infrared
+# encoders and decoders (byte for byte) and irfile.c, linked into infrared.
+# Third-party C11 code: built quietly (-w); the shim comes in by -include.
+LIBIR_DIR := $(MROOT)/src/lib/infrared
+LIBIR_C := $(shell cd $(LIBIR_DIR) && find . -name '*.c' | sort)
+LIBIR_OBJ := $(patsubst ./%.c,$(MB)/libir/%.o,$(LIBIR_C))
+LIBIR_HDR := $(shell find $(LIBIR_DIR) -name '*.h')
+LIBIR_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(LIBIR_DIR) -I$(LIBIR_DIR)/shim -I$(LIBIR_DIR)/encoder_decoder \
+	    -include irshim.h
+$(MB)/libir/%.o: $(LIBIR_DIR)/%.c $(LIBIR_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBIR_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/gui/infrared.o: gui/infrared.c gui/gui.h gui/ui.h $(LIBIR_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBIR_CFLAGS) -MMD -MP -c $< -o $@
 # libsubghz (Phase 9, issue #302, src/lib/subghz): the Unleashed Sub-GHz
 # protocols, linked into subghz (code in flash; the decoders' state is
 # malloc'd while it runs).  Third-party C11 code: built quietly (-w).
@@ -665,7 +808,17 @@ $(MB)/cmd/port/reghash.o: $(MB)/cmd/port/reghash.c $(MODEM_DIR)/modem.h
 OBJS_region = $(MB)/cmd/port/region.o $(MB)/modem/region.o $(MB)/modem/rgblob.o \
 	   $(MB)/modem/rgsha.o $(MB)/cmd/port/reghash.o $(MB)/modem/cc1101.o \
 	   $(MB)/modem/duty.o
-$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
+# radio (spec R16.0.2, R2b.1a; T30a): CPU2 stack images on the card;
+# libradio (src/lib/radio) and libmodem's SHA-256.
+RADIO_DIR := $(MROOT)/src/lib/radio
+$(MB)/cmd/port/radio.o: cmds/radio.c $(RADIO_DIR)/radio.h $(MODEM_DIR)/modem.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -I$(MODEM_DIR) -MMD -MP -c $< -o $@
+$(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
+OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
@@ -889,6 +1042,63 @@ OBJS_badusb-gui = $(MB)/cmd/bu/badusbgui.o $(MB)/cmd/win/lib/gm.o \
 	$(MB)/cmd/bu/hid.o
 CHMEM_badusb-gui := 2304	# K.8 (<= 4.5 KB open): no heap, no
 			# handler, so no MM gap (nattest memuse)
+# The Music Player and the small utilities (issue #420): window apps like
+# the ones above (WIN_CFLAGS), libgm only.  Packages music and utils.
+WINAPPS	+= music clock dice passport
+$(MB)/cmd/win/music/music.o $(MB)/cmd/win/music/fmf.o: apps/music/fmf.h
+OBJS_music = $(MB)/cmd/win/music/music.o $(MB)/cmd/win/music/fmf.o \
+	$(MB)/cmd/win/lib/gm.o
+CHMEM_music := 2048	# K.8: no heap, no handler, so no MM gap; the stack
+			# holds the record and event buffers and the path
+$(foreach u,clock dice passport,$(eval OBJS_$(u) = $(MB)/cmd/win/utils/$(u).o \
+	$(MB)/cmd/win/lib/gm.o))
+CHMEM_clock := 1536	# K.8: two 128 B buffers and a line on the stack
+CHMEM_dice := 1536
+CHMEM_passport := 1536	# struct utsname (~200 B) on the stack
+# U2F (issue #420): the window app on libu2f (src/lib/u2f: the messages,
+# U2FHID, the key files, P-256 from micro-ecc in uecc/, which wants C99).
+# The USB FIDO interface is not there yet: the app says so.  Package u2f.
+U2F_DIR	:= $(MROOT)/src/lib/u2f
+WINAPPS	+= u2f
+$(MB)/cmd/u2f/%.o: $(U2F_DIR)/%.c $(wildcard $(U2F_DIR)/*.h $(U2F_DIR)/uecc/*)
+	@mkdir -p $(dir $@)
+	@$(CC) $(filter-out -std=gnu89,$(WIN_CFLAGS)) -std=gnu99 -I$(U2F_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/u2f/u2fapp.o: apps/u2f/u2fapp.c $(GM_DIR)/gm.h $(wildcard $(U2F_DIR)/*.h)
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -I$(U2F_DIR) -MMD -MP -c $< -o $@
+OBJS_u2f = $(addprefix $(MB)/cmd/u2f/,u2fapp.o u2f.o sha256.o p256.o u2fstore.o) \
+	$(MB)/cmd/win/lib/gm.o
+CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
+			# the file text (384 B), the record buffers; no heap,
+			# no handler, so no MM gap
+# Berry (spec Phase 7c, R7c.1, R7c.4, R7c.5; issue #385): the interpreter
+# (src/lib/berry, upstream MIT, berry_conf.h) and its launcher gzberry.c,
+# one program `berry' in the installed region; its text runs in place, so
+# every running script shares it.  C99, the FPU (single float, R5.7).
+# The const tables (string table, built-in classes and modules, coc's
+# generate/) are pointer tables: in a PIC program they land in .data, so
+# per process in RAM; the shared library slot that keeps them in flash is
+# the next step (PORTING.md "Berry").  The bindings (R7c.3) are in gz/:
+# tsv, pipe (spec K.1) and the sensor stub.  Package berry.
+BERRY_DIR := $(MROOT)/src/lib/berry
+BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c $(BERRY_DIR)/gz/*.c) \
+	$(BERRY_DIR)/default/be_port.c \
+	$(BERRY_DIR)/default/be_modtab.c $(BERRY_DIR)/gzberry.c $(BERRY_DIR)/gzmath.c
+BERRY_GEN := $(BERRY_DIR)/generate/be_const_strtab.h
+BERRY_FP ?= $(UFPFLAGS)	# BERRY_FP= : soft float (the #385 two-loop check)
+BERRY_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu99 $(BERRY_FP) \
+	-fno-data-sections -fno-merge-constants \
+	-include $(BERRY_DIR)/gzmath.h \
+	-I$(BERRY_DIR) -I$(BERRY_DIR)/src -I$(BERRY_DIR)/gz -I$(BERRY_DIR)/generate
+$(BERRY_GEN): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h
+	$(MAKE) -C $(BERRY_DIR) gen
+$(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(BERRY_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_berry = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRYPROGS := berry
+CHMEM_berry := 12288	# R7c.4: the 8 KB script heap (-m), the VM and
+			# its stack; PORTING.md "Berry" has the measured split
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -897,7 +1107,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
 	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
-	   notepost prwtest
+	   notepost prwtest blktest blksecret
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
@@ -905,6 +1115,9 @@ TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
 endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
+# blksecret: blktest built with Secret: yes (12h, AC12.22: EPERM)
+OBJS_blksecret = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
+OBJS_blktest = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
@@ -944,7 +1157,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS) $(BERRYPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
@@ -957,7 +1170,9 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar 
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
-	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar
+	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
+	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
+	   $(PKGDIR)/berry_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -1026,6 +1241,51 @@ $(PKGDIR)/subghz_1.0.tar: $(MB)/bin/subghz tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n subghz -v 1.0 -o $(PKGDIR) --flash \
 	   -D "Sub-GHz remotes: rx, decode, tx, tx_from_file, chat (Unleashed protocols)" \
 	   /usr/bin/subghz=$(MB)/bin/subghz
+# U2F (issue #420): the app as the user u2f (group usb), its folder
+# /ext/u2f/assets made by the postinst; no certificate or key shipped.
+$(PKGDIR)/u2f_1.0.tar: $(MB)/bin/u2f tools/mkpkg.py rootfs/u2f.postinst \
+		rootfs/u2f.prerm
+	python3 -I tools/mkpkg.py -n u2f -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @usb \
+	   --postinst rootfs/u2f.postinst --prerm rootfs/u2f.prerm \
+	   -D "U2F security key (window app; the USB interface is planned)" \
+	   /usr/bin/u2f=$(MB)/bin/u2f
+# The Music Player (issue #420): the app and one scale to try it in
+# /ext/music_player (/home/flipper/music_player); the songs are the user's.
+$(PKGDIR)/music_1.0.tar: $(MB)/bin/music tools/mkpkg.py rootfs/music.postinst \
+		rootfs/music.prerm apps/music/scale.fmf
+	python3 -I tools/mkpkg.py -n music -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @music \
+	   --postinst rootfs/music.postinst --prerm rootfs/music.prerm \
+	   -D "Music Player: FMF and RTTTL songs on the speaker (window app)" \
+	   /usr/bin/music=$(MB)/bin/music \
+	   /home/flipper/music_player/scale.fmf=apps/music/scale.fmf$(COMMA)644
+# Clock, Dice, Passport (issue #420): the stock small utilities.
+$(PKGDIR)/utils_1.0.tar: $(MB)/bin/clock $(MB)/bin/dice $(MB)/bin/passport \
+		tools/mkpkg.py rootfs/utils.postinst rootfs/utils.prerm
+	python3 -I tools/mkpkg.py -n utils -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @clock \
+	   --postinst rootfs/utils.postinst --prerm rootfs/utils.prerm \
+	   -D "Clock, Dice, Passport (window apps)" \
+	   /usr/bin/clock=$(MB)/bin/clock /usr/bin/dice=$(MB)/bin/dice \
+	   /usr/bin/passport=$(MB)/bin/passport
+# Berry (spec 7c, issue #385): the interpreter and the example scripts,
+# each as source (for editing) and as bytecode compiled here by the host
+# tool berryc (R7c.2: the device never needs the compiler for them).
+BERRYC	:= $(BERRY_DIR)/build/berryc
+BERRY_EX := hello primes records
+$(BERRYC): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h $(BERRY_DIR)/Makefile
+	$(MAKE) -C $(BERRY_DIR)
+$(MB)/berry/ex/%.bec: apps/berry/%.be $(BERRYC)
+	@mkdir -p $(dir $@)
+	$(BERRYC) -c $@ $<
+$(PKGDIR)/berry_1.0.tar: $(MB)/bin/berry $(BERRY_EX:%=$(MB)/berry/ex/%.bec) \
+		tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n berry -v 1.0 -o $(PKGDIR) --flash \
+	   -D "Berry scripting (spec 7c): berry, examples" \
+	   /usr/bin/berry=$(MB)/bin/berry \
+	   $(foreach e,$(BERRY_EX),/usr/lib/berry/$(e).be=apps/berry/$(e).be \
+	     /usr/lib/berry/$(e).bec=$(MB)/berry/ex/$(e).bec)
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -1053,7 +1313,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.62
+BASE_VER := 4.75
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)
@@ -1061,7 +1321,7 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   --postinst rootfs/base.postinst \
 	   --os $(GZ_RELEASE) \
 	   -D "Galtzagorriak MINIX system programs" \
-	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
+	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)$(if $(call sgid_of,$(p)),$(COMMA)2755:$(call sgid_of,$(p)))) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
 	   $(foreach r,$(REGION_FILES),/usr/share/region/$(notdir $(r))=$(r)$(COMMA)644) \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
@@ -1146,7 +1406,7 @@ $(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN) \
 		$(GZU_APPLY)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
-	   "$(PKGS)" "$(SUIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
+	   "$(PKGS)" "$(SUIDPROGS) $(SGIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
 # The QEMU disk is as big as the SD card (sparse), so the first boot can
 # partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \

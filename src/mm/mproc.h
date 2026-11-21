@@ -74,4 +74,9 @@ EXTERN struct mproc {
 				 * the chunks there: compare, write only the
 				 * changed ones (R12.29) */
 
+#define BLKWAIT	     01000000	/* a background MI_BLK request waits for idle
+				 * (sw_step, R12.37); no reply yet */
+#define BLKUSED	     02000000	/* PUT a block since its run began: the run
+				 * is discarded at idle when it ends (R12.40) */
+
 #define NIL_MPROC ((struct mproc *) 0)

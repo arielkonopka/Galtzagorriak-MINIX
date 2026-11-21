@@ -18,7 +18,8 @@
  *
  * mkshadow()  - from SYS_FORK: the child shares the parent's addresses
  *               (vfork: without a shadow, the parent waits).
- * unshadow()  - from the clock task: make a shadowed process resident.
+ * unshadow()  - from the clock task: make a shadowed process resident,
+ *               once the resident one has had its turn (#429).
  * rmshadow()  - from SYS_XIT and SYS_FRESH (exec): the process leaves its
  *               group; returns the memory MM must now free.
  */
@@ -132,8 +133,9 @@ phys_clicks c2;			/* fresh memory from MM, image_clicks() big */
 /*===========================================================================*
  *				unshadow				     *
  *===========================================================================*/
-PUBLIC void unshadow(p)
+PUBLIC void unshadow(p, ran)
 struct proc *p;			/* a runnable, shadowed process */
+struct proc *ran;		/* whose quantum just ended (NIL_PROC: none) */
 {
 /* Swap p's image in, and the image of the resident member of its group
  * out into p's shadow buffer.  Called by the clock task.
@@ -145,6 +147,18 @@ struct proc *p;			/* a runnable, shadowed process */
   if ((r = other_member(p, TRUE)) == NIL_PROC)
 	panic("unshadow: group has no resident process", proc_number(p));
   if (p->p_physio || r->p_physio) return;	/* try again later */
+
+  /* #429: a ready resident member keeps the addresses until it has had a
+   * quantum of its own.  Swapped out before it ran (it is at the head of
+   * USER_Q once sched() passed a runaway process on), p would take its
+   * place at the tail, behind that runaway; at the next quantum the two
+   * would trade places again, and neither would ever run: the shell and
+   * its fork child (a background command not yet exec'd) next to a busy
+   * loop hung the console.  Swapping only after r's own quantum (r ==
+   * ran, now at the tail) gives each member every other turn of the
+   * group; a blocked r is swapped out at once as before.
+   */
+  if (r->p_flags == 0 && r != ran) return;	/* after r's turn */
 
   /* Both change queues, so take them off their current queues first. */
   p_ready = (p->p_flags == 0);

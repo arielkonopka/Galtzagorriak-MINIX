@@ -36,6 +36,9 @@
 #define WR_IDLE		4
 #define WR_CLOSE	5
 #define WR_BAD		6		/* malformed: dropped */
+#define WR_RUN		7		/* "run LABEL FILE": open FILE in the
+					 * app of /etc/apps called LABEL, this
+					 * window ends (issue #413) */
 
 #define WS_EMPTY	0		/* struct wr_win st */
 #define WS_BUILD	1		/* win seen, rows coming */

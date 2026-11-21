@@ -4,8 +4,10 @@
 
 #include <pwd.h>
 
+/* extra: one more argument (a file to open, issue #413), or NULL. */
 char *win_run(const char *label, const char *cmd, struct passwd *pw,
-	      int log);
+	      int log, char *extra);
+int win_next(char **label, char **file);
 int win_pending(void);
 void win_reap(int now);
 

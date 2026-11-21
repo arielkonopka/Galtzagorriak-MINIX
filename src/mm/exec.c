@@ -242,6 +242,7 @@ PUBLIC int do_exec()
   /* Swap (R12.28, R12.22): set-uid, set-gid and secret images never go to
    * the card in clear; the launcher's child is the foreground app. */
   rmp->mp_flags &= ~NOSWAP;
+  blk_end(who);			/* another program: no blocks (R12.35) */
   if (secret || (s_buf.st_mode & (I_SET_UID_BIT | I_SET_GID_BIT)))
 	rmp->mp_flags |= NOSWAP;
   if (rmp->mp_flags & FGEXEC) rmp->mp_flags = (rmp->mp_flags & ~FGEXEC) | FGAPP;

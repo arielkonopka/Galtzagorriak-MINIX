@@ -14,7 +14,7 @@ region in the format of src/mm/finst.c:
              binding left erased (ones), seq, flags, dead marker erased;
     page 1   erased (ones);
     page 2.. the texts, each from a page boundary.
-At boot /etc/rc runs "pkg bind /bin/*": MM gives each record to the file
+At boot /etc/rc runs "pkg bind /bin": MM gives each record to the file
 whose text has the same SHA-256 and writes the binding, after moving the
 directory to a page it erased itself (DFU has programmed the free double
 words of page 0 with ones, which must not be programmed twice).

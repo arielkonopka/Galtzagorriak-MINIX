@@ -11,3 +11,5 @@ nogroup:*:99:
 gui:*:10:
 timers:*:11:
 usb:*:12:
+ir:*:13:root,nobody
+nfc:*:14:root,nobody

@@ -3,7 +3,7 @@
 mkpart \- add partitions after the existing ones
 .SH SYNOPSIS
 .nf
-\fBmkpart\fR [\fB\-n \fIsectors\fR] \fIdevice type\fB:\fIsize\fR[\fB@end\fR] ...
+\fBmkpart\fR [\fB\-n \fIsectors\fR] \fIdevice type\fR[\fB/4\fR]\fB:\fIsize\fR[\fB@end\fR] ...
 \fBmkpart \-l\fR \fIdevice\fR
 \fBmkpart \-s\fR \fIdevice\fR
 \fBmkpart\fR [\fB\-n \fIsectors\fR] \fB\-g \fIN device\fR
@@ -39,6 +39,19 @@ or
 size is cut to that); a MINIX partition may be larger (a MINIX V3
 .BR /home ,
 up to 2 TiB).
+.PP
+.B 82/4
+(spec R12.34, cards of 32 GB or more) makes a MINIX partition (81) that
+holds up to four swap subpartitions (82) of 4 GiB \- 1 MiB each:
+.B /dev/hd3a
+to
+.B /dev/hd3d
+when it is the third.
+They start 4 MiB into it, 4 GiB apart; its first sector holds their
+table.
+Its size is cut to the whole subpartitions that fit.
+Swap goes to the first one; MM finds the others itself (see
+.BR swapon (8)).
 .SH OPTIONS
 .TP
 .B \-l
@@ -74,8 +87,13 @@ below 8 GB.
 /usr, at most 4 GiB \- 1 MiB), /home between them: the first boot on
 an 8 GB or larger card (spec R12.34).
 .TP
-.B "mkpart -n 62333952 /dev/hd0 81:2048 82:50%@end 81:*"
-The same, as a dry run for a 32 GB card.
+.B "mkpart -n 31116288 /dev/hd0 81:2048 82:50%@end 81:*"
+The same, as a dry run for a 16 GB card.
+.TP
+.B "mkpart /dev/hd0 81:2048 82/4:*@end 81:*"
+/usr, four 4 GiB swap subpartitions at the end of the card, /home
+(all the space between them): the first boot on a card of 32 GB or
+more.
 .SH "SEE ALSO"
 .BR mkfs (1),
 .BR erase (8),

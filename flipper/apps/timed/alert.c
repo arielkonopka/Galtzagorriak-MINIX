@@ -253,6 +253,38 @@ static long ms_since(clock_t t0)
 
 static void led(const char *pattern);
 
+/* #419: the user's settings of the notification outputs (setgroup sound
+ * and led): "Key: value" of /etc/flipper/NAME.conf, else of the default in
+ * /rom; 1 and the value in v[8], 0 none.  Read once a ring, never written
+ * here. */
+static int setting(const char *name, const char *key, char *v)
+{
+	char p[40], buf[96], *s, *e;
+	int fd, n = -1, k = (int) strlen(key), r;
+
+	for (r = 0; r < 2 && n <= 0; r++) {
+		strcpy(p, r ? "/rom/etc/flipper/" : "/etc/flipper/");
+		strcat(p, name);
+		strcat(p, ".conf");
+		if ((fd = open(p, O_RDONLY)) < 0) continue;
+		n = (int) read(fd, buf, sizeof buf - 1);
+		close(fd);
+	}
+	if (n <= 0) return 0;
+	buf[n] = 0;
+	for (s = buf; s != NULL && *s != 0; s = e) {
+		if ((e = strchr(s, '\n')) != NULL) *e++ = 0;
+		if (strncmp(s, key, (size_t) k) != 0 || s[k] != ':') continue;
+		for (s += k + 1; *s == ' '; s++) ;
+		strncpy(v, s, 7);
+		v[7] = 0;
+		return 1;
+	}
+	return 0;
+}
+
+static int led_pct = 100;		/* LED Brightness, this ring */
+
 /* Ring for ring_ms (see the top): the key that ended it (OK, Back, or
  * Up/Down when snz), or 0. */
 static int ring(int flags, int cat, int ramp, int single, long stage,
@@ -268,6 +300,16 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 	int v, sv = -1, i, np, full, empty;
 
 	if (snz) ends |= KEY_UP | KEY_DOWN;	/* other keys: ring on */
+	{
+		char v[8];
+
+		if (setting("sound", "Vibro", v) && strcmp(v, "off") == 0)
+			flags &= ~NF_VIBRO;
+		if (setting("led", "Notify LED", v) && strcmp(v, "off") == 0)
+			flags &= ~NF_LED;
+		led_pct = setting("led", "Brightness", v) ? atoi(v) : 100;
+		if (led_pct < 10 || led_pct > 100) led_pct = 100;
+	}
 
 	if ((flags & NF_SOUND)
 	    && (spk = open("/dev/speaker", O_WRONLY)) < 0) flags &= ~NF_SOUND;
@@ -291,7 +333,8 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 		 * at once), without it from the start. */
 		other = !(flags & NF_SOUND) || st >= 3;
 		if (other && (flags & NF_LED) && !led_on) {
-			led(cat == TC_ALARM ? "fast red\n" : "pulse blue\n");
+			led(cat == TC_ALARM ? "fast #ff0000\n"
+					    : "pulse #0000ff\n");
 			led_on = 1;
 		}
 		if (other && vib >= 0) {
@@ -369,12 +412,25 @@ static int ring(int flags, int cat, int ramp, int single, long stage,
 	return key;
 }
 
+/* A pattern with one "#rrggbb" colour scaled to led_pct, or "off". */
 static void led(const char *pattern)
 {
-	int fd;
+	static const char hex[] = "0123456789abcdef";
+	char b[24], *c;
+	int fd, i, v;
 
+	strncpy(b, pattern, sizeof b - 1);
+	b[sizeof b - 1] = 0;
+	if ((c = strchr(b, '#')) != NULL && strlen(c) >= 7)
+		for (i = 1; i < 7; i += 2) {
+			v = (int) (strchr(hex, c[i]) - hex) * 16
+				+ (int) (strchr(hex, c[i + 1]) - hex);
+			v = (v * led_pct + 50) / 100;
+			c[i] = hex[v >> 4];
+			c[i + 1] = hex[v & 15];
+		}
 	if ((fd = open("/dev/led", O_WRONLY)) >= 0) {
-		put(fd, pattern);
+		put(fd, b);
 		close(fd);
 	}
 }

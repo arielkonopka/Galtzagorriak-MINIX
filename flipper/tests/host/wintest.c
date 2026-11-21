@@ -232,6 +232,11 @@ static void malformed(void)
 	T(feed(&w, "show\n") == WR_BAD, "show with no window");
 	T(feed(&w, "busy\n") == WR_BUSY && feed(&w, "idle\n") == WR_IDLE
 		&& feed(&w, "close\n") == WR_CLOSE, "busy, idle, close");
+	T(feed(&w, "run\tSub-GHz\t/home/flipper/subghz/a.sub\n") == WR_RUN
+		&& feed(&w, "run\tSub-GHz\tsubghz/a.sub\n") == WR_BAD
+		&& feed(&w, "run\t\t/a.sub\n") == WR_BAD
+		&& feed(&w, "run\tSub-GHz\n") == WR_BAD,
+		"run LABEL FILE: an absolute path, a label (#413)");
 	T(feed(&w, "busy\tx\n") == WR_BAD, "busy with a field");
 	for (i = 0; bad[i] != NULL; i++) {
 		char t[200];

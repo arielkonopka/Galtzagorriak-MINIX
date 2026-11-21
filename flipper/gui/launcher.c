@@ -82,6 +82,12 @@ int napps;
 static char fsck_err;	/* /etc/rc found errors on the card (spec N.3) */
 static unsigned short has_icon, has10;	/* 16 bits: MAXAPPS */
 static unsigned char opt;		/* OPT_* below */
+/* Repeat (#361): the period of a held Up/Down in the lists, in ms; 0 is
+ * off.  rep_lvl indexes rep_tab; 5 (152 ms) is the owner's default. */
+static const unsigned short rep_tab[] = { 0, 350, 300, 250, 200, 152, 120, 90 };
+#define REP_N	((int) (sizeof rep_tab / sizeof rep_tab[0]))
+#define REP_DEF	5
+static unsigned char rep_lvl = REP_DEF;
 #define OPT_ICONS	1
 #define OPT_HINTS	2
 #define OPT_BATT	4
@@ -171,6 +177,7 @@ static void load_conf(const char *conf_file)
 	char line[40];
 
 	opt = OPT_ICONS | OPT_HINTS | OPT_BATT;
+	rep_lvl = REP_DEF;
 	if ((f = cfopen(conf_file, "r")) == NULL) return;
 	while (fgets(line, sizeof line, f) != NULL) {
 		int bit = strncmp(line, "Icons:", 6) == 0 ? OPT_ICONS
@@ -180,6 +187,19 @@ static void load_conf(const char *conf_file)
 			: strncmp(line, "Style:", 6) == 0 ? OPT_STOCK : 0;
 		char *v = strchr(line, ':') + 1;
 
+		if (strncmp(line, "Repeat:", 7) == 0) {	/* ms, or off */
+			int ms, j, best = REP_DEF;
+
+			while (*v == ' ' || *v == '\t') v++;
+			ms = strncmp(v, "off", 3) == 0 ? 0 : atoi(v);
+			if (ms <= 0) best = 0;
+			else for (j = 1; j < REP_N; j++)	/* the nearest step */
+				if (abs(ms - (int) rep_tab[j])
+				    < abs(ms - (int) rep_tab[best == 0 ? j : best]))
+					best = j;
+			rep_lvl = best;
+			continue;
+		}
 		if (bit == 0) continue;
 		while (*v == ' ' || *v == '\t') v++;
 		if (bit == OPT_STOCK) {
@@ -203,6 +223,8 @@ static void save_conf(const char *conf_file)
 		opt & OPT_BATT ? "on" : "off");
 	if (opt & OPT_LOG) fprintf(f, "GuiLog: on\n");
 	fprintf(f, "Style: %s\n", opt & OPT_STOCK ? "stock" : "pine");
+	if (rep_lvl == 0) fprintf(f, "Repeat: off\n");
+	else fprintf(f, "Repeat: %u\n", rep_tab[rep_lvl]);
 	fclose(f);
 }
 
@@ -242,8 +264,9 @@ static int nsel;			/* PG_NOTE: the notification shown */
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
  * like an app, the groups of setgroup as window apps ("=", K.8: the
- * launcher draws them); "" = not there yet.  Power is today's app until
- * its group comes (T24c). */
+ * launcher draws them); "" = not there yet.  Power is today's app (the
+ * battery, T24c); its delays are the "Auto off" group (#419).  Auto off and
+ * Region come after Launcher so the rows above keep their places. */
 static const struct {
 	char name[9];
 	char user[7];
@@ -251,18 +274,21 @@ static const struct {
 } sys_tab[] = {
 	{ "Display", "root", "=/bin/setgroup display" },
 	{ "Sound", "root", "=/bin/setgroup sound" },
-	{ "LED", "", "" },
+	{ "LED", "root", "=/bin/setgroup led" },
 	{ "Time", "root", "=/bin/setgroup time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
+	{ "Auto off", "root", "=/bin/setgroup power" },
+	{ "Region", "root", "=/bin/setgroup region" },
 	{ "About", "root", "=/bin/setgroup about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
 #define SYS_LAUNCHER	7
 
-#define SET_N	4			/* rows of the launcher's own page */
+#define SET_N	5			/* rows of the launcher's own page */
+#define SET_REP	4			/* the Repeat row */
 
 /* "HH:MM" of hm (hour * 60 + minute) into b[6]. */
 static char *hm_text(char *b, unsigned hm)
@@ -284,9 +310,24 @@ static int page_rows(int pg)
 			desk.n[nsel].body) + NOTE_COLS - 1) / NOTE_COLS : SET_N;
 }
 
-static const char set_name[SET_N][8] = { "Icons", "Hints", "Battery", "Style" };
+static const char set_name[SET_N][8] = { "Icons", "Hints", "Battery", "Style",
+									"Repeat" };
 static const unsigned char set_bit[SET_N] = { OPT_ICONS, OPT_HINTS, OPT_BATT,
-					     OPT_STOCK };
+					     OPT_STOCK, 0 };
+
+/* The value of row i of the settings page ("[on]", "[pine]", "[152ms]"). */
+static const char *set_value(int i, char *b)
+{
+	int on = opt & set_bit[i];
+
+	if (i == SET_REP) {
+		if (rep_lvl == 0) return "[off]";
+		sprintf(b, "[%ums]", (unsigned) rep_tab[rep_lvl]);
+		return b;
+	}
+	return set_bit[i] == OPT_STOCK ? (on ? "[stock]" : "[pine]")
+		: on ? "[on]" : "[off]";
+}
 
 /* Draw row i of page pg at y. */
 static void page_row(int pg, int i, int y, int inv)
@@ -322,10 +363,10 @@ static void page_row(int pg, int i, int y, int inv)
 		if (sys_tab[i].cmd[0] == 0 && i != SYS_LAUNCHER)
 			gui_text(50, y, "(later)", inv);
 	} else if (pg == PG_SET) {
-		on = opt & set_bit[i];
+		char vb[10];
+
 		gui_text(6, y, set_name[i], inv);
-		gui_text(42, y, set_bit[i] == OPT_STOCK ? (on ? "[stock]" : "[pine]")
-			 : on ? "[on]" : "[off]", inv);
+		gui_text(42, y, set_value(i, vb), inv);
 	} else if (opt & OPT_ICONS) {
 		if (has_icon & (1 << i)) gui_bits8(6, y, ICON(i), ICON_H, inv);
 		gui_text(16, y, apps[i].label, inv);
@@ -354,11 +395,11 @@ static void stock_sys(int i, struct stock_row *r)
 
 static void stock_set(int i, struct stock_row *r)
 {
-	int on = opt & set_bit[i];
+	char vb[10];
 
 	strcpy(r->text, set_name[i]);
-	strcat(r->text, set_bit[i] == OPT_STOCK ? (on ? " [stock]" : " [pine]")
-		: on ? " [on]" : " [off]");
+	strcat(r->text, " ");
+	strcat(r->text, set_value(i, vb));
 	r->label = r->text;
 }
 
@@ -636,8 +677,10 @@ static void style_env(char **env)
 	env[n] = NULL;
 }
 
-/* Run an app as its user and wait for it.  NULL, or a notice to show. */
-static char *run(struct app *ap)
+/* Run an app as its user and wait for it.  NULL, or a notice to show.
+ * extra: one more argument, the file a window app asked to open in this
+ * app (its "run" record, issue #413), or NULL. */
+static char *run_arg(struct app *ap, char *extra)
 {
 	char cmd[CMDMAX], *argv[MAXARGS + 1], *env[ENVMAX], *p;
 	struct passwd *pw;
@@ -647,8 +690,9 @@ static char *run(struct app *ap)
 	strcpy(cmd, ap->cmd);
 	for (p = strtok(cmd, " "); p != NULL && argc < MAXARGS; p = strtok(NULL, " "))
 		argv[argc++] = p;
-	argv[argc] = NULL;
 	if (argc == 0) return NULL;
+	if (extra != NULL && argc < MAXARGS) argv[argc++] = extra;
+	argv[argc] = NULL;
 
 	if ((pw = getpwnam(ap->user)) == NULL) {
 		if (opt & (OPT_HINTS | OPT_STOCK)) return "unknown user";
@@ -659,8 +703,26 @@ static char *run(struct app *ap)
 		sleep(2);
 		return NULL;
 	}
-	if (ap->cmd[0] == '=')		/* a window app: the launcher draws */
-		return win_run(ap->label, ap->cmd + 1, pw, (opt & OPT_LOG) != 0);
+	if (ap->cmd[0] == '=') {	/* a window app: the launcher draws */
+		char *note, *l, *f;
+		int i;
+
+		/* Archive's Open (#413), Sub-GHz's Frequency analyzer (#419):
+		 * only an app of /etc/apps, by its label, as its own user; one
+		 * hop (an opened app cannot).  When it ends, the app that
+		 * asked starts again (stock: Back returns to it); a loop, so
+		 * going back and forth never deepens the stack. */
+		for (;;) {
+			note = win_run(ap->label, ap->cmd + 1, pw,
+				       (opt & OPT_LOG) != 0, extra);
+			if (!win_next(&l, &f) || extra != NULL) return note;
+			for (i = 0; i < napps; i++)
+				if (strcmp(apps[i].label, l) == 0
+				    && apps + i != ap) break;
+			if (i == napps) return "no such app";
+			if ((note = run_arg(&apps[i], f)) != NULL) return note;
+		}
+	}
 	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
@@ -700,6 +762,11 @@ static char *run(struct app *ap)
 	if (WIFSIGNALED(st) && WTERMSIG(st) != SIGTERM
 	    && WTERMSIG(st) != SIGKILL) return "app crashed";
 	return NULL;
+}
+
+static char *run(struct app *ap)
+{
+	return run_arg(ap, NULL);
 }
 
 /*===========================================================================*
@@ -857,6 +924,8 @@ int main(int argc, char **argv)
 			dirty = 1;
 			continue;
 		}
+		in.rep = rep_lvl ? KEY_UP | KEY_DOWN : 0;	/* hold = repeat (#361) */
+		in.rep_ms = rep_tab[rep_lvl];
 		k = gui_wait(&in, KEY_LEFT | KEY_RIGHT, i, dk_rfd);
 		if (k == GUI_FD) {		/* records from modules */
 			dk_new = 0;
@@ -901,7 +970,7 @@ int main(int argc, char **argv)
 				bat_stale();
 			} else if (k == KEY_LEFT && pages[pg].left >= 0) {
 				was = sel;
-				saved = opt;
+				saved = opt | rep_lvl << 8;
 				pg = pages[pg].left;
 				sel = top = 0;
 			} else if (k == KEY_RIGHT && pages[pg].right >= 0) {
@@ -960,13 +1029,17 @@ int main(int argc, char **argv)
 				note = "not there yet";
 				note_t = now_ticks();
 			} else if (k == KEY_BACK) {
-				if (opt != saved) save_conf(conf_file);	/* only a change */
+				if ((opt | rep_lvl << 8) != saved) save_conf(conf_file);	/* only a change */
 				pg = PG_APPS;
 				sel = was;
 				top = 0;
 			}
 		} else if (pg == PG_SET) {
-			if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
+			if (sel == SET_REP && (k == KEY_OK || k == KEY_LEFT
+							|| k == KEY_RIGHT))
+				rep_lvl = (rep_lvl + (k == KEY_LEFT ? REP_N - 1 : 1))
+						% REP_N;	/* right: faster */
+			else if (k == KEY_OK || k == KEY_LEFT || k == KEY_RIGHT)
 				opt ^= set_bit[sel];
 			else if (k == KEY_BACK) {
 				pg = PG_SYS;

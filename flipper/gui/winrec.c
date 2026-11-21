@@ -39,14 +39,15 @@
 static const char verbs[] =
 	"win\0\0\0\0" "show\0\0\0" "busy\0\0\0" "idle\0\0\0" "close\0\0"
 	"item\0\0\0" "int\0\0\0\0" "enum\0\0\0" "bool\0\0\0" "time\0\0\0"
-	"date\0\0\0" "days\0\0\0" "input\0\0" "line\0\0\0" "action\0";
+	"date\0\0\0" "days\0\0\0" "input\0\0" "line\0\0\0" "action\0" "run\0\0\0\0";
 #define V_WIN	0
 #define V_SHOW	1
 #define V_BUSY	2
 #define V_IDLE	3
 #define V_CLOSE	4
 #define V_ROW	5			/* V_ROW + RK_x - 1 */
-#define NVERBS	15
+#define V_RUN	15			/* not a row (#413) */
+#define NVERBS	16
 
 static const char kinds[] = "list\0\0\0\0" "text\0\0\0\0" "clock\0\0\0"
 			    "confirm\0" "pad\0\0\0\0\0";
@@ -303,6 +304,7 @@ int wr_record(struct wr_win *w, char **f, int n, int len)
 	case V_BUSY: return n == 1 ? WR_BUSY : WR_BAD;
 	case V_IDLE: return n == 1 ? WR_IDLE : WR_BAD;
 	case V_CLOSE: return n == 1 ? WR_CLOSE : WR_BAD;
+	case V_RUN: return n == 3 && f[1][0] && f[2][0] == '/' ? WR_RUN : WR_BAD;
 	}
 	if (w == NULL || w->st != WS_BUILD) return WR_BAD;	/* no "win" */
 	w->bytes = (unsigned short) (w->bytes + len > 0xFFFF ? 0xFFFF

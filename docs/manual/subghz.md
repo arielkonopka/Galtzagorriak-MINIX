@@ -40,8 +40,10 @@ close in the check; about 1 m away worked.
 |---|---|
 | `subghz rx FREQ [-v]` | listen at FREQ Hz (e.g. `433920000`); one line per decoded packet, `Princeton 24bit Key:7C5703`. `-v` adds the protocol's own text, as stock prints it. Ctrl-C ends it and prints how many packets came |
 | `subghz decode FILE [-v]` | the same for a recorded `.sub` RAW capture |
+| `subghz rec FREQ FILE [-t DBM] [-s SEC] [-n N]` | record what comes at FREQ to FILE as a stock RAW `.sub` (stock's Read RAW); `-t`: only while the signal is at least DBM (e.g. `-t -70`, stock's RSSI threshold), `-s`: at most SEC seconds, `-n`: at most N values; Ctrl-C ends it. Receive only |
 | `subghz tx KEY FREQ TE REPEAT` | send KEY (24-bit hex) as Princeton, TE µs per element, REPEAT times (stock's `subghz tx`) |
 | `subghz tx_from_file FILE [REPEAT]` | send a `.sub` file at the file's `Frequency`: a key file through its protocol's encoder, a RAW file as recorded |
+| `subghz edit IN OUT trim\|cut T0 T1` | rewrite a RAW `.sub`: **trim** keeps only the part between T0 and T1 (microseconds from the start of the capture), **cut** drops it and joins the two sides. OUT must differ from IN; a key file (not RAW) is refused. The file streams through, so it is never held whole in RAM. |
 | `subghz chat FREQ` | text lines both ways, one packet per line (stock's `subghz chat`) |
 | `subghz region [CC]` | show the radio region, or set it (once per boot; see below) |
 | `subghz list` | every protocol, and whether it can decode, send, or is a rolling code |
@@ -50,6 +52,90 @@ close in the check; about 1 m away worked.
 `.sub` files are the stock firmware's: copy them from a stock or Unleashed Flipper's
 `/ext/subghz` to the card, for example to `/home/flipper/subghz/`. They are read a line at a
 time, so a long RAW recording needs no more RAM than a short one.
+
+### Recording (Read RAW)
+
+`subghz rec` writes the file as it receives: a 1 KB buffer goes to the card whenever it is full,
+so nothing of the recording stays in memory and its length is bounded only by the card (and by
+`-s` / `-n`). It takes 1 KB for that buffer and the 4 KB ring it already uses for `rx`. The file
+is a stock RAW file (`Filetype: Flipper SubGhz RAW File`, `Protocol: RAW`, `RAW_Data` lines of up
+to 512 values), so a stock Flipper can read and send it, and `subghz decode` shows what is in it:
+
+```
+$ subghz rec 433920000 /home/flipper/subghz/atea.sub -t -70
+Recording at 433920000 to /home/flipper/subghz/atea.sub. Press Ctrl+C to stop.
+^CRecorded 1840 samples, 6210 ms
+$ subghz decode /home/flipper/subghz/atea.sub
+Princeton 24bit Key:7C5703
+```
+
+With `-t`, the RSSI is read once per received frame (on the Flipper: once per 512 edges); what
+comes while it is below the threshold is left out. A recording only receives; sending it
+(`tx_from_file`) is checked against the region like any other file. The Sub-GHz app's **Read RAW**
+(below) runs this command for you.
+
+## The Sub-GHz app (launcher)
+
+**Sub-GHz** on the launcher is the stock app's menu as a window app (the launcher draws it). It
+runs the `subghz` command for you and shows its lines as they come, so it needs the `subghz`
+package (`pkg install subghz`); without it the window says `not installed: /usr/bin/subghz`.
+
+| Row | What it does |
+|---|---|
+| Read | listens at the frequency of Radio settings; each decoded packet is a line, as `subghz rx` prints it (protocol, bits, key). Back stops. |
+| Read RAW | frequency, **RSSI threshold** (Off, −90 … −40 dBm, stock's list) and **REC**: runs `subghz rec` into the first free `RAW_0.sub` … `RAW_99.sub` of `/home/flipper/subghz` and shows its lines. **Stop** ends it; then **Save** keeps the file (it is in Saved; rename it in Archive) and **Erase** deletes it. Back while it records stops it and keeps the file. |
+| Saved | the `.sub` files of `/home/flipper/subghz`, a page at a time. OK on one: **Send** (`subghz tx_from_file`), **Info** (`subghz decode`, RAW captures), **Delete**. |
+| Add manually | a Princeton key: key (1–6 hex digits), TE, frequency, name; **Save** writes a stock key file (`Filetype: Flipper SubGhz Key File`). |
+| Frequency analyzer | starts the **Spectrum** app (below); when you leave Spectrum, Sub-GHz opens again (on its menu, with Radio settings back at 433.92 MHz, AM650). |
+| Radio settings | frequency (stock's common list, 433.92 MHz first), modulation preset (AM270, AM650, FM238, FM476; written into the files you add), and the region. Kept only while the app runs. |
+
+**Sending.** The kernel checks every frame against the region (see "The region" below). If it
+refuses, the Send window shows the refusal as `subghz` words it, for example `refused: outside
+the region's bands, or no region set (subghz region)`; the app never fails silently. On the
+Flipper the transmitter is not written yet, so Send says `no transmitter on this device yet`.
+
+Archive's **Open** on a `.sub` file starts this app on that file. No `.sub` files are shipped
+(spec D.3).
+
+## Editing a RAW capture
+
+`subghz edit` trims or cuts a recorded RAW `.sub`. A RAW file is a list of signed durations in
+microseconds (a positive value is the carrier on that long, a negative value off that long).
+`trim` keeps only the window between two times, `cut` removes it:
+
+```
+subghz edit mysignal.sub clean.sub trim 0 120000     # keep the first 120 ms
+subghz edit mysignal.sub clean.sub cut  40000 60000  # drop 40–60 ms
+```
+
+Durations that straddle a boundary are clipped, and two same-level runs left next to each other
+by a cut are merged, so the result stays a well-formed RAW list. The editing logic is
+host-tested (`flipper/tests/sgedit`).
+
+## Sub-GHz Remote (launcher app)
+
+**Sub-GHz Remote** maps up to five saved `.sub` files to the five keys of the pad (Up, Down,
+Left, Right, OK); pressing a key sends that file through the `subghz` command, so the region gate
+and `subghz`'s own words apply exactly as for Send above (on the Flipper the transmitter is not
+written yet, so a key press says `no transmitter on this device yet`).
+
+Map files live in `/home/flipper/subghz_remote`, in the stock format (Unleashed's
+`SubGHz_Remote`):
+
+```
+Filetype: Flipper SubRem Map file
+Version: 1
+UP: /home/flipper/subghz/gate.sub
+ULABEL: Gate
+DOWN: /home/flipper/subghz/garage.sub
+DLABEL: Garage
+OK: /home/flipper/subghz/bell.sub
+OKLABEL: Doorbell
+```
+
+`xLABEL` lines are the names shown; `xBUTTON` lines of multi-button files are ignored (the file
+is sent as it is). The launcher list shows every `*.txt` map; open one to get the remote pad. No
+map or `.sub` files are shipped (spec D.3): drop your own on the card.
 
 ## Spectrum: what is on the air (launcher app)
 
