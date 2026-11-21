@@ -3261,6 +3261,74 @@ static void furihello_test(void)
 }
 #endif
 
+/* #419: the settings keys (setgroup sound, led, power) under QEMU, with
+ * `settings set' and `settings get' (two runs of settings, without sh: a
+ * third run of either would make the run-time cache copy it to flash).  A missing file gives the
+ * defaults, a file written here is read, a set writes the card's file
+ * once; the files are removed afterwards. */
+static int file_has(const char *path, const char *want)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	n = (int) read(fd, buf, sizeof buf - 1);
+	close(fd);
+	if (n < 0) return 0;
+	buf[n] = 0;
+	return strstr(buf, want) != NULL;
+}
+
+/* settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * it in the flash cache); its exit status */
+static int setk_run(const char *out, const char *a1, const char *a2,
+					const char *a3, const char *a4)
+{
+	pid_t pid;
+	int fd, st = -1;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		if ((fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0)
+			dup2(fd, 1);
+		execl("/bin/settings", "settings", a1, a2, a3, a4, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0) (void) waitpid(pid, &st, 0);
+	return st;
+}
+
+static void __attribute__((noinline)) setkeys_test(void)
+{
+	static const char *const conf[] = { "/etc/flipper/led.conf",
+		"/etc/flipper/power.conf", "/etc/flipper/sound.conf" };
+	FILE *f;
+	int i, st;
+
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) mkdir("/etc/flipper", 0755);
+	if ((f = fopen(conf[2], "w")) != NULL) {
+		fputs("Volume: 40\nVibro: off\n", f);
+		fclose(f);
+	}
+	st = setk_run("/tmp/setk1", "set", "led", "Brightness", "30");
+	(void) setk_run("/tmp/setk2", "get", "led", "power", "sound");
+	check(st == 0 && file_has("/tmp/setk1",
+		"Brightness: 30\nNotify LED: on\n"),
+		"settings set: a key changed, the group's other key its default");
+	check(file_has(conf[0], "Brightness: 30\nNotify LED: on\n"),
+		"settings set: /etc/flipper/led.conf written");
+	check(file_has("/tmp/setk2", "# led\nBrightness: 30\n"),
+		"settings get: led.conf read back");
+	check(file_has("/tmp/setk2", "# power\nAuto off: never\nAuto lock: never\n"),
+		"settings get: no power.conf, the defaults");
+	check(file_has("/tmp/setk2", "Volume: 40\nVibro: off\n"),
+		"settings get: Vibro off read from sound.conf");
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) unlink("/tmp/setk1");
+	(void) unlink("/tmp/setk2");
+}
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -3569,6 +3637,7 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 	spectrum_test();
+	setkeys_test();
 	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
