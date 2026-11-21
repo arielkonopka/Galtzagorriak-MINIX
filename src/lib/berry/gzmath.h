@@ -34,4 +34,10 @@ float gz_fmodf(float x, float y);
 #define ceilf(x)	F1(ceil, x)
 #define floorf(x)	F1(floor, x)
 #define roundf(x)	((x) < 0 ? -floorf(0.5f - (x)) : floorf((x) + 0.5f))
+/* MINIX libc prints no floating point (src/lib/fphook/fltpr.c is the
+ * stub): Berry's snprintf calls with one %e/%f/%g in the format go to
+ * gz_snprintf (gzmath.c), every other one to vsnprintf. */
+#include <stdio.h>
+int gz_snprintf(char *buf, size_t n, const char *fmt, ...);
+#define snprintf gz_snprintf
 #endif

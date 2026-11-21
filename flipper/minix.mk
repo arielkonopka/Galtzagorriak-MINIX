@@ -1050,7 +1050,8 @@ BERRY_DIR := $(MROOT)/src/lib/berry
 BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c) $(BERRY_DIR)/default/be_port.c \
 	$(BERRY_DIR)/default/be_modtab.c $(BERRY_DIR)/gzberry.c $(BERRY_DIR)/gzmath.c
 BERRY_GEN := $(BERRY_DIR)/generate/be_const_strtab.h
-BERRY_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu99 $(UFPFLAGS) \
+BERRY_FP ?= $(UFPFLAGS)	# BERRY_FP= : soft float (the #385 two-loop check)
+BERRY_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu99 $(BERRY_FP) \
 	-fno-data-sections -fno-merge-constants \
 	-include $(BERRY_DIR)/gzmath.h \
 	-I$(BERRY_DIR) -I$(BERRY_DIR)/src -I$(BERRY_DIR)/generate
