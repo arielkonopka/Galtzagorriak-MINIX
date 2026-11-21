@@ -1,0 +1,111 @@
+.TH LIBBLK 3
+.SH NAME
+vm_open, vm_get, vm_unpin, vm_flush, vm_drop, vm_close, VA_GET, VA_SET \- frames over swappable memory blocks
+.SH SYNOPSIS
+.nf
+.ft B
+#include <libblk.h>
+
+int vm_open(struct vm *\fIv\fP, void *\fIpool\fP, unsigned \fIpoolsize\fP,
+            unsigned long \fIsize\fP, unsigned \fIframesize\fP, int \fIflags\fP)
+void *vm_get(struct vm *\fIv\fP, unsigned long \fIoff\fP, int \fImode\fP)
+void vm_unpin(struct vm *\fIv\fP, unsigned long \fIoff\fP)
+int vm_flush(struct vm *\fIv\fP)
+void vm_drop(struct vm *\fIv\fP, unsigned long \fIoff\fP, unsigned long \fIlen\fP)
+int vm_close(struct vm *\fIv\fP)
+
+T *VA_GET(struct vm *\fIv\fP, T, unsigned long \fIi\fP)
+T *VA_SET(struct vm *\fIv\fP, T, unsigned long \fIi\fP)
+.fi
+.ft P
+.SH DESCRIPTION
+.B libblk
+is a small static library (about 0.8 KB of flash, no static data) that
+puts a byte-addressed space of
+.I size
+bytes over the blocks of
+.BR blk (3).
+The app gives it a pool of its own memory; the library cuts it into
+frames of 1024, 2048 or 4096 bytes, each with 8 bytes of metadata taken
+from the pool.
+Link with
+.BR $(MB)/blk/libblk.o .
+.PP
+.B vm_open()
+reserves the blocks
+.RB ( blk_open ,
+.I flags
+as there, e.g.
+.BR BLK_ANY )
+and sets up the frames.
+.I v\->size
+then tells how much was reserved.
+.PP
+.B vm_get()
+returns a pointer to byte
+.I off
+inside a frame, loading the frame first; if it needs the room it writes
+back the least recently used changed frame.
+.I mode
+is
+.B VM_RD
+to read or
+.B VM_RW
+to change the data (the frame is written back later), and may add
+.BR VM_PIN :
+then the frame and the pointer stay until
+.BR vm_unpin() .
+Without a pin the pointer is valid only until the next
+.BR vm_get() .
+It returns NULL with
+.I errno
+set on an error, and
+.B EBUSY
+when every frame is pinned.
+Data never crosses a frame: an object at
+.I off
+must end inside the same frame.
+.PP
+.B VA_GET
+and
+.B VA_SET
+treat the space as an array of records of type
+.I T
+that never cross a frame (the rest of each frame stays unused).
+.PP
+.B vm_flush()
+writes every changed frame back.
+On an error the frames stay changed, so a later
+.B vm_flush()
+tries again (for example after
+.B ENXIO
+when the card was out).
+.PP
+.B vm_drop()
+forgets the frames of
+.RI [ off ", " off + len )
+without writing them, and discards the whole blocks inside the range
+.RB ( blk_discard ).
+Their data is undefined afterwards.
+.PP
+.B vm_close()
+is
+.B vm_flush()
+and then
+.BR blk_close() .
+.SH EXAMPLE
+.nf
+.ft B
+static char pool[3 * (1024 + 8)];
+struct vm v;
+long *p;
+
+if (vm_open(&v, pool, sizeof(pool), 256UL * 1024, 1024, 0) < 0)
+	return -1;
+p = VA_SET(&v, long, 1000);	/* record 1000 */
+if (p != NULL) *p = 42;
+vm_close(&v);
+.ft P
+.fi
+.SH "SEE ALSO"
+.BR blk (3).

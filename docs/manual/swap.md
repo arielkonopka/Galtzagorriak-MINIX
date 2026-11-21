@@ -14,6 +14,9 @@ or larger card it is at the end of the card and takes half of the space after `/
 While `setup -H` converts `/home` ([The SD card](sdcard.md)), the partition holds the copy of
 `/home` and swap stays off until the conversion is done.
 
+The same partition can also hold apps' **memory blocks** (`blk=on`): see
+[Memory blocks](blocks.md).
+
 ## Turning it on
 
 In `/etc/rc.conf` on the card:

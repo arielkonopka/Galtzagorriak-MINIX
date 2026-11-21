@@ -11,6 +11,7 @@ that brings them.
 4. [Buttons and gestures](buttons.md): holding two buttons to force the backlight off or on (planned).
 5. [The SD card](sdcard.md): power loss, the boot-time check and pulling the card out (planned).
 6. [Swap](swap.md): idle programs on the SD card (`swap=plain`), what is never swapped, `free -v`.
+6b. [Memory blocks](blocks.md): app data in 4 KB blocks on the SD card (`blk=on`), `<blk.h>` and `libblk` for app authors.
 7. [Timers and alerts](timers.md): `/var/timers`, `timed`, `alert`, do-not-disturb (`/etc/notify.conf`).
 8. [The self test](selftest.md): the hardware self test (`stest` package, `selftest -a`).
 9. [Reminders and the alarm clock](remind-alarm.md): the `remind` and `alarm` apps, the desk clock.
