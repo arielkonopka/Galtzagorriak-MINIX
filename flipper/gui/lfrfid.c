@@ -5,6 +5,11 @@
  * emulation is the kernel's (RFIDIOCEMU on /dev/rfid); the saved tags are
  * `.rfid` files under /home/lfrfid, the stock format, one per number and
  * named by it (so no on-screen keyboard is needed).
+ *
+ * The screens are the shared ones of the stock app ports (gui/ui.c, issue
+ * #413): the list asks for its rows one at a time, so the saved tags are
+ * never held in memory (no table of names in .bss).  `lfrfid FILE` opens
+ * one saved tag's actions (Archive's Open).
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -18,13 +23,12 @@
 #include <string.h>
 #include <unistd.h>
 #include "gui.h"
+#include "ui.h"
 
 #define DIR_RFID	"/home/lfrfid"
-#define MAXSAVED	32
+#define PATHMAX		64
 
 static unsigned long dur[128], pulse[128];	/* the EM4100 waveform */
-static char saved[MAXSAVED][16];		/* saved file base names */
-static int nsaved;
 
 /* ---- EM4100 waveform (as cmds/rfid.c) ---- */
 static void em_bits(unsigned char id[5], unsigned char b[64])
@@ -157,14 +161,13 @@ static int save_tag(unsigned char id[5])
 }
 
 /* The tag's number from a saved file's "Data:" line; 1 if found. */
-static int load_tag(const char *base, unsigned char id[5])
+static int load_tag(const char *path, unsigned char id[5])
 {
-	char path[64], line[80], *p;
+	char line[80], *p;
 	FILE *f;
 	unsigned v[5];
 	int i, ok = 0;
 
-	sprintf(path, "%s/%s", DIR_RFID, base);
 	if ((f = fopen(path, "r")) == NULL) return 0;
 	while (fgets(line, sizeof line, f) != NULL) {
 		/* `rfid -o` saves every protocol (T19a): this app plays
@@ -184,70 +187,55 @@ static int load_tag(const char *base, unsigned char id[5])
 	return ok;
 }
 
-static void scan_saved(void)
+/* Saved tag i (counting only real tags) into path; the count when i < 0.
+ * One directory pass a call: a list asks only for the rows on screen. */
+static int saved_tag(int i, char *path, char *name)
 {
 	DIR *d;
 	struct dirent *e;
 	unsigned char id[5];
+	char p[PATHMAX];
+	int n = 0;
 
-	nsaved = 0;
-	if ((d = opendir(DIR_RFID)) == NULL) return;
-	while (nsaved < MAXSAVED && (e = readdir(d)) != NULL) {
+	if ((d = opendir(DIR_RFID)) == NULL) return i < 0 ? 0 : -1;
+	while ((e = readdir(d)) != NULL) {
 		if (e->d_name[0] == '.') continue;		/* . and .. */
-		if (strlen(e->d_name) >= sizeof saved[0]) continue;
-		if (!load_tag(e->d_name, id)) continue;		/* a real tag */
-		strcpy(saved[nsaved++], e->d_name);
+		if (strlen(DIR_RFID) + strlen(e->d_name) + 2 > PATHMAX) continue;
+		sprintf(p, "%s/%s", DIR_RFID, e->d_name);
+		if (!load_tag(p, id)) continue;			/* a real tag */
+		if (n++ == i) {
+			if (path) strcpy(path, p);
+			if (name) {
+				strncpy(name, e->d_name, UI_ITEM - 1);
+				name[UI_ITEM - 1] = 0;
+			}
+			closedir(d);
+			return 0;
+		}
 	}
 	closedir(d);
+	return i < 0 ? n : -1;
 }
 
-static void del_tag(const char *base)
+/* Rename a saved tag (in its folder); 1 on success, path is the new one. */
+static int rename_tag(char *path, const char *newname)
 {
-	char path[64];
+	char b[PATHMAX], *s = strrchr(path, '/');
+	int dl = s ? (int) (s - path) + 1 : 0;
 
-	sprintf(path, "%s/%s", DIR_RFID, base);
-	unlink(path);
-}
-
-/* Rename a saved tag; 1 on success. */
-static int rename_tag(const char *base, const char *newname)
-{
-	char a[64], b[64];
-
-	if (newname[0] == 0 || strcmp(base, newname) == 0) return 1;
-	sprintf(a, "%s/%s", DIR_RFID, base);
-	sprintf(b, "%s/%s", DIR_RFID, newname);
-	return rename(a, b) == 0;
+	if (newname[0] == 0 || strcmp(path + dl, newname) == 0) return 1;
+	if (strchr(newname, '/') || dl + strlen(newname) + 1 > PATHMAX) return 0;
+	memcpy(b, path, (size_t) dl);
+	strcpy(b + dl, newname);
+	if (access(b, F_OK) == 0 || rename(path, b) != 0) return 0;
+	strcpy(path, b);
+	return 1;
 }
 
 /* ---- screens ---- */
 
-/* A vertical menu: returns the chosen index, or -1 on Back. */
-static int menu(const char *title, const char *const *items, int n)
-{
-	int sel = 0, i, k;
-
-	for (;;) {
-		gui_clear();
-		gui_title(title);
-		for (i = 0; i < n; i++)
-			gui_text(6, 14 + i * 10, items[i], i == sel);
-		gui_flush();
-		k = gui_key() & ~KEY_LONG;
-		if (k == KEY_BACK) return -1;
-		if (k == KEY_UP) sel = (sel + n - 1) % n;
-		if (k == KEY_DOWN) sel = (sel + 1) % n;
-		if (k == KEY_OK) return sel;
-	}
-}
-
-static void msg(const char *l1, const char *l2)
-{
-	gui_clear();
-	gui_center(22, l1, 0);
-	if (l2) gui_center(36, l2, 0);
-	gui_flush();
-}
+#define menu(t, items, n)	ui_menu(t, items, n)
+#define msg(l1, l2)		ui_msg(l1, l2)
 
 static void show_num(const char *title, unsigned char id[5], const char *hint)
 {
@@ -335,118 +323,62 @@ static int edit_num(unsigned char id[5])
 	}
 }
 
-/* An on-screen keyboard.  Three character rows of ten (the current case),
- * then a row of keys: Shift cycles lower-case, UPPER-CASE and digits and
- * symbols; Bksp rubs out the last character, Del clears the name, Ret
- * finishes (so does BACK).  Edits buf in place, at most max - 1 characters;
- * every character it offers is safe in a file name. */
-#define KB_COLS		10
-#define KB_FKEYS	4		/* Shift Bksp Del Ret */
-static void text_input(char *buf, int max)
-{
-	static const char *const cs[3] = {	/* exactly 30 each */
-		"abcdefghijklmnopqrstuvwxyz .-_",
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZ .-_",
-		"0123456789@#$%&()+=,.!?*-_ :;~"
-	};
-	static const char *const fn[KB_FKEYS] = { "Shift", "Bksp", "Del", "Ret" };
-	int mode = 0, cx = 0, cy = 0, k, len = strlen(buf), r, c, w;
-
-	for (;;) {
-		gui_clear();
-		gui_title("NAME");
-		gui_text(2, 10, buf, 0);
-		gui_vline(2 + len * 4, 8, 15, 1);		/* the cursor */
-		for (r = 0; r < 3; r++)
-			for (c = 0; c < KB_COLS; c++) {
-				char s[2];
-
-				s[0] = cs[mode][r * KB_COLS + c];
-				s[1] = 0;
-				gui_text(4 + c * 12, 22 + r * 10, s,
-					r == cy && c == cx);
-			}
-		for (c = 0; c < KB_FKEYS; c++)
-			gui_text(3 + c * 31, 54, fn[c], cy == 3 && c == cx);
-		gui_flush();
-		w = (cy < 3) ? KB_COLS : KB_FKEYS;
-		k = gui_key() & ~KEY_LONG;
-		if (k == KEY_BACK) return;
-		if (k == KEY_UP) cy = (cy + 3) % 4;
-		if (k == KEY_DOWN) cy = (cy + 1) % 4;
-		if (k == KEY_LEFT) cx = (cx + w - 1) % w;
-		if (k == KEY_RIGHT) cx = (cx + 1) % w;
-		if (cy == 3) { if (cx >= KB_FKEYS) cx = KB_FKEYS - 1; }
-		else if (cx >= KB_COLS) cx = KB_COLS - 1;
-		if (k != KEY_OK) continue;
-		if (cy < 3) {				/* a character */
-			if (len < max - 1) {
-				buf[len++] = cs[mode][cy * KB_COLS + cx];
-				buf[len] = 0;
-			}
-		} else switch (cx) {			/* a key */
-		case 0: mode = (mode + 1) % 3; break;		/* Shift */
-		case 1: if (len > 0) buf[--len] = 0; break;	/* Bksp */
-		case 2: len = 0; buf[0] = 0; break;		/* Del */
-		case 3: return;					/* Ret */
-		}
-	}
-}
-
-/* A saved tag: Emulate / Write / Rename / Delete. */
-static void do_saved_one(const char *base)
+/* A saved tag (path): Emulate / Write / Rename / Delete. */
+static void do_saved_one(const char *file)
 {
 	static const char *const acts[] =
 		{ "Emulate", "Write to tag", "Rename", "Delete" };
 	unsigned char id[5];
-	char name[16];
+	char path[PATHMAX];
 	int a;
 
-	strcpy(name, base);
-	if (!load_tag(name, id)) return;
+	if (strlen(file) >= PATHMAX) return;
+	strcpy(path, file);
+	if (!load_tag(path, id)) { ui_note("not an EM4100 tag", NULL); return; }
 	for (;;) {
-		char title[24];
+		char title[24], *b = strrchr(path, '/');
 
-		sprintf(title, "%.14s", name);
+		sprintf(title, "%.14s", b ? b + 1 : path);
 		a = menu(title, acts, 4);
 		if (a < 0) return;
 		if (a == 0) do_emulate(id);
 		else if (a == 1) {
 			msg("Writing...", "hold a blank fob");
-			msg(write_tag(id) ? "written" : "not written (locked?)",
+			ui_note(write_tag(id) ? "written" : "not written (locked?)",
 				"BACK to return");
-			gui_key();
 		} else if (a == 2) {			/* Rename (max 14 chars) */
 			char nn[15];
 
-			strncpy(nn, name, sizeof nn - 1);
+			strncpy(nn, b ? b + 1 : path, sizeof nn - 1);
 			nn[sizeof nn - 1] = 0;
-			text_input(nn, sizeof nn);
-			if (rename_tag(name, nn)) strcpy(name, nn);
-			else { msg("rename failed", NULL); gui_key(); }
+			if (ui_text("NAME", nn, sizeof nn) && !rename_tag(path, nn))
+				ui_note("rename failed", NULL);
 		} else {
-			del_tag(name);
+			unlink(path);
 			return;
 		}
 	}
 }
 
+static int saved_item(void *ctx, int i, char *buf)
+{
+	(void) ctx;
+	return saved_tag(i, NULL, buf);
+}
+
 static void do_saved(void)
 {
-	const char *items[MAXSAVED];
-	int i, sel;
+	char path[PATHMAX];
+	int n, sel = 0;
 
 	for (;;) {
-		scan_saved();
-		if (nsaved == 0) {
-			msg("no saved tags", "BACK to return");
-			gui_key();
+		if ((n = saved_tag(-1, NULL, NULL)) == 0) {
+			ui_note("no saved tags", "BACK to return");
 			return;
 		}
-		for (i = 0; i < nsaved; i++) items[i] = saved[i];
-		sel = menu("SAVED", items, nsaved);
+		sel = ui_list("SAVED", saved_item, NULL, n, sel, 0, NULL);
 		if (sel < 0) return;
-		do_saved_one(saved[sel]);
+		if (saved_tag(sel, path, NULL) == 0) do_saved_one(path);
 	}
 }
 
@@ -459,12 +391,17 @@ static void do_add(void)
 	gui_key();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	static const char *const main_items[] = { "Read", "Saved", "Add manually" };
 	int sel;
 
 	if (gui_open() < 0) return 1;
+	if (argc > 1 && argv[1][0] == '/') {	/* Archive's Open (#413) */
+		do_saved_one(argv[1]);
+		gui_led(0, 0, 0);
+		return 0;
+	}
 	for (;;) {
 		sel = menu("RFID", main_items, 3);
 		if (sel < 0) break;

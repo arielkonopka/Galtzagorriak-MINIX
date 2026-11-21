@@ -51,6 +51,29 @@ close in the check; about 1 m away worked.
 `/ext/subghz` to the card, for example to `/home/flipper/subghz/`. They are read a line at a
 time, so a long RAW recording needs no more RAM than a short one.
 
+## The Sub-GHz app (launcher)
+
+**Sub-GHz** on the launcher is the stock app's menu as a window app (the launcher draws it). It
+runs the `subghz` command for you and shows its lines as they come, so it needs the `subghz`
+package (`pkg install subghz`); without it the window says `not installed: /usr/bin/subghz`.
+
+| Row | What it does |
+|---|---|
+| Read | listens at the frequency of Radio settings; each decoded packet is a line, as `subghz rx` prints it (protocol, bits, key). Back stops. |
+| Read RAW | **(planned)**: `subghz` has no RAW recorder yet. |
+| Saved | the `.sub` files of `/home/flipper/subghz`, a page at a time. OK on one: **Send** (`subghz tx_from_file`), **Info** (`subghz decode`, RAW captures), **Delete**. |
+| Add manually | a Princeton key: key (1–6 hex digits), TE, frequency, name; **Save** writes a stock key file (`Filetype: Flipper SubGhz Key File`). |
+| Frequency analyzer | points you to the **Spectrum** app on the launcher (below). |
+| Radio settings | frequency (stock's common list, 433.92 MHz first), modulation preset (AM270, AM650, FM238, FM476; written into the files you add), and the region. Kept only while the app runs. |
+
+**Sending.** The kernel checks every frame against the region (see "The region" below). If it
+refuses, the Send window shows the refusal as `subghz` words it, for example `refused: outside
+the region's bands, or no region set (subghz region)`; the app never fails silently. On the
+Flipper the transmitter is not written yet, so Send says `no transmitter on this device yet`.
+
+Archive's **Open** on a `.sub` file starts this app on that file. No `.sub` files are shipped
+(spec D.3).
+
 ## Spectrum: what is on the air (launcher app)
 
 **Spectrum** on the launcher shows how strong the signals are across a band. It only listens

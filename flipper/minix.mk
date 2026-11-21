@@ -321,6 +321,8 @@ ZMODEM	:= rz sz
 GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive nfc
+# Stock app ports part 2 (issue #413): window apps over the commands.
+WINBASE	+= subghzui ibuttonui gpioui
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
@@ -419,6 +421,12 @@ CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
 			# decoders and encoders (~0.5 KB), stdio buffers for
 			# the remote file (1 KB), opendir's 1 KB DIR; Learn
 			# and Debug fork a reader child (a copy of the app)
+CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
+			# 1 KB of stack (records, two paths); subghz runs
+			# as its own process (CHMEM_subghz)
+CHMEM_ibuttonui := 4096	# as subghzui; ikey is its own process
+CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
+			# and MM's 1.5 KB gap
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
 			# (two 128 B paths, the record buffers)
@@ -520,6 +528,8 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 OBJS_spectrum += $(MB)/cmd/gui/specmath.o
 # the Infrared app (issue #389): libir (src/lib/infrared) and the list UI
 OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
+# lfrfid on the shared list, message and keyboard screens (issue #413)
+OBJS_lfrfid += $(MB)/cmd/gui/ui.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
@@ -590,6 +600,16 @@ $(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
+# issue #413: the window apps over subghz, ikey and gpio (gui/runwin.c:
+# the command's output on a pipe, live)
+$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
+		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
+		gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
 # nfc (spec Phase 14, issue #412 item 4): a window app (K.8) on the
 # hand-written libnfc reader (src/lib/libnfc: poller, Crypto-1, the
 # streaming dictionary, the .nfc files), C11 as that library is.
@@ -1153,7 +1173,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.68
+BASE_VER := 4.69
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

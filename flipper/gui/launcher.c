@@ -674,8 +674,10 @@ static void style_env(char **env)
 	env[n] = NULL;
 }
 
-/* Run an app as its user and wait for it.  NULL, or a notice to show. */
-static char *run(struct app *ap)
+/* Run an app as its user and wait for it.  NULL, or a notice to show.
+ * extra: one more argument, the file a window app asked to open in this
+ * app (its "run" record, issue #413), or NULL. */
+static char *run_arg(struct app *ap, char *extra)
 {
 	char cmd[CMDMAX], *argv[MAXARGS + 1], *env[ENVMAX], *p;
 	struct passwd *pw;
@@ -685,8 +687,9 @@ static char *run(struct app *ap)
 	strcpy(cmd, ap->cmd);
 	for (p = strtok(cmd, " "); p != NULL && argc < MAXARGS; p = strtok(NULL, " "))
 		argv[argc++] = p;
-	argv[argc] = NULL;
 	if (argc == 0) return NULL;
+	if (extra != NULL && argc < MAXARGS) argv[argc++] = extra;
+	argv[argc] = NULL;
 
 	if ((pw = getpwnam(ap->user)) == NULL) {
 		if (opt & (OPT_HINTS | OPT_STOCK)) return "unknown user";
@@ -697,8 +700,19 @@ static char *run(struct app *ap)
 		sleep(2);
 		return NULL;
 	}
-	if (ap->cmd[0] == '=')		/* a window app: the launcher draws */
-		return win_run(ap->label, ap->cmd + 1, pw, (opt & OPT_LOG) != 0);
+	if (ap->cmd[0] == '=') {	/* a window app: the launcher draws */
+		char *note = win_run(ap->label, ap->cmd + 1, pw,
+				     (opt & OPT_LOG) != 0, extra), *l, *f;
+		int i;
+
+		/* Archive's Open (#413): only an app of /etc/apps, by its
+		 * label, as its own user; one hop (an opened app cannot) */
+		if (!win_next(&l, &f) || extra != NULL) return note;
+		for (i = 0; i < napps; i++)
+			if (strcmp(apps[i].label, l) == 0 && apps + i != ap)
+				return run_arg(&apps[i], f);
+		return "no such app";
+	}
 	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */
 	fg = open("/dev/lcd", O_RDONLY);	/* R4b.8: the hand-over */
@@ -738,6 +752,11 @@ static char *run(struct app *ap)
 	if (WIFSIGNALED(st) && WTERMSIG(st) != SIGTERM
 	    && WTERMSIG(st) != SIGKILL) return "app crashed";
 	return NULL;
+}
+
+static char *run(struct app *ap)
+{
+	return run_arg(ap, NULL);
 }
 
 /*===========================================================================*

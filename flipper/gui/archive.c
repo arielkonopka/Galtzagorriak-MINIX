@@ -14,8 +14,9 @@
  * page from the directory; a list's length is one counting pass.
  *
  * Open: a .txt file is shown here (its first lines); the other types are
- * opened by their apps (the launcher's "run" record for that is the next
- * part of the task; until then the window says which app opens it).
+ * opened by their apps: a "run" record (issue #413) asks the launcher to
+ * start the app of /etc/apps with that label (Infrared, Sub-GHz, RFID,
+ * iButton) with the file as its argument; this app ends then.
  *
  *	Archive:nobody:@file:=/bin/archive	(/etc/apps)
  *
@@ -45,10 +46,10 @@ static const struct tab {
 } tabs[] = {
 	{ "fav", "Favourites", NULL, NULL, NULL },
 	{ "ir", "Infrared", HOME "/infrared", ".ir", "Infrared" },
-	{ "sub", "Sub-GHz", HOME "/subghz", ".sub", "Sub-GHz (subghz)" },
+	{ "sub", "Sub-GHz", HOME "/subghz", ".sub", "Sub-GHz" },
 	{ "rfid", "125 kHz RFID", HOME "/lfrfid", ".rfid", "RFID" },
 	{ "nfc", "NFC", HOME "/nfc", ".nfc", NULL },
-	{ "ibtn", "iButton", HOME "/ibutton", ".ibtn", "iButton (ikey)" },
+	{ "ibtn", "iButton", HOME "/ibutton", ".ibtn", "iButton" },
 	{ "txt", "Text", HOME, ".txt", "Archive" },
 	{ "all", "Browser", HOME, NULL, NULL },
 };
@@ -355,7 +356,8 @@ static void do_open(void)
 		w_note("No app opens", "this type yet.");
 		return;
 	}
-	w_note("Open it in the app:", tabs[t].app);
+	if (gm_run(tabs[t].app, file) < 0) w_note("Open it in the app:",
+						   tabs[t].app);
 }
 
 static void do_rename(const char *to)
