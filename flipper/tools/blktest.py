@@ -14,6 +14,7 @@ qemu) like tools/swaptest.py, through the first boot (swap partition
   AC12.18  not root: at most half of the block space
   AC12.19  zeros after the writer exits and after exec of another
            program; a forked child has no reservation
+  AC12.20  sectors written: a whole-block PUT 9, BLK_IFCHANGED 0, exit 0
   AC12.22  a Secret: yes image and a set-uid copy: EPERM
   R12.38   <blk.h> (libc) and libblk: 256 KB through 1 KB frames
   R12.38   blk=on in /etc/rc.conf: /etc/rc switches blocks on at boot
@@ -74,6 +75,8 @@ def main():
 		check(r.sh("swapon off && swapon /dev/hd3 plain blk && "
 			"swapon -r 0", 30) == 0, "swapon /dev/hd3 plain blk")
 		tests(r, "/usr/tests/blktest", "AC12.18, AC12.19 as root", 300)
+		tests(r, "/usr/tests/blktest -c",
+			"AC12.20: sectors written (PUT 9, IFCHANGED 0, exit 0)")
 		tests(r, "su bin -c '/usr/tests/blktest -h'",
 			"AC12.18: not root, half of the space")
 		tests(r, "/usr/tests/blksecret -p",

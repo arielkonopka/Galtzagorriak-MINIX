@@ -12,6 +12,9 @@
  *   blktest -d		(swap off) marks in a swap slot and in the block space
  *   blktest -D		R12.40: after MMSWAPON they read as zeros (the
  *			DISCARD of the whole space at idle; QEMU zero-fills)
+ *   blktest -c		AC12.20: sectors written (QEMU's WINCHESTER counter):
+ *			a whole-block PUT 9, BLK_IFCHANGED of the same data 0,
+ *			exit 0
  *   blktest -l		<blk.h> and libblk (R12.38) on the real MM: the
  *			libc calls, then 256 KB through 1 KB frames
  *
@@ -32,6 +35,7 @@
 #include <minix/blk.h>
 #include <libblk.h>
 #include "t.h"
+#include <sys/ioctl.h>
 
 #define BK_SKIP		(16 * 384UL)	/* sectors of the swap slots */
 #define BK_BLOCK	9
@@ -135,6 +139,75 @@ static int wipe(int check)
 	close(fd);
 	sync();
 	return ok;
+}
+
+/* Sectors written to the card since boot (QEMU only), -1: unknown. */
+static long written(void)
+{
+	static int fd = -1;
+	int n = 3;
+
+	if (fd < 0 && (fd = open("/dev/hd0", O_RDONLY)) < 0) return -1;
+	if (ioctl(fd, DIOCFAKECARD, &n) < 0) return -1;
+	return n;
+}
+
+/* AC12.20.  Each count is tried up to 3 times: update(8) may sync
+ * something meanwhile; only an exact count passes. */
+static int count(void)
+{
+	long w0, w;
+	int k, ok, go[2], back[2], pid, st;
+	char ch = 0;
+
+	if (blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) <= 0) {
+		t_result("AC12.20: blk_open", 0, strerror(errno));
+		return t_fail;
+	}
+	fill(buf, BLK_SIZE, 5);
+	for (ok = 0, k = 0; k < 3 && !ok; k++) {
+		buf[0]++;
+		sync();
+		w0 = written();
+		ok = blk(BLK_PUT, 0, 1, 0, 0, buf) == 0
+			&& (w = written()) >= 0 && w0 >= 0 && w - w0 == 9;
+	}
+	t_result("AC12.20: a whole-block PUT writes 9 sectors", ok, NULL);
+	for (ok = 0, k = 0; k < 3 && !ok; k++) {
+		sync();
+		w0 = written();
+		ok = blk(BLK_PUT, BLK_IFCHANGED, 1, 0, 0, buf) == 0
+			&& (w = written()) >= 0 && w0 >= 0 && w == w0;
+	}
+	t_result("AC12.20: BLK_IFCHANGED of unchanged data writes 0 sectors",
+		ok, NULL);
+	blk(BLK_CLOSE, 0, 0, 0, 0, NULL);
+	for (ok = 0, k = 0; k < 3 && !ok; k++) {
+		pipe(go);
+		pipe(back);
+		if ((pid = fork()) == 0) {
+			ch = blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) > 0
+				&& blk(BLK_PUT, 0, 0, 0, 0, buf) == 0;
+			write(back[1], &ch, 1);
+			read(go[0], &ch, 1);
+			_exit(0);
+		}
+		close(back[1]);
+		close(go[0]);
+		ch = 0;
+		if (read(back[0], &ch, 1) != 1) ch = 0;
+		sync();
+		w0 = written();
+		write(go[1], &ch, 1);
+		waitpid(pid, &st, 0);
+		w = written();
+		ok = ch == 1 && w0 >= 0 && w == w0;
+		close(go[1]);
+		close(back[0]);
+		sleep(1);
+	}
+	t_result("AC12.20: exit of a block writer writes nothing", ok, NULL);
+	return t_fail;
 }
 
 static int all_enosys(void)
@@ -255,6 +328,7 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
 	if (argc > 1 && strcmp(argv[1], "-l") == 0) return lib();
 	if (argc > 1 && strcmp(argv[1], "-d") == 0) return !wipe(0);
+	if (argc > 1 && strcmp(argv[1], "-c") == 0) return count();
 	if (argc > 1 && strcmp(argv[1], "-D") == 0) {
 		t_result("R12.40: MMSWAPON discarded a slot and the block space",
 			wipe(1), NULL);
