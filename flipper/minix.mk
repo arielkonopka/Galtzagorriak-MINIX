@@ -1065,12 +1065,13 @@ CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
 			# no handler, so no MM gap
 # Berry (spec Phase 7c, R7c.1, R7c.4, R7c.5; issue #385): the interpreter
 # (src/lib/berry, upstream MIT, berry_conf.h) and its launcher gzberry.c,
-# one program `berry' in the installed region; its text runs in place, so
-# every running script shares it.  C99, the FPU (single float, R5.7).
-# The const tables (string table, built-in classes and modules, coc's
-# generate/) are pointer tables: in a PIC program they land in .data, so
-# per process in RAM; the shared library slot that keeps them in flash is
-# the next step (PORTING.md "Berry").  The bindings (R7c.3) are in gz/:
+# the VM in the shared Berry library (below, issue #431) and the launcher
+# `berry' in the installed region; both run in place, so every running
+# script shares them.  C99, the FPU (single float, R5.7).  The const
+# tables (string table, built-in classes and modules, coc's generate/)
+# are pointer tables: in a PIC program they would land in .data, per
+# process in RAM; in the library they stay in flash (PORTING.md
+# "Berry").  The bindings (R7c.3) are in gz/:
 # tsv, pipe (spec K.1) and the sensor stub.  Package berry.
 BERRY_DIR := $(MROOT)/src/lib/berry
 BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c $(BERRY_DIR)/gz/*.c) \

@@ -118,7 +118,8 @@ share.
 | system image, from `0x08000000`, ≤ 192 KB | DFU only | kernel, MM, FS, INIT (`minix.bin`); the build fails above 192 KB |
 | shared libc, from `0x08030000`, ≤ 48 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
 | shared libfuri + libapp, from `0x0803C000`, ≤ 48 KB | DFU only | the GUI and app library, once, for the apps that use it (`minix.bin`; R2b.9, see below) |
-| installed region, from `0x08048000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
+| shared Berry interpreter, from `0x08048000`, ≤ 96 KB | DFU only | the Berry VM and bindings with their constant tables, once, for every running script (`minix.bin`; R7c.1, issue #431) |
+| installed region, from `0x08060000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
 | run-time text cache, 128 KB | MM in the background | texts of programs run often, within a daily erase budget |
 | guard pages, then the radio stack and FUS | never | the top of flash, from `SFSA` (read from `FLASH->SFR` at boot) |
 
