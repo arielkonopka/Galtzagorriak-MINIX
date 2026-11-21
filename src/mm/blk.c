@@ -58,6 +58,10 @@
 #define MAXRUN		255		/* a byte holds the run's length */
 #define DISC_MAX	(256UL * 2048)	/* sectors discarded a step: 256 MB */
 #define PEND(slot)	(bk.disc & (1U << (slot)))	/* run not yet free */
+#define SUB_MINOR	128		/* hd1a: MM swaps to a subpartition */
+#define EPS		(NEXT / 4)	/* extents per subpartition (>= 32 GB) */
+#define BIG		(sw_minor() >= SUB_MINOR)	/* hd3a ... hd3d */
+#define SUBOK(e)	(!BIG || (e) < EPS || (bk.old & (1U << ((e) / EPS - 1))))
 
 /* All of MM's block state (R12.34, R12.35; spec budget MM +39 B). */
 PRIVATE struct {
@@ -68,7 +72,9 @@ PRIVATE struct {
 				 * DISCARD at idle (R12.40) */
   unsigned short old;		/* bit i: slot i's run began before the last
 				 * pid wrap, so the stamp before it is its
-				 * own too (R12.35) */
+				 * own too (R12.35).  Bits 0-2 (MM, FS and
+				 * INIT hold no run): hd3b, hd3c, hd3d are
+				 * there (cards >= 32 GB, R12.34) */
 } bk;
 
 /* Bit 0 of bk.disc (slot 0 is MM, which never holds a run): the card has
@@ -95,6 +101,7 @@ struct bkhdr {
 
 #define RUN(slot)	(bk.run[(slot) - INIT_PROC_NR - 1])
 
+FORWARD _PROTOTYPE( int bk_at, (unsigned e, unsigned long *sec)	);
 FORWARD _PROTOTYPE( unsigned bk_gap, (unsigned pos)			);
 FORWARD _PROTOTYPE( unsigned bk_fit, (unsigned n, unsigned *len)	);
 FORWARD _PROTOTYPE( int bk_open, (unsigned long bytes, int flags)	);
@@ -135,7 +142,7 @@ PUBLIC void blk_wrap()
   int i;
 
   bk.stamp++;
-  bk.old = 0;
+  bk.old &= 7;				/* (hd3b-hd3d stay) */
   for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
 	if (RUN(i)[1] != 0 && !PEND(i)) bk.old |= 1U << i;
 }
@@ -144,13 +151,18 @@ PUBLIC void blk_wrap()
 /*===========================================================================*
  *				blk_on					     *
  *===========================================================================*/
-PUBLIC int blk_on(sectors)
-unsigned long sectors;		/* the swap partition's size, 0: blocks off */
+PUBLIC int blk_on(sz, nsz)
+unsigned long *sz;		/* the swap partition's size, sectors */
+int nsz;			/* 0: blocks off; 1: a primary partition;
+				 * 4: hd3a-hd3d, sz[i] 0 if not swap */
 {
 /* MMSWAPON: the extents behind the swap slots, from the partition's size
  * in its MBR entry (swap.c reads the MBR anyway; WINCHESTER takes no ioctl
  * from MM).  A partition too small for 256 blocks after the slots has no
- * block space.  The caller checked blk_busy(). */
+ * block space.  Cards >= 32 GB (R12.34): hd3a holds the slots, and each of
+ * hd3a ... hd3d has 64 extents behind the same offset, the size of hd3a's;
+ * one that is missing or short only removes its extents.  The caller
+ * checked blk_busy(). */
   unsigned long n;
   int i;
 
@@ -158,13 +170,17 @@ unsigned long sectors;		/* the swap partition's size, 0: blocks off */
   for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
 	if (PEND(i)) RUN(i)[1] = 0;
   bk.disc = 0;			/* (and NODISC: a new device) */
+  bk.old &= ~7U;
   bk.ext = 0;
-  if (sectors == 0) return(OK);
-  if (sectors <= BK_SKIP) return(ENOSPC);
-  n = (sectors - BK_SKIP) / BK_BLOCK / NEXT;
+  if (nsz == 0) return(OK);
+  if (sz[0] <= BK_SKIP) return(ENOSPC);
+  n = (sz[0] - BK_SKIP) / BK_BLOCK / (nsz == 1 ? NEXT : EPS);
   if (n == 0) return(ENOSPC);
   /* R12.39: a swap partition stays below 4 GiB, so this fits 16 bits. */
   bk.ext = n > 0xFFFF ? 0xFFFF : (unsigned short) n;
+  for (i = 1; i < nsz; i++)
+	if (sz[i] >= BK_SKIP + (unsigned long) EPS * bk.ext * BK_BLOCK)
+		bk.old |= 1U << (i - 1);
   return(OK);
 }
 
@@ -195,19 +211,17 @@ unsigned step;			/* 0: the 16 slots; then groups of extents */
  * (sw_step, at idle; sw.off counts the steps left, 0 B).  Whatever is
  * live by now is left alone: the slot of a process on the card, every
  * extent of a reservation.  ENOTTY: the card has no DISCARD. */
-  unsigned long base, usz, g, u, u0, u1, s;
+  unsigned long usz, g, u, u0, u1, s;
   struct mproc *rmp;
   unsigned char *e;
   int r, i, live;
 
   if (step == 0) {
-	base = 0;
 	usz = BK_SKIP / NR_PROCS;
 	u0 = 0;
 	u1 = NR_PROCS;
   } else {
 	if (bk.ext == 0) return(OK);
-	base = BK_SKIP;
 	usz = (unsigned long) bk.ext * BK_BLOCK;
 	if ((g = DISC_MAX / usz) == 0) g = 1;
 	u0 = (step - 1) * g;
@@ -222,7 +236,10 @@ unsigned step;			/* 0: the 16 slots; then groups of extents */
 						== (IN_USE | SWAPPED);
 			if (!live) rmp->mp_flags &= ~SWAPHDR;
 		} else {
-			live = FALSE;
+			/* (a run stays in one subpartition; one that is
+			 * not there is left alone) */
+			if (s > u && BIG && s % EPS == 0) break;
+			live = !SUBOK(s);
 			for (i = 0; i < NSLOT; i++) {
 				e = bk.run[i];
 				if (e[1] != 0 && s >= e[0] && s < e[0] + e[1])
@@ -231,7 +248,13 @@ unsigned step;			/* 0: the 16 slots; then groups of extents */
 		}
 		if (live) break;
 	}
-	if (s > u && (r = sw_discard(base + u * usz, (s - u) * usz)) != OK) {
+	if (step == 0) {
+		i = sw_minor();		/* the slots: hd3a */
+		g = u * usz;
+	} else {
+		i = bk_at((unsigned) u, &g);
+	}
+	if (s > u && (r = sw_discard(i, g, (s - u) * usz)) != OK) {
 		if (r == ENOTTY) SET_NODISC();
 		return(r);
 	}
@@ -280,6 +303,26 @@ int proc_nr;
 
 
 /*===========================================================================*
+ *				bk_at					     *
+ *===========================================================================*/
+PRIVATE int bk_at(e, sec)
+unsigned e;			/* an extent */
+unsigned long *sec;		/* its first sector on that partition */
+{
+/* Where extent e is: the minor of its partition (hd3a ... hd3d on cards
+ * >= 32 GB), and its first sector there, behind the 16 swap slots. */
+  int m = sw_minor();
+
+  if (m >= SUB_MINOR) {
+	m += e / EPS;
+	e %= EPS;
+  }
+  *sec = BK_SKIP + (unsigned long) e * bk.ext * BK_BLOCK;
+  return(m);
+}
+
+
+/*===========================================================================*
  *				bk_gap					     *
  *===========================================================================*/
 PRIVATE unsigned bk_gap(pos)
@@ -288,6 +331,11 @@ unsigned pos;			/* an extent */
 /* How many free extents start at pos (0: pos is taken). */
   unsigned end = NEXT, f, i;
 
+  /* Cards >= 32 GB: a run stays in one subpartition, which is there. */
+  if (BIG) {
+	if (!SUBOK(pos)) return(0);
+	end = (pos / EPS + 1) * EPS;
+  }
   for (i = 0; i < NSLOT; i++) {
 	if (bk.run[i][1] == 0) continue;
 	f = bk.run[i][0];
@@ -306,13 +354,16 @@ unsigned n;			/* extents wanted */
 unsigned *len;			/* the largest free run, extents */
 {
 /* First fit (R12.34): the lowest free run of at least n extents; NEXT if
- * there is none.  A free run starts at 0 or right after a taken one. */
+ * there is none.  A free run starts at 0 or right after a taken one (or,
+ * on cards >= 32 GB, at a subpartition's first extent). */
   unsigned pos, g, best = NEXT, i;
 
   *len = 0;
-  for (i = 0; i <= NSLOT; i++) {
-	if (i == NSLOT) pos = 0;
-	else if (bk.run[i][1] == 0) continue;
+  for (i = 0; i < NSLOT + 4; i++) {
+	if (i >= NSLOT) {
+		pos = (i - NSLOT) * EPS;
+		if (pos != 0 && !BIG) continue;
+	} else if (bk.run[i][1] == 0) continue;
 	else pos = bk.run[i][0] + bk.run[i][1];
 	if (pos >= NEXT || (g = bk_gap(pos)) == 0) continue;
 	if (g > *len) *len = g;
@@ -428,15 +479,15 @@ int bg;				/* a background caller: the write budget */
   unsigned first = rq->first, n = rq->count ? rq->count : BLK_NSECT, i;
   unsigned long pos, crc, bits;
   phys_bytes buf, a;
-  int valid, e;
+  int valid, e, m;
 
   if (r[1] == 0 || PEND(who)) return(EBADF);
   if (rq->id >= (unsigned long) r[1] * bk.ext) return(ERANGE);
   if (first >= BLK_NSECT || n > BLK_NSECT - first) return(ERANGE);
   if ((buf = bk_buf((vir_bytes) rq->buf, (vir_bytes) n * BK_SECT)) == 0)
 	return(EFAULT);
-  pos = (BK_SKIP + ((unsigned long) r[0] * bk.ext + rq->id) * BK_BLOCK)
-								* BK_SECT;
+  m = bk_at(r[0], &pos);		/* (a run is in one subpartition) */
+  pos = (pos + rq->id * BK_BLOCK) * BK_SECT;
   bits = ((1UL << n) - 1) << first;
 
   /* The header first: a GET of a block that is not the caller's reads
@@ -444,7 +495,7 @@ int bg;				/* a background caller: the write budget */
    * nothing from the card. */
   valid = FALSE;
   if (rq->op == BLK_GET || n != BLK_NSECT || (rq->flags & BLK_IFCHANGED)) {
-	if ((e = sw_io(DEV_READ, MM_PROC_NR, pos, (phys_bytes) h,
+	if ((e = sw_dio(m, DEV_READ, MM_PROC_NR, pos, (phys_bytes) h,
 				(phys_bytes) BK_SECT)) != OK) return(e);
 	valid = bk_valid(h, rq->id);
   }
@@ -454,7 +505,7 @@ int bg;				/* a background caller: the write budget */
 		memset((char *) buf, 0, (size_t) n * BK_SECT);
 		return(OK);
 	}
-	if ((e = sw_io(DEV_READ, who, pos + (1UL + first) * BK_SECT,
+	if ((e = sw_dio(m, DEV_READ, who, pos + (1UL + first) * BK_SECT,
 		(phys_bytes) rq->buf, (phys_bytes) n * BK_SECT)) != OK)
 		return(e);
 	for (i = 0, a = buf; i < n; i++, a += BK_SECT) {
@@ -493,9 +544,9 @@ int bg;				/* a background caller: the write budget */
   h->live |= bits;
   h->count++;
   mp->mp_flags |= BLKUSED;		/* R12.40: discard it when it ends */
-  if ((e = sw_io(DEV_WRITE, MM_PROC_NR, pos, (phys_bytes) h,
+  if ((e = sw_dio(m, DEV_WRITE, MM_PROC_NR, pos, (phys_bytes) h,
 				(phys_bytes) BK_SECT)) != OK) return(e);
-  return(sw_io(DEV_WRITE, who, pos + (1UL + first) * BK_SECT,
+  return(sw_dio(m, DEV_WRITE, who, pos + (1UL + first) * BK_SECT,
 		(phys_bytes) rq->buf, (phys_bytes) n * BK_SECT));
 }
 
@@ -512,7 +563,7 @@ int bg;				/* a background caller (R12.37) */
   struct blkreq rq;
   struct blkinfo bi;
   unsigned long b, z;
-  unsigned len;
+  unsigned len, i;
   int r;
 
   if (sys_copy(who, D, (phys_bytes) desc, MM_PROC_NR, D,
@@ -556,7 +607,9 @@ int bg;				/* a background caller (R12.37) */
 	bi.blocks = PEND(who) ? 0 : (unsigned long) RUN(who)[1] * bk.ext;
 	(void) bk_fit(NEXT, &len);
 	bi.largest = (unsigned long) len * bk.ext;
-	bi.space = (unsigned long) NEXT * bk.ext;
+	for (len = 0, i = 0; i < NEXT; i += EPS)
+		if (SUBOK(i)) len += EPS;
+	bi.space = (unsigned long) len * bk.ext;
 	bi.extent = bk.ext;
 	bi.run = RUN(who)[0];
 	bi.size = BLK_SIZE;
@@ -586,15 +639,15 @@ struct blkreq *rq;
  * of the caller's run hold nothing, headers too, so they read as zeros or
  * old data.  A card without DISCARD: nothing is done. */
   unsigned char *r = RUN(who);
-  unsigned long n = (unsigned long) rq->buf, all;
-  int e;
+  unsigned long n = (unsigned long) rq->buf, all, sec;
+  int e, m;
 
   if (r[1] == 0 || PEND(who)) return(EBADF);
   all = (unsigned long) r[1] * bk.ext;
   if (n == 0 || rq->id >= all || n > all - rq->id) return(ERANGE);
   if (NODISC) return(OK);
-  e = sw_discard(BK_SKIP + ((unsigned long) r[0] * bk.ext + rq->id)
-					* BK_BLOCK, n * BK_BLOCK);
+  m = bk_at(r[0], &sec);
+  e = sw_discard(m, sec + rq->id * BK_BLOCK, n * BK_BLOCK);
   if (e == ENOTTY) SET_NODISC();
   return(e == ENOTTY ? OK : e);
 }
@@ -645,8 +698,7 @@ PUBLIC int blk_step()
 	n = DISC_MAX / ((unsigned long) bk.ext * BK_BLOCK);
 	if (n == 0) n = 1;
 	if (n > e[1]) n = e[1];
-	r = bk.ext == 0 ? OK : sw_discard(BK_SKIP
-		+ (unsigned long) e[0] * bk.ext * BK_BLOCK,
+	r = bk.ext == 0 ? OK : sw_discard(bk_at(e[0], &b), b,
 		n * bk.ext * BK_BLOCK);
 	if (r == ENXIO) return(TRUE);		/* card out: later */
 	if (r == ENOTTY) {			/* no DISCARD: all free now */

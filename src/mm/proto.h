@@ -91,7 +91,7 @@ _PROTOTYPE( void sw_kick, (void)					);
 _PROTOTYPE( int sw_wbudget, (unsigned kb)				);
 /* blk.c */
 _PROTOTYPE( void blk_init, (void)					);
-_PROTOTYPE( int blk_on, (unsigned long sectors)			);
+_PROTOTYPE( int blk_on, (unsigned long *sz, int nsz)			);
 _PROTOTYPE( int blk_busy, (void)					);
 _PROTOTYPE( void blk_end, (int proc_nr)					);
 _PROTOTYPE( void blk_wrap, (void)					);
@@ -100,7 +100,11 @@ _PROTOTYPE( int blk_req, (void)						);
 _PROTOTYPE( int blk_step, (void)					);
 _PROTOTYPE( unsigned blk_nwipe, (void)					);
 _PROTOTYPE( int blk_wipe, (unsigned step)				);
-_PROTOTYPE( int sw_discard, (unsigned long first, unsigned long count)	);
+_PROTOTYPE( int sw_discard, (int minor, unsigned long first,
+						unsigned long count)	);
+_PROTOTYPE( int sw_dio, (int minor, int op, int proc, unsigned long pos,
+					phys_bytes addr, phys_bytes n)	);
+_PROTOTYPE( int sw_minor, (void)					);
 /* alloc.c */
 _PROTOTYPE( int alloc_mem_at, (phys_clicks base, phys_clicks clicks)	);
 _PROTOTYPE( phys_clicks hole_end, (phys_clicks pos)			);

@@ -82,6 +82,8 @@
 #define SW_MAGIC	0x57535A47UL	/* "GZSW" */
 #define SW_MAJOR	3		/* WINCHESTER: /dev/hd* (FS dmap) */
 #define SW_TYPE		0x82		/* MBR partition type: swap */
+#define SW_SUBPART	0x81		/* MINIX: holds subpartitions (R12.34) */
+#define SW_SUBMINOR	128		/* hd1a (drvlib.h MINOR_hd1a) */
 #define RES_KB		16		/* default reserve (R12.5 b) */
 #define RATE_KB		256		/* reserve: at most this a minute */
 #define WAIT_DEMAND	1		/* s waited before on-demand swap */
@@ -227,12 +229,39 @@ unsigned long pos;		/* byte offset on the partition */
 phys_bytes addr;		/* address (flat: virtual = physical) */
 phys_bytes n;			/* bytes, whole sectors */
 {
-/* One transfer between the swap partition and memory, straight through the
+/* One transfer between the swap partition and memory. */
+  return(sw_dio(sw_minor(), op, proc, pos, addr, n));
+}
+
+
+/*===========================================================================*
+ *				sw_minor				     *
+ *===========================================================================*/
+PUBLIC int sw_minor()
+{
+/* The swap partition's minor (hd3a on cards >= 32 GB: blk.c finds hd3b to
+ * hd3d after it, R12.34). */
+  return((int) (sw.dev & BYTE));
+}
+
+
+/*===========================================================================*
+ *				sw_dio					     *
+ *===========================================================================*/
+PUBLIC int sw_dio(minor, op, proc, pos, addr, n)
+int minor;			/* the partition (blocks: hd3b ... too) */
+int op;				/* DEV_READ or DEV_WRITE */
+int proc;			/* whose memory */
+unsigned long pos;		/* byte offset on the partition */
+phys_bytes addr;		/* address (flat: virtual = physical) */
+phys_bytes n;			/* bytes, whole sectors */
+{
+/* One transfer between a swap partition and memory, straight through the
  * WINCHESTER task as FS does it (no FS, no buffer cache, R12.1). */
   message m;
 
   m.m_type = op;
-  m.DEVICE = (int) (sw.dev & BYTE);
+  m.DEVICE = minor;
   m.POSITION = (long) pos;
   m.HIGHPOS = 0;		/* R12.39: swap stays below 4 GiB */
   m.PROC_NR = proc;
@@ -247,8 +276,9 @@ phys_bytes n;			/* bytes, whole sectors */
 /*===========================================================================*
  *				sw_discard				     *
  *===========================================================================*/
-PUBLIC int sw_discard(first, count)
-unsigned long first, count;	/* sectors of the swap partition */
+PUBLIC int sw_discard(minor, first, count)
+int minor;			/* the swap partition (or hd3b ...) */
+unsigned long first, count;	/* sectors of that partition */
 {
 /* R12.40: tell the card those sectors hold nothing (DIOCDISCARD; the
  * kernel does it in steps between its other tasks).  ENOTTY: no DISCARD. */
@@ -258,8 +288,8 @@ unsigned long first, count;	/* sectors of the swap partition */
   rg.first = first;
   rg.count = count;
   m.m_type = DEV_IOCTL;
-  m.DEVICE = (int) (sw.dev & BYTE);
   m.REQUEST = DIOCDISCARD;
+  m.DEVICE = minor;
   m.PROC_NR = MM_PROC_NR;
   m.ADDRESS = (char *) &rg;
   if (sendrec(WINCHESTER, &m) != OK) return(EIO);
@@ -938,8 +968,8 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   message m;
 
   int blk = mode & SW_BLK;		/* R12.38: blocks too (or only) */
-  unsigned long size;
-  int r;
+  unsigned long size[4];
+  int r, i, n, par;
 
   mode &= ~SW_BLK;
   if (mode == SW_CRYPT) return(ENOSYS);		/* 12b, later */
@@ -951,14 +981,19 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   sw.busy = 0;
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
-  (void) blk_on(0UL);
+  (void) blk_on(size, 0);
   sw.off = 0;
   if (mode == SW_OFF && !blk) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;
 	return(OK);
   }
-  if (((dev >> MAJOR) & BYTE) != SW_MAJOR || minor < 1 || minor > 4)
+  /* A primary partition, or on cards >= 32 GB (R12.34) the first
+   * subpartition (hd1a, hd2a ...) of a 0x81 primary one. */
+  par = minor;
+  if (minor >= SW_SUBMINOR && minor < SW_SUBMINOR + 16 && minor % 4 == 0)
+	par = (minor - SW_SUBMINOR) / 4 + 1;
+  if (((dev >> MAJOR) & BYTE) != SW_MAJOR || par < 1 || par > 4)
 	return(EINVAL);
   m.m_type = DEV_OPEN;
   m.DEVICE = minor;
@@ -968,14 +1003,45 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   sw.dev = (dev_t) (SW_MAJOR << MAJOR);		/* hd0: the MBR */
   if (sw_io(DEV_READ, MM_PROC_NR, 0UL, (phys_bytes) mbr, SW_SECT) != OK
 		|| mbr[510] != 0x55 || mbr[511] != 0xAA
-		|| mbr[0x1BE + 16 * (minor - 1) + 4] != SW_TYPE) {
+		|| mbr[0x1BE + 16 * (par - 1) + 4]
+				!= (par == minor ? SW_TYPE : SW_SUBPART)) {
 	sw.dev = NO_DEV;
 	return(EINVAL);
   }
-  mbr += 0x1BE + 16 * (minor - 1) + 12;		/* its size, sectors */
-  size = mbr[0] | (unsigned long) mbr[1] << 8
-		| (unsigned long) mbr[2] << 16 | (unsigned long) mbr[3] << 24;
+  n = 1;
+  i = par - 1;
+  if (par != minor) {
+	/* The subpartition table in the first sector of the primary one:
+	 * a (hd3a) must be swap; b ... d count for blocks if they are. */
+	sw.dev = (dev_t) ((SW_MAJOR << MAJOR) | par);
+	if (sw_io(DEV_READ, MM_PROC_NR, 0UL, (phys_bytes) mbr, SW_SECT) != OK
+		|| mbr[510] != 0x55 || mbr[511] != 0xAA
+		|| mbr[0x1BE + 4] != SW_TYPE) {
+		sw.dev = NO_DEV;
+		return(EINVAL);
+	}
+	n = 4;
+	i = 0;
+  }
+  for (r = 0; r < n; r++, i++) {
+	unsigned char *e = mbr + 0x1BE + 16 * i;
+
+	size[r] = e[4] != SW_TYPE ? 0 : e[12] | (unsigned long) e[13] << 8
+		| (unsigned long) e[14] << 16 | (unsigned long) e[15] << 24;
+  }
   mbr = (unsigned char *) HDR;
+  if (n == 4) {
+	/* hd3b ... hd3d need opening too (their minors follow hd3a's). */
+	for (i = 1; i < 4; i++) {
+		m.m_type = DEV_OPEN;
+		m.DEVICE = minor + i;
+		m.PROC_NR = MM_PROC_NR;
+		m.COUNT = R_BIT | W_BIT;
+		if (size[i] != 0 && (sendrec(WINCHESTER, &m) != OK
+						|| m.REP_STATUS != OK))
+			size[i] = 0;
+	}
+  }
   sw.dev = (dev_t) dev;				/* big enough? */
   if (sw_io(DEV_READ, MM_PROC_NR, NR_PROCS * SW_SLOT - SW_SECT,
 			(phys_bytes) mbr, SW_SECT) != OK) {
@@ -984,7 +1050,7 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   }
   /* Blocks behind the slots (R12.34); with SW_OFF the partition serves
    * only them, nothing is swapped. */
-  if (blk && (r = blk_on(size)) != OK) {
+  if (blk && (r = blk_on(size, n)) != OK) {
 	sw.dev = NO_DEV;
 	return(r);
   }
