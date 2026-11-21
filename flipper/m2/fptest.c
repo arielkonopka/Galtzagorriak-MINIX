@@ -1,5 +1,11 @@
 /* fptest - the R5.7 FPU checks (lazy FP context switch, arm/mpx.S), run
- * by m2test in QEMU and by hand on the device: /bin/fptest.
+ * by m2test in QEMU (/bin/fptest) and by hand on the device, from the
+ * tests package (#436):
+ *	pkg install /lib/pkg/tests_1.0.tar
+ *	/usr/tests/fptest
+ * The exec check runs this program again by the name it was started
+ * with (argv[0], or a search of $PATH when that has no '/'), so it works
+ * from any directory.
  * m2fpu.c and fpregs.S are built for the FPU, this file is not: between
  * fp_fill and fp_check nothing here touches the FP registers.  Each check
  * runs in a child, so this process stays without an FP context.
@@ -10,6 +16,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -181,10 +188,39 @@ static int fp_t_fork(void)	/* the child gets a copy */
 	return bad + WEXITSTATUS(st) * 2;
 }
 
+static char *self;		/* argv[0] */
+
+/* Exec this program again with argument fp-exec: argv[0] if it names a
+ * path, else each $PATH directory (MINIX's libc has no execvp).  The
+ * FP registers are filled once, before the first exec; a failed exec
+ * returns and keeps them. */
+static void exec_self(void)
+{
+	static char buf[128];
+	const char *p, *e;
+	size_t d, n = strlen(self);
+
+	if (strchr(self, '/') == NULL && (p = getenv("PATH")) != NULL) {
+		for (;; p = e + 1) {
+			if ((e = strchr(p, ':')) == NULL) e = p + strlen(p);
+			d = e - p;
+			if (d + 1 + n < sizeof(buf)) {
+				memcpy(buf, d ? p : ".", d ? d : 1);
+				if (d == 0) d = 1;
+				buf[d] = '/';
+				memcpy(buf + d + 1, self, n + 1);
+				execl(buf, self, "fp-exec", (char *) NULL);
+			}
+			if (*e == '\0') break;
+		}
+	}
+	execl(self, self, "fp-exec", (char *) NULL);
+}
+
 static int fp_t_exec(void)	/* exec clears the FP registers */
 {
 	fp_fill(3);
-	execl("/bin/fptest", "fptest", "fp-exec", (char *) NULL);
+	exec_self();
 	return 99;
 }
 
@@ -211,6 +247,7 @@ int main(int argc, char **argv)
 {
 	if (argc == 2 && strcmp(argv[1], "fp-exec") == 0)
 		return fp_nonzero();
+	self = argc > 0 ? argv[0] : "/bin/fptest";
 	fpu_tests();
 	return fails;
 }

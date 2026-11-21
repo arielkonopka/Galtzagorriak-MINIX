@@ -333,7 +333,8 @@ DAEMONS	:= mtpd rpcd
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) $(WINBASE) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
-# runs them; furihello is also in the tests package (/usr/tests).
+# runs them; furihello and fptest are also in the tests package
+# (/usr/tests) on the other boards.
 ifeq ($(BOARD),qemu)
 UPROGS	+= furitest furihello gmdemo fptest guiflood spinfifo
 endif
@@ -1112,6 +1113,7 @@ $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
+TESTS	+= fptest	# R5.7 FPU checks (#436): OBJS_fptest above
 endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
