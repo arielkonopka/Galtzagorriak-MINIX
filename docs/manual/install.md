@@ -156,6 +156,11 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
    [The SD card](sdcard.md#converting-home-to-minix-v3-setup--h)). Before this version `/home`
    was MINIX V2, at most 4 GB.
 
+   On a card of **32 GB or more** swap is larger: `/dev/hd3` at the end of the card holds four
+   swap subpartitions `/dev/hd3a` to `/dev/hd3d` of 4 GiB − 1 MiB each (about 16 GiB), and
+   `/home` is 4 GiB − 1 MiB. The rest of the card stays free. Programs swap to `/dev/hd3a`; the
+   [memory blocks](blocks.md) of apps use all four.
+
 2. After the reboot it shows "Preparing the card..." and tells the card that `/usr`, swap and
    `/home` are empty (`erase`, see [Swap](swap.md)): a card that was full before, from a camera
    or a phone, then has its whole free pool for wear levelling. **(planned on the Flipper,

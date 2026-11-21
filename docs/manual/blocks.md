@@ -33,7 +33,9 @@ swapon /dev/hd3 plain blk
 
 The space behind the 16 swap slots (3 MB) is the **block space**, cut into 256 extents. On the
 64 MB partition of a small card that is about 54 MB of data; on an 8 GB or larger card up to
-about 3.6 GB. A block takes 4.5 KB on the card (one header sector with its owner and a CRC of
+about 3.6 GB. On a card of 32 GB or more, set up by this version, the space is spread over the
+four swap subpartitions `/dev/hd3a` to `/dev/hd3d`, 64 extents each: about 14 GB in all, and one
+app's run stays inside one of them (at most about 3.6 GB). `/etc/rc` then swaps to `/dev/hd3a`. A block takes 4.5 KB on the card (one header sector with its owner and a CRC of
 every sector, then 4 KB of data).
 
 An app gets space **only by asking**: `blk_open(bytes, flags)` reserves a contiguous run of

@@ -5468,6 +5468,11 @@ noticeable CPU on the foreground path.
     subpartition only removes its extents; swap itself needs only `hd3a`. With root, `/usr` 2 GB and
     `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
     partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
+    *as built (T20a):* `mkpart /dev/hd0 81:2048 82/4:*@end 81:4095` makes the layout (type
+    `82/4`: the 0x81 container, subpartitions 4 GiB apart behind its first 4 MiB, their table in its
+    first sector); `/etc/setup` uses it from 29 000 MB on and leaves `/etc/.swap4`, by which
+    `/etc/rc` swaps to `hd3a` (and fsck's scratch goes there, never to `hd3`'s table sector). The
+    subpartitions' presence bits live in spare bits of the pid-wrap mask: MM +0 B, not +1 B;
   - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
     be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
     swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and extents are
