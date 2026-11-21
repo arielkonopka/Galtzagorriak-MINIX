@@ -19,6 +19,7 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <ctype.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,13 @@ void nfcshim_crash(const char* msg, const char* file, int line) __attribute__((n
 #define FURI_LOG_I(tag, ...) ((void)(tag))
 #define FURI_LOG_D(tag, ...) ((void)(tag))
 #define FURI_LOG_T(tag, ...) ((void)(tag))
+/* Log level: never Trace, so the EMV poller's APDU trace (card data) is
+ * never printed (#412). */
+typedef enum {
+    FuriLogLevelDefault, FuriLogLevelNone, FuriLogLevelError, FuriLogLevelWarn,
+    FuriLogLevelInfo, FuriLogLevelDebug, FuriLogLevelTrace,
+} FuriLogLevel;
+static inline FuriLogLevel furi_log_get_level(void) { return FuriLogLevelNone; }
 #define FURI_LOG_RAW_D(...)  ((void)0)
 #define FURI_LOG_RAW_T(...)  ((void)0)
 #define FURI_LOG_RAW_I(...)  ((void)0)
@@ -121,6 +129,18 @@ uint32_t furi_thread_flags_set(FuriThreadId id, uint32_t flags);
 uint32_t furi_thread_flags_clear(uint32_t flags);
 uint32_t furi_thread_flags_wait(uint32_t flags, uint32_t options, uint32_t timeout);
 void furi_string_trim_chars(FuriString* s, const char* chars);
+/* FeliCa's file loader (#412). */
+#define FURI_STRING_FAILURE ((size_t)-1)
+size_t nfcshim_str_search(const FuriString* s, const char* needle, size_t start);
+#define furi_string_search_str(s, n, ...) nfcshim_str_search(s, n, (0, ##__VA_ARGS__))
+void furi_string_mid(FuriString* s, size_t start, size_t len);
+void furi_string_replace_all(FuriString* s, const char* from, const char* to);
+/* Last c in s, or FURI_STRING_FAILURE (stock's optional start is not used). */
+size_t furi_string_search_rchar(const FuriString* s, char c, ...);
+/* Code points in the (UTF-8) string. */
+size_t furi_string_utf8_length(FuriString* s);
+/* The buffer is fixed (NFCSHIM_STR_MAX): nothing to reserve. */
+void furi_string_reserve(FuriString* s, size_t size);
 #define furi_string_trim_1(s) furi_string_trim_chars(s, " \n\r\t")
 #define furi_string_trim_2(s, c) furi_string_trim_chars(s, c)
 #define furi_string_trim_x(a, b, f, ...) f

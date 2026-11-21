@@ -45,4 +45,19 @@ int nfc_supported_cards_read(struct Nfc* nfc, struct NfcDevice* device);
  * that recognised the card, or -1 (out is then empty). */
 int nfc_supported_cards_parse(const struct NfcDevice* device, struct FuriString* out);
 
+/* The ID-list parsers (#412, D.3): plantain, sev_tk, sk_tk, szppk_so and
+ * skylanders name stations or figures from the user's own lists in
+ * /home/flipper/nfc/assets (none shipped).  The list file parser i reads
+ * ("nfc/assets/sz_id.nfc", relative to the home), or NULL. */
+const char* nfc_supported_cards_list_file(size_t i);
+/* After nfc_supported_cards_parse(): append to out a note for each list
+ * the card's protocol could have used and that is missing, so the user
+ * sees why no names are shown:
+ *   parsed (r >= 0, a list parser):  "No ID list found (<path>): codes
+ *                                     shown instead of names."
+ *   not parsed (r < 0):               "No ID list found (<path>),
+ *                                     showing the raw card."
+ * Returns how many notes were added. */
+int nfc_supported_cards_list_notes(const struct NfcDevice* device, int r, struct FuriString* out);
+
 #endif

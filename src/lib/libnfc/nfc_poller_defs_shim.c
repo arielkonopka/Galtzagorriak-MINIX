@@ -16,7 +16,11 @@
 #include <nfc/protocols/iso15693_3/iso15693_3_poller_defs.h>
 #include <nfc/protocols/slix/slix_poller_defs.h>
 #include <nfc/protocols/mf_classic/mf_classic_poller_defs.h>
+#include <nfc/protocols/mf_ultralight/mf_ultralight_poller_defs.h>
 
+#include <nfc/protocols/felica/felica_poller_defs.h>
+#include <nfc/protocols/st25tb/st25tb_poller_defs.h>
+#include <nfc/protocols/emv/emv_poller_defs.h>
 const NfcPollerBase* const nfc_pollers_api[NfcProtocolNum] = {
     [NfcProtocolIso14443_3a] = &nfc_poller_iso14443_3a,
     [NfcProtocolIso14443_3b] = &nfc_poller_iso14443_3b,
@@ -26,4 +30,8 @@ const NfcPollerBase* const nfc_pollers_api[NfcProtocolNum] = {
     [NfcProtocolMfDesfire] = &mf_desfire_poller,
     [NfcProtocolSlix] = &nfc_poller_slix,
     [NfcProtocolMfClassic] = &mf_classic_poller,
+    [NfcProtocolMfUltralight] = &mf_ultralight_poller,
+    [NfcProtocolFelica] = &nfc_poller_felica,
+    [NfcProtocolSt25tb] = &nfc_poller_st25tb,
+    [NfcProtocolEmv] = &emv_poller,
 };

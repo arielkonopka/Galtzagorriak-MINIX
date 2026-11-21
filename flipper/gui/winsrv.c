@@ -452,8 +452,26 @@ static int record(struct ses *s, char *line, int len)
 		break;
 	case WR_CLOSE:
 		return -1;
+	case WR_RUN:	/* lbuf keeps "LABEL\0FILE\0" for win_next (no .bss) */
+		n = (int) strlen(f[1]) + 1;
+		memmove(lbuf, f[1], (size_t) n);
+		memmove(lbuf + n, f[2], strlen(f[2]) + 1);
+		llen = -1;
+		return -1;
 	}
 	return 0;
+}
+
+/* After win_run: the app asked to open a file in another app ("run"
+ * record).  1 with *label and *file in the record buffer (valid until the
+ * next win_run reads a record), else 0.  Once. */
+int win_next(char **label, char **file)
+{
+	if (llen != -1) return 0;
+	llen = 0;
+	*label = lbuf;
+	*file = lbuf + strlen(lbuf) + 1;
+	return 1;
 }
 
 /* Records are there (or the app is gone): read what came, handle every
@@ -1054,7 +1072,8 @@ static void timed(struct ses *s)
 
 /* Start a window app and serve it until it ends or Back closes it.  NULL,
  * or a notice for the launcher's message line. */
-char *win_run(const char *label, const char *cmd, struct passwd *pw, int log)
+char *win_run(const char *label, const char *cmd, struct passwd *pw, int log,
+	      char *extra)
 {
 	char c[CMDMAX], *argv[MAXARGS + 1], *p, *note = NULL;
 	struct ses s;
@@ -1065,8 +1084,9 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log)
 	c[CMDMAX - 1] = 0;
 	for (p = strtok(c, " "); p != NULL && argc < MAXARGS; p = strtok(NULL, " "))
 		argv[argc++] = p;
-	argv[argc] = NULL;
 	if (argc == 0) return NULL;
+	if (extra != NULL && argc < MAXARGS) argv[argc++] = extra;
+	argv[argc] = NULL;
 	win_reap(1);			/* a closed one still alive: SIGTERM */
 	if (pipe(evp) < 0) return "cannot start";
 	if (pipe(recp) < 0) {

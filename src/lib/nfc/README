@@ -45,6 +45,11 @@ with its own code (mfkey/mfkey_recovery.c, mfkey_state_expansion.c,
 mfkey_bs_verify.c); the Crypto1 cipher itself is nfc/helpers/crypto1.c.
 Those are what part 3 ports; no Crapto1 needs to be written from memory.
 
+Local changes: none in this tree.  banapass.c needs one (its case labels
+are `static const` objects, not constant expressions in C); the patch is
+src/lib/libnfc/patches/banapass.patch, applied to a copy at build time,
+so this copy stays byte for byte (#412).
+
 Not taken:
   - The key dictionaries (mf_classic_dict.nfc, mf_plus_dict.nfc,
     mf_ultralight_c_dict.nfc, mf_ultralight_aes_dict.nfc) and the parsers'

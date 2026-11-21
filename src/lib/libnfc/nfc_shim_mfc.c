@@ -74,11 +74,6 @@ bool flipper_format_buffered_file_open_existing(FlipperFormat* ff, const char* p
     (void)ff; (void)p;
     return false;
 }
-void flipper_format_free(FlipperFormat* ff) { (void)ff; }
-bool flipper_format_read_header(FlipperFormat* ff, FuriString* t, uint32_t* v) {
-    (void)ff; (void)t; (void)v;
-    return false;
-}
 bool flipper_format_write_header_cstr(FlipperFormat* ff, const char* t, uint32_t v) {
     (void)ff; (void)t; (void)v;
     return false;
