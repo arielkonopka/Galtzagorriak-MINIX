@@ -89,7 +89,13 @@ code and tested against a software card.)**
 When a card's key is not in any dictionary but you can present the card to a reader that knows
 it, `mfkey` recovers the key from the authentication the reader does (stock's "Mfkey" / nonce
 collection). It runs as an ordinary command (swappable when idle), nonce-collection files in,
-keys out. **(planned: the on-device nonce collection; the Crypto-1 cipher is in the code.)**
+keys out. The recovery itself (the Unleashed `mfkey` engine) is in the code and host-tested in
+two forms: **mfkey32** (two reader authentications on one sector) from a stock-format
+`.mfkey32.log`, and **static_nested** (one tag-static sector, two tag nonces with their
+keystream words) from a stock nested-nonce log. Each recovers a planted key in one to two
+seconds per key on the host; mfkey32 also recovers the all-`F` transport key. **(planned: the
+on-device nonce collection; the static-encrypted attack, which needs a per-card candidate-key
+dictionary.)**
 
 ```
 mfkey nonneak.txt            # nonneak = nonces; prints the recovered keys
