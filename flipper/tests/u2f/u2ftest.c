@@ -12,6 +12,9 @@
 #include "u2f.h"
 #include "sha256.h"
 #include "p256.h"
+#include "u2fstore.h"
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, \
@@ -539,6 +542,96 @@ static void real(void)
 	CHECK(p256_verify(cpub, hash, sig) == 0);	/* not the cert's */
 }
 
+/* ---- the files ---- */
+
+static void wfile(const char *dir, const char *name, const void *d, size_t n)
+{
+	char p[256];
+	FILE *f;
+
+	snprintf(p, sizeof p, "%s/%s", dir, name);
+	f = fopen(p, "wb");
+	if (f == NULL) { fails++; return; }
+	fwrite(d, 1, n, f);
+	fclose(f);
+}
+
+static void rndfill(unsigned char *b, unsigned n)
+{
+	f_random(NULL, b, n);
+}
+
+static void store(void)
+{
+	char dir[] = "/tmp/u2ftestXXXXXX", p[256], sub[300];
+	static const char ck2[] = "Filetype: Flipper U2F Certificate Key File\n"
+		"Version: 1\nType: 2\nData: 17 17 17 17 17 17 17 17 17 17 17 17 "
+		"17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17\n";
+	static const char ck1[] = "Filetype: Flipper U2F Certificate Key File\n"
+		"Version: 1\nType: 1\nIV: 00\nData: 00\n";
+	unsigned char cb[U2F_MAXCERT], k1[32], v[4];
+	struct u2f u, u2;
+	struct stat st;
+	unsigned long c;
+
+	CHECK(u2fs_hex("A: 1\nData: 0a FF\n", "Data", v, 2) == 0
+	      && v[0] == 10 && v[1] == 255);
+	CHECK(u2fs_hex("Data: 0a FF 01\n", "Data", v, 2) < 0);
+	CHECK(u2fs_hex("Data: 0a\n", "Data", v, 2) < 0);
+	CHECK(u2fs_hex("Data: 0g 00\n", "Data", v, 2) < 0);
+	CHECK(u2fs_num("Counter: 4294967295\n", "Counter", &c) == 0
+	      && c == 4294967295UL);
+	CHECK(u2fs_num("Counter: 4294967296\n", "Counter", &c) < 0);
+	CHECK(u2fs_num("Counter: 12x\n", "Counter", &c) < 0);
+	CHECK(u2fs_num("Counter:\n", "Counter", &c) < 0);
+
+	if (mkdtemp(dir) == NULL) { fails++; return; }
+	snprintf(sub, sizeof sub, "%s/assets", dir);
+	mkdir(sub, 0700);
+	setup(&u);
+	CHECK(u2fs_load(dir, &u, cb, rndfill) == U2FS_NOCERT);
+	wfile(dir, "assets/cert.der", cert, sizeof cert);
+	CHECK(u2fs_load(dir, &u, cb, rndfill) == U2FS_NOKEY);
+	wfile(dir, "assets/cert_key.u2f", ck1, sizeof ck1 - 1);
+	CHECK(u2fs_load(dir, &u, cb, rndfill) == U2FS_ENCRYPTED);
+	wfile(dir, "assets/cert_key.u2f", ck2, sizeof ck2 - 1);
+	memset(&u, 0, sizeof u);
+	CHECK(u2fs_load(dir, &u, cb, rndfill) == U2FS_OK);
+	CHECK(u.cert_len == sizeof cert && memcmp(u.cert, cert, sizeof cert) == 0);
+	CHECK(u.cert_key[0] == 0x17 && u.cert_key[31] == 0x17 && u.counter == 0);
+	memcpy(k1, u.device_key, 32);
+	snprintf(p, sizeof p, "%s/minix.key", dir);
+	CHECK(stat(p, &st) == 0 && (st.st_mode & 0777) == 0600);
+	/* the same key the next time; the counter as saved */
+	CHECK(u2fs_counter_save(dir, 41) == 0);
+	memset(&u2, 0, sizeof u2);
+	CHECK(u2fs_load(dir, &u2, cb, rndfill) == U2FS_OK);
+	CHECK(memcmp(u2.device_key, k1, 32) == 0 && u2.counter == 41);
+	snprintf(p, sizeof p, "%s/minix.cnt", dir);
+	CHECK(stat(p, &st) == 0 && (st.st_mode & 0777) == 0600);
+	snprintf(p, sizeof p, "%s/minix.cnt.tmp", dir);
+	CHECK(access(p, F_OK) < 0);
+	/* a broken counter or key stops it, never a new start */
+	wfile(dir, "minix.cnt", "Filetype: Galtzagorriak U2F Counter File\n"
+	      "Version: 1\nCounter: x\n", 64);
+	CHECK(u2fs_load(dir, &u2, cb, rndfill) == U2FS_COUNTER);
+	wfile(dir, "minix.cnt", "", 0);
+	CHECK(u2fs_load(dir, &u2, cb, rndfill) == U2FS_COUNTER);
+	CHECK(u2fs_counter_save(dir, 42) == 0);
+	wfile(dir, "minix.key", "Filetype: Galtzagorriak U2F Device Key File\n"
+	      "Version: 1\nData: 00\n", 63);
+	CHECK(u2fs_load(dir, &u2, cb, rndfill) == U2FS_DEVKEY);
+	/* a certificate too big */
+	{
+		static unsigned char big[U2F_MAXCERT + 1] = { 0x30 };
+
+		wfile(dir, "assets/cert.der", big, sizeof big);
+		CHECK(u2fs_load(dir, &u2, cb, rndfill) == U2FS_NOCERT);
+	}
+	snprintf(p, sizeof p, "rm -rf %s", dir);
+	CHECK(system(p) == 0);
+}
+
 int main(void)
 {
 	vectors();
@@ -546,6 +639,7 @@ int main(void)
 	hid();
 	fuzz();
 	real();
+	store();
 	if (fails) { printf("u2f: %d failed\n", fails); return 1; }
 	printf("u2f: all tests passed\n");
 	return 0;
