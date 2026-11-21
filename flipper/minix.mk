@@ -108,6 +108,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 SHLIBC	?= 1
 SHL	:= $(MB)/shlibc
 SHF	:= $(MB)/shfuri
+SHB	:= $(MB)/shberry
 SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
 SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
@@ -260,16 +261,17 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 	$(call link_server,init,$(MB)/fs.elf)
 
 # The system image (192 KB at most), then the shared libc at 192 KB
-# (SHLIBC_BASE, 48 KB at most) and the shared libfuri + libapp at 240 KB
-# (SHFURI_BASE, 48 KB at most); the installed programs start at 288 KB
-# (hal_flash_layout(), R2b.1; <minix/shlibc.h>).
+# (SHLIBC_BASE, 48 KB at most), the shared libfuri + libapp at 240 KB
+# (SHFURI_BASE, 48 KB at most) and the shared Berry interpreter at 288 KB
+# (SHBERRY_BASE, 96 KB at most, R7c.1); the installed programs start at
+# 384 KB (hal_flash_layout(), R2b.1; <minix/shlibc.h>).
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
-		 tools/mkflash.py $(SHL)/libc.bin $(SHF)/furi.bin
+		 tools/mkflash.py $(SHL)/libc.bin $(SHF)/furi.bin $(SHB)/berry.bin
 	python3 -I tools/mkflash.py --libc=0x30000,$(SHL)/libc.bin \
-	   --lib=0x3C000,$(SHF)/furi.bin \
+	   --lib=0x3C000,$(SHF)/furi.bin --lib=0x48000,$(SHB)/berry.bin \
 	   $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@test $$(stat -c %s $@) -le 294912 || \
-	   { echo "$@ is over 288 KB: it would overlap the installed programs"; \
+	@test $$(stat -c %s $@) -le 393216 || \
+	   { echo "$@ is over 384 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
 # make base-flash: minix-base.bin = minix.bin with the programs used at boot
@@ -285,7 +287,7 @@ BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
-	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x48000 \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x60000 \
 	   --rom=$(MB)/rom.img $(BASE_FLASH:%=$(MB)/bin/%)
 
 # The default settings image (spec L.2): /etc as built, read-only, 32 KB;
@@ -1085,10 +1087,58 @@ $(BERRY_GEN): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h
 $(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(BERRY_CFLAGS) -MMD -MP -c $< -o $@
-OBJS_berry = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRY_OBJ = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRY_LIBOBJ = $(filter-out $(MB)/berry/gzberry.o,$(BERRY_OBJ))
 BERRYPROGS := berry
-CHMEM_berry := 12288	# R7c.4: the 8 KB script heap (-m), the VM and
-			# its stack; PORTING.md "Berry" has the measured split
+# The shared Berry library in flash (spec R7c.1, issue #431; the "berry"
+# library, <minix/shlibc.h>, ld/shberry.ld, tools/mkshlibc.py): the VM and
+# the bindings at SHBERRY_BASE, after the furi library, in minix.bin.  Its
+# constant tables stay in its flash (.data.rel.ro in the text), so a
+# script's RAM is the libc and berry areas, the launcher's few words and
+# the chmem.  Only the launcher's calls are exported (berry.exports).
+SHBERRY_BASE := $(if $(filter flipper,$(BOARD)),0x08048000,0x00048000)
+$(SHB)/tab.S: berry.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	python3 -I tools/mkshlibc.py tab $< $@ --berry
+$(SHB)/tab.o: $(SHB)/tab.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+$(SHB)/berry.elf: $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
+		$(MB)/libc-static.a $(SHL)/shlibc-syms.ld ld/shberry.ld
+	@echo "  LD $@"
+	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
+	   -Wl,--gc-sections -Wl,-q -L$(SHL) \
+	   -Wl,--defsym=SHBERRY_BASE=$(SHBERRY_BASE) -Tld/shberry.ld \
+	   -Wl,-Map=$@.map $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
+	   $(MB)/libc-static.a -lgcc -o $@
+$(SHB)/berry.bin $(SHB)/berry.json $(SHB)/stubs.S $(SHB)/shberry-syms.ld &: \
+		$(SHB)/berry.elf berry.exports tools/mkshlibc.py $(SHL)/libc.json
+	python3 -I tools/mkshlibc.py image $< berry.exports $(SHB)/berry.bin \
+	   $(SHB)/berry.json $(SHB)/stubs.S $(SHB)/shberry-syms.ld \
+	   --dep $(SHL)/libc.json --name SHBERRY --max 0x18000
+$(SHB)/stubs.o: $(SHB)/stubs.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+.PHONY: shberry
+shberry: $(SHB)/berry.bin
+ifeq ($(SHLIBC),1)
+OBJS_berry = $(MB)/berry/gzberry.o
+define berry_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \
+		$(SHB)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a \
+		ld/user-shberry.ld $(SHL)/shlibc-syms.ld $(SHB)/shberry-syms.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -L$(SHB) -Tld/user-shberry.ld \
+	   -Wl,-Map=$$@.map $(MB)/user/crtso-sh.o $(call objs_of,$(1)) \
+	   $(SHB)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $$@
+endef
+ELF2MNX_BERRY = $(if $(filter $*,$(BERRYPROGS)),--furi $(SHB)/berry.json)
+else
+OBJS_berry = $(BERRY_OBJ)
+berry_prog = $(call user_prog,$(1))
+endif
+# chmem: the default 8 KB script heap (-m, R7c.4) with malloc's headers,
+# the C stack of the VM (parser and calls; ~2 KB measured, berrytest) and
+# MM's 1.5 KB safety gap; PORTING.md "Berry" has the measured split.
+CHMEM_berry := 12288
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -1144,8 +1194,9 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS) $(BERRYPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
+$(foreach p,$(BERRYPROGS),$(eval $(call berry_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -1383,7 +1434,7 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
 	   $(if $(filter $*,$(SECRETPROGS)),--secret) \
 	   $(if $(filter $*,$(STATICPROGS)),,$(ELF2MNX_LIBC)) \
-	   $(ELF2MNX_FURI)
+	   $(ELF2MNX_FURI) $(ELF2MNX_BERRY)
 $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)

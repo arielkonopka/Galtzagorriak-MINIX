@@ -372,11 +372,14 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 	    || SHLIBC_HDR->sh_id != (unsigned long) hdr.a_tbase
 	    || !(hdr.a_flags & A_SEP))
 		return(ENOEXEC);
-	/* The same for the shared libfuri + libapp (R2b.9, R5.2), whose
-	 * area follows the libc's: a_dbase is its id, 0 when unused. */
+	/* The same for the shared libfuri + libapp (R2b.9, R5.2) or the
+	 * Berry library (R7c.1), whose area follows the libc's: a_dbase is
+	 * the id of the one the program uses, 0 when none. */
 	if (hdr.a_dbase != 0
 	    && (SHFURI_HDR->sh_magic != SHFURI_MAGIC
-		|| SHFURI_HDR->sh_id != (unsigned long) hdr.a_dbase))
+		|| SHFURI_HDR->sh_id != (unsigned long) hdr.a_dbase)
+	    && (SHBERRY_HDR->sh_magic != SHBERRY_MAGIC
+		|| SHBERRY_HDR->sh_id != (unsigned long) hdr.a_dbase))
 		return(ENOEXEC);
   }
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC | A_NOSWAP)) != 0)

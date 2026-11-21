@@ -150,6 +150,15 @@ int main(int argc, char **argv)
 				SHFURI_HDR->sh_nslot, SHFURI_HDR->sh_area);
 		else
 			printf("shared libfuri: none in flash\n");
+		/* R7c.1: the Berry VM, once for every running script */
+		if (SHBERRY_HDR->sh_magic == SHBERRY_MAGIC)
+			printf("shared Berry: %lu KB at %08lx, id %08lx, %d "
+				"functions, %lu bytes of data per process\n",
+				(SHBERRY_HDR->sh_size + 1023) / 1024,
+				(unsigned long) SHBERRY_BASE, SHBERRY_HDR->sh_id,
+				SHBERRY_HDR->sh_nslot, SHBERRY_HDR->sh_area);
+		else
+			printf("shared Berry: none in flash\n");
 	}
 	if (k) kstacks();
 	return 0;

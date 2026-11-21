@@ -315,6 +315,13 @@ static unsigned long furi_id(void)
 	return SHFURI_HDR->sh_magic == SHFURI_MAGIC ? SHFURI_HDR->sh_id : 0;
 }
 
+/* And for the shared Berry interpreter (R7c.1): its id is in the same
+ * field (Furi:, a_dbase), since no program uses both libraries. */
+static unsigned long berry_id(void)
+{
+	return SHBERRY_HDR->sh_magic == SHBERRY_MAGIC ? SHBERRY_HDR->sh_id : 0;
+}
+
 /* Copy a control field into a buffer of size bytes; 0: it does not fit. */
 static int field(char *to, size_t size, const char *v)
 {
@@ -703,10 +710,11 @@ static int install(const char *file)
 		cleanup();
 		return 1;
 	}
-	if (ctl_furi[0] != 0 && strtoul(ctl_furi, NULL, 16) != furi_id()) {
-		fprintf(stderr, "pkg: %s needs shared libfuri %s, this system has "
-			"%08lx: flash minix-base.bin of the same build\n",
-			ctl_name, ctl_furi, furi_id());
+	if (ctl_furi[0] != 0 && strtoul(ctl_furi, NULL, 16) != furi_id()
+	    && strtoul(ctl_furi, NULL, 16) != berry_id()) {
+		fprintf(stderr, "pkg: %s needs shared library %s, this system has "
+			"libfuri %08lx, Berry %08lx: flash minix-base.bin of the "
+			"same build\n", ctl_name, ctl_furi, furi_id(), berry_id());
 		cleanup();
 		return 1;
 	}

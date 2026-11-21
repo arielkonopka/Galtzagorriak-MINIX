@@ -13,7 +13,7 @@
 #define RD_FLASH_END	0x08100000UL	/* 1 MB */
 #define RD_PAGE		4096UL
 #define RD_GUARD	(16 * RD_PAGE)	/* R2b.1: room for FUS below SFSA */
-#define RD_INST		0x48000UL	/* installed region, from the base */
+#define RD_INST		0x60000UL	/* installed region, from the base (after the system image and the three shared libraries, <minix/shlibc.h>) */
 #define RD_INST_RSV	(2 * RD_PAGE + 32 * 1024UL)	/* its directory
 					 * pages and /dev/rom (HAL_ROM_OFF,
 					 * HAL_ROM_SIZE): never given away */

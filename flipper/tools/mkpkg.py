@@ -114,7 +114,8 @@ def main():
     # "any" for a package without programs (spec J.3).
     # Libc: the build id of the shared libc its programs were linked with
     # (a.out flag A_LIBC, a_tbase; spec R2b.9): pkg refuses another one.
-    # Furi: the same for the shared libfuri + libapp (a_dbase, 0: unused).
+    # Furi: the same for the shared libfuri + libapp or the shared Berry
+    # interpreter (a_dbase, 0: unused; R7c.1: no program uses both).
     # Secret: yes when a program is marked A_NOSWAP (elf2mnx --secret): in
     # plain swap mode its RAM never goes to the card (spec R12.28).
     abis, libcs, furis, secret = set(), set(), set(), False
