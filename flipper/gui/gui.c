@@ -28,6 +28,18 @@ int gui_open(void)
 	return 0;
 }
 
+int gui_open_lcd(void)
+{
+	if ((lcd_fd = open("/dev/lcd", O_RDWR)) < 0) return -1;
+	gui_clear();
+	return 0;
+}
+
+void gui_image(const unsigned char *img)
+{
+	memcpy(fb, img, sizeof fb);
+}
+
 void gui_close(void)
 {
 	if (lcd_fd >= 0) close(lcd_fd);
