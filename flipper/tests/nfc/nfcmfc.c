@@ -4,7 +4,10 @@
  * encrypted parity bits, 9 bits a byte.  Read only: it sends AUTH and READ,
  * nothing else.  Not built by the Makefile: for the device, copy it over
  * apps/hello.c and send the hello package.
- * Usage: nfcmfc [-q] [BLOCK [KEY12HEX [a|b]]]	(-q: no UID, no block data) */
+ * With -w DATA32HEX it WRITEs the block first (never block 0 or a sector
+ * trailer), then reads it back.
+ * Usage: nfcmfc [-q] [-w DATA32HEX] [BLOCK [KEY12HEX [a|b]]]
+ *	(-q: no UID, no block data) */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <minix/nfc.h>
@@ -59,6 +62,17 @@ static void put9(unsigned char *s, unsigned *pos, unsigned v, unsigned p)
 		if (w >> i & 1) s[*pos / 8] |= 1 << (*pos % 8);
 }
 
+/* A 4-bit ACK/NAK, deciphered (0xA: ACK). */
+static int nibble(const unsigned char *rx, unsigned rxb)
+{
+	unsigned i, v = 0;
+
+	if (rxb != 4) return -1;
+	for (i = 0; i < 4; i++)
+		v |= (unsigned) ((rx[0] >> i & 1) ^ crypto1_bit(&c, 0, 0)) << i;
+	return (int) v;
+}
+
 static unsigned get9(const unsigned char *s, unsigned k)
 {
 	unsigned i, w = 0, pos = k * 9;
@@ -87,9 +101,15 @@ int main(int argc, char **argv)
 	unsigned long nt, at, u;
 	unsigned long long k = 0;
 	int v, r, cl, i, quiet = 0;
+	const char *wr = (char *) 0;
 
 	if (argc > 1 && !strcmp(argv[1], "-q")) { quiet = 1; argc--; argv++; }
+	if (argc > 2 && !strcmp(argv[1], "-w")) { wr = argv[2]; argc -= 2; argv += 2; }
 	if (argc > 1) blk = atoi(argv[1]);
+	if (wr != NULL && (strlen(wr) != 32 || blk == 0 || blk % 4 == 3)) {
+		printf("write: 32 hex digits, not block 0, not a trailer\n");
+		return 2;
+	}
 	memset(key, 0xFF, 6);
 	if (argc > 2 && strlen(argv[2]) == 12)
 		for (i = 0; i < 6; i++) {
@@ -154,6 +174,30 @@ int main(int argc, char **argv)
 	if (at != crypto1_prng_successor(nt, 96)) { printf("auth: the card's answer is wrong\n"); goto out; }
 	printf("auth ok (block %u, key %c), parity errors %u\n", blk, kt == 0x60 ? 'A' : 'B', parbad);
 
+	if (wr != NULL) {				/* WRITE, two steps */
+		pl[0] = 0xA0; pl[1] = blk;
+		w = crc_a(pl, 2);
+		pl[2] = w; pl[3] = w >> 8;
+		memset(tx, 0, sizeof tx);
+		pos = 0;
+		seal(tx, &pos, pl, 4);
+		if ((r = xf(tx, pos, rx, sizeof rx * 8, NFC_XF_PARITY, &rxb)) < 0) { printf("write: errno %d\n", -r); goto out; }
+		if ((r = nibble(rx, rxb)) != 0xA) { printf("write: answer %d (%u bits)\n", r, rxb); goto out; }
+		for (i = 0; i < 16; i++) {
+			char h[3];
+
+			h[0] = wr[2 * i]; h[1] = wr[2 * i + 1]; h[2] = 0;
+			pl[i] = (unsigned char) strtol(h, (char **) 0, 16);
+		}
+		w = crc_a(pl, 16);
+		pl[16] = w; pl[17] = w >> 8;
+		memset(tx, 0, sizeof tx);
+		pos = 0;
+		seal(tx, &pos, pl, 18);
+		if ((r = xf(tx, pos, rx, sizeof rx * 8, NFC_XF_PARITY, &rxb)) < 0) { printf("write data: errno %d\n", -r); goto out; }
+		if ((r = nibble(rx, rxb)) != 0xA) { printf("write data: answer %d (%u bits)\n", r, rxb); goto out; }
+		printf("write ok (block %u)\n", blk);
+	}
 	pl[0] = 0x30; pl[1] = blk;			/* READ */
 	w = crc_a(pl, 2);
 	pl[2] = w; pl[3] = w >> 8;
