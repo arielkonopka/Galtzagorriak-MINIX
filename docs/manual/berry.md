@@ -30,8 +30,8 @@ rest of the system:
 Other exit statuses: 0 the script ended normally, 1 an error in the script (the message and the
 line are printed), 2 wrong arguments, 5 the file could not be read.
 
-Only use `-n 0` for testing: two endless scripts without a budget can still make the system stop
-answering (being looked into).
+`-n 0` is for scripts that must run for a long time. A script without a budget still shares the
+processor with the rest: the shell and the other programs keep answering, and `kill` stops it.
 
 ## Bytecode
 

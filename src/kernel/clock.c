@@ -196,7 +196,7 @@ PUBLIC void clock_task()
 			tick_due = FALSE;
 			do_clocktick();
 		} else if (rdy_head[SHADOW_Q] != NIL_PROC) {
-			unshadow(rdy_head[SHADOW_Q]);
+			unshadow(rdy_head[SHADOW_Q], NIL_PROC);
 		}
 		break;
 #else
@@ -228,6 +228,9 @@ PRIVATE void do_clocktick()
 
   register struct proc *rp;
   register int proc_nr;
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+  struct proc *ran;		/* the user process whose quantum ended */
+#endif
 
   if (DUE(next_alarm, realtime)) {
 	/* An alarm may have gone off, but proc may have exited, so check. */
@@ -260,6 +263,9 @@ PRIVATE void do_clocktick()
 
   /* If a user process has been running too long, pick another one. */
   if (--sched_ticks == 0) {
+#if (SHADOWING == 1) && (CHIP == ARM_CM)
+	ran = bill_ptr;
+#endif
 	if (bill_ptr == prev_ptr) lock_sched();	/* process has run too long */
 	sched_ticks = SCHED_RATE;		/* reset quantum */
 	prev_ptr = bill_ptr;			/* new previous process */
@@ -268,7 +274,11 @@ PRIVATE void do_clocktick()
 	 * other processes (#331); a swap copies their images.  When the
 	 * resident member blocks and nothing else is ready, the idle task
 	 * has the swap done at once (shadow_kick). */
+#if (CHIP == ARM_CM)
+	if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q], ran);
+#else
 	if (rdy_head[SHADOW_Q]) unshadow(rdy_head[SHADOW_Q]);
+#endif
 #endif
   }
 }
