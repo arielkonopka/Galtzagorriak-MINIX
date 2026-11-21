@@ -101,6 +101,7 @@
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
 #define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+#define NFC_MINOR	22	/* the ST25R3916 (#390, <minix/nfc.h>; 21: mtpline) */
 /* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
 #define FB_SIZE		(LCD_W * LCD_H / 8)
@@ -484,7 +485,8 @@ PUBLIC void flipdev_task()
 			if (rf_emu != 0) rfid_emu_off();
 		}
 		r = (unsigned) fm.DEVICE <= LAST_MINOR
-				|| fm.DEVICE == SGPKT_MINOR ? OK : ENXIO;
+				|| fm.DEVICE == SGPKT_MINOR
+				|| fm.DEVICE == NFC_MINOR ? OK : ENXIO;
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
 #endif
@@ -1086,7 +1088,7 @@ PRIVATE int adc_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[80];
+  char line[110];
   int mv[HAL_GPIO_PINS], vdda, i, n = 0;
   const char *k;
 
@@ -1750,6 +1752,19 @@ message *m_ptr;
 	if (count < 8) return(EINVAL);
 	if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
 	return(ow_read_rom(user));
+
+  case NFC_MINOR:			/* #390 bring-up: one report line */
+	if (m_ptr->m_type != DEV_READ) return(EINVAL);
+	if (m_ptr->POSITION != 0) return(0);
+	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0) return(EBUSY);
+	{
+		char line[110];
+		int n = hal_nfc_report(line, sizeof line);
+
+		if (count > n) count = n;
+		phys_copy(vir2phys(line), user, (phys_bytes) count);
+		return(count);
+	}
 
   case POWER_MINOR:
 	if (m_ptr->m_type == DEV_WRITE) return(power_write(user, count));

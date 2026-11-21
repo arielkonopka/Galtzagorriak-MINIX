@@ -480,3 +480,11 @@ void kputc(int c);
 void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #endif /* HAL_H */
+
+/* #390, R13.1: the ST25R3916 as an NFC-A poller (polled, no static RAM) */
+int hal_nfc_start(unsigned *mv);	/* 0, -1 no chip, -2 oscillator */
+void hal_nfc_mode_a(void);
+void hal_nfc_field(int on);
+int hal_nfc_reqa(uint32_t *seen, int wupa);	/* the ATQA, or -1; *seen: the irq bits */
+void hal_nfc_stop(void);
+int hal_nfc_report(char *buf, int n);	/* text, for the bring-up */

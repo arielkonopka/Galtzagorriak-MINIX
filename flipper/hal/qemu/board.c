@@ -137,6 +137,14 @@ void hal_line_rx_irq(int on)
 	}
 }
 
+
+int hal_nfc_start(unsigned *mv) { (void) mv; return -1; }
+void hal_nfc_mode_a(void) { }
+void hal_nfc_field(int on) { (void) on; }
+int hal_nfc_reqa(uint32_t *seen, int wupa) { (void) seen; (void) wupa; return -1; }
+void hal_nfc_stop(void) { }
+int hal_nfc_report(char *b, int n) { (void) b; (void) n; return 0; }
+
 void hal_lcd_init(void)
 {
 }

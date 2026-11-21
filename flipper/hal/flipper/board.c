@@ -256,6 +256,304 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 }
 
 /*===========================================================================*
+ *			The ST25R3916 as a poller (#390, R13.1)		     *
+ *===========================================================================*/
+/* NFC-A, polled: no IRQ pin, no static RAM (the state is in the chip's
+ * registers).  Register values and the order from the stock firmware
+ * (furi_hal_nfc*.c, st25r3916*.c; GPL).  SPI1 mode 1, CS PE4.  A register
+ * address with NR_B is in space B (a 0xFB prefix); a read is 0x40 | reg, a
+ * write reg, a direct command 0xC0 | n, the FIFO load 0x80 and read 0x9F. */
+static uint32_t ms_since(uint32_t start);
+#define NR_B		0x40
+#define NR_IRQ_OSC	0x00000080UL	/* main irq register, byte 0 ... */
+#define NR_IRQ_RXE	0x00000010UL
+#define NR_IRQ_TXE	0x00000008UL
+#define NR_IRQ_DCT	0x00008000UL	/* ... byte 1 ... */
+#define NR_IRQ_ERR	0x00F00000UL	/* ... byte 2: crc, par, err2, err1 */
+
+static uint8_t nr_r(unsigned reg)
+{
+	uint8_t v;
+
+	NFC_CS(1);
+	if (reg & NR_B) (void) spi1_xfer(0xFB);
+	(void) spi1_xfer(0x40 | (reg & 0x3F));
+	v = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	return v;
+}
+
+static void nr_w(unsigned reg, uint8_t v)
+{
+	NFC_CS(1);
+	if (reg & NR_B) (void) spi1_xfer(0xFB);
+	(void) spi1_xfer(reg & 0x3F);
+	(void) spi1_xfer(v);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_mod(unsigned reg, unsigned mask, unsigned val)
+{
+	nr_w(reg, (uint8_t) ((nr_r(reg) & ~mask) | (val & mask)));
+}
+
+static void nr_cmd(uint8_t c)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(c);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_test_mod(unsigned reg, unsigned mask, unsigned val)
+{
+	uint8_t v;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0xFC);			/* test register access */
+	(void) spi1_xfer(0x40 | reg);
+	v = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	NFC_CS(1);
+	(void) spi1_xfer(0xFC);
+	(void) spi1_xfer(reg);
+	(void) spi1_xfer((v & ~mask) | (val & mask));
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* The four interrupt registers (0x1A-0x1D) as one word; reading clears. */
+static uint32_t nr_irq(void)
+{
+	uint32_t v = 0;
+	int i;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0x40 | 0x1A);
+	for (i = 0; i < 4; i++) v |= (uint32_t) spi1_xfer(0) << (8 * i);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	return v;
+}
+
+/* Enable (not mask) these sources: a masked one is not recorded. */
+static void nr_enable(uint32_t on)
+{
+	int i;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0x16);
+	for (i = 0; i < 4; i++) (void) spi1_xfer((uint8_t) (~on >> (8 * i)));
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* Wait for one of the sources in want (or ms): everything seen so far. */
+static uint32_t nr_wait(uint32_t want, unsigned ms)
+{
+	uint32_t t0 = DWT->CYCCNT, acc = 0;
+
+	while (!(acc & want) && ms_since(t0) < ms) acc |= nr_irq();
+	return acc;
+}
+
+static void nr_fifo_w(const uint8_t *p, unsigned n)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(0x80);
+	while (n-- > 0) (void) spi1_xfer(*p++);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_fifo_r(uint8_t *p, unsigned n)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(0x9F);
+	while (n-- > 0) *p++ = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* The chip ready to poll: 0; -1 no ST25R3916 answers; -2 the oscillator
+ * does not start.  *mv: the supply it measured. */
+int hal_nfc_start(unsigned *mv)
+{
+	unsigned ad, v;
+
+	spi1_on(1);
+	nr_cmd(0xC1);				/* SET_DEFAULT */
+	hal_delay_ms(2);
+	nr_w(0x01, 0x04);			/* IO_CONF2: driver strength */
+	if ((nr_r(0x3F) & 0xF8) != 0x28) { spi1_off(); return -1; }
+	(void) nr_irq();
+	nr_enable(0);
+	nr_test_mod(0x04, 0x10, 0x10);		/* no overheat protection */
+	if (!(nr_r(0x02) & 0x80)) {		/* the oscillator */
+		nr_enable(NR_IRQ_OSC);
+		nr_mod(0x02, 0x80, 0x80);
+		(void) nr_wait(NR_IRQ_OSC, 10);
+	}
+	nr_enable(0);
+	if (!(nr_r(0x31) & 0x10)) { spi1_off(); return -2; }
+	nr_mod(0x2C, 0x07, 0x00);		/* measure VDD */
+	nr_enable(NR_IRQ_DCT);
+	nr_cmd(0xDF);
+	(void) nr_wait(NR_IRQ_DCT, 100);
+	nr_enable(0);
+	ad = nr_r(0x25);
+	v = ad * 23 + (ad * 4 + 5) / 10;
+	if (mv != NULL) *mv = v;
+	nr_mod(0x01, 0x80, v < 3600 ? 0x80 : 0x00);	/* sup3V */
+	nr_mod(0x00, 0x07, 0x07);		/* no MCU clock */
+	nr_mod(0x01, 0x18, 0x00);		/* no MISO pull-down */
+	nr_mod(0x28, 0x0F, 0x00);		/* driver resistance 1 Ohm */
+	nr_mod(NR_B | 0x2A, 0x80, 0x80);	/* minimum non-overlap */
+	nr_mod(0x2A, 0x7F, 0x11);		/* field detect on: 105 mV */
+	nr_mod(0x2B, 0x7F, 0x00);		/* off: 75 mV */
+	nr_mod(NR_B | 0x28, 0x30, 0x30);	/* load modulation */
+	nr_mod(0x08, 0xF0, 0x50);		/* FDT adjust */
+	nr_mod(0x29, 0xFF, 0x0F);		/* RFO resistance when modulated */
+	nr_mod(NR_B | 0x05, 0x40, 0x40);	/* RX start on 4 bits */
+	nr_w(0x26, 0x82);			/* antenna tuning */
+	nr_w(0x27, 0x82);
+	nr_mod(0x02, 0x03, 0x03);		/* automatic field detect */
+	if (!(nr_r(0x2C) & 0x80)) {		/* adjust the regulators */
+		nr_mod(0x2C, 0x80, 0x80);
+		nr_mod(0x2C, 0x80, 0x00);
+		nr_cmd(0xD6);
+		hal_delay_ms(6);
+	}
+	return 0;
+}
+
+/* NFC-A, 106 kbit/s, as the stock poller sets it. */
+void hal_nfc_mode_a(void)
+{
+	nr_mod(0x02, 0x04, 0x00);		/* no wake-up */
+	nr_mod(0x0A, 0x04, 0x00);		/* the correlator */
+	nr_w(NR_B | 0x30, 0x40);		/* over- and undershoot */
+	nr_w(NR_B | 0x31, 0x03);
+	nr_w(NR_B | 0x32, 0x40);
+	nr_w(NR_B | 0x33, 0x03);
+	nr_mod(0x03, 0x7C, 0x08);		/* ISO 14443A, OOK */
+	nr_w(0x0B, 0x08);			/* RX_CONF1: 600 kHz zero */
+	nr_w(0x0C, 0x2D);			/* AGC on, 3:1, squelch */
+	nr_w(0x0D, 0x00);
+	nr_w(0x0E, 0x00);
+	nr_w(NR_B | 0x0C, 0x51);		/* correlator */
+	nr_w(NR_B | 0x0D, 0x00);
+}
+
+void hal_nfc_field(int on)
+{
+	if (on) {
+		nr_w(NR_B | 0x15, 0);		/* minimum guard time */
+		nr_mod(0x02, 0x48, 0x48);	/* RX and TX on */
+		hal_delay_ms(5);
+	} else
+		nr_mod(0x02, 0x48, 0x00);
+}
+
+/* REQA: the ATQA (b0 | b1 << 8), or -1 no answer. */
+int hal_nfc_reqa(uint32_t *seen, int wupa)
+{
+	uint8_t b[2];
+	uint32_t acc;
+	unsigned n;
+
+	nr_cmd(0xDB);				/* clear the FIFO */
+	nr_mod(0x0A, 0x80, 0x80);		/* no CRC on receive */
+	nr_mod(0x05, 0xC0, 0x00);		/* parity as the standard */
+	nr_w(0x23, 0);
+	(void) nr_irq();
+	nr_enable(NR_IRQ_TXE | NR_IRQ_RXE | NR_IRQ_ERR);
+	nr_cmd(wupa ? 0xC7 : 0xC6);		/* TRANSMIT_REQA / WUPA */
+	acc = nr_wait(NR_IRQ_RXE, 8);
+	nr_enable(0);
+	if (seen != NULL) *seen = acc;
+	if (!(acc & NR_IRQ_RXE) || (acc & NR_IRQ_ERR)) return -1;
+	n = nr_r(0x1E) | (nr_r(0x1F) & 0xC0) << 2;
+	if (n != 2) return -1;
+	nr_fifo_r(b, 2);
+	return b[0] | b[1] << 8;
+}
+
+void hal_nfc_stop(void)
+{
+	nr_cmd(0xC2);				/* STOP */
+	nr_mod(0x02, 0xCF, 0x00);		/* everything off */
+	spi1_off();
+}
+
+/* A text report for the first bring-up: the chip, the oscillator, the
+ * supply, then the field and a REQA.  Returns the length. */
+int hal_nfc_report(char *b, int n)
+{
+	static const char hx[] = "0123456789abcdef";
+	unsigned mv = 0;
+	int r, a, k = 0, i, j;
+	char d[8];
+
+	r = hal_nfc_start(&mv);
+	for (i = 0; i < 2; i++) {
+		const char *t = i == 0 ? "nfc start=" : " mv=";
+		int v = i == 0 ? r : (int) mv;
+
+		for (; *t; t++) b[k++] = *t;
+		if (v < 0) { b[k++] = '-'; v = -v; }
+		j = 0;
+		do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+		while (j > 0) b[k++] = d[--j];
+	}
+	if (r == 0) {
+		uint32_t seen = 0;
+		const char *t;
+
+		unsigned amp;
+
+		hal_nfc_mode_a();
+		hal_nfc_field(1);
+		nr_enable(NR_IRQ_DCT);			/* the amplitude on RFI */
+		nr_cmd(0xD3);
+		(void) nr_wait(NR_IRQ_DCT, 10);
+		nr_enable(0);
+		amp = nr_r(0x25);
+		a = hal_nfc_reqa(&seen, 0);
+		if (a < 0) a = hal_nfc_reqa(&seen, 1);
+		t = " atqa=";
+		for (; *t; t++) b[k++] = *t;
+		if (a < 0) b[k++] = '-';
+		else for (i = 12; i >= 0; i -= 4) b[k++] = hx[a >> i & 15];
+		t = " amp=";
+		for (; *t; t++) b[k++] = *t;
+		b[k++] = hx[amp >> 4 & 15];
+		b[k++] = hx[amp & 15];
+		t = " irq=";
+		for (; *t; t++) b[k++] = *t;
+		for (i = 20; i >= 0; i -= 4) b[k++] = hx[seen >> i & 15];
+		t = " regs=";
+		for (; *t; t++) b[k++] = *t;
+		for (i = 0; i < 6; i++) {	/* op control, aux display,
+						 * regulator, rssi, fifo 1, 2 */
+			static const uint8_t ra[6] = { 0x02, 0x31, 0x2C, 0x2D,
+								0x1E, 0x1F };
+			unsigned v = nr_r(ra[i]);
+
+			b[k++] = hx[v >> 4 & 15];
+			b[k++] = hx[v & 15];
+			b[k++] = ' ';
+		}
+		hal_nfc_stop();
+	}
+	b[k++] = '\n';
+	return k > n ? n : k;
+}
+
+/*===========================================================================*
  *			Sub-GHz receive (R8.1, part 1)			     *
  *===========================================================================*/
 /* The CC1101 as a receiver only: the stock firmware's OOK 650 kHz preset
