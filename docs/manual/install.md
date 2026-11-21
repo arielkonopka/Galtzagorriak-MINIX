@@ -158,8 +158,8 @@ The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh ca
 
    On a card of **32 GB or more** swap is larger: `/dev/hd3` at the end of the card holds four
    swap subpartitions `/dev/hd3a` to `/dev/hd3d` of 4 GiB − 1 MiB each (about 16 GiB), and
-   `/home` is 4 GiB − 1 MiB. The rest of the card stays free. Programs swap to `/dev/hd3a`; the
-   [memory blocks](blocks.md) of apps use all four.
+   `/home` again takes all the space between `/usr` and swap: on a 128 GB card (about 117 GiB) about 99 GiB.
+   Programs swap to `/dev/hd3a`; the [memory blocks](blocks.md) of apps use all four.
 
 2. After the reboot it shows "Preparing the card..." and tells the card that `/usr`, swap and
    `/home` are empty (`erase`, see [Swap](swap.md)): a card that was full before, from a camera

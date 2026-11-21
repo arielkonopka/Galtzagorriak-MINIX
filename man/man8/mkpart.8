@@ -90,10 +90,10 @@ an 8 GB or larger card (spec R12.34).
 .B "mkpart -n 31116288 /dev/hd0 81:2048 82:50%@end 81:*"
 The same, as a dry run for a 16 GB card.
 .TP
-.B "mkpart /dev/hd0 81:2048 82/4:*@end 81:4095"
+.B "mkpart /dev/hd0 81:2048 82/4:*@end 81:*"
 /usr, four 4 GiB swap subpartitions at the end of the card, /home
-(4 GiB \- 1 MiB) between them; the rest stays free: the first boot on
-a card of 32 GB or more.
+(all the space between them): the first boot on a card of 32 GB or
+more.
 .SH "SEE ALSO"
 .BR mkfs (1),
 .BR erase (8),

@@ -30,7 +30,9 @@ partition hd3 becomes a 0x81 one with the subpartitions hd3a, hd3b and
 hd3d of type 82 (hd3c is not swap), and a 60 GiB hole of the QEMU HAL in
 front of it (a sparse 64 GB card, as tools/bigcard.py).  Booted again,
 /etc/rc (swap=plain, blk=on, /etc/.swap4) swaps on hd3a, and blktest -g: 64 extents per subpartition,
-runs on hd3a, hd3b and hd3d, a block on hd3d read back.
+runs on hd3a, hd3b and hd3d, a block on hd3d read back.  /etc/setup's
+layout for these cards as a dry run (mkpart -n on the card's MBR with only
+hd1; 64 GB, 128 GB and 29000 MB): /home reaches the swap container (O.7).
 Exit status: the number of failures.
 """
 import importlib.util
@@ -125,6 +127,49 @@ def make_big(img):
 	return start + BIG_HOLE
 
 
+def setup_layout(r):
+	"""/etc/setup's layout for cards >= 29000 MB, as a dry run (mkpart -n)
+	on this card's MBR with only the root partition: /home (hd4) must
+	reach the swap container (hd3) at the end (spec O.7), which holds
+	hd3a-hd3d of 4 GiB - 1 MiB.  The 64 GB card itself, a 128 GB one
+	(119850 MB, the user's) and the smallest that gets it (29000 MB)."""
+	with open(os.path.join(HERE, "../rootfs/etc/setup")) as f:
+		m = re.search(r'layout="(81:2048 82/4[^"]*)"', f.read())
+	check(m is not None, "/etc/setup has an 82/4 layout")
+	if m is None:
+		return
+	r.sh("(dd if=/dev/hd0 bs=462 count=1; dd if=/dev/zero bs=48 count=1;"
+		" dd if=/dev/hd0 bs=2 skip=255 count=1) >/tmp/mbr1 2>/dev/null",
+		30)
+	mb = r.output("mkpart -s /dev/hd0", 30) or b""
+	mb = int(re.search(rb"(\d+)", mb).group(1)) if re.search(rb"\d+",
+		mb) else 0
+	for card in (mb, 119850, 29000):
+		secs = card * 2048
+		out = r.output("mkpart -n %d /tmp/mbr1 %s" % (secs, m.group(1)),
+			30) or b""
+		p = {}
+		for t in re.finditer(rb"^([1-4a-d]) +type ([0-9a-f]+) +start +"
+				rb"(\d+) +size +(\d+)", out, re.M):
+			p[t.group(1).decode()] = (int(t.group(2), 16),
+				int(t.group(3)), int(t.group(4)))
+		ok = all(k in p for k in "1234abcd")
+		if ok:
+			ok = (p["3"][0] == 0x81 and p["4"][0] == 0x81
+				and p["4"][1] + p["4"][2] == p["3"][1]
+				and p["3"][1] + p["3"][2] <= secs
+				and all(p[k][0] == 0x82 and p[k][2] == 0x800000 - 2048
+					and p[k][1] + p[k][2] <= p["3"][1] + p["3"][2]
+					for k in "abcd"))
+		check(ok, "O.7 on a %d MB card: /home %s MB up to the swap "
+			"container (%s)" % (card, p["4"][2] // 2048 if "4" in p
+				else "?", out.strip().decode(errors="replace")
+				.replace("\r\n", " | ")))
+		if card == 119850 and ok:
+			check(98 * 2**21 < p["4"][2] < 100 * 2**21,
+				"128 GB card (about 117 GiB): /home about 99 GiB")
+
+
 def main_big():
 	r = powercut.Run(0, 0)
 	keep = r.dir
@@ -152,6 +197,7 @@ def main_big():
 		check(re.search(rb"^3 +type 81 +start +%d " % start, out, re.M)
 			is not None, "mkpart -l: %s" % out.strip().decode(
 				errors="replace").replace("\r\n", " | "))
+		setup_layout(r)
 		out = r.output("ls -l /dev/hd3a /dev/hd3b /dev/hd3c /dev/hd3d; "
 			"echo st=$?", 30) or b""
 		check(b"st=0" in out and b"3, 139" in out,
