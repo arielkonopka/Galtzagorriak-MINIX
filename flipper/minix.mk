@@ -640,7 +640,7 @@ $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 # of the launcher's SETTINGS page (K.8).  Their objects as the window
 # apps' (WIN_CFLAGS below): one GOT word per section, unused rodata in
 # flash.
-SETGROUPS := groups conf display sound time about zones afmt
+SETGROUPS := groups conf display sound led time power region about zones afmt
 SET_OBJ	:= $(SETGROUPS:%=$(MB)/cmd/settings/%.o) $(MB)/cmd/settings/gm.o
 OBJS_settings = $(MB)/cmd/port/settings.o $(SET_OBJ)
 OBJS_setgroup = $(MB)/cmd/settings/win.o $(SET_OBJ)
@@ -1231,7 +1231,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.71
+BASE_VER := 4.72
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

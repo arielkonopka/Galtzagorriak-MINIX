@@ -40,6 +40,7 @@ close in the check; about 1 m away worked.
 |---|---|
 | `subghz rx FREQ [-v]` | listen at FREQ Hz (e.g. `433920000`); one line per decoded packet, `Princeton 24bit Key:7C5703`. `-v` adds the protocol's own text, as stock prints it. Ctrl-C ends it and prints how many packets came |
 | `subghz decode FILE [-v]` | the same for a recorded `.sub` RAW capture |
+| `subghz rec FREQ FILE [-t DBM] [-s SEC] [-n N]` | record what comes at FREQ to FILE as a stock RAW `.sub` (stock's Read RAW); `-t`: only while the signal is at least DBM (e.g. `-t -70`, stock's RSSI threshold), `-s`: at most SEC seconds, `-n`: at most N values; Ctrl-C ends it. Receive only |
 | `subghz tx KEY FREQ TE REPEAT` | send KEY (24-bit hex) as Princeton, TE µs per element, REPEAT times (stock's `subghz tx`) |
 | `subghz tx_from_file FILE [REPEAT]` | send a `.sub` file at the file's `Frequency`: a key file through its protocol's encoder, a RAW file as recorded |
 | `subghz chat FREQ` | text lines both ways, one packet per line (stock's `subghz chat`) |
@@ -51,6 +52,27 @@ close in the check; about 1 m away worked.
 `/ext/subghz` to the card, for example to `/home/flipper/subghz/`. They are read a line at a
 time, so a long RAW recording needs no more RAM than a short one.
 
+### Recording (Read RAW)
+
+`subghz rec` writes the file as it receives: a 1 KB buffer goes to the card whenever it is full,
+so nothing of the recording stays in memory and its length is bounded only by the card (and by
+`-s` / `-n`). It takes 1 KB for that buffer and the 4 KB ring it already uses for `rx`. The file
+is a stock RAW file (`Filetype: Flipper SubGhz RAW File`, `Protocol: RAW`, `RAW_Data` lines of up
+to 512 values), so a stock Flipper can read and send it, and `subghz decode` shows what is in it:
+
+```
+$ subghz rec 433920000 /home/flipper/subghz/atea.sub -t -70
+Recording at 433920000 to /home/flipper/subghz/atea.sub. Press Ctrl+C to stop.
+^CRecorded 1840 samples, 6210 ms
+$ subghz decode /home/flipper/subghz/atea.sub
+Princeton 24bit Key:7C5703
+```
+
+With `-t`, the RSSI is read once per received frame (on the Flipper: once per 512 edges); what
+comes while it is below the threshold is left out. A recording only receives; sending it
+(`tx_from_file`) is checked against the region like any other file. The Sub-GHz app's **Read RAW**
+(below) runs this command for you.
+
 ## The Sub-GHz app (launcher)
 
 **Sub-GHz** on the launcher is the stock app's menu as a window app (the launcher draws it). It
@@ -60,10 +82,10 @@ package (`pkg install subghz`); without it the window says `not installed: /usr/
 | Row | What it does |
 |---|---|
 | Read | listens at the frequency of Radio settings; each decoded packet is a line, as `subghz rx` prints it (protocol, bits, key). Back stops. |
-| Read RAW | **(planned)**: `subghz` has no RAW recorder yet. |
+| Read RAW | frequency, **RSSI threshold** (Off, −90 … −40 dBm, stock's list) and **REC**: runs `subghz rec` into the first free `RAW_0.sub` … `RAW_99.sub` of `/home/flipper/subghz` and shows its lines. **Stop** ends it; then **Save** keeps the file (it is in Saved; rename it in Archive) and **Erase** deletes it. Back while it records stops it and keeps the file. |
 | Saved | the `.sub` files of `/home/flipper/subghz`, a page at a time. OK on one: **Send** (`subghz tx_from_file`), **Info** (`subghz decode`, RAW captures), **Delete**. |
 | Add manually | a Princeton key: key (1–6 hex digits), TE, frequency, name; **Save** writes a stock key file (`Filetype: Flipper SubGhz Key File`). |
-| Frequency analyzer | points you to the **Spectrum** app on the launcher (below). |
+| Frequency analyzer | starts the **Spectrum** app (below); when you leave Spectrum, Sub-GHz opens again (on its menu, with Radio settings back at 433.92 MHz, AM650). |
 | Radio settings | frequency (stock's common list, 433.92 MHz first), modulation preset (AM270, AM650, FM238, FM476; written into the files you add), and the region. Kept only while the app runs. |
 
 **Sending.** The kernel checks every frame against the region (see "The region" below). If it

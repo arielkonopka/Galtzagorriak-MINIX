@@ -553,11 +553,14 @@ static void stockapp_tests(void)
 	unlink(ib);
 	check(win_run("/bin/subghzui", (char *) NULL,
 		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
-		"ok\tadd\tsave\n", out, sizeof out) == 0
+		"ok\tadd\tsave\nok\tmain\traw\nback\traw\nok\tmain\tfa\n",
+		out, sizeof out) == 0
 		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& strstr(out, "enum\tth\tRSSI threshold\t0") != NULL
+		&& strstr(out, "run\tSpectrum\t/dev/subghz") != NULL
 		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
 			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
-		"subghzui: Add manually: a stock .sub");
+		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
 	check(win_run("/bin/ibuttonui", (char *) NULL,
 		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
 		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
@@ -3407,6 +3410,61 @@ static void furihello_test(void)
 }
 #endif
 
+/* #419: the settings keys (setgroup sound, led, power) under QEMU, with
+ * `settings set' and `settings get' (two runs of settings, without sh: a
+ * third run of either would make the run-time cache copy it to flash).  A missing file gives the
+ * defaults, a file written here is read, a set writes the card's file
+ * once; the files are removed afterwards (file_has: stockapp_tests').
+ * settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * it in the flash cache); its exit status */
+static int setk_run(const char *out, const char *a1, const char *a2,
+					const char *a3, const char *a4)
+{
+	pid_t pid;
+	int fd, st = -1;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		if ((fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0)
+			dup2(fd, 1);
+		execl("/bin/settings", "settings", a1, a2, a3, a4, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0) (void) waitpid(pid, &st, 0);
+	return st;
+}
+
+static void __attribute__((noinline)) setkeys_test(void)
+{
+	static const char *const conf[] = { "/etc/flipper/led.conf",
+		"/etc/flipper/power.conf", "/etc/flipper/sound.conf" };
+	FILE *f;
+	int i, st;
+
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) mkdir("/etc/flipper", 0755);
+	if ((f = fopen(conf[2], "w")) != NULL) {
+		fputs("Volume: 40\nVibro: off\n", f);
+		fclose(f);
+	}
+	st = setk_run("/tmp/setk1", "set", "led", "Brightness", "30");
+	(void) setk_run("/tmp/setk2", "get", "led", "power", "sound");
+	check(st == 0 && file_has("/tmp/setk1",
+		"Brightness: 30\nNotify LED: on\n"),
+		"settings set: a key changed, the group's other key its default");
+	check(file_has(conf[0], "Brightness: 30\nNotify LED: on\n"),
+		"settings set: /etc/flipper/led.conf written");
+	check(file_has("/tmp/setk2", "# led\nBrightness: 30\n"),
+		"settings get: led.conf read back");
+	check(file_has("/tmp/setk2", "# power\nAuto off: never\nAuto lock: never\n"),
+		"settings get: no power.conf, the defaults");
+	check(file_has("/tmp/setk2", "Volume: 40\nVibro: off\n"),
+		"settings get: Vibro off read from sound.conf");
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) unlink("/tmp/setk1");
+	(void) unlink("/tmp/setk2");
+}
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -3715,6 +3773,7 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 	spectrum_test();
+	setkeys_test();
 	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
