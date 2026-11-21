@@ -42,6 +42,7 @@ close in the check; about 1 m away worked.
 | `subghz decode FILE [-v]` | the same for a recorded `.sub` RAW capture |
 | `subghz tx KEY FREQ TE REPEAT` | send KEY (24-bit hex) as Princeton, TE µs per element, REPEAT times (stock's `subghz tx`) |
 | `subghz tx_from_file FILE [REPEAT]` | send a `.sub` file at the file's `Frequency`: a key file through its protocol's encoder, a RAW file as recorded |
+| `subghz edit IN OUT trim\|cut T0 T1` | rewrite a RAW `.sub`: **trim** keeps only the part between T0 and T1 (microseconds from the start of the capture), **cut** drops it and joins the two sides. OUT must differ from IN; a key file (not RAW) is refused. The file streams through, so it is never held whole in RAM. |
 | `subghz chat FREQ` | text lines both ways, one packet per line (stock's `subghz chat`) |
 | `subghz region [CC]` | show the radio region, or set it (once per boot; see below) |
 | `subghz list` | every protocol, and whether it can decode, send, or is a rolling code |
@@ -73,6 +74,46 @@ Flipper the transmitter is not written yet, so Send says `no transmitter on this
 
 Archive's **Open** on a `.sub` file starts this app on that file. No `.sub` files are shipped
 (spec D.3).
+
+## Editing a RAW capture
+
+`subghz edit` trims or cuts a recorded RAW `.sub`. A RAW file is a list of signed durations in
+microseconds (a positive value is the carrier on that long, a negative value off that long).
+`trim` keeps only the window between two times, `cut` removes it:
+
+```
+subghz edit mysignal.sub clean.sub trim 0 120000     # keep the first 120 ms
+subghz edit mysignal.sub clean.sub cut  40000 60000  # drop 40–60 ms
+```
+
+Durations that straddle a boundary are clipped, and two same-level runs left next to each other
+by a cut are merged, so the result stays a well-formed RAW list. The editing logic is
+host-tested (`flipper/tests/sgedit`).
+
+## Sub-GHz Remote (launcher app)
+
+**Sub-GHz Remote** maps up to five saved `.sub` files to the five keys of the pad (Up, Down,
+Left, Right, OK); pressing a key sends that file through the `subghz` command, so the region gate
+and `subghz`'s own words apply exactly as for Send above (on the Flipper the transmitter is not
+written yet, so a key press says `no transmitter on this device yet`).
+
+Map files live in `/home/flipper/subghz_remote`, in the stock format (Unleashed's
+`SubGHz_Remote`):
+
+```
+Filetype: Flipper SubRem Map file
+Version: 1
+UP: /home/flipper/subghz/gate.sub
+ULABEL: Gate
+DOWN: /home/flipper/subghz/garage.sub
+DLABEL: Garage
+OK: /home/flipper/subghz/bell.sub
+OKLABEL: Doorbell
+```
+
+`xLABEL` lines are the names shown; `xBUTTON` lines of multi-button files are ignored (the file
+is sent as it is). The launcher list shows every `*.txt` map; open one to get the remote pad. No
+map or `.sub` files are shipped (spec D.3): drop your own on the card.
 
 ## Spectrum: what is on the air (launcher app)
 
