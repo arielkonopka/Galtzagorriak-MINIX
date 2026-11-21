@@ -715,6 +715,10 @@ int count;
   for (i = 0; i < count && t[i] >= '0' && t[i] <= '9'; i++)
 	hz = hz * 10 + (t[i] - '0');
   if (i == 0 || i > 10) return(EINVAL);
+  /* The CC1101 and the ST25R3916 share SPI1 (#390): while the NFC chip is
+   * up the receiver stays off, and nothing else of Sub-GHz works without
+   * it. */
+  if (hal_nfc_active()) return(hz == 0 ? count : EBUSY);
   if (hz == 0) {
 	hal_subghz_off();
 	sg_state = 0;
@@ -1763,7 +1767,7 @@ message *m_ptr;
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);
 	if (m_ptr->POSITION != 0) return(0);
 	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0
-						|| hal_nfc_active())
+				|| (sg_state & SG_ON) || hal_nfc_active())
 		return(EBUSY);
 	{
 		char line[110];
@@ -3224,6 +3228,7 @@ message *m_ptr;
 	if (!(v & NFC_TECH_A)) return(ENOTTY);
 	if (hal_nfc_active()) return(OK);
 	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0) return(EBUSY);
+	if (sg_state & SG_ON) return(EBUSY);	/* SPI1 is the CC1101's */
 	if ((r = hal_nfc_start((unsigned *) 0)) < 0)
 		return(r == -3 ? EBUSY : EIO);
 	hal_nfc_mode_a();

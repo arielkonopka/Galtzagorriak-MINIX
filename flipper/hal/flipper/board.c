@@ -512,7 +512,8 @@ static unsigned nr_crc_a(const uint8_t *p, unsigned n)	/* ISO 14443-3 A */
  * chip keeps the parity.  fwt in 1/13.56 MHz, 0: 10 ms; polled, at most
  * 100 ms (longer waits need the chip's timer and its interrupt: later).
  * 0 and *rx_bits; -1 no answer; -2 CRC, parity or framing; -3 the answer is
- * longer than the room; -4 not supported (transparent parity). */
+ * longer than the room; -4 not supported (a CRC with NFC_XF_PARITY or
+ * on a part byte). */
 int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
 	unsigned rx_room, unsigned *rx_bits, unsigned fwt, unsigned flags)
 {
@@ -521,11 +522,13 @@ int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
 	unsigned n, lb, c, i, tmo;
 
 	*rx_bits = 0;
-	if (flags & 0x04) return -4;		/* NFC_XF_PARITY */
 	nr_cmd(0xDB);				/* clear the FIFO */
 	nr_mod(0x12, 0x02, 0x00);		/* no EMV no-response timer */
 	nr_mod(0x0A, 0x80, 0x80);		/* the CRC is ours */
-	nr_mod(0x05, 0xC0, 0x00);		/* the parity is the chip's */
+	/* NFC_XF_PARITY: the caller's stream carries the parity bits (9 bits
+	 * a byte, MIFARE Classic's Crypto-1 encrypts them); otherwise the
+	 * chip makes and checks them. */
+	nr_mod(0x05, 0xC0, (flags & 0x04) ? 0xC0 : 0x00);
 	(void) nr_irq();
 	nr_enable(NR_IRQ_TXE | NR_IRQ_RXE | NR_IRQ_ERR);
 	if (flags & 0x10) {			/* NFC_XF_SHORT: REQA, WUPA */
@@ -533,8 +536,11 @@ int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
 		nr_cmd(tx[0] == 0x52 ? 0xC7 : 0xC6);
 	} else {
 		n = (tx_bits + 7) / 8;
-		if ((flags & 0x01) && (tx_bits & 7)) return -4;
-		if (n + 2 > 512) return -3;
+		if ((flags & 0x01) && ((tx_bits & 7) || (flags & 0x04))) {
+			nr_enable(0);
+			return -4;		/* a CRC needs whole plain bytes */
+		}
+		if (n + 2 > 512) { nr_enable(0); return -3; }
 		c = (flags & 0x01) ? nr_crc_a(tx, n) : 0;	/* NFC_XF_CRC_TX */
 		i = tx_bits + ((flags & 0x01) ? 16 : 0);
 		nr_w(0x23, (uint8_t) i);	/* the bits to send */
@@ -558,13 +564,13 @@ int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
 	if (!(acc & NR_IRQ_RXE)) acc |= nr_wait(NR_IRQ_RXE, tmo);
 	nr_enable(0);
 	if (!(acc & NR_IRQ_RXE)) return (acc & 0x20) ? -2 : -1;	/* RXS only */
-	if (acc & NR_IRQ_ERR) return -2;
+	if ((acc & NR_IRQ_ERR) && !(flags & 0x04)) return -2;
 	i = nr_r(0x1F);
 	n = nr_r(0x1E) | (i & 0xC0) << 2;	/* bytes in the FIFO */
 	lb = i >> 1 & 7;			/* bits of an incomplete last byte */
 	if (n == 0) return -1;
 	if (flags & 0x02) {			/* NFC_XF_CRC_RX */
-		if (n < 3 || lb != 0) return -2;
+		if (n < 3 || lb != 0 || (flags & 0x04)) return -2;
 		n -= 2;
 	}
 	if (n * 8 > rx_room + 7) return -3;
