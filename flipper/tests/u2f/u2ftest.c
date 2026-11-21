@@ -2,7 +2,8 @@
  * Host tests of libu2f (issue #420): SHA-256 and HMAC vectors, the U2F
  * messages (register, authenticate, version, every error) and the U2FHID
  * framing (init, ping over many reports, lock, sequence and busy errors),
- * and a fuzz.  P-256 is a fake here: pub = 04 SHA(priv) SHA(SHA(priv)),
+ * a fuzz, and the same flows with the real P-256 (micro-ecc), whose
+ * signatures are verified.  In the first part P-256 is a fake: pub = 04 SHA(priv) SHA(SHA(priv)),
  * sig = hash HMAC(priv, hash), so the test can tell what was signed with
  * which key. */
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include <string.h>
 #include "u2f.h"
 #include "sha256.h"
+#include "p256.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, \
@@ -445,12 +447,105 @@ static void fuzz(void)
 	}
 }
 
+/* ---- the real P-256 ---- */
+
+static int r_fill(unsigned char *b, unsigned n)
+{
+	f_random(NULL, b, n);
+	return 0;
+}
+
+/* DER (r, s) back to 64 bytes: 0, or -1. */
+static int under(const unsigned char *d, unsigned n, unsigned char sig[64])
+{
+	unsigned i = 2, k, l, part;
+
+	memset(sig, 0, 64);
+	if (n < 8 || d[0] != 0x30 || d[1] != n - 2) return -1;
+	for (part = 0; part < 2; part++) {
+		if (i + 2 > n || d[i] != 2) return -1;
+		l = d[i + 1];
+		i += 2;
+		if (i + l > n || l < 1 || l > 33) return -1;
+		k = l;
+		if (k == 33) { if (d[i] != 0) return -1; i++, k--; }
+		memcpy(sig + part * 32 + 32 - k, d + i, k);
+		i += k;
+	}
+	return i == n ? 0 : -1;
+}
+
+static const struct u2f_ops rops = { NULL, f_random, p256_pub, p256_sign,
+				     f_save, f_event, f_send };
+
+static void real(void)
+{
+	struct u2f u;
+	unsigned char b[U2F_MAXMSG], req[200], one[32], pub[65], cpub[65];
+	unsigned char hash[32], sig[64], z = 0, handle[64];
+	struct sha256 s;
+	unsigned n, cl = sizeof cert;
+	/* RFC 6979 A.2.5: the P-256 key x and its public key U */
+	static const unsigned char x[32] = {
+		0xC9, 0xAF, 0xA9, 0xD8, 0x45, 0xBA, 0x75, 0x16, 0x6B, 0x5C, 0x21,
+		0x57, 0x67, 0xB1, 0xD6, 0x93, 0x4E, 0x50, 0xC3, 0xDB, 0x36, 0xE8,
+		0x9B, 0x12, 0x7B, 0x8A, 0x62, 0x2B, 0x12, 0x0F, 0x67, 0x21 };
+
+	CHECK(p256_pub(NULL, x, pub) == 0 && pub[0] == 4);
+	hexeq(pub + 1, "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6", __LINE__);
+	hexeq(pub + 33, "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299", __LINE__);
+	memset(one, 0, 32);			/* 0 is no key */
+	CHECK(p256_pub(NULL, one, pub) < 0);
+	memset(one, 0xff, 32);			/* above the order: no key */
+	CHECK(p256_pub(NULL, one, pub) < 0);
+	CHECK(p256_sign(NULL, one, one, sig) < 0);	/* no RNG yet */
+	p256_rng(r_fill);
+
+	setup(&u);
+	u.ops = &rops;
+	CHECK(p256_pub(NULL, u.cert_key, cpub) == 0);
+	memset(req, 0x11, 32);
+	memset(req + 32, 0x22, 32);
+	u2f_present(&u);
+	n = u2f_msg(&u, b, apdu(b, 1, 0, req, 64), sizeof b);
+	CHECK(swof(b, n) == 0x9000);
+	memcpy(pub, b + 1, 65);
+	memcpy(handle, b + 67, 64);
+	sha256_init(&s);
+	sha256_update(&s, &z, 1);
+	sha256_update(&s, req + 32, 32);
+	sha256_update(&s, req, 32);
+	sha256_update(&s, handle, 64);
+	sha256_update(&s, pub, 65);
+	sha256_final(&s, hash);
+	CHECK(under(b + 131 + cl, n - 2 - 131 - cl, sig) == 0);
+	CHECK(p256_verify(cpub, hash, sig) == 1);
+	hash[0] ^= 1;
+	CHECK(p256_verify(cpub, hash, sig) == 0);
+
+	memset(req, 0x44, 32);
+	req[64] = 64;
+	memcpy(req + 65, handle, 64);
+	u2f_present(&u);
+	n = u2f_msg(&u, b, apdu(b, 2, 0x03, req, 129), sizeof b);
+	CHECK(swof(b, n) == 0x9000 && b[0] == 1);
+	sha256_init(&s);
+	sha256_update(&s, req + 32, 32);
+	sha256_update(&s, b, 5);		/* flags and counter */
+	sha256_update(&s, req, 32);
+	sha256_final(&s, hash);
+	CHECK(under(b + 5, n - 7, sig) == 0);
+	CHECK(p256_verify(pub, hash, sig) == 1);
+	CHECK(p256_verify(cpub, hash, sig) == 0);	/* not the cert's */
+}
+
 int main(void)
 {
 	vectors();
 	messages();
 	hid();
 	fuzz();
+	real();
 	if (fails) { printf("u2f: %d failed\n", fails); return 1; }
 	printf("u2f: all tests passed\n");
 	return 0;

@@ -70,9 +70,10 @@ level; there is no dolphin on MINIX. OK on **Refresh** reads the values again.
 U2F makes the Flipper a two-factor security key for websites, as on stock. The protocol part is in
 place and tested on the PC (`src/lib/u2f`, `make -C flipper/tests/u2f test`). It handles
 registering a site, logging in, the version query and the USB HID framing, and its answers
-are byte for byte in stock's format, with stock's key derivation. Still
-**(planned)**: the P-256 signatures, the app, and the USB HID FIDO interface (the USB side waits
-for the USB HID work, as Bad USB did).
+are byte for byte in stock's format, with stock's key derivation. The P-256 signatures come from
+micro-ecc (`src/lib/u2f/uecc`, BSD licence, which older stock firmware used too), and the tests
+check them against the RFC 6979 key. Still **(planned)**: the app and the USB HID FIDO interface
+(the USB side waits for the USB HID work, as Bad USB did).
 
 These rules will apply to the key files when the app comes:
 
