@@ -323,6 +323,10 @@ GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 WINBASE	:= archive nfc
 # Stock app ports part 2 (issue #413): window apps over the commands.
 WINBASE	+= subghzui ibuttonui gpioui
+# Stock app ports part 5 (issue #424): Snake, a window game (K.8); the game
+# loop is src/lib/snake (host-tested).  subrem: the Sub-GHz Remote (maps a
+# saved .sub to the pad's buttons, sends via the subghz command).
+WINBASE	+= snakeui subrem
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
@@ -426,6 +430,10 @@ CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
 			# as its own process (CHMEM_subghz)
 CHMEM_ibuttonui := 4096	# as subghzui; ikey is its own process
 CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
+CHMEM_snakeui := 3072	# issue #424: the Snake state (SNAKE_MAX points in
+			# .bss) plus the records' and event buffers
+CHMEM_subrem := 4096	# issue #424: opendir's DIR for the map list, two
+			# paths, subghz runs as its own process (CHMEM_subghz)
 			# and MM's 1.5 KB gap
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
@@ -610,6 +618,21 @@ $(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
 OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
+# issue #424: Snake (gui/snakeui.c over src/lib/snake) and the Sub-GHz
+# Remote (gui/subrem.c, maps a .sub to the pad's buttons and runs the
+# subghz command through runwin.c).
+SNAKE_DIR := $(MROOT)/src/lib/snake
+$(MB)/snake/snakecore.o: $(SNAKE_DIR)/snakecore.c $(SNAKE_DIR)/snakecore.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(SNAKE_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/snakeui.o: gui/snakeui.c $(GM_DIR)/gm.h $(SNAKE_DIR)/snakecore.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -I$(SNAKE_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/subrem.o: gui/subrem.c gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_snakeui = $(MB)/cmd/gui/snakeui.o $(MB)/snake/snakecore.o $(MB)/gm/gm.o
+OBJS_subrem = $(MB)/cmd/gui/subrem.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 # nfc (spec Phase 14, issue #412 item 4): a window app (K.8) on the
 # hand-written libnfc reader (src/lib/libnfc: poller, Crypto-1, the
 # streaming dictionary, the .nfc files), C11 as that library is.
