@@ -540,6 +540,37 @@ int main(int argc, char **argv)
 	waitpid(c, &st, 0);
 	t_result("AC12.19: after a pid wrap the same pid reads zeros",
 		a && b && c == pid && ch == 1, NULL);
+	/* R12.35: a run that is live at a pid wrap keeps its data: block 0
+	 * PUT before the wrap reads back after it; block 1, PUT between two
+	 * wraps, reads back after the second (the stamp before the last
+	 * wrap is the run's own). */
+	{
+		message m;
+
+		a = blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) > 0;
+		fill(buf, BLK_SIZE, 5);
+		a = a && blk(BLK_PUT, 0, 0, 0, 0, buf) == 0;
+		m.m1_i1 = 3;
+		m.m1_i2 = MI_SWAPTEST;
+		m.m1_i3 = 0;
+		a = a && _syscall(MM, MEMINFO, &m) == 0;
+		memset(buf2, 0, sizeof(buf2));
+		a = a && blk(BLK_GET, 0, 0, 0, 0, buf2) == 0
+			&& memcmp(buf2, buf, BLK_SIZE) == 0;
+		fill(buf, BLK_SIZE, 6);
+		a = a && blk(BLK_PUT, 0, 1, 0, 0, buf) == 0;
+		m.m1_i1 = 3;
+		m.m1_i2 = MI_SWAPTEST;
+		m.m1_i3 = 0;
+		a = a && _syscall(MM, MEMINFO, &m) == 0;
+		memset(buf2, 0, sizeof(buf2));
+		a = a && blk(BLK_GET, 0, 1, 0, 0, buf2) == 0
+			&& memcmp(buf2, buf, BLK_SIZE) == 0;
+		blk(BLK_CLOSE, 0, 0, 0, 0, NULL);
+		sleep(2);		/* its DISCARD at idle (R12.40) */
+		t_result("R12.35: a live run keeps its blocks across a pid wrap",
+			a, NULL);
+	}
 	/* AC12.26 (R12.40): a process PUTs 10 blocks and exits; at idle MM
 	 * DISCARDs its run (QEMU fills it with zeros), then frees it. */
 	pipe(go1);

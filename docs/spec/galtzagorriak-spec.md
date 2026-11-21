@@ -5490,6 +5490,13 @@ noticeable CPU on the foreground path.
   - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
     MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
     nonce (R12.10) takes its place.
+  - **Runs live at a pid wrap keep their data** (changed 2026-11-21, #386): at the wrap MM sets a
+    bit for every run that exists then (`bk.old`, 2 B; the "card has no DISCARD" flag moved into
+    an unused bit of the R12.40 mask, so MM stays at +36 B). Such a run also accepts the stamp from
+    before the wrap; a run opened after it accepts only the new one. This is safe: the earlier
+    owner with the same pid in that slot ended before the run began, so before the previous wrap,
+    and its stamp is at least 2 behind. Limit: one bit, so a run that lives through **two** wraps
+    (≈ 60 000 forks) reads blocks it last PUT before the first of them as zeros.
   - The per-sector CRC lets an app read part of a block (from 512 B) with every sector checked.
 - **R12.36 The MM request.** A new `MEMINFO` request `MI_BLK` (no new call number). `m1_p1` points
   to a request descriptor **in the caller's memory** (`struct blkreq`: operation and flags, block

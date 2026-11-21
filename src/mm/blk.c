@@ -19,7 +19,8 @@
  * header sector that names its owner (slot, pid, boot stamp, the
  * program's identity); a block whose header does not match the caller
  * reads as zeros.  The boot stamp changes at every boot and when MM's pid
- * counter wraps (blk_wrap), so a reused pid never sees old blocks.
+ * counter wraps (blk_wrap), so a reused pid never sees old blocks; a run
+ * that was live at the wrap also accepts the stamp before it (bk.old).
  *
  * The entry points into this file are:
  *   blk_init:	 MM starts: the boot stamp
@@ -65,8 +66,16 @@ PRIVATE struct {
   unsigned char run[NSLOT][2];	/* first extent, number of extents */
   unsigned short disc;		/* bit i: slot i's ended run waits for its
 				 * DISCARD at idle (R12.40) */
-  unsigned char nodisc;		/* the card has no DISCARD: runs end at once */
+  unsigned short old;		/* bit i: slot i's run began before the last
+				 * pid wrap, so the stamp before it is its
+				 * own too (R12.35) */
 } bk;
+
+/* Bit 0 of bk.disc (slot 0 is MM, which never holds a run): the card has
+ * no DISCARD, runs end at once (R12.40). */
+#define NODISC		(bk.disc & 1U)
+#define SET_NODISC()	(bk.disc |= 1U)
+#define DISC_PEND	(bk.disc & ~1U)	/* some run waits for its DISCARD */
 
 /* The header sector on the card (R12.35).  It goes through the last
  * sector of exec's mbuf, as the swap header does (R12.26): 0 B. */
@@ -117,8 +126,18 @@ PUBLIC void blk_init()
  *===========================================================================*/
 PUBLIC void blk_wrap()
 {
-/* next_pid went from 30000 back to 2: pids are used again (R12.35). */
+/* next_pid went from 30000 back to 2: pids are used again (R12.35).
+ * A new run's blocks need the new stamp, so a reused pid never sees an
+ * old owner's blocks.  A run that is live now keeps its data: it also
+ * accepts the stamp before the wrap (bk.old).  Its old owner with the same
+ * pid in that slot ended before the run began, and so before the
+ * previous wrap, with a stamp at most bk.stamp - 2. */
+  int i;
+
   bk.stamp++;
+  bk.old = 0;
+  for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
+	if (RUN(i)[1] != 0 && !PEND(i)) bk.old |= 1U << i;
 }
 
 
@@ -138,8 +157,7 @@ unsigned long sectors;		/* the swap partition's size, 0: blocks off */
   /* Runs still waiting for their DISCARD are dropped with the device. */
   for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
 	if (PEND(i)) RUN(i)[1] = 0;
-  bk.disc = 0;
-  bk.nodisc = FALSE;
+  bk.disc = 0;			/* (and NODISC: a new device) */
   bk.ext = 0;
   if (sectors == 0) return(OK);
   if (sectors <= BK_SKIP) return(ENOSPC);
@@ -214,7 +232,7 @@ unsigned step;			/* 0: the 16 slots; then groups of extents */
 		if (live) break;
 	}
 	if (s > u && (r = sw_discard(base + u * usz, (s - u) * usz)) != OK) {
-		if (r == ENOTTY) bk.nodisc = TRUE;
+		if (r == ENOTTY) SET_NODISC();
 		return(r);
 	}
 	if (s == u) s++;		/* a live one: skip it */
@@ -250,7 +268,7 @@ int proc_nr;
   struct mproc *rmp = &mproc[proc_nr];
 
   if (proc_nr <= INIT_PROC_NR || proc_nr >= NR_PROCS) return;
-  if ((rmp->mp_flags & BLKUSED) && RUN(proc_nr)[1] != 0 && !bk.nodisc
+  if ((rmp->mp_flags & BLKUSED) && RUN(proc_nr)[1] != 0 && !NODISC
 						&& !PEND(proc_nr)) {
 	bk.disc |= 1U << proc_nr;	/* R12.40: free after the DISCARD */
 	sw_kick();
@@ -348,6 +366,7 @@ int flags;
   }
   r[0] = (unsigned char) pos;
   r[1] = (unsigned char) n;
+  bk.old &= ~(1U << who);		/* a new run: only the new stamp */
   return((int) (n * bk.ext));
 }
 
@@ -362,7 +381,9 @@ unsigned long id;
 /* R12.35: is the header in HDR the caller's block id?  Anything else is
  * someone's leftover and reads as zeros. */
   return(h->magic == BK_MAGIC && h->slot == (unsigned long) who
-	&& h->pid == (unsigned long) mp->mp_pid && h->stamp == bk.stamp
+	&& h->pid == (unsigned long) mp->mp_pid
+	&& (h->stamp == bk.stamp
+	    || ((bk.old & (1U << who)) && h->stamp == bk.stamp - 1))
 	&& h->dev == (unsigned long) mp->mp_dev
 	&& h->ino == (unsigned long) mp->mp_ino
 	&& h->ctime == (unsigned long) mp->mp_ctime && h->id == id);
@@ -571,10 +592,10 @@ struct blkreq *rq;
   if (r[1] == 0 || PEND(who)) return(EBADF);
   all = (unsigned long) r[1] * bk.ext;
   if (n == 0 || rq->id >= all || n > all - rq->id) return(ERANGE);
-  if (bk.nodisc) return(OK);
+  if (NODISC) return(OK);
   e = sw_discard(BK_SKIP + ((unsigned long) r[0] * bk.ext + rq->id)
 					* BK_BLOCK, n * BK_BLOCK);
-  if (e == ENOTTY) bk.nodisc = TRUE;
+  if (e == ENOTTY) SET_NODISC();
   return(e == ENOTTY ? OK : e);
 }
 
@@ -615,7 +636,7 @@ PUBLIC int blk_step()
   unsigned char *e;
   unsigned long b, z, n;
 
-  if (bk.disc != 0) {
+  if (DISC_PEND) {
 	/* Not while keys arrive or a process waits for the CPU. */
 	if (sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK)
 		return(TRUE);
@@ -629,16 +650,16 @@ PUBLIC int blk_step()
 		n * bk.ext * BK_BLOCK);
 	if (r == ENXIO) return(TRUE);		/* card out: later */
 	if (r == ENOTTY) {			/* no DISCARD: all free now */
-		bk.nodisc = TRUE;
+		SET_NODISC();
 		n = e[1];
 	}
 	e[0] += (unsigned char) n;		/* (EIO: freed all the same) */
 	e[1] -= (unsigned char) n;
 	if (e[1] == 0) bk.disc &= ~(1U << i);
-	if (bk.nodisc) {
+	if (NODISC) {
 		for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
 			if (PEND(i)) RUN(i)[1] = 0;
-		bk.disc = 0;
+		bk.disc = 1U;		/* (NODISC stays) */
 	}
 	return(TRUE);				/* the OPENs waiting: next */
   }
