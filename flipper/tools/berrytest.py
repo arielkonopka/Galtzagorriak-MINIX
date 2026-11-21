@@ -12,6 +12,8 @@ and checks:
   R7c.2  the examples' bytecode compiled on the host (berryc, .bec) runs:
          hello and primes (R7c.6, pure computation) give the same output
          as their source
+  R7c.3  the tsv, pipe and sensor modules (records sorted and mapped,
+         a line joined, sensor.read of a missing sensor is nil)
   R7c.4  an endless loop ends with budget_error and status 3 (default
          budget), a heap bomb with status 4 (default 8 KB heap, -m), a
          bigger -m lets more through; after each the free RAM is back
@@ -103,6 +105,14 @@ def main():
 		check(st == 0 and out == b"1 1.5 1.5 24\n",
 			"R7c.1: -e code, integers and reals, real % real")
 		if fails: print(out)
+
+		# R7c.3: the tsv, pipe and sensor modules (records.be).
+		st, out = status(r, "berry /usr/lib/berry/records.bec")
+		check(st == 0 and out == b"name\ttemp_c\nhall\t19\n"
+			b"kitchen\t21.5\n['kitchen', 'hall']\ntrue nil\n",
+			"R7c.3: records.bec: tsv.records/join, pipe.where/sortby/"
+			"head/map, sensor.list/read")
+		if st != 0 or not out.startswith(b"name"): print(st, out)
 
 		# R7c.4 limits
 		t = time.time()

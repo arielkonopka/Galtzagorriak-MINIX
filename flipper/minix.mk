@@ -1045,16 +1045,18 @@ CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
 # The const tables (string table, built-in classes and modules, coc's
 # generate/) are pointer tables: in a PIC program they land in .data, so
 # per process in RAM; the shared library slot that keeps them in flash is
-# the next step (PORTING.md "Berry").  Package berry.
+# the next step (PORTING.md "Berry").  The bindings (R7c.3) are in gz/:
+# tsv, pipe (spec K.1) and the sensor stub.  Package berry.
 BERRY_DIR := $(MROOT)/src/lib/berry
-BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c) $(BERRY_DIR)/default/be_port.c \
+BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c $(BERRY_DIR)/gz/*.c) \
+	$(BERRY_DIR)/default/be_port.c \
 	$(BERRY_DIR)/default/be_modtab.c $(BERRY_DIR)/gzberry.c $(BERRY_DIR)/gzmath.c
 BERRY_GEN := $(BERRY_DIR)/generate/be_const_strtab.h
 BERRY_FP ?= $(UFPFLAGS)	# BERRY_FP= : soft float (the #385 two-loop check)
 BERRY_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu99 $(BERRY_FP) \
 	-fno-data-sections -fno-merge-constants \
 	-include $(BERRY_DIR)/gzmath.h \
-	-I$(BERRY_DIR) -I$(BERRY_DIR)/src -I$(BERRY_DIR)/generate
+	-I$(BERRY_DIR) -I$(BERRY_DIR)/src -I$(BERRY_DIR)/gz -I$(BERRY_DIR)/generate
 $(BERRY_GEN): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h
 	$(MAKE) -C $(BERRY_DIR) gen
 $(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
@@ -1235,7 +1237,7 @@ $(PKGDIR)/utils_1.0.tar: $(MB)/bin/clock $(MB)/bin/dice $(MB)/bin/passport \
 # each as source (for editing) and as bytecode compiled here by the host
 # tool berryc (R7c.2: the device never needs the compiler for them).
 BERRYC	:= $(BERRY_DIR)/build/berryc
-BERRY_EX := hello primes
+BERRY_EX := hello primes records
 $(BERRYC): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h $(BERRY_DIR)/Makefile
 	$(MAKE) -C $(BERRY_DIR)
 $(MB)/berry/ex/%.bec: apps/berry/%.be $(BERRYC)

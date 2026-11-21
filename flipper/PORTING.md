@@ -1264,7 +1264,11 @@ floating point and its math needs `modf`/`frexp`, which exist only as i386
 assembly.  Not shipped: the `os`, `time`, `json`, `debug`, `introspect`,
 `strict` and `solidify` modules (their sources are removed), and `math`
 (off until a small float libm exists); upstream's `default/berry.c` is
-replaced by `gzberry.c`.  Ints are 32 bit, reals single float (FPU, R5.7),
+replaced by `gzberry.c`.  The bindings (R7c.3) are const modules in
+`src/lib/berry/gz/` (coc tables like the built-in ones): `tsv` (`split`,
+`join`, `records`), `pipe` (`where`, `map`, `head`, `sortby`; spec K.1)
+and a `sensor` stub (`list`, `read` of `/dev/sensor/NAME`); example
+`records.be`.  Ints are 32 bit, reals single float (FPU, R5.7),
 so host and device bytecode are the same.
 
 **Programs.**  `/usr/bin/berry` (package `berry`, `--flash`): `berry
@@ -1290,15 +1294,15 @@ an allocation fails like a full heap: one forced GC, then
 
 | | bytes |
 |---|---|
-| text (flash, shared by every running script) | 75 592 |
-| `.data` + GOT per process | 5 764 + 948 |
+| text (flash, shared by every running script; 4.4 KB of it the bindings) | 79 948 |
+| `.data` + GOT per process | 6 220 + 964 |
 | `.bss` | 148 |
 | chmem (stack and heap gap, `CHMEM_berry`) | 12 288 |
-| one running script, `free -v` | 19 200 |
+| one running script, `free -v` | 19 712 |
 | VM heap at start (`gc.allocated()`) | 1 501 |
 | endless loop with the default budget | ends after 0.5 s (QEMU) |
 
-The 6.7 KB of data per process are the constant tables (`generate/`: the
+The 7.2 KB of data per process are mostly the constant tables (`generate/`: the
 string table, the built-in classes and modules): they are pointer tables,
 and in a position-independent program every initialised pointer is data,
 copied to RAM per process.  This is why AC7c.1's 6 KB per script is not

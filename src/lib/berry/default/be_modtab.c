@@ -25,6 +25,9 @@ be_extern_native_module(strict);
 be_extern_native_module(undefined);
 
 /* user-defined modules declare start */
+be_extern_native_module(tsv);	/* Galtzagorriak (gz/, issue #385) */
+be_extern_native_module(pipe);
+be_extern_native_module(sensor);
 
 /* user-defined modules declare end */
 
@@ -69,6 +72,9 @@ BERRY_LOCAL const bntvmodule_t* const be_module_table[] = {
 #endif
     &be_native_module(undefined),
     /* user-defined modules register start */
+    &be_native_module(tsv),
+    &be_native_module(pipe),
+    &be_native_module(sensor),
 
     /* user-defined modules register end */
     NULL /* do not remove */

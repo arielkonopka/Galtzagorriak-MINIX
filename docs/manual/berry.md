@@ -38,10 +38,23 @@ answering (being looked into).
 Packages carry their scripts compiled. The host tool `berryc` (`make -C src/lib/berry`) makes the
 bytecode: `berryc -c script.bec script.be`. The Flipper loads `.bec` files without compiling them.
 
+## Modules
+
+- `tsv`: the tab-separated text that commands print with `-t`. `tsv.split(line)` gives the
+  fields, `tsv.join(list)` makes a line, `tsv.records(text)` gives one map per line, keyed by
+  the header line. Inside fields, `\t`, `\n` and `\\` stand for a tab, a newline and a backslash.
+- `pipe`: `pipe.where(list, f)`, `pipe.map(list, f)`, `pipe.head(list, n)` and
+  `pipe.sortby(list, key)`, where `key` is a function or, for records, a field name.
+- `sensor`: `sensor.list()` names the sensors in `/dev/sensor`, `sensor.read(name)` gives a
+  sensor's line or `nil`. There are no sensor drivers yet, so the list is empty.
+- `string`, `global`, `sys` and `gc` from Berry itself.
+
+`/usr/lib/berry/records.be` shows `tsv` and `pipe`.
+
 ## Not there yet
 
-- **(planned, R7c.3)** Bindings to the system: `tsv` and `pipe` (the desktop protocol), `sensor`,
-  `timer`, `alert`, `gpio`, `gui` and the radios.
+- **(planned, R7c.3)** More bindings: `timer`, `alert`, `gpio`, `adc`, `gui`, `storage` and the
+  radios.
 - **(planned, R7c.1)** Starting a script with `#!/usr/bin/berry`, and the interpreter as a shared
   library so a running script takes less RAM (about 19 KB today).
 - The `math` module, and `os`, `time` and `json`.
