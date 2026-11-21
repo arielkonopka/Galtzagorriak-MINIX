@@ -121,13 +121,13 @@ FuriString* furi_string_alloc_printf(const char* fmt, ...) {
     return s;
 }
 
-/* ---- FlipperFormat: not used (nfc_file.c does .nfc files) ---- */
+/* ---- FlipperFormat: not used (nfc_file.c does .nfc files); the read
+ * side the ID-list parsers need is nfc_shim_ff.c (#412) ---- */
 #define FF_NO(...) { (void)ff; (void)key; return false; }
 bool flipper_format_read_hex(FlipperFormat* ff, const char* key, uint8_t* d, uint16_t n) FF_NO()
 bool flipper_format_write_hex(FlipperFormat* ff, const char* key, const uint8_t* d, uint16_t n) FF_NO()
 bool flipper_format_read_uint32(FlipperFormat* ff, const char* key, uint32_t* d, uint16_t n) FF_NO()
 bool flipper_format_write_uint32(FlipperFormat* ff, const char* key, const uint32_t* d, uint16_t n) FF_NO()
-bool flipper_format_read_string(FlipperFormat* ff, const char* key, FuriString* d) FF_NO()
 bool flipper_format_write_string(FlipperFormat* ff, const char* key, FuriString* d) FF_NO()
 bool flipper_format_write_string_cstr(FlipperFormat* ff, const char* key, const char* d) FF_NO()
 bool flipper_format_write_comment_cstr(FlipperFormat* ff, const char* key) FF_NO()
@@ -136,7 +136,6 @@ bool flipper_format_key_exist(FlipperFormat* ff, const char* key) FF_NO()
 bool flipper_format_get_value_count(FlipperFormat* ff, const char* key, uint32_t* d) FF_NO()
 bool flipper_format_read_bool(FlipperFormat* ff, const char* key, bool* d, uint16_t n) FF_NO()
 bool flipper_format_write_bool(FlipperFormat* ff, const char* key, const bool* d, uint16_t n) FF_NO()
-bool flipper_format_rewind(FlipperFormat* ff) { (void)ff; return false; }
 bool flipper_format_read_hex_uint64(FlipperFormat* ff, const char* key, uint64_t* d, uint16_t n) FF_NO()
 bool flipper_format_write_hex_uint64(FlipperFormat* ff, const char* key, const uint64_t* d, uint16_t n) FF_NO()
 

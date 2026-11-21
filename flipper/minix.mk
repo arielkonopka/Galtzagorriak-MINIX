@@ -320,7 +320,7 @@ ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
 GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
-WINBASE	:= archive
+WINBASE	:= archive nfc
 # Stock app ports part 2 (issue #413): window apps over the commands.
 WINBASE	+= subghzui ibuttonui gpioui
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
@@ -338,7 +338,7 @@ endif
 SUIDPROGS := passwd su guimod
 # Set-gid programs, PROG:GID: infrared opens /dev/ir as group ir (13) when
 # the user is in that group, then goes back to its own (AC7.3, issue #389).
-SGIDPROGS := infrared:13
+SGIDPROGS := infrared:13 nfc:14
 sgid_of = $(word 2,$(subst :, ,$(filter $(1):%,$(SGIDPROGS))))
 # guimod (spec K.6, T23a): set-uid root only to write the real uid into a
 # desktop record (a FIFO does not say who wrote it); root's rights end
@@ -430,6 +430,11 @@ CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
 			# (two 128 B paths, the record buffers)
+CHMEM_nfc := 16384	# issue #412 (AC14.3, <= 35 KB in all): a read's card
+			# (nfc_device_t 5.3 KB) and keys found (0.6 KB), the
+			# loopback cards (-L, 1.6 KB), stdio for a .nfc file or
+			# a dictionary (1 KB each), opendir's 1 KB DIR; all
+			# malloc'd while used, freed after
 CHMEM_spectrum := 2048	# issue #157: all stack (no malloc, no stdio, no
 			# handler); the frame buffer and the waterfall are bss
 CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
@@ -605,6 +610,27 @@ $(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
 OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
+# nfc (spec Phase 14, issue #412 item 4): a window app (K.8) on the
+# hand-written libnfc reader (src/lib/libnfc: poller, Crypto-1, the
+# streaming dictionary, the .nfc files), C11 as that library is.
+NFCL_DIR := $(MROOT)/src/lib/libnfc
+NFCL_SRC := crypto1 iso14443_3a mf_classic mf_ultralight mf_dict mf_attack \
+	    nfc_file nfc_poller
+NFCL_HDR := $(wildcard $(NFCL_DIR)/*.h)
+NFCL_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 -I$(NFCL_DIR) \
+	    -I$(GM_DIR) -Igui
+$(MB)/libnfc/%.o: $(NFCL_DIR)/%.c $(NFCL_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/nfc.o: gui/nfc.c gui/nfcloop.h $(GM_DIR)/gm.h $(NFCL_HDR) \
+		$(MROOT)/include/minix/nfc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/nfcloop.o: gui/nfcloop.c gui/nfcloop.h $(NFCL_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(NFCL_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_nfc = $(MB)/cmd/gui/nfc.o $(MB)/cmd/gui/nfcloop.o $(MB)/gm/gm.o \
+	   $(NFCL_SRC:%=$(MB)/libnfc/%.o)
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@

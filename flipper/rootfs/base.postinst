@@ -182,6 +182,12 @@ grep '^ir:' /etc/group >/dev/null || {
 }
 chgrp ir /dev/ir 2>/dev/null
 chmod 660 /dev/ir 2>/dev/null
+# Cards made before issue #412 (Phase 14) lack the group nfc (the nfc app
+# is set-gid nfc; /dev/nfc comes with its driver and joins it then).
+grep '^nfc:' /etc/group >/dev/null || {
+	echo 'nfc:*:14:root,nobody' >> /etc/group
+	echo "base: /etc/group now has nfc"
+}
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then

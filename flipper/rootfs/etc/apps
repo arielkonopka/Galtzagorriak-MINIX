@@ -17,3 +17,4 @@ Infrared:nobody:@ir:/bin/infrared
 iButton:nobody:@ibutton:=/bin/ibuttonui
 GPIO:nobody:@gpio:=/bin/gpioui
 Archive:nobody:@file:=/bin/archive
+NFC:nobody:@nfc:=/bin/nfc

@@ -27,4 +27,20 @@
     X(umarsh) \
     X(washcity) \
     X(zolotaya_korona) \
-    X(zolotaya_korona_online)
+    X(zolotaya_korona_online) \
+    X(all_in_one) \
+    X(sonicare) \
+    X(trt) \
+    X(ventra) \
+    X(ndef_ul) \
+    X(ndef_mfc) \
+    X(aic) \
+    X(mykey) \
+    X(plantain) \
+    X(sev_tk) /* sevppk_tk.c */ \
+    X(sk_tk) \
+    X(szppk_so) \
+    X(skylanders) \
+    X(disney_infinity) \
+    X(emv) \
+    X(banapass) /* patched copy, patches/banapass.patch */
