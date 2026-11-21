@@ -325,7 +325,7 @@ _PROTOTYPE( void mkshadow, (struct proc *parent, struct proc *child,
 		phys_clicks c2)						);
 _PROTOTYPE( void rmshadow, (struct proc *p, phys_clicks *basep,
 		phys_clicks *sizep)					);
-_PROTOTYPE( void unshadow, (struct proc *p)				);
+_PROTOTYPE( void unshadow, (struct proc *p, struct proc *ran)		);
 _PROTOTYPE( void copyclicks, (phys_clicks src, phys_clicks dest,
 		phys_clicks nclicks)					);
 _PROTOTYPE( void zeroclicks, (phys_clicks dest, phys_clicks nclicks)	);

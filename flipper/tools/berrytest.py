@@ -17,10 +17,11 @@ and checks:
   R7c.4  an endless loop ends with budget_error and status 3 (default
          budget), a heap bomb with status 4 (default 8 KB heap, -m), a
          bigger -m lets more through; after each the free RAM is back
-  R7c.4  responsiveness wins: with an endless loop without a budget
-         (-n 0) in the background, a shell command still answers within
-         2 s, and the loop dies on kill (BERRYTEST_TWO=1: two loops; that
-         case is open, issue #385)
+  R7c.4  responsiveness wins: with two endless loops without a budget
+         (-n 0) in the background, and then one of them next to a
+         background subshell loop (a shadow group with the login shell,
+         issue #429), a shell command still answers within 2 s, and the
+         loops die on kill
   R7c.5  berry -i: the REPL evaluates lines typed on the console, keeps
          its variables, and ends on end of input
   RAM    free -v with one script running, and the VM's heap at start
@@ -143,28 +144,35 @@ def main():
 		check(st == 4, "R7c.4: -m 2048 is a smaller heap (status %s)" % st)
 
 		# Responsiveness: runaway scripts without a budget (-n 0).
-		# BERRYTEST_TWO=1: two of them (issue #385: QEMU stops
-		# answering about 1 s after the second starts; open).
-		n = 2 if os.environ.get("BERRYTEST_TWO") else 1
-		r.sh("rm -f /tmp/p1; " + "berry -n 0 -e 'while true end' & "
-		     "echo $! >>/tmp/p1; " * n + "sleep 1", 30)
-		worst = 0.0
-		for _ in range(8):
-			t = time.time()
-			out = r.output("echo alive", 20)
-			dt = time.time() - t
-			worst = max(worst, dt)
-			if out != b"alive\n":
-				worst = 99
-				break
-		check(worst < 2.0, "R7c.4: the shell answers in %.2f s at most "
-			"while %d endless script(s) run" % (worst, n))
-		r.sh("kill `cat /tmp/p1`; sleep 1", 20)
-		out = r.output("for p in `cat /tmp/p1`; do kill -0 $p 2>/dev/null "
-			       "&& echo $p; done; echo done", 20)
-		check(out == b"done\n", "R7c.4: the runaway scripts die on kill")
-		check(ram_back(r, base) >= base - 64,
-			"R7c.4: their RAM is free again")
+		# #429: the shell and a fork child of it that shares its
+		# addresses (the second `&' before its exec, or a subshell)
+		# are a shadow group; next to a runaway loop the group's
+		# members swapped places every quantum and neither ran, so the
+		# console hung (kernel, arm/shadow.c unshadow).
+		loop = "berry -n 0 -e 'while true end' & echo $! >>/tmp/p1; "
+		sub = "(while :; do :; done) & echo $! >>/tmp/p1; "
+		for what, cmd in (("2 endless scripts", loop * 2),
+				  ("an endless script and a subshell loop",
+				   loop + sub)):
+			r.sh("rm -f /tmp/p1; " + cmd + "sleep 1", 30)
+			worst = 0.0
+			for _ in range(8):
+				t = time.time()
+				out = r.output("echo alive", 20)
+				dt = time.time() - t
+				worst = max(worst, dt)
+				if out != b"alive\n":
+					worst = 99
+					break
+			check(worst < 2.0, "R7c.4: the shell answers in %.2f s "
+				"at most while %s run" % (worst, what))
+			if worst >= 99: return fails	# the console is gone
+			r.sh("kill `cat /tmp/p1`; sleep 1", 20)
+			out = r.output("for p in `cat /tmp/p1`; do kill -0 $p "
+				       "2>/dev/null && echo $p; done; echo done", 20)
+			check(out == b"done\n", "R7c.4: the loops die on kill")
+			check(ram_back(r, base) >= base - 64,
+				"R7c.4: their RAM is free again")
 
 		# R7c.5: the REPL.
 		mark = len(r.out)
