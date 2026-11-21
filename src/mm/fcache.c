@@ -95,7 +95,12 @@ PRIVATE unsigned char used[MAXPAGES / 8];
 #define DIRADDR(d)	(fc_base + (d) * PAGE)
 #define RECP(d, i)	((struct fcrec *) (DIRADDR(d) + HDR + (i) * REC))
 #define FREE_SLOT(r)	((r)->crc == 0xFFFFFFFFUL && (r)->size == 0xFFFFFFFFUL)
-#define LIVE(r)		(!FREE_SLOT(r) && (r)->dead0 == 0xFFFFFFFFUL)
+/* R2b.1a: an entry not wholly inside today's region (it moved with SFSA
+ * after a CPU2 stack swap) is dead; nothing is written for it. */
+#define IN_REG(r)	((r)->addr >= fc_base + DIRPAGES * PAGE \
+			 && (r)->addr < fc_base + fc_size \
+			 && (r)->size <= fc_base + fc_size - (r)->addr)
+#define LIVE(r)		(!FREE_SLOT(r) && (r)->dead0 == 0xFFFFFFFFUL && IN_REG(r))
 
 FORWARD _PROTOTYPE( int fc_format, (int d, unsigned long gen)		);
 FORWARD _PROTOTYPE( int fc_compact, (void)				);

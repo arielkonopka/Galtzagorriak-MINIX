@@ -527,19 +527,40 @@ static void make_parents(char *path)
  * answers 1: then op 4 does one flash step per call (a page erase or 256
  * bytes), so that MM serves exec and the rest in between (AC2b.R2).
  * Returns 0 or -errno. */
+/* The radio slot (spec R2b.1a): the lowest install address of the CPU2
+ * stacks on the card, one number written by `radio add`/`radio rm`; 0:
+ * none.  MM puts no program at or above it. */
+static unsigned long radio_slot(void)
+{
+	char b[24];
+	int fd, n;
+
+	if ((fd = open("/etc/radio.slot", O_RDONLY)) < 0) return 0;
+	n = read(fd, b, sizeof(b) - 1);
+	close(fd);
+	b[n > 0 ? n : 0] = 0;
+	return strtoul(b, NULL, 0);
+}
+
 static int flash_op(const char *path, int op)
 {
 	message m;
+	unsigned long slot = op == 0 ? radio_slot() : 0;
 	int r;
 
 	m.m1_p1 = (char *) path;
 	m.m1_i1 = strlen(path) + 1;
 	m.m1_i2 = MI_INSTALL;
 	m.m1_i3 = op;
+	m.m1_p2 = (char *) slot;
 	while ((r = _syscall(MM, MEMINFO, &m)) == 1) {
 		m.m1_i2 = MI_INSTALL;
 		m.m1_i3 = 4;
 	}
+	if (r < 0 && errno == ENOSPC && slot != 0)
+		fprintf(stderr, "pkg: %s: radio slot: flash from 0x%08lX "
+			"reserved for CPU2 stacks on the card (radio list)\n",
+			path, slot);
 	return r < 0 ? -errno : 0;
 }
 

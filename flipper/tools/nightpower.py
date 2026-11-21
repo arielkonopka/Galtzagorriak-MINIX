@@ -4,6 +4,8 @@
 Usage:
 	python3 -I nightpower.py [--port /dev/ttyACM0] start [--state F]
 	(unplug USB, leave the Flipper alone for the night, plug it back in)
+	python3 -I nightpower.py [--port /dev/ttyACM0] note [--state F]
+					[--ambient C]	(an interim reading)
 	python3 -I nightpower.py [--port /dev/ttyACM0] end [--state F]
 					[--report F.md]
 	python3 -I nightpower.py --selftest
@@ -24,10 +26,17 @@ nightpower.json in the current directory).
 docs/spec/power-plan.md PR 2, test 2):
 	- no reset during the night (uptime only grew, the cause is not
 	  "watchdog");
-	- the clock within the LSE tolerance (+-2 s over 8 h);
+	- the clock within the LSE tolerance (+-2 s over 8 h, i.e. 69 ppm:
+	  max(2 s, 69 ppm x the run) for longer runs);
 	- more than 99 % of the time in Stop2;
 plus the charge used and the average current it implies, and the gauge's
-own standby estimate.  It prints a report and a ready line for the Power
+own standby estimate.  Over 36 h the report says "run", not "night".
+
+"note" (a multi-day run, once a day) reads only /dev/power, adds it to the
+state file's notes and prints the Stop2 share since the start; "end"
+shows the notes as a per-day table after the verdict.
+
+It prints a report and a ready line for the Power
 table in flipper/PORTING.md, and writes the report to --report.
 
 The console must be logged in at a shell prompt (any user can read
@@ -49,9 +58,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 CAPACITY_MAH = 2100		# the Flipper Zero's battery (stock: 2100 mAh)
-DRIFT_LIMIT = 2.0		# s over the night (AC6.6, about 70 ppm over 8 h)
+DRIFT_LIMIT = 2.0		# s at least (AC6.6: +-2 s over 8 h) ...
+DRIFT_PPM = 69.0		# ... and over longer runs 2 s / 8 h, in ppm
 STOP2_LIMIT = 99.0		# % of the time asleep (AC6.6)
 MIN_HOURS = 8.0			# AC6.6 asks for 8 h
+RUN_HOURS = 36.0		# longer than this it is a "run", not a "night"
 
 POWER_RX = re.compile(r"soc=\S+.*")
 # One Stop2 sleep is at most PM_MAX = HZ - 2 = 58 ticks (arm/klib.c), and
@@ -72,6 +83,12 @@ def unwrap_wakes(wb, wo, stop2):
 	while wb + wo < stop2 / MAX_SLEEP_S * 0.999:
 		wo += WRAP; wrapped = True
 	return wb, wo, wrapped
+
+
+def drift_limit(secs):
+	"""The clock limit in s for a run of secs seconds: AC6.6's +-2 s over
+	8 h is about 69 ppm, so a longer run may drift in proportion."""
+	return max(DRIFT_LIMIT, DRIFT_PPM * 1e-6 * secs)
 
 
 def usb_since(port):
@@ -206,11 +223,12 @@ def judge(a, b):
 	L = []
 	ok = True
 	hours = (b["host_utc"] - a["host_utc"]) / 3600
+	night = "night" if hours <= RUN_HOURS else "run"
 	if a.get("since_boot"):
 		L.append("(since the last boot, %.2f h ago: the minutes on "
 			"USB before the night count as awake)"
 			% ((b["host_utc"] - a["host_utc"]) / 3600))
-	L.append("Night: %.2f h (%s to %s UTC)" % (hours,
+	L.append("%s: %.2f h (%s to %s UTC)" % (night.capitalize(), hours,
 		time.strftime("%Y-%m-%d %H:%M", time.gmtime(a["host_utc"])),
 		time.strftime("%Y-%m-%d %H:%M", time.gmtime(b["host_utc"]))))
 	if hours < MIN_HOURS:
@@ -229,8 +247,8 @@ def judge(a, b):
 		if pb["up"] < want:
 			reset_ok = False
 			L.append("FAIL reset: uptime %d s, expected about %d s: "
-				"the Flipper restarted in the night (reset: %s)"
-				% (pb["up"], want + 120, b.get("reset", "?")))
+				"the Flipper restarted in the %s (reset: %s)"
+				% (pb["up"], want + 120, night, b.get("reset", "?")))
 	if "watchdog" in b.get("reset", ""):
 		if reset_ok and a.get("reset") == b.get("reset"):
 			L.append("  note: reset cause still \"watchdog\" from "
@@ -255,12 +273,14 @@ def judge(a, b):
 		ok = False
 	else:
 		drift = b["clock_offset"] - a["clock_offset"]
-		ppm = drift / (b["host_utc"] - a["host_utc"]) * 1e6
-		good = abs(drift) <= DRIFT_LIMIT
-		L.append("%s clock: %+.1f s over the night (%+.1f ppm; offset "
-			"%+.1f -> %+.1f s; limit +-%g s)" % ("PASS" if good
-			else "FAIL", drift, ppm, a["clock_offset"],
-			b["clock_offset"], DRIFT_LIMIT))
+		secs = b["host_utc"] - a["host_utc"]
+		ppm = drift / secs * 1e6
+		lim = drift_limit(secs)
+		good = abs(drift) <= lim
+		L.append("%s clock: %+.1f s over the %s (%+.1f ppm; offset "
+			"%+.1f -> %+.1f s; limit +-%.1f s = +-%.0f ppm)" % ("PASS"
+			if good else "FAIL", drift, night, ppm, a["clock_offset"],
+			b["clock_offset"], lim, lim / secs * 1e6))
 		L.append("  this computer's clock must be NTP-synchronised "
 			"for this to mean anything")
 		ok &= good
@@ -297,7 +317,7 @@ def judge(a, b):
 	if src:
 		wb, wo, wrapped = unwrap_wakes(wb, wo, st)
 		# On USB the Flipper never sleeps: the time since the cable went
-		# back in is not part of the night.
+		# back in is not part of the run.
 		usb = 0
 		t = b.get("usb_since")
 		if t and (pb.get("usb") or pb.get("vbus")) and \
@@ -351,24 +371,102 @@ def judge(a, b):
 			pb.get("sby", "?")))
 	if pb.get("usb") or pb.get("vbus"):
 		L.append("  (read with USB connected: avg/ma show the "
-			"charger, not the night)")
+			"charger, not the %s)" % night)
 
 	L.append("")
 	L.append("VERDICT: %s" % ("PASS (AC6.6)" if ok else
 		"NOT PASSED: see the lines above"))
-	row = "| %s | %s | %s | overnight %.1f h on battery (nightpower.py): " \
+	L.extend(notes_table(a, b))
+	row = "| %s | %s | %s | %s %.1f h on battery (nightpower.py): " \
 		"Stop2 %s, %d wake-ups other, clock %s, SoC %s -> %s %%, " \
 		"no reset: %s%s |" % (
 		time.strftime("%Y-%m-%d", time.gmtime(a["host_utc"])),
 		b.get("version", "?"),
 		"%.2f mA (SoC)" % ma if ma else "< gauge resolution",
-		hours, "%.2f %%" % pct if pct is not None else "?",
+		"overnight" if hours <= RUN_HOURS else "run", hours, "%.2f %%" % pct if pct is not None else "?",
 		wo if src else -1,
-		"%+.1f s" % drift if drift is not None else "?",
+		"%+.1f s (%+.1f ppm)" % (drift, drift / (b["host_utc"] -
+		a["host_utc"]) * 1e6) if drift is not None else "?",
 		pa.get("soc", "?"), pb.get("soc", "?"),
 		"yes" if reset_ok else "NO",
 		", ambient %.1f -> %.1f C" % amb if None not in amb else "")
 	return L, ok, row
+
+
+def stop2_pct(p0, p1):
+	"""The Stop2 share in % between two /dev/power readings, or None."""
+	if not all(k in p0 and k in p1 for k in ("up", "stop2")) or \
+			p1["up"] <= p0["up"]:
+		return None
+	return 100.0 * (p1["stop2"] - p0["stop2"]) / (p1["up"] - p0["up"])
+
+
+def note_fields(p, host_utc, ambient=None):
+	"""What a `note` keeps of a /dev/power reading."""
+	n = {"host_utc": host_utc}
+	for k in ("soc", "mv", "up", "stop2", "wbtn", "wother"):
+		if k in p:
+			n[k] = p[k]
+	n["usb"] = 1 if (p.get("usb") or p.get("vbus")) else 0
+	if ambient is not None:
+		n["ambient"] = ambient
+	return n
+
+
+def notes_table(a, b):
+	"""The interim readings of `note` as a per-day table: day since the
+	start, SoC, the Stop2 share since the previous reading.  The end
+	reading is the last row.  [] when there are no notes."""
+	notes = a.get("notes") or []
+	if not notes:
+		return []
+	L = ["", "Interim readings (nightpower.py note):",
+		"  day    UTC          SoC   Stop2 since the previous"]
+	prev = a.get("power") or {}
+	pb = b.get("power") or {}
+	rows = notes + [dict(note_fields(pb, b["host_utc"]), end=True)]
+	for n in rows:
+		pct = stop2_pct(prev, n)
+		L.append("  %-6.2f %s %5s  %s%s%s" % (
+			(n["host_utc"] - a["host_utc"]) / 86400.0,
+			time.strftime("%m-%d %H:%M", time.gmtime(n["host_utc"])),
+			"%s %%" % n["soc"] if "soc" in n else "?",
+			"%.2f %%" % pct if pct is not None else "?",
+			" (read on USB: awake)" if n.get("usb") and
+			not n.get("end") else "", " (end)" if n.get("end")
+			else ""))
+		prev = n
+	if any(n.get("usb") for n in notes):
+		L.append("  a note read on USB counts as awake time, as the "
+			"minutes on USB at the start and the end do")
+	return L
+
+
+def cmd_note(args):
+	try:
+		with open(args.state) as f:
+			a = json.load(f)
+	except OSError:
+		sys.exit("nightpower: no %s: run 'start' first" % args.state)
+	mx = open_minix(args.port, args.log)
+	rc, out = mx.run("cat /dev/power", 10)
+	mx.close()
+	p = parse_power(out)
+	if p is None:
+		sys.exit("nightpower: no /dev/power line")
+	n = note_fields(p, time.time(), args.ambient)
+	a.setdefault("notes", []).append(n)
+	with open(args.state, "w") as f:
+		json.dump(a, f, indent=1)
+	pct = stop2_pct(a.get("power") or {}, n)
+	print("Note %d saved in %s: %.2f days since the start, charge %s %%, "
+		"%s mV" % (len(a["notes"]), args.state, (n["host_utc"] -
+		a["host_utc"]) / 86400.0, n.get("soc", "?"), n.get("mv", "?")))
+	print("  Stop2 since the start: %s" % ("%.2f %%" % pct
+		if pct is not None else "? (no up=/stop2= in /dev/power)"))
+	if n["usb"]:
+		print("  read on USB: the minutes on USB count as awake time "
+			"(unplug at once, as after 'start')")
 
 
 def open_minix(port, log):
@@ -525,13 +623,62 @@ def selftest():
 	assert "ppm at about 22.0 C" in text
 	a2 = dict(a); a2["ambient"] = None
 	assert "Ambient: 23.0 C at the end only" in "\n".join(judge(a2, b)[0])
+	# the drift limit scales with the run (#395): max(2 s, 69 ppm)
+	assert drift_limit(8 * 3600) == 2.0
+	assert abs(drift_limit(4 * 86400) - 23.85) < 0.01
+	for h, good, badd in ((8, 1.9, 2.1), (26, 6.3, 6.6), (96, 23.5, 24.2)):
+		for d, want in ((good, True), (-good, True), (badd, False),
+				(-badd, False)):
+			t = h * 3600.0
+			a = dict(host_utc=0.0, reset="software", clock_offset=0.0,
+				power=dict(soc=90, up=100, stop2=0))
+			b = dict(host_utc=t, reset="software", clock_offset=d,
+				power=dict(soc=80, up=100 + int(t),
+				stop2=int(t * 0.995), wother=int(t * 1.04)))
+			lines, ok, row = judge(a, b)
+			if ok != want:
+				bad += 1
+				print("drift %+g s over %d h: got %s, want %s\n%s"
+					% (d, h, ok, want, "\n".join(lines)))
+			text = "\n".join(lines)
+			assert ("ppm)" in row) and ("ppm)" in text)
+			if h > RUN_HOURS:
+				assert text.startswith("Run: ") and "over the run" \
+					in text and "| run %.1f h" % h in row
+			else:
+				assert text.startswith("Night: ") and \
+					"| overnight %.1f h" % h in row
+	assert "limit +-23.8 s = +-69 ppm" in text
+	# interim notes: a 3-day run with one note a day, one read on USB
+	a = dict(host_utc=0.0, reset="software", clock_offset=0.0,
+		power=dict(soc=90, up=100, stop2=0, wbtn=0, wother=0))
+	a["notes"] = [note_fields(dict(soc=88, mv=3950, up=100 + 86400,
+		stop2=86000, wbtn=1, wother=89000, usb=0, vbus=0), 86400.0),
+		note_fields(dict(soc=86, mv=3930, up=100 + 2 * 86400,
+		stop2=86000 + 85100, wbtn=2, wother=178000, usb=1, vbus=2),
+		2 * 86400.0, 21.0)]
+	assert a["notes"][1]["usb"] == 1 and a["notes"][1]["ambient"] == 21.0
+	assert abs(stop2_pct(a["power"], a["notes"][0]) - 99.537) < 0.01
+	b = dict(host_utc=3 * 86400.0, reset="software", clock_offset=4.0,
+		power=dict(soc=84, up=100 + 3 * 86400, stop2=171100 + 86000,
+		wbtn=3, wother=267000, usb=1), usb_since=3 * 86400.0 - 30)
+	lines, ok, row = judge(a, b)
+	text = "\n".join(lines)
+	assert ok, text
+	assert "Interim readings" in text and text.index("VERDICT") < \
+		text.index("Interim readings")
+	assert "88 %  99.54 %" in text and "(read on USB: awake)" in text
+	assert "84 %  99.54 % (end)" in text
+	assert "a note read on USB counts as awake time" in text
+	assert notes_table(dict(a, notes=[]), b) == []
 	for i, (a, b, want) in enumerate(SELF):
 		lines, ok, row = judge(a or since_boot(b), b)
 		if ok != want:
 			bad += 1
 			print("case %d: got %s, want %s\n%s" % (i, ok, want,
 				"\n".join(lines)))
-	print("selftest: %d of %d cases %s" % (len(SELF) - bad, len(SELF),
+	n = len(SELF) + 3 * 4
+	print("selftest: %d of %d cases %s" % (n - bad, n,
 		"ok" if not bad else "FAILED"))
 	return 1 if bad else 0
 
@@ -547,21 +694,24 @@ def main():
 	ap.add_argument("--report", default=None,
 		help="end: also write the report to this Markdown file")
 	ap.add_argument("--ambient", type=float, default=None,
-		help="room temperature in C now (start and end each)")
+		help="room temperature in C now (start, note and end each)")
 	ap.add_argument("--ambient-cmd", default=None,
 		help="a MINIX command that prints temp=NN.N (the dht command)")
 	ap.add_argument("--log", default=None, help="log the console here")
 	ap.add_argument("--selftest", action="store_true",
 		help="check this script on canned text, no hardware")
-	ap.add_argument("what", nargs="?", choices=["start", "end"])
+	ap.add_argument("what", nargs="?", choices=["start", "note", "end"])
 	args = ap.parse_args()
 	if args.selftest:
 		return selftest()
 	if not args.what:
-		ap.error("say start or end (or --selftest)")
+		ap.error("say start, note or end (or --selftest)")
 	args.log = open(args.log, "a") if args.log else None
 	if args.what == "start":
 		cmd_start(args)
+		return 0
+	if args.what == "note":
+		cmd_note(args)
 		return 0
 	return cmd_end(args)
 
