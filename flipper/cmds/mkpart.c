@@ -21,6 +21,12 @@
  * "%" or "*" size is cut to that), a MINIX one (81) may be larger (a V3
  * /home, spec O).  The kernel reads the new table at the next boot.
  *
+ * Type "82/4" (R12.34, cards >= 32 GB): a MINIX partition (81) holding up
+ * to four swap subpartitions (82) of 4 GiB - 1 MiB each, hd3a ... hd3d
+ * when it is the third: each on a 4 GiB boundary behind the first 4 MiB,
+ * whose first sector holds their table.  Its size (MB, "N%" or "*") is
+ * cut to the whole subpartitions that fit, four at most.
+ *
  * -l lists the table, -s prints the device's size in MB, -g N makes
  * partition N reach up to the next partition after it (or the end of the
  * card), for setup -H (spec O.7).  -n sectors: as if the device had that
@@ -43,8 +49,10 @@
 #define ALIGN		8192UL			/* 4 MiB in sectors */
 #define MB		2048UL			/* 1 MiB in sectors */
 #define SWAP_SECS	(0x800000UL - MB)	/* 4 GiB - 1 MiB */
+#define SUB_STEP	0x800000UL		/* 4 GiB: one swap subpartition */
 
-static unsigned char mbr[SECTOR];
+static unsigned char mbr[SECTOR], sub[SECTOR];
+static unsigned long sub_at;		/* the "82/4" container, 0: none */
 static char *prog;
 
 static void die(const char *what)
@@ -62,6 +70,17 @@ static unsigned long get32(unsigned char *p)
 static void put32(unsigned char *p, unsigned long v)
 {
 	p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
+}
+
+static void entry(unsigned char *pe, unsigned long type, unsigned long start,
+	unsigned long size)
+{
+	memset(pe, 0, 16);
+	pe[4] = (unsigned char) type;
+	/* CHS fields: "use LBA" values, as modern tools write. */
+	pe[1] = pe[5] = 0xFE; pe[2] = pe[6] = 0xFF; pe[3] = pe[7] = 0xFF;
+	put32(pe + 8, start);
+	put32(pe + 12, size);
 }
 
 static void list(void)
@@ -107,6 +126,7 @@ int main(int argc, char **argv)
 {
 	struct part_range geom;
 	unsigned long disk_secs, next, limit, size, type, start, fake = 0;
+	unsigned long nsub;
 	unsigned char *pe;
 	char *dev, *arg, *colon, *at;
 	int fd, i, a, lflag = 0, sflag = 0, grow = 0, slot;
@@ -127,7 +147,7 @@ int main(int argc, char **argv)
 		} else break;
 	}
 	if (argc < 2 || (!lflag && !sflag && !grow && argc < 3)) {
-		fprintf(stderr, "Usage: %s [-n sectors] device type:MB|N%%|*[@end] ...\n"
+		fprintf(stderr, "Usage: %s [-n sectors] device type[/4]:MB|N%%|*[@end] ...\n"
 				"       %s -l device\n"
 				"       %s -s device\n"
 				"       %s [-n sectors] -g N device\n",
@@ -141,7 +161,8 @@ int main(int argc, char **argv)
 	if (mbr[510] != 0x55 || mbr[511] != 0xAA) die("no partition table");
 	if (lflag) { list(); return 0; }
 
-	if (ioctl(fd, DIOCGETPS, &geom) < 0) die("cannot get device size");
+	if (!fake && ioctl(fd, DIOCGETPS, &geom) < 0)
+		die("cannot get device size");
 	disk_secs = fake ? fake : geom.count;	/* sectors (R12.39) */
 	if (sflag) { printf("%lu\n", disk_secs / MB); return 0; }
 
@@ -180,10 +201,24 @@ int main(int argc, char **argv)
 			if ((colon = strchr(arg, ':')) == NULL) die("bad argument");
 			next = (next + ALIGN - 1) / ALIGN * ALIGN;
 			if (next >= limit) die("no space left on the device");
-			type = strtoul(arg, NULL, 16);
+			type = strtoul(arg, &at, 16);
+			nsub = 0;
+			if (strncmp(at, "/4:", 3) == 0) {	/* R12.34 */
+				if (type != SWAP_PART || sub_at != 0)
+					die("bad argument");
+				type = MINIX_PART;
+				nsub = 4;
+			}
 			at = strchr(colon + 1, '@');
 			if (at != NULL && strcmp(at, "@end") != 0) die("bad place");
 			size = sizearg(colon + 1, type, limit - next);
+			if (nsub != 0) {
+				if (size < ALIGN + SWAP_SECS)
+					die("no room for a swap subpartition");
+				nsub = (size - ALIGN + MB) / SUB_STEP;
+				if (nsub > 4) nsub = 4;
+				size = ALIGN + nsub * SUB_STEP;
+			}
 			if (size == 0) die("partition would be empty");
 			if (at != NULL) {
 				start = (limit - size) / ALIGN * ALIGN;
@@ -193,20 +228,33 @@ int main(int argc, char **argv)
 				start = next;
 				next += size;
 			}
-			pe = mbr + PART_TABLE_OFF + 16 * slot;
-			memset(pe, 0, 16);
-			pe[4] = (unsigned char) type;
-			/* CHS fields: "use LBA" values, as modern tools write. */
-			pe[1] = pe[5] = 0xFE; pe[2] = pe[6] = 0xFF; pe[3] = pe[7] = 0xFF;
-			put32(pe + 8, start);
-			put32(pe + 12, size);
+			entry(mbr + PART_TABLE_OFF + 16 * slot, type, start, size);
+			for (i = 0; i < (int) nsub; i++)
+				entry(sub + PART_TABLE_OFF + 16 * i, SWAP_PART,
+					start + ALIGN + i * SUB_STEP, SWAP_SECS);
+			if (nsub != 0) sub_at = start;
 		}
 	}
 
+	/* The subpartition table first: a crash before the MBR leaves it
+	 * in free space.  DIOCPRW: it may lie past 4 GiB (R12.39). */
+	if (sub_at != 0) {
+		sub[510] = 0x55;
+		sub[511] = 0xAA;
+		if (!fake && bwrite(fd, sub_at, sub, 1) != 0)
+			die("cannot write the subpartition table");
+	}
 	if (!fake && (lseek(fd, 0L, SEEK_SET) != 0
 	    || write(fd, (char *) mbr, SECTOR) != SECTOR)) die("cannot write MBR");
 	close(fd);
 	if (!fake) sync();
 	list();
+	for (i = 0; sub_at != 0 && i < NR_PARTITIONS; i++) {
+		pe = sub + PART_TABLE_OFF + 16 * i;
+		if (pe[4] != NO_PART)
+			printf("%c  type %02x  start %10lu  size %10lu  (%lu MB)\n",
+				'a' + i, pe[4], get32(pe + 8), get32(pe + 12),
+				get32(pe + 12) / 2048);
+	}
 	return 0;
 }

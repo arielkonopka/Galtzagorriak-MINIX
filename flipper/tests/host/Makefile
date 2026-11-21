@@ -16,7 +16,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
      run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
-     run-music run-u2f
+     run-music run-u2f run-libblk
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -25,6 +25,11 @@ run-libfuri:
 # libapp (spec R7b.4): the timer rules, the notification policy, the spool.
 run-libapp:
 	$(MAKE) -C $(MROOT)/flipper/lib/app test
+
+# libblk (spec 12h, R12.38): frames over swappable memory blocks, against
+# a fake block space (make -C tests/libblk).
+run-libblk:
+	$(MAKE) -C $(MROOT)/flipper/tests/libblk test
 
 # libu2f (issue #420): U2F messages and U2FHID framing (make -C tests/u2f).
 run-u2f:

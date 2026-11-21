@@ -116,7 +116,7 @@ SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
-	   lrand getopt gmtime bread
+	   lrand getopt gmtime bread blk
 SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
 LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
 	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))
@@ -193,7 +193,7 @@ STACK_mm	:= 1024	# stack (+ gap) above bss
 STACK_fs	:= 2048
 STACK_init	:= 8192	# heap (brk) + stack: stdio, exec arg block
 MM_SRC	:= main.c forkexit.c break.c exec.c signal.c alloc.c utility.c \
-	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c
+	   table.c putk.c trace.c getset.c fcache.c finst.c swap.c blk.c
 FS_SRC	:= main.c open.c read.c write.c pipe.c device.c path.c mount.c \
 	   link.c super.c inode.c cache.c cache2.c filedes.c stadir.c \
 	   protect.c time.c lock.c misc.c utility.c table.c putk.c poll.c
@@ -350,7 +350,7 @@ sgid_of = $(word 2,$(subst :, ,$(filter $(1):%,$(SGIDPROGS))))
 # Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
 # never swapped to the card in plain mode (spec R12.28).  login runs as
 # root without set-uid, so the set-uid rule alone would not cover it.
-SECRETPROGS := login passwd su swapsecret
+SECRETPROGS := login passwd su swapsecret blksecret
 LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
@@ -405,6 +405,8 @@ CHMEM_pkg    := 8192	# exec needs heap for the argument block
 CHMEM_swapper := 32768	# tests/swapper: a big image (swap, AC12.1)
 CHMEM_swapsecret := 32768
 CHMEM_swapsmall := 12288	# tests/swapper as a small parked app (AC12.10)
+CHMEM_blktest := 3072	# tests/blktest: parent + 2 holders in the 29+27 KB holes QEMU leaves
+CHMEM_blksecret := 3072
 CHMEM_swaptime := 8192	# tests/swaptime: the timer side
 CHMEM_swapwear := 12288	# tests/swapwear: 20 KB of .bss + this: a 32 KB image (AC12.14)
 CHMEM_alarmrace := 8192	# tests/alarmrace: 6 small children (#308)
@@ -597,6 +599,13 @@ $(MB)/rpcd/main.o: cmds/rpcd.c $(RPC_DIR)/rpcd.h
 OBJS_rpcd = $(MB)/rpcd/main.o $(MB)/rpcd/core.o \
 	   $(patsubst %,$(MB)/rpcd/npb/%.o,pb_common pb_decode pb_encode) \
 	   $(FPB_GEN:%=$(MB)/rpcd/fpb/%.o)
+# libblk (spec 12h, R12.38, src/lib/blk): frames over the swappable memory
+# blocks of <blk.h>.  Static, one object: no malloc, no stdio, no data.
+BLK_DIR	:= $(MROOT)/src/lib/blk
+$(MB)/blk/libblk.o: $(BLK_DIR)/libblk.c $(MROOT)/include/libblk.h \
+		$(MROOT)/include/blk.h $(MROOT)/include/minix/blk.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -1097,7 +1106,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
 	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
-	   notepost prwtest
+	   notepost prwtest blktest blksecret
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
@@ -1105,6 +1114,9 @@ TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
 endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
+# blksecret: blktest built with Secret: yes (12h, AC12.22: EPERM)
+OBJS_blksecret = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
+OBJS_blktest = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)
@@ -1300,7 +1312,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.73
+BASE_VER := 4.74
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

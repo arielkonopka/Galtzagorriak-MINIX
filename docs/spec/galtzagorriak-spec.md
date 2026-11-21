@@ -5468,6 +5468,13 @@ noticeable CPU on the foreground path.
     subpartition only removes its extents; swap itself needs only `hd3a`. With root, `/usr` 2 GB and
     `/home` 4 GiB this uses ≈ 22 GiB; the rest stays free for resource file systems (up to 16
     partitions of ≤ 4 GiB in all, ≈ 64 GiB, until the driver gets more minors);
+    *as built (T20a):* `mkpart /dev/hd0 81:2048 82/4:*@end 81:*` makes the layout (type
+    `82/4`: the 0x81 container, subpartitions 4 GiB apart behind its first 4 MiB, their table in its
+    first sector); `/etc/setup` uses it from 29 000 MB on and leaves `/etc/.swap4`, by which
+    `/etc/rc` swaps to `hd3a` (and fsck's scratch goes there, never to `hd3`'s table sector). The
+    subpartitions' presence bits live in spare bits of the pid-wrap mask: MM +0 B, not +1 B;
+    `/home` (`81:*`) takes all the space between `/usr` and the container, as O.7 says (O.7
+    replaces "`/home` 4 GiB, the rest stays free" above; a 128 GB card of 119 850 MB: `/home` 101 376 MB ≈ 99 GiB);
   - why at the end: swap holds nothing across a reboot, so it is the one partition that can always
     be **shrunk or moved without losing data**. Its half is a reserve: when `/home` must grow, the
     swap start moves up (swap off, new MBR entry, `MMSWAPON` again; the slots and extents are
@@ -5490,6 +5497,13 @@ noticeable CPU on the foreground path.
   - **Boot stamp**: 4 B in MM (RTC seconds at boot mixed with a counter), incremented also when
     MM's `next_pid` wraps (30000 → 2), so a reused pid never sees old blocks. With 12b the boot
     nonce (R12.10) takes its place.
+  - **Runs live at a pid wrap keep their data** (changed 2026-11-21, #386): at the wrap MM sets a
+    bit for every run that exists then (`bk.old`, 2 B; the "card has no DISCARD" flag moved into
+    an unused bit of the R12.40 mask, so MM stays at +36 B). Such a run also accepts the stamp from
+    before the wrap; a run opened after it accepts only the new one. This is safe: the earlier
+    owner with the same pid in that slot ended before the run began, so before the previous wrap,
+    and its stamp is at least 2 behind. Limit: one bit, so a run that lives through **two** wraps
+    (≈ 60 000 forks) reads blocks it last PUT before the first of them as zeros.
   - The per-sector CRC lets an app read part of a block (from 512 B) with every sector checked.
 - **R12.36 The MM request.** A new `MEMINFO` request `MI_BLK` (no new call number). `m1_p1` points
   to a request descriptor **in the caller's memory** (`struct blkreq`: operation and flags, block

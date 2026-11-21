@@ -6,7 +6,8 @@
  *	pkg flash file...	run these programs from internal flash
  *	pkg unflash file...	stop that (their flash pages become free)
  *	pkg bind file...	give programs built into the firmware (make
- *				base-flash) to these files (/etc/rc, at boot)
+ *				base-flash) to these files (/etc/rc, at boot);
+ *				a directory: every file in it
  *	pkg budget [pages]	show (set: root) how many run-time cache pages
  *				may be erased a day (R2b.11; 0: no caching;
  *				/etc/rc sets fcache_budget= from rc.conf)
@@ -595,22 +596,51 @@ static int flash_files(char **v, int n, int op)
 
 /* Programs built into the firmware's flash (spec R2b.6) are found by the
  * hash of their text, once: then by the file, as installed ones. */
+static int bind1(const char *path)	/* 1 bound, 0 not, -1 stop */
+{
+	int e;
+
+	if ((e = flash_op(path, 2)) == 0) return 1;
+	if (e == -EAGAIN) {	/* say it once, not per file */
+		printf("pkg: the clock is not set (RTC): built-in "
+			"programs run from RAM until it is\n");
+		return -1;
+	}
+	return 0;
+}
+
 static int bind(char **v, int n)
 {
 	message m;
-	int i, e, done = 0;
+	struct stat st;
+	DIR *d;
+	struct dirent *de;
+	char path[PATH_MAX];
+	int i, e = 0, done = 0;
 
 	/* Every file, also when no built-in record is unbound: a file that
 	 * was copied back (new inode) is rebound to its text by SHA-256
 	 * (R2b.12).  A file whose binding matches costs one call, no hash. */
 	(void) m;
-	for (i = 0; i < n; i++)
-		if ((e = flash_op(v[i], 2)) == 0) done++;
-		else if (e == -EAGAIN) {	/* say it once, not per file */
-			printf("pkg: the clock is not set (RTC): built-in "
-				"programs run from RAM until it is\n");
-			return 0;
-		}
+	for (i = 0; i < n; i++) {
+		/* A directory: its files, read here.  /etc/rc says
+		 * "pkg bind /bin": the shell glob of /bin (~170 names) ran out of
+		 * string space, and a non-interactive sh then ends /etc/rc. */
+		if (stat(v[i], &st) == 0 && S_ISDIR(st.st_mode)
+				&& (d = opendir(v[i])) != NULL) {
+			while ((de = readdir(d)) != NULL) {
+				if (de->d_name[0] == '.') continue;
+				fmt(path, sizeof path, "%s/%s", v[i],
+								de->d_name);
+				if (stat(path, &st) < 0 || !S_ISREG(st.st_mode))
+					continue;
+				if ((e = bind1(path)) < 0) break;
+				done += e;
+			}
+			closedir(d);
+		} else if ((e = bind1(v[i])) > 0) done++;
+		if (e < 0) return 0;
+	}
 	if (done > 0) printf("pkg: %d built-in programs bound\n", done);
 	return 0;
 }

@@ -69,6 +69,8 @@
 #include <minix/com.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <minix/partition.h>
 #include "mproc.h"
 
 #if (CHIP == ARM_CM)
@@ -80,6 +82,8 @@
 #define SW_MAGIC	0x57535A47UL	/* "GZSW" */
 #define SW_MAJOR	3		/* WINCHESTER: /dev/hd* (FS dmap) */
 #define SW_TYPE		0x82		/* MBR partition type: swap */
+#define SW_SUBPART	0x81		/* MINIX: holds subpartitions (R12.34) */
+#define SW_SUBMINOR	128		/* hd1a (drvlib.h MINOR_hd1a) */
 #define RES_KB		16		/* default reserve (R12.5 b) */
 #define RATE_KB		256		/* reserve: at most this a minute */
 #define WAIT_DEMAND	1		/* s waited before on-demand swap */
@@ -129,8 +133,6 @@ PRIVATE struct {
 
 FORWARD _PROTOTYPE( unsigned short sw_now, (void)			);
 FORWARD _PROTOTYPE( int sw_layout, (struct mproc *rmp, struct layout *l));
-FORWARD _PROTOTYPE( int sw_io, (int op, int proc, unsigned long pos,
-					phys_bytes addr, phys_bytes n)	);
 FORWARD _PROTOTYPE( unsigned long sw_crc, (struct layout *l,
 			unsigned long v, phys_bytes a, phys_bytes n)	);
 FORWARD _PROTOTYPE( int sw_chunk, (struct mproc *rmp, struct layout *l,
@@ -159,6 +161,7 @@ FORWARD _PROTOTYPE( int sw_room_at, (phys_clicks base, phys_clicks n,
 PUBLIC void sw_init()
 {
   sw.res_kb = RES_KB;
+  blk_init();
 }
 
 
@@ -219,26 +222,118 @@ struct layout *l;
 /*===========================================================================*
  *				sw_io					     *
  *===========================================================================*/
-PRIVATE int sw_io(op, proc, pos, addr, n)
+PUBLIC int sw_io(op, proc, pos, addr, n)
 int op;				/* DEV_READ or DEV_WRITE */
 int proc;			/* whose memory */
 unsigned long pos;		/* byte offset on the partition */
 phys_bytes addr;		/* address (flat: virtual = physical) */
 phys_bytes n;			/* bytes, whole sectors */
 {
-/* One transfer between the swap partition and memory, straight through the
+/* One transfer between the swap partition and memory. */
+  return(sw_dio(sw_minor(), op, proc, pos, addr, n));
+}
+
+
+/*===========================================================================*
+ *				sw_minor				     *
+ *===========================================================================*/
+PUBLIC int sw_minor()
+{
+/* The swap partition's minor (hd3a on cards >= 32 GB: blk.c finds hd3b to
+ * hd3d after it, R12.34). */
+  return((int) (sw.dev & BYTE));
+}
+
+
+/*===========================================================================*
+ *				sw_dio					     *
+ *===========================================================================*/
+PUBLIC int sw_dio(minor, op, proc, pos, addr, n)
+int minor;			/* the partition (blocks: hd3b ... too) */
+int op;				/* DEV_READ or DEV_WRITE */
+int proc;			/* whose memory */
+unsigned long pos;		/* byte offset on the partition */
+phys_bytes addr;		/* address (flat: virtual = physical) */
+phys_bytes n;			/* bytes, whole sectors */
+{
+/* One transfer between a swap partition and memory, straight through the
  * WINCHESTER task as FS does it (no FS, no buffer cache, R12.1). */
   message m;
 
   m.m_type = op;
-  m.DEVICE = (int) (sw.dev & BYTE);
+  m.DEVICE = minor;
   m.POSITION = (long) pos;
   m.HIGHPOS = 0;		/* R12.39: swap stays below 4 GiB */
   m.PROC_NR = proc;
   m.ADDRESS = (char *) addr;
   m.COUNT = (int) n;
-  if (sendrec(WINCHESTER, &m) != OK || m.REP_STATUS != (int) n) return(EIO);
-  return(OK);
+  if (sendrec(WINCHESTER, &m) != OK) return(EIO);
+  if (m.REP_STATUS == ENXIO) return(ENXIO);	/* card out (N.6) */
+  return(m.REP_STATUS == (int) n ? OK : EIO);
+}
+
+
+/*===========================================================================*
+ *				sw_discard				     *
+ *===========================================================================*/
+PUBLIC int sw_discard(minor, first, count)
+int minor;			/* the swap partition (or hd3b ...) */
+unsigned long first, count;	/* sectors of that partition */
+{
+/* R12.40: tell the card those sectors hold nothing (DIOCDISCARD; the
+ * kernel does it in steps between its other tasks).  ENOTTY: no DISCARD. */
+  message m;
+  struct part_range rg;
+
+  rg.first = first;
+  rg.count = count;
+  m.m_type = DEV_IOCTL;
+  m.REQUEST = DIOCDISCARD;
+  m.DEVICE = minor;
+  m.PROC_NR = MM_PROC_NR;
+  m.ADDRESS = (char *) &rg;
+  if (sendrec(WINCHESTER, &m) != OK) return(EIO);
+  return(m.REP_STATUS);
+}
+
+
+/*===========================================================================*
+ *				sw_state				     *
+ *===========================================================================*/
+PUBLIC int sw_state()
+{
+/* For the blocks (blk.c): SW_OFF or SW_PLAIN, | 0x80 if the card is gone. */
+  return(sw.mode);
+}
+
+
+/*===========================================================================*
+ *				sw_kick					     *
+ *===========================================================================*/
+PUBLIC void sw_kick()
+{
+/* A block request waits for idle (blk.c, R12.37): the next step soon. */
+  sw_alarm(HZ / 10 + 1);		/* replaces a later one */
+}
+
+
+/*===========================================================================*
+ *				sw_wbudget				     *
+ *===========================================================================*/
+PUBLIC int sw_wbudget(kb)
+unsigned kb;
+{
+/* R12.37: a background block PUT counts in the reserve's write budget
+ * (256 KB a minute, shared).  May kb more be written now? */
+  unsigned short now = sw_now();
+
+  if ((unsigned short) (now - sw.win) >= 60) {
+	sw.win = now;
+	sw.wkb = 0;
+  }
+  if (sw.wkb >= RATE_KB) return(FALSE);
+  sw.wkb += kb;
+  return(TRUE);
 }
 
 
@@ -745,6 +840,28 @@ PUBLIC void sw_step()
   int slot, same;
 
   sw.armed = FALSE;
+  /* R12.37: waiting block requests first (one a step), then the reserve;
+   * swap-ins the user waits for were done in sw_after() already. */
+  if (blk_step()) {
+	sw_alarm(HZ / 10 + 1);
+	return;
+  }
+  /* R12.40: after MMSWAPON, the DISCARD of the whole space, one step at
+   * idle (sw.off: the steps left), before any reserve job begins. */
+  if (sw.busy == 0 && sw.off != 0) {
+	if (sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK) {
+		sw_alarm(HZ / 10 + 1);
+		return;
+	}
+	slot = blk_wipe(blk_nwipe() - sw.off);
+	if (slot == ENXIO) {			/* card out: later */
+		sw_alarm(HZ);
+		return;
+	}
+	sw.off = slot == ENOTTY ? 0 : sw.off - 1;	/* (EIO: go on) */
+	sw_alarm(2);
+	return;
+  }
   if (sw.mode != SW_PLAIN || sw.res_kb == 0) {
 	sw.busy = 0;
 	return;
@@ -850,20 +967,33 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   int minor = dev & BYTE;
   message m;
 
+  int blk = mode & SW_BLK;		/* R12.38: blocks too (or only) */
+  unsigned long size[4];
+  int r, i, n, par;
+
+  mode &= ~SW_BLK;
   if (mode == SW_CRYPT) return(ENOSYS);		/* 12b, later */
   if (mode != SW_OFF && mode != SW_PLAIN) return(EINVAL);
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	if ((rmp->mp_flags & (IN_USE | SWAPPED)) == (IN_USE | SWAPPED))
 		return(EBUSY);
+  if (blk_busy()) return(EBUSY);	/* a reservation is on this device */
   sw.busy = 0;
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
-  if (mode == SW_OFF) {
+  (void) blk_on(size, 0);
+  sw.off = 0;
+  if (mode == SW_OFF && !blk) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;
 	return(OK);
   }
-  if (((dev >> MAJOR) & BYTE) != SW_MAJOR || minor < 1 || minor > 4)
+  /* A primary partition, or on cards >= 32 GB (R12.34) the first
+   * subpartition (hd1a, hd2a ...) of a 0x81 primary one. */
+  par = minor;
+  if (minor >= SW_SUBMINOR && minor < SW_SUBMINOR + 16 && minor % 4 == 0)
+	par = (minor - SW_SUBMINOR) / 4 + 1;
+  if (((dev >> MAJOR) & BYTE) != SW_MAJOR || par < 1 || par > 4)
 	return(EINVAL);
   m.m_type = DEV_OPEN;
   m.DEVICE = minor;
@@ -873,9 +1003,44 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   sw.dev = (dev_t) (SW_MAJOR << MAJOR);		/* hd0: the MBR */
   if (sw_io(DEV_READ, MM_PROC_NR, 0UL, (phys_bytes) mbr, SW_SECT) != OK
 		|| mbr[510] != 0x55 || mbr[511] != 0xAA
-		|| mbr[0x1BE + 16 * (minor - 1) + 4] != SW_TYPE) {
+		|| mbr[0x1BE + 16 * (par - 1) + 4]
+				!= (par == minor ? SW_TYPE : SW_SUBPART)) {
 	sw.dev = NO_DEV;
 	return(EINVAL);
+  }
+  n = 1;
+  i = par - 1;
+  if (par != minor) {
+	/* The subpartition table in the first sector of the primary one:
+	 * a (hd3a) must be swap; b ... d count for blocks if they are. */
+	sw.dev = (dev_t) ((SW_MAJOR << MAJOR) | par);
+	if (sw_io(DEV_READ, MM_PROC_NR, 0UL, (phys_bytes) mbr, SW_SECT) != OK
+		|| mbr[510] != 0x55 || mbr[511] != 0xAA
+		|| mbr[0x1BE + 4] != SW_TYPE) {
+		sw.dev = NO_DEV;
+		return(EINVAL);
+	}
+	n = 4;
+	i = 0;
+  }
+  for (r = 0; r < n; r++, i++) {
+	unsigned char *e = mbr + 0x1BE + 16 * i;
+
+	size[r] = e[4] != SW_TYPE ? 0 : e[12] | (unsigned long) e[13] << 8
+		| (unsigned long) e[14] << 16 | (unsigned long) e[15] << 24;
+  }
+  mbr = (unsigned char *) HDR;
+  if (n == 4) {
+	/* hd3b ... hd3d need opening too (their minors follow hd3a's). */
+	for (i = 1; i < 4; i++) {
+		m.m_type = DEV_OPEN;
+		m.DEVICE = minor + i;
+		m.PROC_NR = MM_PROC_NR;
+		m.COUNT = R_BIT | W_BIT;
+		if (size[i] != 0 && (sendrec(WINCHESTER, &m) != OK
+						|| m.REP_STATUS != OK))
+			size[i] = 0;
+	}
   }
   sw.dev = (dev_t) dev;				/* big enough? */
   if (sw_io(DEV_READ, MM_PROC_NR, NR_PROCS * SW_SLOT - SW_SECT,
@@ -883,7 +1048,15 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
 	sw.dev = NO_DEV;
 	return(ENOSPC);
   }
-  sw.mode = SW_PLAIN;
+  /* Blocks behind the slots (R12.34); with SW_OFF the partition serves
+   * only them, nothing is swapped. */
+  if (blk && (r = blk_on(size, n)) != OK) {
+	sw.dev = NO_DEV;
+	return(r);
+  }
+  sw.mode = mode;
+  sw.off = blk_nwipe();		/* R12.40: DISCARD it all, at idle */
+  sw_kick();
   return(OK);
 }
 
@@ -896,7 +1069,8 @@ PUBLIC int sw_ctl()
 /* MEMINFO with m1_i2 = MI_SWAPON (m1_i1 the partition, 0: off; m1_i3 the
  * mode), MI_SWAPRES (m1_i1 KB), MI_SWAPINFO (struct swinfo to m1_p1),
  * MI_SWAPTEST (tests: m1_i1 1 = swap out pid m1_i3 now, 2 = act as if the
- * card were pulled), MI_FGEXEC (the caller's next child execs the
+ * card were pulled, 3 = the pid counter wraps now and the next fork gets
+ * pid m1_i3 if it is free), MI_FGEXEC (the caller's next child execs the
  * foreground app, R12.22). */
   struct swinfo *si = (struct swinfo *) HDR;
   struct mproc *rmp;
@@ -940,6 +1114,10 @@ PUBLIC int sw_ctl()
 	if (mm_in.m1_i1 == 2) {			/* R12.25, AC12.12 */
 		if (sw.mode == SW_OFF) return(EINVAL);
 		sw_fail("SD card removed (test)");
+		return(OK);
+	}
+	if (mm_in.m1_i1 == 3) {			/* R12.35, AC12.19 */
+		pid_wrap((pid_t) mm_in.m1_i3);
 		return(OK);
 	}
 	if (mm_in.m1_i1 != 1) return(EINVAL);
