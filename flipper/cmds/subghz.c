@@ -351,7 +351,7 @@ static int cmd_decode(int argc, char **argv)
  * 512 edges).  Ctrl-C (SIGINT) or SIGTERM ends it; the file is complete
  * then.  Receive only: nothing is sent.  The core is sgrec.c (libsubghz,
  * host-tested). */
-static SgRec rec;
+static SgRec *rec;		/* malloc'd by rec only: rx pays nothing */
 static int rec_fd = -1, rec_thr = -999;
 
 static int rec_out(void *ctx, const char *buf, int n)
@@ -362,7 +362,7 @@ static int rec_out(void *ctx, const char *buf, int n)
 
 static void rec_put(bool level, uint32_t us)
 {
-	if (!stop && sgrec_put(&rec, level, us)) stop = 1;
+	if (!stop && sgrec_put(rec, level, us)) stop = 1;
 }
 
 /* The RSSI threshold: 1 keep, 0 drop. */
@@ -397,8 +397,12 @@ static int cmd_rec(int argc, char **argv)
 	if (i != argc) return usage();
 	if ((rec_fd = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
 		return bad(argv[3], strerror(errno));
-	sgrec_init(&rec, rec_out, NULL, max, max_us);
-	sgrec_header(&rec, hz);
+	if ((rec = malloc(sizeof(*rec))) == NULL) {
+		close(rec_fd);
+		return bad("rec", "out of memory");
+	}
+	sgrec_init(rec, rec_out, NULL, max, max_us);
+	sgrec_header(rec, hz);
 	if (tune(hz) < 0) {
 		close(rec_fd);
 		return 1;
@@ -429,11 +433,11 @@ static int cmd_rec(int argc, char **argv)
 done:
 	close(fd);
 	untune();
-	e = sgrec_end(&rec) < 0 ? (errno ? errno : ENOSPC) : 0;
+	e = sgrec_end(rec) < 0 ? (errno ? errno : ENOSPC) : 0;
 	if (close(rec_fd) != 0 && !e) e = errno;
 	if (e) return bad(argv[3], strerror(e));
-	printf("Recorded %lu samples, %lu ms\n", rec.n,
-		(unsigned long) (rec.us / 1000));
+	printf("Recorded %lu samples, %lu ms\n", rec->n,
+		(unsigned long) (rec->us / 1000));
 	return 0;
 }
 

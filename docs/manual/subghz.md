@@ -40,6 +40,7 @@ close in the check; about 1 m away worked.
 |---|---|
 | `subghz rx FREQ [-v]` | listen at FREQ Hz (e.g. `433920000`); one line per decoded packet, `Princeton 24bit Key:7C5703`. `-v` adds the protocol's own text, as stock prints it. Ctrl-C ends it and prints how many packets came |
 | `subghz decode FILE [-v]` | the same for a recorded `.sub` RAW capture |
+| `subghz rec FREQ FILE [-t DBM] [-s SEC] [-n N]` | record what comes at FREQ to FILE as a stock RAW `.sub` (stock's Read RAW); `-t`: only while the signal is at least DBM (e.g. `-t -70`, stock's RSSI threshold), `-s`: at most SEC seconds, `-n`: at most N values; Ctrl-C ends it. Receive only |
 | `subghz tx KEY FREQ TE REPEAT` | send KEY (24-bit hex) as Princeton, TE µs per element, REPEAT times (stock's `subghz tx`) |
 | `subghz tx_from_file FILE [REPEAT]` | send a `.sub` file at the file's `Frequency`: a key file through its protocol's encoder, a RAW file as recorded |
 | `subghz chat FREQ` | text lines both ways, one packet per line (stock's `subghz chat`) |
@@ -50,6 +51,26 @@ close in the check; about 1 m away worked.
 `.sub` files are the stock firmware's: copy them from a stock or Unleashed Flipper's
 `/ext/subghz` to the card, for example to `/home/flipper/subghz/`. They are read a line at a
 time, so a long RAW recording needs no more RAM than a short one.
+
+### Recording (Read RAW)
+
+`subghz rec` writes the file as it receives: a 1 KB buffer goes to the card whenever it is full,
+so nothing of the recording stays in memory and its length is bounded only by the card (and by
+`-s` / `-n`). It takes 1 KB for that buffer and the 4 KB ring it already uses for `rx`. The file
+is a stock RAW file (`Filetype: Flipper SubGhz RAW File`, `Protocol: RAW`, `RAW_Data` lines of up
+to 512 values), so a stock Flipper can read and send it, and `subghz decode` shows what is in it:
+
+```
+$ subghz rec 433920000 /home/flipper/subghz/atea.sub -t -70
+Recording at 433920000 to /home/flipper/subghz/atea.sub. Press Ctrl+C to stop.
+^CRecorded 1840 samples, 6210 ms
+$ subghz decode /home/flipper/subghz/atea.sub
+Princeton 24bit Key:7C5703
+```
+
+With `-t`, the RSSI is read once per received frame (on the Flipper: once per 512 edges); what
+comes while it is below the threshold is left out. A recording only receives; sending it
+(`tx_from_file`) is checked against the region like any other file.
 
 ## Spectrum: what is on the air (launcher app)
 

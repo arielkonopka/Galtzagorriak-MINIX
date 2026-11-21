@@ -72,10 +72,11 @@ in `/var/run/gui` (up to 7 KB) and are shown when you come back; `guimod` never 
 ## SETTINGS
 
 The page lists the groups of settings: Display, Sound, LED, Time, Power, Storage, Gestures,
-Launcher and About. OK opens one, Back returns to the app list. The ones marked `(later)` are
-not there yet; Power opens today's Power app.
+Launcher, Auto off, Region and About. OK opens one, Back returns to the app list. The ones marked
+`(later)` are not there yet; Power opens today's Power app (the battery).
 
-**Display**, **Sound**, **Time** and **About** are window apps (the `setgroup` program): the
+**Display**, **Sound** (titled Sound & Vibro), **LED**, **Time** (Time & Date), **Auto off**
+(Power-off), **Region** and **About** are window apps (the `setgroup` program): the
 launcher draws their screens in its own style, so they look like every other list. Up/Down
 choose a line, Left/Right change its value, which takes effect at once, OK on a date or time
 starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Back leaves.
@@ -86,11 +87,21 @@ starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Bac
 | | Timeout | the light goes off after 5 s ... 5 min without a key, or never |
 | | Light | auto (the timeout), off or on: the forced modes of the button gestures; not kept over a restart |
 | Sound | Volume | 0-100 %, the volume of every program that does not set its own (alarms set theirs) |
+| | Vibro | on or off: whether notifications and alarms vibrate (a short buzz when you turn it on) |
 | | Test beep | OK plays three notes |
+| LED | Brightness | 10-100 %, how bright a notification's or alarm's light is |
+| | Notify LED | on or off: off, notifications and alarms leave the LED dark |
+| | Test | OK shows white at that brightness for a moment |
 | Time | Date | the local date; when the edit ends (OK) the clock moves to it at once and keeps the time of day (years up to 2099, as the clock chip counts) |
 | | Time | the local time of day (hours, minutes); when the edit ends the clock is set at once, with the seconds at 0 |
 | | Zone | the time zone: OK opens a list of about 80 places (`UTC`, `Europe/Warsaw`, `America/New_York`, ...), starting at the current one (`*`); OK chooses one. `other` is a zone you wrote into `/etc/TZ` yourself, kept as it is |
 | | Clock | 24 h or 12 h, for the clock apps |
+| | Date fmt | D.M.Y, M/D/Y or Y-M-D, the order of a date's fields for the clock apps |
+| Auto off | Auto off | never, 10 min ... 4 h: power off after so long without a key (kept now; the launcher acting on it is (planned)) |
+| | Auto lock | never, 1 min ... 30 min: lock the keys after so long without a key (kept now; acting on it is (planned)) |
+| Region | Set | the radio region in `/etc/flipper/region` (read-only here: `region set CC` changes it, see [Sub-GHz](subghz.md)) |
+| | Kernel | the region the kernel applies now |
+| | Transmit | `region rules`, or `off (rx only)` when no region is set |
 | About | Base | the version of the base package |
 | | ABI | the version of the program format (spec J.3) |
 | | Kernel | the system image's version and build id, as `ver` prints it |
@@ -99,14 +110,35 @@ starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Bac
 | | Serial | the chip's 64-bit unique id |
 | | Licence | GPLv3; the MINIX base is BSD-3 |
 
-The values are kept in `/etc/flipper/display.conf`, `sound.conf` and `time.conf` on the SD card,
-written once when you leave the screen and only if something changed, and applied at every start
-(`settings apply` in `/etc/rc`). Deleting a file brings the defaults back (100 %, 15 s, 100 %,
-24 h). Opening a screen and leaving it without a change writes no settings to the card. (The
+The values are kept in `/etc/flipper/display.conf`, `sound.conf`, `led.conf`, `time.conf` and
+`power.conf` on the SD card, written once when you leave the screen and only if something
+changed, and applied at every start (`settings apply` in `/etc/rc`); nothing goes to internal
+flash. The volume also lives in a backup register of the clock chip, so it holds without a card.
+Vibro, Notify LED and Brightness are read by every alarm and notification when it rings. Deleting
+a file brings the defaults back (100 %, 15 s; volume 100 %, Vibro on; LED 100 %, on; 24 h,
+D.M.Y; Auto off and Auto lock never). There is only English today, so there is no Language line. Opening a screen and leaving it without a change writes no settings to the card. (The
 two pipes between the launcher and a window app still cost one inode on the card's root file
 system for now, about 3 KB of writes at the next sync; a coming file-system change takes that
 away.) The screens open only from the SETTINGS page: `setgroup` talks to the launcher, not to a
-terminal. From the shell, edit the files and run `settings apply`.
+terminal. From the shell, `settings get GROUP ...` prints a group's keys as they are now and
+`settings set GROUP KEY VALUE` changes one (applied at once, the file written only if it is a
+change):
+
+```
+$ settings set led Brightness 30
+Brightness: 30
+Notify LED: on
+$ settings set sound Vibro off
+Volume: 100
+Vibro: off
+$ settings get time power
+# time
+Clock: 24 h
+Date fmt: D.M.Y
+# power
+Auto off: never
+Auto lock: never
+```
 
 The clock itself keeps UTC; the date and time on the Time screen are local time in the chosen
 zone. A new zone is written to `/etc/TZ` when you leave the screen:
