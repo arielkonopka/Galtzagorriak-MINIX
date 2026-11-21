@@ -57,9 +57,9 @@
 # 2026-11-19 (security review H1/H2/H5 checks): 14.  m2test's text grew by
 # 712 B, from 48644 B on main e038fbe to 49356 B, past 48 KB (12 pages):
 # one more 4 KB page.  Nothing changed in how often the cache writes.
-# 2026-11-21 (#417 nfc_tests + #418 stockapp_tests, merged together): 16.
-# m2test's text grew by two more 4 KB pages with the two test groups (nfc
+# 2026-11-21 (#417 nfc_tests + #418 stockapp_tests, merged together): 15.
+# m2test's text grew by one more 4 KB page with the two test groups (nfc
 # app, Sub-GHz/iButton/GPIO window apps).  Nothing changed in how often the
 # cache writes.
-m2      cache   16
+m2      cache   15
 m2      inst    0
