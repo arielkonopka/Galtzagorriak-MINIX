@@ -47,6 +47,11 @@ int blk_get(unsigned long id, void *buf)
 	return blkcall(BLK_GET, 0, id, 0, BLK_NSECT, buf);
 }
 
+int blk_discard(unsigned long id, unsigned long n)
+{
+	return blkcall(BLK_DISCARD, 0, id, 0, 0, (void *) n);
+}
+
 int blk_put(unsigned long id, const void *buf)
 {
 	return blkcall(BLK_PUT, 0, id, 0, BLK_NSECT, buf);

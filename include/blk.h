@@ -34,5 +34,8 @@ _PROTOTYPE( int blk_read, (unsigned long _id, unsigned _off, void *_buf,
 							unsigned _len)	);
 _PROTOTYPE( int blk_write, (unsigned long _id, unsigned _off,
 					const void *_buf, unsigned _len)	);
+/* R12.40: blocks id .. id + n - 1 are not needed any more; their contents
+ * are undefined from now on (zeros or old data).  Done at idle. */
+_PROTOTYPE( int blk_discard, (unsigned long _id, unsigned long _n)	);
 
 #endif /* _BLK_H */

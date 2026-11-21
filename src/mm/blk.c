@@ -92,6 +92,7 @@ FORWARD _PROTOTYPE( int bk_valid, (struct bkhdr *h, unsigned long id)	);
 FORWARD _PROTOTYPE( phys_bytes bk_buf, (vir_bytes v, vir_bytes n)	);
 FORWARD _PROTOTYPE( int bk_io, (struct blkreq *rq, int bg)		);
 FORWARD _PROTOTYPE( int bk_do, (char *desc, int bg)			);
+FORWARD _PROTOTYPE( int bk_disc, (struct blkreq *rq)			);
 
 
 /*===========================================================================*
@@ -444,6 +445,14 @@ int bg;				/* a background caller (R12.37) */
 	if (PEND(who)) return(SUSPEND);
 	r = bk_open(rq.id, rq.flags);
 	break;
+  case BLK_DISCARD:
+	/* R12.40: always in the idle class (from blk_step), never while
+	 * keys arrive. */
+	if (!(mp->mp_flags & BLKWAIT)
+		|| sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK)
+		return(SUSPEND);
+	if ((r = bk_disc(&rq)) == ENXIO) return(SUSPEND);
+	break;
   case BLK_CLOSE:
 	blk_end(who);
 	r = OK;
@@ -470,6 +479,30 @@ int bg;				/* a background caller (R12.37) */
 	(phys_bytes) &((struct blkreq *) desc)->status,
 	(phys_bytes) sizeof(rq.status));
   return(r);
+}
+
+
+/*===========================================================================*
+ *				bk_disc					     *
+ *===========================================================================*/
+PRIVATE int bk_disc(rq)
+struct blkreq *rq;
+{
+/* blk_discard (R12.40): the card is told that blocks rq->id .. id + n - 1
+ * of the caller's run hold nothing, headers too, so they read as zeros or
+ * old data.  A card without DISCARD: nothing is done. */
+  unsigned char *r = RUN(who);
+  unsigned long n = (unsigned long) rq->buf, all;
+  int e;
+
+  if (r[1] == 0 || PEND(who)) return(EBADF);
+  all = (unsigned long) r[1] * bk.ext;
+  if (n == 0 || rq->id >= all || n > all - rq->id) return(ERANGE);
+  if (bk.nodisc) return(OK);
+  e = sw_discard(BK_SKIP + ((unsigned long) r[0] * bk.ext + rq->id)
+					* BK_BLOCK, n * BK_BLOCK);
+  if (e == ENOTTY) bk.nodisc = TRUE;
+  return(e == ENOTTY ? OK : e);
 }
 
 

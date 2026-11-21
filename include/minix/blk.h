@@ -18,6 +18,8 @@
 #define BLK_OPEN	3	/* reserve id bytes (R12.34); reply: blocks */
 #define BLK_CLOSE	4	/* give the reservation back */
 #define BLK_INFO	5	/* struct blkinfo to buf */
+#define BLK_DISCARD	6	/* blocks id .. id + (long) buf - 1 hold nothing
+				 * any more (R12.40; at idle) */
 
 /* Flags. */
 #define BLK_ANY		0x01	/* OPEN: the largest free run if smaller */

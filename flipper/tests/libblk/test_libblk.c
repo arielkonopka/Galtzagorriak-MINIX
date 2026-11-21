@@ -87,6 +87,15 @@ int blk_put(unsigned long id, const void *buf)
 	return blk_write(id, 0, buf, BLK_SIZE);
 }
 
+static unsigned long disc_id, disc_n;	/* the last blk_discard */
+
+int blk_discard(unsigned long id, unsigned long n)
+{
+	disc_id = id;
+	disc_n = n;
+	return 0;
+}
+
 int blk_putf(unsigned long id, const void *buf, int flags)
 {
 	(void) flags;
@@ -201,6 +210,10 @@ static void lru(void)
 	vm_drop(&v, 12288, 1024);	/* frame of 12288 only */
 	CHECK(vm_flush(&v) == 0 && wr_ops == 1 && card[3][0] == 0
 		&& card[3][1024] == 9, "vm_drop forgets without writing");
+	CHECK(disc_n == 0, "vm_drop of less than a block discards nothing");
+	vm_drop(&v, 4096 + 512, 3 * 4096);
+	CHECK(disc_id == 2 && disc_n == 2,
+		"vm_drop discards the whole blocks inside the range (R12.40)");
 	vm_close(&v);
 }
 

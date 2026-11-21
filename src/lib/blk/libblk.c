@@ -167,6 +167,11 @@ void vm_drop(struct vm *v, unsigned long off, unsigned long len)
 		v->f[i].flags = 0;
 		v->f[i].pins = 0;
 	}
+	/* R12.40: the whole blocks inside the range, at MM's idle. */
+	u0 = (off + BLK_SIZE - 1) / BLK_SIZE;
+	u1 = off + len < off ? (unsigned long) -1 / BLK_SIZE
+			     : (off + len) / BLK_SIZE;
+	if (u1 > u0) (void) blk_discard(u0, u1 - u0);
 }
 
 int vm_close(struct vm *v)

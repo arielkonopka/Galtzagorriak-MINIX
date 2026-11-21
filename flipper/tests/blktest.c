@@ -183,6 +183,13 @@ static int lib(void)
 		blk_read(3, 100, buf2, 512) < 0 && errno == EINVAL
 		&& blk_read(3, 0, buf2, 100) < 0 && errno == EINVAL
 		&& blk_read(3, 3584, buf2, 1024) < 0 && errno == EINVAL, NULL);
+	fill(buf, BLK_SIZE, 5);
+	t_result("R12.40: blk_discard of block 3, then it reads as zeros",
+		blk_put(3, buf) == 0 && blk_discard(3, 1) == 0
+		&& blk_get(3, buf2) == 0 && zeros(buf2, BLK_SIZE), NULL);
+	t_result("R12.40: blk_discard past the run is ERANGE",
+		blk_discard((unsigned long) r, 1) < 0 && errno == ERANGE
+		&& blk_discard(0, 0) < 0 && errno == ERANGE, NULL);
 	t_result("R12.38: blk_close", blk_close() == 0
 		&& blk_get(0, buf) < 0 && errno == EBADF, NULL);
 
