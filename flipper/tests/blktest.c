@@ -9,6 +9,9 @@
  *   blktest -z		(helper, another program: a copy of this file) the
  *			first extent's blocks read as zeros (AC12.19)
  *   blktest -w		(helper) open 1 MB, PUT a pattern in block 0, exit
+ *   blktest -d		(swap off) marks in a swap slot and in the block space
+ *   blktest -D		R12.40: after MMSWAPON they read as zeros (the
+ *			DISCARD of the whole space at idle; QEMU zero-fills)
  *   blktest -l		<blk.h> and libblk (R12.38) on the real MM: the
  *			libc calls, then 256 KB through 1 KB frames
  *
@@ -111,6 +114,27 @@ static int flip(unsigned long sector)
 	close(fd);
 	sync();
 	return 0;
+}
+
+/* R12.40: the DISCARD at MMSWAPON.  Sectors in slot 5 and in the block
+ * space (inside the first 64 MB partition's extents). */
+static const unsigned long wipe_sec[] = { 5 * 384UL + 1, BK_SKIP + 100,
+						BK_SKIP + 60000UL };
+
+static int wipe(int check)
+{
+	int fd = open("/dev/hd3", O_RDWR), i, ok = 1;
+
+	if (fd < 0) return 0;
+	for (i = 0; i < 3; i++) {
+		memset(buf, 0x5A, 512);
+		if (lseek(fd, (off_t) (wipe_sec[i] * 512), SEEK_SET) < 0) ok = 0;
+		else if (!check) ok &= write(fd, buf, 512) == 512;
+		else ok &= read(fd, buf, 512) == 512 && zeros(buf, 512);
+	}
+	close(fd);
+	sync();
+	return ok;
 }
 
 static int all_enosys(void)
@@ -230,6 +254,12 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "-p") == 0) return all_eperm();
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
 	if (argc > 1 && strcmp(argv[1], "-l") == 0) return lib();
+	if (argc > 1 && strcmp(argv[1], "-d") == 0) return !wipe(0);
+	if (argc > 1 && strcmp(argv[1], "-D") == 0) {
+		t_result("R12.40: MMSWAPON discarded a slot and the block space",
+			wipe(1), NULL);
+		return t_fail;
+	}
 	if (argc > 1 && strcmp(argv[1], "-w") == 0) {
 		fill(buf, BLK_SIZE, 1);
 		if (blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) < 0
@@ -399,6 +429,43 @@ int main(int argc, char **argv)
 	waitpid(pid, &st, 0);
 	t_result("AC12.19: exec of another program: zeros (see blk2 above)",
 		WIFEXITED(st) && WEXITSTATUS(st) == 0, NULL);
+	/* AC12.19: after a pid wrap (the MI_SWAPTEST 3 hook) a process with
+	 * the writer's pid, slot and program reads zeros on its extents. */
+	if ((pid = fork()) == 0) {
+		fill(buf, BLK_SIZE, 3);
+		_exit(blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) > 0
+			&& info(&bi) == 0 && bi.run < 255
+			&& blk(BLK_PUT, 0, 0, 0, 0, buf) == 0 ? bi.run : 255);
+	}
+	waitpid(pid, &st, 0);
+	a = WIFEXITED(st) && WEXITSTATUS(st) != 255;
+	first = WEXITSTATUS(st);
+	sleep(2);
+	{
+		message m;
+
+		m.m1_i1 = 3;
+		m.m1_i2 = MI_SWAPTEST;
+		m.m1_i3 = pid;
+		b = _syscall(MM, MEMINFO, &m) == 0;
+	}
+	pipe(go1);
+	if ((c = fork()) == 0) {
+		memset(buf, 0x77, sizeof(buf));
+		ch = blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) > 0
+			&& info(&bi) == 0 && (long) bi.run == first
+			&& blk(BLK_GET, 0, 0, 0, 0, buf) == 0
+			&& zeros(buf, BLK_SIZE);
+		write(go1[1], &ch, 1);
+		_exit(0);
+	}
+	close(go1[1]);
+	ch = 0;
+	if (read(go1[0], &ch, 1) != 1) ch = 0;
+	close(go1[0]);
+	waitpid(c, &st, 0);
+	t_result("AC12.19: after a pid wrap the same pid reads zeros",
+		a && b && c == pid && ch == 1, NULL);
 	/* AC12.26 (R12.40): a process PUTs 10 blocks and exits; at idle MM
 	 * DISCARDs its run (QEMU fills it with zeros), then frees it. */
 	pipe(go1);

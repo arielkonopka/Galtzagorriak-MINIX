@@ -166,7 +166,8 @@ struct kstack {
 #define MMSWAPRES	MI_SWAPRES
 #define MI_SWAPINFO	9	/* struct swinfo to m1_p1 (free -v) */
 #define MI_SWAPTEST	10	/* root, tests: m1_i1 1: swap out pid m1_i3
-			 * now, 2: act as if the card were pulled */
+			 * now, 2: act as if the card were pulled,
+			 * 3: the pid counter wraps, next pid m1_i3 */
 #define MI_FGEXEC	11	/* root: the next child's exec is the
 			 * foreground app: placed low (R12.22) */
 #define MI_MEMTEST	12	/* root (selftest, R7b.3.1): m1_i1 the address of

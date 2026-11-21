@@ -18,6 +18,7 @@ qemu) like tools/swaptest.py, through the first boot (swap partition
   R12.38   <blk.h> (libc) and libblk: 256 KB through 1 KB frames
   R12.38   blk=on in /etc/rc.conf: /etc/rc switches blocks on at boot
   R12.38   blocks only (swapon /dev/hd3 blk, swap off) work too
+  R12.40   MMSWAPON discards the whole space at idle (QEMU zero-fills)
 Exit status: the number of failures.
 """
 import importlib.util
@@ -80,8 +81,12 @@ def main():
 		tests(r, "su bin -c '/tmp/blksuid -p'",
 			"AC12.22: set-uid image gets EPERM")
 		tests(r, "/usr/tests/blktest -l", "R12.38: <blk.h>, libblk", 300)
-		check(r.sh("swapon off && swapon /dev/hd3 blk", 30) == 0,
-			"R12.38: blocks only, swap off")
+		check(r.sh("swapon off && /usr/tests/blktest -d && "
+			"swapon /dev/hd3 blk", 30) == 0,
+			"R12.38: blocks only, swap off (marks on the card)")
+		r.sh("sleep 3", 30)
+		tests(r, "/usr/tests/blktest -D",
+			"R12.40: the DISCARD of the whole space at MMSWAPON")
 		out = r.output("swapon", 30) or b""
 		check(b"swap: off" in out, "R12.38: ... swap stays off")
 		tests(r, "/usr/tests/blktest", "AC12.18, AC12.19 blocks only",

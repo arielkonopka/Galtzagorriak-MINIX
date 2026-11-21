@@ -95,8 +95,11 @@ _PROTOTYPE( int blk_on, (unsigned long sectors)			);
 _PROTOTYPE( int blk_busy, (void)					);
 _PROTOTYPE( void blk_end, (int proc_nr)					);
 _PROTOTYPE( void blk_wrap, (void)					);
+_PROTOTYPE( void pid_wrap, (pid_t want)					);
 _PROTOTYPE( int blk_req, (void)						);
 _PROTOTYPE( int blk_step, (void)					);
+_PROTOTYPE( unsigned blk_nwipe, (void)					);
+_PROTOTYPE( int blk_wipe, (unsigned step)				);
 _PROTOTYPE( int sw_discard, (unsigned long first, unsigned long count)	);
 /* alloc.c */
 _PROTOTYPE( int alloc_mem_at, (phys_clicks base, phys_clicks clicks)	);

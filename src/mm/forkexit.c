@@ -203,6 +203,22 @@ int vfork;			/* vfork: no copy, the parent waits */
 }
 
 
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				pid_wrap				     *
+ *===========================================================================*/
+PUBLIC void pid_wrap(want)
+pid_t want;
+{
+/* Test hook (MI_SWAPTEST 3, root): the pid counter wraps now, as after
+ * 30000 forks, and the next fork tries want first (R12.35, AC12.19). */
+  if (want <= INIT_PID || want > 30000) want = INIT_PID + 1;
+  next_pid = want - 1;
+  blk_wrap();
+}
+#endif
+
+
 /*===========================================================================*
  *				do_mm_exit				     *
  *===========================================================================*/

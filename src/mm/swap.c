@@ -816,6 +816,22 @@ PUBLIC void sw_step()
 	sw_alarm(HZ / 10 + 1);
 	return;
   }
+  /* R12.40: after MMSWAPON, the DISCARD of the whole space, one step at
+   * idle (sw.off: the steps left), before any reserve job begins. */
+  if (sw.busy == 0 && sw.off != 0) {
+	if (sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK) {
+		sw_alarm(HZ / 10 + 1);
+		return;
+	}
+	slot = blk_wipe(blk_nwipe() - sw.off);
+	if (slot == ENXIO) {			/* card out: later */
+		sw_alarm(HZ);
+		return;
+	}
+	sw.off = slot == ENOTTY ? 0 : sw.off - 1;	/* (EIO: go on) */
+	sw_alarm(2);
+	return;
+  }
   if (sw.mode != SW_PLAIN || sw.res_kb == 0) {
 	sw.busy = 0;
 	return;
@@ -936,6 +952,7 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
   (void) blk_on(0UL);
+  sw.off = 0;
   if (mode == SW_OFF && !blk) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;
@@ -972,6 +989,8 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
 	return(r);
   }
   sw.mode = mode;
+  sw.off = blk_nwipe();		/* R12.40: DISCARD it all, at idle */
+  sw_kick();
   return(OK);
 }
 
@@ -984,7 +1003,8 @@ PUBLIC int sw_ctl()
 /* MEMINFO with m1_i2 = MI_SWAPON (m1_i1 the partition, 0: off; m1_i3 the
  * mode), MI_SWAPRES (m1_i1 KB), MI_SWAPINFO (struct swinfo to m1_p1),
  * MI_SWAPTEST (tests: m1_i1 1 = swap out pid m1_i3 now, 2 = act as if the
- * card were pulled), MI_FGEXEC (the caller's next child execs the
+ * card were pulled, 3 = the pid counter wraps now and the next fork gets
+ * pid m1_i3 if it is free), MI_FGEXEC (the caller's next child execs the
  * foreground app, R12.22). */
   struct swinfo *si = (struct swinfo *) HDR;
   struct mproc *rmp;
@@ -1028,6 +1048,10 @@ PUBLIC int sw_ctl()
 	if (mm_in.m1_i1 == 2) {			/* R12.25, AC12.12 */
 		if (sw.mode == SW_OFF) return(EINVAL);
 		sw_fail("SD card removed (test)");
+		return(OK);
+	}
+	if (mm_in.m1_i1 == 3) {			/* R12.35, AC12.19 */
+		pid_wrap((pid_t) mm_in.m1_i3);
 		return(OK);
 	}
 	if (mm_in.m1_i1 != 1) return(EINVAL);

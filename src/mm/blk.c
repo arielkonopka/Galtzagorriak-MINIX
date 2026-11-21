@@ -30,6 +30,7 @@
  *   blk_wrap:	 the pid counter wrapped
  *   blk_req:	 MEMINFO MI_BLK
  *   blk_step:	 at idle: one waiting request or one DISCARD step
+ *   blk_nwipe, blk_wipe: MMSWAPON's DISCARD of the whole space, by steps
  *
  * R12.40: a run whose process PUT a block (BLKUSED) is not free when it
  * ends: its bit in bk.disc is set and the entry stays, so nobody gets the
@@ -146,6 +147,78 @@ unsigned long sectors;		/* the swap partition's size, 0: blocks off */
   if (n == 0) return(ENOSPC);
   /* R12.39: a swap partition stays below 4 GiB, so this fits 16 bits. */
   bk.ext = n > 0xFFFF ? 0xFFFF : (unsigned short) n;
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				blk_nwipe				     *
+ *===========================================================================*/
+PUBLIC unsigned blk_nwipe()
+{
+/* R12.40 at MMSWAPON: the number of steps of blk_wipe, the swap slots
+ * first, then the extents at most DISC_MAX sectors a step. */
+  unsigned long g;
+
+  if (bk.ext == 0) return(1);
+  g = DISC_MAX / ((unsigned long) bk.ext * BK_BLOCK);
+  if (g == 0) g = 1;
+  return(1 + (unsigned) ((NEXT + g - 1) / g));
+}
+
+
+/*===========================================================================*
+ *				blk_wipe				     *
+ *===========================================================================*/
+PUBLIC int blk_wipe(step)
+unsigned step;			/* 0: the 16 slots; then groups of extents */
+{
+/* R12.40: one step of the DISCARD of the whole swap space after MMSWAPON
+ * (sw_step, at idle; sw.off counts the steps left, 0 B).  Whatever is
+ * live by now is left alone: the slot of a process on the card, every
+ * extent of a reservation.  ENOTTY: the card has no DISCARD. */
+  unsigned long base, usz, g, u, u0, u1, s;
+  struct mproc *rmp;
+  unsigned char *e;
+  int r, i, live;
+
+  if (step == 0) {
+	base = 0;
+	usz = BK_SKIP / NR_PROCS;
+	u0 = 0;
+	u1 = NR_PROCS;
+  } else {
+	if (bk.ext == 0) return(OK);
+	base = BK_SKIP;
+	usz = (unsigned long) bk.ext * BK_BLOCK;
+	if ((g = DISC_MAX / usz) == 0) g = 1;
+	u0 = (step - 1) * g;
+	if (u0 >= NEXT) return(OK);
+	u1 = u0 + g > NEXT ? NEXT : u0 + g;
+  }
+  for (u = u0; u < u1; u = s) {
+	for (s = u; s < u1; s++) {
+		if (step == 0) {
+			rmp = &mproc[s];
+			live = (rmp->mp_flags & (IN_USE | SWAPPED))
+						== (IN_USE | SWAPPED);
+			if (!live) rmp->mp_flags &= ~SWAPHDR;
+		} else {
+			live = FALSE;
+			for (i = 0; i < NSLOT; i++) {
+				e = bk.run[i];
+				if (e[1] != 0 && s >= e[0] && s < e[0] + e[1])
+					live = TRUE;
+			}
+		}
+		if (live) break;
+	}
+	if (s > u && (r = sw_discard(base + u * usz, (s - u) * usz)) != OK) {
+		if (r == ENOTTY) bk.nodisc = TRUE;
+		return(r);
+	}
+	if (s == u) s++;		/* a live one: skip it */
+  }
   return(OK);
 }
 
