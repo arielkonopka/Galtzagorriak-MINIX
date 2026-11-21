@@ -20,6 +20,10 @@ qemu) like tools/swaptest.py, through the first boot (swap partition
   R12.38   blk=on in /etc/rc.conf: /etc/rc switches blocks on at boot
   R12.38   blocks only (swapon /dev/hd3 blk, swap off) work too
   R12.40   MMSWAPON discards the whole space at idle (QEMU zero-fills)
+  AC12.21  a background caller waits while keys arrive (typed here), a
+           foreground app is answered at once; background PUTs stop at
+           the write budget; the card pulled (DIOCFAKECARD): a
+           foreground GET is ENXIO, a background one waits for the card
 
 With -g, cards >= 32 GB (R12.34) instead: after the first boot the swap
 partition hd3 becomes a 0x81 one with the subpartitions hd3a, hd3b and
@@ -65,6 +69,27 @@ def tests(r, cmd, what, timeout=120):
 		if line.startswith(b"PASS") or line.startswith(b"FAIL"):
 			print("       " + line.decode("latin-1"), flush=True)
 	check(b"st=0" in out and b"FAIL" not in out, what)
+
+def keys(r):
+	"""AC12.21: blktest -k, keys typed for 3 s after it says KEYS."""
+	print("  ...  /usr/tests/blktest -k (keys for 3 s)", flush=True)
+	start = len(r.out)
+	r.send("/usr/tests/blktest -k; echo st=$?")
+	ok = r.wait(rb"KEYS\r?\n", 60) is not None
+	end = time.time() + 3
+	while ok and time.time() < end:
+		r.p.stdin.write(b"k")
+		r.p.stdin.flush()
+		time.sleep(0.1)
+	r.send("")
+	ok = ok and r.wait(rb"st=\d+", 120) is not None
+	out = r.out[start:]
+	for line in out.splitlines():
+		if re.match(rb"(PASS|FAIL|keys ended|foreground)", line):
+			print("       " + line.decode("latin-1"), flush=True)
+	check(ok and b"st=0" in out and b"FAIL" not in out,
+		"AC12.21: background caller while keys arrive")
+
 
 BIG_HOLE = 60 * 2 * 1024 * 1024		# 60 GiB in sectors
 SUB = 32760				# sectors per subpartition
@@ -206,6 +231,10 @@ def main():
 		check(b"swap: off" in out, "R12.38: blk=on, swap=off: swap off")
 		tests(r, "/usr/tests/blktest -l",
 			"R12.38: blk=on: /etc/rc switched blocks on", 300)
+		# AC12.21 last: the write budget is spent for a minute after it
+		keys(r)
+		tests(r, "/usr/tests/blktest -o",
+			"AC12.21: write budget; the card pulled", 120)
 		check(r.sh("if test -f /etc/rc.conf.blk; then mv /etc/rc.conf.blk "
 			"/etc/rc.conf; else rm /etc/rc.conf; fi && sync", 30) == 0,
 			"the default rc.conf again")

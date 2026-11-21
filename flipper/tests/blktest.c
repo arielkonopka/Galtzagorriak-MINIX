@@ -18,6 +18,14 @@
  *   blktest -g		cards >= 32 GB: blocks over hd3a, hd3b, hd3d (R12.34)
  *   blktest -l		<blk.h> and libblk (R12.38) on the real MM: the
  *			libc calls, then 256 KB through 1 KB frames
+ *   blktest -k		AC12.21 while tools/blktest.py types keys (after
+ *			"KEYS", 3 s, then Enter): a background GET is
+ *			answered only after them, a foreground app's (-F)
+ *			PUT and GET at once
+ *   blktest -o		AC12.21: a background writer's PUTs stop at the
+ *			write budget; the card pulled (QEMU DIOCFAKECARD):
+ *			a foreground GET (-X) is ENXIO and the app lives on,
+ *			a background GET waits until the card is back
  *
  * AC12.18: GET without a reservation is EBADF; after OPEN of 1 MB block 0
  * and the last block read as zeros, one past the end is ERANGE; an OPEN
@@ -37,6 +45,9 @@
 #include <libblk.h>
 #include "t.h"
 #include <sys/ioctl.h>
+#include <sys/times.h>
+#include <poll.h>
+#include <time.h>
 
 #define BK_SKIP		(16 * 384UL)	/* sectors of the swap slots */
 #define BK_BLOCK	9
@@ -377,6 +388,200 @@ static int big(void)
 }
 
 
+/* Real time since boot, ticks (times(2)). */
+static long now(void)
+{
+	struct tms tb;
+
+	return (long) times(&tb);
+}
+
+/* Sleep ms milliseconds (in FS: poll, not an MM wait). */
+static void msleep(int ms)
+{
+	poll((struct pollfd *) NULL, 0, ms);
+}
+
+/* QEMU: the card in (0) or pulled out (1), DIOCFAKECARD on /dev/hd0. */
+static int card(int state)
+{
+	static int fd = -1;
+
+	if (fd < 0 && (fd = open("/dev/hd0", O_RDONLY)) < 0) return -1;
+	return ioctl(fd, DIOCFAKECARD, &state);
+}
+
+/* The caller's next child execs as the foreground app (R12.22). */
+static void fgexec(void)
+{
+	message m;
+
+	m.m1_i2 = MI_FGEXEC;
+	_syscall(MM, MEMINFO, &m);
+}
+
+/* -F: a foreground app while keys arrive: its own run, a PUT and a GET
+ * answered at once (within 0.5 s, not after the keys). */
+static int fg_keys(void)
+{
+	long t;
+	int ok;
+
+	if (blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) <= 0) return 2;
+	fill(buf, BLK_SIZE, 11);
+	t = now();
+	ok = blk(BLK_PUT, 0, 0, 0, 0, buf) == 0
+		&& blk(BLK_GET, 0, 0, 0, 0, buf2) == 0
+		&& memcmp(buf, buf2, BLK_SIZE) == 0;
+	t = now() - t;
+	printf("foreground PUT+GET while keys arrive: %ld ticks\n", t);
+	return ok && t <= CLK_TCK / 2 ? 0 : 1;
+}
+
+/* -X rfd wfd: a foreground app while the card is pulled.  'r' when its
+ * block is written; on a byte a GET ('e': ENXIO); on the next one (the
+ * card is back) the GET again, which must give the block. */
+static int fg_card(int rfd, int wfd)
+{
+	char c;
+	int r;
+
+	if (blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) <= 0) return 2;
+	fill(buf, BLK_SIZE, 13);
+	if (blk(BLK_PUT, 0, 0, 0, 0, buf) != 0) return 3;
+	write(wfd, "r", 1);
+	if (read(rfd, &c, 1) != 1) return 4;
+	r = blk(BLK_GET, 0, 0, 0, 0, buf2);
+	c = r < 0 && errno == ENXIO ? 'e' : 'x';
+	write(wfd, &c, 1);
+	if (read(rfd, &c, 1) != 1) return 5;
+	return blk(BLK_GET, 0, 0, 0, 0, buf2) == 0
+		&& memcmp(buf, buf2, BLK_SIZE) == 0 ? 0 : 6;
+}
+
+/* AC12.21, keys: tools/blktest.py types for 3 s after "KEYS". */
+static int keys(void)
+{
+	char line[256];
+	int p[2], st, fst = -1;
+	pid_t c, f;
+	long tk, tg = -1;
+
+	if (pipe(p) < 0) return 1;
+	if ((c = fork()) == 0) {	/* a background caller */
+		long t;
+
+		if (blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) <= 0) _exit(2);
+		st = blk(BLK_GET, 0, 0, 0, 0, buf2);
+		t = now();
+		write(p[1], &t, sizeof(t));
+		_exit(st == 0 && zeros(buf2, BLK_SIZE) ? 0 : 1);
+	}
+	fgexec();
+	if ((f = fork()) == 0) {
+		execl("/usr/tests/blktest", "blktest", "-F", (char *) NULL);
+		_exit(9);
+	}
+	printf("KEYS\n");
+	fflush(stdout);
+	(void) read(0, line, sizeof(line));	/* the keys, then Enter */
+	tk = now();
+	st = waitpid(f, &fst, WNOHANG) == f;
+	t_result("AC12.21: a foreground app is answered at once while keys "
+		"arrive", st && WIFEXITED(fst) && WEXITSTATUS(fst) == 0,
+		st ? t_status(fst) : "still running after the keys");
+	if (!st) waitpid(f, &fst, 0);
+	if (read(p[0], &tg, sizeof(tg)) != sizeof(tg)) tg = -1;
+	waitpid(c, &st, 0);
+	printf("keys ended at %ld, the background GET came back at %ld\n",
+		tk, tg);
+	t_result("AC12.21: a background GET is answered only after the keys",
+		WIFEXITED(st) && WEXITSTATUS(st) == 0 && tg >= tk,
+		t_status(st));
+	printf("blktest -k: %d failures\n", t_fail);
+	return t_fail;
+}
+
+/* AC12.21: the write budget, and the card pulled. */
+static int card_out(void)
+{
+	char c = 0, a[8], b[8];
+	int p[2], q[2], s[2], st, n, bg;
+	pid_t w, f, g;
+
+	/* A background writer: one byte down the pipe per PUT done. */
+	if (pipe(p) < 0) return 1;
+	if ((w = fork()) == 0) {
+		unsigned long i;
+
+		close(p[0]);
+		if (blk(BLK_OPEN, 0, 256UL * 1024, 0, 0, NULL) <= 0) _exit(2);
+		fill(buf, BLK_SIZE, 17);
+		for (i = 0; ; i = (i + 1) % 32) {
+			buf[0] = (char) i;
+			if (blk(BLK_PUT, 0, i, 0, 0, buf) != 0) _exit(3);
+			write(p[1], "p", 1);
+		}
+	}
+	close(p[1]);
+	msleep(8000);
+	kill(w, SIGKILL);
+	waitpid(w, &st, 0);
+	for (n = 0; read(p[0], &c, 1) == 1; n++) ;
+	close(p[0]);
+	printf("a background writer did %d PUTs in 8 s\n", n);
+	/* 256 KB a minute, a whole-block PUT counts 5 KB (R12.37) */
+	t_result("AC12.21: background PUTs stop at the write budget",
+		WIFSIGNALED(st) && n <= 256 / 5 + 1, t_status(st));
+
+	/* The card pulled: a foreground app gets ENXIO and lives on; a
+	 * background caller waits until the card is back. */
+	if (pipe(p) < 0 || pipe(q) < 0 || pipe(s) < 0) return 1;
+	sprintf(a, "%d", p[0]);
+	sprintf(b, "%d", q[1]);
+	fgexec();
+	if ((f = fork()) == 0) {
+		execl("/usr/tests/blktest", "blktest", "-X", a, b,
+							(char *) NULL);
+		_exit(9);
+	}
+	if ((g = fork()) == 0) {
+		if (blk(BLK_OPEN, 0, 64UL * 1024, 0, 0, NULL) <= 0) _exit(2);
+		fill(buf, BLK_SIZE, 19);
+		if (blk(BLK_PUT, 0, 0, 0, 0, buf) != 0) _exit(3);
+		write(s[1], "r", 1);
+		if (read(s[0], &c, 1) != 1) _exit(4);	/* the card is out */
+		st = blk(BLK_GET, 0, 0, 0, 0, buf2);
+		_exit(st == 0 && memcmp(buf, buf2, BLK_SIZE) == 0 ? 0 : 5);
+	}
+	st = read(q[0], &c, 1) == 1 && c == 'r'
+		&& read(s[0], &c, 1) == 1 && c == 'r';
+	t_result("AC12.21: both callers have a block", st, NULL);
+	st = st && card(1) == 0;
+	write(p[1], "g", 1);
+	write(s[1], "g", 1);
+	c = 0;
+	if (st) (void) read(q[0], &c, 1);
+	t_result("AC12.21: card out: a foreground GET is ENXIO at once",
+		c == 'e', NULL);
+	msleep(2000);
+	bg = waitpid(g, &n, WNOHANG) == 0;
+	card(0);
+	write(p[1], "b", 1);
+	t_result("AC12.21: card out: a background GET waits (2 s)", bg,
+		bg ? NULL : t_status(n));
+	waitpid(f, &st, 0);
+	t_result("AC12.21: card back: the foreground app lived on, its block "
+		"reads back", WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		t_status(st));
+	if (bg) waitpid(g, &n, 0);
+	t_result("AC12.21: card back: the background GET completes with "
+		"the block", WIFEXITED(n) && WEXITSTATUS(n) == 0, t_status(n));
+	printf("blktest -o: %d failures\n", t_fail);
+	return t_fail;
+}
+
+
 int main(int argc, char **argv)
 {
 	struct blkinfo bi;
@@ -390,6 +595,11 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
 	if (argc > 1 && strcmp(argv[1], "-l") == 0) return lib();
 	if (argc > 1 && strcmp(argv[1], "-g") == 0) return big();
+	if (argc > 1 && strcmp(argv[1], "-k") == 0) return keys();
+	if (argc > 1 && strcmp(argv[1], "-o") == 0) return card_out();
+	if (argc > 1 && strcmp(argv[1], "-F") == 0) return fg_keys();
+	if (argc > 3 && strcmp(argv[1], "-X") == 0)
+		return fg_card(atoi(argv[2]), atoi(argv[3]));
 	if (argc > 1 && strcmp(argv[1], "-d") == 0) return !wipe(0);
 	if (argc > 1 && strcmp(argv[1], "-c") == 0) return count();
 	if (argc > 1 && strcmp(argv[1], "-D") == 0) {
