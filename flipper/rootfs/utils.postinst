@@ -1,0 +1,24 @@
+# postinst of the utils package (issue #420, spec K.8): Clock, Dice and Passport on the launcher.
+# Window apps ("=" before the program): the launcher starts them as
+# nobody, in group gui, with their pipes on fd 3 and 4.
+#
+# Only sh built-ins, no subshells, no grep (#271): pkg is still in memory
+# while this runs.  /etc/apps is read with an exec redirection (a
+# redirected loop would run in a forked subshell).
+exec 3<&0 </etc/apps
+c=no
+d=no
+p=no
+while read l
+do
+	case "$l" in
+	*:=/usr/bin/clock) c=yes ;;
+	*:=/usr/bin/dice) d=yes ;;
+	*:=/usr/bin/passport) p=yes ;;
+	esac
+done
+exec <&3 3<&-
+test $c = yes || echo 'Clock:nobody:@clock:=/usr/bin/clock' >> /etc/apps
+test $d = yes || echo 'Dice:nobody:@game:=/usr/bin/dice' >> /etc/apps
+test $p = yes || echo 'Passport:nobody:@info:=/usr/bin/passport' >> /etc/apps
+echo "utils: the launcher has Clock, Dice and Passport"

@@ -27,6 +27,7 @@ that brings them.
 18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites, open in their app.
 19. [iButton keys](ibutton.md): the iButton app (read, saved, add manually, write, emulate), stock `.ibtn` files.
 20. [The GPIO header](gpio.md): the GPIO app (pin levels and modes).
+21. [Small apps](apps.md): Music Player (`.fmf`, RTTTL), Clock, Dice, Passport; U2F (the USB part planned) and its key files.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
