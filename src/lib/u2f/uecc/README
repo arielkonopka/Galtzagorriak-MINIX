@@ -1,0 +1,14 @@
+micro-ecc, vendored unchanged for libu2f's P-256 (issue #420).
+
+Source:  https://github.com/kmackay/micro-ecc
+Commit:  76fda53af41aed0a5b372227be65f69fcb502400
+Licence: BSD 2-clause (LICENSE.txt), compatible with the GPLv3 project.
+Files:   uECC.c uECC.h uECC_vli.h curve-specific.inc platform-specific.inc
+         types.h asm_arm*.inc LICENSE.txt (examples, tests, build scripts
+         and the AVR code left out).
+
+Built only through ../p256.c, which sets the options (secp256r1 only, no
+assembler: uECC_arch_other, so r9, the PIC base of MINIX user programs,
+is never touched) and the random source.  Older stock firmware used this
+library for U2F (lib/micro-ecc); Unleashed uses mbedtls, which is far
+larger.
