@@ -1070,6 +1070,34 @@ OBJS_u2f = $(addprefix $(MB)/cmd/u2f/,u2fapp.o u2f.o sha256.o p256.o u2fstore.o)
 CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
 			# the file text (384 B), the record buffers; no heap,
 			# no handler, so no MM gap
+# Berry (spec Phase 7c, R7c.1, R7c.4, R7c.5; issue #385): the interpreter
+# (src/lib/berry, upstream MIT, berry_conf.h) and its launcher gzberry.c,
+# one program `berry' in the installed region; its text runs in place, so
+# every running script shares it.  C99, the FPU (single float, R5.7).
+# The const tables (string table, built-in classes and modules, coc's
+# generate/) are pointer tables: in a PIC program they land in .data, so
+# per process in RAM; the shared library slot that keeps them in flash is
+# the next step (PORTING.md "Berry").  The bindings (R7c.3) are in gz/:
+# tsv, pipe (spec K.1) and the sensor stub.  Package berry.
+BERRY_DIR := $(MROOT)/src/lib/berry
+BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c $(BERRY_DIR)/gz/*.c) \
+	$(BERRY_DIR)/default/be_port.c \
+	$(BERRY_DIR)/default/be_modtab.c $(BERRY_DIR)/gzberry.c $(BERRY_DIR)/gzmath.c
+BERRY_GEN := $(BERRY_DIR)/generate/be_const_strtab.h
+BERRY_FP ?= $(UFPFLAGS)	# BERRY_FP= : soft float (the #385 two-loop check)
+BERRY_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu99 $(BERRY_FP) \
+	-fno-data-sections -fno-merge-constants \
+	-include $(BERRY_DIR)/gzmath.h \
+	-I$(BERRY_DIR) -I$(BERRY_DIR)/src -I$(BERRY_DIR)/gz -I$(BERRY_DIR)/generate
+$(BERRY_GEN): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h
+	$(MAKE) -C $(BERRY_DIR) gen
+$(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(BERRY_CFLAGS) -MMD -MP -c $< -o $@
+OBJS_berry = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRYPROGS := berry
+CHMEM_berry := 12288	# R7c.4: the 8 KB script heap (-m), the VM and
+			# its stack; PORTING.md "Berry" has the measured split
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -1128,7 +1156,7 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS) $(BERRYPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
@@ -1142,7 +1170,8 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar 
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
-	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar
+	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
+	   $(PKGDIR)/berry_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -1239,6 +1268,23 @@ $(PKGDIR)/utils_1.0.tar: $(MB)/bin/clock $(MB)/bin/dice $(MB)/bin/passport \
 	   -D "Clock, Dice, Passport (window apps)" \
 	   /usr/bin/clock=$(MB)/bin/clock /usr/bin/dice=$(MB)/bin/dice \
 	   /usr/bin/passport=$(MB)/bin/passport
+# Berry (spec 7c, issue #385): the interpreter and the example scripts,
+# each as source (for editing) and as bytecode compiled here by the host
+# tool berryc (R7c.2: the device never needs the compiler for them).
+BERRYC	:= $(BERRY_DIR)/build/berryc
+BERRY_EX := hello primes records
+$(BERRYC): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h $(BERRY_DIR)/Makefile
+	$(MAKE) -C $(BERRY_DIR)
+$(MB)/berry/ex/%.bec: apps/berry/%.be $(BERRYC)
+	@mkdir -p $(dir $@)
+	$(BERRYC) -c $@ $<
+$(PKGDIR)/berry_1.0.tar: $(MB)/bin/berry $(BERRY_EX:%=$(MB)/berry/ex/%.bec) \
+		tools/mkpkg.py
+	python3 -I tools/mkpkg.py -n berry -v 1.0 -o $(PKGDIR) --flash \
+	   -D "Berry scripting (spec 7c): berry, examples" \
+	   /usr/bin/berry=$(MB)/bin/berry \
+	   $(foreach e,$(BERRY_EX),/usr/lib/berry/$(e).be=apps/berry/$(e).be \
+	     /usr/lib/berry/$(e).bec=$(MB)/berry/ex/$(e).bec)
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -1266,7 +1312,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.73
+BASE_VER := 4.74
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

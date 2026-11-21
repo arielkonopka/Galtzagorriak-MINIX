@@ -30,6 +30,7 @@ that brings them.
 20. [The GPIO header](gpio.md): the GPIO app (pin levels and modes).
 21. [Small apps](apps.md): Music Player (`.fmf`, RTTTL), Clock, Dice, Passport; U2F (the USB part planned) and its key files.
 22. [Games](games.md): Snake.
+23. [Berry scripts](berry.md): `berry`, the REPL (`berry -i`), the heap and instruction limits, bytecode (`.bec`); the bindings planned.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
