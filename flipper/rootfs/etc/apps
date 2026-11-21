@@ -14,3 +14,4 @@ RFID:nobody:@rfid:/bin/lfrfid
 Spectrum:nobody:@subghz:/bin/spectrum
 Infrared:nobody:@ir:/bin/infrared
 Archive:nobody:@file:=/bin/archive
+NFC:nobody:@nfc:=/bin/nfc
