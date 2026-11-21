@@ -56,13 +56,31 @@ PRIVATE struct {
   unsigned char run[NSLOT][2];	/* first extent, number of extents */
 } bk;
 
-extern char mbuf[];		/* exec's; its last sector as in swap.c */
+/* The header sector on the card (R12.35).  It goes through the last
+ * sector of exec's mbuf, as the swap header does (R12.26): 0 B. */
+extern char mbuf[];
+#define HDR	((struct bkhdr *) (mbuf + ARG_MAX - BK_SECT))
+#define BK_MAGIC	0x4B425A47UL	/* "GZBK" */
+
+struct bkhdr {
+  unsigned long magic, slot, pid, stamp;	/* whose block it is */
+  unsigned long dev, ino, ctime;	/* the program's identity */
+  unsigned long id;			/* the app's block number */
+  unsigned long live;			/* data sectors written (bit i) */
+  unsigned long count;			/* write counter (12b) */
+  unsigned long tag[4];			/* 12b: GCM */
+  unsigned long crc[BLK_NSECT];		/* CRC-32 of each data sector */
+};
 
 #define RUN(slot)	(bk.run[(slot) - INIT_PROC_NR - 1])
 
 FORWARD _PROTOTYPE( unsigned bk_gap, (unsigned pos)			);
 FORWARD _PROTOTYPE( unsigned bk_fit, (unsigned n, unsigned *len)	);
 FORWARD _PROTOTYPE( int bk_open, (unsigned long bytes, int flags)	);
+FORWARD _PROTOTYPE( int bk_valid, (struct bkhdr *h, unsigned long id)	);
+FORWARD _PROTOTYPE( phys_bytes bk_buf, (vir_bytes v, vir_bytes n)	);
+FORWARD _PROTOTYPE( int bk_io, (struct blkreq *rq, int bg)		);
+FORWARD _PROTOTYPE( int bk_do, (char *desc, int bg)			);
 
 
 /*===========================================================================*
@@ -238,23 +256,165 @@ int flags;
 
 
 /*===========================================================================*
- *				blk_req					     *
+ *				bk_valid				     *
  *===========================================================================*/
-PUBLIC int blk_req()
+PRIVATE int bk_valid(h, id)
+struct bkhdr *h;
+unsigned long id;
 {
-/* MEMINFO MI_BLK (R12.36): the descriptor from the caller's memory. */
+/* R12.35: is the header in HDR the caller's block id?  Anything else is
+ * someone's leftover and reads as zeros. */
+  return(h->magic == BK_MAGIC && h->slot == (unsigned long) who
+	&& h->pid == (unsigned long) mp->mp_pid && h->stamp == bk.stamp
+	&& h->dev == (unsigned long) mp->mp_dev
+	&& h->ino == (unsigned long) mp->mp_ino
+	&& h->ctime == (unsigned long) mp->mp_ctime && h->id == id);
+}
+
+
+/*===========================================================================*
+ *				bk_buf					     *
+ *===========================================================================*/
+PRIVATE phys_bytes bk_buf(v, n)
+vir_bytes v, n;			/* the caller's buffer, bytes */
+{
+/* R12.36: the buffer wholly inside the caller's data or stack segment
+ * (WINCHESTER checks again with numap).  Its physical address, 0: no. */
+  struct mem_map *s;
+  vir_bytes lo, hi;
+
+  for (s = &mp->mp_seg[D]; s <= &mp->mp_seg[S]; s++) {
+	lo = (vir_bytes) s->mem_vir << CLICK_SHIFT;
+	hi = lo + ((vir_bytes) s->mem_len << CLICK_SHIFT);
+	if (v >= lo && v < hi && n <= hi - v)
+		return(((phys_bytes) s->mem_phys << CLICK_SHIFT) + (v - lo));
+  }
+  return(0);
+}
+
+
+/*===========================================================================*
+ *				bk_io					     *
+ *===========================================================================*/
+PRIVATE int bk_io(rq, bg)
+struct blkreq *rq;
+int bg;				/* a background caller: the write budget */
+{
+/* GET or PUT of block rq->id, its sectors first .. first + count - 1,
+ * straight between the card and the caller's buffer (R12.36).  The block
+ * is the caller's only if its header says so (R12.35); a data sector that
+ * was never written reads as zeros (h->live), so a PUT of a sector range
+ * needs no write of the rest. */
+  struct bkhdr *h = HDR;
+  unsigned char *r = RUN(who);
+  unsigned first = rq->first, n = rq->count ? rq->count : BLK_NSECT, i;
+  unsigned long pos, crc, bits;
+  phys_bytes buf, a;
+  int valid, e;
+
+  if (r[1] == 0) return(EBADF);
+  if (rq->id >= (unsigned long) r[1] * bk.ext) return(ERANGE);
+  if (first >= BLK_NSECT || n > BLK_NSECT - first) return(ERANGE);
+  if ((buf = bk_buf((vir_bytes) rq->buf, (vir_bytes) n * BK_SECT)) == 0)
+	return(EFAULT);
+  pos = (BK_SKIP + ((unsigned long) r[0] * bk.ext + rq->id) * BK_BLOCK)
+								* BK_SECT;
+  bits = ((1UL << n) - 1) << first;
+
+  /* The header first: a GET of a block that is not the caller's reads
+   * nothing more; a PUT of the whole block without BLK_IFCHANGED needs
+   * nothing from the card. */
+  valid = FALSE;
+  if (rq->op == BLK_GET || n != BLK_NSECT || (rq->flags & BLK_IFCHANGED)) {
+	if ((e = sw_io(DEV_READ, MM_PROC_NR, pos, (phys_bytes) h,
+				(phys_bytes) BK_SECT)) != OK) return(e);
+	valid = bk_valid(h, rq->id);
+  }
+
+  if (rq->op == BLK_GET) {
+	if (!valid || (h->live & bits) == 0) {
+		memset((char *) buf, 0, (size_t) n * BK_SECT);
+		return(OK);
+	}
+	if ((e = sw_io(DEV_READ, who, pos + (1UL + first) * BK_SECT,
+		(phys_bytes) rq->buf, (phys_bytes) n * BK_SECT)) != OK)
+		return(e);
+	for (i = 0, a = buf; i < n; i++, a += BK_SECT) {
+		if (!(h->live & (1UL << (first + i)))) {
+			memset((char *) a, 0, BK_SECT);
+			continue;
+		}
+		crc = ~crc32_more(0xFFFFFFFFUL, (unsigned char *) a, BK_SECT);
+		if (crc != h->crc[first + i]) return(EIO);
+	}
+	return(OK);
+  }
+
+  /* PUT: the CRCs from the buffer; with BLK_IFCHANGED nothing is written
+   * if the card holds the same (R12.36, AC12.20). */
+  if (!valid) {
+	memset((char *) h, 0, BK_SECT);
+	h->magic = BK_MAGIC;
+	h->slot = (unsigned long) who;
+	h->pid = (unsigned long) mp->mp_pid;
+	h->stamp = bk.stamp;
+	h->dev = (unsigned long) mp->mp_dev;
+	h->ino = (unsigned long) mp->mp_ino;
+	h->ctime = (unsigned long) mp->mp_ctime;
+	h->id = rq->id;
+  }
+  e = valid && (h->live & bits) == bits;	/* all the same so far */
+  for (i = 0, a = buf; i < n; i++, a += BK_SECT) {
+	crc = ~crc32_more(0xFFFFFFFFUL, (unsigned char *) a, BK_SECT);
+	if (crc != h->crc[first + i]) e = FALSE;
+	h->crc[first + i] = crc;
+  }
+  if (e && (rq->flags & BLK_IFCHANGED)) return(OK);
+  /* R12.37: a background caller's writes count in the reserve's budget. */
+  if (bg && !sw_wbudget((n + 2) / 2)) return(EAGAIN);
+  h->live |= bits;
+  h->count++;
+  if ((e = sw_io(DEV_WRITE, MM_PROC_NR, pos, (phys_bytes) h,
+				(phys_bytes) BK_SECT)) != OK) return(e);
+  return(sw_io(DEV_WRITE, who, pos + (1UL + first) * BK_SECT,
+		(phys_bytes) rq->buf, (phys_bytes) n * BK_SECT));
+}
+
+
+/*===========================================================================*
+ *				bk_do					     *
+ *===========================================================================*/
+PRIVATE int bk_do(desc, bg)
+char *desc;			/* the caller's struct blkreq */
+int bg;				/* a background caller (R12.37) */
+{
+/* One MI_BLK request of process 'who' ('mp').  SUSPEND: not now, the
+ * caller waits in BLKWAIT for sw_step(). */
   struct blkreq rq;
   struct blkinfo bi;
+  unsigned long b, z;
   unsigned len;
   int r;
 
-  if (bk.ext == 0) return(ENOSYS);		/* blocks off, no partition */
-  if (who <= INIT_PROC_NR) return(EPERM);	/* servers: never */
-  if (sys_copy(who, D, (phys_bytes) mm_in.m1_p1, MM_PROC_NR, D,
+  if (sys_copy(who, D, (phys_bytes) desc, MM_PROC_NR, D,
 		(phys_bytes) &rq, (phys_bytes) sizeof(rq)) != OK)
 	return(EFAULT);
-  if (sw_state() & 0x80) r = ENXIO;		/* card gone (N.6) */
+  /* R12.37: in plain mode the blocks are in clear, as swap images. */
+  if (mp->mp_flags & NOSWAP) r = EPERM;
   else switch (rq.op) {
+  case BLK_GET:
+  case BLK_PUT:
+	/* A background caller waits while the system is busy: a key in
+	 * the last second or a process waiting for the CPU (FL_BG). */
+	if (bg && sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK)
+		return(SUSPEND);
+	r = bk_io(&rq, bg);
+	/* Card out (N.6) or the minute's budget spent: a background
+	 * request waits and is tried again; the foreground gets the error
+	 * at once, so the screen never hangs on the card. */
+	if (bg && (r == ENXIO || r == EAGAIN)) return(SUSPEND);
+	if (r == EAGAIN) r = OK;
+	break;
   case BLK_OPEN:
 	r = bk_open(rq.id, rq.flags);
 	break;
@@ -271,7 +431,7 @@ PUBLIC int blk_req()
 	bi.extent = bk.ext;
 	bi.size = BLK_SIZE;
 	bi.mode = SW_PLAIN;
-	bi.present = 1;
+	bi.present = !(sw_state() & 0x80);
 	r = sys_copy(MM_PROC_NR, D, (phys_bytes) &bi, who, D,
 			(phys_bytes) rq.buf, (phys_bytes) sizeof(bi));
 	break;
@@ -280,9 +440,67 @@ PUBLIC int blk_req()
   }
   rq.status = r;
   (void) sys_copy(MM_PROC_NR, D, (phys_bytes) &rq.status, who, D,
-	(phys_bytes) &((struct blkreq *) mm_in.m1_p1)->status,
+	(phys_bytes) &((struct blkreq *) desc)->status,
 	(phys_bytes) sizeof(rq.status));
   return(r);
+}
+
+
+/*===========================================================================*
+ *				blk_req					     *
+ *===========================================================================*/
+PUBLIC int blk_req()
+{
+/* MEMINFO MI_BLK (R12.36).  The foreground app is served at once; anyone
+ * else may have to wait for idle (R12.37). */
+  int r;
+
+  if (bk.ext == 0) return(ENOSYS);		/* blocks off, no partition */
+  if (who <= INIT_PROC_NR) return(EPERM);	/* servers: never */
+  r = bk_do(mm_in.m1_p1, !(mp->mp_flags & FGAPP));
+  if (r != SUSPEND) return(r);
+  /* No reply now.  mp_wpid is free while the process is in this call
+   * (only wait uses it): it keeps where the descriptor is. */
+  mp->mp_flags |= BLKWAIT;
+  mp->mp_wpid = (pid_t) mm_in.m1_p1;
+  dont_reply = TRUE;
+  sw_kick();
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				blk_step				     *
+ *===========================================================================*/
+PUBLIC int blk_step()
+{
+/* From sw_step(), at idle (R12.37): one waiting request, the descriptor
+ * read again from the caller.  TRUE if one still waits after this. */
+  struct mproc *rmp, *caller = mp;
+  int caller_who = who, r, more = FALSE;
+
+  for (rmp = &mproc[INIT_PROC_NR + 1]; rmp < &mproc[NR_PROCS]; rmp++) {
+	if (!(rmp->mp_flags & BLKWAIT)) continue;
+	if ((rmp->mp_flags & (IN_USE | HANGING)) != IN_USE || bk.ext == 0) {
+		rmp->mp_flags &= ~BLKWAIT;	/* gone, or blocks off */
+		if ((rmp->mp_flags & (IN_USE | HANGING)) == IN_USE)
+			reply((int) (rmp - mproc), ENOSYS, 0, NIL_PTR);
+		continue;
+	}
+	if (more) return(TRUE);			/* one request a step */
+	who = (int) (rmp - mproc);
+	mp = rmp;
+	r = bk_do((char *) rmp->mp_wpid, TRUE);
+	if (r != SUSPEND) {
+		rmp->mp_flags &= ~BLKWAIT;
+		reply(who, r, 0, NIL_PTR);
+	}
+	more = TRUE;
+	who = caller_who;
+	mp = caller;
+	if (r == SUSPEND) return(TRUE);		/* still busy: later */
+  }
+  return(FALSE);
 }
 
 #endif /* CHIP == ARM_CM */

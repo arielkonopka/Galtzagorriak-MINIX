@@ -236,8 +236,9 @@ phys_bytes n;			/* bytes, whole sectors */
   m.PROC_NR = proc;
   m.ADDRESS = (char *) addr;
   m.COUNT = (int) n;
-  if (sendrec(WINCHESTER, &m) != OK || m.REP_STATUS != (int) n) return(EIO);
-  return(OK);
+  if (sendrec(WINCHESTER, &m) != OK) return(EIO);
+  if (m.REP_STATUS == ENXIO) return(ENXIO);	/* card out (N.6) */
+  return(m.REP_STATUS == (int) n ? OK : EIO);
 }
 
 
@@ -248,6 +249,36 @@ PUBLIC int sw_state()
 {
 /* For the blocks (blk.c): SW_OFF or SW_PLAIN, | 0x80 if the card is gone. */
   return(sw.mode);
+}
+
+
+/*===========================================================================*
+ *				sw_kick					     *
+ *===========================================================================*/
+PUBLIC void sw_kick()
+{
+/* A block request waits for idle (blk.c, R12.37): the next step soon. */
+  sw_alarm(HZ / 10 + 1);		/* replaces a later one */
+}
+
+
+/*===========================================================================*
+ *				sw_wbudget				     *
+ *===========================================================================*/
+PUBLIC int sw_wbudget(kb)
+unsigned kb;
+{
+/* R12.37: a background block PUT counts in the reserve's write budget
+ * (256 KB a minute, shared).  May kb more be written now? */
+  unsigned short now = sw_now();
+
+  if ((unsigned short) (now - sw.win) >= 60) {
+	sw.win = now;
+	sw.wkb = 0;
+  }
+  if (sw.wkb >= RATE_KB) return(FALSE);
+  sw.wkb += kb;
+  return(TRUE);
 }
 
 
@@ -754,6 +785,12 @@ PUBLIC void sw_step()
   int slot, same;
 
   sw.armed = FALSE;
+  /* R12.37: waiting block requests first (one a step), then the reserve;
+   * swap-ins the user waits for were done in sw_after() already. */
+  if (blk_step()) {
+	sw_alarm(HZ / 10 + 1);
+	return;
+  }
   if (sw.mode != SW_PLAIN || sw.res_kb == 0) {
 	sw.busy = 0;
 	return;
