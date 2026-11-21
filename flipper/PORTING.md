@@ -1251,6 +1251,78 @@ conversion, once R6.2 reads the RTC; today one FS and one clock message)
 and `ls -l` of 100 files not measurably slower (both recorded here);
 the boot still takes the clock from the RTC (#70).
 
+## Berry (Phase 7c part 1, issue #385)
+
+**What is there.**  Upstream Berry 1.1.0 (MIT, `src/lib/berry/LICENSE`;
+github.com/berry-lang/berry at 9f6fbc9, 2026-11-11) in `src/lib/berry`,
+with `berry_conf.h` of our own and these changes: the per-script heap
+limit is one check in `be_realloc()` (`src/be_mem.c`, `be_heap_limit`);
+`default/be_port.c` includes `<sys/types.h>` first (MINIX headers);
+`gzmath.h`/`gzmath.c` give the float functions the VM needs (`fmodf`)
+and a printer for `%e/%f/%g` (`gz_snprintf`), because MINIX libc prints no
+floating point and its math needs `modf`/`frexp`, which exist only as i386
+assembly.  Not shipped: the `os`, `time`, `json`, `debug`, `introspect`,
+`strict` and `solidify` modules (their sources are removed), and `math`
+(off until a small float libm exists); upstream's `default/berry.c` is
+replaced by `gzberry.c`.  The bindings (R7c.3) are const modules in
+`src/lib/berry/gz/` (coc tables like the built-in ones): `tsv` (`split`,
+`join`, `records`), `pipe` (`where`, `map`, `head`, `sortby`; spec K.1)
+and a `sensor` stub (`list`, `read` of `/dev/sensor/NAME`); example
+`records.be`.  Ints are 32 bit, reals single float (FPU, R5.7),
+so host and device bytecode are the same.
+
+**Programs.**  `/usr/bin/berry` (package `berry`, `--flash`): `berry
+script.be|.bec [args]`, `berry -e code`, `berry -i` (REPL, R7c.5), `-m
+heap` (R7c.4, default 8192 B, 0 = none), `-n budget` (R7c.4, in units of
+1024 VM instructions, default 4096; 0 = none).  Exit status: 0 ok, 1
+exception, 2 usage, 3 budget spent (`budget_error`), 4 heap limit, 5 I/O.
+The host tool `src/lib/berry/build/berryc` (`make -C src/lib/berry`) is
+the same launcher with the bytecode saver: `berryc -c out.bec in.be`
+(R7c.2); the package's scripts are compiled with it at build time.
+
+**How the limits work.**  Budget: with `BE_USE_PERF_COUNTERS` the VM
+counts instructions and calls the observability hook every 1024 of them
+(`BE_VM_OBSERVABILITY_SAMPLING 11`); the hook counts down and raises
+`budget_error`, which unwinds to the launcher's `be_pcall()` (no system
+call, no time read; the cost is one increment and one test per
+instruction).  The REPL gives each line a fresh budget; the event
+callbacks of the `timer` binding will do the same.  Heap: over the limit
+an allocation fails like a full heap: one forced GC, then
+`BE_MALLOC_FAIL`; the script ends with status 4, its RAM goes back to MM.
+
+**Measured (QEMU, `tools/berrytest.py`, 2026-11-21).**
+
+| | bytes |
+|---|---|
+| text (flash, shared by every running script; 4.4 KB of it the bindings) | 79 948 |
+| `.data` + GOT per process | 6 220 + 964 |
+| `.bss` | 148 |
+| chmem (stack and heap gap, `CHMEM_berry`) | 12 288 |
+| one running script, `free -v` | 19 712 |
+| VM heap at start (`gc.allocated()`) | 1 501 |
+| endless loop with the default budget | ends after 0.5 s (QEMU) |
+
+The 7.2 KB of data per process are mostly the constant tables (`generate/`: the
+string table, the built-in classes and modules): they are pointer tables,
+and in a position-independent program every initialised pointer is data,
+copied to RAM per process.  This is why AC7c.1's 6 KB per script is not
+met yet.  **Next step (R7c.1):** link the VM as a shared library at a
+fixed address (like `libc.bin` and `furi.bin`, `tools/mkshlibc.py`), so
+the tables stay in flash and each script pays only for its GOT, `.bss`
+and heap.  The 48 KB slots after the system image are full, so this
+needs a new slot in the installed region (flash layout, R2b.1); then
+lower `CHMEM_berry` to the measured need (about 1.5 KB of heap at start
+plus the stack).  Also open: `#!` scripts (MM's exec has no `#!`), the
+`math` module, and solidify (bytecode as C constants in flash).
+
+**Open finding.**  Two runaway scripts with `-n 0` (no budget) make QEMU
+stop answering about 1 s after the second one starts; one runaway script,
+or two `sh -c 'while :; do :; done'` loops, do not, and a soft-float
+build (`make BERRY_FP=`) hangs the same way, so it is not the FPU state.
+`BERRYTEST_TWO=1 tools/berrytest.py` reproduces it.  With the default
+budget every loop ends in 0.5 s, so the default configuration is not
+affected; keep `-n 0` for debugging until this is understood.
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**
