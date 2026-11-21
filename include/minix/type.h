@@ -175,6 +175,8 @@ struct kstack {
 #define MI_BUILD	13	/* the system image's version and build id
 			 * ("0.1.1+12.g1a2b3c4", '\0'-ended) to m1_p1, at
 			 * most m1_i1 bytes (settings about, spec K.7) */
+#define MI_BLK		14	/* swappable blocks (12h): m1_p1 a struct
+			 * blkreq in the caller's memory, <minix/blk.h> */
 #define MT_PASS		0	/* free: March C- passed (left zeroed) */
 #define MT_FAIL		1	/* free: a word did not hold its pattern */
 #define MT_INUSE	2	/* a process (or part of one) is there */
@@ -183,6 +185,9 @@ struct kstack {
 #define SW_OFF		0
 #define SW_PLAIN	1
 #define SW_CRYPT	2
+#define SW_BLK		0x10	/* MI_SWAPON, or'ed into m1_i3: blocks on
+				 * (R12.38 blk=on); with SW_OFF the partition
+				 * serves blocks only */
 
 /* sys_flash() operations. */
 #define FL_INFO		0	/* cache region: base, size; with addr: */

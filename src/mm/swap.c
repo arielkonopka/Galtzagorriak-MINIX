@@ -129,8 +129,6 @@ PRIVATE struct {
 
 FORWARD _PROTOTYPE( unsigned short sw_now, (void)			);
 FORWARD _PROTOTYPE( int sw_layout, (struct mproc *rmp, struct layout *l));
-FORWARD _PROTOTYPE( int sw_io, (int op, int proc, unsigned long pos,
-					phys_bytes addr, phys_bytes n)	);
 FORWARD _PROTOTYPE( unsigned long sw_crc, (struct layout *l,
 			unsigned long v, phys_bytes a, phys_bytes n)	);
 FORWARD _PROTOTYPE( int sw_chunk, (struct mproc *rmp, struct layout *l,
@@ -159,6 +157,7 @@ FORWARD _PROTOTYPE( int sw_room_at, (phys_clicks base, phys_clicks n,
 PUBLIC void sw_init()
 {
   sw.res_kb = RES_KB;
+  blk_init();
 }
 
 
@@ -219,7 +218,7 @@ struct layout *l;
 /*===========================================================================*
  *				sw_io					     *
  *===========================================================================*/
-PRIVATE int sw_io(op, proc, pos, addr, n)
+PUBLIC int sw_io(op, proc, pos, addr, n)
 int op;				/* DEV_READ or DEV_WRITE */
 int proc;			/* whose memory */
 unsigned long pos;		/* byte offset on the partition */
@@ -239,6 +238,16 @@ phys_bytes n;			/* bytes, whole sectors */
   m.COUNT = (int) n;
   if (sendrec(WINCHESTER, &m) != OK || m.REP_STATUS != (int) n) return(EIO);
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				sw_state				     *
+ *===========================================================================*/
+PUBLIC int sw_state()
+{
+/* For the blocks (blk.c): SW_OFF or SW_PLAIN, | 0x80 if the card is gone. */
+  return(sw.mode);
 }
 
 
@@ -850,15 +859,21 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   int minor = dev & BYTE;
   message m;
 
+  int blk = mode & SW_BLK;		/* R12.38: blocks too (or only) */
+  int r;
+
+  mode &= ~SW_BLK;
   if (mode == SW_CRYPT) return(ENOSYS);		/* 12b, later */
   if (mode != SW_OFF && mode != SW_PLAIN) return(EINVAL);
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	if ((rmp->mp_flags & (IN_USE | SWAPPED)) == (IN_USE | SWAPPED))
 		return(EBUSY);
+  if (blk_busy()) return(EBUSY);	/* a reservation is on this device */
   sw.busy = 0;
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
-  if (mode == SW_OFF) {
+  (void) blk_on(0);
+  if (mode == SW_OFF && !blk) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;
 	return(OK);
@@ -883,7 +898,13 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
 	sw.dev = NO_DEV;
 	return(ENOSPC);
   }
-  sw.mode = SW_PLAIN;
+  /* Blocks behind the slots (R12.34); with SW_OFF the partition serves
+   * only them, nothing is swapped. */
+  if (blk && (r = blk_on(minor)) != OK) {
+	sw.dev = NO_DEV;
+	return(r);
+  }
+  sw.mode = mode;
   return(OK);
 }
 
