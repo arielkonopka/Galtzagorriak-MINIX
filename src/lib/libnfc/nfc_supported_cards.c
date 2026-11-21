@@ -7,6 +7,7 @@
 #include <nfc/nfc.h>
 #include <nfc/nfc_device.h>
 #include <flipper_application.h>
+#include <flipper_format/flipper_format.h>
 #include <plugins/supported_cards/nfc_supported_card_plugin.h>
 
 #include "nfc_supported_cards.h"
@@ -22,6 +23,18 @@ typedef struct {
 
 #define NSC_ENTRY(name) {#name, name##_plugin_ep},
 static const NscEntry nsc_table[] = {NFC_SUPPORTED_CARDS(NSC_ENTRY)};
+
+/* The lookup file each ID-list parser opens (its EXT_PATH, minus /ext/). */
+static const struct {
+    const char* name;
+    const char* file;
+} nsc_lists[] = {
+    {"plantain", "nfc/assets/sz_id.nfc"},
+    {"sev_tk", "nfc/assets/sev_id.nfc"},
+    {"sk_tk", "nfc/assets/sk_id.nfc"},
+    {"szppk_so", "nfc/assets/sz_id.nfc"},
+    {"skylanders", "nfc/assets/skylanders.nfc"},
+};
 
 size_t nfc_supported_cards_count(void) { return COUNT_OF(nsc_table); }
 
@@ -63,4 +76,43 @@ int nfc_supported_cards_parse(const NfcDevice* device, FuriString* out) {
     }
     furi_string_reset(out);
     return -1;
+}
+
+const char* nfc_supported_cards_list_file(size_t i) {
+    if(i >= COUNT_OF(nsc_table)) return NULL;
+    for(size_t k = 0; k < COUNT_OF(nsc_lists); k++)
+        if(!strcmp(nsc_lists[k].name, nsc_table[i].name)) return nsc_lists[k].file;
+    return NULL;
+}
+
+static bool nsc_list_present(const char* file, char* path, size_t size) {
+    char ext[96];
+    snprintf(ext, sizeof ext, "/ext/%s", file);
+    nfcshim_ext_path(ext, path, size);
+    FILE* f = fopen(path, "r");
+    if(f) fclose(f);
+    return f != NULL;
+}
+
+int nfc_supported_cards_list_notes(const NfcDevice* device, int r, FuriString* out) {
+    furi_check(device && out);
+    NfcProtocol protocol = nfc_device_get_protocol(device);
+    const char* seen[COUNT_OF(nsc_lists)];
+    int notes = 0;
+    for(size_t i = 0; i < COUNT_OF(nsc_table); i++) {
+        if(r >= 0 && (size_t)r != i) continue;
+        const char* file = nfc_supported_cards_list_file(i);
+        if(!file || nsc_plugin(i)->protocol != protocol) continue;
+        bool dup = false;
+        for(int k = 0; k < notes; k++)
+            if(!strcmp(seen[k], file)) dup = true;
+        char path[160];
+        if(dup || nsc_list_present(file, path, sizeof path)) continue;
+        seen[notes++] = file;
+        if(r >= 0)
+            furi_string_cat_printf(out, "\nNo ID list found (%s): codes shown instead of names.\n", path);
+        else
+            furi_string_cat_printf(out, "No ID list found (%s), showing the raw card.\n", path);
+    }
+    return notes;
 }

@@ -8,9 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "nfc_shim.h"
 #include "cm_mfc.h"
+#include "cm_mful.h"
+#include "cm_emv.h"
 
 #include <nfc/nfc.h>
 #include <nfc/nfc_device.h>
@@ -19,6 +23,13 @@
 #include <nfc/protocols/mf_classic/mf_classic_poller_sync.h>
 
 #include <nfc/protocols/mf_desfire/mf_desfire.h>
+#include <nfc/protocols/mf_ultralight/mf_ultralight_poller_sync.h>
+#include <nfc/protocols/felica/felica.h>
+#include <flipper_format/flipper_format.h>
+#include <nfc/nfc_poller.h>
+#include <nfc/protocols/emv/emv_poller.h>
+#include <nfc/protocols/emv/emv.h>
+#include <nfc/protocols/st25tb/st25tb.h>
 #include <plugins/supported_cards/nfc_supported_card_plugin.h>
 
 #include "nfc_supported_cards.h"
@@ -392,6 +403,300 @@ static void test_datetime(void) {
     furi_string_free(s);
 }
 
+/* ---- part 5 (#412): Ultralight / FeliCa parsers ---- */
+
+static NfcDevice* sweep_mful(MfUltralightType type, uint16_t pages, int random) {
+    MfUltralightData* d = mf_ultralight_alloc();
+    d->type = type;
+    d->pages_total = pages;
+    d->pages_read = pages;
+    d->iso14443_3a_data->uid_len = 7;
+    for(uint16_t p = 0; p < pages; p++)
+        for(int i = 0; i < 4; i++) d->page[p].data[i] = random ? (uint8_t)sweep_rand() : 0;
+    if(random) d->pages_read = (uint16_t)(sweep_rand() % (pages + 1u));
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfUltralight, d);
+    mf_ultralight_free(d);
+    return dev;
+}
+
+static NfcDevice* sweep_felica(int random) {
+    FelicaData* d = felica_alloc();
+    d->workflow_type = FelicaLite;
+    d->blocks_total = FELICA_BLOCKS_TOTAL_COUNT;
+    d->blocks_read = random ? (uint8_t)(sweep_rand() % 29) : FELICA_BLOCKS_TOTAL_COUNT;
+    for(size_t i = 0; i < sizeof d->data.dump; i++) d->data.dump[i] = random ? (uint8_t)sweep_rand() : 0;
+    for(int i = 0; i < 8; i++) d->pmm.data[i] = random ? (uint8_t)sweep_rand() : 0;
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolFelica, d);
+    felica_free(d);
+    return dev;
+}
+
+static void test_p5_sweep(void) {
+    size_t n = nfc_supported_cards_count();
+    FuriString* out = furi_string_alloc();
+    unsigned claimed = 0, runs = 0, ul = 0, fe = 0;
+    static const struct { MfUltralightType t; uint16_t pages; } ul_types[] = {
+        {MfUltralightTypeOrigin, 16}, {MfUltralightTypeMfulC, 48}, {MfUltralightTypeNTAG213, 45},
+        {MfUltralightTypeNTAG215, 135}, {MfUltralightTypeNTAG216, 231}};
+    for(size_t i = 0; i < n; i++) {
+        const NfcSupportedCardsPlugin* p = nfc_supported_cards_plugin(i);
+        if(p->protocol == NfcProtocolMfUltralight) {
+            ul++;
+            for(size_t t = 0; t < COUNT_OF(ul_types); t++) {
+                NfcDevice* dev = sweep_mful(ul_types[t].t, ul_types[t].pages, 0);
+                furi_string_reset(out);
+                if(p->parse && p->parse(dev, out)) {
+                    printf("     %s claims a blank %u-page Ultralight\n", nfc_supported_cards_name(i), ul_types[t].pages);
+                    claimed++;
+                }
+                nfc_device_free(dev);
+                for(int r = 0; r < 40; r++) {
+                    dev = sweep_mful(ul_types[t].t, ul_types[t].pages, 1);
+                    furi_string_reset(out);
+                    if(p->parse) (void)p->parse(dev, out);
+                    runs++;
+                    nfc_device_free(dev);
+                }
+            }
+        } else if(p->protocol == NfcProtocolFelica) {
+            fe++;
+            NfcDevice* dev = sweep_felica(0);
+            furi_string_reset(out);
+            if(p->parse && p->parse(dev, out)) {
+                printf("     %s claims a blank FeliCa\n", nfc_supported_cards_name(i));
+                claimed++;
+            }
+            nfc_device_free(dev);
+            for(int r = 0; r < 40; r++) {
+                dev = sweep_felica(1);
+                furi_string_reset(out);
+                if(p->parse) (void)p->parse(dev, out);
+                runs++;
+                nfc_device_free(dev);
+            }
+        }
+    }
+    printf("     part-5 sweep: %u Ultralight, %u FeliCa parsers, %u random dumps\n", ul, fe, runs);
+    CHECK(ul >= 5 && fe >= 1, "p5 sweep: Ultralight and FeliCa parsers linked in");
+    CHECK(claimed == 0, "p5 sweep: no parser claims a blank card");
+    CHECK(runs > 0, "p5 sweep: random dumps parsed without a crash");
+    furi_string_free(out);
+}
+
+/* NDEF end to end: a URI record on the software NTAG215, read by the
+ * vendored Ultralight poller, parsed by ndef_ul. */
+static void test_ndef_ul(void) {
+    static cm_mful_t k;
+    nfc_xfer_t x = {0};
+    cm_mful_ntag215(&k);
+    static const uint8_t tlv[] = {0x03, 0x10, 0xD1, 0x01, 0x0C, 0x55, 0x04, 'e', 'x', 'a',
+                                  'm',  'p',  'l',  'e',  '.',  'o',  'r', 'g', 0xFE, 0x00};
+    memcpy(k.mem[4], tlv, sizeof tlv);
+    x.transceive = cm_mful_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    MfUltralightData* d = mf_ultralight_alloc();
+    MfUltralightError e = mf_ultralight_poller_sync_read_card(nfc, d, NULL);
+    CHECK(e == MfUltralightErrorNone && d->type == MfUltralightTypeNTAG215, "ndef: NTAG215 read by the vendored poller");
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfUltralight, d);
+    mf_ultralight_free(d);
+    FuriString* out = furi_string_alloc();
+    int r = nfc_supported_cards_parse(dev, out);
+    const char* name = r >= 0 ? nfc_supported_cards_name((size_t)r) : "none";
+    CHECK(r >= 0 && !strcmp(name, "ndef_ul"), "ndef: the URI tag is parsed by ndef_ul");
+    CHECK(strstr(furi_string_get_cstr(out), "https://example.org") != NULL, "ndef: URI https://example.org shown");
+    if(r < 0 || !strstr(furi_string_get_cstr(out), "example.org")) printf("     parser %s:\n%s\n", name, furi_string_get_cstr(out));
+    furi_string_free(out);
+    nfc_device_free(dev);
+    nfc_free(nfc);
+}
+
+/* ID lists (#412, D.3): the user's own file, written here; missing file. */
+static void test_id_lists(void) {
+    char dir[] = "/tmp/nfclistXXXXXX";
+    CHECK(mkdtemp(dir) != NULL, "lists: temp home");
+    char path[200];
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    mkdir(path, 0755);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    mkdir(path, 0755);
+    char home[64];
+    snprintf(home, sizeof home, "%s/", dir);
+    nfcshim_ext_dir = home;
+
+    /* A figure: sector 0 key A is the Skylanders key, ID 0x0123 in block 1. */
+    MfClassicData* d = mf_classic_alloc();
+    static const uint8_t uid[4] = {0x21, 0x43, 0x65, 0x87};
+    d->type = MfClassicType1k;
+    mf_classic_set_uid(d, uid, 4);
+    MfClassicBlock b = {0};
+    b.data[0] = 0x23;
+    b.data[1] = 0x01;
+    mf_classic_set_block_read(d, 1, &b);
+    MfClassicSectorTrailer* st = mf_classic_get_sector_trailer_by_sector(d, 0);
+    bit_lib_num_to_bytes_be(0x4b0b20107ccbULL, 6, st->key_a.data);
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolMfClassic, d);
+    mf_classic_free(d);
+    FuriString* out = furi_string_alloc();
+
+    int r = nfc_supported_cards_parse(dev, out);
+    CHECK(r < 0, "lists: no skylanders.nfc -> the figure is not named");
+    furi_string_reset(out);
+    int n = nfc_supported_cards_list_notes(dev, r, out);
+    CHECK(n >= 1 && strstr(furi_string_get_cstr(out), "skylanders.nfc), showing the raw card"),
+          "lists: 'No ID list found (...skylanders.nfc), showing the raw card'");
+    CHECK(strstr(furi_string_get_cstr(out), dir) != NULL, "lists: the note names the user's path");
+
+    snprintf(path, sizeof path, "%s/nfc/assets/skylanders.nfc", dir);
+    FILE* f = fopen(path, "w");
+    fputs("Filetype: Flipper NFC resources\nVersion: 1\n# test list\n0122: Not This One\n0123: Test Figure\n", f);
+    fclose(f);
+    furi_string_reset(out);
+    r = nfc_supported_cards_parse(dev, out);
+    CHECK(r >= 0 && !strcmp(nfc_supported_cards_name((size_t)r), "skylanders") &&
+              strstr(furi_string_get_cstr(out), "Test Figure"),
+          "lists: with the user's skylanders.nfc the figure is named");
+    furi_string_reset(out);
+    CHECK(nfc_supported_cards_list_notes(dev, r, out) == 0, "lists: no note when the list is there");
+
+    /* The reader itself: from the current position on, rewind, header. */
+    FlipperFormat* ff = flipper_format_file_alloc(NULL);
+    FuriString* v = furi_string_alloc();
+    uint32_t ver = 0;
+    CHECK(flipper_format_file_open_existing(ff, "/ext/nfc/assets/skylanders.nfc"), "ff: /ext maps to the home");
+    CHECK(flipper_format_read_header(ff, v, &ver) && ver == 1 &&
+              !strcmp(furi_string_get_cstr(v), "Flipper NFC resources"),
+          "ff: header");
+    CHECK(flipper_format_read_string(ff, "0123", v) && !strcmp(furi_string_get_cstr(v), "Test Figure"), "ff: read_string");
+    CHECK(!flipper_format_read_string(ff, "0122", v), "ff: no wrap without rewind (as stock)");
+    CHECK(flipper_format_rewind(ff) && flipper_format_read_string(ff, "0122", v), "ff: rewind");
+    CHECK(!flipper_format_file_open_existing(ff, "/ext/nfc/assets/none.nfc"), "ff: missing file fails");
+    furi_string_free(v);
+    flipper_format_free(ff);
+
+    remove(path);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    rmdir(path);
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    rmdir(path);
+    rmdir(dir);
+    nfcshim_ext_dir = "/home/flipper/";
+    furi_string_free(out);
+    nfc_device_free(dev);
+}
+
+/* EMV: the software card (synthetic data) read by the vendored poller and
+ * shown by the emv parser; country and currency names come from the
+ * user's own country_code.nfc / currency_code.nfc (written here). */
+static NfcCommand emv_stop_cb(NfcGenericEvent event, void* context) {
+    (void)event;
+    (void)context;
+    return NfcCommandStop;
+}
+
+static void test_emv_parse(void) {
+    static cm_4a_t k;
+    static cm_emv_t app;
+    nfc_xfer_t x = {0};
+    memset(&k, 0, sizeof k);
+    k.a = (cm_3a_t){{0x08, 0x12, 0x34, 0x56}, 4, {0x04, 0x00}, 0x20, 0, 0};
+    static const uint8_t ats[] = {0x05, 0x78, 0x80, 0x70, 0x02};
+    memcpy(k.ats, ats, sizeof ats);
+    k.dep.app = cm_emv_app;
+    k.dep.app_ctx = &app;
+    x.transceive = cm_4a_xfer;
+    x.ctx = &k;
+    Nfc* nfc = nfc_alloc_xfer(&x);
+    NfcPoller* poller = nfc_poller_alloc(nfc, NfcProtocolEmv);
+    nfc_poller_start(poller, emv_stop_cb, NULL);
+    nfc_poller_stop(poller);
+    NfcDevice* dev = nfc_device_alloc();
+    nfc_device_set_data(dev, NfcProtocolEmv, nfc_poller_get_data(poller));
+    nfc_poller_free(poller);
+    nfc_free(nfc);
+
+    char dir[] = "/tmp/nfcemvXXXXXX", path[200], home[64];
+    CHECK(mkdtemp(dir) != NULL, "emv: temp home");
+    snprintf(home, sizeof home, "%s/", dir);
+    nfcshim_ext_dir = home;
+    FuriString* out = furi_string_alloc();
+    int r = nfc_supported_cards_parse(dev, out);
+    CHECK(r >= 0 && !strcmp(nfc_supported_cards_name((size_t)r), "emv"), "emv: parsed by the emv parser");
+    CHECK(strstr(furi_string_get_cstr(out), "4000 0000 0000 0002") != NULL ||
+              strstr(furi_string_get_cstr(out), "4000000000000002") != NULL,
+          "emv: the (synthetic) number is shown");
+    CHECK(strstr(furi_string_get_cstr(out), "Country:") == NULL, "emv: no country_code.nfc, no country line");
+
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    mkdir(path, 0755);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    mkdir(path, 0755);
+    snprintf(path, sizeof path, "%s/nfc/assets/currency_code.nfc", dir);
+    FILE* f = fopen(path, "w");
+    fputs("Filetype: Flipper EMV resources\nVersion: 1\n0978: TST\n", f);
+    fclose(f);
+    char path2[200];
+    snprintf(path2, sizeof path2, "%s/nfc/assets/country_code.nfc", dir);
+    f = fopen(path2, "w");
+    fputs("Filetype: Flipper EMV resources\nVersion: 1\n# test\n0250: Testland\n", f);
+    fclose(f);
+    furi_string_reset(out);
+    r = nfc_supported_cards_parse(dev, out);
+    CHECK(r >= 0 && strstr(furi_string_get_cstr(out), "Country: Testland") &&
+              strstr(furi_string_get_cstr(out), "Currency: TST"),
+          "emv: country and currency names from the user's files");
+    if(r < 0 || !strstr(furi_string_get_cstr(out), "Testland")) printf("%s\n", furi_string_get_cstr(out));
+    remove(path);
+    remove(path2);
+    snprintf(path, sizeof path, "%s/nfc/assets", dir);
+    rmdir(path);
+    snprintf(path, sizeof path, "%s/nfc", dir);
+    rmdir(path);
+    rmdir(dir);
+    nfcshim_ext_dir = "/home/flipper/";
+    furi_string_free(out);
+    nfc_device_free(dev);
+}
+
+/* ST25TB (mykey): blank and random 4K dumps. */
+static void test_st25tb_sweep(void) {
+    size_t n = nfc_supported_cards_count();
+    FuriString* out = furi_string_alloc();
+    unsigned parsers = 0, claimed = 0, runs = 0;
+    for(size_t i = 0; i < n; i++) {
+        const NfcSupportedCardsPlugin* p = nfc_supported_cards_plugin(i);
+        if(p->protocol != NfcProtocolSt25tb || !p->parse) continue;
+        parsers++;
+        for(int r = 0; r <= 40; r++) {
+            St25tbData* d = st25tb_alloc();
+            d->type = St25tbType04k;
+            d->uid[0] = 0xD0;
+            d->uid[1] = 0x02;
+            d->uid[2] = 7 << 2;
+            for(int b = 0; b < 128; b++) d->blocks[b] = r ? sweep_rand() : 0;
+            d->system_otp_block = r ? sweep_rand() : 0xFFFFFFFFu;
+            NfcDevice* dev = nfc_device_alloc();
+            nfc_device_set_data(dev, NfcProtocolSt25tb, d);
+            st25tb_free(d);
+            furi_string_reset(out);
+            bool ok = p->parse(dev, out);
+            if(!r && ok) {
+                printf("     %s claims a blank ST25TB\n", nfc_supported_cards_name(i));
+                claimed++;
+            }
+            runs++;
+            nfc_device_free(dev);
+        }
+    }
+    CHECK(parsers >= 1 && runs > 0, "st25tb sweep: mykey linked, random dumps without a crash");
+    CHECK(claimed == 0, "st25tb sweep: no parser claims a blank card");
+    furi_string_free(out);
+}
+
 int main(void) {
     printf("libnfc mf_classic sync + supported_cards tests (#404)\n");
     test_datetime();
@@ -400,6 +705,11 @@ int main(void) {
     test_microel();
     test_no_card();
     test_sweep();
+    test_p5_sweep();
+    test_ndef_ul();
+    test_id_lists();
+    test_emv_parse();
+    test_st25tb_sweep();
     if(fails) {
         printf("%d FAILED\n", fails);
         return 1;

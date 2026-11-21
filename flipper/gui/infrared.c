@@ -710,8 +710,17 @@ int main(int argc, char **argv)
 	dec = infrared_alloc_decoder();
 	enc = infrared_alloc_encoder();
 	if (argc > 2 && !strcmp(argv[1], "-t")) return selftest(argv[2], keep);
+	if (argc > 1 && argv[1][0] == '/') {	/* Archive's Open (#413) */
+		const char *b = strrchr(argv[1], '/') + 1;
+
+		if (gui_open() < 0) return 1;
+		remote(argv[1], b);
+		gui_led(0, 0, 0);
+		if (irfd >= 0) close(irfd);
+		return 0;
+	}
 	if (argc > 1 && !loopback) {
-		fprintf(stderr, "Usage: infrared [-L | -t FILE | -c [FILE]]\n");
+		fprintf(stderr, "Usage: infrared [-L | -t FILE | -c [FILE] | FILE]\n");
 		return 2;
 	}
 	if (gui_open() < 0) return 1;

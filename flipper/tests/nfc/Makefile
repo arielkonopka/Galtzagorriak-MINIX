@@ -22,7 +22,7 @@ B	:= build
 # nfctest: the part-1 hand-written libnfc.
 NFC_SRC	:= $(L)/crypto1.c $(L)/mf_classic.c $(L)/mf_dict.c $(L)/mf_attack.c \
 	   $(L)/nfc_file.c $(L)/iso14443_3a.c $(L)/mf_ultralight.c \
-	   $(L)/nfc_poller.c
+	   $(L)/nfc_poller.c $(L)/nfc_sha1.c
 NFC_HDR	:= $(wildcard $(L)/*.h)
 
 # mfkeytest: the vendored recovery engine, the libnfc host driver, and the
@@ -44,7 +44,7 @@ MFKEY_SRC := $(V)/mfkey/crypto1.c $(V)/mfkey/mfkey_attack.c \
 	     $(L)/mfkey_host.c
 MFKEY_HDR := $(L)/mfkey_host.h $(wildcard $(L)/mfkey_shim/*.h)
 
-test: $(B)/nfctest $(B)/mfkeytest prototest cardtest
+test: $(B)/nfctest $(B)/mfkeytest prototest cardtest p5test
 	cd . && ./$(B)/nfctest
 	cd . && ./$(B)/mfkeytest
 

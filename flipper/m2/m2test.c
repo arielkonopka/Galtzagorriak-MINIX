@@ -25,6 +25,7 @@
 #include "libhid.h"
 #include "ibkey.h"
 #include <minix/partition.h>
+#include <a.out.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -479,6 +480,151 @@ static void infrared_tests(void)
 		"infrared: nobody (in group ir) opens /dev/ir; stock signals "
 		"encode, loop back, decode (libir)");
 	unlink("/tmp/m2ir.ir");
+}
+
+/* Issue #413: the Sub-GHz, iButton and GPIO window apps (spec K.8), driven
+ * through their event pipe as the desktop would: Add manually writes stock
+ * .sub and .ibtn files, a file argument opens its window (Archive's Open),
+ * GPIO lists the eight pins.  The records the app sent (the first 1 KB)
+ * into out.  No subghz or ikey run: the radio and the contacts are the
+ * device checks, and every extra program is a text-cache copy (T2). */
+static int win_run(const char *prog, const char *arg, const char *ev,
+	char *out, int size)
+{
+	int e[2], r[2], n, got = 0, st;
+	pid_t pid;
+
+	if (pipe(e) < 0) return -1;
+	if (pipe(r) < 0) { close(e[0]); close(e[1]); return -1; }
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int x = fcntl(e[0], F_DUPFD, 10), y = fcntl(r[1], F_DUPFD, 10);
+
+		close(e[0]);		/* the pipes may be on 3 and 4 */
+		close(e[1]);
+		close(r[0]);
+		close(r[1]);
+		dup2(x, 3);
+		dup2(y, 4);
+		close(x);
+		close(y);
+		execl(prog, prog, arg, (char *) NULL);
+		_exit(99);
+	}
+	close(e[0]);
+	close(r[1]);
+	if (pid > 0) (void) write(e[1], ev, strlen(ev));
+	close(e[1]);			/* then the desktop is gone: close */
+	while (pid > 0 && (n = read(r[0], out + got, size - 1 - got)) > 0) {
+		got += n;
+		if (got >= size - 1) {		/* keep the last half */
+			memmove(out, out + size / 2, got - size / 2);
+			got -= size / 2;
+		}
+	}
+	out[got] = 0;
+	close(r[0]);
+	if (pid < 0 || waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int file_has(const char *path, const char *want)
+{
+	char b[400];
+	int fd = open(path, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, b, sizeof b - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	b[n] = 0;
+	return strstr(b, want) != NULL;
+}
+
+static void stockapp_tests(void)
+{
+	static char out[1024];
+	const char *sub = "/home/flipper/subghz/M2sg.sub";
+	const char *ib = "/home/flipper/ibutton/M2ib.ibtn";
+
+	mkdir("/home", 0755);
+	mkdir("/home/flipper", 0755);
+	unlink(sub);
+	unlink(ib);
+	check(win_run("/bin/subghzui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
+		"ok\tadd\tsave\n", out, sizeof out) == 0
+		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
+			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
+		"subghzui: Add manually: a stock .sub");
+	check(win_run("/bin/ibuttonui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
+		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
+		"ok\tmain\tsaved\nok\tlist\tf0000\n", out, sizeof out) == 0
+		&& file_has(ib, "DS1990\nRom Data: 01 A2 B3 C4 D5 E6 F7 A8")
+		&& strstr(out, "item\tty\tDallas\t01A2B3C4D5E6F7A8") != NULL,
+		"ibuttonui: Add manually, Saved: a stock .ibtn");
+	check(win_run("/bin/gpioui", (char *) NULL, "", out,
+		sizeof out) == 0 && strstr(out, "enum\tp7\tPC0 (16) =") != NULL
+		&& strstr(out, "item\tv5\t5V on GPIO") != NULL,
+		"gpioui: the header pins");
+	unlink(sub);
+	unlink(ib);
+}
+
+/* Phase 14 (issue #412 item 4): the nfc app.  Group nfc (14), the app
+ * set-gid nfc, opens /dev/nfc only for a member (AC7.3's rule; there is
+ * no /dev/nfc in QEMU, the driver is lane:local): daemon (uid 1) is told
+ * "not in group nfc".  nfc -t DICT, as nobody: the loopback cards read
+ * (Classic 1K with the dictionary's key, NTAG215), saved, read back, Add
+ * manually.  AC14.3: the whole image (data + bss + CHMEM, a_total) is at
+ * most 35 KB.  Two runs, as infrared (flash text cache, M2 budget). */
+static int nfc_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/nfc", "nfc", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void nfc_tests(void)
+{
+	static const char dict[] = "# m2test\nA0A1A2A3A4A5\nFFFFFFFFFFFF\n";
+	struct exec hd;
+	struct stat sb;
+	int fd, n = -1;
+
+	check(stat("/bin/nfc", &sb) == 0 && sb.st_gid == 14
+		&& (sb.st_mode & S_ISGID) != 0,
+		"nfc: the app is setgid nfc (14)");
+	if ((fd = open("/bin/nfc", O_RDONLY)) >= 0) {
+		n = read(fd, &hd, sizeof hd);
+		close(fd);
+	}
+	printf("nfc: image %ld B (data %ld, bss %ld)\n",
+		n == (int) sizeof hd ? hd.a_total : -1L,
+		n == (int) sizeof hd ? hd.a_data : -1L,
+		n == (int) sizeof hd ? hd.a_bss : -1L);
+	check(n == (int) sizeof hd && hd.a_total > 0 && hd.a_total <= 35L * 1024,
+		"nfc: the whole image <= 35 KB (AC14.3)");
+	check(nfc_run(1, 1, "-c", NULL) == 1,
+		"nfc: daemon (not in group nfc) is refused /dev/nfc (AC7.3)");
+	fd = creat("/tmp/m2nfc.dic", 0644);
+	if (fd >= 0) { write(fd, dict, sizeof dict - 1); close(fd); }
+	check(fd >= 0 && nfc_run(99, 9999, "-t", "/tmp/m2nfc.dic") == 0,
+		"nfc: loopback cards read, saved, read back (nfc -t, libnfc)");
+	unlink("/tmp/m2nfc.dic");
 }
 
 /* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
@@ -3670,6 +3816,8 @@ int main(int argc, char **argv)
 	hid_tests();
 	subghz_tests();
 	infrared_tests();
+	stockapp_tests();
+	nfc_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();

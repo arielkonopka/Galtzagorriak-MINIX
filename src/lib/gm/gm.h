@@ -67,6 +67,7 @@ void gm_line(const char *text);
 void gm_action(const char *key, const char *label);
 int gm_show(void);
 int gm_busy(int busy);
+int gm_run(const char *label, const char *file);	/* open FILE in LABEL */
 int gm_event(char *buf, int size, char **f, int nf);
 int gm_pending(const char *buf);
 /* Wait at most ms (< 0: no limit) for an event: 1 when gm_event() has one
