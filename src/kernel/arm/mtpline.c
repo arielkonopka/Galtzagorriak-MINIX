@@ -5,8 +5,8 @@
  * tools/mtphost.py, sits on the other end of QEMU's socket.  No tty: no
  * echo, no line editing, no special characters.
  *
- * A read returns what has arrived (at least one byte; it waits for one,
- * or EAGAIN with O_NONBLOCK); one reader at a time.  A write sends all of
+ * A read returns what has arrived (at least one byte, at most 64; it waits
+ * for one, or EAGAIN with O_NONBLOCK); one reader at a time.  A write sends all of
  * it, polled (QEMU's UART takes a byte at once).  Not built for the
  * Flipper, where MTP goes over USB (T29b): RAM there 0 B.
  *
@@ -78,6 +78,12 @@ int count;
   phys_bytes user;
   int n = 0;
 
+  /* #438: at most one ring's worth.  The RX interrupt is on while this
+   * loop runs (the ring was not full) and refills the ring behind it, so
+   * ln_head - ln_tail alone does not bound n: a long read ran past buf
+   * into the saved registers (the caller's r4, PRINTER's &fm) and
+   * flipdev_task took a bus fault.  A short read is the rule here. */
+  if (count > LINE_RING) count = LINE_RING;
   while (ln_tail != ln_head && n < count) {
 	buf[n++] = ln_ring[ln_tail % LINE_RING];
 	ln_tail++;
