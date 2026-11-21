@@ -318,11 +318,13 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid spectrum
+GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
+# archive (issue #389): a window app (K.8), libgm statically, no gui.c.
+WINBASE	:= archive
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
-UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) \
+UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) $(WINBASE) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
 # runs them; furihello is also in the tests package (/usr/tests).
@@ -332,6 +334,10 @@ endif
 # Set-uid root programs, and the password helper of crypt(3) in /lib
 # (on the root file system, so login works before /usr is mounted).
 SUIDPROGS := passwd su guimod
+# Set-gid programs, PROG:GID: infrared opens /dev/ir as group ir (13) when
+# the user is in that group, then goes back to its own (AC7.3, issue #389).
+SGIDPROGS := infrared:13
+sgid_of = $(word 2,$(subst :, ,$(filter $(1):%,$(SGIDPROGS))))
 # guimod (spec K.6, T23a): set-uid root only to write the real uid into a
 # desktop record (a FIFO does not say who wrote it); root's rights end
 # right after it opens /var/run/gui.
@@ -409,6 +415,13 @@ CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
 			# no heap, MM's 1.5 KB gap
 CHMEM_console  := 4096
+CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
+			# decoders and encoders (~0.5 KB), stdio buffers for
+			# the remote file (1 KB), opendir's 1 KB DIR; Learn
+			# and Debug fork a reader child (a copy of the app)
+CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
+			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
+			# (two 128 B paths, the record buffers)
 CHMEM_spectrum := 2048	# issue #157: all stack (no malloc, no stdio, no
 			# handler); the frame buffer and the waterfall are bss
 CHMEM_rfid     := 12288	# R9.0.6 long FSK/PSK emulation: 8 KB aborted (twoflip); rfid -s: its 4 KB capture ring (R9.0.5); emulate: the protocol dictionary (1.5 KB), a 2 KB
@@ -500,6 +513,8 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 		 $(MB)/cmd/gui/desktop.o $(MB)/cmd/gui/launcher_stock.o
 # the Spectrum app's steps, scale and zoom (issue #157; tests/host spectest)
 OBJS_spectrum += $(MB)/cmd/gui/specmath.o
+# the Infrared app (issue #389): libir (src/lib/infrared) and the list UI
+OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
@@ -566,6 +581,10 @@ GM_DIR	:= $(MROOT)/src/lib/gm
 $(MB)/gm/gm.o: $(GM_DIR)/gm.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+$(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
 $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
@@ -603,6 +622,22 @@ $(MB)/cmd/port/rfid.o: cmds/rfid.c $(LFRFID_HDR)
 	@mkdir -p $(dir $@)
 	@$(CC) $(LFRFID_CFLAGS) -MMD -MP -c $< -o $@
 OBJS_rfid = $(MB)/cmd/port/rfid.o $(LFRFID_OBJ)
+# libir (spec Phase 7, issue #389, src/lib/infrared): the Unleashed infrared
+# encoders and decoders (byte for byte) and irfile.c, linked into infrared.
+# Third-party C11 code: built quietly (-w); the shim comes in by -include.
+LIBIR_DIR := $(MROOT)/src/lib/infrared
+LIBIR_C := $(shell cd $(LIBIR_DIR) && find . -name '*.c' | sort)
+LIBIR_OBJ := $(patsubst ./%.c,$(MB)/libir/%.o,$(LIBIR_C))
+LIBIR_HDR := $(shell find $(LIBIR_DIR) -name '*.h')
+LIBIR_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 \
+	    -I$(LIBIR_DIR) -I$(LIBIR_DIR)/shim -I$(LIBIR_DIR)/encoder_decoder \
+	    -include irshim.h
+$(MB)/libir/%.o: $(LIBIR_DIR)/%.c $(LIBIR_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBIR_CFLAGS) -w -c $< -o $@
+$(MB)/cmd/gui/infrared.o: gui/infrared.c gui/gui.h gui/ui.h $(LIBIR_HDR)
+	@mkdir -p $(dir $@)
+	@$(CC) $(LIBIR_CFLAGS) -MMD -MP -c $< -o $@
 # libsubghz (Phase 9, issue #302, src/lib/subghz): the Unleashed Sub-GHz
 # protocols, linked into subghz (code in flash; the decoders' state is
 # malloc'd while it runs).  Third-party C11 code: built quietly (-w).
@@ -704,7 +739,7 @@ $(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
 OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
-$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h
+$(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
@@ -1092,7 +1127,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.64
+BASE_VER := 4.67
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)
@@ -1100,7 +1135,7 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   --postinst rootfs/base.postinst \
 	   --os $(GZ_RELEASE) \
 	   -D "Galtzagorriak MINIX system programs" \
-	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)) \
+	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)$(if $(call sgid_of,$(p)),$(COMMA)2755:$(call sgid_of,$(p)))) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
 	   $(foreach r,$(REGION_FILES),/usr/share/region/$(notdir $(r))=$(r)$(COMMA)644) \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
@@ -1185,7 +1220,7 @@ $(MB)/proto: rootfs/proto minix.mk tools/mkproto.py $(PKGS) $(GZU_RUN) \
 		$(GZU_APPLY)
 	@mkdir -p $(MB)
 	python3 -I tools/mkproto.py $< $@ $(MB)/bin "$(UPROGS)" "$(ALIASES)" \
-	   "$(PKGS)" "$(SUIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
+	   "$(PKGS)" "$(SUIDPROGS) $(SGIDPROGS)" $(if $(GZU_RUN),$(dir $(GZU_RUN)))
 # The QEMU disk is as big as the SD card (sparse), so the first boot can
 # partition it like the real card.
 $(MB)/fs.img $(MB)/disk.img: $(MB)/proto tools/mkfsimg.py \
