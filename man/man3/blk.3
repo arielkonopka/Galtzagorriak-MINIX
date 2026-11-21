@@ -1,0 +1,149 @@
+.TH BLK 3
+.SH NAME
+blk_open, blk_close, blk_info, blk_get, blk_put, blk_putf, blk_read, blk_write, blk_discard \- swappable memory blocks on the SD card
+.SH SYNOPSIS
+.nf
+.ft B
+#include <blk.h>
+
+int blk_open(unsigned long \fIbytes\fP, int \fIflags\fP)
+int blk_close(void)
+int blk_info(struct blkinfo *\fIbi\fP)
+int blk_get(unsigned long \fIid\fP, void *\fIbuf\fP)
+int blk_put(unsigned long \fIid\fP, const void *\fIbuf\fP)
+int blk_putf(unsigned long \fIid\fP, const void *\fIbuf\fP, int \fIflags\fP)
+int blk_read(unsigned long \fIid\fP, unsigned \fIoff\fP, void *\fIbuf\fP, unsigned \fIlen\fP)
+int blk_write(unsigned long \fIid\fP, unsigned \fIoff\fP, const void *\fIbuf\fP, unsigned \fIlen\fP)
+int blk_discard(unsigned long \fIid\fP, unsigned long \fIn\fP)
+.fi
+.ft P
+.SH DESCRIPTION
+A process can keep working data that does not fit in RAM in numbered
+blocks of
+.B BLK_SIZE
+(4096) bytes on the SD card's swap partition.
+The memory manager moves them between the card and buffers in the
+process's own data or stack segment; nothing is mapped.
+Blocks are there only while the system has them on
+.RB ( blk=on
+in
+.BR /etc/rc.conf ,
+or
+.BR "swapon /dev/hd3 [plain] blk" ).
+.PP
+.B blk_open()
+reserves
+.I bytes
+of block space, rounded up to whole extents (see
+.BR blk_info ),
+and returns the number of blocks reserved.
+Blocks 0 to N\-1 then exist and read as zeros until written.
+With
+.B BLK_ANY
+a request larger than the largest free run gets that run instead.
+A second call with a smaller size gives the tail back; a larger one grows
+the run in place if the extents after it are free, otherwise it fails with
+.B ENOSPC
+and the old run stays.
+A process that is not root holds at most half of the block space.
+.PP
+The reservation ends with
+.BR blk_close() ,
+.B exec
+or exit; nothing is written then, and no other process can ever read the
+old blocks: they read as zeros.
+A forked child starts without a reservation.
+.PP
+.B blk_info()
+fills
+.B struct blkinfo
+with the caller's reservation
+.RB ( blocks ),
+the largest free run
+.RB ( largest ),
+the whole block space
+.RB ( space )
+and the blocks per extent
+.RB ( extent ),
+all in blocks.
+.PP
+.B blk_get()
+reads block
+.I id
+into the 4096 bytes at
+.IR buf ;
+.B blk_put()
+writes them.
+.B blk_putf()
+with
+.B BLK_IFCHANGED
+writes nothing if the data on the card is already the same (sector CRCs),
+which saves card wear for an app that writes back whole blocks it may not
+have changed.
+.B blk_read()
+and
+.B blk_write()
+move a part of a block:
+.I off
+and
+.I len
+are multiples of
+.B BLK_SECT
+(512) and
+.IR off + len
+is at most 4096.
+.PP
+.B blk_discard()
+says that blocks
+.I id
+to
+.IR id + n \- 1
+are not needed any more.
+Their contents are undefined from then on (zeros, or the old data).
+The card is told at idle (SD DISCARD) if it can take it; otherwise
+nothing happens.
+.PP
+A request from a process in the background waits until the system is
+idle; one from the foreground app is served at once.
+.SH "RETURN VALUE"
+0 (or the number of blocks for
+.BR blk_open ),
+or \-1 with
+.I errno
+set.
+.SH ERRORS
+.TP 10
+.B ENOSYS
+Blocks are off.
+.TP
+.B EBADF
+No reservation.
+.TP
+.B ERANGE
+A block or sector range outside the reservation.
+.TP
+.B ENOSPC
+No free run large enough, or more than half of the space (not root).
+.TP
+.B EIO
+A sector failed its CRC or could not be read; the other sectors are not
+affected.
+.TP
+.B ENXIO
+The card is out; try again later.
+The process is not killed.
+.TP
+.B EPERM
+A set-uid or set-gid program, or a
+.B "Secret: yes"
+package, while swap is plain (unencrypted).
+.TP
+.B EINVAL
+A bad buffer, offset or length.
+.SH "SEE ALSO"
+.BR libblk (3),
+.BR swapon (8).
+.SH NOTES
+The data is on the card unencrypted in plain mode; each sector carries a
+CRC-32, so damage is found, not hidden.
+The design is in the spec, section 12h (R12.34 to R12.40).

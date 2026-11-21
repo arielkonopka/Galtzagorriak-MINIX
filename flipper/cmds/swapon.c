@@ -1,7 +1,10 @@
 /*	swapon - swap to the SD card			(Flipper port)
  *
  *	swapon				show the swap state
- *	swapon device [plain|crypt]	swap to that partition (root)
+ *	swapon device [plain|crypt] [blk]
+ *					swap to that partition (root); blk:
+ *					swappable blocks for apps too (12h)
+ *	swapon device blk		blocks only, no swap (12h, R12.38)
  *	swapon off			no more swap (root; nothing swapped)
  *	swapon -r kb			the idle reserve (root; 0: none)
  *	swapon -o pid			test: swap pid out now (root)
@@ -37,7 +40,8 @@ static int mm(int req, int i1, int i3, void *p)
 static void usage(void)
 {
 	fprintf(stderr, "Usage: swapon [device [plain|crypt] | off | -r kb"
-				" | -o pid | -X]\n");
+				" | -o pid | -X]\n"
+		"       swapon device [plain|crypt] blk\n");
 	exit(1);
 }
 
@@ -66,7 +70,7 @@ static int show(void)
 int main(int argc, char **argv)
 {
 	struct stat sb;
-	int mode = SW_PLAIN;
+	int mode = SW_PLAIN, blk = 0;
 
 	if (argc == 1) return show();
 	if (strcmp(argv[1], "-r") == 0) {
@@ -99,6 +103,10 @@ int main(int argc, char **argv)
 		}
 		return 0;
 	}
+	if (argc > 2 && strcmp(argv[argc - 1], "blk") == 0) {
+		blk = SW_BLK;		/* R12.38: blocks on */
+		if (--argc == 2) mode = SW_OFF;	/* blocks only */
+	}
 	if (argc > 3) usage();
 	if (argc == 3) {
 		if (strcmp(argv[2], "plain") == 0) mode = SW_PLAIN;
@@ -109,10 +117,13 @@ int main(int argc, char **argv)
 		fprintf(stderr, "swapon: %s: not a block device\n", argv[1]);
 		return 1;
 	}
-	if (mm(MI_SWAPON, (int) sb.st_rdev, mode, NULL) < 0) {
+	if (mm(MI_SWAPON, (int) sb.st_rdev, mode | blk, NULL) < 0) {
 		if (errno == ENOSYS)
 			fprintf(stderr, "swapon: crypt needs swap encryption, "
 				"which is not there yet: swap stays off\n");
+		else if (errno == EBUSY)
+			fprintf(stderr, "swapon: busy: processes are swapped "
+				"or hold blocks\n");
 		else if (errno == EINVAL)
 			fprintf(stderr, "swapon: %s: not an SD card partition "
 				"of type 82\n", argv[1]);

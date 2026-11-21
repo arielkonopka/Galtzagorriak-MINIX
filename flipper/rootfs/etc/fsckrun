@@ -29,4 +29,5 @@ echo off >/dev/led
 sync
 echo "The card was checked: restarting"
 reboot
-exit 0
+# Still here: the restart did not happen.  The request file is already gone,
+# so no loop; go on with the normal start (rc mounts and checks as usual).

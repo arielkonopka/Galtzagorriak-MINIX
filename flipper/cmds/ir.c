@@ -4,7 +4,8 @@
  *					one), decoded; -r: also the raw
  *					timings; -d: another device with
  *					the same timings (/dev/subghzraw)
- *		ir tx PROTO ADDR CMD	send one message
+ *		ir tx PROTO ADDR CMD	send one message (ADDR, CMD in hex,
+ *					as the stock firmware's ir tx)
  *		ir tx raw [-f HZ] US ...  send marks and spaces, microseconds,
  *					mark first; carrier HZ (38000)
  *		ir list FILE		the signals in a remote file
@@ -823,8 +824,9 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "tx") == 0 && argc == 5) {
 		if ((p = protocol(argv[2])) < 0) usage();
-		return send_msg(p, strtoul(argv[3], NULL, 0),
-				   strtoul(argv[4], NULL, 0));
+		/* hex, as the stock firmware's "ir tx NEC 04 08" (0x allowed) */
+		return send_msg(p, strtoul(argv[3], NULL, 16),
+				   strtoul(argv[4], NULL, 16));
 	}
 	if (strcmp(argv[1], "list") == 0 && argc == 3)
 		return each(argv[2], list1, NULL);

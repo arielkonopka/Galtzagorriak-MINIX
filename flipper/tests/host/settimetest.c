@@ -16,14 +16,16 @@
 #include "../../../src/commands/settings/afmt.h"
 #include "../../../src/commands/settings/sgroup.h"
 
-/* Time and About for groups.c: only their rows matter here. */
+/* Time, Region and About for groups.c: only their rows matter here. */
 const struct srow time_rows[] = {
 	{ "Date", S_DATE, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Time", S_TIME, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Zone", S_ITEM, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Clock", S_ENUM, 0, 0, 1, 1, "", "24 h|12 h" },
+	{ "Date fmt", S_ENUM, 0, 0, 2, 1, "", "D.M.Y|M/D/Y|Y-M-D" },
 };
-const struct srow about_rows[8];
+const struct srow about_rows[8], region_rows[3];
+int region_fn(int op, int row, void *buf) { (void) op; (void) row; (void) buf; return 0; }
 int time_fn(int op, int row, void *buf) { (void) op; (void) row; (void) buf; return 0; }
 int about_fn(int op, int row, void *buf) { (void) op; (void) row; (void) buf; return 0; }
 
@@ -262,7 +264,50 @@ int main(void)
 		sg_val[0] = -1;
 		conf_parse(sg_find("sound"), f);
 		check(sg_val[0] == -1, "conf: malformed numbers ignored");
-		check(sg_find("about") == 3 && sg_find("led") < 0, "groups by name");
+		check(sg_find("about") == 6 && sg_find("led") == 2
+			&& sg_find("power") == 4 && sg_find("vibro") < 0,
+			"groups by name");
+
+		/* #419: the new keys.  Defaults (no file: SG_LOAD), read,
+		 * write; a missing or empty file keeps the defaults. */
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		(void) sg_call(sg_find("sound"), SG_LOAD, -1, NULL);
+		check(sg_val[0] == 100 && sg_val[1] == 0,
+			"sound: defaults volume 100, Vibro on");
+		strcpy(f, "Volume: 40\nVibro: off\n");
+		conf_parse(sg_find("sound"), f);
+		check(sg_val[0] == 40 && sg_val[1] == 1, "sound: Vibro off read");
+		check(conf_format(sg_find("sound"), f, sizeof f) > 0
+			&& strcmp(f, "Volume: 40\nVibro: off\n") == 0,
+			"sound: written without Test beep");
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		strcpy(f, "");
+		conf_parse(sg_find("led"), f);
+		(void) sg_call(sg_find("led"), SG_LOAD, -1, NULL);
+		check(sg_val[0] == 100 && sg_val[1] == 0,
+			"led: empty file, defaults 100 %, Notify LED on");
+		strcpy(f, "Brightness: 30\nNotify LED: off\nBrightness: 5\n");
+		conf_parse(sg_find("led"), f);
+		check(sg_val[0] == 30 && sg_val[1] == 1
+			&& conf_format(sg_find("led"), f, sizeof f) > 0
+			&& strcmp(f, "Brightness: 30\nNotify LED: off\n") == 0,
+			"led: read and write, 5 % below the minimum ignored");
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		(void) sg_call(sg_find("power"), SG_LOAD, -1, NULL);
+		check(sg_val[0] == 0 && sg_val[1] == 0, "power: defaults never");
+		strcpy(f, "Auto off: 1 h\nAuto lock: 5 min\nAuto off: 3 h\n");
+		conf_parse(sg_find("power"), f);
+		check(sg_val[0] == 3 && sg_val[1] == 2
+			&& conf_format(sg_find("power"), f, sizeof f) > 0
+			&& strcmp(f, "Auto off: 1 h\nAuto lock: 5 min\n") == 0,
+			"power: read and write, an unknown option ignored");
+		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
+		strcpy(f, "Clock: 24 h\nDate fmt: Y-M-D\n");
+		conf_parse(sg_find("time"), f);
+		check(sg_val[3] == 0 && sg_val[4] == 2, "time: Date fmt read");
+		check(sg_rows(sg_find("region"), &i) == region_rows && i == 3
+			&& conf_format(sg_find("region"), f, sizeof f) == 0,
+			"region: read-only, nothing written");
 		{
 			int len;
 			const char *o = sg_opt("a|bb|c", 1, &len);

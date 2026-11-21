@@ -439,6 +439,7 @@ PUBLIC int do_meminfo()
   if (mm_in.m1_i2 == MI_RESET) return(sys_kstacks(who, (char *) 0, 0));
   if (mm_in.m1_i2 >= MI_SWAPON && mm_in.m1_i2 <= MI_FGEXEC)
 	return(sw_ctl());			/* swap.c (Phase 12) */
+  if (mm_in.m1_i2 == MI_BLK) return(blk_req());	/* blk.c (12h) */
   /* m1_i2 = MI_TRACE: switch the memory use trace on or off (root). */
   if (mm_in.m1_i2 == MI_TRACE) {
 	if (mp->mp_effuid != SUPER_USER) return(EPERM);

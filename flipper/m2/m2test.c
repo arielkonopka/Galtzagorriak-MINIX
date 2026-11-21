@@ -25,6 +25,8 @@
 #include "libhid.h"
 #include "ibkey.h"
 #include <minix/partition.h>
+#include <blk.h>
+#include <a.out.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -426,6 +428,209 @@ static void phase3_tests(void)
 		"may its own (AC3.5)");
 }
 
+/* Phase 7 (issue #389): the infrared app.  /dev/ir is group "ir" (13),
+ * infrared is setgid "ir"; a user outside the group cannot open /dev/ir
+ * through it (AC7.3: daemon, uid 1), one in it can (nobody, listed in
+ * /etc/group).  infrared -c FILE: then stock signals through encode ->
+ * /dev/ir frame -> decode over the app's loopback (QEMU has no IR
+ * hardware).  Two runs only: a third would copy the app into the flash
+ * text cache (T2) and break the M2 erase budget. */
+static int ir_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/infrared", "infrared", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void infrared_tests(void)
+{
+	static const char sig[] =
+		"Filetype: IR signals file\nVersion: 1\n"
+		"#\nname: Piztu\ntype: parsed\nprotocol: NECext\n"
+		"address: EE 87 00 00\ncommand: 5D A0 00 00\n"
+		"#\nname: Bolumena_gora\ntype: raw\nfrequency: 38000\n"
+		"duty_cycle: 0.330000\ndata: 504 3432 502 483 500 484 510\n"
+		"#\nname: Itzali\ntype: parsed\nprotocol: SIRC\n"
+		"address: 01 00 00 00\ncommand: 15 00 00 00\n"
+		"#\nname: Kanala\ntype: parsed\nprotocol: RC6\n"
+		"address: 00 00 00 00\ncommand: 0C 00 00 00\n";
+	struct stat sb, sd;
+	int fd;
+
+	check(stat("/dev/ir", &sd) == 0 && sd.st_gid == 13
+		&& (sd.st_mode & 0777) == 0660
+		&& stat("/bin/infrared", &sb) == 0 && sb.st_gid == 13
+		&& (sb.st_mode & S_ISGID) != 0,
+		"infrared: /dev/ir is group ir, the app setgid ir (AC7.3)");
+	check(ir_run(1, 1, "-c", NULL) == 1,
+		"infrared: daemon (not in group ir) cannot open /dev/ir (AC7.3)");
+	fd = creat("/tmp/m2ir.ir", 0644);
+	if (fd >= 0) { write(fd, sig, sizeof sig - 1); close(fd); }
+	check(fd >= 0 && ir_run(99, 9999, "-c", "/tmp/m2ir.ir") == 0,
+		"infrared: nobody (in group ir) opens /dev/ir; stock signals "
+		"encode, loop back, decode (libir)");
+	unlink("/tmp/m2ir.ir");
+}
+
+/* Issue #413: the Sub-GHz, iButton and GPIO window apps (spec K.8), driven
+ * through their event pipe as the desktop would: Add manually writes stock
+ * .sub and .ibtn files, a file argument opens its window (Archive's Open),
+ * GPIO lists the eight pins.  The records the app sent (the first 1 KB)
+ * into out.  No subghz or ikey run: the radio and the contacts are the
+ * device checks, and every extra program is a text-cache copy (T2). */
+static int win_run(const char *prog, const char *arg, const char *ev,
+	char *out, int size)
+{
+	int e[2], r[2], n, got = 0, st;
+	pid_t pid;
+
+	if (pipe(e) < 0) return -1;
+	if (pipe(r) < 0) { close(e[0]); close(e[1]); return -1; }
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int x = fcntl(e[0], F_DUPFD, 10), y = fcntl(r[1], F_DUPFD, 10);
+
+		close(e[0]);		/* the pipes may be on 3 and 4 */
+		close(e[1]);
+		close(r[0]);
+		close(r[1]);
+		dup2(x, 3);
+		dup2(y, 4);
+		close(x);
+		close(y);
+		execl(prog, prog, arg, (char *) NULL);
+		_exit(99);
+	}
+	close(e[0]);
+	close(r[1]);
+	if (pid > 0) (void) write(e[1], ev, strlen(ev));
+	close(e[1]);			/* then the desktop is gone: close */
+	while (pid > 0 && (n = read(r[0], out + got, size - 1 - got)) > 0) {
+		got += n;
+		if (got >= size - 1) {		/* keep the last half */
+			memmove(out, out + size / 2, got - size / 2);
+			got -= size / 2;
+		}
+	}
+	out[got] = 0;
+	close(r[0]);
+	if (pid < 0 || waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int file_has(const char *path, const char *want)
+{
+	char b[400];
+	int fd = open(path, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, b, sizeof b - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	b[n] = 0;
+	return strstr(b, want) != NULL;
+}
+
+static void stockapp_tests(void)
+{
+	static char out[1024];
+	const char *sub = "/home/flipper/subghz/M2sg.sub";
+	const char *ib = "/home/flipper/ibutton/M2ib.ibtn";
+
+	mkdir("/home", 0755);
+	mkdir("/home/flipper", 0755);
+	unlink(sub);
+	unlink(ib);
+	check(win_run("/bin/subghzui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
+		"ok\tadd\tsave\nok\tmain\traw\nback\traw\nok\tmain\tfa\n",
+		out, sizeof out) == 0
+		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& strstr(out, "enum\tth\tRSSI threshold\t0") != NULL
+		&& strstr(out, "run\tSpectrum\t/dev/subghz") != NULL
+		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
+			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
+		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
+	check(win_run("/bin/ibuttonui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
+		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
+		"ok\tmain\tsaved\nok\tlist\tf0000\n", out, sizeof out) == 0
+		&& file_has(ib, "DS1990\nRom Data: 01 A2 B3 C4 D5 E6 F7 A8")
+		&& strstr(out, "item\tty\tDallas\t01A2B3C4D5E6F7A8") != NULL,
+		"ibuttonui: Add manually, Saved: a stock .ibtn");
+	check(win_run("/bin/gpioui", (char *) NULL, "", out,
+		sizeof out) == 0 && strstr(out, "enum\tp7\tPC0 (16) =") != NULL
+		&& strstr(out, "item\tv5\t5V on GPIO") != NULL,
+		"gpioui: the header pins");
+	unlink(sub);
+	unlink(ib);
+}
+
+/* Phase 14 (issue #412 item 4): the nfc app.  Group nfc (14), the app
+ * set-gid nfc, opens /dev/nfc only for a member (AC7.3's rule; there is
+ * no /dev/nfc in QEMU, the driver is lane:local): daemon (uid 1) is told
+ * "not in group nfc".  nfc -t DICT, as nobody: the loopback cards read
+ * (Classic 1K with the dictionary's key, NTAG215), saved, read back, Add
+ * manually.  AC14.3: the whole image (data + bss + CHMEM, a_total) is at
+ * most 35 KB.  Two runs, as infrared (flash text cache, M2 budget). */
+static int nfc_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/nfc", "nfc", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void nfc_tests(void)
+{
+	static const char dict[] = "# m2test\nA0A1A2A3A4A5\nFFFFFFFFFFFF\n";
+	struct exec hd;
+	struct stat sb;
+	int fd, n = -1;
+
+	check(stat("/bin/nfc", &sb) == 0 && sb.st_gid == 14
+		&& (sb.st_mode & S_ISGID) != 0,
+		"nfc: the app is setgid nfc (14)");
+	if ((fd = open("/bin/nfc", O_RDONLY)) >= 0) {
+		n = read(fd, &hd, sizeof hd);
+		close(fd);
+	}
+	printf("nfc: image %ld B (data %ld, bss %ld)\n",
+		n == (int) sizeof hd ? hd.a_total : -1L,
+		n == (int) sizeof hd ? hd.a_data : -1L,
+		n == (int) sizeof hd ? hd.a_bss : -1L);
+	check(n == (int) sizeof hd && hd.a_total > 0 && hd.a_total <= 35L * 1024,
+		"nfc: the whole image <= 35 KB (AC14.3)");
+	check(nfc_run(1, 1, "-c", NULL) == 1,
+		"nfc: daemon (not in group nfc) is refused /dev/nfc (AC7.3)");
+	fd = creat("/tmp/m2nfc.dic", 0644);
+	if (fd >= 0) { write(fd, dict, sizeof dict - 1); close(fd); }
+	check(fd >= 0 && nfc_run(99, 9999, "-t", "/tmp/m2nfc.dic") == 0,
+		"nfc: loopback cards read, saved, read back (nfc -t, libnfc)");
+	unlink("/tmp/m2nfc.dic");
+}
+
 /* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
  * program, m2/fptest.c, built for the FPU; m2test itself stays soft-float. */
 static void fpu_tests(void)
@@ -526,6 +731,67 @@ static const struct {
 	"mtpd: the half-sent file is gone, nothing else left",
 	"  mtpd: pid %d, status %#x, alarm %d, errno %d\n",
 };
+
+/* rpcd (spec R15.5, issue #388) on the target: the stock frames through a
+ * pipe, the same bytes as the host test (tests/flipperpb/golden.h, made
+ * by Google protobuf): ping, protobuf_version, storage list of /ext
+ * (here $RPCD_EXT=/tmp/rpcx) and an app_start_request, which gets
+ * ERROR_NOT_IMPLEMENTED and the session goes on. */
+#include "golden.h"
+static void rpcd_test(void)
+{
+	static const unsigned char appstart[] = { 0x05, 0x08, 0x07, 0x82, 0x01, 0x00 };
+	static unsigned char got[128], want[128];
+	static char env[] = "RPCD_EXT=/tmp/rpcx";	/* putenv writes it */
+	int to[2], from[2], fd, n, k, w = 0, status = -1;
+	pid_t pid;
+
+	mkdir("/tmp/rpcx", 0755);
+	if ((fd = creat("/tmp/rpcx/a.txt", 0644)) >= 0) {
+		write(fd, "hello world\n", 12);
+		close(fd);
+	}
+	mkdir("/tmp/rpcx/radio", 0755);
+	memcpy(want + w, g_ping_resp, sizeof(g_ping_resp)); w += sizeof(g_ping_resp);
+	memcpy(want + w, g_pbver_resp, sizeof(g_pbver_resp)); w += sizeof(g_pbver_resp);
+	memcpy(want + w, g_list_resp, sizeof(g_list_resp)); w += sizeof(g_list_resp);
+	memcpy(want + w, g_notimpl_resp, sizeof(g_notimpl_resp)); w += sizeof(g_notimpl_resp);
+	fflush(stdout);
+	if (pipe(to) < 0 || pipe(from) < 0) {
+		check(0, "rpcd: pipes");
+		return;
+	}
+	pid = fork();
+	if (pid == 0) {
+		dup2(to[0], 0);
+		dup2(from[1], 1);
+		close(to[0]); close(to[1]); close(from[0]); close(from[1]);
+		putenv(env);
+		execl("/bin/rpcd", "rpcd", (char *) NULL);
+		_exit(99);
+	}
+	close(to[0]);
+	close(from[1]);
+	write(to[1], g_ping_req, sizeof(g_ping_req));
+	write(to[1], g_pbver_req, sizeof(g_pbver_req));
+	write(to[1], g_list_req, sizeof(g_list_req));
+	write(to[1], appstart, sizeof(appstart));
+	close(to[1]);			/* the transport is gone: rpcd ends */
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(30);
+	for (n = 0; n < (int) sizeof(got)
+		&& (k = read(from[0], got + n, sizeof(got) - n)) > 0; )
+		n += k;
+	close(from[0]);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) status = -1;
+	alarm(0);
+	check(pid > 0 && got_sig == 0 && n == w && memcmp(got, want, w) == 0,
+		"rpcd: ping, protobuf_version, list /ext, NOT_IMPLEMENTED (stock frames)");
+	if (n != w) printf("  rpcd: %d bytes back, want %d\n", n, w);
+	check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"rpcd ends when the transport closes");
+}
 
 static void mtpd_test(void)
 {
@@ -1172,6 +1438,24 @@ static void discard_tests(void)
 	check(r1 == 0, "discard: DIOCDISCARD of the last sector");
 	check(zero, "discard: the range reads back as zeros (QEMU)");
 	check(r0 < 0 && i < 0, "discard: empty and too-long ranges refused");
+}
+
+
+/* Spec 12h (R12.38, AC12.22): M2 boots with swap and blocks off, so every
+ * block call fails with ENOSYS and nothing reaches the card. */
+static void blk_tests(void)
+{
+	static char b[BLK_SIZE];
+	struct blkinfo bi;
+	int bi_ok, get_ok, open_ok;
+
+	errno = 0;
+	bi_ok = blk_info(&bi) < 0 && errno == ENOSYS;
+	errno = 0;
+	get_ok = blk_get(0, b) < 0 && errno == ENOSYS;
+	errno = 0;
+	open_ok = blk_open(4096, 0) < 0 && errno == ENOSYS;
+	check(bi_ok && get_ok && open_ok, "blk: blocks off: blk_info, blk_get, blk_open ENOSYS");
 }
 
 
@@ -2741,7 +3025,8 @@ static void __attribute__((noinline)) stock_test(int b, int l)
 
 	style_toggle(b, l);
 	lgrab(l, st.s2);
-	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 51) && !lpix(127, 1),
+	/* five rows now (Repeat, #361): the list scrolls, Style's bar is at y 40 */
+	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 40),
 		st.s3);
 	furi_tap(b, 0x20);			/* Back: SETTINGS */
 	furi_tap(b, 0x20);			/* Back: APPS, written */
@@ -3144,6 +3429,61 @@ static void furihello_test(void)
 }
 #endif
 
+/* #419: the settings keys (setgroup sound, led, power) under QEMU, with
+ * `settings set' and `settings get' (two runs of settings, without sh: a
+ * third run of either would make the run-time cache copy it to flash).  A missing file gives the
+ * defaults, a file written here is read, a set writes the card's file
+ * once; the files are removed afterwards (file_has: stockapp_tests').
+ * settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * it in the flash cache); its exit status */
+static int setk_run(const char *out, const char *a1, const char *a2,
+					const char *a3, const char *a4)
+{
+	pid_t pid;
+	int fd, st = -1;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		if ((fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0)
+			dup2(fd, 1);
+		execl("/bin/settings", "settings", a1, a2, a3, a4, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0) (void) waitpid(pid, &st, 0);
+	return st;
+}
+
+static void __attribute__((noinline)) setkeys_test(void)
+{
+	static const char *const conf[] = { "/etc/flipper/led.conf",
+		"/etc/flipper/power.conf", "/etc/flipper/sound.conf" };
+	FILE *f;
+	int i, st;
+
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) mkdir("/etc/flipper", 0755);
+	if ((f = fopen(conf[2], "w")) != NULL) {
+		fputs("Volume: 40\nVibro: off\n", f);
+		fclose(f);
+	}
+	st = setk_run("/tmp/setk1", "set", "led", "Brightness", "30");
+	(void) setk_run("/tmp/setk2", "get", "led", "power", "sound");
+	check(st == 0 && file_has("/tmp/setk1",
+		"Brightness: 30\nNotify LED: on\n"),
+		"settings set: a key changed, the group's other key its default");
+	check(file_has(conf[0], "Brightness: 30\nNotify LED: on\n"),
+		"settings set: /etc/flipper/led.conf written");
+	check(file_has("/tmp/setk2", "# led\nBrightness: 30\n"),
+		"settings get: led.conf read back");
+	check(file_has("/tmp/setk2", "# power\nAuto off: never\nAuto lock: never\n"),
+		"settings get: no power.conf, the defaults");
+	check(file_has("/tmp/setk2", "Volume: 40\nVibro: off\n"),
+		"settings get: Vibro off read from sound.conf");
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) unlink("/tmp/setk1");
+	(void) unlink("/tmp/setk2");
+}
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -3452,6 +3792,7 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 	spectrum_test();
+	setkeys_test();
 	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
@@ -3483,15 +3824,20 @@ int main(int argc, char **argv)
 	ibutton_tests();
 	hid_tests();
 	subghz_tests();
+	infrared_tests();
+	stockapp_tests();
+	nfc_tests();
 	gpio_tests();
 	card_tests();
 	sflag_tests();
 	discard_tests();
+	blk_tests();
 	preempt_tests();
 	testop_tests();
 	gzupdate_test();
 	pkg_tests();
 	mtpd_test();
+	rpcd_test();
 #endif
 	time_tests();
 	fpu_tests();

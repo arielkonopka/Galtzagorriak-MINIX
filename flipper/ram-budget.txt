@@ -78,7 +78,15 @@ kernel    160    14724  14884
 # +96 B): when each process began to wait (16 x 2 B), the reserve job
 # (CRC, slot, offset), the device, mode, reserve and its rate window, and
 # swap-out/in counters.  The header goes through mbuf; kernel +0 B.
-mm        32     10196  10228
+# T20a step 1 (#386, spec 12h R12.34/R12.35): MM +32 B of the spec's
+# +39 B: the block reservation table (2 B for each of the 13 user slots,
+# 26 B: MM, FS and INIT never hold blocks), blocks per extent (2 B), the
+# boot stamp (4 B).  Kernel +0 B.
+# T20a step 4 (R12.40): +4 B, MM now +36 B of +39 B: the 16-bit discard
+# mask (2 B), "the card has no DISCARD" (1 B) and 1 B of padding of the
+# block state; the number of swap subpartitions (1 B, R12.34 >= 32 GB)
+# will take that padding byte.
+mm        32     10228  10260
 # Phase 2d (UTC, 64-bit time_t): FS -72 B, its two static clock messages
 # moved to the stack (+1 B: the once-only "past 2106" note); kernel, MM 0.
 # R4b.6 poll() (#169): FS +268 B: one poll record per process (16 B x 16:

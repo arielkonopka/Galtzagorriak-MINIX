@@ -154,6 +154,13 @@ What eats the reserve, from experience in this tree:
   - **not present**: `select`, `usleep`,
     `nanosleep`, `setitimer`, `mmap`, sockets, threads, `setgroups` (R4b.4, **(planned)**);
   - `memcpy`/`memmove`/`memset` are fast assembly versions;
+  - **memory blocks** (`<blk.h>`, spec 12h): data that does not fit in RAM can live in 4 KB
+    blocks on the card's swap partition, read into and written from your own buffers
+    (`blk_open`, `blk_get`, `blk_put`, ...), and `libblk` (`<libblk.h>`, static,
+    `$(MB)/blk/libblk.o`) gives frames in a pool you supply. Off unless `blk=on`; then a
+    background caller waits for idle, so it never costs the buttons time. The calls fail with
+    `ENOSYS` when blocks are off: always keep a fallback. `man 3 blk`, `man 3 libblk` and the
+    manual chapter [Memory blocks](../../manual/blocks.md);
   - `cfopen(path, mode)` reads a settings file from the card and falls back to the default in
     `/rom` (chapter 5);
   - `snprintf`/`vsnprintf` store at most n - 1 characters and a null; unlike C99 they return

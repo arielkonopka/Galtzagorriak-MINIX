@@ -21,6 +21,7 @@
 #include "iso14443_3a.h"
 #include "mf_ultralight.h"
 #include "nfc_poller.h"
+#include "nfc_sha1.h"
 
 static int fails;
 #define CHECK(c, msg) do { if(!(c)) { printf("FAIL: %s\n", msg); fails++; } } while(0)
@@ -533,6 +534,31 @@ static void test_mfc_read(void)
 	      "block contents decrypted correctly");
 }
 
+/* SHA-1, FIPS 180-4 / RFC 3174 test vectors (#412). */
+static int sha1_is(const char *msg, size_t len, size_t reps, const char *hex)
+{
+	uint8_t d[20], *buf;
+	char got[41];
+	size_t i;
+	buf = malloc(len * reps + 1);
+	for(i = 0; i < reps; i++) memcpy(buf + i * len, msg, len);
+	nfc_sha1(buf, len * reps, d);
+	free(buf);
+	for(i = 0; i < 20; i++) sprintf(got + 2 * i, "%02x", d[i]);
+	return strcmp(got, hex) == 0;
+}
+
+static void test_sha1(void)
+{
+	CHECK(sha1_is("", 0, 1, "da39a3ee5e6b4b0d3255bfef95601890afd80709"), "sha1: empty");
+	CHECK(sha1_is("abc", 3, 1, "a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1: abc");
+	CHECK(sha1_is("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, 1,
+		      "84983e441c3bd26ebaae4aa1f95129e5e54670f1"), "sha1: 448 bits (two blocks)");
+	CHECK(sha1_is("a", 1, 1000000, "34aa973cd4c4daa4f61eeb2bdbad27316534016f"), "sha1: a million a");
+	CHECK(sha1_is("0123456701234567012345670123456701234567012345670123456701234567", 64, 10,
+		      "dea356a2cddd90c7a7ecedc5ebb563934f460452"), "sha1: RFC 3174 test 4");
+}
+
 int main(void)
 {
 	printf("libnfc host tests (Phase 14, #387)\n");
@@ -544,6 +570,7 @@ int main(void)
 	test_iso14443_3a();
 	test_ultralight();
 	test_mfc_read();
+	test_sha1();
 	if(fails) { printf("%d FAILED\n", fails); return 1; }
 	printf("all libnfc tests passed\n");
 	return 0;

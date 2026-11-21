@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest gzsigtest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest gzsigtest irtest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -73,6 +73,11 @@ lfrfidtest:
 # encoder -> the line -> decoders.
 ibkeytest:
 	$(MAKE) -C tests/ibkey test
+
+# libir on the PC (spec Phase 7, issue #389): the stock infrared codecs
+# against the stock .irtest vectors, .ir files read and written back.
+irtest:
+	$(MAKE) -C tests/infrared test
 
 # libdht on the PC (issue #358): the AM2301/DHT21/DHT22 frame decoder.
 dhttest:

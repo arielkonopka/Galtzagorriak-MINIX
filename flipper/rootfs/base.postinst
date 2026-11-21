@@ -55,6 +55,16 @@ test -f /etc/apps && grep '^Spectrum:' /etc/apps >/dev/null || test ! -f /etc/ap
 	echo 'Spectrum:nobody:@subghz:/bin/spectrum' >> /etc/apps
 	echo "base: the launcher now has Spectrum"
 }
+# Issue #413: the Sub-GHz, iButton and GPIO window apps on the launcher.
+for a in 'Sub-GHz:nobody:@subghz:=/bin/subghzui' \
+	 'iButton:nobody:@ibutton:=/bin/ibuttonui' 'GPIO:nobody:@gpio:=/bin/gpioui'
+do
+	n=`echo "$a" | sed 's/:.*//'`
+	test -f /etc/apps && grep "^$n:" /etc/apps >/dev/null || test ! -f /etc/apps || {
+		echo "$a" >> /etc/apps
+		echo "base: the launcher now has $n"
+	}
+done
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
 test -f /etc/apps &&	# a card without its own copy keeps using /rom's
@@ -164,6 +174,20 @@ then
 	chgrp usb /dev/hidcons 2>/dev/null
 	chmod 660 /dev/hidcons 2>/dev/null
 fi
+# Cards made before issue #389 (Phase 7, AC7.3) lack the group ir; /dev/ir
+# moves to it from gui (the infrared app is set-gid ir).
+grep '^ir:' /etc/group >/dev/null || {
+	echo 'ir:*:13:root,nobody' >> /etc/group
+	echo "base: /etc/group now has ir"
+}
+chgrp ir /dev/ir 2>/dev/null
+chmod 660 /dev/ir 2>/dev/null
+# Cards made before issue #412 (Phase 14) lack the group nfc (the nfc app
+# is set-gid nfc; /dev/nfc comes with its driver and joins it then).
+grep '^nfc:' /etc/group >/dev/null || {
+	echo 'nfc:*:14:root,nobody' >> /etc/group
+	echo "base: /etc/group now has nfc"
+}
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then
