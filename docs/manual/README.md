@@ -24,7 +24,10 @@ that brings them.
 15. [Desktop and modules](desktop.md): the desktop's pages (HOME, NOTES, RUNNING), notifications, writing a module in shell or C.
 16. [Radio stacks](radio.md): ST's CPU2 stacks on the SD card, `radio-fetch.py`, `radio list`/`add`/`rm`, the radio slot (`radio use` planned).
 17. [Infrared remotes](infrared.md): the `infrared` app (learn, saved and universal remotes, debug), stock `.ir` files, group `ir`.
-18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites.
+18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites, open in their app.
+19. [iButton keys](ibutton.md): the iButton app (read, saved, add manually, write, emulate), stock `.ibtn` files.
+20. [The GPIO header](gpio.md): the GPIO app (pin levels and modes).
+21. [Small apps](apps.md): Music Player (`.fmf`, RTTTL), Clock, Dice, Passport; U2F (the USB part planned) and its key files.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in

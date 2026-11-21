@@ -24,9 +24,11 @@ folder, so a folder with hundreds of files uses no more memory than one with ten
 
 OK on a file opens its page:
 
-- **Open**: a `.txt` file shows its first lines. Opening other types in their app from here is
-  **(planned)**, the next part of issue #389. Until then the page names the app to use
-  (Infrared, RFID, `subghz`, `ikey`).
+- **Open**: a `.txt` file shows its first lines. The other types open in their app: `.ir` in
+  Infrared, `.sub` in Sub-GHz, `.rfid` in RFID, `.ibtn` in iButton (`.nfc`: planned). Archive
+  asks the launcher (a `run` record, see [The launcher](launcher.md)); the launcher starts the
+  app of `/etc/apps` with that label, as its own user, with the file as its argument. When you
+  leave that app, Archive opens again (at its first page).
 - **Name**: rename it on the keyboard. The type ending stays: `telebista` becomes
   `telebista.ir`. A name that is already taken is not used.
 - **Favourite**: on puts the file in Favourites; off takes it out.

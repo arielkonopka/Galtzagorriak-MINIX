@@ -55,6 +55,16 @@ test -f /etc/apps && grep '^Spectrum:' /etc/apps >/dev/null || test ! -f /etc/ap
 	echo 'Spectrum:nobody:@subghz:/bin/spectrum' >> /etc/apps
 	echo "base: the launcher now has Spectrum"
 }
+# Issue #413: the Sub-GHz, iButton and GPIO window apps on the launcher.
+for a in 'Sub-GHz:nobody:@subghz:=/bin/subghzui' \
+	 'iButton:nobody:@ibutton:=/bin/ibuttonui' 'GPIO:nobody:@gpio:=/bin/gpioui'
+do
+	n=`echo "$a" | sed 's/:.*//'`
+	test -f /etc/apps && grep "^$n:" /etc/apps >/dev/null || test ! -f /etc/apps || {
+		echo "$a" >> /etc/apps
+		echo "base: the launcher now has $n"
+	}
+done
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
 test -f /etc/apps &&	# a card without its own copy keeps using /rom's

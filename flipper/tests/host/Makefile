@@ -15,7 +15,8 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 	   spectest pmstattest
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
-     run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled
+     run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
+     run-music run-u2f
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -24,6 +25,14 @@ run-libfuri:
 # libapp (spec R7b.4): the timer rules, the notification policy, the spool.
 run-libapp:
 	$(MAKE) -C $(MROOT)/flipper/lib/app test
+
+# libu2f (issue #420): U2F messages and U2FHID framing (make -C tests/u2f).
+run-u2f:
+	$(MAKE) -C $(MROOT)/flipper/tests/u2f test
+
+# The Music Player's song parser (issue #420): FMF and RTTTL, a fuzz.
+run-music:
+	$(MAKE) -C $(MROOT)/flipper/apps/music test
 
 # remind and alarm (spec 7b.1, 7b.2): the log reader, times, the form.
 run-native:
@@ -177,7 +186,7 @@ $(B)/desktest: desktest.c $(MROOT)/flipper/gui/desktop.c $(MROOT)/flipper/gui/de
 # settings time and about (spec K.7, T24b, T24d): the zone table, /etc/TZ,
 # local time from a rule, the About rows, a group's file.
 SETDIR	:= $(MROOT)/src/commands/settings
-SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c
+SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c led.c power.c
 $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
 		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)

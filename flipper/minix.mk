@@ -321,6 +321,8 @@ ZMODEM	:= rz sz
 GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive nfc
+# Stock app ports part 2 (issue #413): window apps over the commands.
+WINBASE	+= subghzui ibuttonui gpioui
 # mtpd: files to a PC over MTP (spec R10.4, flipper/mtpd), below.
 # rpcd: the stock RPC for the mobile app (spec R15.5, issue #388), below.
 DAEMONS	:= mtpd rpcd
@@ -419,6 +421,12 @@ CHMEM_infrared := 8192	# issue #389: the 4 KB frame is bss; heap: libir's
 			# decoders and encoders (~0.5 KB), stdio buffers for
 			# the remote file (1 KB), opendir's 1 KB DIR; Learn
 			# and Debug fork a reader child (a copy of the app)
+CHMEM_subghzui := 4096	# issue #413, K.8 window app: opendir's 1 KB DIR,
+			# 1 KB of stack (records, two paths); subghz runs
+			# as its own process (CHMEM_subghz)
+CHMEM_ibuttonui := 4096	# as subghzui; ikey is its own process
+CHMEM_gpioui := 2560	# no DIR, no child: the records' 128 B buffers
+			# and MM's 1.5 KB gap
 CHMEM_archive := 4096	# issue #389, K.8 window app: opendir's 1 KB DIR
 			# (malloc: MM's 1.5 KB gap back in), 1 KB of stack
 			# (two 128 B paths, the record buffers)
@@ -520,6 +528,8 @@ OBJS_launcher += $(MB)/cmd/gui/appline.o $(MB)/cmd/gui/winsrv.o $(MB)/cmd/gui/wi
 OBJS_spectrum += $(MB)/cmd/gui/specmath.o
 # the Infrared app (issue #389): libir (src/lib/infrared) and the list UI
 OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
+# lfrfid on the shared list, message and keyboard screens (issue #413)
+OBJS_lfrfid += $(MB)/cmd/gui/ui.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:
@@ -590,6 +600,16 @@ $(MB)/cmd/gui/archive.o: gui/archive.c $(GM_DIR)/gm.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
 OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
+# issue #413: the window apps over subghz, ikey and gpio (gui/runwin.c:
+# the command's output on a pipe, live)
+$(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
+		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
+		gui/runwin.h $(GM_DIR)/gm.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
 # nfc (spec Phase 14, issue #412 item 4): a window app (K.8) on the
 # hand-written libnfc reader (src/lib/libnfc: poller, Crypto-1, the
 # streaming dictionary, the .nfc files), C11 as that library is.
@@ -620,7 +640,7 @@ $(MB)/cmd/app/gmdemo.o: apps/gmdemo.c $(GM_DIR)/gm.h
 # of the launcher's SETTINGS page (K.8).  Their objects as the window
 # apps' (WIN_CFLAGS below): one GOT word per section, unused rodata in
 # flash.
-SETGROUPS := groups conf display sound time about zones afmt
+SETGROUPS := groups conf display sound led time power region about zones afmt
 SET_OBJ	:= $(SETGROUPS:%=$(MB)/cmd/settings/%.o) $(MB)/cmd/settings/gm.o
 OBJS_settings = $(MB)/cmd/port/settings.o $(SET_OBJ)
 OBJS_setgroup = $(MB)/cmd/settings/win.o $(SET_OBJ)
@@ -989,6 +1009,35 @@ OBJS_badusb-gui = $(MB)/cmd/bu/badusbgui.o $(MB)/cmd/win/lib/gm.o \
 	$(MB)/cmd/bu/hid.o
 CHMEM_badusb-gui := 2304	# K.8 (<= 4.5 KB open): no heap, no
 			# handler, so no MM gap (nattest memuse)
+# The Music Player and the small utilities (issue #420): window apps like
+# the ones above (WIN_CFLAGS), libgm only.  Packages music and utils.
+WINAPPS	+= music clock dice passport
+$(MB)/cmd/win/music/music.o $(MB)/cmd/win/music/fmf.o: apps/music/fmf.h
+OBJS_music = $(MB)/cmd/win/music/music.o $(MB)/cmd/win/music/fmf.o \
+	$(MB)/cmd/win/lib/gm.o
+CHMEM_music := 2048	# K.8: no heap, no handler, so no MM gap; the stack
+			# holds the record and event buffers and the path
+$(foreach u,clock dice passport,$(eval OBJS_$(u) = $(MB)/cmd/win/utils/$(u).o \
+	$(MB)/cmd/win/lib/gm.o))
+CHMEM_clock := 1536	# K.8: two 128 B buffers and a line on the stack
+CHMEM_dice := 1536
+CHMEM_passport := 1536	# struct utsname (~200 B) on the stack
+# U2F (issue #420): the window app on libu2f (src/lib/u2f: the messages,
+# U2FHID, the key files, P-256 from micro-ecc in uecc/, which wants C99).
+# The USB FIDO interface is not there yet: the app says so.  Package u2f.
+U2F_DIR	:= $(MROOT)/src/lib/u2f
+WINAPPS	+= u2f
+$(MB)/cmd/u2f/%.o: $(U2F_DIR)/%.c $(wildcard $(U2F_DIR)/*.h $(U2F_DIR)/uecc/*)
+	@mkdir -p $(dir $@)
+	@$(CC) $(filter-out -std=gnu89,$(WIN_CFLAGS)) -std=gnu99 -I$(U2F_DIR) -MMD -MP -c $< -o $@
+$(MB)/cmd/u2f/u2fapp.o: apps/u2f/u2fapp.c $(GM_DIR)/gm.h $(wildcard $(U2F_DIR)/*.h)
+	@mkdir -p $(dir $@)
+	@$(CC) $(WIN_CFLAGS) -I$(U2F_DIR) -MMD -MP -c $< -o $@
+OBJS_u2f = $(addprefix $(MB)/cmd/u2f/,u2fapp.o u2f.o sha256.o p256.o u2fstore.o) \
+	$(MB)/cmd/win/lib/gm.o
+CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
+			# the file text (384 B), the record buffers; no heap,
+			# no handler, so no MM gap
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -1057,7 +1106,8 @@ PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar 
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
 	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
-	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar
+	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
+	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar
 # Packages pkg must refuse (AC3.4, tests/pkgbad.c): data of the tests one.
 BADPKGS	:= $(foreach b,dep long dotdot name abs link,$(PKGDIR)/bad/$(b).tar)
 $(BADPKGS) &: tools/mkbadpkg.py
@@ -1126,6 +1176,34 @@ $(PKGDIR)/subghz_1.0.tar: $(MB)/bin/subghz tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n subghz -v 1.0 -o $(PKGDIR) --flash \
 	   -D "Sub-GHz remotes: rx, decode, tx, tx_from_file, chat (Unleashed protocols)" \
 	   /usr/bin/subghz=$(MB)/bin/subghz
+# U2F (issue #420): the app as the user u2f (group usb), its folder
+# /ext/u2f/assets made by the postinst; no certificate or key shipped.
+$(PKGDIR)/u2f_1.0.tar: $(MB)/bin/u2f tools/mkpkg.py rootfs/u2f.postinst \
+		rootfs/u2f.prerm
+	python3 -I tools/mkpkg.py -n u2f -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @usb \
+	   --postinst rootfs/u2f.postinst --prerm rootfs/u2f.prerm \
+	   -D "U2F security key (window app; the USB interface is planned)" \
+	   /usr/bin/u2f=$(MB)/bin/u2f
+# The Music Player (issue #420): the app and one scale to try it in
+# /ext/music_player (/home/flipper/music_player); the songs are the user's.
+$(PKGDIR)/music_1.0.tar: $(MB)/bin/music tools/mkpkg.py rootfs/music.postinst \
+		rootfs/music.prerm apps/music/scale.fmf
+	python3 -I tools/mkpkg.py -n music -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @music \
+	   --postinst rootfs/music.postinst --prerm rootfs/music.prerm \
+	   -D "Music Player: FMF and RTTTL songs on the speaker (window app)" \
+	   /usr/bin/music=$(MB)/bin/music \
+	   /home/flipper/music_player/scale.fmf=apps/music/scale.fmf$(COMMA)644
+# Clock, Dice, Passport (issue #420): the stock small utilities.
+$(PKGDIR)/utils_1.0.tar: $(MB)/bin/clock $(MB)/bin/dice $(MB)/bin/passport \
+		tools/mkpkg.py rootfs/utils.postinst rootfs/utils.prerm
+	python3 -I tools/mkpkg.py -n utils -v 1.0 -o $(PKGDIR) --flash \
+	   --window --background exit -i @clock \
+	   --postinst rootfs/utils.postinst --prerm rootfs/utils.prerm \
+	   -D "Clock, Dice, Passport (window apps)" \
+	   /usr/bin/clock=$(MB)/bin/clock /usr/bin/dice=$(MB)/bin/dice \
+	   /usr/bin/passport=$(MB)/bin/passport
 # The example window app (spec K.8): the program, its launcher line, and
 # its source with libgm in /usr/share/examples/gui; with them the example
 # desktop module of spec K.6 (battile.sh, a battery tile in three lines).
@@ -1153,7 +1231,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.68
+BASE_VER := 4.72
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)

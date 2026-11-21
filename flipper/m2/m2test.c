@@ -482,6 +482,100 @@ static void infrared_tests(void)
 	unlink("/tmp/m2ir.ir");
 }
 
+/* Issue #413: the Sub-GHz, iButton and GPIO window apps (spec K.8), driven
+ * through their event pipe as the desktop would: Add manually writes stock
+ * .sub and .ibtn files, a file argument opens its window (Archive's Open),
+ * GPIO lists the eight pins.  The records the app sent (the first 1 KB)
+ * into out.  No subghz or ikey run: the radio and the contacts are the
+ * device checks, and every extra program is a text-cache copy (T2). */
+static int win_run(const char *prog, const char *arg, const char *ev,
+	char *out, int size)
+{
+	int e[2], r[2], n, got = 0, st;
+	pid_t pid;
+
+	if (pipe(e) < 0) return -1;
+	if (pipe(r) < 0) { close(e[0]); close(e[1]); return -1; }
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int x = fcntl(e[0], F_DUPFD, 10), y = fcntl(r[1], F_DUPFD, 10);
+
+		close(e[0]);		/* the pipes may be on 3 and 4 */
+		close(e[1]);
+		close(r[0]);
+		close(r[1]);
+		dup2(x, 3);
+		dup2(y, 4);
+		close(x);
+		close(y);
+		execl(prog, prog, arg, (char *) NULL);
+		_exit(99);
+	}
+	close(e[0]);
+	close(r[1]);
+	if (pid > 0) (void) write(e[1], ev, strlen(ev));
+	close(e[1]);			/* then the desktop is gone: close */
+	while (pid > 0 && (n = read(r[0], out + got, size - 1 - got)) > 0) {
+		got += n;
+		if (got >= size - 1) {		/* keep the last half */
+			memmove(out, out + size / 2, got - size / 2);
+			got -= size / 2;
+		}
+	}
+	out[got] = 0;
+	close(r[0]);
+	if (pid < 0 || waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int file_has(const char *path, const char *want)
+{
+	char b[400];
+	int fd = open(path, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, b, sizeof b - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	b[n] = 0;
+	return strstr(b, want) != NULL;
+}
+
+static void stockapp_tests(void)
+{
+	static char out[1024];
+	const char *sub = "/home/flipper/subghz/M2sg.sub";
+	const char *ib = "/home/flipper/ibutton/M2ib.ibtn";
+
+	mkdir("/home", 0755);
+	mkdir("/home/flipper", 0755);
+	unlink(sub);
+	unlink(ib);
+	check(win_run("/bin/subghzui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
+		"ok\tadd\tsave\nok\tmain\traw\nback\traw\nok\tmain\tfa\n",
+		out, sizeof out) == 0
+		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& strstr(out, "enum\tth\tRSSI threshold\t0") != NULL
+		&& strstr(out, "run\tSpectrum\t/dev/subghz") != NULL
+		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
+			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
+		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
+	check(win_run("/bin/ibuttonui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
+		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
+		"ok\tmain\tsaved\nok\tlist\tf0000\n", out, sizeof out) == 0
+		&& file_has(ib, "DS1990\nRom Data: 01 A2 B3 C4 D5 E6 F7 A8")
+		&& strstr(out, "item\tty\tDallas\t01A2B3C4D5E6F7A8") != NULL,
+		"ibuttonui: Add manually, Saved: a stock .ibtn");
+	check(win_run("/bin/gpioui", (char *) NULL, "", out,
+		sizeof out) == 0 && strstr(out, "enum\tp7\tPC0 (16) =") != NULL
+		&& strstr(out, "item\tv5\t5V on GPIO") != NULL,
+		"gpioui: the header pins");
+	unlink(sub);
+	unlink(ib);
+}
+
 /* Phase 14 (issue #412 item 4): the nfc app.  Group nfc (14), the app
  * set-gid nfc, opens /dev/nfc only for a member (AC7.3's rule; there is
  * no /dev/nfc in QEMU, the driver is lane:local): daemon (uid 1) is told
@@ -3316,6 +3410,61 @@ static void furihello_test(void)
 }
 #endif
 
+/* #419: the settings keys (setgroup sound, led, power) under QEMU, with
+ * `settings set' and `settings get' (two runs of settings, without sh: a
+ * third run of either would make the run-time cache copy it to flash).  A missing file gives the
+ * defaults, a file written here is read, a set writes the card's file
+ * once; the files are removed afterwards (file_has: stockapp_tests').
+ * settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * it in the flash cache); its exit status */
+static int setk_run(const char *out, const char *a1, const char *a2,
+					const char *a3, const char *a4)
+{
+	pid_t pid;
+	int fd, st = -1;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		if ((fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0)
+			dup2(fd, 1);
+		execl("/bin/settings", "settings", a1, a2, a3, a4, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0) (void) waitpid(pid, &st, 0);
+	return st;
+}
+
+static void __attribute__((noinline)) setkeys_test(void)
+{
+	static const char *const conf[] = { "/etc/flipper/led.conf",
+		"/etc/flipper/power.conf", "/etc/flipper/sound.conf" };
+	FILE *f;
+	int i, st;
+
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) mkdir("/etc/flipper", 0755);
+	if ((f = fopen(conf[2], "w")) != NULL) {
+		fputs("Volume: 40\nVibro: off\n", f);
+		fclose(f);
+	}
+	st = setk_run("/tmp/setk1", "set", "led", "Brightness", "30");
+	(void) setk_run("/tmp/setk2", "get", "led", "power", "sound");
+	check(st == 0 && file_has("/tmp/setk1",
+		"Brightness: 30\nNotify LED: on\n"),
+		"settings set: a key changed, the group's other key its default");
+	check(file_has(conf[0], "Brightness: 30\nNotify LED: on\n"),
+		"settings set: /etc/flipper/led.conf written");
+	check(file_has("/tmp/setk2", "# led\nBrightness: 30\n"),
+		"settings get: led.conf read back");
+	check(file_has("/tmp/setk2", "# power\nAuto off: never\nAuto lock: never\n"),
+		"settings get: no power.conf, the defaults");
+	check(file_has("/tmp/setk2", "Volume: 40\nVibro: off\n"),
+		"settings get: Vibro off read from sound.conf");
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) unlink("/tmp/setk1");
+	(void) unlink("/tmp/setk2");
+}
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -3624,6 +3773,7 @@ int main(int argc, char **argv)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
 	spectrum_test();
+	setkeys_test();
 	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
@@ -3656,6 +3806,7 @@ int main(int argc, char **argv)
 	hid_tests();
 	subghz_tests();
 	infrared_tests();
+	stockapp_tests();
 	nfc_tests();
 	gpio_tests();
 	card_tests();

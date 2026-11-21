@@ -267,6 +267,19 @@ int gm_show(void)
 	return flush();
 }
 
+/* "run LABEL FILE" (issue #413): the desktop ends this app's window and
+ * starts the app of /etc/apps called LABEL with FILE (an absolute path)
+ * as its argument, as Archive's Open.  0, or -1 if the desktop is gone.
+ * The app ends after it (its events stop: GM_CLOSE). */
+int gm_run(const char *label, const char *file)
+{
+	const char *f[3];
+
+	f[0] = "run"; f[1] = label; f[2] = file;
+	rec(f, 3);
+	return flush();
+}
+
 /* "busy" / "idle": a long job (the desktop marks the window) */
 int gm_busy(int busy)
 {
