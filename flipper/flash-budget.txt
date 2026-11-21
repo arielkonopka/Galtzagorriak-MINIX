@@ -61,5 +61,8 @@
 # m2test's text grew by one more 4 KB page with the two test groups (nfc
 # app, Sub-GHz/iButton/GPIO window apps).  Nothing changed in how often the
 # cache writes.
-m2      cache   15
+# 2026-11-21 (#434 fptest checks): 16.  m2test's text grew past another 4 KB
+# page with the two FP-fault checks.  Nothing changed in how often the cache
+# writes.
+m2      cache   16
 m2      inst    0
