@@ -70,7 +70,8 @@ Princeton 24bit Key:7C5703
 
 With `-t`, the RSSI is read once per received frame (on the Flipper: once per 512 edges); what
 comes while it is below the threshold is left out. A recording only receives; sending it
-(`tx_from_file`) is checked against the region like any other file.
+(`tx_from_file`) is checked against the region like any other file. The Sub-GHz app's **Read RAW**
+(below) runs this command for you.
 
 ## The Sub-GHz app (launcher)
 
@@ -81,10 +82,10 @@ package (`pkg install subghz`); without it the window says `not installed: /usr/
 | Row | What it does |
 |---|---|
 | Read | listens at the frequency of Radio settings; each decoded packet is a line, as `subghz rx` prints it (protocol, bits, key). Back stops. |
-| Read RAW | **(planned)**: `subghz` has no RAW recorder yet. |
+| Read RAW | frequency, **RSSI threshold** (Off, −90 … −40 dBm, stock's list) and **REC**: runs `subghz rec` into the first free `RAW_0.sub` … `RAW_99.sub` of `/home/flipper/subghz` and shows its lines. **Stop** ends it; then **Save** keeps the file (it is in Saved; rename it in Archive) and **Erase** deletes it. Back while it records stops it and keeps the file. |
 | Saved | the `.sub` files of `/home/flipper/subghz`, a page at a time. OK on one: **Send** (`subghz tx_from_file`), **Info** (`subghz decode`, RAW captures), **Delete**. |
 | Add manually | a Princeton key: key (1–6 hex digits), TE, frequency, name; **Save** writes a stock key file (`Filetype: Flipper SubGhz Key File`). |
-| Frequency analyzer | points you to the **Spectrum** app on the launcher (below). |
+| Frequency analyzer | starts the **Spectrum** app (below); when you leave Spectrum, Sub-GHz opens again (on its menu, with Radio settings back at 433.92 MHz, AM650). |
 | Radio settings | frequency (stock's common list, 433.92 MHz first), modulation preset (AM270, AM650, FM238, FM476; written into the files you add), and the region. Kept only while the app runs. |
 
 **Sending.** The kernel checks every frame against the region (see "The region" below). If it
