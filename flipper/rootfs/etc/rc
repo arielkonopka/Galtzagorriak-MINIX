@@ -20,7 +20,7 @@ case $? in
 2)	echo "rc: the root file system was repaired: restarting"
 	reboot
 	exit 0 ;;
-*)	echo "rc: errors left on $root: run fsck"
+*)	echo "rc: errors left on $root: reboot fsck"
 	fsck_err=1 ;;
 esac
 
@@ -57,7 +57,7 @@ test -f /etc/.setup-done && {
 		fsck -p -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
 		case $? in
 		0|1)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
-		*)	echo "rc: $1 has errors: mounted read-only, run fsck"
+		*)	echo "rc: $1 has errors: mounted read-only, reboot fsck"
 			fsck_err=1
 			mount -r $1 $2 || echo "rc: cannot mount $1 on $2" ;;
 		esac
@@ -73,7 +73,7 @@ test -f /etc/.setup-done && {
 }
 # setup -H (spec O.7): the next step of converting /home to MINIX V3.
 test -f /etc/.home-v3 && sh /etc/setup -Hboot
-# The launcher says "Card has errors: run fsck" while this file is there.
+# The launcher says "Card has errors: reboot fsck" while this file is there.
 if test -n "$fsck_err"; then >/etc/.fsck-errors; else rm -f /etc/.fsck-errors; fi
 
 # Programs built into the firmware's flash (make base-flash): bind them to
