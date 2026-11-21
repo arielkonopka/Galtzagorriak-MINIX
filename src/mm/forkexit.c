@@ -150,7 +150,7 @@ int vfork;			/* vfork: no copy, the parent waits */
   *rmc = *rmp;			/* copy parent's process slot to child's */
 #if (CHIP == ARM_CM)
   rmp->mp_flags &= ~FGEXEC;	/* the child execs the foreground app */
-  rmc->mp_flags &= ~(SWAPHOT | SWAPHDR);	/* its slot's header is not its */
+  rmc->mp_flags &= ~(SWAPHOT | SWAPHDR | BLKUSED);	/* its slot's header is not its */
 #endif
 
   rmc->mp_parent = who;		/* record child's parent */

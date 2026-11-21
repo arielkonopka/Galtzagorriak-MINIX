@@ -216,6 +216,7 @@ int main(int argc, char **argv)
 	struct blkinfo bi;
 	unsigned long ext, last, sec;
 	int r, a, b, c, go1[2], go2[2], go3[2], st, pid;
+	long first;
 	char ch = 0;
 
 	if (argc > 1 && strcmp(argv[1], "-n") == 0) return all_enosys();
@@ -361,6 +362,8 @@ int main(int argc, char **argv)
 	waitpid(pid, &st, 0);
 	t_result("AC12.19: the writer PUT block 0 and exited",
 		WIFEXITED(st) && WEXITSTATUS(st) == 0, NULL);
+	/* R12.40: its run is free once MM has DISCARDed it at idle. */
+	sleep(2);
 	memset(buf, 0x77, sizeof(buf));
 	r = blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL);
 	t_result("AC12.19: after the writer exits, its block 0 reads as zeros",
@@ -389,6 +392,47 @@ int main(int argc, char **argv)
 	waitpid(pid, &st, 0);
 	t_result("AC12.19: exec of another program: zeros (see blk2 above)",
 		WIFEXITED(st) && WEXITSTATUS(st) == 0, NULL);
+	/* AC12.26 (R12.40): a process PUTs 10 blocks and exits; at idle MM
+	 * DISCARDs its run (QEMU fills it with zeros), then frees it. */
+	pipe(go1);
+	if ((pid = fork()) == 0) {
+		int k;
+
+		first = -1;
+		fill(buf, BLK_SIZE, 4);
+		if (blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) > 0
+				&& info(&bi) == 0) first = (long) bi.run;
+		for (k = 0; k < 10; k++)
+			if (blk(BLK_PUT, 0, k, 0, 0, buf) < 0) first = -1;
+		write(go1[1], &first, sizeof(first));
+		_exit(0);
+	}
+	close(go1[1]);
+	if (read(go1[0], &first, sizeof(first)) != sizeof(first)) first = -1;
+	close(go1[0]);
+	waitpid(pid, &st, 0);
+	sleep(2);
+	r = 0;
+	if (first >= 0) {
+		int fd = open("/dev/hd3", O_RDONLY);
+		int k;
+
+		for (k = 0; k < 10 && fd >= 0; k++) {
+			sec = BK_SKIP + ((unsigned long) first * ext + k)
+							* BK_BLOCK;
+			if (lseek(fd, (off_t) (sec * 512), SEEK_SET) < 0
+					|| read(fd, buf2, BLK_SIZE) != BLK_SIZE
+					|| !zeros(buf2, BLK_SIZE)) break;
+		}
+		r = fd >= 0 && k == 10;
+		if (fd >= 0) close(fd);
+	}
+	t_result("AC12.26: the writer's 10 blocks were discarded at idle",
+		r, NULL);
+	t_result("AC12.26: ... and its extents are free again",
+		blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) > 0
+		&& info(&bi) == 0 && (long) bi.run == first, NULL);
+	blk(BLK_CLOSE, 0, 0, 0, 0, NULL);
 	printf("blktest: %d failures\n", t_fail);
 	return t_fail;
 }

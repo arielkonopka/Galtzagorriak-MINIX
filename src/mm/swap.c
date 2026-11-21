@@ -69,6 +69,8 @@
 #include <minix/com.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <minix/partition.h>
 #include "mproc.h"
 
 #if (CHIP == ARM_CM)
@@ -239,6 +241,29 @@ phys_bytes n;			/* bytes, whole sectors */
   if (sendrec(WINCHESTER, &m) != OK) return(EIO);
   if (m.REP_STATUS == ENXIO) return(ENXIO);	/* card out (N.6) */
   return(m.REP_STATUS == (int) n ? OK : EIO);
+}
+
+
+/*===========================================================================*
+ *				sw_discard				     *
+ *===========================================================================*/
+PUBLIC int sw_discard(first, count)
+unsigned long first, count;	/* sectors of the swap partition */
+{
+/* R12.40: tell the card those sectors hold nothing (DIOCDISCARD; the
+ * kernel does it in steps between its other tasks).  ENOTTY: no DISCARD. */
+  message m;
+  struct part_range rg;
+
+  rg.first = first;
+  rg.count = count;
+  m.m_type = DEV_IOCTL;
+  m.DEVICE = (int) (sw.dev & BYTE);
+  m.REQUEST = DIOCDISCARD;
+  m.PROC_NR = MM_PROC_NR;
+  m.ADDRESS = (char *) &rg;
+  if (sendrec(WINCHESTER, &m) != OK) return(EIO);
+  return(m.REP_STATUS);
 }
 
 

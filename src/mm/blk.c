@@ -29,6 +29,14 @@
  *		 was cleared by the last exit in it)
  *   blk_wrap:	 the pid counter wrapped
  *   blk_req:	 MEMINFO MI_BLK
+ *   blk_step:	 at idle: one waiting request or one DISCARD step
+ *
+ * R12.40: a run whose process PUT a block (BLKUSED) is not free when it
+ * ends: its bit in bk.disc is set and the entry stays, so nobody gets the
+ * extents until blk_step() has told the card they hold nothing (DISCARD,
+ * at idle, at most DISC_MAX sectors a step).  Until then the slot's next
+ * process has no reservation, and its OPEN waits in BLKWAIT.  A card
+ * without DISCARD (ENOTTY once) frees runs at once from then on.
  */
 
 #include "mm.h"
@@ -46,12 +54,17 @@
 #define BK_SKIP		(NR_PROCS * 384UL)	/* sectors of the 16 swap slots */
 #define NSLOT		(NR_PROCS - INIT_PROC_NR - 1)	/* user slots */
 #define MAXRUN		255		/* a byte holds the run's length */
+#define DISC_MAX	(256UL * 2048)	/* sectors discarded a step: 256 MB */
+#define PEND(slot)	(bk.disc & (1U << (slot)))	/* run not yet free */
 
 /* All of MM's block state (R12.34, R12.35; spec budget MM +39 B). */
 PRIVATE struct {
   unsigned long stamp;		/* boot stamp (R12.35) */
   unsigned short ext;		/* blocks per extent, 0: blocks off */
   unsigned char run[NSLOT][2];	/* first extent, number of extents */
+  unsigned short disc;		/* bit i: slot i's ended run waits for its
+				 * DISCARD at idle (R12.40) */
+  unsigned char nodisc;		/* the card has no DISCARD: runs end at once */
 } bk;
 
 /* The header sector on the card (R12.35).  It goes through the last
@@ -118,7 +131,13 @@ unsigned long sectors;		/* the swap partition's size, 0: blocks off */
  * from MM).  A partition too small for 256 blocks after the slots has no
  * block space.  The caller checked blk_busy(). */
   unsigned long n;
+  int i;
 
+  /* Runs still waiting for their DISCARD are dropped with the device. */
+  for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
+	if (PEND(i)) RUN(i)[1] = 0;
+  bk.disc = 0;
+  bk.nodisc = FALSE;
   bk.ext = 0;
   if (sectors == 0) return(OK);
   if (sectors <= BK_SKIP) return(ENOSPC);
@@ -137,7 +156,9 @@ PUBLIC int blk_busy()
 {
   int i;
 
-  for (i = 0; i < NSLOT; i++) if (bk.run[i][1] != 0) return(TRUE);
+  /* (a run that only waits for its DISCARD does not count) */
+  for (i = 0; i < NSLOT; i++)
+	if (bk.run[i][1] != 0 && !PEND(i + INIT_PROC_NR + 1)) return(TRUE);
   return(FALSE);
 }
 
@@ -148,10 +169,21 @@ PUBLIC int blk_busy()
 PUBLIC void blk_end(proc_nr)
 int proc_nr;
 {
-/* Exit or exec (R12.35): the run is free again, nothing is written.  Who
- * reserves those extents next has another pid, slot or program, and reads
- * the old blocks as zeros.  (R12.40 adds the DISCARD at idle.) */
-  if (proc_nr > INIT_PROC_NR && proc_nr < NR_PROCS) RUN(proc_nr)[1] = 0;
+/* Exit, exec or CLOSE (R12.35): the run is free again, nothing is written.
+ * Who reserves those extents next has another pid, slot or program, and
+ * reads the old blocks as zeros.  R12.40: if a block was PUT, the run is
+ * free only after its DISCARD at idle (blk_step). */
+  struct mproc *rmp = &mproc[proc_nr];
+
+  if (proc_nr <= INIT_PROC_NR || proc_nr >= NR_PROCS) return;
+  if ((rmp->mp_flags & BLKUSED) && RUN(proc_nr)[1] != 0 && !bk.nodisc
+						&& !PEND(proc_nr)) {
+	bk.disc |= 1U << proc_nr;	/* R12.40: free after the DISCARD */
+	sw_kick();
+  } else if (!PEND(proc_nr)) {
+	RUN(proc_nr)[1] = 0;
+  }
+  rmp->mp_flags &= ~BLKUSED;
 }
 
 
@@ -219,7 +251,7 @@ int flags;
 	n = lim;
   }
   if (n == 0) {
-	r[1] = 0;
+	blk_end(who);
 	return(0);
   }
   if (r[1] != 0) {
@@ -303,7 +335,7 @@ int bg;				/* a background caller: the write budget */
   phys_bytes buf, a;
   int valid, e;
 
-  if (r[1] == 0) return(EBADF);
+  if (r[1] == 0 || PEND(who)) return(EBADF);
   if (rq->id >= (unsigned long) r[1] * bk.ext) return(ERANGE);
   if (first >= BLK_NSECT || n > BLK_NSECT - first) return(ERANGE);
   if ((buf = bk_buf((vir_bytes) rq->buf, (vir_bytes) n * BK_SECT)) == 0)
@@ -365,6 +397,7 @@ int bg;				/* a background caller: the write budget */
   if (bg && !sw_wbudget((n + 2) / 2)) return(EAGAIN);
   h->live |= bits;
   h->count++;
+  mp->mp_flags |= BLKUSED;		/* R12.40: discard it when it ends */
   if ((e = sw_io(DEV_WRITE, MM_PROC_NR, pos, (phys_bytes) h,
 				(phys_bytes) BK_SECT)) != OK) return(e);
   return(sw_io(DEV_WRITE, who, pos + (1UL + first) * BK_SECT,
@@ -407,15 +440,17 @@ int bg;				/* a background caller (R12.37) */
 	if (r == EAGAIN) r = OK;
 	break;
   case BLK_OPEN:
+	/* R12.40: the last run in this slot is not discarded yet. */
+	if (PEND(who)) return(SUSPEND);
 	r = bk_open(rq.id, rq.flags);
 	break;
   case BLK_CLOSE:
-	RUN(who)[1] = 0;
+	blk_end(who);
 	r = OK;
 	break;
   case BLK_INFO:
 	memset((char *) &bi, 0, sizeof(bi));
-	bi.blocks = (unsigned long) RUN(who)[1] * bk.ext;
+	bi.blocks = PEND(who) ? 0 : (unsigned long) RUN(who)[1] * bk.ext;
 	(void) bk_fit(NEXT, &len);
 	bi.largest = (unsigned long) len * bk.ext;
 	bi.space = (unsigned long) NEXT * bk.ext;
@@ -466,10 +501,41 @@ PUBLIC int blk_req()
  *===========================================================================*/
 PUBLIC int blk_step()
 {
-/* From sw_step(), at idle (R12.37): one waiting request, the descriptor
- * read again from the caller.  TRUE if one still waits after this. */
+/* From sw_step(), at idle (R12.37): one DISCARD step of an ended run
+ * (R12.40), or else one waiting request, the descriptor read again from
+ * the caller.  TRUE if more waits after this. */
   struct mproc *rmp, *caller = mp;
-  int caller_who = who, r, more = FALSE;
+  int caller_who = who, r, more = FALSE, i;
+  unsigned char *e;
+  unsigned long b, z, n;
+
+  if (bk.disc != 0) {
+	/* Not while keys arrive or a process waits for the CPU. */
+	if (sys_flash(FL_INFO | FL_BG, 0UL, NULL, 0, &b, &z) != OK)
+		return(TRUE);
+	for (i = INIT_PROC_NR + 1; !PEND(i); i++) ;
+	e = RUN(i);
+	n = DISC_MAX / ((unsigned long) bk.ext * BK_BLOCK);
+	if (n == 0) n = 1;
+	if (n > e[1]) n = e[1];
+	r = bk.ext == 0 ? OK : sw_discard(BK_SKIP
+		+ (unsigned long) e[0] * bk.ext * BK_BLOCK,
+		n * bk.ext * BK_BLOCK);
+	if (r == ENXIO) return(TRUE);		/* card out: later */
+	if (r == ENOTTY) {			/* no DISCARD: all free now */
+		bk.nodisc = TRUE;
+		n = e[1];
+	}
+	e[0] += (unsigned char) n;		/* (EIO: freed all the same) */
+	e[1] -= (unsigned char) n;
+	if (e[1] == 0) bk.disc &= ~(1U << i);
+	if (bk.nodisc) {
+		for (i = INIT_PROC_NR + 1; i < NR_PROCS; i++)
+			if (PEND(i)) RUN(i)[1] = 0;
+		bk.disc = 0;
+	}
+	return(TRUE);				/* the OPENs waiting: next */
+  }
 
   for (rmp = &mproc[INIT_PROC_NR + 1]; rmp < &mproc[NR_PROCS]; rmp++) {
 	if (!(rmp->mp_flags & BLKWAIT)) continue;
