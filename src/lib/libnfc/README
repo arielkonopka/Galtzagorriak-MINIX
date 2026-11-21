@@ -40,6 +40,25 @@ Done so far
 All of the above is host-tested in flipper/tests/nfc (software 3A,
 MIFARE Classic 1K and NTAG215 card models) under ASan/UBSan.
 
+The vendored Unleashed stacks (src/lib/nfc, unchanged) on nfc_xfer (#404):
+  nfc_shim.c/.h     furi, FuriString and the `Nfc` API over nfc_xfer; the
+                    poller loop runs in the caller (step cap, no threads).
+  nfc_shim_mfc.c    thread flags without threads, and failing storage/
+                    stream/key-dictionary stubs for the MIFARE Classic
+                    poller's attack modes and nfc_device.c's file half.
+  nfc_shim_time.c   stock's datetime/locale (24 h, D.M.Y) and RTC calls.
+  nfc_poller_defs_shim.c, nfc_device_defs_shim.c
+                    the poller and device tables of the protocols built:
+                    3A, 3B, 4A, 4B, DESFire, 15693, SLIX, MIFARE Classic
+                    (with stock's mf_classic_poller_sync).
+  nfc_supported_cards.c/.h, nfc_supported_cards_list.h
+                    the supported_cards parsers linked in (no plugin
+                    loader): verify -> read with the parser's keys ->
+                    parse to text.  25 of the 41 build today.
+  shim/             the headers the vendored files include.
+Tested in flipper/tests/nfc/prototest.c and cardtest.c (software 4A, 4B,
+DESFire, SLIX2 and MIFARE Classic 1K/4K models).
+
 Memory rules (spec Phase 14)
 ----------------------------
 No big buffer stays resident: every protocol context is allocated per use
@@ -49,8 +68,12 @@ from /home/flipper/nfc/assets a line at a time, never loaded whole.
 Still to port (needs the Unleashed lib/nfc tree copied byte for byte the
 way src/lib/subghz and src/lib/lfrfid were; that tree is not in this
 runner, so these are not reimplemented from memory):
-  - ISO 14443-4A, MIFARE DESFire, ISO 15693 (NFC-V), NFC-B/F pollers and
-    Unleashed's keyless transit/ID parsers;
+  - the parsers that are not in the table yet: those that read ID or
+    station lists from files (plantain, sevppk_tk, sk_tk, szppk_so,
+    skylanders: D.3, the user's own files on the SD card), those on
+    protocols not built here (Ultralight/NTAG, FeliCa, ST25TB, EMV),
+    disney_infinity (SHA-1) and banapass (case labels on const objects,
+    which GCC rejects);
   - the full `mfkey` nonce recovery (lfsr_recovery32/64, nested): the
     Crapto1 state-recovery, to be copied verbatim, not rewritten.
 Lane:local (the driver): the ST25R3916 /dev/nfc back end for nfc_xfer,

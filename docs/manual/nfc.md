@@ -12,6 +12,20 @@ firmware (spec Phase 14).
 > (spec Phase 13), so the `nfc` **app** and the live commands below are **(planned)** until
 > that driver lands. Saved-card files already work on dumps. The full `mfkey` key recovery
 > (Crypto-1 nonce/LFSR recovery) is still being ported and is **(planned)**.
+>
+> The stock (Unleashed) protocol stacks in `src/lib/nfc` now run on the PC as well, unchanged,
+> through a small adapter (#404): **ISO 14443-4A** (RATS/ATS, I-blocks, the card's "wait"
+> request), **ISO 14443-4B**, **MIFARE DESFire** (version, free memory, applications and every
+> file the card lets you read without a key; DESFire Light's wrapped commands too) and
+> **ISO 15693 / ICODE SLIX** (UID, memory blocks, lock status, NXP signature), and stock's
+> MIFARE Classic reader with known keys. On top of them, 25 of stock's **card parsers** turn a
+> dump into readable text (balance, trips, card number): aime, bambu, bip, charliecard,
+> clipper, csc, gallagher, hi, hid, hworld, itso, kazan, metromoney, microel, mizip, myki,
+> opal, smartrider, social_moscow, troika, two_cities, umarsh, washcity, zolotaya_korona and
+> zolotaya_korona_online. A parser that knows its card's keys (MiZIP and Microel derive them
+> from the UID) reads the card with them. Dates are shown as day.month.year, 24 h. Parsers that
+> need ID or station lists (which would come from your own files on the SD card) are not
+> included yet. Like the rest, all of this reaches real cards once the driver is there.
 
 ## Card files
 

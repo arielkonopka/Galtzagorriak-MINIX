@@ -44,7 +44,7 @@ MFKEY_SRC := $(V)/mfkey/crypto1.c $(V)/mfkey/mfkey_attack.c \
 	     $(L)/mfkey_host.c
 MFKEY_HDR := $(L)/mfkey_host.h $(wildcard $(L)/mfkey_shim/*.h)
 
-test: $(B)/nfctest $(B)/mfkeytest
+test: $(B)/nfctest $(B)/mfkeytest prototest cardtest
 	cd . && ./$(B)/nfctest
 	cd . && ./$(B)/mfkeytest
 
@@ -55,6 +55,8 @@ $(B)/nfctest: nfctest.c $(NFC_SRC) $(NFC_HDR)
 $(B)/mfkeytest: $(V)/mfkeytest.c $(MFKEY_SRC) $(MFKEY_HDR)
 	@mkdir -p $(B)
 	$(CC) $(MFKEY_CFLAGS) $(MFKEY_INC) -o $@ $(V)/mfkeytest.c $(MFKEY_SRC)
+
+include proto.mk
 
 clean:
 	rm -rf $(B)
