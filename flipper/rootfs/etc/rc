@@ -38,7 +38,11 @@ test -f /etc/.setup-done || sh /etc/setup
 # then mount them (see /etc/fstab).  One with errors left, or not
 # checked, is mounted read-only and checked again at the next boot.
 # setup -H keeps the copy of /home on the swap partition: no scratch.
-scratch="-T /dev/hd3"
+# Cards of 32 GB or more (/etc/.swap4, R12.34): swap is /dev/hd3a, and
+# /dev/hd3's first sector holds the subpartition table.
+sw=/dev/hd3
+test -f /etc/.swap4 && sw=/dev/hd3a
+scratch="-T $sw"
 test -f /etc/.home-v3 && scratch=
 test -f /etc/.setup-done && {
 	rm -f /tmp/fsck.log
@@ -92,12 +96,12 @@ test -n "$fcache_budget" && pkg budget $fcache_budget >/dev/null
 blkarg=
 test "$blk" = on && blkarg=blk
 case "$swap" in
-plain)	test -f /etc/.setup-done && test ! -f /etc/.home-v3 && swapon /dev/hd3 plain $blkarg &&
+plain)	test -f /etc/.setup-done && test ! -f /etc/.home-v3 && swapon $sw plain $blkarg &&
 		{ test -z "$swap_reserve" || swapon -r $swap_reserve; } ;;
 crypt)	echo "rc: swap=crypt is not available yet (no swap encryption): swap is off"
 	test -n "$blkarg" && echo "rc: blk=on needs swap=plain or off: blocks are off" ;;
 *)	test -n "$blkarg" && test -f /etc/.setup-done && test ! -f /etc/.home-v3 &&
-		swapon /dev/hd3 blk ;;
+		swapon $sw blk ;;
 esac
 
 # The radio region (spec R8.2): the Sub-GHz transmit bands; set once per

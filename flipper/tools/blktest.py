@@ -25,7 +25,7 @@ With -g, cards >= 32 GB (R12.34) instead: after the first boot the swap
 partition hd3 becomes a 0x81 one with the subpartitions hd3a, hd3b and
 hd3d of type 82 (hd3c is not swap), and a 60 GiB hole of the QEMU HAL in
 front of it (a sparse 64 GB card, as tools/bigcard.py).  Booted again,
-swapon /dev/hd3a plain blk, and blktest -g: 64 extents per subpartition,
+/etc/rc (swap=plain, blk=on, /etc/.swap4) swaps on hd3a, and blktest -g: 64 extents per subpartition,
 runs on hd3a, hd3b and hd3d, a block on hd3d read back.
 Exit status: the number of failures.
 """
@@ -107,8 +107,11 @@ def main_big():
 		if not r.login():
 			check(False, "first boot and login")
 			return 1
-		check(r.sh("pkg install /lib/pkg/tests_1.0.tar && sync", 120)
-			== 0, "install the tests package")
+		check(r.sh("pkg install /lib/pkg/tests_1.0.tar && echo swap=plain"
+			" >>/etc/rc.conf && echo blk=on >>/etc/rc.conf && "
+			">/etc/.swap4 && sync", 120) == 0,
+			"install the tests package; swap=plain, blk=on, "
+			"/etc/.swap4 (as /etc/setup on a card >= 32 GB)")
 		r.p.kill()
 		r.p.wait()
 		start = make_big(os.path.join(keep, "build/qemu/minix/disk.img"))
@@ -124,14 +127,14 @@ def main_big():
 		check(re.search(rb"^3 +type 81 +start +%d " % start, out, re.M)
 			is not None, "mkpart -l: %s" % out.strip().decode(
 				errors="replace").replace("\r\n", " | "))
-		out = r.output("mknod /dev/hd3a b 3 136; mknod /dev/hd3b b 3 137;"
-			" ls -l /dev/hd3a /dev/hd3b; echo st=$?", 30) or b""
+		out = r.output("ls -l /dev/hd3a /dev/hd3b /dev/hd3c /dev/hd3d; "
+			"echo st=$?", 30) or b""
+		check(b"st=0" in out and b"3, 139" in out,
+			"/dev/hd3a-hd3d in the root file system")
+		out = r.output("swapon", 30) or b""
 		print(out.decode(errors="replace"))
-		check(b"st=0" in out, "mknod /dev/hd3a, /dev/hd3b")
-		out = r.output("swapon off; swapon /dev/hd3a plain blk && swapon "
-			"-r 0; echo st=$?; swapon", 30) or b""
-		print(out.decode(errors="replace"))
-		check(b"st=0" in out, "swapon /dev/hd3a plain blk")
+		check(b"device 3/136" in out and b"swap: plain" in out,
+			"R12.34: /etc/rc swaps on /dev/hd3a (/etc/.swap4)")
 		r.sh("sleep 3", 30)	# the DISCARD at MMSWAPON first
 		tests(r, "/usr/tests/blktest -g",
 			"R12.34: blocks over hd3a, hd3b, hd3d", 300)

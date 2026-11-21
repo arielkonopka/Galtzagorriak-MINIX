@@ -10,7 +10,11 @@
 #	/dev/hd2  /usr   2 GB	programs and packages (MINIX V2)
 #	/dev/hd3  swap		cards below 8 GB: 64 MB, right after /usr;
 #				larger cards: at the end of the card, half
-#				of the space after /usr, at most 4 GiB - 1 MiB
+#				of the space after /usr, at most 4 GiB - 1 MiB;
+#				cards of 32 GB or more: hd3 holds four swap
+#				subpartitions hd3a-hd3d of 4 GiB - 1 MiB
+#				(/etc/.swap4), /home is 4 GiB - 1 MiB and
+#				the rest of the card stays free
 #	/dev/hd4  /home  rest	your files (MINIX V3: names up to 60
 #				characters, any size; its zone map has room
 #				for a /home up to the end of the card)
@@ -29,6 +33,10 @@ then
 	then
 		echo "First boot: adding /usr (2 GB), swap (64 MB) and /home to the SD card."
 		layout="81:2048 82:64 81:*"
+	elif test "$mb" -ge 29000
+	then
+		echo "First boot: adding /usr (2 GB), /home (4 GB) and 16 GB of swap (at the end) to the SD card."
+		layout="81:2048 82/4:*@end 81:4095"
 	else
 		echo "First boot: adding /usr (2 GB), /home and swap (at the end) to the SD card."
 		layout="81:2048 82:50%@end 81:*"
@@ -37,6 +45,7 @@ then
 		echo "setup: partitioning failed, starting without /usr and /home"
 		exit 1
 	}
+	case "$layout" in *82/4*) >/etc/.swap4 ;; esac
 	>/etc/.setup-parted
 	sync
 	echo "Rebooting to use the new partitions."
@@ -45,7 +54,9 @@ then
 fi
 
 echo "Preparing the card..."
-for p in /dev/hd2 /dev/hd3 /dev/hd4
+swap=/dev/hd3
+test -f /etc/.swap4 && swap="/dev/hd3a /dev/hd3b /dev/hd3c /dev/hd3d"
+for p in /dev/hd2 $swap /dev/hd4
 do
 	erase -q $p
 	case $? in
