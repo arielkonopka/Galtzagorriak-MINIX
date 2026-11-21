@@ -1,0 +1,36 @@
+# postinst of the u2f package (issue #420, spec K.8).  The app's own user
+# u2f (uid 25) in group usb: the key files in /ext/u2f (/home/flipper/u2f)
+# belong to it, mode 0600, and the USB FIDO interface will be group usb.
+# The launcher line "U2F", a window app.  No certificate or key is
+# shipped: the user puts their own in /ext/u2f/assets.
+#
+# Only sh built-ins and small programs, no subshells, no grep (#271): pkg
+# is still in memory while this runs.  The files are read with exec
+# redirections (a redirected loop would run in a forked subshell).
+exec 3<&0 </etc/passwd
+u=no
+while read l
+do
+	case "$l" in u2f:*) u=yes ;; esac
+done
+exec </etc/apps
+a=no
+while read l
+do
+	case "$l" in *:=/usr/bin/u2f) a=yes ;; esac
+done
+exec <&3 3<&-
+test $u = yes || {
+	echo 'u2f:*:25:12:U2F:/home/flipper/u2f:' >> /etc/passwd
+	echo "u2f: added the user u2f (uid 25, group usb)"
+}
+test $a = yes || {
+	echo 'U2F:u2f:@usb:=/usr/bin/u2f' >> /etc/apps
+	echo "u2f: the launcher now has U2F"
+}
+test -d /home/flipper/u2f || mkdir /home/flipper/u2f
+test -d /home/flipper/u2f/assets || mkdir /home/flipper/u2f/assets
+chown u2f /home/flipper/u2f /home/flipper/u2f/assets
+chmod 700 /home/flipper/u2f /home/flipper/u2f/assets
+echo "u2f: as root, copy your cert.der and cert_key.u2f to /home/flipper/u2f/assets"
+echo "u2f: then chown u2f and chmod 600 them"
