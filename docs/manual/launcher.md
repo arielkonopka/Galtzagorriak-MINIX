@@ -398,7 +398,9 @@ brackets on the right and a hint line that names the buttons for the row under t
   (`gm_run()`), as Archive's Open does. Its window ends, and the launcher starts the app of
   `/etc/apps` whose label is LABEL, as that line's user, with FILE (an absolute path) as its
   last argument. Only apps on the list can be started this way, and an app opened like this
-  cannot open a further one. An unknown label shows `no such app`.
+  cannot open a further one. An unknown label shows `no such app`. When the opened app ends
+  (without a notice), the launcher starts the app that asked again, from its first window, as
+  stock's Back does (issue #419): Archive after Open, Sub-GHz after its Frequency analyzer.
 
 **Watching the traffic.** With `GuiLog: on` in `/etc/launcher.conf` the launcher copies every
 record it gets from a window app (`gui< ...`) and every event it sends (`gui> ...`) to the

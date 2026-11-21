@@ -553,11 +553,14 @@ static void stockapp_tests(void)
 	unlink(ib);
 	check(win_run("/bin/subghzui", (char *) NULL,
 		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
-		"ok\tadd\tsave\n", out, sizeof out) == 0
+		"ok\tadd\tsave\nok\tmain\traw\nback\traw\nok\tmain\tfa\n",
+		out, sizeof out) == 0
 		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& strstr(out, "enum\tth\tRSSI threshold\t0") != NULL
+		&& strstr(out, "run\tSpectrum\t/dev/subghz") != NULL
 		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
 			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
-		"subghzui: Add manually: a stock .sub");
+		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
 	check(win_run("/bin/ibuttonui", (char *) NULL,
 		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
 		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
@@ -3411,21 +3414,8 @@ static void furihello_test(void)
  * `settings set' and `settings get' (two runs of settings, without sh: a
  * third run of either would make the run-time cache copy it to flash).  A missing file gives the
  * defaults, a file written here is read, a set writes the card's file
- * once; the files are removed afterwards. */
-static int file_has(const char *path, const char *want)
-{
-	char buf[256];
-	int fd, n;
-
-	if ((fd = open(path, O_RDONLY)) < 0) return 0;
-	n = (int) read(fd, buf, sizeof buf - 1);
-	close(fd);
-	if (n < 0) return 0;
-	buf[n] = 0;
-	return strstr(buf, want) != NULL;
-}
-
-/* settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * once; the files are removed afterwards (file_has: stockapp_tests').
+ * settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
  * it in the flash cache); its exit status */
 static int setk_run(const char *out, const char *a1, const char *a2,
 					const char *a3, const char *a4)

@@ -704,17 +704,24 @@ static char *run_arg(struct app *ap, char *extra)
 		return NULL;
 	}
 	if (ap->cmd[0] == '=') {	/* a window app: the launcher draws */
-		char *note = win_run(ap->label, ap->cmd + 1, pw,
-				     (opt & OPT_LOG) != 0, extra), *l, *f;
+		char *note, *l, *f;
 		int i;
 
-		/* Archive's Open (#413): only an app of /etc/apps, by its
-		 * label, as its own user; one hop (an opened app cannot) */
-		if (!win_next(&l, &f) || extra != NULL) return note;
-		for (i = 0; i < napps; i++)
-			if (strcmp(apps[i].label, l) == 0 && apps + i != ap)
-				return run_arg(&apps[i], f);
-		return "no such app";
+		/* Archive's Open (#413), Sub-GHz's Frequency analyzer (#419):
+		 * only an app of /etc/apps, by its label, as its own user; one
+		 * hop (an opened app cannot).  When it ends, the app that
+		 * asked starts again (stock: Back returns to it); a loop, so
+		 * going back and forth never deepens the stack. */
+		for (;;) {
+			note = win_run(ap->label, ap->cmd + 1, pw,
+				       (opt & OPT_LOG) != 0, extra);
+			if (!win_next(&l, &f) || extra != NULL) return note;
+			for (i = 0; i < napps; i++)
+				if (strcmp(apps[i].label, l) == 0
+				    && apps + i != ap) break;
+			if (i == napps) return "no such app";
+			if ((note = run_arg(&apps[i], f)) != NULL) return note;
+		}
 	}
 	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */
