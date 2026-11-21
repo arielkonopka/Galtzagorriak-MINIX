@@ -30,6 +30,16 @@ rest of the system:
 Other exit statuses: 0 the script ended normally, 1 an error in the script (the message and the
 line are printed), 2 wrong arguments, 5 the file could not be read.
 
+## RAM
+
+The interpreter is a shared library in internal flash (spec R7c.1): its code and its constant
+tables (the built-in strings, classes and modules) are there once, for every running script. A
+script's process holds only its own state: 1.1 KB of data (the C library's and Berry's
+per-process variables) plus the room for its heap and stack, 12 KB, which the system reserves
+when the script starts so that the default 8 KB heap (`-m`) always fits. One running script
+takes about 13.3 KB; two take twice that. `free -v` shows the library ("shared Berry: 84 KB at
+...") and its data per process.
+
 `-n 0` is for scripts that must run for a long time. A script without a budget still shares the
 processor with the rest: the shell and the other programs keep answering, and `kill` stops it.
 
@@ -55,6 +65,7 @@ bytecode: `berryc -c script.bec script.be`. The Flipper loads `.bec` files witho
 
 - **(planned, R7c.3)** More bindings: `timer`, `alert`, `gpio`, `adc`, `gui`, `storage` and the
   radios.
-- **(planned, R7c.1)** Starting a script with `#!/usr/bin/berry`, and the interpreter as a shared
-  library so a running script takes less RAM (about 19 KB today).
+- **(planned, R7c.1)** Starting a script with `#!/usr/bin/berry`.
+- **(planned, R7c.4)** A heap size per script package (`Heap:` in its manifest), so a small
+  script reserves less than 12 KB; the spec's goal is 6 KB for an idle script.
 - The `math` module, and `os`, `time` and `json`.

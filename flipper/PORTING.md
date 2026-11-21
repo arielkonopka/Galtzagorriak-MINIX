@@ -1290,30 +1290,83 @@ callbacks of the `timer` binding will do the same.  Heap: over the limit
 an allocation fails like a full heap: one forced GC, then
 `BE_MALLOC_FAIL`; the script ends with status 4, its RAM goes back to MM.
 
+**Where the 19.7 KB of part 1 went (QEMU, issue #431, from the link map
+and `free -v`).**  Berry was one position-independent program (80 KB of
+text, in place in the installed region):
+
+| per running script | bytes |
+|---|---|
+| `.data.rel.ro`: the constant tables (pointer tables, copied to RAM to be relocated) | 6 208 |
+| of it: the string table `be_string.o` / bytes, base, list, lexer, string, map, range ... | 2 444 / 3 764 |
+| GOT: the libc area (608) and the program's own entries (356) | 964 |
+| `.data` + `.bss` (launcher line buffer, the heap limit, module cache) | 160 |
+| chmem: heap and stack gap (`CHMEM_berry`) | 12 288 |
+| sum (MM rounds to clicks) | 19 620 → 19 712 measured |
+
+The loaded bytecode is not in that list: a script's functions, constants
+and strings are allocated in the VM heap (1 501 B at start, `gc.allocated()`)
+and count inside the chmem.  libc's code is in the shared libc already.
+
+**The shared library slot (R7c.1, issue #431).**  The VM and the bindings
+are now a third shared library in flash, after libc and libfuri
+(`<minix/shlibc.h>` `SHBERRY_BASE`, `ld/shberry.ld`, `berry.exports`,
+`tools/mkshlibc.py tab --berry`), built into `minix.bin` like the other two:
+
+    0x08030000  shared libc			48 KB slot, 19 KB used
+    0x0803C000  shared libfuri + libapp	48 KB slot, 44 KB used
+    0x08048000  shared Berry (GZLB)		96 KB slot, 84 KB used
+    0x08060000  installed programs (was 0x08048000)
+
+Its `.data.rel.ro` is linked into its text: at a fixed address the
+pointers of the constant tables are final at link time, so the tables run
+from flash; `mkshlibc.py` refuses the image if one of them points into RAM.
+Its per-process "berry area" (GOT 336 B incl. data and bss) follows the
+libc area at r9, like the furi area; a program uses either libfuri or Berry,
+so the id of the one it uses is in `a_dbase` (MM's exec and `pkg` accept
+either header; 6 more instructions in MM, 0 B RAM).  The launcher
+`/usr/bin/berry` (still in package `berry`, `--flash`) keeps only
+`gzberry.c`: 1.4 KB of text, 16 stubs.
+
 **Measured (QEMU, `tools/berrytest.py`, 2026-11-21).**
 
-| | bytes |
-|---|---|
-| text (flash, shared by every running script; 4.4 KB of it the bindings) | 79 948 |
-| `.data` + GOT per process | 6 220 + 964 |
-| `.bss` | 148 |
-| chmem (stack and heap gap, `CHMEM_berry`) | 12 288 |
-| one running script, `free -v` | 19 712 |
-| VM heap at start (`gc.allocated()`) | 1 501 |
-| endless loop with the default budget | ends after 0.5 s (QEMU) |
+| | part 1 | now |
+|---|---|---|
+| text in flash, shared by every script | 79 948 (program) | 85 072 (library, tables included) + 1 404 (launcher) |
+| data per process: libc area + Berry area + launcher GOT and data | 7 184 | 1 008 |
+| `.bss` | 148 | 140 |
+| chmem (`CHMEM_berry`) | 12 288 | 12 288 |
+| **one running script, `free -v`** | **19 712** | **13 568** |
+| a second (and third) idle script at the same time | 19 712 | 13 568 each |
+| VM heap at start (`gc.allocated()`) | 1 501 | 1 501 |
 
-The 7.2 KB of data per process are mostly the constant tables (`generate/`: the
-string table, the built-in classes and modules): they are pointer tables,
-and in a position-independent program every initialised pointer is data,
-copied to RAM per process.  This is why AC7c.1's 6 KB per script is not
-met yet.  **Next step (R7c.1):** link the VM as a shared library at a
-fixed address (like `libc.bin` and `furi.bin`, `tools/mkshlibc.py`), so
-the tables stay in flash and each script pays only for its GOT, `.bss`
-and heap.  The 48 KB slots after the system image are full, so this
-needs a new slot in the installed region (flash layout, R2b.1); then
-lower `CHMEM_berry` to the measured need (about 1.5 KB of heap at start
-plus the stack).  Also open: `#!` scripts (MM's exec has no `#!`), the
-`math` module, and solidify (bytecode as C constants in flash).
+**AC7c.1 (≤ 6 KB for an idle script, with its stack): not met with the
+default 8 KB heap, and it cannot be while the heap is reserved up front.**
+MINIX gives a process its whole data+gap+stack at exec (`a_total`); brk
+only moves inside it.  So `berry` reserves what its default limit needs:
+MM's `memuse` (`free -t on`) shows the heap bomb at the 8 KB limit leaves
+1 712 B of the 12 288 untouched (MM's 1.5 KB safety gap), so the chmem
+cannot shrink without lowering the default `-m`.  What a script itself
+uses: `hello.bec` ran in a 5 KB chmem (heap brk 3 072 B, stack ~1 KB,
+992 B untouched), i.e. **≈ 6.3 KB for the smallest bytecode script**
+(1.15 KB data + 5 KB); source scripts need ~2 KB of C stack for the parser
+(`hello.be` overflowed the 5 KB stack).  What is missing for AC7c.1:
+(1) per-script chmem: script packages with a `Heap:` field get their own
+copy of the 1.4 KB launcher with chmem = heap + 3 KB (R7c.4's manifest
+heap), so the default 8 KB stays for `berry` on the shell; (2) the malloc
+growth step (1.5 KB of VM heap took 3 KB of brk).  Both are follow-ups;
+this part does not lower `CHMEM_berry`, so no limit of part 1 changes.
+
+**Found: a stack overflow of an FP process can panic the kernel.**  With
+`CHMEM_berry` at 5 KB (test build only), `berry primes.bec 30` faults on
+its stack (`signal 11 ... cfsr=00000082`), and right after that MM faults
+with CFSR 0x20 (MLSPERR: the lazy FP state save) in `_receive`: "Kernel
+panic: exception in system code".  The bad-stack-pointer path
+(`klib.c`, the `bad stack pointer` message) cancels a pending lazy save;
+the ordinary MemManage path for a process with live FP state seemingly
+does not, so the deferred save hits the faulting process's stack under
+MM's MPU map.  Not reachable with the shipped chmem in these tests, but
+any user program that uses the FPU and faults could do it: needs its own
+issue (kernel, R5.7).
 
 **The `-n 0` hang (found in part 1, fixed in #429).**  Two runaway
 scripts with `-n 0` made QEMU stop answering.  The cause was the

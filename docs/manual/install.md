@@ -318,6 +318,10 @@ format error`) until you rewrite the card.)
 `minix.bin`) and install the app packages (`remind`, `alarm`, `timed`) again: what was installed
 before is not found at the new place.)
 
+(The same once more since the shared Berry interpreter, issue #431: the programs installed in
+internal flash now start 96 KB later, at `0x08060000`, and `minix.bin` is up to 384 KB. Flash
+`minix-base.bin` and install the packages installed with `--flash` (`berry` and the apps) again.)
+
 
 1. Build the new version (section 2).
 2. Send the new system package: `flipper/tools/flsend build/flipper/minix/pkgs/base_X.Y.tar`.
