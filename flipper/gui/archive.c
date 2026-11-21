@@ -16,7 +16,8 @@
  * Open: a .txt file is shown here (its first lines); the other types are
  * opened by their apps: a "run" record (issue #413) asks the launcher to
  * start the app of /etc/apps with that label (Infrared, Sub-GHz, RFID,
- * iButton) with the file as its argument; this app ends then.
+ * iButton) with the file as its argument; this app ends then, and the
+ * launcher starts it again when that app ends (#419).
  *
  *	Archive:nobody:@file:=/bin/archive	(/etc/apps)
  *

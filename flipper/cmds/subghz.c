@@ -6,6 +6,11 @@
  *					(-v: also the protocol's own text, as
  *					stock's CLI prints it); Ctrl-C ends
  *		subghz decode FILE [-v]	the same for a .sub RAW capture
+ *		subghz rec FREQ FILE [-t DBM] [-s SEC] [-n SAMPLES]
+ *					record a RAW capture (stock's Read RAW):
+ *					streamed to FILE, only while the RSSI
+ *					is >= DBM (-t), for SEC seconds of
+ *					signal or SAMPLES values at most
  *		subghz tx KEY FREQ TE REPEAT
  *					send KEY (hex, 24 bits) as Princeton
  *					with TE us, REPEAT times (stock's
@@ -45,6 +50,7 @@
 #include <unistd.h>
 #include <sgfile.h>
 #include <sgedit.h>
+#include <sgrec.h>
 #include <subghz/registry.h>
 #include <lib/flipper_format/flipper_format.h>
 
@@ -68,6 +74,7 @@ static int usage(void)
 		"Usage: subghz rx FREQ [-v]\n"
 		"       subghz decode FILE [-v]\n"
 		"       subghz edit IN OUT trim|cut T0 T1\n"
+		"       subghz rec FREQ FILE [-t DBM] [-s SEC] [-n SAMPLES]\n"
 		"       subghz tx KEY FREQ TE REPEAT\n"
 		"       subghz tx_from_file FILE [REPEAT]\n"
 		"       subghz chat FREQ\n"
@@ -192,12 +199,18 @@ static void fl_feed(bool level, uint32_t dur)
 	}
 }
 
+/* What the stream gives its durations to: the decoders (fl_feed) or the
+ * recorder; rs_gate, when set, is asked once a half ring whether to keep
+ * it (the recorder's RSSI threshold). */
+static void (*rs_feed)(bool level, uint32_t dur) = fl_feed;
+static int (*rs_gate)(void);
+
 /* 0 when it ran until Ctrl-C, -1 when the kernel has no stream (QEMU) */
 static int rx_stream(int fd, SubGhzReceiver *rx)
 {
 	struct sg_stream st;
 	uint32_t *ring = malloc(RS_WORDS * sizeof(uint32_t)), prev = 0;
-	int h, i, first = 1, lv;
+	int h, i, first = 1, lv, keep;
 
 	if (ring == NULL) return -1;
 	st.ring = ring;
@@ -222,9 +235,10 @@ static int rx_stream(int fd, SubGhzReceiver *rx)
 			first = 1;
 			lv = !lv;
 			fl_dur = 0;
-			subghz_receiver_reset(rx);
+			if (rx != NULL) subghz_receiver_reset(rx);
 			continue;
 		}
+		keep = rs_gate == NULL || rs_gate();
 		for (i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2); i++) {
 			if (!first) {
 				uint32_t d = ring[i] - prev;
@@ -239,9 +253,9 @@ static int rx_stream(int fd, SubGhzReceiver *rx)
 				if (d > 4000 && lv) {
 					lv = 0;
 					fl_dur = 0;
-					subghz_receiver_reset(rx);
+					if (rx != NULL) subghz_receiver_reset(rx);
 				}
-				fl_feed(lv, d);
+				if (keep) rs_feed(lv, d);
 				lv = !lv;
 			}
 			prev = ring[i];
@@ -418,6 +432,108 @@ static int cmd_edit(int argc, char **argv)
 	if (w.fail) { bad(argv[3], "write failed"); ret = 1; }
 	if (ret) remove(argv[3]);	/* leave no half-written file */
 	return ret;
+}
+
+/* ---- record (Read RAW) ----
+ * subghz rec FREQ FILE [-t DBM] [-s SECONDS] [-n SAMPLES]: what the
+ * receiver demodulates, as a stock RAW .sub file (Filetype "Flipper SubGhz
+ * RAW File", RAW_Data lines of up to RAW_LINE signed durations: on > 0,
+ * off < 0), as stock's Read RAW.  The file is streamed to the card through
+ * one line buffer (REC_BUF): nothing of the recording stays in RAM, so its
+ * length is bounded by the card (and -s / -n) only.  -t: only what comes
+ * while the RSSI (its peak, /dev/subghz) is at least DBM, stock's RSSI
+ * threshold; checked once a frame (QEMU) or a half ring (the Flipper,
+ * 512 edges).  Ctrl-C (SIGINT) or SIGTERM ends it; the file is complete
+ * then.  Receive only: nothing is sent.  The core is sgrec.c (libsubghz,
+ * host-tested). */
+static SgRec *rec;		/* malloc'd by rec only: rx pays nothing */
+static int rec_fd = -1, rec_thr = -999;
+
+static int rec_out(void *ctx, const char *buf, int n)
+{
+	(void) ctx;
+	return (int) write(rec_fd, buf, (size_t) n);
+}
+
+static void rec_put(bool level, uint32_t us)
+{
+	if (!stop && sgrec_put(rec, level, us)) stop = 1;
+}
+
+/* The RSSI threshold: 1 keep, 0 drop. */
+static int rec_gate(void)
+{
+	char t[48];
+	int fd, n, v;
+
+	if ((fd = open("/dev/subghz", O_RDONLY)) < 0) return 1;
+	n = (int) read(fd, t, sizeof t - 1);
+	close(fd);
+	if (n <= 0) return 1;
+	t[n] = 0;
+	return sgrec_rssi(t, &v) && v >= rec_thr;
+}
+
+static int cmd_rec(int argc, char **argv)
+{
+	unsigned long hz, max = 0;
+	unsigned long long max_us = 0;
+	int fd, n, i, e;
+
+	if (argc < 4 || !parse_freq(argv[2], &hz)) return usage();
+	for (i = 4; i + 1 < argc; i += 2) {
+		if (strcmp(argv[i], "-t") == 0) rec_thr = atoi(argv[i + 1]);
+		else if (strcmp(argv[i], "-s") == 0)
+			max_us = strtoul(argv[i + 1], NULL, 10) * 1000000ULL;
+		else if (strcmp(argv[i], "-n") == 0)
+			max = strtoul(argv[i + 1], NULL, 10);
+		else return usage();
+	}
+	if (i != argc) return usage();
+	if ((rec_fd = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
+		return bad(argv[3], strerror(errno));
+	if ((rec = malloc(sizeof(*rec))) == NULL) {
+		close(rec_fd);
+		return bad("rec", "out of memory");
+	}
+	sgrec_init(rec, rec_out, NULL, max, max_us);
+	sgrec_header(rec, hz);
+	if (tune(hz) < 0) {
+		close(rec_fd);
+		return 1;
+	}
+	if ((fd = open("/dev/subghzraw", O_RDONLY)) < 0) {
+		untune();
+		close(rec_fd);
+		return bad("/dev/subghzraw", strerror(errno));
+	}
+	signal(SIGINT, onsig);
+	signal(SIGTERM, onsig);
+	printf("Recording at %lu to %s. Press Ctrl+C to stop.\n", hz, argv[3]);
+	fflush(stdout);
+	rs_feed = rec_put;
+	if (rec_thr > -999) rs_gate = rec_gate;
+	if (rx_stream(fd, NULL) == 0) goto done;	/* the Flipper */
+	while (!stop) {
+		n = read(fd, (char *) frame, sizeof(frame));
+		if (n < 0) {
+			if (errno == EINTR) break;
+			bad("/dev/subghzraw", strerror(errno));
+			break;
+		}
+		if (rs_gate != NULL && !rs_gate()) continue;
+		for (i = 0; i < n / 4 && !stop; i++) rec_put(!(i & 1), frame[i]);
+		if (n < (int) sizeof(frame)) rec_put(false, GAP_US);
+	}
+done:
+	close(fd);
+	untune();
+	e = sgrec_end(rec) < 0 ? (errno ? errno : ENOSPC) : 0;
+	if (close(rec_fd) != 0 && !e) e = errno;
+	if (e) return bad(argv[3], strerror(e));
+	printf("Recorded %lu samples, %lu ms\n", rec->n,
+		(unsigned long) (rec->us / 1000));
+	return 0;
 }
 
 /* ---- send ---- */
@@ -743,6 +859,7 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "rx") == 0) return cmd_rx(argc, argv);
 	if (strcmp(argv[1], "decode") == 0) return cmd_decode(argc, argv);
 	if (strcmp(argv[1], "edit") == 0) return cmd_edit(argc, argv);
+	if (strcmp(argv[1], "rec") == 0) return cmd_rec(argc, argv);
 	if (strcmp(argv[1], "tx") == 0) return cmd_tx(argc, argv);
 	if (strcmp(argv[1], "tx_from_file") == 0) return cmd_tx_file(argc, argv);
 	if (strcmp(argv[1], "chat") == 0) return cmd_chat(argc, argv);

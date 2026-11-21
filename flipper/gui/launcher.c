@@ -264,8 +264,9 @@ static int nsel;			/* PG_NOTE: the notification shown */
 
 /* The SETTINGS page (spec K.7): every group but Launcher is a program run
  * like an app, the groups of setgroup as window apps ("=", K.8: the
- * launcher draws them); "" = not there yet.  Power is today's app until
- * its group comes (T24c). */
+ * launcher draws them); "" = not there yet.  Power is today's app (the
+ * battery, T24c); its delays are the "Auto off" group (#419).  Auto off and
+ * Region come after Launcher so the rows above keep their places. */
 static const struct {
 	char name[9];
 	char user[7];
@@ -273,12 +274,14 @@ static const struct {
 } sys_tab[] = {
 	{ "Display", "root", "=/bin/setgroup display" },
 	{ "Sound", "root", "=/bin/setgroup sound" },
-	{ "LED", "", "" },
+	{ "LED", "root", "=/bin/setgroup led" },
 	{ "Time", "root", "=/bin/setgroup time" },
 	{ "Power", "nobody", "/bin/power" },
 	{ "Storage", "", "" },
 	{ "Gestures", "", "" },
 	{ "Launcher", "", "" },
+	{ "Auto off", "root", "=/bin/setgroup power" },
+	{ "Region", "root", "=/bin/setgroup region" },
 	{ "About", "root", "=/bin/setgroup about" },
 };
 #define SYS_N		(int) (sizeof(sys_tab) / sizeof(sys_tab[0]))
@@ -701,17 +704,24 @@ static char *run_arg(struct app *ap, char *extra)
 		return NULL;
 	}
 	if (ap->cmd[0] == '=') {	/* a window app: the launcher draws */
-		char *note = win_run(ap->label, ap->cmd + 1, pw,
-				     (opt & OPT_LOG) != 0, extra), *l, *f;
+		char *note, *l, *f;
 		int i;
 
-		/* Archive's Open (#413): only an app of /etc/apps, by its
-		 * label, as its own user; one hop (an opened app cannot) */
-		if (!win_next(&l, &f) || extra != NULL) return note;
-		for (i = 0; i < napps; i++)
-			if (strcmp(apps[i].label, l) == 0 && apps + i != ap)
-				return run_arg(&apps[i], f);
-		return "no such app";
+		/* Archive's Open (#413), Sub-GHz's Frequency analyzer (#419):
+		 * only an app of /etc/apps, by its label, as its own user; one
+		 * hop (an opened app cannot).  When it ends, the app that
+		 * asked starts again (stock: Back returns to it); a loop, so
+		 * going back and forth never deepens the stack. */
+		for (;;) {
+			note = win_run(ap->label, ap->cmd + 1, pw,
+				       (opt & OPT_LOG) != 0, extra);
+			if (!win_next(&l, &f) || extra != NULL) return note;
+			for (i = 0; i < napps; i++)
+				if (strcmp(apps[i].label, l) == 0
+				    && apps + i != ap) break;
+			if (i == napps) return "no such app";
+			if ((note = run_arg(&apps[i], f)) != NULL) return note;
+		}
 	}
 	win_reap(1);			/* a closed window app still alive */
 	gui_close();			/* the app opens the devices itself */

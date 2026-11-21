@@ -11,7 +11,8 @@
  * Back, which writes /etc/TZ once (through a new file and rename,
  * R18b.3) and gives INIT SIGHUP (the zone of what it starts) and SIGRTC
  * (timed re-arms the local-time timers).  "other": a rule not in the
- * table, kept as it is.  Clock (12/24 h) is saved in
+ * table, kept as it is.  Clock (12/24 h) and Date fmt (the order of a
+ * date's fields, as stock's Date format) are saved in
  * /etc/flipper/time.conf for the clock apps.  None of it is applied at
  * boot: the RTC runs on, and INIT reads /etc/TZ itself. */
 #include <sys/types.h>
@@ -29,13 +30,14 @@
 #define ZPAGE		12	/* zones per page of the list (<= 16 rows,
 				 * <= 640 B of records) */
 
-enum { R_DATE, R_TIME, R_ZONE, R_CLOCK };
+enum { R_DATE, R_TIME, R_ZONE, R_CLOCK, R_DFMT };
 
 const struct srow time_rows[] = {
 	{ "Date", S_DATE, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Time", S_TIME, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Zone", S_ITEM, S_NOSAVE, 0, 0, 0, "", "" },
 	{ "Clock", S_ENUM, 0, 0, 1, 1, "", "24 h|12 h" },
+	{ "Date fmt", S_ENUM, 0, 0, 2, 1, "", "D.M.Y|M/D/Y|Y-M-D" },
 };
 
 static short nzones;			/* tz_count(): "other" is that one */
@@ -85,6 +87,7 @@ static void load(void)
 	}
 	zone = zone0 = (short) tz_find(label, rule0);
 	if (sg_val[R_CLOCK] < 0) sg_val[R_CLOCK] = 0;
+	if (sg_val[R_DFMT] < 0) sg_val[R_DFMT] = 0;
 	show_time();
 }
 

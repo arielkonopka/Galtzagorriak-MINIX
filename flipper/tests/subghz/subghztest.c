@@ -21,6 +21,7 @@
  */
 #include <dirent.h>
 #include <sgfile.h>
+#include <sgrec.h>
 #include <subghz/registry.h>
 #include <lib/flipper_format/flipper_format.h>
 
@@ -619,6 +620,125 @@ static void fuzz(SubGhzEnvironment* env, long pairs) {
     subghz_receiver_free(rx);
 }
 
+/* ---- Read RAW (issue #419): sgrec ---- */
+
+static int rx_n;
+
+static void rec_rx(SubGhzReceiver* r, SubGhzProtocolDecoderBase* d, void* ctx) {
+    (void)r;
+    (void)d;
+    (void)ctx;
+    rx_n++;
+}
+
+static char rec_text[64 * 1024];
+static int rec_len, rec_outs, rec_fail_at = -1;
+
+static int rec_out(void* ctx, const char* buf, int n) {
+    (void)ctx;
+    if(rec_outs++ == rec_fail_at) return -1; /* the card full */
+    if(rec_len + n >= (int)sizeof(rec_text)) return -1;
+    memcpy(rec_text + rec_len, buf, n);
+    rec_len += n;
+    rec_text[rec_len] = 0;
+    return n;
+}
+
+static void rec_reset(void) {
+    rec_len = rec_outs = 0;
+    rec_text[0] = 0;
+    rec_fail_at = -1;
+}
+
+static void rec_test(SubGhzEnvironment* env) {
+    static SgRec r;
+    SubGhzReceiver* rx;
+    FILE* f;
+    SgFile s;
+    const char* why;
+    bool level;
+    uint32_t us;
+    int i, ok, lines, dbm, n0;
+
+    rec_reset();
+    sgrec_init(&r, rec_out, NULL, 0, 0);
+    sgrec_header(&r, 433920000UL);
+    sgrec_put(&r, true, 500);
+    sgrec_put(&r, false, 1000);
+    sgrec_put(&r, false, 20000); /* the same level: one value */
+    sgrec_put(&r, true, 0);      /* 0 us: nothing */
+    sgrec_put(&r, true, 350);
+    CHECK(sgrec_end(&r) == 0 && strcmp(rec_text,
+        "Filetype: Flipper SubGhz RAW File\nVersion: 1\nFrequency: 433920000\n"
+        "Preset: FuriHalSubGhzPresetOok650Async\nProtocol: RAW\n"
+        "RAW_Data: 500 -21000 350\n") == 0,
+        "sgrec: stock RAW header and values, same levels merged: %s", rec_text);
+
+    /* -n: at most n values; the line buffer goes out in pieces, never the
+     * whole recording at once */
+    rec_reset();
+    sgrec_init(&r, rec_out, NULL, 1200, 0);
+    sgrec_header(&r, 868350000UL);
+    for(i = 0; i < 5000 && !sgrec_put(&r, !(i & 1), 400 + i % 7); i++)
+        ;
+    ok = sgrec_end(&r) == 0 && r.n == 1200;
+    for(lines = 0, i = 0; i < rec_len; i++)
+        if(rec_text[i] == '\n') lines++;
+    CHECK(ok && lines == 5 + 3 && rec_outs > 3, "sgrec: -n 1200 = 3 RAW_Data lines of <= 512, %d outputs",
+          rec_outs);
+
+    /* -s: the time recorded */
+    rec_reset();
+    sgrec_init(&r, rec_out, NULL, 0, 1000000ULL);
+    for(i = 0; i < 100000 && !sgrec_put(&r, !(i & 1), 1000); i++)
+        ;
+    CHECK(i == 999 && sgrec_end(&r) == 0, "sgrec: -s 1 ends after 1 s of signal (%d)", i);
+
+    /* the output fails (the card full): it stops and says so */
+    rec_reset();
+    rec_fail_at = 1;
+    sgrec_init(&r, rec_out, NULL, 0, 0);
+    sgrec_header(&r, 433920000UL);
+    for(i = 0; i < 100000 && !sgrec_put(&r, !(i & 1), 300); i++)
+        ;
+    CHECK(i < 100000 && sgrec_end(&r) < 0, "sgrec: a failed write stops the recording");
+
+    CHECK(sgrec_rssi("rssi=-92 peak=-41 freq=433919830", &dbm) && dbm == -41 &&
+              sgrec_rssi("rssi=-110 freq=433920000", &n0) && n0 == -110 &&
+              !sgrec_rssi("off freq=433919830", &dbm),
+          "sgrec: RSSI threshold reads the peak, else rssi, none when off");
+
+    /* a recording of a capture decodes as the capture: Princeton from
+     * vectors/, through the recorder, through sg_open/sg_raw_next */
+    rec_reset();
+    sgrec_init(&r, rec_out, NULL, 0, 0);
+    sgrec_header(&r, 433920000UL);
+    n0 = -1;
+    if(sg_open(&s, "vectors/princeton_raw.sub", &why) == 0) {
+        while(sg_raw_next(&s, &level, &us) == 1) sgrec_put(&r, level, us);
+        sg_close(&s);
+        n0 = 0;
+    }
+    CHECK(n0 == 0 && sgrec_end(&r) == 0, "sgrec: vectors/princeton_raw.sub recorded");
+    f = fopen("build/rec.sub", "w");
+    if(f != NULL) {
+        fputs(rec_text, f);
+        fclose(f);
+    }
+    rx = subghz_receiver_alloc_init(env);
+    subghz_receiver_set_filter(rx, SubGhzProtocolFlag_Decodable);
+    rx_n = 0;
+    subghz_receiver_set_rx_callback(rx, rec_rx, NULL);
+    ok = sg_open(&s, "build/rec.sub", &why) == 0 && s.raw && s.frequency == 433920000UL;
+    if(ok) {
+        while(sg_raw_next(&s, &level, &us) == 1) subghz_receiver_decode(rx, level, us);
+        subghz_receiver_decode(rx, false, 20000);
+        sg_close(&s);
+    }
+    CHECK(ok && rx_n > 0, "sgrec: the recorded file is a RAW .sub and decodes (%d packets)", rx_n);
+    subghz_receiver_free(rx);
+}
+
 int main(int argc, char** argv) {
     SubGhzEnvironment* env;
     FILE* golden = NULL;
@@ -656,6 +776,7 @@ int main(int argc, char** argv) {
     random_test(env);
     round_trips(env);
     fuzz(env, 2000000);
+    rec_test(env);
     sg_env_free(env);
     printf("subghztest: %d checks, %d failed; heap asked %lu bytes in all\n", checks, failures,
            (unsigned long)subghz_heap_bytes);

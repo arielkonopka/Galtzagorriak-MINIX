@@ -27,7 +27,8 @@ OK on a file opens its page:
 - **Open**: a `.txt` file shows its first lines. The other types open in their app: `.ir` in
   Infrared, `.sub` in Sub-GHz, `.rfid` in RFID, `.ibtn` in iButton (`.nfc`: planned). Archive
   asks the launcher (a `run` record, see [The launcher](launcher.md)); the launcher starts the
-  app of `/etc/apps` with that label, as its own user, with the file as its argument.
+  app of `/etc/apps` with that label, as its own user, with the file as its argument. When you
+  leave that app, Archive opens again (at its first page).
 - **Name**: rename it on the keyboard. The type ending stays: `telebista` becomes
   `telebista.ir`. A name that is already taken is not used.
 - **Favourite**: on puts the file in Favourites; off takes it out.

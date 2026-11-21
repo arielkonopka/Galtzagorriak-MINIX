@@ -1,0 +1,19 @@
+# prerm of the utils package (issue #420): its apps off the launcher.  sh
+# built-ins and exec redirections only (no subshell, no grep, #271).
+# /etc/apps is never rewritten in place (#282): the new list goes to
+# /etc/apps.new, sync puts it on the card, mv renames it over /etc/apps.
+test -f /etc/apps || exit 0	# no own copy: the launcher uses /rom's
+exec 3<&0 4>&1 </etc/apps >/etc/apps.new
+ok=yes
+while read l
+do
+	case "$l" in *:=/usr/bin/clock|*:=/usr/bin/dice|*:=/usr/bin/passport) ;; *) echo "$l" || ok=no ;; esac
+done
+exec <&3 >&4 3<&- 4>&-
+if test $ok = yes && sync && mv /etc/apps.new /etc/apps
+then :
+else
+	rm -f /etc/apps.new
+	echo "utils: could not rewrite /etc/apps; its lines stay (edit it by hand)" >&2
+	exit 1
+fi
