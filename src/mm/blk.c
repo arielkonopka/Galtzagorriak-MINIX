@@ -88,6 +88,7 @@ PRIVATE struct {
 extern char mbuf[];
 #define HDR	((struct bkhdr *) (mbuf + ARG_MAX - BK_SECT))
 #define BK_MAGIC	0x4B425A47UL	/* "GZBK" */
+#define BK_SCR		((ARG_MAX - BK_SECT) / BK_SECT)	/* mbuf in front */
 
 struct bkhdr {
   unsigned long magic, slot, pid, stamp;	/* whose block it is */
@@ -106,7 +107,9 @@ FORWARD _PROTOTYPE( unsigned bk_gap, (unsigned pos)			);
 FORWARD _PROTOTYPE( unsigned bk_fit, (unsigned n, unsigned *len)	);
 FORWARD _PROTOTYPE( int bk_open, (unsigned long bytes, int flags)	);
 FORWARD _PROTOTYPE( int bk_valid, (struct bkhdr *h, unsigned long id)	);
-FORWARD _PROTOTYPE( phys_bytes bk_buf, (vir_bytes v, vir_bytes n)	);
+FORWARD _PROTOTYPE( int bk_buf, (vir_bytes v, vir_bytes n)		);
+FORWARD _PROTOTYPE( int bk_user, (vir_bytes v, unsigned n,
+						unsigned long *crc)	);
 FORWARD _PROTOTYPE( int bk_io, (struct blkreq *rq, int bg)		);
 FORWARD _PROTOTYPE( int bk_do, (char *desc, int bg)			);
 FORWARD _PROTOTYPE( int bk_disc, (struct blkreq *rq)			);
@@ -444,21 +447,56 @@ unsigned long id;
 /*===========================================================================*
  *				bk_buf					     *
  *===========================================================================*/
-PRIVATE phys_bytes bk_buf(v, n)
+PRIVATE int bk_buf(v, n)
 vir_bytes v, n;			/* the caller's buffer, bytes */
 {
-/* R12.36: the buffer wholly inside the caller's data or stack segment
- * (WINCHESTER checks again with numap).  Its physical address, 0: no. */
+/* R12.36: is the buffer wholly inside the caller's data or stack segment?
+ * (WINCHESTER checks again with numap.) */
   struct mem_map *s;
   vir_bytes lo, hi;
 
   for (s = &mp->mp_seg[D]; s <= &mp->mp_seg[S]; s++) {
 	lo = (vir_bytes) s->mem_vir << CLICK_SHIFT;
 	hi = lo + ((vir_bytes) s->mem_len << CLICK_SHIFT);
-	if (v >= lo && v < hi && n <= hi - v)
-		return(((phys_bytes) s->mem_phys << CLICK_SHIFT) + (v - lo));
+	if (v >= lo && v < hi && n <= hi - v) return(TRUE);
   }
-  return(0);
+  return(FALSE);
+}
+
+
+/*===========================================================================*
+ *				bk_user					     *
+ *===========================================================================*/
+PRIVATE int bk_user(v, n, crc)
+vir_bytes v;			/* the caller's buffer, checked by bk_buf */
+unsigned n;			/* sectors */
+unsigned long *crc;		/* the CRC of each sector; 0: zero them */
+{
+/* The caller's sectors, only through the kernel (sys_copy), never at the
+ * addresses in mp_seg: after a fork the caller shares them with its
+ * shadow group, and the clock task may have put another member's image
+ * there while MM waited for the card (arm/shadow.c).  Through the free
+ * part of exec's mbuf, in front of HDR: 0 B. */
+  unsigned i, j, k;
+  int r;
+
+  for (i = 0; i < n; i += k) {
+	k = n - i < BK_SCR ? n - i : BK_SCR;
+	if (crc == (unsigned long *) 0) {
+		memset(mbuf, 0, (size_t) k * BK_SECT);
+		r = sys_copy(MM_PROC_NR, D, (phys_bytes) mbuf, who, D,
+			(phys_bytes) v, (phys_bytes) k * BK_SECT);
+	} else {
+		r = sys_copy(who, D, (phys_bytes) v, MM_PROC_NR, D,
+			(phys_bytes) mbuf, (phys_bytes) k * BK_SECT);
+		for (j = 0; r == OK && j < k; j++)
+			*crc++ = ~crc32_more(0xFFFFFFFFUL, (unsigned char *)
+				mbuf + j * BK_SECT, BK_SECT);
+	}
+	if (r != OK) return(EFAULT);
+	v += (vir_bytes) k * BK_SECT;
+  }
+  return(OK);
 }
 
 
@@ -477,15 +515,13 @@ int bg;				/* a background caller: the write budget */
   struct bkhdr *h = HDR;
   unsigned char *r = RUN(who);
   unsigned first = rq->first, n = rq->count ? rq->count : BLK_NSECT, i;
-  unsigned long pos, crc, bits;
-  phys_bytes buf, a;
+  unsigned long pos, bits, c[BLK_NSECT];
   int valid, e, m;
 
   if (r[1] == 0 || PEND(who)) return(EBADF);
   if (rq->id >= (unsigned long) r[1] * bk.ext) return(ERANGE);
   if (first >= BLK_NSECT || n > BLK_NSECT - first) return(ERANGE);
-  if ((buf = bk_buf((vir_bytes) rq->buf, (vir_bytes) n * BK_SECT)) == 0)
-	return(EFAULT);
+  if (!bk_buf((vir_bytes) rq->buf, (vir_bytes) n * BK_SECT)) return(EFAULT);
   m = bk_at(r[0], &pos);		/* (a run is in one subpartition) */
   pos = (pos + rq->id * BK_BLOCK) * BK_SECT;
   bits = ((1UL << n) - 1) << first;
@@ -501,20 +537,19 @@ int bg;				/* a background caller: the write budget */
   }
 
   if (rq->op == BLK_GET) {
-	if (!valid || (h->live & bits) == 0) {
-		memset((char *) buf, 0, (size_t) n * BK_SECT);
-		return(OK);
-	}
+	if (!valid || (h->live & bits) == 0)
+		return(bk_user((vir_bytes) rq->buf, n, (unsigned long *) 0));
 	if ((e = sw_dio(m, DEV_READ, who, pos + (1UL + first) * BK_SECT,
 		(phys_bytes) rq->buf, (phys_bytes) n * BK_SECT)) != OK)
 		return(e);
-	for (i = 0, a = buf; i < n; i++, a += BK_SECT) {
+	if ((e = bk_user((vir_bytes) rq->buf, n, c)) != OK) return(e);
+	for (i = 0; i < n; i++) {
 		if (!(h->live & (1UL << (first + i)))) {
-			memset((char *) a, 0, BK_SECT);
-			continue;
+			if ((e = bk_user((vir_bytes) rq->buf + i * BK_SECT, 1,
+				(unsigned long *) 0)) != OK) return(e);
+		} else if (c[i] != h->crc[first + i]) {
+			return(EIO);
 		}
-		crc = ~crc32_more(0xFFFFFFFFUL, (unsigned char *) a, BK_SECT);
-		if (crc != h->crc[first + i]) return(EIO);
 	}
 	return(OK);
   }
@@ -532,11 +567,11 @@ int bg;				/* a background caller: the write budget */
 	h->ctime = (unsigned long) mp->mp_ctime;
 	h->id = rq->id;
   }
+  if ((e = bk_user((vir_bytes) rq->buf, n, c)) != OK) return(e);
   e = valid && (h->live & bits) == bits;	/* all the same so far */
-  for (i = 0, a = buf; i < n; i++, a += BK_SECT) {
-	crc = ~crc32_more(0xFFFFFFFFUL, (unsigned char *) a, BK_SECT);
-	if (crc != h->crc[first + i]) e = FALSE;
-	h->crc[first + i] = crc;
+  for (i = 0; i < n; i++) {
+	if (c[i] != h->crc[first + i]) e = FALSE;
+	h->crc[first + i] = c[i];
   }
   if (e && (rq->flags & BLK_IFCHANGED)) return(OK);
   /* R12.37: a background caller's writes count in the reserve's budget. */
