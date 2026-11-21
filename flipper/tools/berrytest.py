@@ -183,15 +183,12 @@ def main():
 		check(ok, "R7c.5: berry -i keeps a = 42 and prints a + 1")
 		if not ok: print(r.out[mark:][-400:])
 
-		# RAM of one running script (the process: chmem, data, GOT)
-		# and what its VM has allocated at the start (gc.allocated()).
-		r.sh("berry -n 0 -e 'while true end' & echo $! >/tmp/p1; "
-		     "sleep 1", 30)
-		now = freebytes(r)
-		r.sh("kill `cat /tmp/p1`; sleep 1", 20)
-		one = base - now
-		print("  RAM: one berry process: %6d bytes (free %d -> %d)" %
-			(one, base, now), flush=True)
+		# RAM of a running script (the process: chmem, data, GOT) and
+		# of two at once: idle scripts, REPLs blocked reading a FIFO
+		# that a sleep holds open (no runaway loop: without a budget
+		# that is the #429 case).  The first comes with the sleep, so
+		# the second's cost is the clean number; a third must cost
+		# the same (nothing of the VM is copied per script).
 		st, out = status(r, "berry -e 'import gc print(gc.allocated())'")
 		print("  RAM: VM heap at start: %s bytes" % out.strip().decode(),
 			flush=True)
@@ -203,30 +200,34 @@ def main():
 			"%s bytes of data per script" % (m.group(1).decode(),
 			m.group(2).decode(), m.group(3).decode()) if m else
 			"R7c.1: free -v shows the shared Berry library")
-		check(0 < one <= 15360,
-			"AC7c.1: one script process <= 15 KB in QEMU (%d B; the "
-			"8 KB default heap is reserved up front, PORTING.md Berry)"
-			% one)
-
-		# Two idle scripts at once (REPLs blocked reading a FIFO that
-		# a sleep holds open): the second costs the same as the
-		# first, nothing of the VM is copied per script.
-		r.sh("rm -f /tmp/bf; mkfifo /tmp/bf; (sleep 120 >/tmp/bf &); "
-		     "berry -i </tmp/bf >/dev/null & echo $! >/tmp/p1; sleep 2",
+		r.sh("rm -f /tmp/bf /tmp/p1; mkfifo /tmp/bf; "
+		     "sleep 120 >/tmp/bf & echo $! >/tmp/p1; "
+		     "berry -i </tmp/bf >/dev/null & echo $! >>/tmp/p1; sleep 2",
 		     30)
 		f1 = freebytes(r)
 		r.sh("berry -i </tmp/bf >/dev/null & echo $! >>/tmp/p1; sleep 2",
 		     30)
 		f2 = freebytes(r)
-		two = f1 - f2
-		print("  RAM: second idle script: %6d bytes (free %d -> %d)"
-			% (two, f1, f2), flush=True)
+		if os.environ.get("BERRYTEST_RAM"):
+			print((r.output("free -v", 20) or b"").decode())
+		r.sh("berry -i </tmp/bf >/dev/null & echo $! >>/tmp/p1; sleep 2",
+		     30)
+		f3 = freebytes(r)
+		one, two = f1 - f2, f2 - f3
+		print("  RAM: one idle script: %6d bytes (free %d -> %d), "
+			"another: %d bytes (-> %d)" % (one, f1, f2, two, f3),
+			flush=True)
+		check(0 < one <= 14336,
+			"AC7c.1: one script process <= 14 KB in QEMU (%d B; the "
+			"8 KB default heap is reserved up front, PORTING.md Berry)"
+			% one)
 		out = r.output("echo alive", 20)
-		check(out == b"alive\n" and 0 < two <= one + 256,
-			"AC7c.1: two scripts at once; the second takes %d B, "
-			"like the first (%d B)" % (two, one))
-		r.sh("kill `cat /tmp/p1`; sleep 1", 20)
-		r.sh("rm -f /tmp/bf", 20)
+		check(out == b"alive\n" and one - 256 <= two <= one + 256,
+			"AC7c.1: scripts side by side: the next one takes %d B, "
+			"like the one before (%d B)" % (two, one))
+		r.sh("kill `cat /tmp/p1`; sleep 1; rm -f /tmp/bf", 20)
+		check(ram_back(r, base) >= base - 64,
+			"AC7c.1: their RAM is free again")
 		print("%d failed" % fails)
 		if os.environ.get("BERRYTEST_LOG"):
 			with open(os.environ["BERRYTEST_LOG"], "wb") as f:
