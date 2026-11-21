@@ -202,12 +202,26 @@ def image(elf_path, exports, out_bin, out_json, out_stubs, out_syms,
                          "in the library nor in its area")
             if k == "data":
                 relocs.add(off)
+    # Words of the text and of the area that hold the library's own flash
+    # addresses (the constant tables, the entry table, GOT entries of its
+    # functions and strings): what would have to change if the library
+    # were written somewhere else than its link address (#433: placed at
+    # install time).  Counted for PORTING.md, listed in the json.
+    trelocs, arelocs = [], []
+    if got:
+        for off in range(max(got[3], astart) - A_DATA_LINK,
+                         got[3] - A_DATA_LINK + got[5], 4):
+            v = struct.unpack_from("<I", full, off)[0]
+            if tlo <= v < thi:
+                arelocs.append(off)
     for target in (".text",):
         for off, rtype, rsym in elf.relocs(target):
             if rtype in (R_ARM_ABS32, R_ARM_TARGET1) and base <= off < base + HDR:
                 continue                # sh_size, sh_area: link-time values
             if rtype in (R_ARM_ABS32, R_ARM_TARGET1):
                 v = struct.unpack_from("<I", elf.e, text[4] + off - base)[0]
+                if tlo <= v < thi:
+                    trelocs.append(off - base)
                 if kind(v) == "data":
                     sys.exit(f"{elf_path}: the text at {off:#x} holds a data "
                              "address (an object not compiled -fpic?)")
@@ -271,6 +285,7 @@ def image(elf_path, exports, out_bin, out_json, out_stubs, out_syms,
         "base": base, "size": tsize, "id": lid, "area": area, "start": start,
         "exports": os.path.abspath(exports),
         "template": bytes(tmpl).hex(), "relocs": sorted(relocs),
+        "text_self": sorted(set(trelocs)), "area_self": sorted(arelocs),
     }
     with open(out_json, "w") as f:
         json.dump(info, f, indent=0)
@@ -304,7 +319,9 @@ def image(elf_path, exports, out_bin, out_json, out_stubs, out_syms,
             f.write(f"PROVIDE({n} = {data[n]:#x});\n")
     print(f"  {name}: {len(img)} bytes at {base:#x}, {len(names)} "
           f"functions, {len(data)} variables, area {area} bytes at "
-          f"+{start} ({len(relocs)} relocated), id {lid:#010x}")
+          f"+{start} ({len(relocs)} relocated), id {lid:#010x}; own flash "
+          f"addresses: {len(set(trelocs))} words of text, {len(arelocs)} of "
+          "the area")
 
 
 def exports(elf_path):

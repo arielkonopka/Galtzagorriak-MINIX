@@ -261,17 +261,16 @@ $(MB)/init.elf: $(MB)/fs.elf $(SRV_init) $(MB)/libc.a ld/server.ld $(MB)/.init-$
 	$(call link_server,init,$(MB)/fs.elf)
 
 # The system image (192 KB at most), then the shared libc at 192 KB
-# (SHLIBC_BASE, 48 KB at most), the shared libfuri + libapp at 240 KB
-# (SHFURI_BASE, 48 KB at most) and the shared Berry interpreter at 288 KB
-# (SHBERRY_BASE, 96 KB at most, R7c.1); the installed programs start at
-# 384 KB (hal_flash_layout(), R2b.1; <minix/shlibc.h>).
+# (SHLIBC_BASE, 48 KB at most) and the shared libfuri + libapp at 240 KB
+# (SHFURI_BASE, 48 KB at most); the installed programs start at 288 KB
+# (hal_flash_layout(), R2b.1; <minix/shlibc.h>).
 $(MB)/minix.bin: $(MB)/kernel.elf $(MB)/mm.elf $(MB)/fs.elf $(MB)/init.elf \
-		 tools/mkflash.py $(SHL)/libc.bin $(SHF)/furi.bin $(SHB)/berry.bin
+		 tools/mkflash.py $(SHL)/libc.bin $(SHF)/furi.bin
 	python3 -I tools/mkflash.py --libc=0x30000,$(SHL)/libc.bin \
-	   --lib=0x3C000,$(SHF)/furi.bin --lib=0x48000,$(SHB)/berry.bin \
+	   --lib=0x3C000,$(SHF)/furi.bin \
 	   $(OBJCOPY) $(NM) $@ $(filter %.elf,$^)
-	@test $$(stat -c %s $@) -le 393216 || \
-	   { echo "$@ is over 384 KB: it would overlap the installed programs"; \
+	@test $$(stat -c %s $@) -le 294912 || \
+	   { echo "$@ is over 288 KB: it would overlap the installed programs"; \
 	     touch -d @0 $@; exit 1; }
 
 # make base-flash: minix-base.bin = minix.bin with the programs used at boot
@@ -287,7 +286,7 @@ BASE_FLASH := sh launcher getty login ls cat cp pkg update mount printroot \
 $(MB)/minix-base.bin: $(MB)/minix.bin $(BASE_FLASH:%=$(MB)/bin/%) \
 		      tools/mkbaseflash.py $(MB)/rom.img
 	python3 -I tools/mkbaseflash.py $< $@ \
-	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x60000 \
+	   $(if $(filter flipper,$(BOARD)),0x08000000,0) 0x48000 \
 	   --rom=$(MB)/rom.img $(BASE_FLASH:%=$(MB)/bin/%)
 
 # The default settings image (spec L.2): /etc as built, read-only, 32 KB;
@@ -1101,13 +1100,20 @@ $(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
 BERRY_OBJ = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
 BERRY_LIBOBJ = $(filter-out $(MB)/berry/gzberry.o,$(BERRY_OBJ))
 BERRYPROGS := berry
-# The shared Berry library in flash (spec R7c.1, issue #431; the "berry"
-# library, <minix/shlibc.h>, ld/shberry.ld, tools/mkshlibc.py): the VM and
-# the bindings at SHBERRY_BASE, after the furi library, in minix.bin.  Its
-# constant tables stay in its flash (.data.rel.ro in the text), so a
+# The shared Berry library (spec R7c.1, issues #431, #433; the "berry"
+# library, ld/shberry.ld, tools/mkshlibc.py): the VM and the bindings,
+# with their constant tables (.data.rel.ro) in the library's text, so a
 # script's RAM is the libc and berry areas, the launcher's few words and
 # the chmem.  Only the launcher's calls are exported (berry.exports).
-SHBERRY_BASE := $(if $(filter flipper,$(BOARD)),0x08048000,0x00048000)
+# The user's decision on #433: the library is optional, carried by the
+# berry package and written into the installed region only when that
+# package is installed, never a fixed slot taken from every unit.  Its
+# install-time placement is not done yet (PORTING.md "Berry", the
+# relocation numbers); until then SHBERRY=0 builds the launcher as one
+# program, as before, and `make shberry` links the library at a link
+# address (SHBERRY_LINK) to check it (mkshlibc's guard, the numbers).
+SHBERRY ?= 0
+SHBERRY_LINK := $(if $(filter flipper,$(BOARD)),0x08048000,0x00048000)
 $(SHB)/tab.S: berry.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
 	@mkdir -p $(dir $@)
 	python3 -I tools/mkshlibc.py tab $< $@ --berry
@@ -1118,7 +1124,7 @@ $(SHB)/berry.elf: $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
 	@echo "  LD $@"
 	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
 	   -Wl,--gc-sections -Wl,-q -L$(SHL) \
-	   -Wl,--defsym=SHBERRY_BASE=$(SHBERRY_BASE) -Tld/shberry.ld \
+	   -Wl,--defsym=SHBERRY_BASE=$(SHBERRY_LINK) -Tld/shberry.ld \
 	   -Wl,-Map=$@.map $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
 	   $(MB)/libc-static.a -lgcc -o $@
 $(SHB)/berry.bin $(SHB)/berry.json $(SHB)/stubs.S $(SHB)/shberry-syms.ld &: \
@@ -1130,7 +1136,7 @@ $(SHB)/stubs.o: $(SHB)/stubs.S
 	$(CC) $(MCFLAGS) -c $< -o $@
 .PHONY: shberry
 shberry: $(SHB)/berry.bin
-ifeq ($(SHLIBC),1)
+ifeq ($(SHLIBC)$(SHBERRY),11)
 OBJS_berry = $(MB)/berry/gzberry.o
 define berry_prog
 $(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \

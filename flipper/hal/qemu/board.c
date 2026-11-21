@@ -739,12 +739,12 @@ unsigned hal_disk_mhz;
  * the next (monitor pmemsave, then a loader file), as a CPU2 stack swap
  * would leave it.  The layout is then worked out from it as on the
  * Flipper (hal/flipper/board.c): the cache's 128 KB right below the 16
- * guard pages, the programs from 0x60000 up to the cache.  Taken only up
+ * guard pages, the programs from 0x48000 up to the cache.  Taken only up
  * to 0xD0000 and page aligned (else, and when 0, today's fixed layout);
  * below QFL_MIN neither region is used.  The word sits in the guard,
  * below CUT_CFG. */
 #define FAKE_SFSA	((volatile uint32_t *) 0x000CFFE0)
-#define QFL_INST	0x00060000u
+#define QFL_INST	0x00048000u
 #define QFL_CACHE	0x00020000u
 #define QFL_GUARD	(16u * 4096u)
 #define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xB000u)	/* dirs, /dev/rom, a page */
@@ -771,20 +771,19 @@ void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 		return;
 	}
 	l[HAL_FL_SFSA] = 0x000D0000;
-	l[HAL_FL_INST] = 0x00060000;		/* after 192 KB of system and
-						 * 192 KB of shared libc,
-						 * libfuri and Berry
-						 * (<minix/shlibc.h>) */
-	/* 320 KB, near the Flipper's (its SFSA is higher still): a
+	l[HAL_FL_INST] = 0x00048000;		/* after 192 KB of system and
+						 * 96 KB of shared libc and
+						 * libfuri (<minix/shlibc.h>) */
+	/* 416 KB, near the Flipper's (its SFSA is higher still): a
 	 * --flash package as big as subghz (130 KB of text) fits */
-	l[HAL_FL_INST_SIZE] = 0x00050000;
+	l[HAL_FL_INST_SIZE] = 0x00068000;
 	l[HAL_FL_CACHE] = 0x000B0000;
 	l[HAL_FL_CACHE_SIZE] = 0x00020000;
-	l[HAL_FL_ROM] = 0x00060000 + HAL_ROM_OFF;
+	l[HAL_FL_ROM] = 0x00048000 + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
 }
 
-uint32_t hal_rom_base(void) { return 0x00060000 + HAL_ROM_OFF; }
+uint32_t hal_rom_base(void) { return 0x00048000 + HAL_ROM_OFF; }
 
 void hal_flash_region(uint32_t *base, uint32_t *size)
 {

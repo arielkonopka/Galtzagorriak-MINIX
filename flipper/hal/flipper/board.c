@@ -3629,17 +3629,15 @@ void hal_tone(unsigned hz, unsigned vol)
  * firmware does:
  *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
  *	0x08030000  shared libc (R2b.9, <minix/shlibc.h>)	HAL_LIBC_SIZE
- *	0x0803C000  shared libfuri + libapp (R2b.9)	  (all three,
- *	0x08048000  shared Berry interpreter (R7c.1)	   192 KB)
- *	0x08060000  installed programs (Phase 2b)	up to the cache
+ *	0x0803C000  shared libfuri + libapp (R2b.9)	  (both, 96 KB)
+ *	0x08048000  installed programs (Phase 2b)	up to the cache
  *	...         run-time text cache			HAL_CACHE_SIZE
  *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
  *	SFSA ..     CPU2 wireless stack and FUS, never touched
  */
 #define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
-#define HAL_LIBC_SIZE	0x30000u	/* 192 KB, SHLIBC_MAX + SHFURI_MAX
-					 * + SHBERRY_MAX; the three libraries
-					 * are in minix.bin */
+#define HAL_LIBC_SIZE	0x18000u	/* 96 KB, SHLIBC_MAX + SHFURI_MAX;
+					 * both libraries are in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	16u
 

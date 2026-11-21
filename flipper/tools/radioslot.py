@@ -2,9 +2,9 @@
 """radioslot - R2b.1a in QEMU (task T30a): `pkg flash` keeps out of the
 radio slot.  Needs `make minix disk` (the QEMU image, normal INIT).
 
-QEMU's flash layout (hal/qemu/board.c) has its installed region at 0x60000;
-its first free page is 0x6A000 (two directory pages and /dev/rom before
-it).  With /etc/radio.slot = 0x0806A000 nothing fits below the slot: the
+QEMU's flash layout (hal/qemu/board.c) has its installed region at 0x48000;
+its first free page is 0x52000 (two directory pages and /dev/rom before
+it).  With /etc/radio.slot = 0x08052000 nothing fits below the slot: the
 install must fail and name the slot; a slot higher up leaves room; without
 the file the install works as before.  `radio` prints the layout with the
 slot, `radio list` the (empty) card.
@@ -12,8 +12,8 @@ slot, `radio list` the (empty) card.
 Part 2, `radioslot.py sfsa`: QEMU with a fake SFSA (hal/qemu/board.c
 FAKE_SFSA); the installed region goes from one QEMU run to the next
 through the monitor (pmemsave, then a loader file), as a CPU2 stack swap
-would leave it.  Run 1 today's layout, a program installed at 0x6A000;
-run 2 SFSA 0x9B000 (programs end at 0x6B000): the record is past the
+would leave it.  Run 1 today's layout, a program installed at 0x52000;
+run 2 SFSA 0x83000 (programs end at 0x53000): the record is past the
 end, MM marks it dead at boot, sed runs from RAM; run 3 today's
 layout again: the record stays dead.  Run 4 SFSA 0x70000 (no room below
 the guard): neither region, `pkg flash` refuses, the system runs.
@@ -34,7 +34,7 @@ _spec.loader.exec_module(powercut)
 
 
 FAKE_SFSA = 0x000CFFE0
-REGION = (0x60000, 0x6FF00)		# up to the config words (FAKE_SFSA, CUT_CFG)
+REGION = (0x48000, 0x87F00)		# up to the config words (FAKE_SFSA, CUT_CFG)
 
 
 def qemu_extra(sfsa, region, mon):
@@ -77,7 +77,7 @@ def save_region(r, mon, path):
 
 
 def od_ok(r):
-	"""/tmp/p is sed (10 KB of text: 3 pages from 0x6A000)."""
+	"""/tmp/p is sed (10 KB of text: 3 pages from 0x52000)."""
 	out = r.output("echo hi | /tmp/p s/h/j/")
 	return out is not None and b"ji" in out
 
@@ -130,13 +130,13 @@ def sfsa_main():
 		stop(r)
 	if bad:
 		return sfsa_end(bad)
-	r, mon = boot(0x9B000, reg1, card, "2")
+	r, mon = boot(0x83000, reg1, card, "2")
 	try:
 		if not r.login():
 			return sfsa_end(["run 2: no login"])
 		n2, c = installed(r)
-		if c != "0009b000" or n2 != n0:
-			bad.append("run 2 (SFSA 0x9B000): %r programs, CPU2 %r"
+		if c != "00083000" or n2 != n0:
+			bad.append("run 2 (SFSA 0x83000): %r programs, CPU2 %r"
 				% (n2, c))
 		if b"past the region (SFSA moved): dead" not in r.out:
 			bad.append("run 2: no 'dead' line: %r" % re.findall(
@@ -190,10 +190,10 @@ def main():
 		if out is None or b"no images" not in out:
 			bad.append("radio list: %r" % out)
 		r.sh("cp /bin/sed /tmp/p; sync")
-		r.sh("echo 0x0806A000 > /etc/radio.slot")
+		r.sh("echo 0x08052000 > /etc/radio.slot")
 		out = r.output("radio")
-		if out is None or b"radio slot: 0x0806A000" not in out \
-		   or b"programs up to 0x0806A000" not in out:
+		if out is None or b"radio slot: 0x08052000" not in out \
+		   or b"programs up to 0x08052000" not in out:
 			bad.append("radio: %r" % out)
 		out = r.output("pkg flash /tmp/p 2>&1; echo rc=$?", 120)
 		if out is None or b"radio slot" not in out or b"rc=0" in out:

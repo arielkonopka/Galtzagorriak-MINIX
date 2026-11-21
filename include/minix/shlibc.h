@@ -24,14 +24,6 @@
  * follows the libc area at r9 and its build id covers the libc's.  Only
  * the GUI apps carry it: a_dbase of their long header holds its id
  * (0: the program does not use it).
- *
- * The third, the Berry interpreter (spec R7c.1, Phase 7c part 3, issue
- * #431; flipper/berry.exports, ld/shberry.ld), follows the furi library
- * at SHBERRY_BASE.  Its constant tables (the string table, the built-in
- * classes and modules: pointer tables) stay in its flash, so a running
- * script pays only for the "berry area" (its GOT, data and bss), which
- * also follows the libc area.  No program uses both: a_dbase holds the
- * id of the one it uses, and MM accepts it when either header has it.
  */
 #ifndef _MINIX_SHLIBC_H
 #define _MINIX_SHLIBC_H
@@ -44,12 +36,9 @@
 #define SHLIBC_MAX	0xC000UL	/* 48 KB; the furi library follows */
 #define SHLIBC_MAGIC	0x434C5A47UL	/* "GZLC" */
 #define SHFURI_BASE	(SHLIBC_BASE + SHLIBC_MAX)	/* + 240 KB */
-#define SHFURI_MAX	0xC000UL	/* 48 KB; the Berry library follows */
+#define SHFURI_MAX	0xC000UL	/* 48 KB; installed programs follow */
 #define SHFURI_MAGIC	0x464C5A47UL	/* "GZLF" */
-#define SHBERRY_BASE	(SHFURI_BASE + SHFURI_MAX)	/* + 288 KB */
-#define SHBERRY_MAX	0x18000UL	/* 96 KB; installed programs follow */
-#define SHBERRY_MAGIC	0x424C5A47UL	/* "GZLB" */
-#define SHLIB_END	(SHBERRY_BASE + SHBERRY_MAX)	/* + 384 KB */
+#define SHLIB_END	(SHFURI_BASE + SHFURI_MAX)	/* + 288 KB */
 
 struct shlibc_hdr {
   unsigned long sh_magic;	/* SHLIBC_MAGIC */
@@ -64,6 +53,5 @@ struct shlibc_hdr {
 
 #define SHLIBC_HDR	((struct shlibc_hdr *) SHLIBC_BASE)
 #define SHFURI_HDR	((struct shlibc_hdr *) SHFURI_BASE)
-#define SHBERRY_HDR	((struct shlibc_hdr *) SHBERRY_BASE)
 
 #endif /* _MINIX_SHLIBC_H */
