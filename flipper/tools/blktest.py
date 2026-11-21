@@ -15,6 +15,8 @@ qemu) like tools/swaptest.py, through the first boot (swap partition
   AC12.19  zeros after the writer exits and after exec of another
            program; a forked child has no reservation
   AC12.22  a Secret: yes image and a set-uid copy: EPERM
+  R12.38   <blk.h> (libc) and libblk: 256 KB through 1 KB frames
+  R12.38   blk=on in /etc/rc.conf: /etc/rc switches blocks on at boot
   R12.38   blocks only (swapon /dev/hd3 blk, swap off) work too
 Exit status: the number of failures.
 """
@@ -77,12 +79,33 @@ def main():
 			"AC12.22: Secret: yes image gets EPERM")
 		tests(r, "su bin -c '/tmp/blksuid -p'",
 			"AC12.22: set-uid image gets EPERM")
+		tests(r, "/usr/tests/blktest -l", "R12.38: <blk.h>, libblk", 300)
 		check(r.sh("swapon off && swapon /dev/hd3 blk", 30) == 0,
 			"R12.38: blocks only, swap off")
 		out = r.output("swapon", 30) or b""
 		check(b"swap: off" in out, "R12.38: ... swap stays off")
 		tests(r, "/usr/tests/blktest", "AC12.18, AC12.19 blocks only",
 			300)
+		# R12.38: blk=on in the card's /etc/rc.conf (swap=off there):
+		# after a reboot /etc/rc has switched blocks on by itself.
+		# (QEMU has no rc.conf; a card's own one is kept in
+		# /etc/rc.conf.blk and put back at the end)
+		check(r.sh("swapon off && { test ! -f /etc/rc.conf || cp "
+			"/etc/rc.conf /etc/rc.conf.blk; } && echo swap=off "
+			">>/etc/rc.conf && echo blk=on >>/etc/rc.conf && sync",
+			30) == 0,
+			"R12.38: blk=on in /etc/rc.conf")
+		r.send("reboot")
+		if not r.login():
+			check(False, "login after the reboot")
+			return 1
+		out = r.output("swapon", 30) or b""
+		check(b"swap: off" in out, "R12.38: blk=on, swap=off: swap off")
+		tests(r, "/usr/tests/blktest -l",
+			"R12.38: blk=on: /etc/rc switched blocks on", 300)
+		check(r.sh("if test -f /etc/rc.conf.blk; then mv /etc/rc.conf.blk "
+			"/etc/rc.conf; else rm /etc/rc.conf; fi && sync", 30) == 0,
+			"the default rc.conf again")
 	finally:
 		log = os.environ.get("BLKTEST_LOG")
 		if log:

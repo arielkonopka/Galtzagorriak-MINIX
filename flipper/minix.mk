@@ -116,7 +116,7 @@ SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
-	   lrand getopt gmtime bread
+	   lrand getopt gmtime bread blk
 SHLIBC_GCC := __aeabi_uldivmod __aeabi_ldivmod	# R2d.4: once, here
 LIBCP_STATIC := $(filter $(MB)/libcp/math/%.o \
 	   $(foreach m,$(SHLIBC_STATIC),%/$(m).o),$(LIBCP_OBJ))
@@ -597,6 +597,13 @@ $(MB)/rpcd/main.o: cmds/rpcd.c $(RPC_DIR)/rpcd.h
 OBJS_rpcd = $(MB)/rpcd/main.o $(MB)/rpcd/core.o \
 	   $(patsubst %,$(MB)/rpcd/npb/%.o,pb_common pb_decode pb_encode) \
 	   $(FPB_GEN:%=$(MB)/rpcd/fpb/%.o)
+# libblk (spec 12h, R12.38, src/lib/blk): frames over the swappable memory
+# blocks of <blk.h>.  Static, one object: no malloc, no stdio, no data.
+BLK_DIR	:= $(MROOT)/src/lib/blk
+$(MB)/blk/libblk.o: $(BLK_DIR)/libblk.c $(MROOT)/include/libblk.h \
+		$(MROOT)/include/blk.h $(MROOT)/include/minix/blk.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
 # libgm (spec K.8, src/lib/gm): window apps describe their screens, the
 # launcher draws them (gui/winsrv.c).  Static, one object: no malloc, no
 # stdio; programs link it with --gc-sections.
@@ -1078,7 +1085,8 @@ endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
 # blksecret: blktest built with Secret: yes (12h, AC12.22: EPERM)
-OBJS_blksecret = $(MB)/cmd/test/blktest.o
+OBJS_blksecret = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
+OBJS_blktest = $(MB)/cmd/test/blktest.o $(MB)/blk/libblk.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)

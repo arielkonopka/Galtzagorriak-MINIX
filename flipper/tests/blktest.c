@@ -9,6 +9,8 @@
  *   blktest -z		(helper, another program: a copy of this file) the
  *			first extent's blocks read as zeros (AC12.19)
  *   blktest -w		(helper) open 1 MB, PUT a pattern in block 0, exit
+ *   blktest -l		<blk.h> and libblk (R12.38) on the real MM: the
+ *			libc calls, then 256 KB through 1 KB frames
  *
  * AC12.18: GET without a reservation is EBADF; after OPEN of 1 MB block 0
  * and the last block read as zeros, one past the end is ERANGE; an OPEN
@@ -25,12 +27,13 @@
 #include <lib.h>
 #include <minix/callnr.h>
 #include <minix/blk.h>
+#include <libblk.h>
 #include "t.h"
 
 #define BK_SKIP		(16 * 384UL)	/* sectors of the swap slots */
 #define BK_BLOCK	9
 
-static char buf[BLK_SIZE], buf2[BLK_SIZE];
+static char buf[BLK_SIZE] __attribute__((aligned(4))), buf2[BLK_SIZE];
 
 static int blk(int op, int flags, unsigned long id, int first, int count,
 							void *b)
@@ -149,6 +152,65 @@ static int half(void)
 	return t_fail;
 }
 
+/* R12.38: the libc calls and libblk over MM's blocks (the pool: buf). */
+
+static int lib(void)
+{
+	struct blkinfo bi;
+	struct vm v;
+	unsigned long off, size = 256UL * 1024, sum1 = 0, sum2 = 0;
+	unsigned char *p;
+	int r, ok = 1;
+
+	t_result("R12.38: blk_get without blk_open is EBADF",
+		blk_get(0, buf) < 0 && errno == EBADF, NULL);
+	r = blk_open(64UL * 1024, 0);
+	t_result("R12.38: blk_open(64 KB)", r >= 16, NULL);
+	t_result("R12.38: blk_info", blk_info(&bi) == 0
+		&& bi.blocks == (unsigned long) r && bi.size == BLK_SIZE, NULL);
+	fill(buf, BLK_SIZE, 5);
+	t_result("R12.38: blk_put then blk_get", blk_put(3, buf) == 0
+		&& blk_get(3, buf2) == 0 && memcmp(buf, buf2, BLK_SIZE) == 0,
+		NULL);
+	t_result("R12.38: blk_putf(BLK_IFCHANGED) of the same data",
+		blk_putf(3, buf, BLK_IFCHANGED) == 0, NULL);
+	fill(buf, 1024, 6);
+	t_result("R12.38: blk_write then blk_read of 1 KB at 2 KB",
+		blk_write(3, 2048, buf, 1024) == 0
+		&& blk_read(3, 2048, buf2, 1024) == 0
+		&& memcmp(buf, buf2, 1024) == 0, NULL);
+	t_result("R12.38: blk_read off or len not a multiple of 512: EINVAL",
+		blk_read(3, 100, buf2, 512) < 0 && errno == EINVAL
+		&& blk_read(3, 0, buf2, 100) < 0 && errno == EINVAL
+		&& blk_read(3, 3584, buf2, 1024) < 0 && errno == EINVAL, NULL);
+	t_result("R12.38: blk_close", blk_close() == 0
+		&& blk_get(0, buf) < 0 && errno == EBADF, NULL);
+
+	r = vm_open(&v, buf, sizeof(buf), size, 1024, 0);
+	t_result("libblk: vm_open(256 KB, 1 KB frames), 3 frames",
+		r == 0 && v.nframes == 3 && v.size >= size, NULL);
+	if (r < 0) return t_fail;
+	for (off = 0; off < size && ok; off += 64) {
+		p = vm_get(&v, off, VM_RW);
+		if (p == NULL) { ok = 0; break; }
+		memset(p, (int) (off >> 6), 64);
+		sum1 += (off >> 6) & 0xFF;
+	}
+	t_result("libblk: 256 KB written through the frames", ok
+		&& vm_flush(&v) == 0, NULL);
+	for (off = 0; off < size && ok; off += 64) {
+		p = vm_get(&v, off, VM_RD);
+		if (p == NULL || p[63] != p[0]) { ok = 0; break; }
+		sum2 += p[0];
+	}
+	t_result("libblk: ... and read back (checksum)", ok && sum1 == sum2,
+		NULL);
+	t_result("libblk: vm_close", vm_close(&v) == 0
+		&& blk_info(&bi) == 0 && bi.blocks == 0, NULL);
+	printf("blktest -l: %d failures\n", t_fail);
+	return t_fail;
+}
+
 int main(int argc, char **argv)
 {
 	struct blkinfo bi;
@@ -159,6 +221,7 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "-n") == 0) return all_enosys();
 	if (argc > 1 && strcmp(argv[1], "-p") == 0) return all_eperm();
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
+	if (argc > 1 && strcmp(argv[1], "-l") == 0) return lib();
 	if (argc > 1 && strcmp(argv[1], "-w") == 0) {
 		fill(buf, BLK_SIZE, 1);
 		if (blk(BLK_OPEN, 0, 1024UL * 1024, 0, 0, NULL) < 0

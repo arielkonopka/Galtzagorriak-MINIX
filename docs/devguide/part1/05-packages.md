@@ -54,7 +54,7 @@ an older tree fails cleanly instead of crashing after an incompatible system upd
 | `pkg remove name` | run `prerm`, remove the files; refused if another package depends on it |
 | `pkg list`, `pkg info name`, `pkg files name` | what is installed, a control file, a file list |
 | `pkg flash file...`, `pkg unflash file...` | put a program's text into flash, or take it out |
-| `pkg bind file...` | connect files to text already in flash (used by `/etc/rc` at boot) |
+| `pkg bind file...` | connect files (or every file of a directory) to text already in flash (used by `/etc/rc` at boot) |
 | `pkg budget [pages]` | show or set the run-time cache's daily erase budget |
 
 The database is in `/usr/var/pkg/info` (`NAME.control`, `NAME.list`, and the scripts). `pkg`
