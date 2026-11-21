@@ -34,7 +34,7 @@ _spec.loader.exec_module(powercut)
 
 
 FAKE_SFSA = 0x000CFFE0
-REGION = (0x60000, 0x87F00)		# up to the config words (FAKE_SFSA, CUT_CFG)
+REGION = (0x60000, 0x6FF00)		# up to the config words (FAKE_SFSA, CUT_CFG)
 
 
 def qemu_extra(sfsa, region, mon):
@@ -135,7 +135,7 @@ def sfsa_main():
 		if not r.login():
 			return sfsa_end(["run 2: no login"])
 		n2, c = installed(r)
-		if c != "00083000" or n2 != n0:
+		if c != "0009b000" or n2 != n0:
 			bad.append("run 2 (SFSA 0x9B000): %r programs, CPU2 %r"
 				% (n2, c))
 		if b"past the region (SFSA moved): dead" not in r.out:
