@@ -7,9 +7,7 @@
  * same code runs in the host tests and, later, on the Flipper.
  *
  * Source: Unleashed applications/main/u2f (u2f.c, u2f_hid.c), GPLv3.  The
- * message formats, the key derivation and the wire bytes are stock's, so
- * a key registered with stock's logic and the same device key
- * authenticates here.  Changes from stock (bounds and spec fixes):
+ * message formats, the key derivation and the wire bytes are stock's.  Changes from stock (bounds and spec fixes):
  *  - every request length is checked (stock reads the fixed offsets of a
  *    full request whatever arrived): a short REGISTER or AUTHENTICATE is
  *    0x6700, an AUTHENTICATE whose key handle is not 64 B is 0x6A80;
@@ -27,7 +25,7 @@
  *    packet of another channel while one is being assembled ERR_CHANNEL_
  *    BUSY; the channel lock times out by the caller's clock (no timer).
  *
- * Key storage rules (the app, next part; summary of docs/manual/u2f.md):
+ * Key storage rules (the app, next part; docs/manual/apps.md):
  * the attestation certificate and its key are the user's own files
  * (/ext/u2f/assets/cert.der, cert_key.u2f): never shipped.  The device
  * key (key.u2f, 32 random bytes from /dev/random at the first start) and

@@ -25,6 +25,7 @@ that brings them.
 16. [Radio stacks](radio.md): ST's CPU2 stacks on the SD card, `radio-fetch.py`, `radio list`/`add`/`rm`, the radio slot (`radio use` planned).
 17. [Infrared remotes](infrared.md): the `infrared` app (learn, saved and universal remotes, debug), stock `.ir` files, group `ir`.
 18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites.
+19. [Small apps](apps.md): Music Player (`.fmf`, RTTTL), Clock, Dice, Passport; U2F (planned) and its key file rules.
 
 More chapters (the apps, the shell and commands, packages, settings, the
 hardware devices, time and location) follow as the features settle. Release notes are in
