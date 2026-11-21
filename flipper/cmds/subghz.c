@@ -49,6 +49,7 @@
 #include <minix/subghz.h>
 #include <unistd.h>
 #include <sgfile.h>
+#include <sgedit.h>
 #include <sgrec.h>
 #include <subghz/registry.h>
 #include <lib/flipper_format/flipper_format.h>
@@ -72,6 +73,7 @@ static int usage(void)
 	fprintf(stderr,
 		"Usage: subghz rx FREQ [-v]\n"
 		"       subghz decode FILE [-v]\n"
+		"       subghz edit IN OUT trim|cut T0 T1\n"
 		"       subghz rec FREQ FILE [-t DBM] [-s SEC] [-n SAMPLES]\n"
 		"       subghz tx KEY FREQ TE REPEAT\n"
 		"       subghz tx_from_file FILE [REPEAT]\n"
@@ -337,6 +339,99 @@ static int cmd_decode(int argc, char **argv)
 	subghz_receiver_free(rx);
 	sg_env_free(env);
 	return r < 0 ? 1 : 0;
+}
+
+/* ---- edit a RAW capture (trim, cut): issue #424 item 2 ---- */
+
+struct ewr {			/* the output RAW_Data writer */
+	FILE *f;
+	int perline;		/* values on the current line */
+	int fail;		/* a write failed */
+};
+
+#define RAW_PERLINE 512		/* values per RAW_Data line, as stock */
+
+static int emit_raw(void *ctx, int32_t dur)
+{
+	struct ewr *w = ctx;
+
+	if (w->fail) return 1;
+	if (w->perline == 0) {
+		if (fputs("RAW_Data:", w->f) < 0) { w->fail = 1; return 1; }
+	}
+	if (fprintf(w->f, " %ld", (long) dur) < 0) { w->fail = 1; return 1; }
+	if (++w->perline >= RAW_PERLINE) {
+		if (fputc('\n', w->f) < 0) { w->fail = 1; return 1; }
+		w->perline = 0;
+	}
+	return 0;
+}
+
+/* subghz edit IN OUT trim|cut T0 T1
+ * Rewrite the RAW capture IN to OUT keeping (trim) or dropping (cut) the
+ * time window [T0, T1) microseconds.  OUT must differ from IN; a key file
+ * (not RAW) is refused.  The file streams through: it is never held whole
+ * in RAM. */
+static int cmd_edit(int argc, char **argv)
+{
+	SgFile s;
+	SgEdit e;
+	struct ewr w;
+	const char *why;
+	SgEditOp op;
+	unsigned long t0, t1;
+	bool level;
+	uint32_t us;
+	int r, ret = 0;
+	char *end;
+
+	if (argc != 7) return usage();
+	if (strcmp(argv[4], "trim") == 0) op = SG_EDIT_TRIM;
+	else if (strcmp(argv[4], "cut") == 0) op = SG_EDIT_CUT;
+	else return usage();
+	t0 = strtoul(argv[5], &end, 10);
+	if (*end != 0) return bad(argv[5], "T0 must be microseconds");
+	t1 = strtoul(argv[6], &end, 10);
+	if (*end != 0) return bad(argv[6], "T1 must be microseconds");
+	if (t1 <= t0) return bad(argv[4], "need T0 < T1");
+	if (strcmp(argv[2], argv[3]) == 0)
+		return bad(argv[3], "OUT must differ from IN");
+
+	if (sg_open(&s, argv[2], &why) < 0) return bad(argv[2], why);
+	if (!s.raw) {
+		sg_close(&s);
+		return bad(argv[2], "not a RAW capture");
+	}
+	w.f = fopen(argv[3], "w");
+	if (w.f == NULL) { sg_close(&s); return bad(argv[3], strerror(errno)); }
+	w.perline = 0;
+	w.fail = 0;
+	/* the header, as stock writes a RAW .sub */
+	fprintf(w.f, "Filetype: %s\n", s.filetype[0] ? s.filetype
+		: "Flipper SubGhz RAW File");
+	fprintf(w.f, "Version: 1\n");
+	fprintf(w.f, "Frequency: %lu\n", s.frequency);
+	if (s.preset[0]) fprintf(w.f, "Preset: %s\n", s.preset);
+	fprintf(w.f, "Protocol: RAW\n");
+
+	sg_edit_init(&e, op, (uint32_t) t0, (uint32_t) t1, emit_raw, &w);
+	while ((r = sg_raw_next(&s, &level, &us)) == 1) {
+		int32_t dur = level ? (int32_t) us : -(int32_t) us;
+
+		if (sg_edit_feed(&e, dur) != 0) break;	/* a write failed */
+	}
+	if (r >= 0) sg_edit_end(&e);
+	if (w.perline > 0 && !w.fail) fputc('\n', w.f);
+	if (fclose(w.f) != 0) w.fail = 1;
+	if (r < 0) {
+		fprintf(stderr, "subghz: %s: bad RAW_Data near line %lu\n",
+			argv[2], s.line);
+		ret = 1;
+	}
+	sg_close(&s);
+	if (w.fail) { bad(argv[3], "write failed"); ret = 1; }
+	if (ret) remove(argv[3]);	/* leave no half-written file */
+	return ret;
 }
 
 /* ---- record (Read RAW) ----
@@ -763,6 +858,7 @@ int main(int argc, char **argv)
 	if (argc < 2) return usage();
 	if (strcmp(argv[1], "rx") == 0) return cmd_rx(argc, argv);
 	if (strcmp(argv[1], "decode") == 0) return cmd_decode(argc, argv);
+	if (strcmp(argv[1], "edit") == 0) return cmd_edit(argc, argv);
 	if (strcmp(argv[1], "rec") == 0) return cmd_rec(argc, argv);
 	if (strcmp(argv[1], "tx") == 0) return cmd_tx(argc, argv);
 	if (strcmp(argv[1], "tx_from_file") == 0) return cmd_tx_file(argc, argv);
