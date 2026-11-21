@@ -91,7 +91,7 @@ _PROTOTYPE( void sw_kick, (void)					);
 _PROTOTYPE( int sw_wbudget, (unsigned kb)				);
 /* blk.c */
 _PROTOTYPE( void blk_init, (void)					);
-_PROTOTYPE( int blk_on, (int minor)					);
+_PROTOTYPE( int blk_on, (unsigned long sectors)			);
 _PROTOTYPE( int blk_busy, (void)					);
 _PROTOTYPE( void blk_end, (int proc_nr)					);
 _PROTOTYPE( void blk_wrap, (void)					);

@@ -346,7 +346,7 @@ sgid_of = $(word 2,$(subst :, ,$(filter $(1):%,$(SGIDPROGS))))
 # Programs that hold passwords or keys: a.out flag A_NOSWAP (Secret: yes),
 # never swapped to the card in plain mode (spec R12.28).  login runs as
 # root without set-uid, so the set-uid rule alone would not cover it.
-SECRETPROGS := login passwd su swapsecret
+SECRETPROGS := login passwd su swapsecret blksecret
 LIBPROGS := pwdauth
 # (rz/sz are buildable - make build/<board>/minix/bin/rz - but not shipped:
 # MINIX 2.0's 1990 rz does not get along with today's lrzsz; pkg get and
@@ -1046,7 +1046,7 @@ OBJS_furihello = $(MB)/cmd/furihello.o $(FURI_LINK)
 TESTS	:= sigret unaligned badreloc fcpoison mpufrag abiexec fccheck \
 	   pkgbad pkgplant sticky pwdcheck swapper swapsecret swapsmall \
 	   swaptime swaptime64 swapwear regtest hidfake sgfake alarmrace \
-	   notepost prwtest
+	   notepost prwtest blktest blksecret
 $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
@@ -1054,6 +1054,8 @@ TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
 endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
+# blksecret: blktest built with Secret: yes (12h, AC12.22: EPERM)
+OBJS_blksecret = $(MB)/cmd/test/blktest.o
 # swapsmall: the same, a small image (placement, AC12.10)
 OBJS_swapsmall = $(MB)/cmd/test/swapper.o
 # swaptime64: swaptime's helper with a 64 KB image (swap-in time, #109)

@@ -897,6 +897,7 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   message m;
 
   int blk = mode & SW_BLK;		/* R12.38: blocks too (or only) */
+  unsigned long size;
   int r;
 
   mode &= ~SW_BLK;
@@ -909,7 +910,7 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   sw.busy = 0;
   for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 	rmp->mp_flags &= ~SWAPHDR;	/* the headers were another device's */
-  (void) blk_on(0);
+  (void) blk_on(0UL);
   if (mode == SW_OFF && !blk) {
 	sw.mode = SW_OFF;
 	sw.dev = NO_DEV;
@@ -929,6 +930,10 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
 	sw.dev = NO_DEV;
 	return(EINVAL);
   }
+  mbr += 0x1BE + 16 * (minor - 1) + 12;		/* its size, sectors */
+  size = mbr[0] | (unsigned long) mbr[1] << 8
+		| (unsigned long) mbr[2] << 16 | (unsigned long) mbr[3] << 24;
+  mbr = (unsigned char *) HDR;
   sw.dev = (dev_t) dev;				/* big enough? */
   if (sw_io(DEV_READ, MM_PROC_NR, NR_PROCS * SW_SLOT - SW_SECT,
 			(phys_bytes) mbr, SW_SECT) != OK) {
@@ -937,7 +942,7 @@ int mode;			/* SW_OFF, SW_PLAIN, SW_CRYPT */
   }
   /* Blocks behind the slots (R12.34); with SW_OFF the partition serves
    * only them, nothing is swapped. */
-  if (blk && (r = blk_on(minor)) != OK) {
+  if (blk && (r = blk_on(size)) != OK) {
 	sw.dev = NO_DEV;
 	return(r);
   }

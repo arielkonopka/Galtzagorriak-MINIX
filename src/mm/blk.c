@@ -34,8 +34,6 @@
 #include "mm.h"
 #include <minix/com.h>
 #include <minix/blk.h>
-#include <minix/partition.h>
-#include <sys/ioctl.h>
 #include <signal.h>
 #include <string.h>
 #include "mproc.h"
@@ -112,26 +110,19 @@ PUBLIC void blk_wrap()
 /*===========================================================================*
  *				blk_on					     *
  *===========================================================================*/
-PUBLIC int blk_on(minor)
-int minor;			/* the swap partition, 0: blocks off */
+PUBLIC int blk_on(sectors)
+unsigned long sectors;		/* the swap partition's size, 0: blocks off */
 {
-/* MMSWAPON: the partition's size from WINCHESTER (DIOCGETPS, R12.39), the
- * extents behind the swap slots.  A partition too small for 256 blocks
- * after the slots has no block space.  The caller checked blk_busy(). */
-  struct part_range *rg = (struct part_range *) (mbuf + ARG_MAX - BK_SECT);
+/* MMSWAPON: the extents behind the swap slots, from the partition's size
+ * in its MBR entry (swap.c reads the MBR anyway; WINCHESTER takes no ioctl
+ * from MM).  A partition too small for 256 blocks after the slots has no
+ * block space.  The caller checked blk_busy(). */
   unsigned long n;
-  message m;
 
   bk.ext = 0;
-  if (minor == 0) return(OK);
-  m.m_type = DEV_IOCTL;
-  m.DEVICE = minor;
-  m.PROC_NR = MM_PROC_NR;
-  m.REQUEST = DIOCGETPS;
-  m.ADDRESS = (char *) rg;
-  if (sendrec(WINCHESTER, &m) != OK || m.REP_STATUS != OK) return(ENXIO);
-  if (rg->count <= BK_SKIP) return(ENOSPC);
-  n = (rg->count - BK_SKIP) / BK_BLOCK / NEXT;
+  if (sectors == 0) return(OK);
+  if (sectors <= BK_SKIP) return(ENOSPC);
+  n = (sectors - BK_SKIP) / BK_BLOCK / NEXT;
   if (n == 0) return(ENOSPC);
   /* R12.39: a swap partition stays below 4 GiB, so this fits 16 bits. */
   bk.ext = n > 0xFFFF ? 0xFFFF : (unsigned short) n;
@@ -429,6 +420,7 @@ int bg;				/* a background caller (R12.37) */
 	bi.largest = (unsigned long) len * bk.ext;
 	bi.space = (unsigned long) NEXT * bk.ext;
 	bi.extent = bk.ext;
+	bi.run = RUN(who)[0];
 	bi.size = BLK_SIZE;
 	bi.mode = SW_PLAIN;
 	bi.present = !(sw_state() & 0x80);

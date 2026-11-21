@@ -39,6 +39,7 @@ struct blkinfo {
   unsigned long largest;	/* the largest free run, blocks */
   unsigned long space;		/* the whole block space, blocks */
   unsigned long extent;		/* blocks per extent (the unit of OPEN) */
+  unsigned long run;		/* the caller's first extent (free -v, tests) */
   unsigned short size;		/* BLK_SIZE */
   unsigned char mode;		/* SW_PLAIN, SW_CRYPT (12b) */
   unsigned char present;	/* the card is there */
