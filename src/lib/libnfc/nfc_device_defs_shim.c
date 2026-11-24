@@ -21,6 +21,9 @@
 #include <nfc/protocols/felica/felica.h>
 #include <nfc/protocols/st25tb/st25tb.h>
 #include <nfc/protocols/emv/emv.h>
+#include <nfc/protocols/type_4_tag/type_4_tag.h>
+#include <nfc/protocols/ntag4xx/ntag4xx.h>
+#include <nfc/protocols/mf_plus/mf_plus.h>
 const NfcDeviceBase* const nfc_devices[NfcProtocolNum] = {
     [NfcProtocolIso14443_3a] = &nfc_device_iso14443_3a,
     [NfcProtocolIso14443_3b] = &nfc_device_iso14443_3b,
@@ -34,4 +37,7 @@ const NfcDeviceBase* const nfc_devices[NfcProtocolNum] = {
     [NfcProtocolFelica] = &nfc_device_felica,
     [NfcProtocolSt25tb] = &nfc_device_st25tb,
     [NfcProtocolEmv] = &nfc_device_emv,
+    [NfcProtocolType4Tag] = &nfc_device_type_4_tag,
+    [NfcProtocolNtag4xx] = &nfc_device_ntag4xx,
+    [NfcProtocolMfPlus] = &nfc_device_mf_plus,
 };

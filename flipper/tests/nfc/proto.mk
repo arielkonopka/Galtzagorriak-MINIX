@@ -59,8 +59,7 @@ NSC_PARSERS := aime bambu bip charliecard clipper csc gallagher \
 	       umarsh washcity zolotaya_korona zolotaya_korona_online \
 	       all_in_one sonicare trt aic mykey plantain sevppk_tk sk_tk szppk_so skylanders \
 	       disney_infinity emv
-CSRC	:= $(L)/nfc_device_defs_shim.c $(V)/nfc/nfc_device.c $(V)/nfc/nfc_device_i.c \
-	   $(L)/nfc_supported_cards.c $(V)/api/gallagher/gallagher_util.c \
+CSRC	:= $(L)/nfc_supported_cards.c $(V)/api/gallagher/gallagher_util.c \
 	   $(V)/api/mosgortrans/mosgortrans_util.c $(L)/nfc_shim_time.c $(V)/toolbox/strint.c \
 	   $(patsubst %,$(V)/plugins/supported_cards/%.c,$(NSC_PARSERS))
 VHDR	+= $(L)/nfc_supported_cards.h $(L)/nfc_supported_cards_list.h
@@ -156,3 +155,33 @@ $(B)/cryptotest: cryptotest.c $(MBEDSRC) $(L)/nfc_shim_crypto.c $(L)/nfc_mbedtls
 	$(CC) $(CFLAGS) $(VINC) -DMBEDTLS_SELF_TEST -o $@ cryptotest.c $(MBEDSRC) $(L)/nfc_shim_crypto.c
 
 .PHONY: cryptotest
+
+# Part 7 (#451): the vendored Type 4 Tag poller (it asks the NTAG4xx and
+# DESFire pollers what platform the tag is, so ntag4xx is compiled too:
+# as a dependency only, its own reader is a later task) and the MIFARE
+# Plus poller (SL1/SL3 detection, AES with the vendored Mbed TLS).
+P7SRC	:= $(V)/nfc/protocols/type_4_tag/type_4_tag.c \
+	   $(V)/nfc/protocols/type_4_tag/type_4_tag_i.c \
+	   $(V)/nfc/protocols/type_4_tag/type_4_tag_poller.c \
+	   $(V)/nfc/protocols/type_4_tag/type_4_tag_poller_i.c \
+	   $(V)/nfc/protocols/ntag4xx/ntag4xx.c $(V)/nfc/protocols/ntag4xx/ntag4xx_i.c \
+	   $(V)/nfc/protocols/ntag4xx/ntag4xx_poller.c \
+	   $(V)/nfc/protocols/ntag4xx/ntag4xx_poller_i.c \
+	   $(V)/nfc/protocols/mf_plus/mf_plus.c $(V)/nfc/protocols/mf_plus/mf_plus_i.c \
+	   $(V)/nfc/protocols/mf_plus/mf_plus_crypto.c \
+	   $(V)/nfc/protocols/mf_plus/mf_plus_poller.c \
+	   $(V)/nfc/protocols/mf_plus/mf_plus_poller_i.c
+# The Type 4 Tag poller names its platform through NfcDevice, so the
+# device layer (it was cardtest's only) is in every vendored test now.
+VSRC	+= $(P7SRC) $(L)/nfc_device_defs_shim.c $(V)/nfc/nfc_device.c \
+	   $(V)/nfc/nfc_device_i.c
+VHDR	+= cm_t4.h cm_mfplus.h
+
+p7test: $(B)/p7test
+	./$(B)/p7test
+
+$(B)/p7test: p7test.c $(VSRC) $(VHDR)
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ p7test.c $(VSRC) -lm
+
+.PHONY: p7test

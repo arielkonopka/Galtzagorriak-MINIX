@@ -21,6 +21,11 @@
 #include <nfc/protocols/felica/felica_poller_defs.h>
 #include <nfc/protocols/st25tb/st25tb_poller_defs.h>
 #include <nfc/protocols/emv/emv_poller_defs.h>
+/* Part 7 (#451): Type 4 Tag, MIFARE Plus; NTAG4xx as the Type 4 Tag
+ * poller's platform probe. */
+#include <nfc/protocols/type_4_tag/type_4_tag_poller_defs.h>
+#include <nfc/protocols/ntag4xx/ntag4xx_poller_defs.h>
+#include <nfc/protocols/mf_plus/mf_plus_poller_defs.h>
 const NfcPollerBase* const nfc_pollers_api[NfcProtocolNum] = {
     [NfcProtocolIso14443_3a] = &nfc_poller_iso14443_3a,
     [NfcProtocolIso14443_3b] = &nfc_poller_iso14443_3b,
@@ -34,4 +39,7 @@ const NfcPollerBase* const nfc_pollers_api[NfcProtocolNum] = {
     [NfcProtocolFelica] = &nfc_poller_felica,
     [NfcProtocolSt25tb] = &nfc_poller_st25tb,
     [NfcProtocolEmv] = &emv_poller,
+    [NfcProtocolType4Tag] = &type_4_tag_poller,
+    [NfcProtocolNtag4xx] = &ntag4xx_poller,
+    [NfcProtocolMfPlus] = &mf_plus_poller,
 };
