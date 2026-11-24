@@ -188,6 +188,7 @@ PUBLIC void cstart()
   /* Boot screen; it stays until the launcher takes over the display.
    * Boot messages go to the console (USB) instead. */
   hal_lcd_init();		/* also turns the backlight on */
+  hal_charge_mode();		/* #407: a power-on from USB: charging screen */
   hal_lcd_flush(splash_fb);
 #endif
 

@@ -137,6 +137,7 @@ void hal_line_rx_irq(int on)
 	}
 }
 
+void hal_charge_mode(void) { }
 
 int hal_nfc_start(unsigned *mv) { (void) mv; return -1; }
 void hal_nfc_mode_a(void) { }
