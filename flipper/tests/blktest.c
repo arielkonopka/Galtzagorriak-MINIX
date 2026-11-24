@@ -590,6 +590,24 @@ int main(int argc, char **argv)
 	long first;
 	char ch = 0;
 
+	if (argc > 1 && strcmp(argv[1], "-4") == 0) {
+		/* Security review 2026-11-23, M1 (blktest.py -4): on a swap
+		 * partition past 4 GiB the block space still ends below
+		 * 4 GiB, where MM's 32-bit byte offsets reach (16 slots of
+		 * 384 sectors, then 9 sectors a block). */
+		r = info(&bi);
+		printf("space %lu blocks, extent %lu\n", bi.space, bi.extent);
+		t_result("M1: the block space ends below 4 GiB", r == 0
+			&& bi.space > 0 && bi.space <= (0x7FFFFFUL - 6144) / 9,
+			NULL);
+		r = blk(BLK_OPEN, BLK_ANY, 0xFFFFFFFFUL, 0, 0, NULL);
+		fill(buf, BLK_SIZE, 9);
+		t_result("M1: the first block of a full run: PUT, GET", r > 0
+			&& blk(BLK_PUT, 0, 0, 0, 0, buf) == 0
+			&& blk(BLK_GET, 0, 0, 0, 0, buf2) == 0
+			&& memcmp(buf, buf2, BLK_SIZE) == 0, NULL);
+		return t_fail;
+	}
 	if (argc > 1 && strcmp(argv[1], "-n") == 0) return all_enosys();
 	if (argc > 1 && strcmp(argv[1], "-p") == 0) return all_eperm();
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) return half();
