@@ -8,6 +8,7 @@
 #define NFCLOOP_NONE	0		/* nothing in the field */
 #define NFCLOOP_MFC1K	1		/* MIFARE Classic 1K */
 #define NFCLOOP_NTAG215	2		/* NTAG215 */
+#define NFCLOOP_T4T	3		/* ISO 14443-4 Type 4 Tag (#451) */
 
 struct nfcloop;
 struct nfcloop *nfcloop_new(void);	/* malloc'd, NFCLOOP_NONE */

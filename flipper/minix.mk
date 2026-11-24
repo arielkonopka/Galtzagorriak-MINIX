@@ -650,7 +650,7 @@ OBJS_subrem = $(MB)/cmd/gui/subrem.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
 # streaming dictionary, the .nfc files), C11 as that library is.
 NFCL_DIR := $(MROOT)/src/lib/libnfc
 NFCL_SRC := crypto1 iso14443_3a mf_classic mf_ultralight mf_dict mf_attack \
-	    nfc_file nfc_poller
+	    nfc_file nfc_poller iso_dep aid_scan t4t
 NFCL_HDR := $(wildcard $(NFCL_DIR)/*.h)
 NFCL_CFLAGS = $(filter-out -std=gnu89,$(UCFLAGS)) -std=gnu11 -I$(NFCL_DIR) \
 	    -I$(GM_DIR) -Igui
@@ -1316,10 +1316,13 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.78
+BASE_VER := 4.79
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
+# The nfc service scanner's example AID dictionary (#451): public AIDs
+# only (D.3); the user's own copy goes to /home/flipper/nfc/assets.
+AID_EXAMPLE := rootfs/usr/share/nfc/aid_scan.nfc
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
-	    rootfs/base.postinst $(REGION_FILES)
+	    rootfs/base.postinst $(REGION_FILES) $(AID_EXAMPLE)
 	python3 -I tools/mkpkg.py -n base -v $(BASE_VER) -o $(PKGDIR) \
 	   --postinst rootfs/base.postinst \
 	   --os $(GZ_RELEASE) \
@@ -1327,6 +1330,7 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   $(foreach p,$(UPROGS),/bin/$(p)=$(MB)/bin/$(p)$(if $(filter $(p),$(SUIDPROGS)),$(COMMA)4755)$(if $(call sgid_of,$(p)),$(COMMA)2755:$(call sgid_of,$(p)))) \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
 	   $(foreach r,$(REGION_FILES),/usr/share/region/$(notdir $(r))=$(r)$(COMMA)644) \
+	   /usr/share/nfc/aid_scan.nfc=$(AID_EXAMPLE)$(COMMA)644 \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
