@@ -320,7 +320,7 @@ void power_off(void)
  * syncs and marks every file system CLEAN (N.2), then ship mode.
  */
   spawn = 0;
-  tell(2, "init: battery low: powering off\n");
+  tell(2, "init: powering off\n");
   kill(-1, SIGTERM);
   alarm(2);
   while (!gotalrm && (waitpid(-1, NULL, 0) > 0 || errno == EINTR)) {}
