@@ -44,7 +44,7 @@ MFKEY_SRC := $(V)/mfkey/crypto1.c $(V)/mfkey/mfkey_attack.c \
 	     $(L)/mfkey_host.c
 MFKEY_HDR := $(L)/mfkey_host.h $(wildcard $(L)/mfkey_shim/*.h)
 
-test: $(B)/nfctest $(B)/mfkeytest prototest cardtest p5test
+test: $(B)/nfctest $(B)/mfkeytest prototest cardtest p5test cryptotest
 	cd . && ./$(B)/nfctest
 	cd . && ./$(B)/mfkeytest
 
