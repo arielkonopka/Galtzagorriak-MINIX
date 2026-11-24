@@ -55,6 +55,7 @@
 #define BK_BLOCK	(1 + BLK_NSECT)	/* sectors on the card: header + data */
 #define BK_SKIP		(NR_PROCS * 384UL)	/* sectors of the 16 swap slots */
 #define NSLOT		(NR_PROCS - INIT_PROC_NR - 1)	/* user slots */
+#define BK_MAXSECT	0x7FFFFFUL	/* 4 GiB - 512 B: 32-bit byte offsets */
 #define MAXRUN		255		/* a byte holds the run's length */
 #define DISC_MAX	(256UL * 2048)	/* sectors discarded a step: 256 MB */
 #define PEND(slot)	(bk.disc & (1U << (slot)))	/* run not yet free */
@@ -177,7 +178,13 @@ int nsz;			/* 0: blocks off; 1: a primary partition;
   bk.ext = 0;
   if (nsz == 0) return(OK);
   if (sz[0] <= BK_SKIP) return(ENOSPC);
-  n = (sz[0] - BK_SKIP) / BK_BLOCK / (nsz == 1 ? NEXT : EPS);
+  /* Security review 2026-11-23, M1: bk_io and sw_dio count in bytes, 32
+   * bits (R12.39: swap stays below 4 GiB), but the size is whatever the
+   * card's partition table says.  With more, the blocks past 4 GiB came
+   * out on top of the swap slots and of other processes' blocks.  Only
+   * what lies below 4 GiB is used. */
+  n = sz[0] > BK_MAXSECT ? BK_MAXSECT : sz[0];
+  n = (n - BK_SKIP) / BK_BLOCK / (nsz == 1 ? NEXT : EPS);
   if (n == 0) return(ENOSPC);
   /* R12.39: a swap partition stays below 4 GiB, so this fits 16 bits. */
   bk.ext = n > 0xFFFF ? 0xFFFF : (unsigned short) n;

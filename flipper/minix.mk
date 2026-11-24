@@ -318,7 +318,7 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared bootscreen
+GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared bootscreen chargescreen
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive nfc
 # Stock app ports part 2 (issue #413): window apps over the commands.
@@ -333,7 +333,8 @@ DAEMONS	:= mtpd rpcd
 UPROGS	:= sh halt m2test $(CMDS) $(PORTCMDS) $(SETCMDS) $(EDITCMDS) $(GUIAPPS) $(WINBASE) \
 	   $(DAEMONS)
 # libfuri's tests (spec R5.1, R5.2) only on the QEMU image, where m2test
-# runs them; furihello is also in the tests package (/usr/tests).
+# runs them; furihello and fptest are also in the tests package
+# (/usr/tests) on the other boards.
 ifeq ($(BOARD),qemu)
 UPROGS	+= furitest furihello gmdemo fptest guiflood spinfifo
 endif
@@ -419,6 +420,7 @@ CHMEM_fsck   := 90112	# spec N.4: fsck_mem (64 KB of maps; less if it does not
 CHMEM_subghz := 16384	# every decoder's state (malloc'd once, ~5 KB),
 			# key files (<= 4 KB), stdio; the 2 KB frame buffer
 			# is bss
+CHMEM_chargescreen := 2048
 CHMEM_bootscreen := 2048	# issue #399: stdin 64 B, two 25 B lines, stdio; fsck is running beside it
 CHMEM_launcher := 4096
 CHMEM_gmdemo := 2560	# K.8 window app: 1 KB of stack (two 128 B buffers),
@@ -1112,6 +1114,7 @@ $(foreach c,$(TESTS),$(eval OBJS_$(c) = $(MB)/cmd/test/$(c).o))
 OBJS_notepost = $(MB)/cmd/test/notepost.o $(FURI_LINK)	# T23c: libapp
 ifneq ($(BOARD),qemu)	# (QEMU: in UPROGS)
 TESTS	+= furihello	# libfuri GUI (R5.2): OBJS_furihello above
+TESTS	+= fptest	# R5.7 FPU checks (#436): OBJS_fptest above
 endif
 # swapsecret: swapper built with Secret: yes (A_NOSWAP, R12.28, AC12.13)
 OBJS_swapsecret = $(MB)/cmd/test/swapper.o
@@ -1313,7 +1316,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.76
+BASE_VER := 4.78
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	    rootfs/base.postinst $(REGION_FILES)
