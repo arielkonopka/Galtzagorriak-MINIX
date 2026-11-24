@@ -73,6 +73,7 @@
 #include "hal.h"
 #include <minix/lat.h>
 #include <minix/fg.h>
+#include <minix/ir.h>
 #include <minix/rtc.h>
 #include <minix/rfid.h>
 #include <minix/ibutton.h>
@@ -215,7 +216,13 @@ PRIVATE volatile u8_t tx_h, tx_t;
 PRIVATE volatile u8_t rtc_fired;	/* SIGRTC to INIT is due (R7b.1) */
 PRIVATE volatile u8_t ir_rd;		/* a reader waits */
 PRIVATE volatile u8_t ir_started, ir_done;	/* its frame began, ended */
-PRIVATE u8_t ir_paused;			/* a frame went out meanwhile */
+PRIVATE u8_t ir_paused;			/* bit 0: a frame went out meanwhile;
+					 * bits 1-7: IRIOCSGAP, the silence
+					 * that ends a frame, in 2 ms (0:
+					 * IR_GAP_MS).  One byte for both: the
+					 * kernel's static RAM is at its budget */
+#define IR_PAUSED	0x01
+#define IR_GAP_OF(b)	(((b) >> 1) * 2)
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
 PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
@@ -372,6 +379,7 @@ FORWARD _PROTOTYPE( void ge_task, (void) );
 FORWARD _PROTOTYPE( int bl_state, (u32_t st) );
 FORWARD _PROTOTYPE( void ir_fill, (void)				);
 FORWARD _PROTOTYPE( int ir_rx_arm, (void)				);
+FORWARD _PROTOTYPE( int ir_ioctl, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int rfid_read, (message *m_ptr, phys_bytes user,
 							int count)	);
 FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
@@ -481,6 +489,8 @@ PUBLIC void flipdev_task()
 							&& !sp_waiting)
 			sp_quiet = 100 - hal_vol_default();	/* the default
 							 * again (K.7) */
+		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IR_MINOR)
+			ir_paused &= IR_PAUSED;	/* the default gap again */
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == GPIO_MINOR
 				&& gp_proc == fm.PROC_NR + 1) gp_stop();
 		if (fm.m_type == DEV_CLOSE && fm.DEVICE == IBUTTON_MINOR
@@ -518,6 +528,7 @@ PUBLIC void flipdev_task()
 		  : fm.DEVICE == RFID_MINOR ? rfid_ioctl(&fm)
 		  : fm.DEVICE == NFC_MINOR ? nfc_ioctl(&fm)
 		  : fm.DEVICE == IBUTTON_MINOR ? ow_run(&fm)
+		  : fm.DEVICE == IR_MINOR ? ir_ioctl(&fm)
 		  : fm.DEVICE == SUBGHZ_MINOR || fm.DEVICE == SGRAW_MINOR
 		    || fm.DEVICE == SGPKT_MINOR ? sg_ioctl(&fm)
 		  : fg_ioctl(&fm);
@@ -2346,8 +2357,8 @@ PRIVATE void do_hardint()
 		tx_on = FALSE;
 		if (tx_rfid && !rf_held) rfid_tx_off();
 		else if (tx_rfid) tx_rfid = FALSE;	/* field held: keep it */
-		if (ir_rd && ir_paused) {	/* the reader's capture again */
-			ir_paused = FALSE;
+		if (ir_rd && (ir_paused & IR_PAUSED)) {	/* the reader's capture again */
+			ir_paused &= ~IR_PAUSED;
 			if (ir_rx_arm() < 0) ir_rx_end(EIO);
 		}
 		reply(REVIVE, tx_caller, tx_proc, tx_err ? EIO : tx_count);
@@ -3071,12 +3082,13 @@ int count, input;
   ir_proc = m_ptr->PROC_NR;
   ir_buf = user;				/* count bytes, checked */
   ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
-  ir_started = ir_done = ir_paused = FALSE;
+  ir_started = ir_done = FALSE;
+  ir_paused &= ~IR_PAUSED;
   pu_input = input;
   proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
   ir_rd = TRUE;			/* first: TIM2's interrupt is the
 				 * transmitter's otherwise, and stops it */
-  if (tx_on) ir_paused = TRUE;		/* armed when it is out */
+  if (tx_on) ir_paused |= IR_PAUSED;	/* armed when it is out */
   else if (ir_rx_arm() < 0) {
 	ir_rd = FALSE;
 	proc_addr(ir_proc)->p_physio = FALSE;
@@ -3085,12 +3097,29 @@ int count, input;
   return(SUSPEND);
 }
 
+PRIVATE int ir_ioctl(m_ptr)
+message *m_ptr;
+{
+/* IRIOCSGAP (<minix/ir.h>): the silence that ends a received frame. */
+  phys_bytes user;
+  int ms;
+
+  if (m_ptr->TTY_REQUEST != IRIOCSGAP) return(ENOTTY);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&ms), (phys_bytes) sizeof(int));
+  if (ms != 0 && (ms < 10 || ms > 250)) return(EINVAL);
+  ir_paused = (ir_paused & IR_PAUSED) | (u8_t) (ms / 2 << 1);
+  return(OK);
+}
+
 PRIVATE int ir_rx_arm()
 {
 /* The pulse engine (R4b.7) captures the reader's frame straight into its
  * buffer: the durations between edges, in us, by DMA. */
   if (hal_pulse_rx(pu_input, ir_buf, (unsigned) ir_count / 4,
-		(pu_input ? SG_GAP_MS : IR_GAP_MS) * 1000) < 0)
+		(pu_input ? SG_GAP_MS : IR_GAP_OF(ir_paused) ? IR_GAP_OF(ir_paused)
+						: IR_GAP_MS) * 1000) < 0)
 	return(-1);
   lock();
   pm_busy |= PM_PULSE;			/* TIM2 and DMA need the clocks */
@@ -3172,7 +3201,8 @@ int count;
   ir_proc = m_ptr->PROC_NR;
   ir_buf = user;
   ir_count = count > 0x7FFC ? 0x7FFC : count & ~3;
-  ir_started = ir_done = ir_paused = FALSE;
+  ir_started = ir_done = FALSE;
+  ir_paused &= ~IR_PAUSED;
   pu_input = 2;
   rf_polls = 0;
   rf_settle = rf_held ? (RF_SETTLE_MS / RF_POLL_MS) : 0;
@@ -3697,9 +3727,9 @@ int count;
 	next_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
 	tx_t++;
   }
-  if (ir_rd && !ir_paused) {		/* the reader waits: TIM2 is ours */
+  if (ir_rd && !(ir_paused & IR_PAUSED)) {	/* the reader waits: TIM2 is ours */
 	hal_pulse_stop();
-	ir_paused = TRUE;
+	ir_paused |= IR_PAUSED;
   }
   tx_seg = 1;
   hal_ir_carrier(1);				/* the first mark */

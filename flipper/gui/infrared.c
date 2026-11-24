@@ -34,6 +34,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
+#include <minix/ir.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -247,6 +249,10 @@ static int reader_main(int ifd, int pfd)
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
 	sigaction(SIGALRM, &sa, NULL);
+	/* as stock's raw receiver: a remote's repeat bursts belong to the
+	 * signal that Learn saves (not fatal on an older kernel) */
+	en = IR_GAP_LEARN;
+	(void) ioctl(ifd, IRIOCSGAP, &en);
 	for (;;) {
 		alarm(1);
 		n = ir_recv(ifd);
@@ -266,7 +272,7 @@ static int reader_main(int ifd, int pfd)
 /* Start the reader: this program again, with /dev/ir and the pipe. */
 static int reader_start(void)
 {
-	static char a1[8], a2[8];
+	char a1[8], a2[8];		/* on the stack: the bss budget */
 	char *av[5];
 	int p[2];
 
