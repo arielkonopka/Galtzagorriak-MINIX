@@ -221,8 +221,11 @@ PUBLIC int do_ksig()
    * kill(), the kernel may collect several unrelated signals for a
    * process and pass them to MM in one blow.  Thus loop on the bit
    * map. For SIGINT and SIGQUIT, use proc_id 0 to indicate a broadcast
-   * to the recipient's process group.  For SIGKILL, use proc_id -1 to
-   * indicate a systemwide broadcast.
+   * to the recipient's process group.  A kernel SIGKILL goes to that
+   * process alone: MINIX on the PC broadcast it to all but INIT (the
+   * keyboard's Ctrl-Alt-Del), but here it is the stop of a foreground app
+   * held Back for 4 s (flipdev.c, FG_KILL), which must not take the launcher
+   * and the services with it.
    */
   for (i = 1; i <= _NSIG; i++) {
 	if (!sigismember(&sig_map, i)) continue;
@@ -230,8 +233,6 @@ PUBLIC int do_ksig()
 	    case SIGINT:
 	    case SIGQUIT:
 		id = 0; break;	/* broadcast to process group */
-	    case SIGKILL:
-		id = -1; break;	/* broadcast to all except INIT */
 	    case SIGALRM:
 		/* Disregard SIGALRM when the target process has not
 		 * requested an alarm.  This only applies for a KERNEL
