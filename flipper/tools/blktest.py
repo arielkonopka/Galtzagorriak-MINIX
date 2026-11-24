@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """blktest - swappable memory blocks for apps (spec 12h) in QEMU.
 
-Usage: blktest.py [-g]
+Usage: blktest.py [-g | -4]
 
 Boots a fresh copy of build/qemu/minix/disk.img (make minix disk, BOARD
 qemu) like tools/swaptest.py, through the first boot (swap partition
@@ -33,6 +33,9 @@ front of it (a sparse 64 GB card, as tools/bigcard.py).  Booted again,
 runs on hd3a, hd3b and hd3d, a block on hd3d read back.  /etc/setup's
 layout for these cards as a dry run (mkpart -n on the card's MBR with only
 hd1; 64 GB, 128 GB and 29000 MB): /home reaches the swap container (O.7).
+With -4 (security review 2026-11-23, M1): the swap partition is made
+4.5 GiB bigger (a hole at its end), and blktest -4 checks that the block
+space still ends below 4 GiB.
 Exit status: the number of failures.
 """
 import importlib.util
@@ -125,6 +128,71 @@ def make_big(img):
 		f.seek(start * 512)
 		f.write(sub)
 	return start + BIG_HOLE
+
+
+OVER_HOLE = 0x900000			# 4.5 GiB in sectors
+
+
+def make_over(img):
+	"""hd3 (swap) grows past 4 GiB: a hole of the QEMU HAL at its end."""
+	with open(img, "r+b") as f:
+		mbr = bytearray(f.read(512))
+		e = 0x1BE + 16 * 2
+		start, size = struct.unpack_from("<II", mbr, e + 8)
+		if mbr[e + 4] != 0x82 or size == 0:
+			return None
+		end = start + size
+		mbr[0x1A8:0x1B8] = b"GZ-HOLE!" + struct.pack("<II", end,
+								OVER_HOLE)
+		for i in range(4):
+			o = 0x1BE + 16 * i
+			s0, n = struct.unpack_from("<II", mbr, o + 8)
+			if n and s0 >= end:
+				struct.pack_into("<I", mbr, o + 8, s0 + OVER_HOLE)
+		struct.pack_into("<I", mbr, e + 12, size + OVER_HOLE)
+		f.seek(0)
+		f.write(mbr)
+	return size + OVER_HOLE
+
+
+def main_over():
+	"""Security review 2026-11-23, M1: a swap partition past 4 GiB (a
+	card made on a PC, or a hostile one): the block space must end below
+	4 GiB, or blocks land on the swap slots."""
+	r = powercut.Run(0, 0)
+	keep = r.dir
+	try:
+		if not r.login():
+			check(False, "first boot and login")
+			return 1
+		check(r.sh("pkg install /lib/pkg/tests_1.0.tar && sync", 120) == 0,
+			"install the tests package")
+		r.p.kill()
+		r.p.wait()
+		size = make_over(os.path.join(keep, "build/qemu/minix/disk.img"))
+		check(size is not None and size > 0x800000,
+			"hd3 (swap) is now %s sectors" % size)
+		if size is None:
+			return fails
+		r = powercut.Run(0, 0, reuse=keep)
+		if not r.login():
+			check(False, "login with the big swap partition")
+			return fails + 1
+		out = r.output("mkpart -l /dev/hd0", 30) or b""
+		print(out.decode(errors="replace"))
+		check(r.sh("swapon /dev/hd3 plain blk && swapon -r 0", 30) == 0,
+			"swapon /dev/hd3 plain blk")
+		r.sh("sleep 3", 30)
+		tests(r, "/usr/tests/blktest -4",
+			"M1: block space below 4 GiB on a bigger partition", 120)
+	finally:
+		log = os.environ.get("BLKTEST_LOG")
+		if log:
+			with open(log, "wb") as f:
+				f.write(r.out)
+		r.close()
+	print("blktest -4: %d failures" % fails)
+	return fails
 
 
 def setup_layout(r):
@@ -295,4 +363,5 @@ def main():
 
 
 if __name__ == "__main__":
-	sys.exit(main_big() if sys.argv[1:] == ["-g"] else main())
+	sys.exit(main_big() if sys.argv[1:] == ["-g"]
+		else main_over() if sys.argv[1:] == ["-4"] else main())

@@ -2031,8 +2031,12 @@ int hal_disk_init(void)
 		if ((r = sd_cmd(CMD0, 0)) == R1_IDLE) break;
 		if (v2 == 39) SD_FAIL(1, r);
 		sd_select(0);
+		/* (security review 2026-11-23, K9: the other tasks meanwhile,
+		 * as below; an empty slot held the CPU for 40 x 10 ms at
+		 * every open) */
 		start = DWT->CYCCNT;
-		while (ms_since(start) < 10) ;
+		while (ms_since(start) < 10) hal_disk_yield();
+		spi2_speed(SPI_DIV_SD_INIT);
 	}
 	if ((r = sd_cmd(CMD59, 1)) > R1_IDLE) SD_FAIL(2, r);	/* CRCs on */
 	v2 = 0;
