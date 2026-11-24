@@ -29,7 +29,10 @@ Inputs, by how they reach the kernel:
 | iButton / 1-Wire | `flipdev.c` (`ow_*`) | reviewed |
 | GPIO, ADC, buttons | `flipdev.c`, `board.c` | reviewed (no interrupts or parsing from GPIO) |
 | BLE / CPU2 mailbox and shared RAM | not implemented yet | review when it lands |
-| Sub-GHz (CC1101), NFC (ST25R3916), 125 kHz RFID | parked at boot, no receive path yet | review when it lands |
+| Sub-GHz (CC1101) receive: RSSI, raw frames, the gapless stream | `arm/flipdev.c` (`pulse_read`, `rs_start`), `board.c` (`hal_subghz_*`) | reviewed (2026-11-19, stream 2026-11-23); transmit and packets when the device path lands |
+| 125 kHz RFID (read, stream, emulation) | `arm/flipdev.c` (`rfid_*`, `rs_*`, `er_*`) | reviewed (2026-11-19) |
+| Swap partition and block space (sizes from the card) | `src/mm/swap.c`, `src/mm/blk.c` | reviewed (2026-11-23) |
+| NFC (ST25R3916) | libraries only (`src/lib/nfc`, host-tested), no device path yet | review when it lands |
 | Wi-Fi module (ESP32-S2 on USART1) | Phase 22 | review when it lands |
 
 **What is not a weakness by itself.** Canary apps (spec section M) and

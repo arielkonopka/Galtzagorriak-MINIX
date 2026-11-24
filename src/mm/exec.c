@@ -401,6 +401,16 @@ vir_bytes *pc;			/* program entry point (initial PC) */
   }
 #endif
   if (*tot_bytes == 0) return(ENOEXEC);
+#if (CHIP == ARM_CM)
+  /* Security review 2026-11-23, M2: sizes from the file that wrap the
+   * click sums below (a huge a_data with a small a_bss) gave a small
+   * image and a load of 4 GB into it.  The kernel stopped the read at
+   * the image's end; refused here all the same. */
+  if (*data_bytes + *bss_bytes < *data_bytes
+	|| *data_bytes + *bss_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1
+	|| (unsigned long) *text_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1
+	|| *tot_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1) return(ENOEXEC);
+#endif
 
   if (*ft != SEPARATE) {
 
