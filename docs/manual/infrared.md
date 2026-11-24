@@ -57,6 +57,14 @@ duty_cycle: 0.330000
 data: 504 3432 502 483 500 484 510
 ```
 
+## Signals with repeat bursts
+
+Many remotes send a burst and then one or more short repeat bursts 40 to 110 ms later. All of
+them belong to the signal. Learn (in the app and `ir learn FILE NAME`) therefore waits for 150 ms
+of silence before it takes a signal as complete, as the stock firmware does, so a learned raw
+signal keeps its repeats. `ir rx` shows each burst as a frame of its own (30 ms of silence ends
+one); `ir rx -g 150` shows them joined, as Learn saves them.
+
 ## Who may use it: group `ir`
 
 `/dev/ir` belongs to group `ir` (mode 660). The app is set-gid `ir`. It opens `/dev/ir` only

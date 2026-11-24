@@ -1,9 +1,12 @@
 /* ir - infrared receive and send on the Flipper (Galtzagorriak MINIX)
  *
- * Usage:	ir rx [-r] [-n COUNT] [-d DEV]	print received frames (default:
- *					one), decoded; -r: also the raw
- *					timings; -d: another device with
- *					the same timings (/dev/subghzraw)
+ * Usage:	ir rx [-r] [-n COUNT] [-g MS] [-d DEV]	print received frames
+ *					(default: one), decoded; -r: also the
+ *					raw timings; -g: a frame ends after MS
+ *					of silence (default 30; 150 keeps a
+ *					remote's repeat bursts in one frame);
+ *					-d: another device with the same
+ *					timings (/dev/subghzraw)
  *		ir tx PROTO ADDR CMD	send one message (ADDR, CMD in hex,
  *					as the stock firmware's ir tx)
  *		ir tx raw [-f HZ] US ...  send marks and spaces, microseconds,
@@ -20,6 +23,8 @@
  * a first word with bit 31 set gives the carrier frequency and duty.
  */
 #include <sys/types.h>
+#include <sys/ioctl.h>
+#include <minix/ir.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -66,7 +71,7 @@ static struct pd pd_pio = { 8500, 4225, 500, 500, 1500 };
 
 static void usage(void)
 {
-	fprintf(stderr, "Usage: ir rx [-r] [-n COUNT] [-d DEV]\n"
+	fprintf(stderr, "Usage: ir rx [-r] [-n COUNT] [-g MS] [-d DEV]\n"
 			"       ir tx PROTO ADDR CMD\n"
 			"       ir tx raw [-f HZ] US US ...\n"
 			"       ir list FILE\n"
@@ -549,10 +554,15 @@ static void raw(void)
 	printf("\n");
 }
 
-static int rx(int count, int rawtoo)
+static int rx(int count, int rawtoo, int gap)
 {
 	struct msg m;
 	int fd = devir(O_RDONLY);
+
+	if (gap > 0 && ioctl(fd, IRIOCSGAP, &gap) < 0) {
+		perror("ir: -g");
+		return 1;
+	}
 
 	while (count-- > 0) {
 		receive(fd);
@@ -760,6 +770,10 @@ static int learn(char *file, char *name)
 
 	isnew = access(file, 0) != 0;
 	fd = devir(O_RDONLY);
+	/* as stock's raw receiver: a remote's repeat bursts, 40 to 110 ms
+	 * apart, belong to the signal (not fatal on an older kernel) */
+	i = IR_GAP_LEARN;
+	(void) ioctl(fd, IRIOCSGAP, &i);
 	printf("Point the remote at the Flipper and press the button.\n");
 	fflush(stdout);
 	do {
@@ -793,7 +807,7 @@ static int learn(char *file, char *name)
 int main(int argc, char **argv)
 {
 	unsigned long hz = 38000;
-	int i, p, count = 1, rawtoo = 0;
+	int i, p, count = 1, rawtoo = 0, gap = 0;
 
 	if (argc < 2) usage();
 	if (strcmp(argv[1], "rx") == 0) {
@@ -801,11 +815,13 @@ int main(int argc, char **argv)
 			if (strcmp(argv[i], "-r") == 0) rawtoo = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				count = atoi(argv[++i]);
+			else if (strcmp(argv[i], "-g") == 0 && i + 1 < argc)
+				gap = atoi(argv[++i]);
 			else if (strcmp(argv[i], "-d") == 0 && i + 1 < argc)
 				devname = argv[++i];
 			else usage();
 		}
-		return rx(count, rawtoo);
+		return rx(count, rawtoo, gap);
 	}
 	if (strcmp(argv[1], "tx") == 0 && argc >= 4
 					&& strcmp(argv[2], "raw") == 0) {

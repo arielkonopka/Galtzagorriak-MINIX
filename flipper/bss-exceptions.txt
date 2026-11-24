@@ -14,8 +14,7 @@ ir	4344
 # infrared: the Infrared app (issue #389, Phase 7).  The same 4 KB frame as
 # ir (1024 timings, stock's limit, plus the carrier word) and gui.c's 1 KB
 # frame buffer.  Only while the app runs; swapped out with it when idle.
-# 2026-11-24 (#416): 5168, +16 B: the reader is a program of its own, with its fd arguments.
-infrared	5168
+infrared	5152
 # launcher: the desktop (spec K.6, K.8, T23b).  Its window server keeps
 # the window on the screen and its parent (2 x 658 B), a record line
 # (128 B) and the keyboard's text (64 B); the clock window's localtime()
