@@ -242,6 +242,7 @@ PUBLIC int do_exec()
   /* Swap (R12.28, R12.22): set-uid, set-gid and secret images never go to
    * the card in clear; the launcher's child is the foreground app. */
   rmp->mp_flags &= ~NOSWAP;
+  blk_end(who);			/* another program: no blocks (R12.35) */
   if (secret || (s_buf.st_mode & (I_SET_UID_BIT | I_SET_GID_BIT)))
 	rmp->mp_flags |= NOSWAP;
   if (rmp->mp_flags & FGEXEC) rmp->mp_flags = (rmp->mp_flags & ~FGEXEC) | FGAPP;
@@ -372,6 +373,12 @@ vir_bytes *pc;			/* program entry point (initial PC) */
 	    || SHLIBC_HDR->sh_id != (unsigned long) hdr.a_tbase
 	    || !(hdr.a_flags & A_SEP))
 		return(ENOEXEC);
+	/* The same for the shared libfuri + libapp (R2b.9, R5.2), whose
+	 * area follows the libc's: a_dbase is its id, 0 when unused. */
+	if (hdr.a_dbase != 0
+	    && (SHFURI_HDR->sh_magic != SHFURI_MAGIC
+		|| SHFURI_HDR->sh_id != (unsigned long) hdr.a_dbase))
+		return(ENOEXEC);
   }
   if ((hdr.a_flags & ~(A_NSYM | A_EXEC | A_SEP | A_LIBC | A_NOSWAP)) != 0)
 	return(ENOEXEC);
@@ -394,6 +401,16 @@ vir_bytes *pc;			/* program entry point (initial PC) */
   }
 #endif
   if (*tot_bytes == 0) return(ENOEXEC);
+#if (CHIP == ARM_CM)
+  /* Security review 2026-11-23, M2: sizes from the file that wrap the
+   * click sums below (a huge a_data with a small a_bss) gave a small
+   * image and a load of 4 GB into it.  The kernel stopped the read at
+   * the image's end; refused here all the same. */
+  if (*data_bytes + *bss_bytes < *data_bytes
+	|| *data_bytes + *bss_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1
+	|| (unsigned long) *text_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1
+	|| *tot_bytes + CLICK_SIZE - 1 < CLICK_SIZE - 1) return(ENOEXEC);
+#endif
 
   if (*ft != SEPARATE) {
 

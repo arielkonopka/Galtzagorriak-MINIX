@@ -169,10 +169,14 @@ int rw_flag;			/* READING or WRITING */
   } else {
 	if (rip->i_pipe == I_PIPE && position >= rip->i_size) {
 		/* Reset pipe pointers.  What was in it has been read: it
-		 * need not be written to the disk (T9). */
-		for (i = 0; i < V1_NR_DZONES; i++)
+		 * need not be written to the disk (T9).  Zones in core only
+		 * (K.6) go too: the next write counts its block again. */
+		for (i = 0; i < V1_NR_DZONES; i++) {
 			forget_zone(rip->i_dev, rip->i_zone[i],
-					get_super(rip->i_dev)->s_log_zone_size);
+					rip->i_sp->s_log_zone_size);
+			if (rip->i_zone[i] >= rip->i_sp->s_zones)
+				rip->i_zone[i] = NO_ZONE;
+		}
 		rip->i_size = 0;	/* no data left */
 		position = 0;		/* reset reader(s) */
 		if ( (wf = find_filp(rip, W_BIT)) != NIL_FILP) wf->filp_pos =0;
@@ -183,7 +187,8 @@ int rw_flag;			/* READING or WRITING */
 
   /* Check to see if read-ahead is called for, and if so, set it up. */
   if (rw_flag == READING && rip->i_seek == NO_SEEK && position % BLOCK_SIZE== 0
-		&& (regular || mode_word == I_DIRECTORY)) {
+		&& (regular || mode_word == I_DIRECTORY)
+		&& rip->i_pipe != I_PIPE) {
 	rdahed_inode = rip;
 	rdahedpos = position;
   }
@@ -194,7 +199,16 @@ int rw_flag;			/* READING or WRITING */
   if (r == OK) {
 	if (rw_flag == READING) rip->i_update |= ATIME;
 	if (rw_flag == WRITING) rip->i_update |= CTIME | MTIME;
-	rip->i_dirt = DIRTY;		/* inode is thus now dirty */
+	/* Spec N.2: a read does not dirty the inode for its access time (no
+	 * SD write per exec or cat; the file system stays CLEAN); the time
+	 * goes to the card when the inode is written for another reason.
+	 * Spec K.7 (ACK7.2): nor does a write to a character device
+	 * (/dev/lcd, a tty): only its times change, and every frame drawn
+	 * would otherwise cost an inode write at the next sync.  Spec K.6:
+	 * nor pipe or FIFO I/O: size, positions and times stay in core
+	 * (a FIFO's times on the disk are not updated). */
+	if (rw_flag == WRITING && !char_spec && rip->i_pipe != I_PIPE)
+		rip->i_dirt = DIRTY;	/* inode is thus now dirty */
 	if (partial_pipe) {
 		partial_pipe = 0;
 			/* partial write on pipe with */
@@ -253,6 +267,15 @@ int usr;			/* which user process */
 		/* Writing to a nonexistent block. Create and enter in inode.*/
 		if ((bp= new_block(rip, position)) == NIL_BUF)return(err_code);
 	}
+  } else if (rip->i_pipe == I_PIPE && b >= (block_t) rip->i_sp->s_zones) {
+	/* Spec K.6: a pipe's block, in the cache only (write.c, pipe_zone).
+	 * It is there while it holds data; never read from the disk. */
+	bp = get_block(dev, b, PREFETCH);
+	if (bp->b_dev == NO_DEV) {
+		bp->b_dev = dev;
+		zero_block(bp);
+		bp->b_dirt = CLEAN;
+	}
   } else if (rw_flag == READING) {
 	/* Read and read ahead if convenient. */
 	bp = rahead(rip, b, position, left);
@@ -281,7 +304,9 @@ int usr;			/* which user process */
 	r = sys_copy(usr, seg, (phys_bytes) buff,
 			FS_PROC_NR, D, (phys_bytes) (bp->b_data+off),
 			(phys_bytes) chunk);
-	bp->b_dirt = DIRTY;
+	bp->b_dirt = rip->i_pipe == I_PIPE && !block_spec
+		&& bp->b_blocknr >= (block_t) rip->i_sp->s_zones
+		? PIPE_DIRTY : DIRTY;
   }
   n = (off + chunk == BLOCK_SIZE ? FULL_DATA_BLOCK : PARTIAL_DATA_BLOCK);
   put_block(bp, n);
@@ -302,9 +327,9 @@ off_t position;			/* position in file whose blk wanted */
 
   register struct buf *bp;
   register zone_t z;
-  int scale, boff, dzones, nr_indirects, index, zind, ex;
+  int scale, boff, dzones, nr_indirects, index, zind;
   block_t b;
-  long excess, zone, block_pos;
+  long excess, zone, block_pos, span;
   
   scale = rip->i_sp->s_log_zone_size;	/* for block-zone conversion */
   block_pos = position/BLOCK_SIZE;	/* relative blk # in file */
@@ -322,31 +347,36 @@ off_t position;			/* position in file whose blk wanted */
 	return(b);
   }
 
-  /* It is not in the inode, so it must be single or double indirect. */
+  /* It is not in the inode: single, double or (V3, spec O.4) triple
+   * indirect.  Walk down from the inode.
+   */
   excess = zone - dzones;	/* first Vx_NR_DZONES don't count */
-
-  if (excess < nr_indirects) {
-	/* 'position' can be located via the single indirect block. */
-	z = rip->i_zone[dzones];
-  } else {
-	/* 'position' can be located via the double indirect block. */
-	if ( (z = rip->i_zone[dzones+1]) == NO_ZONE) return(NO_BLOCK);
-	excess -= nr_indirects;			/* single indir doesn't count*/
-	b = (block_t) z << scale;
-	bp = get_block(rip->i_dev, b, NORMAL);	/* get double indirect block */
-	index = (int) (excess/nr_indirects);
-	z = rd_indir(bp, index);		/* z= zone for single*/
-	put_block(bp, INDIRECT_BLOCK);		/* release double ind block */
-	excess = excess % nr_indirects;		/* index into single ind blk */
+  span = 1;			/* zones under one entry at this level */
+  zind = dzones;
+  if (excess >= nr_indirects) {
+	excess -= nr_indirects;
+	span = nr_indirects;
+	zind = dzones + 1;
+	if (excess >= (long) nr_indirects * nr_indirects) {
+		excess -= (long) nr_indirects * nr_indirects;
+		span = (long) nr_indirects * nr_indirects;
+		zind = dzones + 2;
+		if (!IS_V3(rip->i_sp) || excess / span >= nr_indirects)
+			return(NO_BLOCK);
+	}
   }
-
-  /* 'z' is zone num for single indirect block; 'excess' is index into it. */
-  if (z == NO_ZONE) return(NO_BLOCK);
-  b = (block_t) z << scale;			/* b is blk # for single ind */
-  bp = get_block(rip->i_dev, b, NORMAL);	/* get single indirect block */
-  ex = (int) excess;				/* need an integer */
-  z = rd_indir(bp, ex);				/* get block pointed to */
-  put_block(bp, INDIRECT_BLOCK);		/* release single indir blk */
+  z = rip->i_zone[zind];
+  for (;;) {
+	if (z == NO_ZONE) return(NO_BLOCK);
+	b = (block_t) z << scale;
+	bp = get_block(rip->i_dev, b, NORMAL);	/* an indirect block */
+	index = (int) (excess / span);
+	excess %= span;
+	z = rd_indir(bp, index);
+	put_block(bp, INDIRECT_BLOCK);
+	if (span == 1) break;
+	span /= nr_indirects;
+  }
   if (z == NO_ZONE) return(NO_BLOCK);
   b = ((block_t) z << scale) + boff;
   return(b);
@@ -427,7 +457,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
 /* Minimum number of blocks to prefetch. */
 # define BLOCKS_MINIMUM		(NR_BUFS < 50 ? 18 : 32)
 
-  int block_spec, scale, read_q_size;
+  int block_spec, scale, read_q_size, pipe_q;
   unsigned int blocks_ahead, fragment;
   block_t block, blocks_left;
   off_t ind1_pos;
@@ -499,6 +529,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
   if (blocks_ahead > blocks_left) blocks_ahead = blocks_left;
 
   read_q_size = 0;
+  pipe_q = pipe_bufs();		/* pipe data: never taken (K.6) */
 
   /* Acquire block buffers. */
   for (;;) {
@@ -507,7 +538,7 @@ unsigned bytes_ahead;		/* bytes beyond position for immediate use */
 	if (--blocks_ahead == 0) break;
 
 	/* Don't trash the cache, leave 4 free. */
-	if (bufs_in_use >= NR_BUFS - 4) break;
+	if (bufs_in_use + pipe_q >= NR_BUFS - 4) break;
 
 	block++;
 

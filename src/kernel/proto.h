@@ -270,7 +270,7 @@ _PROTOTYPE( void pm_minute, (void)					);
 _PROTOTYPE( void ecc_poll, (void)					);
 _PROTOTYPE( void arm_exception, (unsigned exc)				);
 _PROTOTYPE( void kernel_fault_report, (u32_t *frame, unsigned exc)	);
-_PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp)	);
+_PROTOTYPE( int user_frame_ok, (struct proc *rp, vir_bytes sp, int fp)	);
 _PROTOTYPE( void lcd_cons_putc, (int c)					);
 _PROTOTYPE( void flipdev_notice, (int kind)				);
 #define NOTICE_BACK	0	/* flipdev_notice(): the card is back (N.6) */
@@ -293,7 +293,7 @@ _PROTOTYPE( void lat_nosleep, (int r)					);
 #else
 #define LAT_EVENT(ev, arg)	((void) 0)
 #endif
-_PROTOTYPE( void user_frame_fault, (void)				);
+_PROTOTYPE( void user_frame_fault, (struct proc *rp)			);
 _PROTOTYPE( void mpu_switch, (void)					);
 _PROTOTYPE( void shadow_kick, (void)					);
 _PROTOTYPE( void bell, (void)						);
@@ -306,10 +306,13 @@ _PROTOTYPE( char *k_getenv, (char *name)				);
 /* arm/flipdev.c */
 _PROTOTYPE( void flipdev_tick, (void)					);
 _PROTOTYPE( void flipdev_btn, (void)					);
+_PROTOTYPE( void flipdev_off_notice, (void)				);
 _PROTOTYPE( void subghz_minute, (void)					);
 _PROTOTYPE( void flipdev_vibro_off, (void)				);
 _PROTOTYPE( void flipdev_adc_poll, (void)				);
 _PROTOTYPE( void flipdev_led_tick, (void)				);
+_PROTOTYPE( void flipdev_xit, (int proc_nr)				);
+_PROTOTYPE( void flipdev_cons_act, (void)				);
 _PROTOTYPE( void flipdev_pulse_poll, (void)				);
 _PROTOTYPE( clock_t flipdev_idle, (clock_t now)				);
 _PROTOTYPE( int ir_busy, (void)						);
@@ -323,7 +326,7 @@ _PROTOTYPE( void mkshadow, (struct proc *parent, struct proc *child,
 		phys_clicks c2)						);
 _PROTOTYPE( void rmshadow, (struct proc *p, phys_clicks *basep,
 		phys_clicks *sizep)					);
-_PROTOTYPE( void unshadow, (struct proc *p)				);
+_PROTOTYPE( void unshadow, (struct proc *p, struct proc *ran)		);
 _PROTOTYPE( void copyclicks, (phys_clicks src, phys_clicks dest,
 		phys_clicks nclicks)					);
 _PROTOTYPE( void zeroclicks, (phys_clicks dest, phys_clicks nclicks)	);

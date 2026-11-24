@@ -6,7 +6,7 @@
 
 ## 8.1 Why Berry
 
-The owner chose [Berry](https://github.com/berry-lang/berry) (MIT) on 2026-11-14 over Lua,
+The user chose [Berry](https://github.com/berry-lang/berry) (MIT) on 2026-11-14 over Lua,
 MicroPython, mJS and Forth (comparison in spec 7c.0). The deciding points for this machine:
 
 - it keeps library tables **and** compiled scripts in flash without patches (constant objects

@@ -133,7 +133,11 @@ char string[NAME_MAX];		/* component extracted from 'old_name' */
 
   /* Copy the unparsed path, 'old_name', to the array, 'string'. */
   while ( rnp < &old_name[PATH_MAX]  &&  c != '/'   &&  c != '\0') {
-	if (np < &string[NAME_MAX]) *np++ = c;
+	if (np >= &string[NAME_MAX]) {	/* spec O.4: no silent cut */
+		err_code = ENAMETOOLONG;
+		return((char *) 0);
+	}
+	*np++ = c;
 	c = *++rnp;		/* advance to next character */
   }
 
@@ -249,22 +253,32 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
  *    if 'string' is dot1 or dot2, no access permissions are checked.
  */
 
-  register struct direct *dp;
+  register char *dp;		/* the entry (spec O.4: bytes, per FS) */
   register struct buf *bp;
-  int i, r, e_hit, t, match;
+  int r, e_hit, match;
   mode_t bits;
   off_t pos;
   unsigned new_slots, old_slots;
   block_t b;
   struct super_block *sp;
   int extended = 0;
+  unsigned esize, noff, nlen;	/* entry size, name offset, name length */
+  ino_t ino;
 
   /* If 'ldir_ptr' is not a pointer to a dir inode, error. */
   if ( (ldir_ptr->i_mode & I_TYPE) != I_DIRECTORY) return(ENOTDIR);
 
+  sp = ldir_ptr->i_sp;
+  esize = DIR_ESIZE(sp);
+  noff = DIR_NOFF(sp);
+  nlen = DIR_NLEN(sp);
+
   r = OK;
 
   if (flag != IS_EMPTY) {
+	/* A name longer than NAME_MAX (60) never gets here (get_name: spec
+	 * O.4).  V1/V2 still cut names at 14, as MINIX always did: the pkg
+	 * database on existing cards has names cut that way. */
 	bits = (flag == LOOK_UP ? X_BIT : W_BIT | X_BIT);
 
 	if (string == dot1 || string == dot2) {
@@ -276,7 +290,7 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
   if (r != OK) return(r);
   
   /* Step through the directory one block at a time. */
-  old_slots = (unsigned) (ldir_ptr->i_size/DIR_ENTRY_SIZE);
+  old_slots = (unsigned) (ldir_ptr->i_size / esize);
   new_slots = 0;
   e_hit = FALSE;
   match = 0;			/* set when a string match occurs */
@@ -288,20 +302,22 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
 	bp = get_block(ldir_ptr->i_dev, b, NORMAL);	/* get a dir block */
 
 	/* Search a directory block. */
-	for (dp = &bp->b_dir[0]; dp < &bp->b_dir[NR_DIR_ENTRIES]; dp++) {
+	for (dp = &bp->b_data[0]; dp < &bp->b_data[BLOCK_SIZE]; dp += esize) {
 		if (++new_slots > old_slots) { /* not found, but room left */
 			if (flag == ENTER) e_hit = TRUE;
 			break;
 		}
+		ino = IS_V3(sp) ? (ino_t) *(u32_t *) dp
+				: (ino_t) conv2(sp->s_native, *(u16_t *) dp);
 
 		/* Match occurs if string found. */
-		if (flag != ENTER && dp->d_ino != 0) {
+		if (flag != ENTER && ino != 0) {
 			if (flag == IS_EMPTY) {
 				/* If this test succeeds, dir is not empty. */
-				if (strcmp(dp->d_name, "." ) != 0 &&
-				    strcmp(dp->d_name, "..") != 0) match = 1;
+				if (strcmp(dp + noff, "." ) != 0 &&
+				    strcmp(dp + noff, "..") != 0) match = 1;
 			} else {
-				if (strncmp(dp->d_name, string, NAME_MAX) == 0)
+				if (strncmp(dp + noff, string, nlen) == 0)
 					match = 1;
 			}
 		}
@@ -311,16 +327,20 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
 			r = OK;
 			if (flag == IS_EMPTY) r = ENOTEMPTY;
 			else if (flag == DELETE) {
-				/* Save d_ino for recovery. */
-				t = NAME_MAX - sizeof(ino_t);
-				*((ino_t *) &dp->d_name[t]) = dp->d_ino;
-				dp->d_ino = 0;	/* erase entry */
+				/* Save the inode number for recovery in the
+				 * last bytes of the name, then erase it. */
+				if (IS_V3(sp)) {
+					memcpy(dp + esize - 4, dp, 4);
+					memset(dp, 0, 4);
+				} else {
+					memcpy(dp + esize - 2, dp, 2);
+					memset(dp, 0, 2);
+				}
 				bp->b_dirt = DIRTY;
 				ldir_ptr->i_update |= CTIME | MTIME;
 				ldir_ptr->i_dirt = DIRTY;
 			} else {
-				sp = ldir_ptr->i_sp;	/* 'flag' is LOOK_UP */
-				*numb = conv2(sp->s_native, (int) dp->d_ino);
+				*numb = ino;	/* 'flag' is LOOK_UP */
 			}
 			put_block(bp, DIRECTORY_BLOCK);
 			return(r);
@@ -328,7 +348,7 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
 
 
 		/* Check for free slot for the benefit of ENTER. */
-		if (flag == ENTER && dp->d_ino == 0) {
+		if (flag == ENTER && ino == 0) {
 			e_hit = TRUE;	/* we found a free slot */
 			break;
 		}
@@ -350,21 +370,21 @@ int flag;			/* LOOK_UP, ENTER, DELETE or IS_EMPTY */
 	if (new_slots == 0) return(EFBIG); /* dir size limited by slot count */
 	if ( (bp = new_block(ldir_ptr, ldir_ptr->i_size)) == NIL_BUF)
 		return(err_code);
-	dp = &bp->b_dir[0];
+	dp = &bp->b_data[0];
 	extended = 1;
   }
 
   /* 'bp' now points to a directory block with space. 'dp' points to slot. */
-  (void) memset(dp->d_name, 0, (size_t) NAME_MAX); /* clear entry */
-  for (i = 0; string[i] && i < NAME_MAX; i++) dp->d_name[i] = string[i];
-  sp = ldir_ptr->i_sp; 
-  dp->d_ino = conv2(sp->s_native, (int) *numb);
+  (void) memset(dp, 0, (size_t) esize); /* clear entry */
+  (void) strncpy(dp + noff, string, (size_t) nlen);
+  if (IS_V3(sp)) *(u32_t *) dp = (u32_t) *numb;
+  else *(u16_t *) dp = (u16_t) conv2(sp->s_native, (int) *numb);
   bp->b_dirt = DIRTY;
   put_block(bp, DIRECTORY_BLOCK);
   ldir_ptr->i_update |= CTIME | MTIME;	/* mark mtime for update later */
   ldir_ptr->i_dirt = DIRTY;
   if (new_slots > old_slots) {
-	ldir_ptr->i_size = (off_t) new_slots * DIR_ENTRY_SIZE;
+	ldir_ptr->i_size = (off_t) new_slots * esize;
 	/* Send the change to disk if the directory is extended. */
 	if (extended) rw_inode(ldir_ptr, WRITING);
   }

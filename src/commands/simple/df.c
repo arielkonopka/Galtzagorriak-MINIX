@@ -2,6 +2,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <limits.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -27,6 +28,9 @@ _PROTOTYPE(int main, (int argc, char *argv []));
 _PROTOTYPE(int df, (char *name, char *mnton, char *version, char *rw_flag, int silent ));
 _PROTOTYPE(bit_t bit_count, (int blocks, bit_t bits, int fd ));
 _PROTOTYPE(void defaults, (void ));
+_PROTOTYPE(static int df_mounted, (char *name, char *mnton, char *version,
+						char *rw_flag ));
+_PROTOTYPE(static char *mount_point, (char *name, char *buf ));
 
 int main(argc, argv)
 int argc;
@@ -58,7 +62,15 @@ char *argv[];
 
   if (argc == 1) defaults();
 
-  for (i = 1; i < argc; i++) ex |= df(argv[i], "", "", "", SILENT);
+  for (i = 1; i < argc; i++) {
+	static char mp[PATH_MAX+1];
+
+	/* Spec O.5: a mounted device from the FS server's counters. */
+	if (mount_point(argv[i], mp) != NULL
+			&& df_mounted(argv[i], mp, "", "") == 0)
+		continue;
+	ex |= df(argv[i], "", "", "", SILENT);
+  }
   return(ex);
 }
 
@@ -215,7 +227,57 @@ void defaults()
   while (1) {
 	get_mtab_entry(special, mounted_on, version, rw_flag);
 	if (special[0] == '\0') exit(0);
+	if (df_mounted(special, mounted_on, version, rw_flag) == 0) continue;
 	ex |= df(special, mounted_on, version, rw_flag, REPORT);
   }
   exit(ex);
+}
+
+
+/* Spec O.5: the mount point of a mounted device, from /etc/mtab. */
+static char *mount_point(name, buf)
+char *name, *buf;
+{
+  char special[PATH_MAX+1], version[10], rw_flag[10];
+
+  if (load_mtab("df") < 0) return(NULL);
+  while (1) {
+	get_mtab_entry(special, buf, version, rw_flag);
+	if (special[0] == '\0') return(NULL);
+	if (strcmp(special, name) == 0) return(buf);
+  }
+}
+
+/* Spec O.5: a mounted file system, from statfs(): no bit map is read, so
+ * the answer is immediate on any size.  "~" after the free counts: an
+ * estimate from the super block hint; update's idle recount is not done. */
+static int df_mounted(name, mnton, version, rw_flag)
+char *name, *mnton, *version, *rw_flag;
+{
+  struct statfs st;
+  char devname[32], mp[PATH_MAX+1], v[4];
+  char *on = mnton;
+  int j, est;
+
+  if (on[0] == '\0' && (on = mount_point(name, mp)) == NULL) return(-1);
+  if (statfs(on, &st) != 0) return(-1);
+  est = (st.f_flag & ST_ESTIMATE) != 0;
+  for (j = 0; j < NL; j++) devname[j] = ' ';
+  strncpy(devname, mnton, (size_t)NL);
+  for (j = 0; j < NL; j++) if(devname[j] == '\0') devname[j] = ' ';
+  devname[NL] = '\0';
+  if (version[0] == '\0' && mnton[0] != '\0') {
+	v[0] = '0' + st.f_version;
+	v[1] = '\0';
+	version = v;
+  }
+
+  fprintf(stdout, "%s", name);
+  j = 10 - strlen(name);
+  while (j-- > 0) fprintf(stdout, " ");
+  fprintf(stdout, " %5ld   %5ld   %5ld%c   %7ld %7ld %7ld%c  %s %s %s\n",
+	st.f_files, st.f_files - st.f_ffree, st.f_ffree, est ? '~' : ' ',
+	st.f_blocks, st.f_blocks - st.f_bfree, st.f_bfree, est ? '~' : ' ',
+	devname, version, rw_flag);
+  return(0);
 }

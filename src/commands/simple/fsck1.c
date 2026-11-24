@@ -302,7 +302,7 @@ unsigned nelem, elsize;
 void printname(s)
 char *s;
 {
-  register n = NAME_MAX;
+  register n = DIRSIZ;
   int c;
 
   do {
@@ -897,7 +897,7 @@ ino_t ino, exp;
 off_t pos;
 dir_struct *dp;
 {
-  char printable_name[4 * NAME_MAX + 1];
+  char printable_name[4 * DIRSIZ + 1];
 
   if (dp->d_inum != exp) {
 	make_printable_name(printable_name, dp->d_name, sizeof(dp->d_name));
@@ -931,7 +931,7 @@ int chkname(ino, dp)
 ino_t ino;
 dir_struct *dp;
 {
-  register n = NAME_MAX + 1;
+  register n = DIRSIZ + 1;
   register char *p = dp->d_name;
 
   if (*p == '\0') {

@@ -1,7 +1,7 @@
 # 4. Servers and system calls
 
 MM and FS are MINIX 2.0's servers, extended for the port. This chapter shows where new calls go
-and what each kind of extension costs. The rule from the owner applies first: **do not rewrite
+and what each kind of extension costs. The rule from the user applies first: **do not rewrite
 working MINIX core without need**; touch it for RAM, responsiveness or security, or when a
 feature cannot be done outside it.
 
@@ -97,7 +97,10 @@ buffer.
 ## 4.7 Where things are planned to go
 
 - Supplementary groups in FS and MM (R4b.4).
-- Swap-out and swap-in of blocked processes in MM, to the SD card only (Phase 12).
+- Encrypted swap, park and hibernate (Phase 12, R12.18–R12.21); plain swap of blocked
+  processes landed (`src/mm/swap.c`, R12.28).
+- Swappable memory blocks for apps, `blk_open()` through MM (spec 12h, task T20).
+- Less SD wear from swap: chunk CRC skip, `DIOCERASE` (spec 12g, task T18).
 - `setitimer` subset on the ms timer (R4b.2, with R4b.6).
 
 Read the spec section before starting on any of them: each has a RAM budget and acceptance

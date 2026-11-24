@@ -24,6 +24,17 @@ The amount of disk space and number of i-nodes, both free and used is
 reported.
 If no argument is given, \fIdf\fR reports on the root device and all mounted
 file systems.
+.PP
+For a mounted file system the numbers come from
+.BR statfs (2):
+the file system server's counters, so nothing is read from the disk.
+Blocks are the data zones (without the bit maps and the inode table).
+A \fB~\fR after the free counts means an estimate: the counters started from
+the hint in the super block at mount, and the idle recount that
+.BR update (8)
+makes is not done yet.
+An unmounted device is read from the disk as before (MINIX V1/V2 only).
 .SH "SEE ALSO"
 .BR du (1),
+.BR statfs (2),
 .BR fstab (5).

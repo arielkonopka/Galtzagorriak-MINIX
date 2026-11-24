@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Sign a Galtzagorriak update file with Ed25519 (spec RS.4, RS.6, RS.20).
+
+  gzsign --new-key [DIR]      make a key pair once: DIR/update.key (private,
+                              mode 0600, never commit it or copy it to the
+                              Flipper) and DIR/update.pub (public, 64 hex
+                              digits); DIR defaults to ~/.config/galtzagorriak
+  gzsign [--key FILE] FILE.update
+                              write the key id into the header and sign its
+                              448 bytes, in place
+  gzsign --pub [--key FILE]   print the public key (hex) of the private key
+
+The private key comes from, in this order: --key FILE; the environment
+variable GZ_UPDATE_KEY (the key file's text, as the CI secret holds it);
+~/.config/galtzagorriak/update.key.  Without one gzsign stops and says how to
+make one: the Flipper has no "unsigned allowed" switch.
+
+Key file: PKCS#8 PEM, as `openssl genpkey -algorithm ed25519` writes it; a
+line of 64 hex digits (the 32-byte seed) is accepted as well.  The private
+key is never printed."""
+import hashlib
+import os
+import re
+import sys
+
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import \
+        Ed25519PrivateKey
+except ImportError:
+    sys.exit("gzsign: needs the Python package 'cryptography' "
+             "(pip install cryptography, or apt install python3-cryptography)")
+
+SECTOR = 512
+HDR_SIGNED = 448
+KEYID_OFF = 64
+DEFDIR = os.path.join(os.path.expanduser("~"), ".config", "galtzagorriak")
+HOWTO = ("make a key once with `tools/gzsign --new-key` (keep update.key "
+         "offline, see docs/manual/install.md section 7), or set "
+         "GZ_UPDATE_KEY")
+
+
+def die(msg):
+    print(f"gzsign: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def raw_pub(key):
+    return key.public_key().public_bytes(serialization.Encoding.Raw,
+                                         serialization.PublicFormat.Raw)
+
+
+def parse_key(text, where):
+    t = text.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{64}", t):
+        return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(t))
+    try:
+        k = serialization.load_pem_private_key(t.encode() + b"\n", None)
+    except (ValueError, TypeError):
+        die(f"{where} is not an unencrypted Ed25519 PEM key or 64 hex digits")
+    if not isinstance(k, Ed25519PrivateKey):
+        die(f"{where} is not an Ed25519 key")
+    return k
+
+
+def load_key(path):
+    if path:
+        return parse_key(open(path).read(), path)
+    env = os.environ.get("GZ_UPDATE_KEY", "")
+    if env.strip():
+        return parse_key(env, "GZ_UPDATE_KEY")
+    p = os.path.join(DEFDIR, "update.key")
+    if os.path.exists(p):
+        return parse_key(open(p).read(), p)
+    die("no signing key: " + HOWTO)
+
+
+def key_id(pub):
+    return hashlib.sha512(pub).digest()[:8]
+
+
+def new_key(d):
+    kp, pp = os.path.join(d, "update.key"), os.path.join(d, "update.pub")
+    for p in (kp, pp):
+        if os.path.exists(p):
+            die(f"{p} exists; not overwriting a key")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    k = Ed25519PrivateKey.generate()
+    pem = k.private_bytes(serialization.Encoding.PEM,
+                          serialization.PrivateFormat.PKCS8,
+                          serialization.NoEncryption())
+    fd = os.open(kp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
+    pub = raw_pub(k)
+    with open(pp, "w") as f:
+        f.write(pub.hex() + "\n")
+    print(f"private key: {kp} (keep it offline; for CI paste its text into "
+          f"the secret GZ_UPDATE_KEY)")
+    print(f"public key:  {pp}  {pub.hex()}")
+    print(f"key id:      {key_id(pub).hex()}")
+
+
+def sign(path, key):
+    with open(path, "r+b") as f:
+        hdr = bytearray(f.read(SECTOR))
+        if len(hdr) != SECTOR or hdr[:8] != b"GZUPDATE":
+            die(f"{path} is not an update file")
+        pub = raw_pub(key)
+        hdr[KEYID_OFF:KEYID_OFF + 8] = key_id(pub)
+        hdr[HDR_SIGNED:] = key.sign(bytes(hdr[:HDR_SIGNED]))
+        f.seek(0)
+        f.write(hdr)
+    print(f"  {path}: signed, key id {key_id(pub).hex()}")
+
+
+def main(argv):
+    keyfile = None
+    if "--key" in argv:
+        i = argv.index("--key")
+        if i + 1 >= len(argv):
+            die("--key needs a file")
+        keyfile = argv[i + 1]
+        del argv[i:i + 2]
+    if argv[:1] == ["--new-key"] and len(argv) <= 2:
+        new_key(argv[1] if len(argv) == 2 else DEFDIR)
+    elif argv == ["--pub"]:
+        print(raw_pub(load_key(keyfile)).hex())
+    elif len(argv) == 1 and not argv[0].startswith("-"):
+        sign(argv[0], load_key(keyfile))
+    else:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+
+
+main(sys.argv[1:])

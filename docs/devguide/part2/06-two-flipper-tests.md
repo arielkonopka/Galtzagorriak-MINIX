@@ -26,6 +26,7 @@ Unleashed Flipper sends or emulates, MINIX receives or reads. "M→U" (`m2u`): t
 | `subghz` | signal level at 315, 433.92, 868.35 MHz; raw timings; Princeton `tx`; chat × both | Unleashed sends, MINIX measures; MINIX sends, Unleashed decodes |
 | `subghz-decode` | 37 remote protocols × both | Unleashed's own test recordings (`.sub` key files) sent by one, decoded by the other |
 | `nfc` | 7 tag types (ISO14443-3A, NTAG215, Ultralight 11/21/C, FeliCa, SLIX) × both | one emulates a tag file, the other scans it |
+| `gmodem` | the data modems of spec section P: RFID `fast`/`robust`, Sub-GHz `narrow`/`std`/`wide`/`max`, NFC, BLE × both | **two MINIX Flippers** (`--peer-minix`, 6.12): one sends 1 KB with `gmodem send`, the other receives it; checksums must match. N/A against Unleashed |
 
 Each row ends with one status:
 
@@ -35,7 +36,7 @@ Each row ends with one status:
 | **FAIL** | MINIX has the feature, but the result is wrong (wrong data, wrong protocol, or the side it drove got nothing) |
 | **MISSING** | MINIX does not have it yet: the command or option is not there, or MINIX got the signal but has no decoder for it |
 | **BLOCKED** | the Unleashed Flipper could not do its part here (region settings forbid the frequency, its command line cannot express it); the reason is given |
-| **N/A** | needs a blank tag or key that was not offered (`--t5577`, `--rw1990`) |
+| **N/A** | needs a blank tag or key that was not offered (`--t5577`, `--rw1990`), or a second MINIX Flipper (`--peer-minix`, the `gmodem` rows) |
 | **INFO** | a measurement only |
 
 Where MINIX does not have a feature yet, the row still runs: it uses the command the spec plans
@@ -96,6 +97,10 @@ No 3D printer and no soldering are needed.
    **close that terminal program**, because only one program can hold the port.
 3. Do not run the launcher's RFID, IR or iButton apps while testing: the device files are used
    by one program at a time.
+4. Optional: `echo console cyan >/dev/led` as root makes the MINIX Flipper's LED flash with every
+   burst of console traffic. During a run it then flickers all the time; when it stays dark for
+   more than a few seconds, the script is waiting on something (or the console stopped
+   answering: look at the log). `echo off >/dev/led` before power measurements.
 
 ## 6.4 The physical setup
 
@@ -106,7 +111,31 @@ back, each Flipper's coil sits over the other's, which is what a reader and a ta
 distance must be **small and the same every time**, or a result depends on how the Flippers
 happened to lie.
 
-1. Take off silicone cases or covers (they add several millimetres).
+**The spacer matters, and no single one suits every RFID row** (measured 2026-11-19, both
+Flippers in their silicone cases, reference Unleashed `unlshd-093`). The three setups:
+
+- **thick**: the whole box of a Flipper Zero, folded along its own edges (about 10 mm);
+- **thin**: half of that box, folded so that half of it presses the Flipper against the table
+  (about 5 mm);
+- **none**: the silicone cases touch.
+
+| Spacer | MINIX emulates, Unleashed reads (M→U) | Unleashed emulates, MINIX reads (U→M) |
+|---|---|---|
+| **thick** | ASK and FSK read; PSK mostly not (Keri 1 in 3) | 18 of 25 (with `rfid` from #357) |
+| **thin** | 3 of 5 PSK; most ASK/FSK not | ASK and PSK read; of the FSK ones HIDProx |
+| **none** | all 5 PSK (5/5 each); FSK 0/5, ASK RF/32 0/3 | ASK and PSK read; of the FSK ones AWID |
+
+For reading, ASK and PSK tags read at every spacer; each FSK row reads only at some (HIDProx
+thick or thin, AWID thick or none), HIDExt and Pyramid at none of them, and EM4100 at RF/16
+never. So `--spacer` gates the emulation rows only: run those ASK and FSK rows with the thick
+spacer and the PSK rows (Keri, Indala26, Idteck, Nexwatch, Indala224) with none. Tell the script
+which is in with `--spacer none|thin|thick` (rows that need another one are BLOCKED and say
+so), or use `--spacer ask`: it runs the thick rows first and then asks you to take the spacer
+out. Real tags (T5577 fobs written as HIDProx, AWID, Indala26, Keri, PAC/Stanley, Electra,
+EM4100) read without any of this (#357); the spacer only matters for a Flipper's emulation.
+
+1. Silicone cases may stay on if you use the table above; without them the distances differ,
+   so find your own thick and thin spacers the same way.
 2. Put the two Flippers back to back, screens facing outwards, **both top edges (the GPIO
    header) at the same end**, and line up their outlines exactly. Seen from the side:
 
@@ -172,7 +201,16 @@ Avoid direct sunlight on the windows.
 
 ### Sub-GHz
 
-Nothing to set up: the antennas are inside, and a few centimetres is a very strong signal.
+**Where the antenna is.** Each Flipper's Sub-GHz antenna (a small spring) is in the corner next to the screen on the top edge: the upper right corner seen from the front. For these rows lay the Flippers flat, **antennas facing each other, about 5 cm apart**: MINIX then reads -44 to -55 dBm while the reference sends. Top edges facing each other put the antennas on opposite sides, and the level was -80 dBm (noise).
+
+**The reference's transmission is short.** `subghz tx KEY FREQ TE REPEAT` and `tx_from_file FILE REPEAT` of the reference end after about a second, whatever REPEAT says. A receiver that listens for several seconds sees a burst and then silence, and results then depend on the burst falling into the listening window. Send several times inside the window (`tools/twoflip.py` sends each file 10 times; a longer window needs a loop of such commands).
+
+
+The antennas are inside, but **take the stack apart for the Sub-GHz rows and put the two
+Flippers about 1 m apart** (both stay on USB; unplug the 17/18 wires). Back to back the
+receiver is overloaded: MINIX measures about -37 dBm during Unleashed's transmission, the
+CC1101's demodulated output is choppy noise, and almost nothing decodes. At about 1 m it reads
+-59 dBm and the frames are clean (checked 2026-11-19: 31 decode rows PASS, 0 back to back).
 Keep other 433 MHz remotes away during the test. The test sends a short burst (a few
 seconds, low power, in the 433 MHz band that remotes use); check that this is allowed where you
 are.
@@ -274,7 +312,7 @@ Windows write `py` instead of `python3`.
    python3 twoflip.py --selftest
    ```
 
-   The last line must be `selftest: ok (234 rows)` (the number grows with the rows).
+   The last line must be `selftest: ok (250 rows)` (the number grows with the rows).
 
 2. **Find the Flippers.**
 
@@ -362,9 +400,11 @@ Windows write `py` instead of `python3`.
 | `-r N` | run each row N times; a row that passed only sometimes is FAIL "k/N passed" (shows marginal distance or alignment) |
 | `--map FILE` | write the coverage map (Markdown) and FILE.json |
 | `--baseline FILE.json` | compare with an earlier run |
+| `--spacer none\|thin\|thick\|ask` | RFID: the spacer between the Flippers (6.4). RFID rows that need another one are BLOCKED; `ask` runs the thick-spacer rows first, then asks for the change. Written into the map. |
 | `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
 | `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |
-| `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`) |
+| `--freq HZ` | Sub-GHz frequency of the raw, Princeton and chat rows (default `433920000`); refused if it is not a transmit band of `--region` |
+| `--region EU\|US\|any` | where the rows may make the reference Flipper transmit (default `EU`: 433.05–434.79 and 868.0–868.6 MHz). Rows outside it are BLOCKED. Unleashed applies no region itself, so this is the only guard: use `US` or `any` only where that is legal |
 | `--log FILE` | full transcript of both consoles |
 | `--password PW` | MINIX root password (else `TWOFLIP_PASSWORD`, else asked) |
 
@@ -374,7 +414,8 @@ Windows write `py` instead of `python3`.
   data length (Unleashed's `rfid emulate X 00` lists names and lengths). If a row says the
   protocol was read but the data differs in both directions, the protocol may not carry every
   bit of the pattern: compare with what Unleashed read in the M→U row and change the vector in
-  `LF_PROTOCOLS`/`lf_data`. "Radio Key" has a space in its name, which Unleashed's command line
+  `LF_PROTOCOLS`/`lf_data`. `LF_CANONICAL` holds such vectors (Paradox, Gallagher, Radio Key,
+  FDX-A): the bytes the Unleashed code itself gives back after encoding and decoding the pattern. "Radio Key" has a space in its name, which Unleashed's command line
   cannot take, so its U→M row is BLOCKED.
 - **Infrared:** one message per protocol, from Unleashed's infrared unit tests where it has them
   (`IR_VECTORS`).
@@ -403,6 +444,9 @@ table is about FAIL and BLOCKED rows and about the script not starting.
 | `ibutton-Dallas_dev_ibutton-u2m` FAIL "no ROM" | The wires: pin 17 to 17 and 18 to 18 (count from the printed numbers), pins pushed fully in. 5V on GPIO off on Unleashed. |
 | `ir-*` FAIL "received nothing" | Paper roof above the top edges, or face the Flippers top edge to top edge (6.4). No sunlight or bright lamp on the windows. A wrong value (not "nothing") is a decoder or encoder bug: report it. |
 | `subghz-level_*` BLOCKED | Unleashed may not transmit at that frequency with its region settings. Normal for 315 or 868 MHz in some regions. |
+| Every Sub-GHz row BLOCKED with `Device 0 failed to start` (`subghz chat` works) | A bug in Unleashed `unlshd-095`'s command line, not the radio: the internal CC1101's driver has no `begin()` (`cc1101_int_interconnect.c`), `subghz_devices_begin()` then returns false, and the new start check in `subghz_cli.c` takes that as a failure, so `subghz tx`, `rx` and `tx_from_file` on device 0 always stop there. Install another Unleashed release on the reference Flipper (the script was written against `53818b1`). The region is not the cause: Unleashed reports `hardware.region.provisioned : 00` even with a valid `/int/.region_data`. |
+| `subghz-decode-*` MISSING "decoded nothing" for almost every protocol, levels PASS | The Flippers are too close: the receiver is overloaded. Put them about 1 m apart (6.4, Sub-GHz). |
+| `subghz-decode-Freezer`, `-Proteco` BLOCKED "reboots" | Unleashed `unlshd-093` says `Error transmitter` and reboots (its USB port goes away) on `tx_from_file` of these two files, which ended the whole run. The script skips them (`UL_TX_CRASH`). |
 | `subghz-level_*` FAIL with a small rise | Another transmitter nearby during the quiet reading; run that row again. |
 | A row hangs for more than a minute | Press Ctrl-C, unplug and replug both Flippers, rerun that row with `--log` and report the log. |
 
@@ -422,7 +466,7 @@ speed). The commands the script uses today, on main:
 | iButton U→M | `ikey emulate Dallas 01A1B2C3D4E5F68F` (Ctrl-C ends) | `od -b /dev/ibutton` |
 | Sub-GHz level | `subghz tx 74BADE 433920000 403 100 0` | `echo 433920000 > /dev/subghz`, `cat /dev/subghz`, `echo 0 > /dev/subghz` |
 | Sub-GHz raw | (as above) | `ir rx -r -n 1 -d /dev/subghzraw` |
-| Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 1 0`; `subghz rx 433920000 0` | (planned, 6.10) |
+| Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 10 0` (10 transmissions: most decoders report a frame only after seeing it twice in a row); `subghz rx 433920000 0` | `subghz rx 433920000`, `subghz tx_from_file FILE 10` |
 | NFC | `nfc`, then `emulate -f /ext/twoflip/Ntag215.nfc` or `scanner`, then `exit` | (planned, 6.10) |
 
 The Unleashed sources these were checked against: `applications/main/lfrfid/lfrfid_cli.c`,
@@ -438,7 +482,8 @@ The map already names the MINIX version (`ver`) and the Unleashed version (`info
 
 ## 6.10 For developers: the commands MINIX is expected to have
 
-The rows for features MINIX does not have yet use these commands. They mirror the stock
+The rows for features MINIX does not have yet use these commands; the ones marked
+**present** exist on main. They mirror the stock
 command line (spec 4.x "cli commands → Unix commands", and R9.0.3 for `rfid`), so the stock
 apps' habits carry over. A different syntax is fine, but then change the row in `twoflip.py`
 in the same PR.
@@ -449,9 +494,9 @@ in the same PR.
 | `rfid emulate PROTOCOL HEX`, `rfid write PROTOCOL HEX` | emulate prints a line with "emulating" and runs until Ctrl-C; the name is quoted when it has a space (`"Radio Key"`). EM4100 keeps `rfid emulate EM B0 B1 B2 B3 B4` |
 | `ikey read` | `Dallas HEX`, `Cyfral HEX`, `Metakom HEX` (as stock) |
 | `ikey emulate TYPE HEX`, `ikey write Dallas HEX` | emulate prints "Emulating..." and runs until Ctrl-C |
-| `subghz rx FREQ` | each decoded packet with the protocol name and its key in hex (as stock) |
-| `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` | sends, then exits 0 |
-| `subghz chat FREQ` | lines typed are sent, lines received are printed |
+| `subghz rx FREQ` (**present**, #302) | each decoded packet with the protocol name and its key in hex (as stock): `Princeton 24bit Key:7C5703` |
+| `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` (**present**, #302; on the Flipper they say "no transmitter on this device yet" until the CC1101 transmit path exists) | sends, then exits 0 |
+| `subghz chat FREQ` (**present**, #302; transmit as above) | lines typed are sent, lines received are printed |
 | `nfc scanner` | the detected protocol names as stock (`ISO14443-3A`, `NTAG/Ultralight`, `FeliCa`, `SLIX`) |
 | `nfc emulate -f FILE` | prints "Emulating..." and runs until Ctrl-C |
 
@@ -466,8 +511,83 @@ MISSING; anything else that does not match is FAIL.
   card; `mx.run(cmd)` runs a MINIX command and returns its exit status and output,
   `mx.start` / `mx.stop` the long ones, `mx.exists(word)` whether a command exists,
   `mx.upload(path, text)` writes a file. `wait(regex, secs)` waits for output.
+- **A pattern that ends in a number must also match the character after it**: `(?=\D)`,
+  `(?=[^0-9A-F])` or `(?=\r?\n)`. USB delivers a line in pieces. Without that,
+  `command 0x08` matched as `0x0` (5 of 10 IR rows failed on the device) and `@@R=127` as `@@R=12`
+  (a missing command counted as present). The simulator sends the last character of each line
+  20 ms late, so `--selftest` catches such a pattern.
 - New test files go into `twoflip_data/subghz/` or `twoflip_data/nfc/`; they become rows by
   themselves.
 - The simulator `twoflip_sim.py` imitates both Flippers as main has them; when MINIX gains a
   command, teach the simulator the command and change `expected()`, and keep
   `python3 -I twoflip.py --selftest` passing.
+
+## 6.12 Two MINIX Flippers: the data modems (`--peer-minix`)
+
+The `gmodem` command (spec section P, manual chapter [Data modems](../../manual/modem.md)) moves
+files between two Flippers that **both run MINIX**. The Unleashed firmware has nothing like it,
+so the reference Flipper of the rest of this chapter cannot be the partner: against Unleashed
+the 16 `gmodem` rows are **N/A**. To run them you need a second Flipper with MINIX for the
+session.
+
+### What you need
+
+- The MINIX Flipper of 6.3 and **a second Flipper with the same MINIX build** (same
+  `minix-base.bin` and SD card image, prepared exactly as in 6.3, with its own SD card). If the
+  only second Flipper is the Unleashed reference: back it up with qFlipper, flash it with MINIX
+  for the session (the manual's [installation chapter](../../manual/install.md)), and flash
+  Unleashed back afterwards (installation chapter, section 8, "Recovery and going back"). Note it
+  in the report, because the reference Flipper's own settings are then gone until restored.
+- On both: logged in as root (the script logs in with `--password` or `TWOFLIP_PASSWORD`;
+  both need the same root password, or log in by hand first).
+
+### Physical setup
+
+- **RFID rows:** back to back exactly as in 6.4 ("Back to back"), same spacer. The sending
+  Flipper is the tag (it only loads the other's field), the receiving one is the reader. Keep
+  the spacer thin (1–3 mm): the modem's tag side reaches no further than `rfid emulate`.
+- **Sub-GHz rows (when `/dev/subghz` can transmit, T26b):** the two Flippers 1–2 m apart on the
+  table, antennas (the top left corner) not touching anything metal. Set the region first, on
+  both: `echo EU > /etc/flipper/region` (or `US`); `gmodem info -m subghz` must say `ok` for the
+  preset before the row can pass.
+- **NFC and BLE rows:** MISSING until their drivers exist (Phases 13 and 15).
+
+### Running
+
+```
+python3 twoflip.py --peer-minix --ports          # both must say minix or login
+python3 twoflip.py --peer-minix --log modem.log --map modem.md modem
+```
+
+Without `-m` and `-u` the first MINIX port found is "M" and the second the peer "P" (`u2m` in
+the row names means the peer sends). Give them by hand to fix the order:
+`-m /dev/ttyACM0 -u /dev/ttyACM1`. With `--peer-minix` only the `gmodem` rows run; everything
+else needs the Unleashed partner.
+
+Each row: the sender gets `/tmp/mdm.in` (1 KB of text, a few Basque words in it: "Kaixo,
+galtzagorriak! Datuak irratiz doaz"), the receiver starts `gmodem recv -m MEDIUM -p PRESET -o
+/tmp/mdm.out -t 60`, the sender `gmodem send -m MEDIUM -p PRESET /tmp/mdm.in`; when the receiver
+ends, the script stops the sender (Ctrl-C) and compares `cksum` on both. A row takes up to three
+minutes. PASS shows the bytes and the seconds (`1152 B in 14 s`): put those numbers in the
+report, they are the measured rates the manual quotes.
+
+| Row result | What to do |
+|---|---|
+| PASS | note the time |
+| FAIL "did not finish in 180 s" | move the stack: the coils must lie on top of each other; try `-p robust` by hand (6.8) |
+| FAIL "checksums differ" | a bug (a frame with a good CRC but wrong data must not happen): report it with the `--log` file |
+| MISSING "not implemented yet" | the medium's driver is not there; expected for Sub-GHz until T26b, NFC, BLE |
+
+### By hand
+
+On the receiving Flipper, then on the sending one within a few seconds:
+
+```
+gmodem recv -m rfid -o /tmp/got.txt          # reader: waits, shows frames as they come
+gmodem send -m rfid /etc/motd                # tag: plays the file until Ctrl-C
+```
+
+The reader prints `N bytes, F frames, T s` and exits 0 when everything arrived; then
+`cksum /tmp/got.txt` on one and `cksum /etc/motd` on the other must agree. `gmodem info` on
+either shows the rates and, for Sub-GHz, what the region allows.
+

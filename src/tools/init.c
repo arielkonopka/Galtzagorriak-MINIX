@@ -11,6 +11,12 @@
  * Signal 15 (SIGTERM) makes init stop spawning new processes, this is
  * used by shutdown and friends when they are about to close the system
  * down.
+ *
+ * Galtzagorriak (spec I.1): what init starts gets TZ from /etc/TZ (its
+ * first line that is not a '#' comment), read again at every start, so a
+ * new zone (settings time, setup) holds from the next start on; the
+ * SIGHUP that follows a change restarts nothing by itself.  The file is
+ * read on the stack of the starting child: 0 B of init's own RAM.
  */
 
 #include <sys/types.h>
@@ -25,6 +31,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <minix/gzversion.h>
 #include <utmp.h>
 
 /* Command to execute as a response to the three finger salute. */
@@ -50,6 +57,8 @@ struct slotent slots[PIDSLOTS];	/* init table of ttys and pids */
 
 volatile char gothup = 0;	/* flag, showing signal 1 was received */
 volatile char gotabrt = 0;	/* flag, showing signal 6 was received */
+volatile char gotpwr = 0;	/* SIGPWR: low battery (spec N.5) */
+volatile char gotalrm = 0;	/* the halt's grace time is over */
 char spawn = 1;			/* flag, spawn processes only when set */
 /* R7b.3: SIGRTC (an RTC alarm, the time set) runs /usr/lib/timed, at most
  * one at a time; one more run if a signal came meanwhile.  Also at boot,
@@ -68,7 +77,11 @@ void onhup(int sig);
 void onterm(int sig);
 void onabrt(int sig);
 void onrtc(int sig);
+void onpwr(int sig);
+void onalrm(int sig);
+void power_off(void);
 void timed(void);
+void gztree(void);
 
 int main(void)
 {
@@ -107,11 +120,20 @@ int main(void)
   sa.sa_handler = onrtc;
   sigaction(SIGRTC, &sa, NULL);
 
+  /* Power: the battery is low (spec R6.1, N.5): an orderly halt. */
+  sa.sa_handler = onpwr;
+  sigaction(SIGPWR, &sa, NULL);
+  sa.sa_handler = onalrm;
+  sigaction(SIGALRM, &sa, NULL);
+
+  gztree();
+
   /* Execute the /etc/rc file. */
   if ((pid = vfork()) != 0) {	/* R2c.2: the child opens and execs */
 	/* Parent just waits. */
 	while (wait(NULL) != pid) {
 		if (gotabrt) reboot(RBT_HALT);
+		if (gotpwr) power_off();
 	}
   } else {
 	static char *rc_command[] = { "sh", "/etc/rc", NULL, NULL };
@@ -173,6 +195,8 @@ int main(void)
 		check = 1;
 	}
 
+	if (gotpwr) power_off();
+
 	if (gotrtc) {
 		gotrtc = 0;
 		timed();
@@ -220,6 +244,45 @@ void onrtc(int sig)
   gotrtc = 1;
 }
 
+/* Spec RS.14: base files of another epoch than this system's (an update
+ * file was flashed by atea) are switched by gztree before /etc/rc.  INIT
+ * only compares /etc/gz-tree with GZ_EPOCH and, if the new tree is staged,
+ * runs its gztree (the staged copy, or /bin/gztree once the switch has
+ * moved it) and waits.  If gztree fails INIT boots anyway; the next boot
+ * tries again.  Stack only: +0 B static RAM. */
+#define GZ_S_(x)	#x
+#define GZ_S(x)		GZ_S_(x)
+#define GZ_DIR		"/.gzupdate/" GZ_S(GZ_EPOCH)
+
+void gztree(void)
+{
+  char *cmd[2], *env[1];
+  char ep[12];
+  int fd, n = 0;
+  pid_t pid;
+
+  if ((fd = open("/etc/gz-tree", O_RDONLY)) >= 0) {
+	n = read(fd, ep, sizeof(ep) - 1);
+	close(fd);
+  }
+  if (n >= (int) sizeof(GZ_S(GZ_EPOCH)) - 1
+	&& memcmp(ep, GZ_S(GZ_EPOCH), sizeof(GZ_S(GZ_EPOCH)) - 1) == 0
+	&& (n == (int) sizeof(GZ_S(GZ_EPOCH)) - 1
+	    || ep[sizeof(GZ_S(GZ_EPOCH)) - 1] == '\n'))
+	return;
+  if (access(GZ_DIR "/MANIFEST", R_OK) != 0) return;	/* nothing staged */
+  cmd[0] = "gztree";
+  cmd[1] = env[0] = NULL;		/* INIT has no environ */
+  if ((pid = vfork()) == 0) {
+	execve(GZ_DIR "/bin/gztree", cmd, env);
+	execve("/bin/gztree", cmd, env);
+	_exit(127);
+  }
+  n = -1;
+  if (pid < 0 || waitpid(pid, &n, 0) != pid || n != 0)
+	report(2, "gztree");
+}
+
 void timed(void)
 {
   pid_t pid;
@@ -238,6 +301,31 @@ void timed(void)
 	_exit(1);
   }
   if (pid > 0) timed_pid = pid;
+}
+
+void onpwr(int sig)
+{
+  gotpwr = 1;
+}
+
+void onalrm(int sig)
+{
+  gotalrm = 1;
+}
+
+void power_off(void)
+{
+/* Spec N.5: like the power menu's power off.  SIGTERM to every process, up
+ * to 2 s for them to end, then reboot(RBT_HALT): MM kills the rest, FS
+ * syncs and marks every file system CLEAN (N.2), then ship mode.
+ */
+  spawn = 0;
+  tell(2, "init: powering off\n");
+  kill(-1, SIGTERM);
+  alarm(2);
+  while (!gotalrm && (waitpid(-1, NULL, 0) > 0 || errno == EINTR)) {}
+  reboot(RBT_HALT);
+  _exit(1);	/* not reached */
 }
 
 void onabrt(int sig)
@@ -375,15 +463,34 @@ void startup(int linenr, struct ttyent *ttyp)
 int execute(char **cmd)
 {
   /* Execute a command with a path search along /sbin:/bin:/usr/sbin:/usr/bin.
+   * The environment: TZ from /etc/TZ, or nothing.
    */
-  static char *nullenv[] = { NULL };
   char command[128];
   char *path[] = { "/sbin", "/bin", "/usr/sbin", "/usr/bin" };
-  int i;
+  char tz[3 + 93], *env[2], *p, *e;
+  int i, n;
+
+  env[0] = env[1] = NULL;
+  if ((i = open("/etc/TZ", O_RDONLY)) >= 0) {
+	n = read(i, tz + 3, sizeof(tz) - 4);
+	close(i);
+	if (n > 0) {
+		tz[3 + n] = 0;
+		for (p = tz + 3; *p != 0; p = e) {
+			for (e = p; *e != 0 && *e != '\n'; e++) {}
+			if (*e == '\n') *e++ = 0;
+			if (*p == '#' || *p == 0) continue;
+			memmove(tz + 3, p, strlen(p) + 1);
+			memcpy(tz, "TZ=", 3);
+			env[0] = tz;
+			break;
+		}
+	}
+  }
 
   if (cmd[0][0] == '/') {
 	/* A full path. */
-	return execve(cmd[0], cmd, nullenv);
+	return execve(cmd[0], cmd, env);
   }
 
   /* Path search. */
@@ -395,7 +502,7 @@ int execute(char **cmd)
 	strcpy(command, path[i]);
 	strcat(command, "/");
 	strcat(command, cmd[0]);
-	execve(command, cmd, nullenv);
+	execve(command, cmd, env);
 	if (errno != ENOENT) break;
   }
   return -1;

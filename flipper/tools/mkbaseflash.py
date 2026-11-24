@@ -5,15 +5,16 @@ R2b.6, make base-flash).
 Usage: mkbaseflash.py system.bin out.bin FLASH_BASE REGION_OFFSET [--rom=rom.img] prog.aout ...
 
 out.bin is system.bin padded to REGION_OFFSET (the installed region, which
-starts after the 192 KB system image and the 64 KB of the shared libc,
-R2b.9, on every layout; system.bin = minix.bin, which carries both), then the
+starts after the 192 KB system image and the 96 KB of the shared libraries,
+libc and libfuri + libapp, R2b.9, on every layout; system.bin = minix.bin,
+which carries them), then the
 region in the format of src/mm/finst.c:
     page 0   directory "GINB" (made on the PC), generation 1, one 64-byte
              record per program: SHA-256 of the text, address, size, the
              binding left erased (ones), seq, flags, dead marker erased;
     page 1   erased (ones);
     page 2.. the texts, each from a page boundary.
-At boot /etc/rc runs "pkg bind /bin/*": MM gives each record to the file
+At boot /etc/rc runs "pkg bind /bin": MM gives each record to the file
 whose text has the same SHA-256 and writes the binding, after moving the
 directory to a page it erased itself (DFU has programmed the free double
 words of page 0 with ones, which must not be programmed twice).

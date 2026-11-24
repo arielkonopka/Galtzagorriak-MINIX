@@ -15,6 +15,8 @@ _PROTOTYPE( void invalidate, (Dev_t device)				);
 _PROTOTYPE( void put_block, (struct buf *bp, int block_type)		);
 _PROTOTYPE( void rw_block, (struct buf *bp, int rw_flag)		);
 _PROTOTYPE( void forget_zone, (Dev_t dev, zone_t z, int scale)		);
+_PROTOTYPE( int pipe_bufs, (void)						);
+_PROTOTYPE( void sb_written, (struct buf *bp)				);
 _PROTOTYPE( void rw_scattered, (Dev_t dev,
 			struct buf **bufq, int bufqsize, int rw_flag)	);
 
@@ -52,6 +54,7 @@ _PROTOTYPE( struct filp *get_filp, (int fild)				);
 
 /* inode.c */
 _PROTOTYPE( struct inode *alloc_inode, (Dev_t dev, Mode_t bits)		);
+_PROTOTYPE( struct inode *pipe_inode, (void)				);
 _PROTOTYPE( void dup_inode, (struct inode *ip)				);
 _PROTOTYPE( void free_inode, (Dev_t dev, Ino_t numb)			);
 _PROTOTYPE( struct inode *get_inode, (Dev_t dev, int numb)		);
@@ -84,6 +87,7 @@ _PROTOTYPE( int do_revive, (void)					);
 _PROTOTYPE( int do_inochk, (void)					);
 _PROTOTYPE( int do_set, (void)						);
 _PROTOTYPE( int do_sync, (void)						);
+_PROTOTYPE( int do_fstatfs, (void)					);
 
 /* mount.c */
 _PROTOTYPE( int do_mount, (void)					);
@@ -154,6 +158,9 @@ _PROTOTYPE( void free_bit, (struct super_block *sp, int map,
 _PROTOTYPE( struct super_block *get_super, (Dev_t dev)			);
 _PROTOTYPE( int mounted, (struct inode *rip)				);
 _PROTOTYPE( int read_super, (struct super_block *sp)			);
+_PROTOTYPE( int put_sflags, (struct super_block *sp, int set, int clr)	);
+_PROTOTYPE( void sf_mounted, (struct super_block *sp)			);
+_PROTOTYPE( void sf_clean, (struct super_block *sp, int force)		);
 
 /* time.c */
 _PROTOTYPE( int do_stime, (void)					);

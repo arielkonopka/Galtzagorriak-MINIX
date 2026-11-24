@@ -33,7 +33,15 @@
 #define USB_EP_SWBUF_TX     USB_EP_DTOG_RX
 #define USB_EP_SWBUF_RX     USB_EP_DTOG_TX
 
-#define EP_TOGGLE_SET(epr, bits, mask) *(epr) = (*(epr) ^ (bits)) & (USB_EPREG_MASK | (mask))
+/* Galtzagorriak: CTR_RX and CTR_TX are cleared by writing 0 and kept by
+ * writing 1.  A read-modify-write that writes back the value it read
+ * clears a CTR flag the hardware set in between: the event is lost.  With
+ * a lost CTR_TX the CDC console's tx_busy stayed set and output stopped
+ * until the cable was replugged (seen on the device with input bursts:
+ * EP_RX_VALID re-arming RX as an IN transfer ended).  So every write
+ * keeps both (as ST's PCD macros do), except the one that clears one. */
+#define EP_CTR_KEEP	(USB_EP_CTR_RX | USB_EP_CTR_TX)
+#define EP_TOGGLE_SET(epr, bits, mask) *(epr) = (((*(epr) ^ (bits)) & (USB_EPREG_MASK | (mask))) | EP_CTR_KEEP)
 
 #define EP_TX_STALL(epr)    EP_TOGGLE_SET((epr), USB_EP_TX_STALL,                   USB_EPTX_STAT)
 #define EP_RX_STALL(epr)    EP_TOGGLE_SET((epr), USB_EP_RX_STALL,                   USB_EPRX_STAT)
@@ -302,7 +310,7 @@ static int32_t ep_read(uint8_t ep, void *buf, uint16_t blen) {
         switch (*reg & (USB_EP_DTOG_RX | USB_EP_SWBUF_RX)) {
         case 0:
         case (USB_EP_DTOG_RX | USB_EP_SWBUF_RX):
-            *reg = (*reg & USB_EPREG_MASK) | USB_EP_SWBUF_RX;
+            *reg = (*reg & USB_EPREG_MASK) | USB_EP_SWBUF_RX | EP_CTR_KEEP;
         	break;
         default:
             break;
@@ -357,7 +365,7 @@ static int32_t ep_write(uint8_t ep, const void *buf, uint16_t blen) {
         } else {
             pma_write(buf, blen, &(tbl->tx0));
         }
-        *reg = (*reg & USB_EPREG_MASK) | USB_EP_SWBUF_TX;
+        *reg = (*reg & USB_EPREG_MASK) | USB_EP_SWBUF_TX | EP_CTR_KEEP;
         break;
     /* isochronous endpoint */
     case (USB_EP_TX_VALID | USB_EP_ISOCHRONOUS):
@@ -392,11 +400,11 @@ static void evt_poll(usbd_device *dev, usbd_evt_callback callback) {
     if (_istr & USB_ISTR_CTR) {
         volatile uint16_t *reg = EPR(_ep);
         if (*reg & USB_EP_CTR_TX) {
-            *reg &= (USB_EPREG_MASK ^ USB_EP_CTR_TX);
+            *reg = (*reg & (USB_EPREG_MASK ^ USB_EP_CTR_TX)) | USB_EP_CTR_RX;
             _ep |= 0x80;
             _ev = usbd_evt_eptx;
         } else {
-            *reg &= (USB_EPREG_MASK ^ USB_EP_CTR_RX);
+            *reg = (*reg & (USB_EPREG_MASK ^ USB_EP_CTR_RX)) | USB_EP_CTR_TX;
             _ev = (*reg & USB_EP_SETUP) ? usbd_evt_epsetup : usbd_evt_eprx;
         }
     } else if (_istr & USB_ISTR_RESET) {

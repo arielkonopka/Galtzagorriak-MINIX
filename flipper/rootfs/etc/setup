@@ -1,19 +1,51 @@
-# /etc/setup - first-boot setup of the SD card, run by /etc/rc.
+# /etc/setup - first-boot setup of the SD card, run by /etc/rc; and
+# "sh /etc/setup -H", which converts an existing /home to MINIX V3.
 #
 # The card arrives with only the root file system (partition 1, /dev/hd1).
-# Stage 1 adds the other partitions after it, below 4 GB, and reboots so the
-# kernel sees them; stage 2 makes the file systems.
-#	/dev/hd2  /usr   2 GB	programs and packages
-#	/dev/hd3  swap   64 MB	reserved
-#	/dev/hd4  /home  rest	your files
+# Stage 1 adds the other partitions after it, each on a 4 MiB boundary
+# (the card's erase unit, R12.32), and reboots so the kernel sees them;
+# stage 2 tells the card the new partitions are empty (erase, R12.33: a
+# card that was once full gets its free pool back for wear levelling) and
+# makes the file systems.  Layout (spec R12.34, O.7):
+#	/dev/hd2  /usr   2 GB	programs and packages (MINIX V2)
+#	/dev/hd3  swap		cards below 8 GB: 64 MB, right after /usr;
+#				larger cards: at the end of the card, half
+#				of the space after /usr, at most 4 GiB - 1 MiB;
+#				cards of 32 GB or more: hd3 holds four swap
+#				subpartitions hd3a-hd3d of 4 GiB - 1 MiB
+#				(/etc/.swap4), 16 GiB in all; /home takes
+#				all the space between /usr and them (O.7)
+#	/dev/hd4  /home  rest	your files (MINIX V3: names up to 60
+#				characters, any size; its zone map has room
+#				for a /home up to the end of the card)
+#
+# setup -H (spec O.7) converts /home of a card made before: /etc/homev3.
+
+PATH=/bin:/usr/bin
+
+# sh's string space is small: setup -H is its own script, /etc/homev3.
+case "$1" in -H*) exec sh /etc/homev3 $1 ;; esac
 
 if test ! -f /etc/.setup-parted
 then
-	echo "First boot: adding /usr (2 GB), swap (64 MB) and /home to the SD card."
-	mkpart /dev/hd0 81:2048 82:64 81:* || {
+	mb=`mkpart -s /dev/hd0`
+	if test "$mb" -lt 7000
+	then
+		echo "First boot: adding /usr (2 GB), swap (64 MB) and /home to the SD card."
+		layout="81:2048 82:64 81:*"
+	elif test "$mb" -ge 29000
+	then
+		echo "First boot: adding /usr (2 GB), /home and 16 GB of swap (at the end) to the SD card."
+		layout="81:2048 82/4:*@end 81:*"
+	else
+		echo "First boot: adding /usr (2 GB), /home and swap (at the end) to the SD card."
+		layout="81:2048 82:50%@end 81:*"
+	fi
+	mkpart /dev/hd0 $layout || {
 		echo "setup: partitioning failed, starting without /usr and /home"
 		exit 1
 	}
+	case "$layout" in *82/4*) >/etc/.swap4 ;; esac
 	>/etc/.setup-parted
 	sync
 	echo "Rebooting to use the new partitions."
@@ -21,8 +53,25 @@ then
 	exit 0
 fi
 
+echo "Preparing the card..."
+swap=/dev/hd3
+test -f /etc/.swap4 && swap="/dev/hd3a /dev/hd3b /dev/hd3c /dev/hd3d"
+for p in /dev/hd2 $swap /dev/hd4
+do
+	erase -q $p
+	case $? in
+	0)	;;
+	2)	echo "setup: this card or driver cannot erase, going on"
+		break ;;
+	*)	echo "setup: erase $p failed, going on" ;;
+	esac
+done
 echo "First boot: making file systems on /dev/hd2 and /dev/hd4 (takes a while)."
-mkfs /dev/hd2 && mkfs /dev/hd4 || {
+set `mkpart -l /dev/hd0 | grep '^4 '`
+mb=`mkpart -s /dev/hd0`
+h=`expr $5 / 2`
+g=`expr $mb "*" 1024 - $h`	# -g: /home's start to the card's end
+mkfs /dev/hd2 && mkfs -3 -g $g /dev/hd4 || {
 	echo "setup: mkfs failed"
 	exit 1
 }

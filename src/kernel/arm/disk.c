@@ -5,10 +5,12 @@
  * Transfers are polled and done directly in w_schedule(), a block at a
  * time through a bounce buffer, so nothing is held across messages.
  *
- * Positions: io_position is a signed long and dv_base/dv_size are byte
- * counts, so the original drivers break past 2 GB.  Here the position is
- * taken as unsigned and the sector is computed as base sector + offset
- * sector, which works for partitions up to 4 GB anywhere on the first 2 TB.
+ * Positions (R12.39): dv_base and dv_size are in sectors (DV_SECS), so a
+ * partition may start and end anywhere in the first 2 TiB and be larger
+ * than 4 GiB (a MINIX V3 /home, spec O).  A request's byte position is
+ * io_position (low 32 bits, unsigned) plus io_high (HIGHPOS, bits 32-47).
+ * DIOCGETP/DIOCSETP keep bytes for the old tools (EOVERFLOW past 4 GiB);
+ * DIOCGETPS answers in sectors and DIOCPRW moves raw sectors anywhere.
  *
  * The card pulled out (spec N.6): before every request the card-detect
  * line is read.  While the card is out, every request fails with ENXIO
@@ -57,7 +59,12 @@ FORWARD _PROTOTYPE( int w_init, (void)					);
 FORWARD _PROTOTYPE( int w_card, (void)					);
 FORWARD _PROTOTYPE( void w_tell, (char *what)				);
 FORWARD _PROTOTYPE( int w_ioctl, (struct driver *dp, message *m_ptr)	);
-FORWARD _PROTOTYPE( int w_discard, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int w_discard, (message *m_ptr, int erase)		);
+FORWARD _PROTOTYPE( int w_xfer, (int proc_nr, int opcode,
+	unsigned long sector, phys_bytes user_phys, unsigned long nbytes,
+	unsigned long *done)						);
+FORWARD _PROTOTYPE( int w_part, (message *m_ptr)			);
+FORWARD _PROTOTYPE( int w_prw, (message *m_ptr)				);
 FORWARD _PROTOTYPE( void w_nap_end, (void)				);
 #define DISCARD_STEP	0x20000UL	/* sectors per DISCARD: 64 MB */
 
@@ -117,9 +124,8 @@ PRIVATE int w_schedule(proc_nr, iop)
 int proc_nr;			/* process doing the request */
 struct iorequest_s *iop;	/* pointer to read or write request */
 {
-  unsigned long pos, nbytes, sector, count;
+  unsigned long pos, nbytes, sector, done;
   phys_bytes user_phys;
-  struct proc *rp;
   int opcode, r;
 
   nbytes = iop->io_nbytes;
@@ -136,13 +142,39 @@ struct iorequest_s *iop;	/* pointer to read or write request */
   if (user_phys == 0) return(iop->io_nbytes = EFAULT);	/* not the caller's memory */
   if ((r = w_card()) != OK) return(iop->io_nbytes = r);	/* N.6 */
 
-  if (pos >= w_dv->dv_size) return(OK);			/* at EOF */
-  if (nbytes > w_dv->dv_size - pos) nbytes = w_dv->dv_size - pos;
-  sector = (w_dv->dv_base >> SECTOR_SHIFT) + (pos >> SECTOR_SHIFT);
+  /* The sector in the partition (R12.39, drvlib.c; past 2 TiB is EOF). */
+  sector = dv_sector(w_dv, iop->io_high, pos);
+  if (sector >= w_dv->dv_size) return(OK);			/* at EOF */
+  if ((nbytes >> SECTOR_SHIFT) > w_dv->dv_size - sector)
+	nbytes = (w_dv->dv_size - sector) << SECTOR_SHIFT;
 
-  /* Straight between the card and the caller's memory (R2a.3: no bounce
-   * buffer; the SPI moves bytes, so any alignment does).  The caller must
-   * stay where it is meanwhile: no shadow swap (p_physio). */
+  r = w_xfer(proc_nr, opcode, w_dv->dv_base + sector, user_phys, nbytes,
+								&done);
+  iop->io_nbytes -= done;
+  if (r != OK) iop->io_nbytes = r;
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				w_xfer					     *
+ *===========================================================================*/
+PRIVATE int w_xfer(proc_nr, opcode, sector, user_phys, nbytes, done)
+int proc_nr;			/* whose memory */
+int opcode;			/* DEV_READ or DEV_WRITE */
+unsigned long sector;		/* first sector on the card */
+phys_bytes user_phys;		/* the caller's buffer, checked */
+unsigned long nbytes;		/* whole sectors, inside the partition */
+unsigned long *done;		/* bytes moved */
+{
+/* Straight between the card and the caller's memory (R2a.3: no bounce
+ * buffer; the SPI moves bytes, so any alignment does).  The caller must
+ * stay where it is meanwhile: no shadow swap (p_physio). */
+  unsigned long count;
+  struct proc *rp;
+  int r;
+
+  *done = 0;
   rp = proc_addr(proc_nr);
   rp->p_physio = TRUE;
   while (nbytes > 0) {
@@ -163,15 +195,15 @@ struct iorequest_s *iop;	/* pointer to read or write request */
 		if (!(wini[0].present & W_NODET)
 		    && !hal_disk_present()) {	/* N.6: pulled out meanwhile */
 			(void) w_card();
-			return(iop->io_nbytes = ENXIO);
+			return(ENXIO);
 		}
 		printf("%s: I/O error at sector %lu\n", w_name(), sector);
-		return(iop->io_nbytes = EIO);
+		return(EIO);
 	}
 	sector += count >> SECTOR_SHIFT;
 	user_phys += count;
 	nbytes -= count;
-	iop->io_nbytes -= count;
+	*done += count;
 	/* The card is deselected: other tasks first (R0.8b), also between
 	 * the requests of a scatter (an exec's text read in one piece
 	 * starved the infrared ring) */
@@ -225,6 +257,7 @@ PRIVATE int w_init()
 {
   struct wini *wn = &wini[0];
   unsigned long sectors;
+  int why;
 
   {	/* SD data by DMA, the task asleep meanwhile (T4b step 2) */
 	int irq = hal_disk_dma_irq();
@@ -234,16 +267,18 @@ PRIVATE int w_init()
 		enable_irq(irq);
 	}
   }
-  if (hal_disk_init() != 0) {
-	printf("%s: no card\n", w_name());
+  if ((why = hal_disk_init()) != 0) {
+	why = -why;
+	if (why < 256) printf("%s: no card\n", w_name());
+	else printf("%s: no card (init step %d, R1 0x%x)\n", w_name(),
+						why >> 8, why & 0xFF);
 	return(ENXIO);
   }
   sectors = hal_disk_sectors();
-  /* dv_size is a 32-bit byte count: clip whole-disk access to 4 GB. */
-  if (sectors > 0xFFFFFFFFUL >> SECTOR_SHIFT)
-	sectors = 0xFFFFFFFFUL >> SECTOR_SHIFT;
+  /* R12.39: in sectors, the whole card (2 TiB at most); read() of
+   * /dev/hd0 still ends at 4 GiB (32-bit file positions). */
   wn->part[0].dv_base = 0;
-  wn->part[0].dv_size = sectors << SECTOR_SHIFT;
+  wn->part[0].dv_size = sectors;
   wn->present = W_IN;
   if (hal_disk_id(&w_id) != 0) w_id = 0;	/* N.6: 0 matches no card */
   if (!hal_disk_present()) {	/* a card answers, the switch says none */
@@ -318,28 +353,39 @@ PRIVATE int w_ioctl(dp, m_ptr)
 struct driver *dp;
 message *m_ptr;
 {
-/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another.
- * DIOCDISCARD (R12.40): tell the card a range of the partition is unused. */
-  int state;
+/* DIOCFAKECARD (QEMU only, tests of N.6): 0 card in, 1 out, 2 another;
+ * 3 puts the number of sectors written since boot in its int (K.7 ACK7.2).
+ * DIOCDISCARD (R12.40): tell the card a range of the partition is unused.
+ * DIOCERASE (R12.33): erase a range of the partition (install time). */
+  int state, r;
   phys_bytes user;
 
-  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr));
-  if (m_ptr->REQUEST != DIOCFAKECARD) return(do_diocntl(dp, m_ptr));
+  if (m_ptr->REQUEST == DIOCDISCARD) return(w_discard(m_ptr, FALSE));
+  if (m_ptr->REQUEST == DIOCERASE) return(w_discard(m_ptr, TRUE));
+  if (m_ptr->REQUEST == DIOCPRW) return(w_prw(m_ptr));
+  if (m_ptr->REQUEST != DIOCFAKECARD) return(w_part(m_ptr));
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(int));
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&state), (phys_bytes) sizeof(int));
-  return(hal_disk_fake(state) == 0 ? OK : EINVAL);
+  r = hal_disk_fake(state);
+  if (r < 0 || (state != 3 && r != 0)) return(EINVAL);
+  if (state == 3) phys_copy(vir2phys(&r), user, (phys_bytes) sizeof(int));
+  return(OK);
 }
 
 
 /*===========================================================================*
  *				w_discard				     *
  *===========================================================================*/
-PRIVATE int w_discard(m_ptr)
+PRIVATE int w_discard(m_ptr, erase)
 message *m_ptr;
+int erase;			/* ERASE (R12.33) instead of DISCARD */
 {
 /* R12.40: DISCARD (SD 5.1) a sector range of the partition: the card marks
  * it unused, nothing is erased or written.  ENOTTY if the card has none.
+ * R12.33, erase: ERASE the range instead (first-boot setup, through the
+ * erase command; never at run time).  ENOTTY while the HAL has none
+ * (the Flipper until T18b).
  * Done in steps of DISCARD_STEP sectors with the other tasks between them;
  * the HAL waits for the busy card by naps (hal_disk_nap), never a loop.
  * Only MM (swap, at idle) and root reach it: /dev/hd* are root's. */
@@ -352,21 +398,23 @@ message *m_ptr;
   user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(rg));
   if (user == 0) return(EFAULT);
   phys_copy(user, vir2phys(&rg), (phys_bytes) sizeof(rg));
-  size = w_dv->dv_size >> SECTOR_SHIFT;
+  size = w_dv->dv_size;
   if (rg.count == 0 || rg.first >= size || rg.count > size - rg.first)
 	return(EINVAL);
   if ((r = w_card()) != OK) return(r);			/* N.6 */
-  sector = (w_dv->dv_base >> SECTOR_SHIFT) + rg.first;
+  sector = w_dv->dv_base + rg.first;
   while (rg.count > 0) {
 	n = rg.count < DISCARD_STEP ? rg.count : DISCARD_STEP;
-	r = hal_disk_discard(sector, sector + n - 1);
+	r = erase ? hal_disk_erase(sector, sector + n - 1)
+		  : hal_disk_discard(sector, sector + n - 1);
 	if (r == -2) return(ENOTTY);
 	if (r != 0) {
 		if (!(wini[0].present & W_NODET) && !hal_disk_present()) {
 			(void) w_card();
 			return(ENXIO);
 		}
-		printf("%s: discard failed at sector %lu\n", w_name(), sector);
+		printf("%s: %s failed at sector %lu\n", w_name(),
+				erase ? "erase" : "discard", sector);
 		return(EIO);
 	}
 	sector += n;
@@ -374,6 +422,82 @@ message *m_ptr;
 	task_yield();
   }
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_part					     *
+ *===========================================================================*/
+PRIVATE int w_part(m_ptr)
+message *m_ptr;
+{
+/* The partition ioctls (R12.39).  DIOCGETPS: first sector and number of
+ * sectors.  DIOCGETP/DIOCSETP: in bytes, as the old tools expect; a base
+ * past 4 GiB is EOVERFLOW, a size of 4 GiB or more is told as the largest
+ * whole number of sectors below 4 GiB (DIOCGETPS has the real one). */
+  struct partition entry;
+  struct part_range rg;
+  phys_bytes user;
+  unsigned n;
+#define BYTES_MAX	(0xFFFFFFFFUL >> SECTOR_SHIFT)	/* sectors < 4 GiB */
+
+  if (m_ptr->REQUEST == DIOCGETPS) n = sizeof(rg);
+  else if (m_ptr->REQUEST == DIOCGETP || m_ptr->REQUEST == DIOCSETP)
+	n = sizeof(entry);
+  else return(ENOTTY);
+  if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, n);
+  if (user == 0) return(EFAULT);
+
+  if (m_ptr->REQUEST == DIOCGETPS) {
+	rg.first = w_dv->dv_base;
+	rg.count = w_dv->dv_size;
+	phys_copy(vir2phys(&rg), user, (phys_bytes) n);
+  } else if (m_ptr->REQUEST == DIOCSETP) {
+	phys_copy(user, vir2phys(&entry), (phys_bytes) n);
+	w_dv->dv_base = entry.base >> SECTOR_SHIFT;
+	w_dv->dv_size = entry.size >> SECTOR_SHIFT;
+  } else {
+	if (w_dv->dv_base > BYTES_MAX) return(EOVERFLOW);
+	entry.base = w_dv->dv_base << SECTOR_SHIFT;
+	entry.size = (w_dv->dv_size > BYTES_MAX ? BYTES_MAX : w_dv->dv_size)
+							<< SECTOR_SHIFT;
+	w_geometry(&entry);
+	phys_copy(vir2phys(&entry), user, (phys_bytes) n);
+  }
+  return(OK);
+}
+
+
+/*===========================================================================*
+ *				w_prw					     *
+ *===========================================================================*/
+PRIVATE int w_prw(m_ptr)
+message *m_ptr;
+{
+/* DIOCPRW (R12.39): read or write up to PRW_MAX sectors of the partition,
+ * anywhere in it, straight from or into the caller's buffer.  FS has
+ * checked a write (descriptor open for writing, device not mounted). */
+  struct part_rw rw;
+  phys_bytes user;
+  unsigned long nbytes, done;
+  int r;
+
+  if (w_prepare(m_ptr->DEVICE) == NIL_DEV) return(ENXIO);
+  user = numap(m_ptr->PROC_NR, (vir_bytes) m_ptr->ADDRESS, sizeof(rw));
+  if (user == 0) return(EFAULT);
+  phys_copy(user, vir2phys(&rw), (phys_bytes) sizeof(rw));
+  if (rw.count == 0 || rw.count > PRW_MAX || rw.write > 1
+	|| rw.sector >= w_dv->dv_size || rw.count > w_dv->dv_size - rw.sector)
+	return(EINVAL);
+  nbytes = (unsigned long) rw.count << SECTOR_SHIFT;
+  user = rw.write
+	? numap_src(m_ptr->PROC_NR, (vir_bytes) rw.buf, nbytes)
+	: numap(m_ptr->PROC_NR, (vir_bytes) rw.buf, nbytes);
+  if (user == 0) return(EFAULT);
+  if ((r = w_card()) != OK) return(r);			/* N.6 */
+  return(w_xfer(m_ptr->PROC_NR, rw.write ? DEV_WRITE : DEV_READ,
+			w_dv->dv_base + rw.sector, user, nbytes, &done));
 }
 
 
@@ -434,7 +558,7 @@ PRIVATE void w_geometry(entry)
 struct partition *entry;
 {
 /* Fake a geometry: 64 heads, 32 sectors, like most card readers report. */
-  unsigned long sectors = wini[0].part[0].dv_size >> SECTOR_SHIFT;
+  unsigned long sectors = wini[0].part[0].dv_size;
 
   entry->heads = 64;
   entry->sectors = 32;

@@ -47,6 +47,14 @@ testing every path. A HAL function that the emulator cannot do returns a "not pr
 5. Add the same node in `base.postinst` for cards made before your change (look at the
    `/dev/adc` block), and raise `BASE_VER` in `minix.mk`.
 
+A family of minors with its own rules can live in its own file that `flipdev.c` includes, as the
+USB HID files do (`hiddev.c`, minors 17-19, `IS_HID()` checked first in open/close, `do_rw`,
+the ioctl switch and `do_select`, `hid_check()` after every message and interrupt). Its numbers
+and ioctls go in a `<minix/*.h>` header that is the contract for every HAL backend
+(`<minix/hid.h>`: QEMU's `hal_hid_*` print console lines, the Flipper's drive the USB stack),
+and the backend tells the task about changes from its interrupt (`hid_event()`), never by
+the task polling it.
+
 ## 3.3 Interrupts
 
 - Register a handler with `put_irq_handler(irq, handler)` and `enable_irq(irq)` once, at the
@@ -56,7 +64,7 @@ testing every path. A HAL function that the emulator cannot do returns a "not pr
   then gets a `HARD_INT` message and does the rest in `do_hardint()`.
 - `cause_sig()`, replies and copies to users are task work, never handler work.
 - **Interrupt slots are full**: `NR_IRQ_HANDLERS` is 8 and all eight are used (clock, UART,
-  USB, buttons, IR receive, IR transmit, ms timer, SD DMA). A new handler means raising it
+  USB, buttons, RTC alarm, IR transmit, ms timer, SD DMA; IR receive moved to the pulse engine, which needs none). A new handler means raising it
   (+4 bytes) with a reason, or sharing a handler between lines as the buttons do.
 - Masking interrupts (`lock()`/`unlock()`) is allowed for at most **20 µs** (budget L4). The
   one measured exception is the iButton bit slot (≤ 70 µs). Anything longer must be restructured:

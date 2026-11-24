@@ -74,7 +74,14 @@ Always use `card.img`, `minix-base.bin` and `base_X.Y.tar` **from the same build
 programs on the card use the C library in the flashed image (one copy for all of them), and they
 run only with the library of their own build: with another one every program, the shell
 included, fails to start ("cannot execute"). `pkg` refuses such a package ("pkg: base needs
-shared libc ..., this system has ..."), and `free -v` shows the library and its id.
+shared libc ..., this system has ..."; the same for the GUI apps' library, "needs shared
+libfuri ..."), and `free -v` shows both libraries (`shared libc:`, `shared libfuri:`) and their ids.
+
+**A download and your own build are two different builds**, even from the same commit: the
+library's id is a checksum of the compiled code, so it changes with the compiler. The images on
+GitHub are built with Ubuntu 24.04's GCC; a build on your computer (or on another computer with
+another GCC version) has another id. Pick one source and stay with it. Switching sources means
+writing a new card, which erases `/home`: back it up first (section 7, *Backing up your files*).
 
 **(planned)** Signed release images (spec R17.2) and a stock-updater package (`.fuf`) that the
 stock firmware or qFlipper can install from the SD card without `dfu-util` (spec R17.3).
@@ -117,7 +124,10 @@ Put the card back into the Flipper.
        dfu-util -a 0 -s 0x08000000:leave -D build/flipper/minix/minix-base.bin
 
    (`make BOARD=flipper minix-flash` does the same with the bare `minix.bin`.)
-   When `dfu-util` finishes, the Flipper starts MINIX by itself.
+   When `dfu-util` finishes, the Flipper starts MINIX by itself. `dfu-util` may end with
+   "Error during download get_status" (exit code 74) even though the flash worked: the chip
+   restarts before it answers the last request. If `File downloaded successfully` is printed
+   above it, all is well.
 
 If the Flipper does not reach DFU mode with Left + Back (for example a broken image that crashes
 very early), use the hardware combination: hold **Left + Back + OK**, release **Back** and
@@ -128,16 +138,34 @@ very early), use the hardware combination: hold **Left + Back + OK**, release **
 The LCD shows the Galtzagorriak boot screen and the boot messages. On a fresh card,
 `/etc/setup` then prepares the rest of the card. This happens once and takes a minute or two:
 
-1. It adds three partitions after the root file system and **reboots by itself**:
+1. It adds three partitions after the root file system, each starting on a 4 MiB boundary
+   (the card's usual erase unit), and **reboots by itself**:
 
    | Partition | Mounted on | Size | Use |
    |---|---|---|---|
    | `/dev/hd1` | `/` | 32 MB | the system, `/etc` settings |
    | `/dev/hd2` | `/usr` | 2 GB | programs and packages |
-   | `/dev/hd3` | (swap) | 64 MB | swap for idle programs, off by default ([Swap](swap.md)) |
-   | `/dev/hd4` | `/home` | the rest, up to 4 GB | your files |
+   | `/dev/hd3` | (swap) | see below | swap for idle programs, off by default ([Swap](swap.md)) |
+   | `/dev/hd4` | `/home` | the rest | your files, MINIX V3 |
 
-2. After the reboot it makes the file systems on `/usr` and `/home` and continues booting.
+   On a card below 8 GB swap is 64 MB, right after `/usr`, and `/home` takes the rest. On an
+   8 GB or larger card swap sits **at the end of the card** and takes half of the space after
+   `/usr`, at most 4 GiB − 1 MiB; `/home` lies between `/usr` and swap. `/home` is a MINIX V3
+   file system (names up to 60 characters, larger than 4 GB), and its block map already has
+   room up to the end of the card, so it can later take swap's space too (`setup -H`, see
+   [The SD card](sdcard.md#converting-home-to-minix-v3-setup--h)). Before this version `/home`
+   was MINIX V2, at most 4 GB.
+
+   On a card of **32 GB or more** swap is larger: `/dev/hd3` at the end of the card holds four
+   swap subpartitions `/dev/hd3a` to `/dev/hd3d` of 4 GiB − 1 MiB each (about 16 GiB), and
+   `/home` again takes all the space between `/usr` and swap: on a 128 GB card (about 117 GiB) about 99 GiB.
+   Programs swap to `/dev/hd3a`; the [memory blocks](blocks.md) of apps use all four.
+
+2. After the reboot it shows "Preparing the card..." and tells the card that `/usr`, swap and
+   `/home` are empty (`erase`, see [Swap](swap.md)): a card that was full before, from a camera
+   or a phone, then has its whole free pool for wear levelling. **(planned on the Flipper,
+   T18b)**: until the SD driver can erase, setup says "this card or driver cannot erase, going
+   on" and goes on. Then it makes the file systems on `/usr` and `/home` and continues booting.
    Then `/etc/rc` binds the programs in flash (`pkg bind`, about 2 s the first time) and starts
    the launcher. The boot never waits for the console, so a Flipper with no USB host comes up as
    usual.
@@ -155,8 +183,11 @@ Once booted, the LCD shows the **launcher**: Up/Down select an app, OK starts it
 An app that does not react to Back can still be closed: **hold Back for a second**. The app is
 asked to end (SIGTERM), and stopped for good 3 seconds later if it has not. While an app runs it
 owns the screen and the buttons; other programs cannot draw over it.
-Today it offers *Console* (the system console on the LCD, 32x10 characters), *About* and
-*Lights*. *About* shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
+The launcher is a small desktop with three pages side by side, SETTINGS, APPS and HOME;
+a short Left or Right moves between them. [The launcher](launcher.md) describes it in full.
+Among the apps is *Console* (the system console on the LCD, 31x10 characters in a frame; it shows
+what the USB console prints from the moment you open it, and says "USB console: waiting for
+text" until then). *About*, on the SETTINGS page, shows the system version (e.g. `Galtzagorriak 0.1.1`), the MINIX version it is
 based on, the machine and ABI number, the host name and the uptime; `uname -a` and `ver` print
 the same on the console. After 5 minutes without a key the backlight fades out; the next key only turns it on.
 
@@ -173,17 +204,35 @@ their own). Do not turn on "add carriage return" in the terminal program, or you
 
 Press Enter, and log in as **root** with the password set at the first boot. `passwd` changes
 it. A wrong password is refused after 2 seconds, to make guessing slow.
+
+The keys are those of a Linux terminal: **Ctrl-C** stops the running command, **Backspace**
+rubs out a character (whether the terminal sends DEL or Ctrl-H), **Ctrl-U** clears the line,
+**Ctrl-D** at the start of a line ends the input, Ctrl-\\ quits with a core dump. (MINIX 2.0
+used DEL to stop a command, which is what Backspace sends today; `stty erase ^H intr ^?` brings
+that back for the session.)
+
+To see on the Flipper when the computer talks to it (handy when a script drives it, or to tell a
+slow command from a dead cable), let the status LED flash with the USB console's traffic:
+
+    echo console cyan >/dev/led     # any colour; on until "echo off >/dev/led" or a reboot
+
+Each burst of traffic, in either direction, gives a short flash; no traffic, no light. Add the
+line to `/etc/rc.conf` to have it at every boot. Details: [Devices](devices.md), the status LED.
+
 The serial pins 13 (TX) and 14 (RX) on the GPIO header also carry the console, at 115200 8N1.
 Useful first commands: `ver` (version, build and the cause of the last reset), `df`, `free`,
 `pkg list`.
 
-**The clock keeps UTC.** Local time comes from the `TZ` variable, a POSIX rule; put it into
-`~/.profile`, for example for Central Europe:
+**The clock keeps UTC.** Local time comes from the time zone in `/etc/TZ`, a POSIX rule; choose
+it on the launcher under SETTINGS > Time (see [The launcher](launcher.md)), or write it yourself,
+for example for Central Europe:
 
-    TZ=CET-1CEST,M3.5.0,M10.5.0/3; export TZ
+    # Europe/Warsaw
+    CET-1CEST,M3.5.0,M10.5.0/3
 
-Without `TZ` the time shown is UTC. `date` prints local time, `date -u` UTC. To set the clock (as
-root): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
+INIT gives it as `TZ` to everything it starts, and `/etc/profile` reads it for login shells. A
+`TZ` set in `~/.profile` still wins for that user. Without `/etc/TZ` the time shown is UTC.
+`date` prints local time, `date -u` UTC. To set the clock (as root; or on SETTINGS > Time): `date MMDDYYhhmm` takes local time, `date -u MMDDYYhhmm` or a trailing `Z` UTC
 (`date 0119380314Z`: 2038-01-19 03:14 UTC); `MMDDCCYYhhmmss` gives the century too. Programs
 use 64-bit times, so nothing breaks in 2038; files keep times from 1970 to 2106-02-07.
 
@@ -191,8 +240,7 @@ In `/tmp` and `/usr/tmp` (sticky directories, mode 1777) everybody may create fi
 file's owner (or root) may delete or rename it.
 
 **(planned)** A first-boot wizard on the LCD that asks for the root password, hostname, region,
-date, time zone and location (spec Phase 18b), and `/etc/TZ` for the whole system. Until then the
-clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
+date, time zone and location (spec Phase 18b). Until then the clock starts from whatever the RTC holds; after the stock firmware that is your **local** time,
 but MINIX reads it as UTC: set it once with `date -u ...Z`.
 
 ## 7. Installing apps and updating the system
@@ -214,18 +262,61 @@ path, a `..` component, a name too long for `tar`, or is a link or device; packa
 `Depends:` names are 1–32 letters, digits and `._+-`. `pkg remove` deletes only the files the
 package installed.
 
+A package is installed only when its setup script (`postinst`) ran and ended without an error.
+Otherwise `pkg` says why and exits 1: `pkg: NAME: postinst cannot start: REASON` (for example when
+there is no room in RAM, even after waiting 10 s) or `pkg: NAME: postinst failed: exit N` (128 + the signal number if it was killed). Then
+`pkg: NAME VERSION is not set up: pkg install FILE again`: the files are in place, and the same
+command runs the script again. When RAM is short for a moment, `pkg` and the shell wait and try
+again (1 s apart, up to 10 s) before they give up. While a subshell of yours runs in the
+background (for example `( ... ) &`), the shell cannot wait this way: it says
+`NAME: no memory to start it` at once; run the command again a moment later.
+
+### Backing up your files
+
+Your files live in `/home` on the SD card. Before anything that rewrites the card (a new card
+image, switching between downloaded and self-built images, an ABI change), copy them off:
+
+- **The whole card**, to restore it exactly as it was (any Linux PC with a card reader):
+
+      lsblk -o NAME,SIZE,TRAN,MODEL       # find the card, e.g. sdb; never the system disk
+      sudo dd if=/dev/sdX of=flipper-sd-$(date +%F).img bs=4M status=progress
+
+- **Only the files**: Linux reads MINIX file systems. `/home` is the card's 4th partition:
+
+      sudo mount -t minix -o ro /dev/sdX4 /mnt && cp -a /mnt ~/flipper-home && sudo umount /mnt
+
+  (`/dev/mmcblk0p4` on a built-in reader.) Copy them back the same way after the new card's
+  first boot (mount without `-o ro`), or send them over the console.
+
+**(planned)** Files to and from a PC over USB with no card reader and no drivers (MTP, spec
+R10.4), also from Windows and macOS.
+
 ### Updating to a newer build without erasing the card
 
 Rewriting the card (section 4) always works but erases `/home`. To keep your files:
 
+(**From 0.1.1 to 0.1.2 or later** the steps below do not work: that step changes the ABI, the
+shared C library and the place of the installed programs at once. Back up `/home` as above,
+write the new card image (section 4), flash the new `minix-base.bin` (section 5) and install
+your app packages again. The release notes in `CHANGELOG.md` say when a release needs this.)
+
 (Not across an ABI change: the new system cannot run the old programs and the old `pkg` refuses
 the new package, "pkg: base needs ABI 2, this system is ABI 1". The step from ABI 1 to ABI 2
 (64-bit time, base 3.68) needs a rewritten card and `minix-base.bin` of the same build; copy what
-you need from `/home` first. `ver` and the *About* app show the ABI.)
+you need from `/home` first. The step from ABI 2 to ABI 3 (32-bit inode numbers, T27a) is the
+same: rewrite the card. `ver` and the *About* app show the ABI.)
 
 (Not either when the shared C library changed: `pkg` refuses the new package with "pkg: base needs
 shared libc X, this system has Y". Then too rewrite the card and flash `minix-base.bin` of the
-same build. Builds that do not touch the library keep its id, and the steps below work.)
+same build. Builds that do not touch the library keep its id, and the steps below work, but only
+when they are made with the same compiler: a build from another computer (another GCC version) has
+another id. If you flash first anyway, the Flipper starts without a console (`init: console: Exec
+format error`) until you rewrite the card.)
+
+(Since the shared libfuri + libapp, issue #201, the programs installed in internal flash start
+32 KB later, at `0x08048000`. Coming from an older build, flash `minix-base.bin` (not only
+`minix.bin`) and install the app packages (`remind`, `alarm`, `timed`) again: what was installed
+before is not found at the new place.)
 
 
 1. Build the new version (section 2).
@@ -237,6 +328,72 @@ same build. Builds that do not touch the library keep its id, and the steps belo
 `reboot -d` also turns on *dev mode*: until the next normal `reboot` or `halt`, a watchdog reset
 (a hang) goes back to DFU mode, so a broken new image returns there by itself. Without dev mode
 a hang just reboots the Flipper, like the stock firmware.
+
+### Updating with the update file
+
+Every release comes with one signed file, `Galtzagorriak-X.Y.Z.update`, on its GitHub release page,
+with a `.sha512` next to it. It holds the whole system from one build: the firmware for the
+Flipper's flash, the base programs on the SD card, the official apps and the release notes.
+
+> **Not finished yet.** The Flipper can already check the file and prepare the update. The step
+> that writes the flash at the next start is `atea`, the new boot stage, and it is not on the
+> Flipper yet (task T33b). Until it is, update with DFU as described above.
+
+**The steps:**
+
+1. Download `Galtzagorriak-X.Y.Z.update` from the release page.
+2. Connect the Flipper over USB. In Windows Explorer it shows up as a portable device. Drag the
+   file onto it. Any name ending in `.update` works.
+3. The Flipper checks the file (about 1–2 seconds per MB) and shows a window: `System update`,
+   `0.8.2 → 0.9.0`, the first lines of the release notes (for example
+   `0.9.0: alarm snooze, "Egun on!" on the welcome screen`), and `OK install  Back later`.
+   Nothing is installed until you press **OK** on the Flipper. A file on its own, an MTP host or a
+   remote shell cannot start an update.
+4. After OK the Flipper prepares the update and restarts. During the restart it shows a progress
+   bar (about 10 seconds for a full release, less for a small one). **Do not take the battery out
+   while the bar is showing.** If the power goes anyway, the next start carries on where it
+   stopped.
+5. The new system starts. On its first start it switches the base programs on the card (one line
+   `gztree: ...` per file on the console) and starts as usual. Your files in `/home`, your
+   settings and your alarms stay.
+
+From the console you can do the same as root:
+
+```
+gzupdate check /home/flipper/Galtzagorriak.update    # only check, change nothing
+gzupdate apply /home/flipper/Galtzagorriak.update    # check, ask, prepare, restart
+```
+
+**What the messages mean** (`gzupdate: ...`, one line, and nothing is changed):
+
+| Message | Meaning |
+|---|---|
+| `not signed by a trusted key` | The file was not signed by the project's key or your own key. It may come from somewhere else. |
+| `bad signature`, `... damaged (hash mismatch)`, `padding not zero`, `truncated file` | The file was changed or did not copy completely. Copy it again and check it against the `.sha512` file. |
+| `for another board (...)` | The file is for another device (for example the QEMU build). |
+| `already installed` | This release is already running. |
+| `older than the running system (...)` | This is an older release. See "Going back" below. |
+| `needs at least X.Y.Z (running ...)` | The release is too old to update from this file. First install release X.Y.Z, or use DFU. |
+| `not an update file` | The file is something else. |
+
+**Going back to an older release.** An older signed file is installed only after you confirm it on
+the Flipper itself: the screen shows `0.9.0 → 0.8.2 (older). OK: yes, Back: no`. A program cannot
+do this without your button press. If a new release does not start three times in a row, the
+Flipper asks `0.9.0 did not start. Go back to 0.8.2? OK / Back` and, on OK, installs the update file
+it came from (kept as `/usr/.gzupdate/prev.update`). Both questions come from `atea` (T33b).
+
+**When DFU is still needed:** the first time you install a build that has `atea` (it moves the
+system up by 16 KB in flash, so the whole `minix-base.bin` has to be written once, and the apps
+installed again); when the project's key changes; when the card is broken or missing (the Flipper
+then says `Insert the SD card`, or `Recovery: connect to a PC (DFU)`).
+
+**If you build the system yourself:** make a key pair once with `flipper/tools/gzsign --new-key`.
+It writes `~/.config/galtzagorriak/update.key` (private: keep it safe, never commit it or copy it
+to the Flipper) and `update.pub`. `make BOARD=flipper update` then builds
+`build/flipper/minix/Galtzagorriak.update`, signs it with your key and checks it. Your build
+trusts your `update.pub` as well as the project's key, so your Flipper accepts your own files. To
+sign in another place, pass the private key with `--key FILE` or the variable `GZ_UPDATE_KEY`.
+Without a key `make update` stops and says how to make one.
 
 ## 8. Recovery and going back to the stock firmware
 
@@ -257,19 +414,30 @@ a hang just reboots the Flipper, like the stock firmware.
 4. The stock clock may now show UTC instead of local time until you set it again (for example by
    connecting the mobile app).
 
-## 9. Known limitations (today)
+## 9. What works and known limitations (today)
 
-- Hardware that works: LCD, backlight, RGB LED, buttons, vibration, speaker (`beep`), GPIO
-  header (`gpio`), infrared send and receive (`ir`), USB serial console, SD card.
-- Not yet: Sub-GHz radio, NFC, 125 kHz RFID, iButton, Bluetooth, U2F, BadUSB and the other stock
-  apps; the menu interface is a first launcher with three apps. These come in the later phases of
+What works on the Flipper (details in [Hardware devices](devices.md) and the other chapters):
+
+- Screen, backlight with fade-out, RGB status LED, buttons, vibration, speaker.
+- The launcher desktop with settings, reminders and an alarm clock, timers and alerts ([Timers and alerts](timers.md)).
+- 125 kHz RFID: read, write T5577 cards and emulate, all 25 LF protocols (`rfid`).
+- iButton (Dallas): read, write RW1990 blanks and emulate (`ikey`). Cyfral and Metakom: in QEMU only for now (device part pending).
+- Infrared send and receive with the stock protocols (`ir`).
+- Sub-GHz: receiving and tuning only so far (`/dev/subghz`, `/dev/subghzraw`).
+- USB: the serial console, and the Flipper as a keyboard, mouse or media keys
+  ([USB gadgets](usb-gadgets.md), Bad USB).
+- GPIO header (`gpio`), the hardware self test ([The self test](selftest.md)).
+- Power: deep sleep when idle (with no USB cable), real power-off with `halt` (hold **Back** or
+  plug in USB to start again), battery readings in the *Power* app ([Power and battery](power.md)).
+
+Not yet:
+
+- Sub-GHz sending, NFC, Bluetooth, U2F and the other stock apps. They come in the later phases of
   the spec (`docs/spec/galtzagorriak-spec.md`).
-- Power management is not done yet: the Flipper uses several mA even when idle, so the battery
-  lasts much shorter than with the stock firmware, and `halt` does not switch it off. Real
-  power-off and sleep come with spec tasks T14/T15. To see the current draw yourself, see
-  [Power and battery](power.md).
-- The time zone is set per user with `TZ` (section 6); there is no system-wide `/etc/TZ` yet.
-- The system console is on USB and on the LCD *Console* app; there is no on-screen keyboard yet.
+- A new time zone reaches programs started after the change; open shells keep the old one until
+  the next login (section 6).
+- There is no on-screen keyboard yet; for typing use the USB console.
+- `/home` ends at 4 GB of the card (see section 6).
 - **(planned)** Connecting the official Flipper mobile app over Bluetooth (time sync, device
   info, files; spec R15.7).
 - **(planned)** Installing MINIX on a second Flipper from a MINIX Flipper over Bluetooth, without a

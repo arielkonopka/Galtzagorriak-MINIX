@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <minix/callnr.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -19,7 +20,13 @@
 #include <sys/times.h>
 #include <minix/fg.h>
 #include <minix/ibutton.h>
+#include <minix/hid.h>
+#include <minix/subghz.h>
+#include "libhid.h"
+#include "ibkey.h"
 #include <minix/partition.h>
+#include <blk.h>
+#include <a.out.h>
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
@@ -421,6 +428,225 @@ static void phase3_tests(void)
 		"may its own (AC3.5)");
 }
 
+/* Phase 7 (issue #389): the infrared app.  /dev/ir is group "ir" (13),
+ * infrared is setgid "ir"; a user outside the group cannot open /dev/ir
+ * through it (AC7.3: daemon, uid 1), one in it can (nobody, listed in
+ * /etc/group).  infrared -c FILE: then stock signals through encode ->
+ * /dev/ir frame -> decode over the app's loopback (QEMU has no IR
+ * hardware).  Two runs only: a third would copy the app into the flash
+ * text cache (T2) and break the M2 erase budget. */
+static int ir_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/infrared", "infrared", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void infrared_tests(void)
+{
+	static const char sig[] =
+		"Filetype: IR signals file\nVersion: 1\n"
+		"#\nname: Piztu\ntype: parsed\nprotocol: NECext\n"
+		"address: EE 87 00 00\ncommand: 5D A0 00 00\n"
+		"#\nname: Bolumena_gora\ntype: raw\nfrequency: 38000\n"
+		"duty_cycle: 0.330000\ndata: 504 3432 502 483 500 484 510\n"
+		"#\nname: Itzali\ntype: parsed\nprotocol: SIRC\n"
+		"address: 01 00 00 00\ncommand: 15 00 00 00\n"
+		"#\nname: Kanala\ntype: parsed\nprotocol: RC6\n"
+		"address: 00 00 00 00\ncommand: 0C 00 00 00\n";
+	struct stat sb, sd;
+	int fd;
+
+	check(stat("/dev/ir", &sd) == 0 && sd.st_gid == 13
+		&& (sd.st_mode & 0777) == 0660
+		&& stat("/bin/infrared", &sb) == 0 && sb.st_gid == 13
+		&& (sb.st_mode & S_ISGID) != 0,
+		"infrared: /dev/ir is group ir, the app setgid ir (AC7.3)");
+	check(ir_run(1, 1, "-c", NULL) == 1,
+		"infrared: daemon (not in group ir) cannot open /dev/ir (AC7.3)");
+	fd = creat("/tmp/m2ir.ir", 0644);
+	if (fd >= 0) { write(fd, sig, sizeof sig - 1); close(fd); }
+	check(fd >= 0 && ir_run(99, 9999, "-c", "/tmp/m2ir.ir") == 0,
+		"infrared: nobody (in group ir) opens /dev/ir; stock signals "
+		"encode, loop back, decode (libir)");
+	unlink("/tmp/m2ir.ir");
+}
+
+/* Issue #413: the Sub-GHz, iButton and GPIO window apps (spec K.8), driven
+ * through their event pipe as the desktop would: Add manually writes stock
+ * .sub and .ibtn files, a file argument opens its window (Archive's Open),
+ * GPIO lists the eight pins.  The records the app sent (the first 1 KB)
+ * into out.  No subghz or ikey run: the radio and the contacts are the
+ * device checks, and every extra program is a text-cache copy (T2). */
+static int win_run(const char *prog, const char *arg, const char *ev,
+	char *out, int size)
+{
+	int e[2], r[2], n, got = 0, st;
+	pid_t pid;
+
+	if (pipe(e) < 0) return -1;
+	if (pipe(r) < 0) { close(e[0]); close(e[1]); return -1; }
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int x = fcntl(e[0], F_DUPFD, 10), y = fcntl(r[1], F_DUPFD, 10);
+
+		close(e[0]);		/* the pipes may be on 3 and 4 */
+		close(e[1]);
+		close(r[0]);
+		close(r[1]);
+		dup2(x, 3);
+		dup2(y, 4);
+		close(x);
+		close(y);
+		execl(prog, prog, arg, (char *) NULL);
+		_exit(99);
+	}
+	close(e[0]);
+	close(r[1]);
+	if (pid > 0) (void) write(e[1], ev, strlen(ev));
+	close(e[1]);			/* then the desktop is gone: close */
+	while (pid > 0 && (n = read(r[0], out + got, size - 1 - got)) > 0) {
+		got += n;
+		if (got >= size - 1) {		/* keep the last half */
+			memmove(out, out + size / 2, got - size / 2);
+			got -= size / 2;
+		}
+	}
+	out[got] = 0;
+	close(r[0]);
+	if (pid < 0 || waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int file_has(const char *path, const char *want)
+{
+	char b[400];
+	int fd = open(path, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, b, sizeof b - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	b[n] = 0;
+	return strstr(b, want) != NULL;
+}
+
+static void stockapp_tests(void)
+{
+	static char out[1024];
+	const char *sub = "/home/flipper/subghz/M2sg.sub";
+	const char *ib = "/home/flipper/ibutton/M2ib.ibtn";
+
+	mkdir("/home", 0755);
+	mkdir("/home/flipper", 0755);
+	unlink(sub);
+	unlink(ib);
+	check(win_run("/bin/subghzui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tkey=6ab234\tname=M2sg\tte=350\n"
+		"ok\tadd\tsave\nok\tmain\traw\nback\traw\nok\tmain\tfa\n",
+		out, sizeof out) == 0
+		&& strstr(out, "win\tfile\tlist\tM2sg.sub") != NULL
+		&& strstr(out, "enum\tth\tRSSI threshold\t0") != NULL
+		&& strstr(out, "run\tSpectrum\t/dev/subghz") != NULL
+		&& file_has(sub, "433920000\nPreset: FuriHalSubGhzPresetOok650Async"
+			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
+		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
+	check(win_run("/bin/ibuttonui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
+		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
+		"ok\tmain\tsaved\nok\tlist\tf0000\n", out, sizeof out) == 0
+		&& file_has(ib, "DS1990\nRom Data: 01 A2 B3 C4 D5 E6 F7 A8")
+		&& strstr(out, "item\tty\tDallas\t01A2B3C4D5E6F7A8") != NULL,
+		"ibuttonui: Add manually, Saved: a stock .ibtn");
+	check(win_run("/bin/gpioui", (char *) NULL, "", out,
+		sizeof out) == 0 && strstr(out, "enum\tp7\tPC0 (16) =") != NULL
+		&& strstr(out, "item\tv5\t5V on GPIO") != NULL,
+		"gpioui: the header pins");
+	unlink(sub);
+	unlink(ib);
+}
+
+/* Phase 14 (issue #412 item 4): the nfc app.  Group nfc (14), the app
+ * set-gid nfc, opens /dev/nfc only for a member (AC7.3's rule; there is
+ * no /dev/nfc in QEMU, the driver is lane:local): daemon (uid 1) is told
+ * "not in group nfc".  nfc -t DICT, as nobody: the loopback cards read
+ * (Classic 1K with the dictionary's key, NTAG215), saved, read back, Add
+ * manually.  AC14.3: the whole image (data + bss + CHMEM, a_total) is at
+ * most 35 KB.  Two runs, as infrared (flash text cache, M2 budget). */
+static int nfc_run(gid_t g, uid_t u, const char *a1, const char *a2)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+
+		if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+		if (setgid(g) < 0 || setuid(u) < 0) _exit(98);
+		execl("/bin/nfc", "nfc", a1, a2, (char *) NULL);
+		_exit(99);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st)) return -1;
+	return WEXITSTATUS(st);
+}
+
+static void nfc_tests(void)
+{
+	static const char dict[] = "# m2test\nA0A1A2A3A4A5\nFFFFFFFFFFFF\n";
+	struct exec hd;
+	struct stat sb;
+	int fd, n = -1;
+
+	check(stat("/bin/nfc", &sb) == 0 && sb.st_gid == 14
+		&& (sb.st_mode & S_ISGID) != 0,
+		"nfc: the app is setgid nfc (14)");
+	if ((fd = open("/bin/nfc", O_RDONLY)) >= 0) {
+		n = read(fd, &hd, sizeof hd);
+		close(fd);
+	}
+	printf("nfc: image %ld B (data %ld, bss %ld)\n",
+		n == (int) sizeof hd ? hd.a_total : -1L,
+		n == (int) sizeof hd ? hd.a_data : -1L,
+		n == (int) sizeof hd ? hd.a_bss : -1L);
+	check(n == (int) sizeof hd && hd.a_total > 0 && hd.a_total <= 35L * 1024,
+		"nfc: the whole image <= 35 KB (AC14.3)");
+	check(nfc_run(1, 1, "-c", NULL) == 1,
+		"nfc: daemon (not in group nfc) is refused /dev/nfc (AC7.3)");
+	fd = creat("/tmp/m2nfc.dic", 0644);
+	if (fd >= 0) { write(fd, dict, sizeof dict - 1); close(fd); }
+	check(fd >= 0 && nfc_run(99, 9999, "-t", "/tmp/m2nfc.dic") == 0,
+		"nfc: loopback cards read, saved, read back (nfc -t, libnfc)");
+	unlink("/tmp/m2nfc.dic");
+}
+
+/* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
+ * program, m2/fptest.c, built for the FPU; m2test itself stays soft-float. */
+static void fpu_tests(void)
+{
+	pid_t pid;
+	int st;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl("/bin/fptest", "fptest", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "fpu: lazy FP context switch (fptest)");
+}
+
 static void finish(void)
 {
 	flash_report();
@@ -456,6 +682,173 @@ static void finish(void)
 }
 
 #ifdef BOARD_QEMU
+/* mtpd (spec R10.4, T29a) on QEMU's second serial line (/dev/mtpline):
+ * minix-run puts tools/mtphost.py on its other end, which runs the whole
+ * MTP test (list, get, send, delete, rename, move, NAME_MAX + 1, cancel,
+ * broken containers) against this mtpd, leaves galtzagorriak/etxea.sub
+ * and then pulls the cable in the middle of a send.  Here: mtpd ends
+ * with status 0, it ran as the owner of its root (bin), the example file
+ * is there and the half-sent one is not. */
+/* The test's strings in one const struct (flash), as the subghz and pkg
+ * tests': each literal would cost a GOT word in every copy of m2test.  The paths under
+ * the root are built once into a stack buffer. */
+static const struct {
+	char ex[sizeof "Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n"];
+	char wait[sizeof "mtpd: waiting for tools/mtphost.py on /dev/mtpline\n"];
+	char root[sizeof "/tmp/mtpd"];
+	char bin[sizeof "/bin/mtpd"];
+	char name[sizeof "mtpd"];
+	char r[sizeof "-r"];
+	char l[sizeof "-l"];
+	char line[sizeof "/dev/mtpline"];
+	char dir[sizeof "/galtzagorriak"];
+	char sub[sizeof "/etxea.sub"];
+	char pulled[sizeof "/pulled.bin"];
+	char c1[sizeof "mtpd served mtphost and ended on the pulled cable"];
+	char c2[sizeof "mtpd: etxea.sub sent from the PC, owned by bin"];
+	char c3[sizeof "mtpd: the half-sent file is gone, nothing else left"];
+	char st[sizeof "  mtpd: pid %d, status %#x, alarm %d, errno %d\n"];
+} mt = {
+	"Filetype: Flipper SubGhz Key File\n"
+		"Version: 1\nFrequency: 433920000\n"
+		"Preset: FuriHalSubGhzPresetOok650Async\nProtocol: Princeton\n"
+		"Bit: 24\nKey: 00 00 00 00 00 95 D5 D4\nTE: 400\n",
+	"mtpd: waiting for tools/mtphost.py on /dev/mtpline\n",
+	"/tmp/mtpd",
+	"/bin/mtpd",
+	"mtpd",
+	"-r",
+	"-l",
+	"/dev/mtpline",
+	"/galtzagorriak",
+	"/etxea.sub",
+	"/pulled.bin",
+	"mtpd served mtphost and ended on the pulled cable",
+	"mtpd: etxea.sub sent from the PC, owned by bin",
+	"mtpd: the half-sent file is gone, nothing else left",
+	"  mtpd: pid %d, status %#x, alarm %d, errno %d\n",
+};
+
+/* rpcd (spec R15.5, issue #388) on the target: the stock frames through a
+ * pipe, the same bytes as the host test (tests/flipperpb/golden.h, made
+ * by Google protobuf): ping, protobuf_version, storage list of /ext
+ * (here $RPCD_EXT=/tmp/rpcx) and an app_start_request, which gets
+ * ERROR_NOT_IMPLEMENTED and the session goes on. */
+#include "golden.h"
+static void rpcd_test(void)
+{
+	static const unsigned char appstart[] = { 0x05, 0x08, 0x07, 0x82, 0x01, 0x00 };
+	static unsigned char got[128], want[128];
+	static char env[] = "RPCD_EXT=/tmp/rpcx";	/* putenv writes it */
+	int to[2], from[2], fd, n, k, w = 0, status = -1;
+	pid_t pid;
+
+	mkdir("/tmp/rpcx", 0755);
+	if ((fd = creat("/tmp/rpcx/a.txt", 0644)) >= 0) {
+		write(fd, "hello world\n", 12);
+		close(fd);
+	}
+	mkdir("/tmp/rpcx/radio", 0755);
+	memcpy(want + w, g_ping_resp, sizeof(g_ping_resp)); w += sizeof(g_ping_resp);
+	memcpy(want + w, g_pbver_resp, sizeof(g_pbver_resp)); w += sizeof(g_pbver_resp);
+	memcpy(want + w, g_list_resp, sizeof(g_list_resp)); w += sizeof(g_list_resp);
+	memcpy(want + w, g_notimpl_resp, sizeof(g_notimpl_resp)); w += sizeof(g_notimpl_resp);
+	fflush(stdout);
+	if (pipe(to) < 0 || pipe(from) < 0) {
+		check(0, "rpcd: pipes");
+		return;
+	}
+	pid = fork();
+	if (pid == 0) {
+		dup2(to[0], 0);
+		dup2(from[1], 1);
+		close(to[0]); close(to[1]); close(from[0]); close(from[1]);
+		putenv(env);
+		execl("/bin/rpcd", "rpcd", (char *) NULL);
+		_exit(99);
+	}
+	close(to[0]);
+	close(from[1]);
+	write(to[1], g_ping_req, sizeof(g_ping_req));
+	write(to[1], g_pbver_req, sizeof(g_pbver_req));
+	write(to[1], g_list_req, sizeof(g_list_req));
+	write(to[1], appstart, sizeof(appstart));
+	close(to[1]);			/* the transport is gone: rpcd ends */
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(30);
+	for (n = 0; n < (int) sizeof(got)
+		&& (k = read(from[0], got + n, sizeof(got) - n)) > 0; )
+		n += k;
+	close(from[0]);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) status = -1;
+	alarm(0);
+	check(pid > 0 && got_sig == 0 && n == w && memcmp(got, want, w) == 0,
+		"rpcd: ping, protobuf_version, list /ext, NOT_IMPLEMENTED (stock frames)");
+	if (n != w) printf("  rpcd: %d bytes back, want %d\n", n, w);
+	check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"rpcd ends when the transport closes");
+}
+
+static void mtpd_test(void)
+{
+	char buf[256], path[sizeof mt.root + sizeof mt.dir + sizeof mt.pulled];
+	char *leaf;
+	struct stat st;
+	DIR *d;
+	struct dirent *e;
+	int fd, n, entries = 0, status = -1;
+	pid_t pid;
+
+	printf(mt.wait);
+	fflush(stdout);
+	mkdir(mt.root, 0755);
+	chown(mt.root, 2, 2);			/* bin: mtpd becomes it */
+	pid = fork();
+	if (pid == 0) {
+		execl(mt.bin, mt.name, mt.r, mt.root, mt.l, mt.line,
+			(char *) NULL);
+		_exit(99);
+	}
+	got_sig = 0;
+	signal(SIGALRM, alarm_handler);
+	alarm(60);
+	if (pid > 0 && waitpid(pid, &status, 0) != pid) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		status = -1;
+	}
+	alarm(0);
+	n = pid > 0 && got_sig == 0 && WIFEXITED(status)
+		&& WEXITSTATUS(status) == 0;
+	if (!n) printf(mt.st, (int) pid, status, got_sig, errno);
+	check(n, mt.c1);
+	strcpy(path, mt.root);
+	strcat(path, mt.dir);			/* <root>/galtzagorriak */
+	leaf = path + strlen(path);
+	strcpy(leaf, mt.sub);
+	n = -1;
+	if ((fd = open(path, O_RDONLY)) >= 0) {
+		n = read(fd, buf, sizeof(buf));
+		close(fd);
+	}
+	check(n == (int) strlen(mt.ex)
+		&& memcmp(buf, mt.ex, n) == 0
+		&& stat(path, &st) == 0
+		&& st.st_uid == 2, mt.c2);
+	*leaf = '\0';
+	if ((d = opendir(path)) != NULL) {
+		while ((e = readdir(d)) != NULL)
+			if (e->d_name[0] != '.') entries++;
+		closedir(d);
+	}
+	strcpy(leaf, mt.pulled);
+	check(entries == 1 && stat(path, &st) < 0, mt.c3);
+}
+
 /* libfuri GUI (spec R5.2): furihello, a ViewDispatcher with a Submenu
  * and a Popup, driven with fake buttons (QEMU only).  Its frames go to
  * /dev/lcd (dumped to the console).  OK on "Say hello" -> the popup;
@@ -559,6 +952,327 @@ static void devpoll_tests(void)
 #endif
 
 #ifdef BOARD_QEMU
+/* R11.3.1 (T28a): the USB HID files with QEMU's backend, which prints each
+ * report as a console line "hid< kbd 02 00 0b ..."; HIDIOCLINE gives that
+ * line's FNV-1a hash, so the test checks the very line on the console.
+ * HIDIOCFAKE plays the host (unplug, LEDs); HIDP_TEST is a fake persona
+ * holding the bus. */
+static unsigned long fnv(const char *s)
+{
+	unsigned long h = 2166136261UL;
+
+	while (*s) h = ((h ^ (unsigned char) *s++) * 16777619UL) & 0xFFFFFFFFUL;
+	return h;
+}
+
+static int hid_line(int fd, const char *want)
+{
+	long h = 0;
+
+	return ioctl(fd, HIDIOCLINE, &h) == 0
+			&& ((unsigned long) h & 0xFFFFFFFFUL) == fnv(want);
+}
+
+static void hid_tests(void)
+{
+	unsigned char r[16];
+	struct pollfd p;
+	struct stat sb;
+	struct tms tm;
+	clock_t t0, t1;
+	int k, m, c, n, st, v, e;
+	pid_t pid;
+
+	k = open("/dev/hidkbd", O_RDWR);
+	m = open("/dev/hidmouse", O_WRONLY);
+	c = open("/dev/hidcons", O_WRONLY);
+	check(k >= 0 && m >= 0 && c >= 0, "hid: open hidkbd, hidmouse, hidcons");
+	if (k < 0 || m < 0 || c < 0) return;
+	check(stat("/dev/hidkbd", &sb) == 0 && (sb.st_mode & 0777) == 0660
+		&& sb.st_gid == 12 && (sb.st_rdev & 0xFF) == HID_KBD_MINOR,
+		"hid: /dev/hidkbd is group usb (12), 0660, minor 17");
+	v = 0;
+	check(ioctl(k, HIDIOCSTATE, &v) == 0 && (v & 0xFF) == (HID_ATTACHED
+		| HID_CONFIGURED) && HID_PERSONA(v) == HIDP_NONE,
+		"hid: HIDIOCSTATE says configured, no persona");
+
+	hid_kbd(r, HID_MOD_LSHIFT, 0x0B);
+	check(write(k, (char *) r, 8) == 8
+		&& hid_line(k, "hid< kbd 02 00 0b 00 00 00 00 00"),
+		"hid: a keyboard report, its console line");
+	hid_mouse(r, HID_BTN_LEFT, 5, -3, 0);
+	check(write(m, (char *) r, 4) == 4
+		&& hid_line(m, "hid< mouse 01 05 fd 00"),
+		"hid: a mouse report, its console line");
+	hid_cons(r, HID_CC_VOL_UP);
+	check(write(c, (char *) r, 2) == 2 && hid_line(c, "hid< cons e9 00"),
+		"hid: a consumer report, its console line");
+	check(hid_type(k, hid_us, "Hi", &n) == 2 && n == 0
+		&& hid_line(k, "hid< kbd 00 00 00 00 00 00 00 00"),
+		"hid: libhid types \"Hi\", the last line is all keys up");
+	r[0] = 0; r[1] = 0x80; r[2] = 0; r[3] = 0;
+	e = write(m, (char *) r, 4) < 0 && errno == EINVAL;
+	check(e && write(k, (char *) r, 7) < 0 && errno == EINVAL,
+		"hid: dx -128 and a short report: EINVAL");
+
+	/* the host unplugs: POLLIN (a change), writes EAGAIN, no POLLOUT;
+	 * plugged in again by a child: poll(POLLOUT) wakes */
+	(void) ioctl(m, HIDIOCSTATE, &v);		/* seen */
+	p.fd = m; p.events = POLLIN | POLLOUT; p.revents = 0;
+	check(poll(&p, 1, 0) == 1 && p.revents == POLLOUT,
+		"hid: poll: writable, no change");
+	v = 0;
+	check(ioctl(k, HIDIOCFAKE, &v) == 0 && poll(&p, 1, 0) == 1
+		&& p.revents == POLLIN, "hid: unplugged: POLLIN, not writable");
+	hid_mouse(r, 0, 1, 0, 0);
+	e = write(m, (char *) r, 4) < 0 && errno == EAGAIN;
+	check(e && ioctl(m, HIDIOCSTATE, &v) == 0 && (v & 0xFF) == 0
+		&& poll(&p, 1, 0) == 0, "hid: unplugged: EAGAIN, state 0, "
+		"POLLIN cleared by HIDIOCSTATE");
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		(void) poll((struct pollfd *) NULL, 0, 300);
+		v = HID_ATTACHED | HID_CONFIGURED;
+		_exit(ioctl(k, HIDIOCFAKE, &v) == 0 ? 0 : 1);
+	}
+	p.events = POLLOUT;
+	t0 = times(&tm);
+	n = poll(&p, 1, 3000);
+	t1 = times(&tm);
+	check(n == 1 && p.revents == POLLOUT && t1 - t0 >= 12 && t1 - t0 < 60,
+		"hid: poll(POLLOUT) wakes when the host configures us");
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "hid: the host child done");
+
+	/* the LED byte: a read waits for a change */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		(void) poll((struct pollfd *) NULL, 0, 300);
+		v = HID_ATTACHED | HID_CONFIGURED | HID_LED_CAPS << 16;
+		_exit(ioctl(k, HIDIOCFAKE, &v) == 0 ? 0 : 1);
+	}
+	r[0] = 0xFF;
+	t0 = times(&tm);
+	n = read(k, (char *) r, 1);
+	t1 = times(&tm);
+	check(n == 1 && r[0] == HID_LED_CAPS && t1 - t0 >= 12,
+		"hid: read on hidkbd waits for the LEDs, gets Caps Lock");
+	(void) waitpid(pid, &st, 0);
+	n = open("/dev/hidkbd", O_RDONLY | O_NONBLOCK);
+	e = n >= 0 && read(n, (char *) r, 1) < 0 && errno == EAGAIN;
+	check(e, "hid: no change since: O_NONBLOCK read EAGAIN");
+	if (n >= 0) close(n);
+	(void) ioctl(k, HIDIOCSTATE, &v);
+	v = HID_ATTACHED | HID_CONFIGURED;		/* LEDs off again */
+	(void) ioctl(k, HIDIOCFAKE, &v);
+	(void) read(k, (char *) r, 1);
+
+	/* one persona at a time: a fake one holds the bus */
+	v = HIDP_TEST;
+	check(ioctl(k, HIDIOCSPERSONA, &v) == 0, "hid: HIDIOCSPERSONA test");
+	n = open("/dev/hidmouse", O_WRONLY);
+	e = n < 0 && errno == EBUSY;
+	check(e, "hid: persona held: open() EBUSY");
+	if (n >= 0) close(n);
+	hid_cons(r, HID_CC_MUTE);
+	e = write(c, (char *) r, 2) < 0 && errno == EBUSY;
+	check(e && ioctl(k, HIDIOCSTATE, &v) == 0
+		&& HID_PERSONA(v) == HIDP_TEST, "hid: persona held: write EBUSY, "
+		"HIDIOCSTATE names it");
+	fflush(stdout);
+	if ((pid = fork()) == 0) {		/* not the holder */
+		v = HIDP_NONE;
+		_exit(ioctl(k, HIDIOCSPERSONA, &v) < 0 && errno == EBUSY ? 0 : 1);
+	}
+	check(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "hid: another process cannot let go");
+	close(k);				/* the holder's close lets go */
+	k = open("/dev/hidkbd", O_RDWR);
+	hid_kbd(r, 0, 0);
+	check(k >= 0 && write(k, (char *) r, 8) == 8,
+		"hid: the holder closed: open and write again");
+	close(k);
+	close(m);
+	close(c);
+}
+#endif
+
+#ifdef BOARD_QEMU
+/* Issue #302 (spec R8.2): Sub-GHz transmit with QEMU's backend, which
+ * prints each frame or packet as console lines ("sg> tx ..."); SGIOCLINE
+ * gives the hash of that text, SGIOCFAKE makes the next write a received
+ * frame or packet (the hid< / HIDIOCFAKE pattern).  The region is set
+ * once; every transmit is checked against its bands and duty cycle. */
+/* The test's strings in one const struct (flash), as the pkg test's
+ * (PK_STRINGS below): each literal would cost a GOT word in every copy
+ * of m2test. */
+static const struct {
+	char s0[sizeof "/dev/subghz"];
+	char s1[sizeof "%lu"];
+	char s2[sizeof "/dev/subghzraw"];
+	char s3[sizeof "/dev/subghzpkt"];
+	char s4[sizeof "subghz: open the 3 files (pkt: minor 20)"];
+	char s5[sizeof "subghz: untuned EIO; tuned, no region: EPERM"];
+	char s6[sizeof "subghz: region: non-root EPERM, XX JP EINVAL, PL set once "
+		"(US: EPERM)"];
+	char s7[sizeof "tx 433920000 3 350 -700 350"];
+	char s8[sizeof "subghz: a frame goes out, its console line (sg> tx)"];
+	char s9[sizeof "yo"];
+	char s10[sizeof "subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)"];
+	char s11[sizeof "/bin/m2test"];
+	char s12[sizeof "m2test"];
+	char s13[sizeof "sg-read"];
+	char s14[sizeof "subghz: SGIOCFAKE: the reader gets the frame"];
+	char s15[sizeof "pkt 433920000 79 6f"];
+	char s16[sizeof "subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit"];
+} sg = {
+	"/dev/subghz",
+	"%lu",
+	"/dev/subghzraw",
+	"/dev/subghzpkt",
+	"subghz: open the 3 files (pkt: minor 20)",
+	"subghz: untuned EIO; tuned, no region: EPERM",
+	"subghz: region: non-root EPERM, XX JP EINVAL, PL set once "
+		"(US: EPERM)",
+	"tx 433920000 3 350 -700 350",
+	"subghz: a frame goes out, its console line (sg> tx)",
+	"yo",
+	"subghz: EINVAL (0 us, > 1 s, part words); EPERM at 315 MHz; "
+		"EAGAIN for 4 s at 868.8 MHz (0.1 %)",
+	"/bin/m2test",
+	"m2test",
+	"sg-read",
+	"subghz: SGIOCFAKE: the reader gets the frame",
+	"pkt 433920000 79 6f",
+	"subghz: a packet out (sg> pkt), none heard (EAGAIN), one "
+		"heard (SGIOCFAKE); air time, 10 % limit",
+};
+
+static int sg_tune(unsigned long hz)
+{
+	char t[12];
+	int fd = open(sg.s0, O_WRONLY), n, ok;
+
+	if (fd < 0) return 0;
+	n = sprintf(t, sg.s1, hz);
+	ok = write(fd, t, n) == n;
+	close(fd);
+	return ok;
+}
+
+static int sg_line(int fd, const char *want)
+{
+	long h = 0;
+
+	return ioctl(fd, SGIOCLINE, &h) == 0
+			&& ((unsigned long) h & 0xFFFFFFFFUL) == fnv(want);
+}
+
+static void subghz_tests(void)
+{
+	unsigned long f[4];
+	struct sg_air air;
+	struct stat sb;
+	int s, r, k, v, e, st, n;
+	pid_t pid;
+	char b[8];
+
+	s = open(sg.s0, O_RDWR);
+	r = open(sg.s2, O_RDWR);
+	k = open(sg.s3, O_RDWR);
+	check(s >= 0 && r >= 0 && k >= 0 && stat(sg.s3, &sb) == 0
+		&& (sb.st_rdev & 0xFF) == 20, sg.s4);
+	if (s < 0 || r < 0 || k < 0) return;
+	f[0] = 350; f[1] = 700; f[2] = 350;
+	e = write(r, (char *) f, 12) < 0 && errno == EIO && sg_tune(433920000UL);
+	v = -1;
+	e = e && ioctl(s, SGIOCGREGION, &v) == 0 && v == 0
+		&& write(r, (char *) f, 12) < 0 && errno == EPERM;
+	check(e, sg.s5);
+	/* #326: a member of group subghz that is not root may not set the
+	 * region while none is set (it asks for US: had that worked, EU
+	 * below would fail) */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		setgid(10);
+		setuid(9999);
+		v = SG_REGION('U', 'S');
+		_exit(ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM ? 0 : 1);
+	}
+	e = pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
+	v = SG_REGION('X', 'X');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	v = SG_REGION('J', 'P');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EINVAL;
+	v = SG_REGION('P', 'L');
+	e = e && ioctl(s, SGIOCREGION, &v) == 0;
+	v = SG_REGION('U', 'S');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
+	v = SG_REGION('E', 'U');
+	e = e && ioctl(s, SGIOCREGION, &v) < 0 && errno == EPERM;
+	v = 0;
+	check(e && ioctl(s, SGIOCGREGION, &v) == 0 && v == SG_REGION('P', 'L'),
+		sg.s6);
+	check(write(r, (char *) f, 12) == 12
+		&& sg_line(r, sg.s7),
+		sg.s8);
+	f[1] = 0;
+	e = write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 2000000;
+	e = e && write(r, (char *) f, 12) < 0 && errno == EINVAL;
+	f[1] = 700;
+	e = e && write(r, (char *) f, 10) < 0 && errno == EINVAL;
+	/* 315 MHz is not PL's; 868.8 MHz: 0.1 % of an hour, 3.6 s */
+	e = e && sg_tune(315000000UL) && write(r, (char *) f, 12) < 0
+		&& errno == EPERM && write(k, sg.s9, 2) < 0 && errno == EPERM;
+	f[0] = f[1] = f[2] = f[3] = 1000000;
+	e = e && sg_tune(868800000UL) && ioctl(r, SGIOCAIR, &air) == 0
+		&& air.limit_ms == 3600;
+	check(e && write(r, (char *) f, 16) < 0 && errno == EAGAIN,
+		sg.s10);
+
+	/* a received frame for a waiting reader: another program (a reader
+	 * is pinned while it waits, R4b.5, so a forked copy sharing our
+	 * memory could not run beside it) */
+	(void) sg_tune(433920000UL);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(sg.s11, sg.s12, sg.s13, (char *) NULL);
+		_exit(99);
+	}
+	f[0] = 500; f[1] = 1000; f[2] = 500; f[3] = 2000;
+	for (n = 0, e = -1; n < 25 && e < 0; n++) {	/* until it reads */
+		(void) poll((struct pollfd *) NULL, 0, 200);
+		v = SG_FAKE_RAW;
+		if (ioctl(r, SGIOCFAKE, &v) < 0) break;
+		e = write(r, (char *) f, 16);
+		if (e < 0 && errno != EAGAIN) break;
+	}
+	check(e == 16 && pid > 0 && waitpid(pid, &st, 0) == pid
+		&& WIFEXITED(st) && WEXITSTATUS(st) == 0,
+		sg.s14);
+
+	/* packets */
+	v = SG_FAKE_PKT;
+	e = ioctl(r, SGIOCFAKE, &v) < 0 && errno == EINVAL
+		&& write(k, sg.s9, 2) == 2 && sg_line(k, sg.s15)
+		&& read(k, b, sizeof(b)) < 0 && errno == EAGAIN;
+	check(e && ioctl(k, SGIOCFAKE, &v) == 0 && write(k, sg.s9, 2) == 2
+		&& read(k, b, sizeof(b)) == 2 && b[0] == 'y' && b[1] == 'o'
+		&& ioctl(r, SGIOCAIR, &air) == 0 && air.limit_ms == 360000
+		&& air.used_ms > 0 && air.used_ms < 100,
+		sg.s16);
+	(void) sg_tune(0UL);
+	close(s);
+	close(r);
+	close(k);
+}
+#endif
+
+#ifdef BOARD_QEMU
 /* Spec N.6 (the card pulled out), kernel part: while the card is out
  * every transfer fails and the console says so; another card is refused;
  * the same card back carries on.  QEMU's hook DIOCFAKECARD; raw reads at
@@ -594,6 +1308,91 @@ static void card_tests(void)
 	check(r1 < 0, "card out: a read fails");
 	check(r2 < 0, "card: another card is refused");
 	check(r3 == (int) sizeof b, "card: the same card back carries on");
+}
+
+/* The root's s_flags on the disk (spec N.1), read through /dev/hd1 (the
+ * same cache as the FS: what is on the card).  -1: not that device. */
+static int root_sflags(void)
+{
+	static unsigned char b[1024];
+	struct stat sr, sd;
+	int fd, n;
+
+	if (stat("/", &sr) != 0 || stat("/dev/hd1", &sd) != 0
+					|| sd.st_rdev != sr.st_dev)
+		return(-1);
+	if ((fd = open("/dev/hd1", O_RDONLY)) < 0) return(-1);
+	lseek(fd, 1024L, SEEK_SET);
+	n = read(fd, b, sizeof b);
+	close(fd);
+	return(n == (int) sizeof b ? (b[18] | b[19] << 8) : -1);
+}
+
+static int fill_file(char *path, int c)
+{
+	static char b[1024];
+	int fd, n;
+
+	memset(b, c, sizeof b);
+	if ((fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
+		return(-1);
+	n = write(fd, b, sizeof b);
+	close(fd);
+	return(n == (int) sizeof b ? 0 : -1);
+}
+
+/* T17a: spec N.1, N.2 (CLEAN off before the first write, on again after a
+ * quiet sync period; a read writes nothing) and the FS side of N.6 (a
+ * dirty block written while the card is out stays in the cache and goes
+ * to the card when it is back, not "Unrecoverable write error"). */
+static void sflag_tests(void)
+{
+	static char b[1024];
+	int fd, f0, f1, f2, st, i, n, same;
+
+	if (fill_file("/tmp/n6", 'A') != 0) {
+		check(0, "fs flags: write /tmp/n6");
+		return;
+	}
+	f0 = root_sflags();
+	sync();
+	sync();
+	f1 = root_sflags();
+	if ((fd = open("/etc/motd", O_RDONLY)) >= 0) {
+		while (read(fd, b, sizeof b) > 0) {}
+		close(fd);
+	}
+	sync();
+	sync();
+	f2 = root_sflags();
+	check(f0 >= 0 && !(f0 & 1), "fs flags: CLEAN off before the first write");
+	check(f1 >= 0 && (f1 & 1), "fs flags: CLEAN again after a quiet sync");
+	check(f2 >= 0 && (f2 & 1), "fs flags: a read writes nothing (no atime)");
+
+	/* N.6: the card out while a dirty block is written. */
+	n = fill_file("/tmp/n6", 'B');
+	if (n != 0 || (fd = open("/dev/hd0", O_RDONLY)) < 0) {
+		check(0, "card out: write /tmp/n6 again");
+		return;
+	}
+	fflush(stdout);
+	st = 1;
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	sync();				/* fails: the blocks stay dirty */
+	st = 0;
+	(void) ioctl(fd, DIOCFAKECARD, &st);
+	close(fd);
+	sync();				/* the card is back: written now */
+	same = 0;
+	if ((fd = open("/tmp/n6", O_RDONLY)) >= 0) {
+		n = read(fd, b, sizeof b);
+		for (i = 0; i < n && b[i] == 'B'; i++) {}
+		same = (n == (int) sizeof b && i == n);
+		close(fd);
+	}
+	check(same, "card out: a dirty block is kept until the card is back");
+	unlink("/tmp/n6");
+	sync();
 }
 
 /* R12.40: DIOCDISCARD on the whole disk's last sector, which no partition
@@ -639,6 +1438,24 @@ static void discard_tests(void)
 	check(r1 == 0, "discard: DIOCDISCARD of the last sector");
 	check(zero, "discard: the range reads back as zeros (QEMU)");
 	check(r0 < 0 && i < 0, "discard: empty and too-long ranges refused");
+}
+
+
+/* Spec 12h (R12.38, AC12.22): M2 boots with swap and blocks off, so every
+ * block call fails with ENOSYS and nothing reaches the card. */
+static void blk_tests(void)
+{
+	static char b[BLK_SIZE];
+	struct blkinfo bi;
+	int bi_ok, get_ok, open_ok;
+
+	errno = 0;
+	bi_ok = blk_info(&bi) < 0 && errno == ENOSYS;
+	errno = 0;
+	get_ok = blk_get(0, b) < 0 && errno == ENOSYS;
+	errno = 0;
+	open_ok = blk_open(4096, 0) < 0 && errno == ENOSYS;
+	check(bi_ok && get_ok && open_ok, "blk: blocks off: blk_info, blk_get, blk_open ENOSYS");
 }
 
 
@@ -754,6 +1571,35 @@ static void preempt_body(void)
 	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0,
 		"fg: an exited foreground app holds nothing");
+	/* Security review 2026-11-19, H5 and H1: root may do everything,
+	 * others not.  A user of group gui names itself or nobody as the
+	 * foreground, never somebody else's process (here: us, root's);
+	 * and may not move /dev/rom's window (DIOCSETP) over the RAM. */
+	fflush(stdout);
+	if ((c = fork()) == 0) {
+		struct partition pe;
+		int e1, e2, e3, rom;
+
+		setgid(10);
+		setuid(9999);
+		n = getppid();
+		e1 = ioctl(l, FGIOCSET, &n) < 0 && errno == EPERM;
+		n = getpid();
+		e2 = ioctl(l, FGIOCSET, &n) == 0;
+		n = 0;
+		e2 = e2 && ioctl(l, FGIOCSET, &n) == 0;
+		memset(&pe, 0, sizeof pe);
+		pe.base = 0x20000000UL;
+		pe.size = 0x00030000UL;
+		rom = open("/dev/rom", O_RDONLY);
+		e3 = rom >= 0 && ioctl(rom, DIOCSETP, &pe) < 0
+			&& errno == EPERM;
+		_exit((e1 ? 0 : 1) | (e2 ? 0 : 2) | (e3 ? 0 : 4));
+	}
+	check(c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0,
+		"fg, rom: a user names only its own processes; "
+		"DIOCSETP is root's (H5, H1)");
 	close(pr[0]); close(pr[1]);
 	close(b); close(nb); close(l);
 }
@@ -817,6 +1663,192 @@ static void gpio_tests(void)
 #endif
 
 #ifdef BOARD_QEMU
+/* R6.7 part 3: IBIOCEMU's rules (QEMU has no reader; the slots are the
+ * host test's, tests/host/ibemutest.c): the emulating process owns the
+ * contact, others get EBUSY, a master read or IBIOCRUN meanwhile EBUSY,
+ * and its close ends it. */
+static void ibemu_tests(void)
+{
+	static const unsigned char rom[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	struct ib_emu q;
+	struct ib_run r;
+	unsigned char buf[8];
+	pid_t p;
+	int fd, st, e1, e2;
+
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		check(0, "ibemu: open");
+		return;
+	}
+	memset(&q, 0, sizeof q);
+	memcpy(q.rom, rom, 8);
+	q.on = 1;
+	q.served = 99;
+	check(ioctl(fd, IBIOCEMU, &q) == 0 && q.served == 0,
+		"ibemu: IBIOCEMU on, nobody served yet");
+	e1 = read(fd, buf, 8) < 0 && errno == EBUSY;
+	memset(&r, 0, sizeof r);
+	r.op[0] = IB_RESET; r.nop = 1;
+	e2 = ioctl(fd, IBIOCRUN, &r) < 0 && errno == EBUSY;
+	check(e1 && e2, "ibemu: read and IBIOCRUN busy while emulating");
+	if ((p = fork()) == 0) {		/* another process */
+		int f = open("/dev/ibutton", O_RDWR);
+
+		q.on = 1;
+		_exit(f >= 0 && ioctl(f, IBIOCEMU, &q) < 0 && errno == EBUSY
+			? 0 : 1);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "ibemu: another process gets EBUSY");
+	close(fd);				/* ends the emulation */
+	fd = open("/dev/ibutton", O_RDWR);
+	check(fd >= 0 && read(fd, buf, 8) < 0 && errno == ENODEV,
+		"ibemu: after close the contact reads again (no key: ENODEV)");
+	if (fd >= 0) close(fd);
+}
+
+/* R6.7 part 3b: Cyfral and Metakom.  QEMU's capture sees the list being
+ * played (a loopback), so IBIOCPLAY -> IBIOCCAPT -> libibkey must give the
+ * key back; then the rules (EINVAL, EBUSY, the close), then ikey itself:
+ * `ikey emulate Metakom` in the background, `ikey read` finds it.  ikey
+ * runs only twice here: a third run would put it in the flash text cache
+ * (T2), pages the flash budget does not have. */
+static unsigned short ibm_dur[IBK_MAXFRAME], ibm_cap[256];
+
+static int ibm_capt(int fd, unsigned n)
+{
+	struct ib_capt c;
+
+	c.dur = ibm_cap;
+	c.n = n;
+	c.ms = 50;
+	c.got = 0;
+	if (ioctl(fd, IBIOCCAPT, &c) < 0) return -1;
+	return c.got == n ? c.level : -2;
+}
+
+static int ibm_file_has(const char *path, const char *s)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	buf[n] = 0;
+	return strstr(buf, s) != NULL;
+}
+
+static pid_t ibm_run(const char *out, const char *a1, const char *a2,
+	const char *a3, const char *a4, const char *a5)
+{
+	pid_t p;
+	int fd;
+
+	if ((p = fork()) == 0) {
+		fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
+		execl("/bin/ikey", "ikey", a1, a2, a3, a4, a5, (char *) NULL);
+		_exit(99);
+	}
+	return p;
+}
+
+static void ibmisc_tests(void)
+{
+	static const unsigned char cy[2] = { 0xA1, 0xB2 };
+	struct ib_play q;
+	struct ib_emu e;
+	unsigned char key[IBK_MAXKEY], buf[8];
+	int fd, n, lv, kt, st, e1, e2;
+	pid_t p, r;
+
+	if ((fd = open("/dev/ibutton", O_RDWR)) < 0) {
+		check(0, "ibmisc: open");
+		return;
+	}
+	errno = 0;
+	check(ibm_capt(fd, 256) == -1 && errno == ENODEV,
+		"ibmisc: IBIOCCAPT, nobody plays -> ENODEV");
+	check(ibm_capt(fd, 8) == -1 && errno == EINVAL,
+		"ibmisc: IBIOCCAPT, 8 durations -> EINVAL");
+	n = ibk_frame(IBK_CYFRAL, cy, ibm_dur, &lv, IBK_MAXFRAME);
+	memset(&q, 0, sizeof q);
+	q.dur = ibm_dur; q.n = (unsigned) n - 1; q.level = lv;
+	check(ioctl(fd, IBIOCPLAY, &q) < 0 && errno == EINVAL,
+		"ibmisc: IBIOCPLAY, an odd count -> EINVAL");
+	q.n = (unsigned) n;
+	ibm_dur[3] = 0;
+	check(ioctl(fd, IBIOCPLAY, &q) < 0 && errno == EINVAL,
+		"ibmisc: IBIOCPLAY, a 0 us level -> EINVAL");
+	(void) ibk_frame(IBK_CYFRAL, cy, ibm_dur, &lv, IBK_MAXFRAME);
+	q.served = 99;
+	check(ioctl(fd, IBIOCPLAY, &q) == 0 && q.served == 0,
+		"ibmisc: IBIOCPLAY Cyfral A1B2, nobody served yet");
+	lv = ibm_capt(fd, 256);
+	kt = lv >= 0 ? ibk_decode(ibm_cap, 256, lv, key) : 0;
+	check(kt == IBK_CYFRAL && key[0] == 0xA1 && key[1] == 0xB2,
+		"ibmisc: IBIOCCAPT (loopback) decodes as Cyfral A1B2");
+	check(ioctl(fd, IBIOCPLAY, &q) == 0 && q.served == 1,
+		"ibmisc: the capture counts as served");
+	e1 = read(fd, buf, 8) < 0 && errno == EBUSY;
+	memset(&e, 0, sizeof e);
+	e.on = 1;
+	e2 = ioctl(fd, IBIOCEMU, &e) < 0 && errno == EBUSY;
+	check(e1 && e2, "ibmisc: read and IBIOCEMU busy while playing");
+	if ((p = fork()) == 0) {
+		int f = open("/dev/ibutton", O_RDWR);
+
+		_exit(f >= 0 && ioctl(f, IBIOCPLAY, &q) < 0 && errno == EBUSY
+			? 0 : 1);
+	}
+	check(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "ibmisc: another player gets EBUSY");
+	close(fd);				/* ends the playing */
+	fd = open("/dev/ibutton", O_RDWR);
+	errno = 0;
+	check(fd >= 0 && ibm_capt(fd, 256) == -1 && errno == ENODEV,
+		"ibmisc: after close nothing plays (ENODEV)");
+	if (fd >= 0) close(fd);
+
+	/* Security review 2026-11-19, H2: exec gives the old image's memory
+	 * away, so what the process played from it stops, although the
+	 * descriptor stays open in the new program. */
+	fflush(stdout);
+	if ((p = fork()) == 0) {
+		int f = open("/dev/ibutton", O_RDWR);
+
+		if (f < 0 || ioctl(f, IBIOCPLAY, &q) < 0) _exit(1);
+		execl("/bin/sleep", "sleep", "2", (char *) NULL);
+		_exit(2);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 700);
+	fd = open("/dev/ibutton", O_RDWR);
+	errno = 0;
+	e1 = fd >= 0 && ibm_capt(fd, 256) == -1 && errno == ENODEV;
+	if (fd >= 0) close(fd);
+	check(e1 && p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0,
+		"ibmisc: exec stops what the old image played (H2)");
+
+	/* ikey end to end: emulate Metakom, read it */
+	p = ibm_run("/tmp/ike.out", "emulate", "-t", "3", "Metakom",
+		"0305090A");
+	(void) poll((struct pollfd *) NULL, 0, 700);
+	r = ibm_run("/tmp/ikr.out", "read", "-n", "4", (char *) NULL, NULL);
+	e1 = r > 0 && waitpid(r, &st, 0) == r && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
+	e2 = p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0;
+	check(e1 && ibm_file_has("/tmp/ikr.out", "Metakom 0305090A"),
+		"ibmisc: ikey read finds `ikey emulate Metakom 0305090A`");
+	check(e2 && ibm_file_has("/tmp/ike.out", "Read by a reader"),
+		"ibmisc: ikey emulate says a reader read it");
+	(void) unlink("/tmp/ike.out");
+	(void) unlink("/tmp/ikr.out");
+}
+
 /* R6.7 part 2: IBIOCRUN, 1-Wire master steps (QEMU: nobody on the line,
  * it reads high). */
 static void ibutton_tests(void)
@@ -845,8 +1877,1494 @@ static void ibutton_tests(void)
 	check(ioctl(fd, IBIOCRUN, &q) < 0 && errno == EINVAL,
 		"ibutton: too many steps -> EINVAL");
 	close(fd);
+	ibemu_tests();
+	ibmisc_tests();
 }
 #endif
+
+/* T21a / R5.6a: the launcher with icons, hints and its settings page,
+ * driven by fake keys (AC5.4-AC5.7).  Its own apps and conf files in /tmp
+ * (-a, -c).  Frames are read from /dev/lcd; FRAME lines in the log are
+ * the frames for tools/frame2png.py. */
+static unsigned char lfb[1024];
+
+static int lpix(int x, int y)
+{
+	return lfb[(y >> 3) * 128 + x] >> (y & 7) & 1;
+}
+
+static void lgrab(int l, const char *name)
+{
+	int i;
+
+	(void) poll((struct pollfd *) NULL, 0, 150);
+	lseek(l, 0L, SEEK_SET);
+	if (read(l, (char *) lfb, sizeof lfb) != sizeof lfb) memset(lfb, 0, 1024);
+	printf("FRAME %s ", name);
+	for (i = 0; i < 1024; i++) printf("%02x", lfb[i]);
+	printf("\n");
+}
+
+/* the 6 rows of the 8x6 cell at x, y as bytes (MSB left) */
+static void lcell(int x, int y, unsigned char *rows)
+{
+	int gx, gy;
+
+	for (gy = 0; gy < 6; gy++) {
+		rows[gy] = 0;
+		for (gx = 0; gx < 8; gx++)
+			rows[gy] |= (unsigned char) (lpix(x + gx, y + gy) << (7 - gx));
+	}
+}
+
+/* T23b / spec K.8: a window app (gmdemo, libgm) in the launcher, driven
+ * by fake keys: the desktop draws its windows, changes values, opens the
+ * keyboard, keeps the parent, asks for a page; the app gets ok, submit,
+ * back, page and close (its -l log).  ACK8.4: a deaf app (-n) gets the
+ * busy mark after 150 ms, Back closes it at once, SIGTERM 2 s later.
+ * ACK8.5: key -> frame and OK -> next window in QEMU (printed). */
+static int has_line(const char *file, const char *want)
+{
+	FILE *f;
+	char line[80];
+	int ok = 0;
+
+	if ((f = fopen(file, "r")) == NULL) return 0;
+	while (fgets(line, sizeof line, f) != NULL)
+		if (strncmp(line, want, strlen(want)) == 0) ok = 1;
+	fclose(f);
+	return ok;
+}
+
+/* A key down, ms until the screen changes (-1: not within 1 s), up.
+ * Not inlined: its 2 KB of stack only while it runs (main's frame would
+ * otherwise carry them and leave malloc 10000 no room). */
+static long __attribute__((noinline)) key_frame(int b, int l, int key)
+{
+	unsigned char m = key, *before = lfb, now[1024];
+	struct tms tm;
+	clock_t t0, t1;
+	long ms = -1;
+
+	lseek(l, 0L, SEEK_SET);
+	if (read(l, (char *) before, 1024) != 1024) return -1;
+	t0 = times(&tm);
+	(void) write(b, (char *) &m, 1);
+	do {
+		(void) poll((struct pollfd *) NULL, 0, 2);
+		lseek(l, 0L, SEEK_SET);
+		if (read(l, (char *) now, 1024) != 1024) break;
+		t1 = times(&tm);
+		if (memcmp(before, now, 1024) != 0) {
+			ms = (long) (t1 - t0) * 1000 / CLK_TCK;
+			break;
+		}
+	} while ((long) (t1 - t0) < CLK_TCK);
+	(void) poll((struct pollfd *) NULL, 0, 20);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 60);
+	return ms;
+}
+
+/* A quick key for the window test (the whole M2 run has 60 s): down,
+ * up, and time for the desktop to draw. */
+static void wtap(int b, int key)
+{
+	unsigned char m = key;
+
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 20);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 60);
+}
+
+static int hourglass(void)
+{
+	return !lpix(121, 1) && !lpix(125, 1) && !lpix(122, 2) && lpix(121, 2)
+		&& !lpix(123, 3) && lpix(121, 3) && !lpix(121, 5);
+}
+
+static void __attribute__((noinline)) window_test(int b, int l)
+{
+	FILE *f;
+	int i, ok;
+	long ms, worst = 0;
+	unsigned long sum;
+
+	/* The launcher of launcher_test (one more launcher run would make
+	 * the run-time cache copy it to flash: an erase over the M2 budget).
+	 * Its list is on "Inor": OK there reloads the files below. */
+	unlink("/tmp/gml");
+	unlink("/tmp/gml2");
+	f = fopen("/tmp/la", "w");
+	fprintf(f, "Demo:root:@app:=/bin/gmdemo -l /tmp/gml -p 2\n"
+		"Deaf:root::=/bin/gmdemo -n -l /tmp/gml2\n");
+	fclose(f);
+	f = fopen("/tmp/lc", "w");
+	fprintf(f, "Icons: on\nHints: on\nBattery: off\nGuiLog: on\n");
+	fclose(f);
+	wtap(b, 0x10);					/* reload */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	wtap(b, 0x01);					/* Up: Demo */
+	fflush(stdout);
+	ms = key_frame(b, l, 0x10);			/* OK: Demo */
+	printf("  K.8 start -> first window: %ld ms\n", ms);
+	lgrab(l, "win-main");
+	check(has_line("/tmp/gml", "start"), "window: the launcher starts the window app");
+	ok = lpix(0, 0) && lpix(0, 8) && !lpix(0, 14) && lpix(0, 56) && lpix(127, 56);
+	check(ok, "window: title bar, the first row selected, hint line (K.2 style)");
+	for (sum = 0, i = 0; i < 1024; i++) sum = sum * 31 + lfb[i];
+	wtap(b, 0x08);					/* Right: Volume 40 -> 45 */
+	lgrab(l, "win-vol");
+	{
+		unsigned long s2 = 0;
+
+		for (i = 0; i < 1024; i++) s2 = s2 * 31 + lfb[i];
+		check(s2 != sum, "window: Right changes a value in the desktop");
+	}
+	worst = key_frame(b, l, 0x02);			/* Down: Name (ACK8.5) */
+	ms = key_frame(b, l, 0x10);			/* OK: the keyboard */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	lgrab(l, "win-kb");
+	ms = key_frame(b, l, 0x10);			/* types 'a' */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	wtap(b, 0x01);					/* Up: the command row */
+	for (i = 0; i < 3; i++) wtap(b, 0x08);		/* Done */
+	wtap(b, 0x10);
+	ms = key_frame(b, l, 0x02);			/* Down: About */
+	if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	printf("  ACK8.5 key -> frame on a window app's list and keyboard: max %ld ms (4 keys)\n",
+		worst);
+	check(worst >= 0 && worst < 500, "ACK8.5: every key redrawn by the desktop (QEMU)");
+	ms = key_frame(b, l, 0x10);			/* OK -> the text window */
+	lgrab(l, "win-about");
+	printf("  ACK8.5 OK -> next window: %ld ms\n", ms);
+	check(ms >= 0, "ACK8.5: OK opens the next window");
+	check(has_line("/tmp/gml", "value vol=45") && has_line("/tmp/gml", "value name=Wake upa")
+		&& has_line("/tmp/gml", "ok about"),
+		"window: submit with the changed values (keyboard text), then ok");
+	ms = key_frame(b, l, 0x20);			/* Back: the kept parent */
+	printf("  K.8 Back -> parent window: %ld ms\n", ms);
+	check(has_line("/tmp/gml", "back about") && ms >= 0,
+		"window: Back shows the parent at once, the app hears back");
+	wtap(b, 0x02);					/* Down: Long list */
+	wtap(b, 0x10);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	wtap(b, 0x02);
+	wtap(b, 0x02);					/* past its 2-row page */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "win-page");
+	check(has_line("/tmp/gml", "ok long") && has_line("/tmp/gml", "page 2"),
+		"window: a long list asks for its next page");
+	wtap(b, 0x20);					/* Back: main */
+	wtap(b, 0x20);					/* Back: closes */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	check(has_line("/tmp/gml", "close"), "window: Back on the first window closes the app");
+
+	/* ACK8.4: an app that never reads its events */
+	wtap(b, 0x02);					/* Deaf */
+	wtap(b, 0x10);
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	wtap(b, 0x02);
+	wtap(b, 0x02);					/* About */
+	wtap(b, 0x10);					/* ok: no answer */
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	lgrab(l, "deaf-busy");
+	check(hourglass(), "ACK8.4: the busy mark after 150 ms");
+	ms = key_frame(b, l, 0x01);			/* the desktop still moves */
+	check(ms >= 0 && ms < 500, "ACK8.4: keys still work while the app is busy");
+	ms = key_frame(b, l, 0x20);			/* Back: closed at once */
+	printf("  ACK8.4 Back on a deaf app -> launcher: %ld ms\n", ms);
+	lgrab(l, "deaf-closed");
+	check(ms >= 0 && ms < 500 && !hourglass(), "ACK8.4: Back closes it at once");
+	check(!has_line("/tmp/gml2", "term"), "ACK8.4: no SIGTERM before 2 s");
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	check(has_line("/tmp/gml2", "term"), "ACK8.4: SIGTERM 2 s after Back");
+	(void) poll((struct pollfd *) NULL, 0, 200);	/* the launcher reaps it */
+}
+
+/* T23a / spec K.6: the desktop in the launcher.  ACK.6: a Left+Up chord
+ * held 1.5 s keeps APPS, a short Left turns the page on its release.
+ * ACK.1: a shell module of three lines (guimod) puts a tile on HOME and
+ * changes it; ACK.2: killed, its tile goes and the desktop keeps working;
+ * ACK.3: four modules writing as fast as they can, key -> frame on the
+ * desktop (QEMU: < 500 ms, as ACK8.5; L1 itself on the device).  The
+ * launcher of launcher_test, on its APPS page. */
+static unsigned long lsum(int y0, int y1)
+{
+	unsigned long sum = 0;
+	int x, y;
+
+	for (y = y0; y <= y1; y++)
+		for (x = 0; x < 128; x++) sum = sum * 31 + (unsigned long) lpix(x, y);
+	return sum;
+}
+
+static unsigned long tsum(void)		/* the page's name on the title */
+{
+	unsigned long sum = 0;
+	int x, y;
+
+	for (y = 1; y <= 5; y++)
+		for (x = 40; x < 88; x++) sum = sum * 31 + (unsigned long) lpix(x, y);
+	return sum;
+}
+
+static int row_text(int i)		/* row i of a page has text */
+{
+	int x, y;
+
+	for (y = 7 + 6 * i; y < 12 + 6 * i; y++)
+		for (x = 6; x < 60; x++)
+			if (lpix(x, y) != lpix(0, y)) return 1;
+	return 0;
+}
+
+static int sectors_written(void);
+static long free_ram(void);
+
+static void __attribute__((noinline)) desktop_test(int b, int l, pid_t lpid)
+{
+	FILE *f;
+	unsigned char m;
+	unsigned long apps, s1;
+	int p[2], i, st, ok;
+	long ms, worst = 0;
+	pid_t mod, w;
+	struct stat sb;
+	int s0;
+
+	ok = stat("/var/run/gui", &sb) == 0 && S_ISFIFO(sb.st_mode)
+		&& (sb.st_mode & 07777) == 0620 && sb.st_uid == 0 && sb.st_gid == 10;
+	check(ok, "desktop: /var/run/gui is a FIFO, root's, 0620, group gui");
+	lgrab(l, "desk-apps");
+	apps = tsum();
+	/* ACK.6 (Up still moves the selection: it is not a page key) */
+	m = 0x05;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 1500);
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	lgrab(l, "ack6-chord");
+	check(tsum() == apps, "ACK.6: Left+Up held 1.5 s: the page stays APPS");
+	m = 0x04;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "ack6-press");
+	ok = tsum() == apps;
+	m = 0;
+	(void) write(b, (char *) &m, 1);
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "ack6-release");
+	check(ok && tsum() != apps,
+		"ACK.6: a short Left turns to SETTINGS on its release, not its press");
+	wtap(b, 0x20);					/* Back: APPS */
+
+	/* ACK.1, ACK.2 */
+	f = fopen("/tmp/ack1.sh", "w");
+	fprintf(f, "guimod tile ack Kaixo mundua\nread x\n"
+		"guimod tile ack Agur; read x\n");
+	fclose(f);
+	if (pipe(p) < 0) { check(0, "desktop: pipe"); return; }
+	fflush(stdout);
+	if ((mod = fork()) == 0) {
+		dup2(p[0], 0);
+		close(p[0]);
+		close(p[1]);
+		execl("/bin/sh", "sh", "/tmp/ack1.sh", (char *) NULL);
+		_exit(99);
+	}
+	close(p[0]);
+	wtap(b, 0x08);					/* Right: HOME */
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "ack1-tile");
+	s1 = lsum(7, 12);
+	ok = lpix(0, 7) && row_text(0) && !row_text(1);
+	(void) write(p[1], "\n", 1);			/* the module goes on */
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "ack1-changed");
+	check(ok && lpix(0, 7) && lsum(7, 12) != s1 && !row_text(1),
+		"ACK.1: a 3-line shell module puts a tile on HOME and changes it");
+	kill(mod, SIGKILL);
+	(void) waitpid(mod, &st, 0);
+	close(p[1]);
+	ms = key_frame(b, l, 0x02);			/* any key: it is seen */
+	lgrab(l, "ack2-gone");
+	check(ms >= 0 && !lpix(0, 7) && kill(lpid, 0) == 0,
+		"ACK.2: the killed module's tile goes, the desktop keeps working");
+
+	/* ACK.3: four modules as fast as they can, keys on APPS */
+	wtap(b, 0x04);					/* Left: APPS */
+	(void) sectors_written();	/* ACK.5: ACK.1's file, the clean mark */
+	s0 = sectors_written();
+	printf("  ACK.3 free RAM before the flood modules: %ld bytes\n", free_ram());
+	fflush(stdout);
+	/* #324: one vfork (no copy of m2test's data), exec'd at once into
+	 * guiflood, which forks the other three: the flooders are
+	 * guiflood's small image, not copies of m2test, so m2test's size
+	 * does not decide whether they fork.  Their own process group
+	 * (setsid): killed and reaped by it. */
+	if ((w = vfork()) == 0) {
+		(void) setsid();
+		execl("/bin/guiflood", "guiflood", (char *) NULL);
+		_exit(99);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 200);
+	for (i = 0; i < 4; i++) {
+		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);
+		if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	}
+	printf("  ACK.3 key -> frame on APPS, 4 modules flooding: max %ld ms (4 keys)\n",
+		worst);
+	check(worst >= 0 && worst < 500, "ACK.3: keys redrawn while 4 modules flood (QEMU)");
+	wtap(b, 0x08);					/* Right: HOME */
+	ms = key_frame(b, l, 0x02);
+	printf("  ACK.3 key -> frame on HOME, 4 modules flooding: %ld ms\n", ms);
+	lgrab(l, "ack3-home");
+	check(ms >= 0 && ms < 500 && row_text(0) && row_text(3) && !row_text(4),
+		"ACK.3: HOME has the 4 modules' tiles, keys still move");
+	if (w > 0) {	/* not kill(-1): the fork may have failed */
+		(void) kill(-w, SIGKILL);
+		(void) kill(w, SIGKILL);	/* before its setsid() */
+		/* the three forks of guiflood are now m2test's (it is
+		 * init here): the group's, all four */
+		while (waitpid(-w, &st, 0) > 0 || errno == EINTR) ;
+	}
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	s0 = sectors_written() - s0;
+	printf("  ACK.5 4 modules flooding /var/run/gui, then sync: %d sectors"
+		" written\n", s0);
+	check(s0 == 0, "ACK.5: FIFO records never reach the card (K.6)");
+	wtap(b, 0x02);
+	lgrab(l, "ack3-gone");
+	check(!row_text(0), "ACK.2: four killed modules: their tiles go");
+
+	/* a notification: the unread count on the status line, the text on
+	 * the message line */
+	wtap(b, 0x04);					/* APPS */
+	(void) poll((struct pollfd *) NULL, 0, 100);
+	lgrab(l, "desk-before-note");
+	s1 = lsum(0, 6);
+	apps = lsum(57, 63);
+	{	/* as guimod writes it (guimod runs only twice here: a third
+		 * run would make the run-time cache copy it to flash) */
+		static const char rec[] = "notify\tmail\t0\t1\tKaixo\n";
+		int fd = open("/var/run/gui", O_WRONLY | O_NONBLOCK);
+
+		(void) write(fd, rec, sizeof rec - 1);
+		close(fd);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, "desk-note");
+	check(lsum(0, 6) != s1 && lsum(57, 63) != apps,
+		"desktop: a notification: the count on the status line, the text noted");
+}
+
+/* #331: four processes spinning on EAGAIN (O_NONBLOCK writes to full
+ * pipes, /bin/spinfifo: a shadow group of four) must not freeze the
+ * launcher: key -> frame on APPS as ACK.3 measures it.  They are started
+ * with a plain fork() of m2test (process 1, large data): the fork must
+ * return in the parent (or fail cleanly), not hang it. */
+static void __attribute__((noinline)) spin_test(int b, int l)
+{
+	long ms, worst = 0;
+	pid_t w;
+	int i, st;
+
+	wtap(b, 0x04);					/* Left: APPS */
+	w = fork();
+	if (w == 0) {
+		(void) setsid();
+		execl("/bin/spinfifo", "spinfifo", "4", (char *) NULL);
+		_exit(99);
+	}
+	printf("  #331 fork() of m2test: %s (errno %d)\n",
+		w > 0 ? "returned" : "failed", w > 0 ? 0 : errno);
+	check(w > 0 || errno == ENOMEM || errno == EAGAIN,
+		"#331: fork() of m2test returns or fails cleanly");
+	if (w < 0 && (w = vfork()) == 0) {
+		(void) setsid();
+		execl("/bin/spinfifo", "spinfifo", "4", (char *) NULL);
+		_exit(99);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	for (i = 0; i < 4; i++) {
+		ms = key_frame(b, l, i & 1 ? 0x01 : 0x02);
+		if (ms < 0 || ms > worst) worst = ms < 0 ? 99999 : ms;
+	}
+	printf("  #331 key -> frame on APPS, 4 EAGAIN spinners: max %ld ms"
+		" (4 keys)\n", worst);
+	check(w > 0 && worst < 500,
+		"#331: keys redrawn while 4 processes spin on EAGAIN (QEMU)");
+	if (w > 0) {
+		(void) kill(-w, SIGKILL);
+		(void) kill(w, SIGKILL);	/* before its setsid() */
+		while (waitpid(-w, &st, 0) > 0 || errno == EINTR) ;
+	}
+}
+
+/* T24b, T24d / spec K.7, K.8: settings time from the launcher's SETTINGS
+ * page, the window app setgroup (the launcher draws it), run once here
+ * and once for Display (more runs would make the run-time cache copy
+ * setgroup to flash: an erase over the M2 budget).  ACK7.2: opening and
+ * leaving the group writes 0 sectors (QEMU's WINCHESTER counter,
+ * DIOCFAKECARD 3): a minute moved goes to the RTC only, the zone list
+ * opened and left is no change.  ACK7.4: free RAM while the group is open
+ * against the launcher alone, without its text (in RAM here, in flash on
+ * the device: base flash or the run-time cache).  The clock is put back
+ * afterwards. */
+static int sectors_written(void)
+{
+	int fd, n;
+
+	sync();
+	if ((fd = open("/dev/hd0", O_RDONLY)) < 0) return -1;
+	n = 3;
+	if (ioctl(fd, DIOCFAKECARD, &n) != 0) n = -1;
+	close(fd);
+	return n;
+}
+
+static long free_ram(void)
+{
+	message m;
+
+	m.m1_p1 = NULL;
+	m.m1_i1 = 0;
+	m.m1_i2 = 0;
+	return (long) _syscall(MM, MEMINFO, &m);
+}
+
+/* #271: pkg install must not exit 0 unless its postinst ran (and ended
+ * with 0); else it exits 1 and says why.  Under load the exec of the
+ * postinst's sh failed with EAGAIN (no memory hole) in pkg's vfork child,
+ * silently: pkg said "installed".  The package is made here (ustar, as
+ * tools/mkpkg.py makes them); its postinst appends a line to PP_RAN, or
+ * exits 3 while PP_FAIL exists.  Then installs while a filler holds all
+ * the memory there is for a while: each must either have run its postinst
+ * or exit 1 with a "pkg: " reason; pkg tries an exec that found no hole
+ * again (1 s apart), so they should all get through. */
+#define PP_TAR	"/tmp/pkgpost.tar"
+#define PP_RAN	"/tmp/pkgpost.ran"
+#define PP_FAIL	"/tmp/pkgpost.fail"
+#define PP_ERR	"/tmp/pkgpost.err"
+#define PP_LOAD	2		/* installs under load (M2 has 90 s) */
+
+/* The strings of the pkg test, in one const struct (flash): with -fpic
+ * every string literal has its own GOT word, in each process's data; the
+ * pkg test's 44 put every copy of m2test one 256 B click over, and one of
+ * ACK.3's 4 flooders could not fork. */
+#define PK_STRINGS(S) \
+	S(o7, "%07o") \
+	S(o11, "%011o") \
+	S(o6, "%06o") \
+	S(ustar, "ustar") \
+	S(v00, "00") \
+	S(bin, "bin") \
+	S(oper, "operator") \
+	S(err, PP_ERR) \
+	S(tar, PP_TAR) \
+	S(ran, PP_RAN) \
+	S(fail, PP_FAIL) \
+	S(pkgbin, "/bin/pkg") \
+	S(said, "  pkg said: %s%s") \
+	S(nl, "\n") \
+	S(scratch, "/usr/var/pkg/tmp") \
+	S(sleepbin, "/bin/sleep") \
+	S(s60, "60") \
+	S(f, "f") \
+	S(control, "Package: pkgpost\nVersion: 1.0\n" "Abi: any\nDescription: M2 test of postinst (#271)\n") \
+	S(postinst, "echo ran >> " PP_RAN "\n" "test -f " PP_FAIL " && exit 3\nexit 0\n") \
+	S(var, "/usr/var") \
+	S(varpkg, "/usr/var/pkg") \
+	S(info, "/usr/var/pkg/info") \
+	S(cmake, "pkg #271: make the test package") \
+	S(mctl, "CONTROL/control") \
+	S(mpost, "CONTROL/postinst") \
+	S(pf, "/tmp/pkgpost.f") \
+	S(install, "install") \
+	S(installed, "installed") \
+	S(cinst, "pkg #271: install runs the postinst, exit 0") \
+	S(sectors, "  pkg install: %d card sectors written\n") \
+	S(failed, "pkg: pkgpost: postinst failed: exit 3") \
+	S(notset, "is not set up") \
+	S(cfail, "pkg #271: a postinst that fails: exit 1, says why") \
+	S(pkgc, "pkg: ") \
+	S(loadbad, "  pkg install under load: exit %d, postinst " "lines %d -> %d, %d left in the scratch " "directory\n") \
+	S(started, "  pkg install under load: %d of %d started\n") \
+	S(cload, "pkg #271: under load, exit 0 only " "with the postinst run, else a reason") \
+	S(remove, "remove") \
+	S(pkgpost, "pkgpost") \
+	S(cremove, "pkg #271: remove") \
+
+#define PK_DECL(n, s)	char n[sizeof s];
+#define PK_INIT(n, s)	s,
+static const struct { PK_STRINGS(PK_DECL) } pk = { PK_STRINGS(PK_INIT) };
+
+/* A member: data, or (data NULL) n bytes of 'x'. */
+static void tar_member(int fd, const char *name, const char *data, int n,
+								int mode)
+{
+	char h[512];
+	unsigned sum = 0;
+	int i;
+
+	if (data != NULL) n = (int) strlen(data);
+	memset(h, 0, sizeof h);
+	strcpy(h, name);
+	sprintf(h + 100, pk.o7, mode);
+	sprintf(h + 108, pk.o7, 2);		/* bin */
+	sprintf(h + 116, pk.o7, 0);		/* operator */
+	sprintf(h + 124, pk.o11, n);
+	sprintf(h + 136, pk.o11, 0);
+	h[156] = '0';
+	memcpy(h + 257, pk.ustar, 6);
+	memcpy(h + 263, pk.v00, 2);
+	strcpy(h + 265, pk.bin);
+	strcpy(h + 297, pk.oper);
+	memset(h + 148, ' ', 8);
+	for (i = 0; i < 512; i++) sum += (unsigned char) h[i];
+	sprintf(h + 148, pk.o6, sum);		/* then NUL, ' ' */
+	write(fd, h, sizeof h);
+	memset(h, 0, sizeof h);
+	for (i = 0; i < n; i += 512) {
+		if (data != NULL)
+			memcpy(h, data + i, n - i < 512 ? n - i : 512);
+		else memset(h, 'x', n - i < 512 ? n - i : 512);
+		write(fd, h, sizeof h);
+		memset(h, 0, sizeof h);
+	}
+}
+
+/* pkg op arg in a child; its stderr (and stdout if out < 0) to PP_ERR. */
+static pid_t pkg_start(const char *op, const char *arg, int out)
+{
+	pid_t pid;
+	int fd;
+
+	fflush(stdout);
+	if ((pid = fork()) != 0) return pid;	/* < 0: no memory */
+	if ((fd = creat(pk.err, 0644)) >= 0) {
+		dup2(out >= 0 ? out : fd, 1);
+		dup2(fd, 2);
+		close(fd);
+	}
+	if (out >= 0) close(out);
+	execl(pk.pkgbin, pk.pkgbin + 5, op, arg, (char *) NULL);
+	_exit(errno == EAGAIN ? 126 : 127);
+}
+
+static int pkg_wait(pid_t pid)
+{
+	int st;
+
+	if (pid < 0) return -2;			/* not started */
+	if (waitpid(pid, &st, 0) != pid) return -1;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static int pkg_run(const char *op, const char *arg)
+{
+	return pkg_wait(pkg_start(op, arg, -1));
+}
+
+static int file_lines(const char *path)
+{
+	char buf[64];
+	int fd, n, i, lines = 0;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return 0;
+	while ((n = read(fd, buf, sizeof buf)) > 0)
+		for (i = 0; i < n; i++) lines += buf[i] == '\n';
+	close(fd);
+	return lines;
+}
+
+static int err_has(const char *want)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(pk.err, O_RDONLY)) < 0) return 0;
+	n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	buf[n > 0 ? n : 0] = 0;
+	return strstr(buf, want) != NULL;
+}
+
+static void err_show(void)
+{
+	char buf[256];
+	int fd, n;
+
+	if ((fd = open(pk.err, O_RDONLY)) < 0) return;
+	n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	buf[n > 0 ? n : 0] = 0;
+	printf(pk.said, buf,
+			n > 0 && buf[n - 1] == '\n' ? pk.nl + 1 : pk.nl);
+}
+
+/* Entries left in pkg's scratch directory (cleanup: rm -r). */
+static int scratch_left(void)
+{
+	DIR *d;
+	struct dirent *e;
+	int n = 0;
+
+	if ((d = opendir(pk.scratch)) == NULL) return 0;
+	while ((e = readdir(d)) != NULL) n += e->d_name[0] != '.';
+	closedir(d);
+	return n;
+}
+
+/* Fills the memory there is, writes a byte to ready, holds the memory ms
+ * milliseconds, gives it back.  Copies of m2test take the big holes, then
+ * /bin/sleep (~7 KB) the rest and, every 10 ms, what other programs give
+ * back.  Runs in its own child (pid returned). */
+static pid_t filler(int ms, int ready)
+{
+	pid_t pid, kids[48];
+	volatile int err;
+	struct tms tm;
+	clock_t t0;
+	int n = 0, said = 0;
+
+	fflush(stdout);
+	if ((pid = fork()) != 0) return pid;
+	while (n < 48 && (kids[n] = fork()) >= 0) {
+		if (kids[n] == 0) { for (;;) pause(); }
+		n++;
+	}
+	t0 = times(&tm);
+	do {				/* and what others give back */
+		while (n < 48) {
+			err = 0;
+			if ((pid = vfork()) < 0) break;
+			if (pid == 0) {
+				execl(pk.sleepbin, pk.sleepbin + 5, pk.s60,
+							(char *) NULL);
+				err = errno != 0 ? errno : ENOEXEC;
+				_exit(127);
+			}
+			if (err != 0) { waitpid(pid, NULL, 0); break; }
+			kids[n++] = pid;
+		}
+		if (!said) {
+			said = 1;
+			write(ready, pk.f, 1);
+		}
+		poll(NULL, 0, 10);
+	} while ((long) (times(&tm) - t0) < (long) ms * HZ / 1000);
+	while (n > 0) { kill(kids[--n], SIGKILL); wait(NULL); }
+	_exit(0);
+}
+
+/* The run-time cache's erase budget (R2b.11): set it (>= 0; 0: no
+ * caching), return the one before.  The pkg test runs pkg, tar, sh and
+ * sleep more than twice: cached, they would erase flash pages the M2
+ * budget does not have. */
+static long fc_budget(int pages)
+{
+	message m;
+	struct fccount fc;
+
+	m.m1_p1 = (char *) &fc;
+	m.m1_i1 = pages;
+	m.m1_i2 = MI_FCBUDGET;
+	if (_syscall(MM, MEMINFO, &m) < 0) return -1;
+	return (long) fc.budget;
+}
+
+/* ACS.2 (spec S.10, T33a part 3): gzupdate check on the ACS.1 files of
+ * tools/updatetest.py (/lib/gzu, tools/gzucases.py): the good one shows
+ * the window text, each bad one prints one line and exits 1, and nothing
+ * is written to the card (DIOCFAKECARD 3 counts the sectors).  Strings in
+ * one const struct (flash), for the GOT reason below. */
+#define GZ_STRINGS(S) \
+	S(sh, "/bin/sh") \
+	S(scr, "/lib/gzu/run") \
+	S(ran, "  gzupdate check: case %d wrong (sh exit %d)\n") \
+	S(what, "ACS.2: gzupdate check accepts the good file, refuses each bad one") \
+	S(nowr, "ACS.2: gzupdate check writes nothing")
+#define GZ_DECL(n, s)	char n[sizeof s];
+#define GZ_INIT(n, s)	s,
+static const struct { GZ_STRINGS(GZ_DECL) } gz = { GZ_STRINGS(GZ_INIT) };
+
+static int sectors_written(void);
+
+static void __attribute__((noinline)) gzupdate_test(void)
+{
+	int st = -1, w0, w1;
+	pid_t pid;
+
+	if (access(gz.scr, R_OK) != 0) return;	/* not a QEMU disk */
+	w0 = sectors_written();
+	w0 = sectors_written();		/* the first one may see old writes */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(gz.sh, gz.sh + 5, gz.scr, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st))
+		st = WEXITSTATUS(st);
+	else
+		st = -1;
+	w1 = sectors_written();
+	if (st != 0) printf(gz.ran, st - 1, st);
+	check(st == 0, gz.what);
+	check(w0 >= 0 && w1 == w0, gz.nowr);
+}
+
+/* #118: test(1)'s file tests -e -b -c -p -L -h -u -g -k, through sh as
+ * a postinst runs them.  Before, an unknown operator was a non-empty
+ * string: "test -c /nofile" was true.  The script exits with the number
+ * of the first case that is wrong.  Strings in one const struct (flash),
+ * for the GOT reason above. */
+#define TO_STRINGS(S) \
+	S(sh, "/bin/sh") \
+	S(scr, "/tmp/testop.sh") \
+	S(p, "/tmp/testop.p") \
+	S(u, "/tmp/testop.u") \
+	S(g, "/tmp/testop.g") \
+	S(k, "/tmp/testop.k") \
+	S(body, "T=/tmp/testop\n" \
+		"test -c /tmp/nofile && exit 1\n" \
+		"test -e /tmp/nofile && exit 2\n" \
+		"test -c /dev/null || exit 3\n" \
+		"test -b /dev/null && exit 4\n" \
+		"test -b /dev/hd0 || exit 5\n" \
+		"test -c /dev/hd0 && exit 6\n" \
+		"test -e / || exit 7\n" \
+		"test -p $T.p || exit 8\n" \
+		"test -p $T.u && exit 9\n" \
+		"test -L / -o -h $T.p && exit 10\n" \
+		"test -u $T.u || exit 11\n" \
+		"test -u $T.g && exit 12\n" \
+		"test -g $T.g || exit 13\n" \
+		"test -k $T.k || exit 14\n" \
+		"test -k / && exit 15\n" \
+		"[ -c /dev/null -a ! -b /dev/null ] || exit 16\n" \
+		"exit 0\n") \
+	S(ran, "  test(1) ops: sh exit %d\n") \
+	S(what, "#118: test -e -b -c -p -L -h -u -g -k on files")
+#define TO_DECL(n, s)	char n[sizeof s];
+#define TO_INIT(n, s)	s,
+static const struct { TO_STRINGS(TO_DECL) } to = { TO_STRINGS(TO_INIT) };
+
+static void __attribute__((noinline)) testop_tests(void)
+{
+	int fd, st = -1;
+	pid_t pid;
+
+	unlink(to.p);
+	unlink(to.u);
+	unlink(to.g);
+	rmdir(to.k);
+	(void) mkfifo(to.p, 0644);
+	if ((fd = creat(to.u, 0755)) >= 0) close(fd);
+	if ((fd = creat(to.g, 0755)) >= 0) close(fd);
+	(void) chmod(to.u, 04755);
+	(void) chmod(to.g, 02755);
+	(void) mkdir(to.k, 0777);
+	(void) chmod(to.k, 01777);
+	if ((fd = creat(to.scr, 0644)) >= 0) {
+		(void) write(fd, to.body, sizeof to.body - 1);
+		close(fd);
+	}
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(to.sh, to.sh + 5, to.scr, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st))
+		st = WEXITSTATUS(st);
+	else
+		st = -1;
+	if (st != 0) printf(to.ran, st);
+	check(st == 0, to.what);
+	unlink(to.scr);
+	unlink(to.p);
+	unlink(to.u);
+	unlink(to.g);
+	rmdir(to.k);
+}
+
+static void __attribute__((noinline)) pkg_tests(void)
+{
+	int fd, st, i, ok, before, started = 0, bad = 0, s0, s1;
+	pid_t f, f2;
+
+	fc_budget(0);
+	mkdir(pk.var, 0755);
+	mkdir(pk.varpkg, 0755);
+	mkdir(pk.info, 0755);
+	unlink(pk.ran);
+	unlink(pk.fail);
+	if ((fd = creat(pk.tar, 0644)) < 0) {
+		check(0, pk.cmake);
+		return;
+	}
+	tar_member(fd, pk.mctl, pk.control, 0, 0644);
+	tar_member(fd, pk.mpost, pk.postinst, 0, 0755);
+	tar_member(fd, pk.pf + 1, NULL, 600, 0644);
+	{	char z[1024];
+		memset(z, 0, sizeof z);
+		write(fd, z, sizeof z);
+	}
+	close(fd);
+
+	s0 = sectors_written();
+	st = pkg_run(pk.install, pk.tar);
+	s1 = sectors_written();
+	ok = st == 0 && file_lines(pk.ran) == 1 && err_has(pk.installed);
+	check(ok, pk.cinst);
+	if (!ok) err_show();
+	if (s0 >= 0 && s1 >= 0)
+		printf(pk.sectors, s1 - s0);
+
+	close(creat(pk.fail, 0644));
+	st = pkg_run(pk.install, pk.tar);
+	ok = st == 1 && file_lines(pk.ran) == 2
+		&& err_has(pk.failed)
+		&& err_has(pk.notset);
+	check(ok, pk.cfail);
+	if (!ok) err_show();
+	unlink(pk.fail);
+
+	/* Under load, the moment of #271: pkg has unpacked the package and
+	 * is about to start rm (its cleanup) and sh (the postinst), with no
+	 * memory hole for them.  pkg's stdout is a full pipe: it stops in
+	 * the fflush() before those, after tar.  Then the filler takes all
+	 * the memory there is and the pipe is read: rm and sh find no hole
+	 * (exec: EAGAIN) until the filler gives the memory back 1.5 s later.
+	 * Before #271 pkg said "installed", exit 0, no postinst run. */
+	for (i = 0; i < PP_LOAD; i++) {
+		int p[2], q[2];
+		char c[64];
+
+		before = file_lines(pk.ran);
+		if (pipe(p) < 0) break;
+		if (pipe(q) < 0) { close(p[0]); close(p[1]); break; }
+		fcntl(p[1], F_SETFL, O_NONBLOCK);
+		while (write(p[1], c, sizeof c) == (int) sizeof c) ;
+		while (write(p[1], c, 1) == 1) ;	/* full */
+		fcntl(p[1], F_SETFL, 0);
+		f = pkg_start(pk.install, pk.tar, p[1]);
+		close(p[1]);
+		poll(NULL, 0, 300);		/* pkg: tar, then stops */
+		f2 = filler(1500, q[1]);
+		close(q[1]);
+		read(q[0], c, 1);		/* memory full */
+		close(q[0]);
+		while (read(p[0], c, sizeof c) > 0) ;	/* pkg goes on */
+		close(p[0]);
+		st = pkg_wait(f);
+		if (f2 > 0) waitpid(f2, NULL, 0);
+		if (st == -2 || st == 126) continue;	/* pkg did not start */
+		started++;
+		if ((st == 0 ? file_lines(pk.ran) != before + 1
+			     : !err_has(pk.pkgc)) || scratch_left() != 0) {
+			bad++;
+			printf(pk.loadbad, st, before, file_lines(pk.ran),
+				scratch_left());
+			err_show();
+		}
+	}
+	printf(pk.started, started,
+								PP_LOAD);
+	check(started > 0 && bad == 0, pk.cload);
+
+	st = pkg_run(pk.remove, pk.pkgpost);
+	check(st == 0 && access(pk.pf, F_OK) < 0,
+						pk.cremove);
+	if (st != 0) err_show();
+	unlink(pk.tar);
+	unlink(pk.ran);
+	unlink(pk.err);
+	/* The budget stays 0: MM copies a program to the cache in the
+	 * background, after its 3rd run - it would still do so for pkg,
+	 * tar, sh and sleep if the budget came back now. */
+}
+
+/* What the window's two pipes cost on the card (s0: the counter now):
+ * nothing since K.6 "pipe data never reaches the card" (T23a's FS part):
+ * a pipe's inode and zones are in core only, no bitmap is written.  It
+ * was 6 sectors before (an inode bit and zone bits, T9). */
+static int pipe_sectors(int s0)
+{
+	int p[2], q[2];
+	char c[8];
+
+	if (pipe(p) < 0) return -1;
+	if (pipe(q) < 0) { close(p[0]); close(p[1]); return -1; }
+	(void) write(p[1], "ok\tx\n", 5);
+	(void) write(q[1], "show\n", 5);
+	(void) read(p[0], c, sizeof c);
+	(void) read(q[0], c, sizeof c);
+	close(p[0]); close(p[1]); close(q[0]); close(q[1]);
+	return sectors_written() - s0;
+}
+
+/* a_text of a program (its a.out header), -1 */
+static long text_size(const char *path)
+{
+	unsigned char h[12];
+	int fd, n = 0;
+
+	if ((fd = open(path, O_RDONLY)) < 0) return -1;
+	n = read(fd, (char *) h, sizeof h);
+	close(fd);
+	if (n != (int) sizeof h || h[0] != 0x01 || h[1] != 0x03) return -1;
+	return (long) h[8] | (long) h[9] << 8 | (long) h[10] << 16
+		| (long) h[11] << 24;
+}
+
+static void __attribute__((noinline)) settings_test(int b, int l)
+{
+	struct stat st;
+	struct tms tm;
+	clock_t c0;
+	time_t t0, t1, t2;
+	long f0, ft, text;
+	int z0, s0, s1, i, tz0, conf0, ok, up, ps;
+
+	tz0 = stat("/etc/TZ", &st) == 0;
+	conf0 = stat("/etc/flipper/time.conf", &st) == 0;
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	f0 = free_ram();
+	z0 = sectors_written();			/* a sync of its own costs */
+	s0 = sectors_written();
+	ps = pipe_sectors(s0);
+	s0 = sectors_written();
+	{	/* MM: "memuse:" at setgroup's exit (its stack never used) */
+		message m;
+
+		m.m1_i1 = 1;
+		m.m1_i2 = MI_TRACE;
+		(void) _syscall(MM, MEMINFO, &m);
+	}
+	wtap(b, 0x04);				/* SETTINGS */
+	for (i = 0; i < 3; i++) wtap(b, 0x02);	/* Display Sound LED Time */
+	wtap(b, 0x10);				/* OK: setgroup time */
+	(void) poll((struct pollfd *) NULL, 0, 800);
+	ft = free_ram();
+	lgrab(l, "time");
+	ok = lpix(0, 0) && lpix(0, 8) && lpix(0, 56);
+	check(ok, "settings time: the desktop draws it: title, the first row selected, hint line");
+	wtap(b, 0x02);				/* Time */
+	wtap(b, 0x10);				/* OK: edit, the hours */
+	wtap(b, 0x08);				/* Right: the minutes */
+	t0 = time((time_t *) 0);
+	up = t0 / 60 % 60 != 59;		/* no wrap to the hour's :00 */
+	c0 = times(&tm);
+	wtap(b, up ? 0x01 : 0x02);		/* Up: +1 minute (59: Down) */
+	lgrab(l, "time-edit");
+	wtap(b, 0x10);				/* OK: done, sent at once (LIVE) */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	t1 = time((time_t *) 0);
+	wtap(b, 0x02);				/* Zone */
+	wtap(b, 0x10);				/* OK: the zone list */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, "time-zones");
+	ok = lpix(0, 0) && lpix(0, 8) && lpix(0, 56);
+	check(ok, "settings time: Zone opens the list of zones");
+	wtap(b, 0x20);				/* Back: Time again, no zone */
+	wtap(b, 0x20);				/* Back: nothing to write */
+	(void) poll((struct pollfd *) NULL, 0, 500);
+	s1 = sectors_written();
+	t2 = t0 + (time_t) ((times(&tm) - c0) / CLK_TCK);
+	(void) stime(&t2);			/* the clock back */
+	{
+		message m;
+
+		m.m1_i1 = 0;
+		m.m1_i2 = MI_TRACE;
+		(void) _syscall(MM, MEMINFO, &m);
+	}
+	wtap(b, 0x20);				/* SETTINGS -> list */
+	printf("  settings time: %s on the minutes: %ld -> %ld\n",
+		up ? "Up" : "Down", (long) t0, (long) t1);
+	/* (the minute shown came at the window's start: it may have turned
+	 * since, so the new time is the minute after, or this one) */
+	check(t1 % 60 <= 3 && t1 - t0 <= 66 && t0 - t1 <= 125,
+		"settings time: a new minute sets the clock at once (seconds 0)");
+	printf("  ACK7.2 settings time, no saved change: %d sectors written,"
+		" the window's pipes alone %d (the probe's own sync: %d)\n",
+		s1 - s0, ps, s0 - z0);
+	check(z0 >= 0 && ps == 0 && s1 - s0 == 0,
+		"ACK7.2: a group opened and left without a change writes 0 sectors"
+		" (its K.8 pipes too, K.6)");
+	check((stat("/etc/TZ", &st) == 0) == tz0
+		&& (stat("/etc/flipper/time.conf", &st) == 0) == conf0,
+		"ACK7.2: no /etc/TZ, no time.conf written");
+	text = text_size("/bin/setgroup");
+	if (text > 0) text = (text + 255) & ~255L;	/* MM's 256 B clicks */
+	printf("  ACK7.4 free while settings time is open: %ld B more in use"
+		" than the launcher alone, %ld B without its text (%ld B in clicks)\n",
+		f0 - ft, f0 - ft - text, text);
+	check(text > 0 && f0 - ft - text > 0 && f0 - ft - text <= 3072,
+		"ACK7.4: an open group takes <= 3 KB more than the launcher (text in flash)");
+	{
+		message m;
+		char id[24];
+
+		m.m1_p1 = id;
+		m.m1_i1 = (int) sizeof id;
+		m.m1_i2 = MI_BUILD;
+		id[0] = 0;
+		ok = _syscall(MM, MEMINFO, &m) == 0;
+		id[sizeof id - 1] = 0;
+		printf("  MI_BUILD: %s\n", id);
+		check(ok && id[0] >= '0' && id[0] <= '9' && strchr(id, '.') != NULL,
+			"MI_BUILD: the image's version and build id (settings about)");
+	}
+}
+
+/* T31 / AC5.7: the Stock style (spec R5.6b).  On the APPS list of
+ * launcher_test (on "Zaharra", whose /bin/true is not on the M2 disk: OK
+ * gives a message); ends there in Pine style. */
+static unsigned long fsum(void)
+{
+	unsigned long sum = 0;
+	int i;
+
+	for (i = 0; i < 1024; i++) sum = sum * 31 + lfb[i];
+	return sum;
+}
+
+/* stock_test's strings in one const struct (flash): each literal would
+ * cost a GOT word in every copy of m2test, and ACK.3's 4 flooders fork
+ * it with a few bytes to spare (as sg above). */
+static const struct {
+	char s0[sizeof "style-sys"];
+	char s1[sizeof "style-set"];
+	char s2[sizeof "stock-settings"];
+	char s3[sizeof "AC5.7: Style toggles to stock on the settings page, redrawn at once (submenu look)"];
+	char s4[sizeof "stock-apps"];
+	char s5[sizeof "AC5.7: the Apps page as the stock menu (frame at y 21, scroll bar, no title bar)"];
+	char s6[sizeof "/tmp/lc"];
+	char s7[sizeof "r"];
+	char s8[sizeof "Style: stock\n"];
+	char s9[sizeof "AC5.7: /etc/launcher.conf has Style: stock (written once)"];
+	char s10[sizeof "not found"];
+	char s11[sizeof "stock-popup"];
+	char s12[sizeof "stock-popup-gone"];
+	char s13[sizeof "AC5.7: a message is a stock-style popup, gone after 2 s"];
+	char s14[sizeof "/tmp/st.sh"];
+	char s15[sizeof "w"];
+	char s16[sizeof "echo $FURI_STYLE > /tmp/st.out\n"];
+	char s17[sizeof "/tmp/st.out"];
+	char s18[sizeof "L"];
+	char s19[sizeof "stock-down"];
+	char s20[sizeof "stock-ran"];
+	char s21[sizeof "AC5.7: OK starts the app, the menu is back"];
+	char s22[sizeof "stock-home"];
+	char s23[sizeof "stock-back"];
+	char s24[sizeof "AC5.7: Right and Left still change pages"];
+	char s25[sizeof "stock-inor"];
+	char s26[sizeof "pine-again"];
+	char s27[sizeof "AC5.7: Style: pine again, the title bar is back"];
+	char s28[sizeof "stock\n"];
+	char s29[sizeof "AC5.7: an app started in the Stock style sees FURI_STYLE=stock"];
+} st = {
+	"style-sys",
+	"style-set",
+	"stock-settings",
+	"AC5.7: Style toggles to stock on the settings page, redrawn at once (submenu look)",
+	"stock-apps",
+	"AC5.7: the Apps page as the stock menu (frame at y 21, scroll bar, no title bar)",
+	"/tmp/lc",
+	"r",
+	"Style: stock\n",
+	"AC5.7: /etc/launcher.conf has Style: stock (written once)",
+	"not found",
+	"stock-popup",
+	"stock-popup-gone",
+	"AC5.7: a message is a stock-style popup, gone after 2 s",
+	"/tmp/st.sh",
+	"w",
+	"echo $FURI_STYLE > /tmp/st.out\n",
+	"/tmp/st.out",
+	"L",
+	"stock-down",
+	"stock-ran",
+	"AC5.7: OK starts the app, the menu is back",
+	"stock-home",
+	"stock-back",
+	"AC5.7: Right and Left still change pages",
+	"stock-inor",
+	"pine-again",
+	"AC5.7: Style: pine again, the title bar is back",
+	"stock\n",
+	"AC5.7: an app started in the Stock style sees FURI_STYLE=stock",
+};
+
+static void style_toggle(int b, int l)		/* APPS -> its settings -> Style */
+{
+	int i;
+
+	furi_tap(b, 0x04);			/* SETTINGS */
+	lgrab(l, st.s0);
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Launcher */
+	furi_tap(b, 0x10);
+	lgrab(l, st.s1);
+	for (i = 0; i < 3; i++) furi_tap(b, 0x02);	/* Style */
+	furi_tap(b, 0x10);			/* toggles, redrawn at once */
+}
+
+static void __attribute__((noinline)) stock_test(int b, int l)
+{
+	FILE *f;
+	char line[40];
+	unsigned long apps, s1;
+	int ok, n, x, frame;
+
+	style_toggle(b, l);
+	lgrab(l, st.s2);
+	/* five rows now (Repeat, #361): the list scrolls, Style's bar is at y 40 */
+	check(!lpix(0, 0) && !lpix(64, 0) && lpix(5, 40),
+		st.s3);
+	furi_tap(b, 0x20);			/* Back: SETTINGS */
+	furi_tap(b, 0x20);			/* Back: APPS, written */
+	lgrab(l, st.s4);
+	apps = fsum();
+	for (frame = 1, x = 2; x <= 121; x++) if (!lpix(x, 21) || !lpix(x + 1, 42)) frame = 0;
+	check(frame && !lpix(0, 0) && !lpix(64, 0) && lpix(126, 0) && !lpix(126, 1),
+		st.s5);
+	n = 0;
+	if ((f = fopen(st.s6, st.s7)) != NULL) {
+		while (fgets(line, sizeof line, f) != NULL)
+			if (strcmp(line, st.s8) == 0) n++;
+		fclose(f);
+	}
+	check(n == 1, st.s9);
+	furi_tap(b, 0x10);			/* OK: st.s10, the popup */
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, st.s11);
+	s1 = fsum();
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	lgrab(l, st.s12);
+	check(s1 != apps && fsum() == apps,
+		st.s13);
+	f = fopen(st.s14, st.s15);
+	fprintf(f, st.s16);
+	fclose(f);
+	unlink(st.s17);
+	furi_tap(b, 0x20);			/* Back: the light on, no action */
+	for (n = 0; n < 3; n++) furi_tap(b, 0x02);	/* st.s18, the script */
+	lgrab(l, st.s19);
+	s1 = fsum();
+	furi_tap(b, 0x10);			/* OK: runs it */
+	for (n = 0; n < 20 && access(st.s17, F_OK) < 0; n++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	(void) poll((struct pollfd *) NULL, 0, 300);
+	lgrab(l, st.s20);
+	check(access(st.s17, F_OK) == 0 && s1 != apps && fsum() == s1,
+		st.s21);
+	n = 0;
+	if ((f = fopen(st.s17, st.s7)) != NULL) {
+		n = fgets(line, sizeof line, f) != NULL && strcmp(line, st.s28) == 0;
+		fclose(f);
+	}
+	check(n, st.s29);
+	unlink(st.s17);
+	unlink(st.s14);
+	furi_tap(b, 0x08);			/* Right: HOME */
+	lgrab(l, st.s22);
+	ok = fsum() != s1 && !lpix(0, 0);
+	furi_tap(b, 0x04);			/* Left: APPS */
+	lgrab(l, st.s23);
+	check(ok && fsum() == s1, st.s24);
+	furi_tap(b, 0x20);
+	for (n = 0; n < 3; n++) furi_tap(b, 0x01);	/* where it was */
+	lgrab(l, st.s25);
+	style_toggle(b, l);			/* back to Pine */
+	furi_tap(b, 0x20);
+	furi_tap(b, 0x20);
+	lgrab(l, st.s26);
+	check(lpix(0, 0) && lpix(127, 0), st.s27);
+}
+
+static void launcher_test(void)
+{
+	static const unsigned char bell[6] = { 0x18, 0x3C, 0x3C, 0x7E, 0x00, 0x18 };
+	unsigned char c[6];
+	struct stat s1, s2;
+	FILE *f;
+	char line[40];
+	int b, l, i, st, ok, rule, blank;
+	pid_t pid;
+
+	f = fopen("/tmp/la", "w");
+	fprintf(f, "Kanpaia:root:#183C3C7E0018:/bin/true\n"
+		"Ordua:root:@clock:/bin/true\nKaixo:root:Zz:/bin/true\n"
+		"Hutsa:root::/bin/true\nEz:root:@nosuch:/bin/true\n"
+		"Txarra:root:#12XY:/bin/true\nGezi:root:>_:/bin/true\n"
+		"Bat:root:!:/bin/true\nZaharra:root:/bin/true\n"
+		"Inor:nosuchuser:@bell:/bin/true\n"
+		"K:root:@app:/bin/true\nL:root:@app:/bin/sh /tmp/st.sh\n");
+	fclose(f);
+	f = fopen("/tmp/lc", "w");
+	fprintf(f, "Icons: on\nHints: on\n");
+	fclose(f);
+	b = open("/dev/buttons", O_WRONLY);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || l < 0) { check(0, "launcher: open lcd/buttons"); return; }
+	furi_tap(b, 0x20);	/* the backlight on (Back: no page action) */
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl("/bin/launcher", "launcher", "-a", "/tmp/la", "-c", "/tmp/lc",
+			(char *) NULL);
+		_exit(99);
+	}
+	(void) poll((struct pollfd *) NULL, 0, 600);
+	lgrab(l, "list");
+	lcell(6, 7, c);
+	for (i = 0; i < 6; i++) c[i] = (unsigned char) ~c[i];	/* selected */
+	check(memcmp(c, bell, 6) == 0, "launcher: # bitmap icon at x 6-13, inverted on the selected row");
+	lcell(6, 13, c);
+	check(c[0] | c[1] | c[2] | c[3] | c[4] | c[5], "launcher: @clock drawn");
+	blank = 1;
+	for (i = 3; i <= 5; i++) {		/* Hutsa, Ez, Txarra: no icon */
+		lcell(6, 7 + 6 * i, c);
+		if (c[0] | c[1] | c[2] | c[3] | c[4] | c[5]) blank = 0;
+	}
+	check(blank, "launcher: empty, unknown and malformed icons: a blank cell");
+	for (rule = 1, i = 0; i < 128; i++) if (!lpix(i, 56)) rule = 0;
+	check(rule && lpix(127, 6), "launcher: hint line rule at y 56, scroll mark (12 entries)");
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* Down to the 8th */
+	lgrab(l, "list-8");
+	for (i = 0; i < 2; i++) furi_tap(b, 0x02);	/* "Inor": unknown user */
+	furi_tap(b, 0x10);
+	lgrab(l, "note");
+	ok = 0;
+	for (i = 1; i < 60; i++) if (lpix(i, 59)) ok = 1;
+	(void) poll((struct pollfd *) NULL, 0, 2300);
+	lgrab(l, "note-gone");
+	check(ok && lpix(0, 56), "launcher: unknown user noted on the message line, list still drawn");
+	stat("/tmp/lc", &s1);
+	furi_tap(b, 0x04);			/* Left: SETTINGS (K.7) */
+	lgrab(l, "settings");
+	furi_tap(b, 0x20);			/* Back, no change */
+	(void) poll((struct pollfd *) NULL, 0, 1100);
+	stat("/tmp/lc", &s2);
+	check(s1.st_mtime == s2.st_mtime && s1.st_size == s2.st_size,
+		"launcher: settings and Back without a change write nothing");
+	/* Left+Up together (the backlight chord): no page */
+	{
+		unsigned char m = 0x05;
+
+		(void) write(b, (char *) &m, 1);
+		(void) poll((struct pollfd *) NULL, 0, 100);
+		m = 0;
+		(void) write(b, (char *) &m, 1);
+		(void) poll((struct pollfd *) NULL, 0, 250);
+	}
+	lgrab(l, "chord");
+	lcell(6, 7, c);
+	check(lpix(0, 0) && c[0] != 0xFF, "launcher: a Left+Up chord opens no page");
+	furi_tap(b, 0x04);			/* SETTINGS */
+	for (i = 0; i < 7; i++) furi_tap(b, 0x02);	/* to Launcher */
+	furi_tap(b, 0x10);			/* OK: its options */
+	furi_tap(b, 0x10);			/* OK: icons off */
+	lgrab(l, "settings-off");
+	furi_tap(b, 0x20);			/* Back: SETTINGS */
+	furi_tap(b, 0x20);			/* Back: the list, written */
+	lgrab(l, "list-noicons");
+	ok = 0;
+	if ((f = fopen("/tmp/lc", "r")) != NULL) {
+		while (fgets(line, sizeof line, f) != NULL)
+			if (strcmp(line, "Icons: off\n") == 0) ok = 1;
+		fclose(f);
+	}
+	check(ok, "launcher: OK toggles, Back writes /etc/launcher.conf (Icons: off)");
+	stock_test(b, l);			/* T31, spec R5.6b, AC5.7 */
+	/* ACK7.1 (K.7): SETTINGS -> Display -> Right on Brightness -> Back:
+	 * the backlight changes at once, display.conf is written once */
+	{
+		unsigned long st0 = 0, st1 = 0;
+		int fd = open("/dev/backlight", O_RDWR);
+		unsigned char lv[1];
+
+		lv[0] = 128;			/* 50 %: room to go up */
+		if (fd >= 0) {
+			(void) write(fd, (char *) lv, 1);
+			lseek(fd, 0L, SEEK_SET);
+			(void) read(fd, (char *) &st0, 4);
+		}
+		unlink("/etc/flipper/display.conf");
+		furi_tap(b, 0x04);		/* SETTINGS */
+		furi_tap(b, 0x10);		/* OK on Display */
+		(void) poll((struct pollfd *) NULL, 0, 800);
+		lgrab(l, "display");
+		furi_tap(b, 0x08);		/* Right: brightness +10 % */
+		if (fd >= 0) {
+			lseek(fd, 0L, SEEK_SET);
+			(void) read(fd, (char *) &st1, 4);
+		}
+		furi_tap(b, 0x20);		/* Back: saved, the launcher */
+		(void) poll((struct pollfd *) NULL, 0, 500);
+		ok = 0;
+		if ((f = fopen("/etc/flipper/display.conf", "r")) != NULL) {
+			while (fgets(line, sizeof line, f) != NULL)
+				if (strcmp(line, "Brightness: 60\n") == 0) ok = 1;
+			fclose(f);
+		}
+		check((st1 >> 16 & 0xFF) > (st0 >> 16 & 0xFF),
+			"settings: Display Right raises the brightness at once (ACK7.1)");
+		check(ok, "settings: Back writes /etc/flipper/display.conf (ACK7.1)");
+		furi_tap(b, 0x20);		/* SETTINGS -> list */
+		if (fd >= 0) close(fd);
+		unlink("/etc/flipper/display.conf");
+	}
+	settings_test(b, l);			/* T24b, spec K.7 */
+	window_test(b, l);			/* T23b, spec K.8 */
+	desktop_test(b, l, pid);		/* T23a, spec K.6 */
+	spin_test(b, l);			/* #331 */
+	kill(pid, SIGKILL);
+	(void) waitpid(pid, &st, 0);
+	/* m2test is process 1: whatever the launcher left is ours now */
+	while (waitpid(-1, &st, WNOHANG) > 0) ;
+	close(b);
+	close(l);
+	unlink("/tmp/la");
+	unlink("/tmp/lc");
+}
+
+/* The Spectrum app (issue #157) with fake buttons.  First "spectrum
+ * /dev/null": no line from the "radio", so the "no radio" screen (the
+ * title bar, the hint rule, no selection bar), and Back ends it with 0.
+ * Then on /dev/subghz (QEMU's: in tune, a flat -110 dBm): the band list
+ * (a selection bar), OK sweeps the first band (433.05-434.79), the
+ * device is tuned there, the view has its cursor mark at step 16 (x 64,
+ * y 8); Back writes "0" (the radio is off again) and shows the list, a
+ * second Back ends it with 0. */
+static const struct {
+	char bin[sizeof "/bin/spectrum"];
+	char name[sizeof "spectrum"];
+	char null[sizeof "/dev/null"];
+	char dev[sizeof "/dev/subghz"];
+	char c0[sizeof "spectrum: open lcd/buttons"];
+	char c1[sizeof "spectrum: no radio (/dev/null): the notice, Back -> exit 0"];
+	char c2[sizeof "spectrum: the band list, OK sweeps 433 MHz (tuned, cursor)"];
+	char c3[sizeof "spectrum: Back writes 0 (radio off), Back again -> exit 0"];
+} spt = {
+	"/bin/spectrum", "spectrum", "/dev/null", "/dev/subghz",
+	"spectrum: open lcd/buttons",
+	"spectrum: no radio (/dev/null): the notice, Back -> exit 0",
+	"spectrum: the band list, OK sweeps 433 MHz (tuned, cursor)",
+	"spectrum: Back writes 0 (radio off), Back again -> exit 0",
+};
+
+/* Wait (up to 5 s) for a frame with the title bar; 1 if it came. */
+static int spt_frame(int l, unsigned char *lcd)
+{
+	int i, x, top;
+
+	for (i = 0; i < 50; i++) {
+		(void) poll((struct pollfd *) NULL, 0, 100);
+		lseek(l, 0L, SEEK_SET);
+		if (read(l, (char *) lcd, 1024) != 1024) return 0;
+		for (x = 0, top = 1; x < 128; x++) top &= lcd[x] & 1;
+		if (top) return 1;
+	}
+	return 0;
+}
+
+/* The hint line's rule at y = 56 (page 7, bit 0) across the width. */
+static int spt_rule(const unsigned char *lcd)
+{
+	int x, r = 1;
+
+	for (x = 0; x < 128; x++) r &= lcd[7 * 128 + x] & 1;
+	return r;
+}
+
+static int spt_exit(pid_t pid)
+{
+	pid_t r = 0;
+	int i, st = 0;
+
+	for (i = 0; i < 50 && (r = waitpid(pid, &st, WNOHANG)) == 0; i++)
+		(void) poll((struct pollfd *) NULL, 0, 100);
+	if (r == 0) {
+		kill(pid, SIGKILL);
+		(void) waitpid(pid, &st, 0);
+		return 0;
+	}
+	return r == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+/* What /dev/subghz says now starts with want. */
+static int spt_radio(const char *want)
+{
+	char line[48];
+	int fd = open(spt.dev, O_RDONLY), n;
+
+	if (fd < 0) return 0;
+	n = read(fd, line, sizeof line - 1);
+	close(fd);
+	if (n <= 0) return 0;
+	line[n] = 0;
+	return strncmp(line, want, strlen(want)) == 0;
+}
+
+static void __attribute__((noinline)) spectrum_test(void)
+{
+	unsigned char lcd[1024];
+	int b, l, ok, menu, view, tuned, off, x, text;
+	pid_t pid;
+
+	b = open("/dev/buttons", O_WRONLY);
+	l = open("/dev/lcd", O_RDWR);
+	if (b < 0 || l < 0) {
+		check(0, spt.c0);
+		if (b >= 0) close(b);
+		if (l >= 0) close(l);
+		return;
+	}
+	furi_tap(b, 0x04);		/* the backlight on, if it was off */
+	memset(lcd, 0, sizeof lcd);
+	(void) write(l, (char *) lcd, sizeof lcd);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(spt.bin, spt.name, spt.null, (char *) NULL);
+		_exit(99);
+	}
+	ok = spt_frame(l, lcd) && spt_rule(lcd) && (lcd[128 + 127] & 0x1F) == 0;
+	for (x = 0, text = 0; x < 128; x++)
+		text |= lcd[2 * 128 + x] | lcd[3 * 128 + x] | lcd[4 * 128 + x];
+	furi_tap(b, 0x20);
+	check(pid > 0 && ok && text != 0 && spt_exit(pid), spt.c1);
+
+	memset(lcd, 0, sizeof lcd);
+	(void) write(l, (char *) lcd, sizeof lcd);
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		execl(spt.bin, spt.name, (char *) NULL);
+		_exit(99);
+	}
+	menu = spt_frame(l, lcd) && spt_rule(lcd) && (lcd[128 + 127] & 0x1F) != 0;
+	furi_tap(b, 0x10);		/* OK: 433.05-434.79 */
+	(void) poll((struct pollfd *) NULL, 0, 1500);
+	tuned = spt_radio("rssi=");
+	lseek(l, 0L, SEEK_SET);
+	view = read(l, (char *) lcd, sizeof lcd) == sizeof lcd
+		&& (lcd[0] & 1) && spt_rule(lcd)
+		&& (lcd[128 + 64] & 1) && (lcd[128 + 65] & 2)	/* the v */
+		&& (lcd[128 + 127] & 0x1F) == 0;		/* no list */
+	check(pid > 0 && menu && tuned && view, spt.c2);
+	furi_tap(b, 0x20);		/* Back: the list, the radio off */
+	off = spt_radio("off");
+	furi_tap(b, 0x20);		/* Back: quit */
+	check(off && spt_exit(pid), spt.c3);
+	close(b);
+	close(l);
+}
 
 static void furihello_test(void)
 {
@@ -882,14 +3400,19 @@ static void furihello_test(void)
 		lseek(l, 0L, SEEK_SET);
 		if (i == 0 && l >= 0 && read(l, (char *) lcd, sizeof lcd)
 							== sizeof lcd) {
-			/* the popup: an empty top line, text in rows 20-27 */
-			int x, top = 0, text = 0;
+			/* the popup in the Pine style (spec K.2, T22b): the
+			 * black title bar (row 0), no selection bar at x = 127
+			 * (the menu has one under the title), its text in
+			 * rows 8-23, the hint line's rule at y = 56 */
+			int x, top = 1, text = 0, rule = 1;
 
 			for (x = 0; x < 128; x++) {
-				top |= lcd[x];
-				text |= lcd[2 * 128 + x] | lcd[3 * 128 + x];
+				top &= lcd[x];
+				rule &= lcd[7 * 128 + x];
+				text |= lcd[128 + x] | lcd[2 * 128 + x];
 			}
-			popup = top == 0 && text != 0;
+			popup = (top & 1) && (rule & 1) && text != 0
+				&& lcd[128 + 127] == 0;
 		}
 	}
 	for (i = 0; i < 40 && (r = waitpid(pid, &st, WNOHANG)) == 0; i++)
@@ -906,6 +3429,61 @@ static void furihello_test(void)
 }
 #endif
 
+/* #419: the settings keys (setgroup sound, led, power) under QEMU, with
+ * `settings set' and `settings get' (two runs of settings, without sh: a
+ * third run of either would make the run-time cache copy it to flash).  A missing file gives the
+ * defaults, a file written here is read, a set writes the card's file
+ * once; the files are removed afterwards (file_has: stockapp_tests').
+ * settings A1 A2 A3 A4 >out (not through sh: a third run of sh would put
+ * it in the flash cache); its exit status */
+static int setk_run(const char *out, const char *a1, const char *a2,
+					const char *a3, const char *a4)
+{
+	pid_t pid;
+	int fd, st = -1;
+
+	fflush(stdout);
+	if ((pid = fork()) == 0) {
+		if ((fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644)) >= 0)
+			dup2(fd, 1);
+		execl("/bin/settings", "settings", a1, a2, a3, a4, (char *) NULL);
+		_exit(99);
+	}
+	if (pid > 0) (void) waitpid(pid, &st, 0);
+	return st;
+}
+
+static void __attribute__((noinline)) setkeys_test(void)
+{
+	static const char *const conf[] = { "/etc/flipper/led.conf",
+		"/etc/flipper/power.conf", "/etc/flipper/sound.conf" };
+	FILE *f;
+	int i, st;
+
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) mkdir("/etc/flipper", 0755);
+	if ((f = fopen(conf[2], "w")) != NULL) {
+		fputs("Volume: 40\nVibro: off\n", f);
+		fclose(f);
+	}
+	st = setk_run("/tmp/setk1", "set", "led", "Brightness", "30");
+	(void) setk_run("/tmp/setk2", "get", "led", "power", "sound");
+	check(st == 0 && file_has("/tmp/setk1",
+		"Brightness: 30\nNotify LED: on\n"),
+		"settings set: a key changed, the group's other key its default");
+	check(file_has(conf[0], "Brightness: 30\nNotify LED: on\n"),
+		"settings set: /etc/flipper/led.conf written");
+	check(file_has("/tmp/setk2", "# led\nBrightness: 30\n"),
+		"settings get: led.conf read back");
+	check(file_has("/tmp/setk2", "# power\nAuto off: never\nAuto lock: never\n"),
+		"settings get: no power.conf, the defaults");
+	check(file_has("/tmp/setk2", "Volume: 40\nVibro: off\n"),
+		"settings get: Vibro off read from sound.conf");
+	for (i = 0; i < 3; i++) (void) unlink(conf[i]);
+	(void) unlink("/tmp/setk1");
+	(void) unlink("/tmp/setk2");
+}
+
 int main(int argc, char **argv)
 {
 	char *p, buf[64];
@@ -915,6 +3493,16 @@ int main(int argc, char **argv)
 	if (argc == 2 && strcmp(argv[1], "warm") == 0) {	/* see init.c */
 		for (;;) pause();
 	}
+#ifdef BOARD_QEMU
+	if (argc == 2 && strcmp(argv[1], "sg-read") == 0) {	/* #302 */
+		unsigned long got[8];
+		int c = open("/dev/subghzraw", O_RDONLY);
+
+		n = read(c, (char *) got, sizeof(got));
+		return n == 16 && got[0] == 500 && got[1] == 1000
+			&& got[2] == 500 && got[3] == 2000 ? 0 : 1;
+	}
+#endif
 	if (argc == 2 && strcmp(argv[1], "child-exec") == 0) {
 		printf("  [exec'd child pid %d running]\n", getpid());
 		return 7;
@@ -967,6 +3555,40 @@ int main(int argc, char **argv)
 	wait(&st);
 	check(n == 17 && strcmp(buf, "through the pipe") == 0,
 						"fork + pipe");
+
+	/* Spec K.6: pipe data lives in the cache only, at most half of it
+	 * (fs/write.c, pipe_zone); 3 full pipes (21 blocks, the cache has
+	 * 18) take real zones beyond that.  Every byte must come back. */
+	{
+		/* (heap, not .bss: a bigger image fails the forks below) */
+		unsigned char *pb = (unsigned char *) malloc(512);
+		int pp[3][2], k, j, okk = pb != NULL, np = 0;
+
+		for (k = 0; pb != NULL && k < 3; k++)
+			if (pipe(pp[k]) == 0) np++;
+		for (k = 0; k < np; k++)
+			for (j = 0; j < 14; j++) {
+				memset(pb, (k * 14 + j) & 0xFF, 512);
+				if (write(pp[k][1], (char *) pb, 512) != 512)
+					okk = 0;
+			}
+		n = open("/bin/sh", O_RDONLY);	/* files go on meanwhile */
+		if (n < 0 || read(n, (char *) pb, 512) != 512)
+			okk = 0;
+		if (n >= 0) close(n);
+		for (k = 0; k < np; k++) {
+			for (j = 0; j < 14; j++) {
+				if (read(pp[k][0], (char *) pb, 512) != 512)
+					okk = 0;
+				else if (pb[0] != ((k * 14 + j) & 0xFF)
+				    || pb[511] != pb[0]) okk = 0;
+			}
+			close(pp[k][0]);
+			close(pp[k][1]);
+		}
+		free(pb);
+		check(np == 3 && okk, "3 full pipes: the data comes back (K.6)");
+	}
 
 	/* Shadowing under load: parent and child (same addresses) take
 	 * turns 200 times; each flip exchanges their images (flipclicks).
@@ -1169,6 +3791,9 @@ int main(int argc, char **argv)
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "libfuri core (furitest)");
 	furihello_test();
+	spectrum_test();
+	setkeys_test();
+	launcher_test();
 	/* liblfrfid (spec R9.0.1) on the target: all 25 protocols allocate,
 	 * render and fill their T5577 blocks; the line "decoders: N B of
 	 * heap" is the R9.0.1 measurement (budget 6 KB). */
@@ -1180,18 +3805,42 @@ int main(int argc, char **argv)
 	}
 	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
 		&& WEXITSTATUS(st) == 0, "rfid list (liblfrfid)");
+	/* libmodem (spec section P) on the target: the RFID line code's
+	 * numbers and every Sub-GHz preset's CC1101 values and legal check
+	 * (64-bit integer arithmetic, no FPU). */
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		execl("/bin/gmodem", "gmodem", "info", (char *) NULL);
+		_exit(99);
+	}
+	check(pid > 0 && wait(&st) == pid && WIFEXITED(st)
+		&& WEXITSTATUS(st) == 0, "gmodem info (libmodem)");
 #endif
 	memtest_tests();
 	poll_tests();
 #ifdef BOARD_QEMU
 	devpoll_tests();
 	ibutton_tests();
+	hid_tests();
+	subghz_tests();
+	infrared_tests();
+	stockapp_tests();
+	nfc_tests();
 	gpio_tests();
 	card_tests();
+	sflag_tests();
 	discard_tests();
+	blk_tests();
 	preempt_tests();
+	testop_tests();
+	gzupdate_test();
+	pkg_tests();
+	mtpd_test();
+	rpcd_test();
 #endif
 	time_tests();
+	fpu_tests();
 	finish();
 	return 0;
 }

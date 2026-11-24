@@ -2,7 +2,7 @@
 
 You implement one task (the issue or comment that started you) for Galtzagorriak
 MINIX, a MINIX 2.0.0 port to the Flipper Zero (STM32WB55, 256 KB RAM of which
-MINIX uses 192 KB, code runs from flash). The owner's local agent works on other
+MINIX uses 192 KB, code runs from flash). The user's local agent works on other
 tasks at the same time; the review side reads your PR and squash-merges it.
 
 ## Before you write code
@@ -13,7 +13,9 @@ tasks at the same time; the review side reads your PR and squash-merges it.
    marked DONE, or the issue is too vague to implement, say so in your progress
    comment and stop without code changes.
 
-## Rules (the owner's; reviews reject PRs that break them)
+## Rules (the user's; reviews reject PRs that break them)
+
+**Wording:** in docs, specs, comments and PR text, refer to the person who runs this project as "the user" (or "you"), never as "the owner" (user request, 2026-11-18). "Owner" stays only in its technical senses: file or process owner, uid, lock or bus holder, GitHub repository owner.
 - **Responsiveness first**: budgets L1–L10 (spec rule 0.8). Never add busy
   waits or long work in interrupts or in the kernel/MM/FS paths a key press uses.
 - **RAM is tight**: `make BOARD=flipper ramcheck` must pass. Do not raise a line in
@@ -32,11 +34,26 @@ A run can stop at its turn or time limit. After **each finished step** of your
 checklist (it builds, or at least compiles), commit and push it with the git
 scripts you were given (`git-add.sh`, `git-commit.sh -m "WIP <task>: <step>"`,
 `git-push.sh origin HEAD`), and keep the checklist in your comment current.
-Then a cut-off run leaves a branch that the next run continues: the owner or
+Then a cut-off run leaves a branch that the next run continues: the user or
 the review side opens a draft PR from it and comments `@claude continue`.
 When you are started on a PR, read its commits and your earlier comment first
 and continue from the first unchecked step; do not redo finished steps.
 Plan big tasks so that each step is a few files, not the whole task at once.
+
+**Run tests in the foreground.** This is a headless run: when you end your turn
+(for example with "waiting for X to finish"), the job ends and every background
+command is killed. Never use `run_in_background`, and never end your turn while
+something is still running. Give long commands `timeout: 600000` (10 min). Split
+anything longer, e.g. `tools/pkgload.py` or powercut in batches, and commit
+between the batches.
+
+**Push after every commit; the token lasts about an hour.** The job's GitHub
+token expires roughly 60 minutes after the run starts. After that, `git push`
+and progress-comment updates fail with "Authentication failed" / "Bad
+credentials", and any unpushed commit is lost when the job ends (#282,
+run 44375225261). So `git push` right after each commit. If the plan needs
+more than about 50 minutes, push what is done, write the open steps in your
+final message, and stop: the dispatcher resumes it with "@claude continue".
 
 ## Check your work (all in this runner; the toolchain is installed)
 ```
@@ -50,7 +67,7 @@ If the change touches installs or the flash region, also run
 `make -j"$(nproc)" minix disk && python3 -I tools/powercut.py -j"$(nproc)"`.
 You have no Flipper. Anything that needs the device (L1–L10 with `lat`, radio,
 USB, SD timing) goes into the PR description under "Needs on-device test", with
-the exact steps, for the owner's local agent; after the merge they become
+the exact steps, for the user's local agent; after the merge they become
 checkboxes in the open issue labelled `device-checks` (#109).
 A change on the Flipper path that only the device can accept (a new hardware
 path, a driver) merges **off by default** (or with no change on the Flipper

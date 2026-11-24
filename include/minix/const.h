@@ -95,7 +95,7 @@
 /* Some limits. */
 #define MAX_BLOCK_NR  ((block_t) 077777777)	/* largest block number */
 #define HIGHEST_ZONE   ((zone_t) 077777777)	/* largest zone number */
-#define MAX_INODE_NR      ((ino_t) 0177777)	/* largest inode number */
+#define MAX_INODE_NR      ((ino_t) 0xFFFFFFFFL)	/* largest inode number */
 #define MAX_FILE_POS ((off_t) 037777777777)	/* largest legal file offset */
 
 #define NO_BLOCK              ((block_t) 0)	/* absence of a block number */

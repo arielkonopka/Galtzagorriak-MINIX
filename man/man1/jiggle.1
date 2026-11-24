@@ -1,0 +1,65 @@
+.TH JIGGLE 1
+.SH NAME
+jiggle \- keep the computer on the USB cable awake (mouse jiggler)
+.SH SYNOPSIS
+.nf
+\fBjiggle\fR [\fB\-i\fR \fIseconds\fR] [\fB\-p tiny\fR|\fBzero\fR] &
+\fBjiggle \-k\fR
+.fi
+.SH DESCRIPTION
+.B Jiggle
+writes a mouse report to
+.B /dev/hidmouse
+every
+.I seconds
+(default 30, 1 to 3600), so that the computer the Flipper is plugged into
+does not lock its screen or go to sleep (Galtzagorriak MINIX, spec
+R11.3.6).
+Start it in the background; the Jiggler page of Teklatua does the same.
+.TP
+.B \-p tiny
+(the default) moves the pointer one pixel right, down, left and up: it
+ends where it was.
+.TP
+.B \-p zero
+sends a report that does not move it at all.
+.TP
+.B \-k
+stops the running
+.BR jiggle .
+.PP
+.B Jiggle
+sleeps in
+.BR poll ()
+between reports.
+While the cable is out, the computer has not set the Flipper up yet, has
+suspended the USB bus, or another USB persona (the canary, a reader mode)
+holds it, it sends nothing and does not wake at all until that changes.
+.PP
+While it runs, the desktop shows
+.B J
+on the status line
+.RB ( "guimod status jiggle J" ).
+Only one
+.B jiggle
+runs at a time.
+It takes about 1 KB of RAM (its text runs from flash).
+.SH FILES
+.TP 20
+.B /dev/hidmouse
+the USB mouse (mode 0660, group usb)
+.TP
+.B /tmp/jiggle
+the FIFO
+.B "jiggle \-k"
+writes into (the running one's, mode 0600)
+.SH "EXIT STATUS"
+0 stopped by
+.BR "jiggle \-k" ,
+1 an error (no access to
+.BR /dev/hidmouse ,
+already running; for
+.BR \-k :
+not running), 2 usage.
+.SH "SEE ALSO"
+.BR guimod (1).

@@ -18,11 +18,16 @@
 #include <fcntl.h>
 #include <minix/callnr.h>
 #include <minix/com.h>
+#include <minix/subghz.h>
+#include <minix/fg.h>
+#include <sys/ioctl.h>
+#include <minix/partition.h>
 #include "dev.h"
 #include "file.h"
 #include "fproc.h"
 #include "inode.h"
 #include "param.h"
+#include "super.h"
 
 PRIVATE message dev_mess;
 PRIVATE major, minor, task;
@@ -34,7 +39,9 @@ FORWARD _PROTOTYPE( void find_dev, (Dev_t dev)				);
  *===========================================================================*/
 PUBLIC int dev_io(op, nonblock, dev, pos, bytes, proc, buff)
 int op;				/* DEV_READ, DEV_WRITE, DEV_IOCTL, etc. */
-int nonblock;			/* TRUE if nonblocking op */
+int nonblock;			/* TRUE if nonblocking op; for the block
+				 * I/O of the cache: position bits 32-63
+				 * (HIGHPOS, R12.39), the same field */
 dev_t dev;			/* major-minor device number */
 off_t pos;			/* byte position */
 int bytes;			/* how many bytes to transfer */
@@ -217,6 +224,51 @@ PUBLIC int do_ioctl()
   if ( (rip->i_mode & I_TYPE) != I_CHAR_SPECIAL
 	&& (rip->i_mode & I_TYPE) != I_BLOCK_SPECIAL) return(ENOTTY);
   dev = (dev_t) rip->i_zone[0];
+  /* #326: the Sub-GHz region (the bands a transmit may use) is set by the
+   * superuser only (/etc/rc).  The device is 0660 group subghz, and the
+   * kernel does not know the caller's uid, so FS checks it here.  'Q' is
+   * the Sub-GHz ioctl group only, so no other device sees this number. */
+  if (m.TTY_REQUEST == SGIOCREGION && !super_user) return(EPERM);
+  /* Security review 2026-11-19, H1: DIOCSETP rewrites a driver's idea of
+   * where a device begins and how long it is.  On /dev/rom (0644) that
+   * let any process read all of RAM, or reset the device with a bus
+   * fault.  The superuser only (repartition); 'd' is the disk group. */
+  if (m.TTY_REQUEST == DIOCSETP && !super_user) return(EPERM);
+  /* H5: FGIOCSET names the process that gets the screen and the buttons,
+   * and that a long Back ends.  The superuser (the launcher) names any;
+   * others only themselves, nobody (0), or a process of their own real
+   * uid (an app's own child).  The kernel still refuses servers and init. */
+  if (m.TTY_REQUEST == FGIOCSET && !super_user) {
+	int fgpid;
+	struct fproc *rfp;
+
+	if (sys_copy(who, D, (phys_bytes) m.ADDRESS, FS_PROC_NR, D,
+			(phys_bytes) &fgpid, (phys_bytes) sizeof(fgpid)) != OK)
+		return(EFAULT);
+	if (fgpid != 0 && fgpid != fp->fp_pid) {
+		for (rfp = &fproc[0]; rfp < &fproc[NR_PROCS]; rfp++)
+			if (rfp->fp_pid == fgpid) break;
+		if (rfp == &fproc[NR_PROCS]) return(ESRCH);
+		if (rfp->fp_realuid != fp->fp_realuid) return(EPERM);
+	}
+  }
+  /* R12.39: a raw sector read (DIOCPRW) needs a descriptor open for
+   * reading; a write, one open for writing and a device that is not
+   * mounted (the cache would not see it).  The kernel cannot check
+   * either, so FS does. */
+  if (m.TTY_REQUEST == DIOCPRW && (rip->i_mode & I_TYPE) == I_BLOCK_SPECIAL) {
+	struct part_rw rw;
+	struct super_block *sp;
+
+	if (sys_copy(who, D, (phys_bytes) m.ADDRESS, FS_PROC_NR, D,
+			(phys_bytes) &rw, (phys_bytes) sizeof(rw)) != OK)
+		return(EFAULT);
+	if (!(f->filp_mode & (rw.write ? W_BIT : R_BIT))) return(EBADF);
+	if (rw.write) {
+		for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+			if (sp->s_dev == dev) return(EBUSY);
+	}
+  }
   find_dev(dev);
 
   dev_mess= m;

@@ -281,8 +281,8 @@ char *directory;
 			}
 
 			/* Add new pathname-component to `pathname'. */
-			strncpy(name, dp->d_name, (size_t) NAME_MAX);
-			name[NAME_MAX] = '\0';
+			strncpy(name, dp->d_name, (size_t) DIRSIZ);
+			name[DIRSIZ] = '\0';
 
 			/* Call the right routine */
 			if ((dip.d1_mode & I_TYPE) == I_DIRECTORY)

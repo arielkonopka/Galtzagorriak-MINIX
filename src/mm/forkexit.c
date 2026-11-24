@@ -150,6 +150,7 @@ int vfork;			/* vfork: no copy, the parent waits */
   *rmc = *rmp;			/* copy parent's process slot to child's */
 #if (CHIP == ARM_CM)
   rmp->mp_flags &= ~FGEXEC;	/* the child execs the foreground app */
+  rmc->mp_flags &= ~(SWAPHOT | SWAPHDR | BLKUSED);	/* its slot's header is not its */
 #endif
 
   rmc->mp_parent = who;		/* record child's parent */
@@ -170,6 +171,9 @@ int vfork;			/* vfork: no copy, the parent waits */
   do {
 	t = 0;			/* 't' = 0 means pid still free */
 	next_pid = (next_pid < 30000 ? next_pid + 1 : INIT_PID + 1);
+#if (CHIP == ARM_CM)
+	if (next_pid == INIT_PID + 1) blk_wrap();	/* R12.35 */
+#endif
 	for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
 		if (rmp->mp_pid == next_pid || rmp->mp_procgrp == next_pid) {
 			t = 1;
@@ -197,6 +201,22 @@ int vfork;			/* vfork: no copy, the parent waits */
   }
   return(next_pid);		 /* child's pid */
 }
+
+
+#if (CHIP == ARM_CM)
+/*===========================================================================*
+ *				pid_wrap				     *
+ *===========================================================================*/
+PUBLIC void pid_wrap(want)
+pid_t want;
+{
+/* Test hook (MI_SWAPTEST 3, root): the pid counter wraps now, as after
+ * 30000 forks, and the next fork tries want first (R12.35, AC12.19). */
+  if (want <= INIT_PID || want > 30000) want = INIT_PID + 1;
+  next_pid = want - 1;
+  blk_wrap();
+}
+#endif
 
 
 /*===========================================================================*
@@ -237,6 +257,7 @@ int exit_status;		/* the process' exit status (for parent) */
   proc_nr = (int) (rmp - mproc);	/* get process slot number */
 #if (CHIP == ARM_CM)
   sw_touch(proc_nr);		/* no reserve swap-out of it (swap.c) */
+  blk_end(proc_nr);		/* its block run is free (blk.c, R12.35) */
 #endif
 
   /* Remember a session leader's process group. */

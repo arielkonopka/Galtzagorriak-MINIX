@@ -11,9 +11,11 @@
 #define GZ_NAME		"Galtzagorriak"
 #define GZ_MAJOR	0
 #define GZ_MINOR	1
-#define GZ_PATCH	1
-#define GZ_RELEASE	"0.1.1"
-#define GZ_ABI		2	/* binary compatibility of programs (J.3) */
+#define GZ_PATCH	2
+#define GZ_RELEASE	"0.1.2"
+#define GZ_EPOCH	3	/* +1 every release, never reused (spec RS.19):
+				 * update files install only upwards */
+#define GZ_ABI		3	/* binary compatibility of programs (J.3) */
 #define GZ_BASE		"MINIX 2.0.0"
 #define GZ_BASE_VER	"M2.0.0"	/* uname -v */
 

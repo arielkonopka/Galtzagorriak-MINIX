@@ -11,8 +11,6 @@
 #define bit_nr bit_t
 #define block_nr block_t
 #define d_inode d2_inode
-#define d_inum d_ino
-#define dir_struct struct direct
 #define i_mode d2_mode
 #define i_nlinks d2_nlinks
 #define i_size d2_size
@@ -33,11 +31,49 @@
 *   Removed -m option, by which fsck could be told to make a file
 *   system on a 360K floppy.  The code had limited utility, was buggy,
 *   and failed due to a bug in the ACK C compiler.  Use mkfs instead!
+*
+* Galtzagorriak (spec N.3, N.4, T17a; spec O.6, T27a: MINIX V3 too, with
+*   64 B entries and 60-character names, 32-bit inodes, the triple
+*   indirect zone, CLEAN/CHECK at offset 14, blocks past 2 GiB read with
+*   bread(); imap/dirmap only up to the highest inode in use; the zone
+*   windows above the highest zone in use are only compared):
+*   -p  preen: nothing to do (no output) when the super block says CLEAN
+*       and not CHECK; else check and repair as -a.
+*   -v  for the Flipper's 32x10 console: a header, the phase with a
+*       spinner and a percentage redrawn in place, one short line per
+*       repair, a summary.  The long messages go to /dev/null.
+*   -m KB  memory for the maps (fsck_mem, default 64).  The computed zone
+*       map is a window of the zones; more windows mean more passes.
+*       Windows past the first are walked only for the inodes whose
+*       2-byte record (first and last window) covers them.  -p stops at
+*       the high-water mark: above it the only possible error is a leaked
+*       zone (space, not danger).
+*   -S  the leak sweep (spec O.6): as -p, also on a CLEAN file system, and
+*       the zone map above the high-water mark is compared too, so a leak
+*       there is freed.  On a mounted file system it only counts.
+*   -T dev  scratch on the swap partition dev (swap off there): past about
+*       fsck_mem / 6 inodes in use the link counts and window records go
+*       to its first blocks, 16 KB of pages in RAM (spec O.6).
+*   -L file  append the -v lines to file.  -k  Back (on /dev/buttons)
+*       stops the check (exit 8, CHECK set).  -w s  after repairs, keep
+*       the summary on the screen until a key or s seconds.
+*   Exit status as BSD: 0 clean, 1 repaired, 2 the mounted root repaired
+*   (reboot now), 4 errors left, 8 not checked.  After a check with
+*   repairs allowed: CHECK = 0, and CLEAN = 1 if not mounted.
+*   The disk maps are compared one block at a time; spec_imap/spec_zmap
+*   only with -c/-i/-z; link counts up to the highest inode in use.
 */
 
+#include <lib.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/dir.h>
+#include <sys/stat.h>
+#include <sys/times.h>
 #include <ctype.h>
+#include <stddef.h>
+#include <time.h>
+#include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -51,6 +87,7 @@
 #include "../../fs/inode.h"
 #include "../../fs/type.h"
 #include <minix/fslib.h>
+#include <minix/partition.h>
 
 #undef printf			/* defined as printk in "../fs/const.h" */
 
@@ -79,12 +116,44 @@
 #define setbit(w, b)	(w[WORDOFBIT(b)] |= POWEROFBIT(b))
 #define clrbit(w, b)	(w[WORDOFBIT(b)] &= ~POWEROFBIT(b))
 #define bitset(w, b)	(w[WORDOFBIT(b)] & POWEROFBIT(b))
+/* The spec_ maps exist only with -c, -i or -z (spec N.4). */
+#define specset(w, b)	do { if (w) setbit(w, b); } while (0)
+#define specbit(w, b)	((w) != 0 && bitset(w, b))
 
 #define ZONE_CT 	360	/* default zones  (when making file system) */
 #define INODE_CT	 95	/* default inodes (when making file system) */
 
 #include "../../fs/super.h"
-struct super_block sb;
+
+/* Spec O.6: the super block as fsck uses it, for V2 and V3 alike (V1 is
+ * refused).  getsuper() reads block 1 field by field, putsuper() writes it
+ * back; the on-disk layouts are in getsuper(). */
+struct {
+  unsigned long s_ninodes;	/* V2: 16 bits on the disk, V3: 32 */
+  int s_imap_blocks;
+  int s_zmap_blocks;
+  zone_t s_firstdatazone;
+  int s_log_zone_size;
+  long s_max_size;
+  zone_t s_zones;
+  unsigned short s_magic;
+  unsigned short s_flags;	/* N.1: V2 at offset 18, V3 at 14 */
+} sb;
+int v3;				/* a MINIX V3 file system */
+int esize = 16, nlen = DIRSIZ, noff = 2;	/* directory entries (O.4) */
+#define FLAGS_OFF	(v3 ? 14 : 18)
+
+/* A directory entry in memory, for both formats (spec O.6): V1/V2 on the
+ * disk 16 B (16-bit inode, 14 chars), V3 64 B (32-bit inode, 60 chars).
+ * d_name always ends in a 0. */
+typedef struct {
+  ino_t d_inum;
+  char d_name[V3_DIRSIZ + 1];
+} dir_struct;
+
+/* Disk addresses in bytes: a V3 /home can be far larger than 4 GiB. */
+typedef unsigned long long addr_t;
+#define MAXPOS		((off_t) 0x7FFFFFFFL)
 
 #define STICKY_BIT	01000	/* not defined anywhere else */
 
@@ -92,7 +161,7 @@ struct super_block sb;
  * btoa gives the byte address of a block
  */
 #define ztob(z)		((block_nr) (z) << sb.s_log_zone_size)
-#define btoa(b)		((long) (b) * BLOCK_SIZE)
+#define btoa(b)		((addr_t) (b) << 10)	/* BLOCK_SIZE */
 #define SCALE		((int) ztob(1))	/* # blocks in a zone */
 #define FIRST		((zone_nr) sb.s_firstdatazone)	/* as the name says */
 
@@ -114,9 +183,9 @@ struct super_block sb;
 
 /* Byte address of a zone/of an inode */
 #define zaddr(z)	btoa(ztob(z))
-#define inoaddr(i)	((long) (i - 1) * INODE_SIZE + (long) btoa(BLK_ILIST))
+#define inoaddr(i)	((addr_t) ((i) - 1) * INODE_SIZE + btoa(BLK_ILIST))
 #define INDCHUNK	((int) (CINDIR * ZONE_NUM_SIZE))
-#define DIRCHUNK	((int) (CDIRECT * DIR_ENTRY_SIZE))
+#define DIRCHUNK	256	/* bytes of a directory read at a time */
 
 char *prog, *device;		/* program name (fsck), device name */
 int firstcnterr;		/* is this the first inode ref cnt error? */
@@ -126,6 +195,9 @@ bitchunk_t *dirmap;		/* directory (inode) bit map */
 char rwbuf[BLOCK_SIZE];		/* one block buffer cache */
 block_nr thisblk;		/* block in buffer cache */
 char nullbuf[BLOCK_SIZE];	/* null buffer */
+bitchunk_t mapbuf[WORDS_PER_BLOCK];	/* one disk map block (spec N.4) */
+int imblk;			/* blocks in imap and dirmap (spec O.6) */
+bit_nr hwm;			/* highest zone bit any inode owns (O.6) */
 nlink_t *count;			/* inode count */
 int changed;			/* has the diskette been written to? */
 struct stack {
@@ -145,6 +217,46 @@ int npipe, nsyml, ztype[NLEVEL];
 long nfreezone;
 
 int repair, automatic, listing, listsuper;	/* flags */
+int preen, verbose, keyskip;	/* -p, -v, -k (spec N.3) */
+long fsck_mem = 64L * 1024;	/* -m: bytes for the maps (spec N.4) */
+char *logname;			/* -L: the -v lines also go here */
+FILE *vout, *vlog;		/* the console and the log for -v */
+int vfd = -1;			/* /dev/buttons for -k */
+int ismounted, isroot;		/* the device is mounted; it is / */
+int nfixed, nleft;		/* repairs made, errors not repaired */
+int stopped;			/* Back pressed */
+ino_t maxino;			/* count[] and winrec[] cover 0..maxino */
+long nused;			/* inodes in use in the disk map */
+ino_t cur_ino;			/* inode whose zones are being marked */
+unsigned char *winrec;		/* per inode: first and last window (O.6) */
+int sweep;			/* -S: compare above the high-water mark */
+char *scrname;			/* -T: scratch on the (unused) swap partition */
+int scrfd = -1;			/* open while count[]/winrec[] live there */
+
+/* Spec O.6: past ~30 000 inodes in use the link count and the window
+ * record (4 B an inode, 256 a page) live in a scratch area at the start
+ * of the swap partition, 1 KB pages through a small LRU. */
+#define SPAGES		16	/* pages in RAM (16 KB on top of fsck_mem) */
+#define SRECS		(BLOCK_SIZE / 4)	/* records a page */
+struct spage {
+  long pno;			/* page number, -1: none */
+  unsigned long use;		/* LRU stamp */
+  unsigned char *buf;
+} *spg;
+unsigned char *sinit;		/* a bit per page: on the device already */
+unsigned long suse;		/* LRU clock */
+long spmax;			/* pages the swap partition holds */
+
+/* The link count and the 2-byte window record of inode i. */
+#define CNT(i)	(*(scrfd >= 0 ? (nlink_t *) srec((ino_t) (i)) : &count[i]))
+#define WREC(i)	(scrfd >= 0 ? srec((ino_t) (i)) + 1 : winrec + 2 * (long) (i))
+bit_nr wlo, whi, wbits;		/* zmap holds zone bits wlo..whi-1 */
+int nwin, curwin;		/* number of windows; the current one */
+char *vphase = "";		/* -v: what is going on */
+long vdone, vtotal;		/* -v: progress in the phase */
+clock_t vstart, vlast;		/* -v: times() at the start, last redraw */
+int vspin, vcalls;
+int waitsecs;			/* -w: keep the summary of repairs on screen */
 int firstlist;			/* has the listing header been printed? */
 unsigned part_offset;		/* sector offset for this partition */
 char answer[] = "Answer questions with y or n.  Then hit RETURN";
@@ -163,8 +275,13 @@ _PROTOTYPE(void printpath, (int mode, int nlcr));
 _PROTOTYPE(void devopen, (void));
 _PROTOTYPE(void devclose, (void));
 _PROTOTYPE(void devio, (block_nr bno, int dir));
-_PROTOTYPE(void devread, (long offset, char *buf, int size));
-_PROTOTYPE(void devwrite, (long offset, char *buf, int size));
+_PROTOTYPE(void devread, (addr_t offset, char *buf, int size));
+_PROTOTYPE(void devwrite, (addr_t offset, char *buf, int size));
+_PROTOTYPE(void unpack, (char *raw, dir_struct *dp));
+_PROTOTYPE(void pack, (dir_struct *dp, char *raw));
+_PROTOTYPE(off_t padd, (off_t pos, off_t n));
+_PROTOTYPE(void putsuper, (void));
+_PROTOTYPE(void growmaps, (ino_t ino));
 _PROTOTYPE(void pr, (char *fmt, int cnt, char *s, char *p));
 _PROTOTYPE(void lpr, (char *fmt, long cnt, char *s, char *p));
 _PROTOTYPE(bit_nr getnumber, (char *s));
@@ -181,7 +298,7 @@ _PROTOTYPE(void freebitmap, (bitchunk_t *p));
 _PROTOTYPE(void getbitmaps, (void));
 _PROTOTYPE(void putbitmaps, (void));
 _PROTOTYPE(void chkword, (unsigned w1, unsigned w2, bit_nr bit, char *type, int *n, int *report));
-_PROTOTYPE(void chkmap, (bitchunk_t *cmap, bitchunk_t *dmap, bit_nr bit, block_nr blkno, int nblk, char *type));
+_PROTOTYPE(void chkmap, (bitchunk_t *cmap, int cblk, bit_nr bit, block_nr blkno, int nblk, bit_nr nbits, char *type));
 _PROTOTYPE(void chkilist, (void));
 _PROTOTYPE(void getcount, (void));
 _PROTOTYPE(void counterror, (Ino_t ino));
@@ -210,7 +327,22 @@ _PROTOTYPE(int chkinode, (Ino_t ino, d_inode *ip));
 _PROTOTYPE(int descendtree, (dir_struct *dp));
 _PROTOTYPE(void chktree, (void));
 _PROTOTYPE(void printtotal, (void));
-_PROTOTYPE(void chkdev, (char *f, char **clist, char **ilist, char **zlist));
+_PROTOTYPE(int chkdev, (char *f, char **clist, char **ilist, char **zlist));
+_PROTOTYPE(void vline, (char *s));
+_PROTOTYPE(void vtick, (int force));
+_PROTOTYPE(void vset, (char *phase, long total));
+_PROTOTYPE(void needino, (Ino_t ino));
+_PROTOTYPE(void findmaxino, (void));
+_PROTOTYPE(unsigned char *srec, (ino_t ino));
+_PROTOTYPE(void spageio, (struct spage *p, int wr));
+_PROTOTYPE(void scropen, (void));
+_PROTOTYPE(void scrclose, (void));
+_PROTOTYPE(void getwindow, (void));
+_PROTOTYPE(void setwindow, (int w));
+_PROTOTYPE(void wzones, (zone_nr *zlist, int len, int level, off_t *pos, off_t size, int *dirty));
+_PROTOTYPE(void winpass, (void));
+_PROTOTYPE(int sflags, (int set, int clr));
+_PROTOTYPE(void whereis, (void));
 
 /* Initialize the variables used by this program. */
 void initvars()
@@ -229,8 +361,15 @@ void initvars()
 void fatal(s)
 char *s;
 {
+  char line[40];
+
   printf("%s\nfatal\n", s);
-  exit(-1);
+  if (verbose) {
+	sprintf(line, "not checked: %.18s", *s ? s : "error");
+	vline(line);
+  }
+  if (repair) sync();
+  exit(8);		/* BSD: could not check (spec N.3) */
 }
 
 /* Test for end of line. */
@@ -246,19 +385,37 @@ char *question;
 {
   register int c, answerchar;
 
+  char line[40];
+
   if (!repair) {
 	printf("\n");
+	nleft++;
 	return(0);
   }
   printf("%s? ", question);
   if (automatic) {
 	printf("yes\n");
+	nfixed++;
+	if (verbose) {	/* one short line per repair (spec N.3) */
+		while (*question == '.' || *question == ' ') question++;
+		if (cur_ino != 0)
+			sprintf(line, "fix %u: %.20s", (unsigned) cur_ino,
+								question);
+		else
+			sprintf(line, "fix: %.26s", question);
+		vline(line);
+	}
 	return(1);
   }
   fflush(stdout);
-  if ((c = answerchar = getchar()) == 'q' || c == 'Q') exit(1);
+  if ((c = answerchar = getchar()) == 'q' || c == 'Q') exit(4);
   while (!eoln(c)) c = getchar();
-  return !(answerchar == 'n' || answerchar == 'N');
+  if (answerchar == 'n' || answerchar == 'N') {
+	nleft++;
+	return(0);
+  }
+  nfixed++;
+  return(1);
 }
 
 /* Convert string to integer.  Representation is octal. */
@@ -315,7 +472,7 @@ unsigned nelem, elsize;
 void printname(s)
 char *s;
 {
-  register n = NAME_MAX;
+  register n = nlen;
   int c;
 
   do {
@@ -384,17 +541,29 @@ int dir;
 {
   if (dir == READING && bno == thisblk) return;
   thisblk = bno;
+  vtick(0);
 
 #if 0
 printf("%s at block %5d\n", dir == READING ? "reading " : "writing", bno);
 #endif
-  lseek(dev, (off_t) btoa(bno), SEEK_SET);
-  if (dir == READING) {
-	if (read(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
-		return;
+  if (bno >= (block_nr) 0x200000L) {
+	/* Spec O.6: past 2 GiB lseek() cannot go; DIOCPRW (O.3) can. */
+	if (dir == READING) {
+		if (bread(dev, (unsigned long) bno * 2, rwbuf, 2) == 0)
+			return;
+	} else {
+		if (bwrite(dev, (unsigned long) bno * 2, rwbuf, 2) == 0)
+			return;
+	}
   } else {
-	if (write(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
-		return;
+	lseek(dev, (off_t) btoa(bno), SEEK_SET);
+	if (dir == READING) {
+		if (read(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
+			return;
+	} else {
+		if (write(dev, rwbuf, BLOCK_SIZE) == BLOCK_SIZE)
+			return;
+	}
   }
 
   printf("%s: can't %s block %ld (error = 0x%x)\n", prog,
@@ -409,25 +578,66 @@ printf("%s at block %5d\n", dir == READING ? "reading " : "writing", bno);
 
 /* Read `size' bytes from the disk starting at byte `offset'. */
 void devread(offset, buf, size)
-long offset;
+addr_t offset;
 char *buf;
 int size;
 {
-  devio((block_nr) (offset / BLOCK_SIZE), READING);
-  memmove(buf, &rwbuf[(int) (offset % BLOCK_SIZE)], (size_t)size);  /* lint but OK */
+  devio((block_nr) (offset >> 10), READING);
+  memmove(buf, &rwbuf[(int) (offset & (BLOCK_SIZE - 1))], (size_t)size);
 }
 
 /* Write `size' bytes to the disk starting at byte `offset'. */
 void devwrite(offset, buf, size)
-long offset;
+addr_t offset;
 char *buf;
 int size;
 {
   if (!repair) fatal("internal error (devwrite)");
-  if (size != BLOCK_SIZE) devio((block_nr) (offset / BLOCK_SIZE), READING);
-  memmove(&rwbuf[(int) (offset % BLOCK_SIZE)], buf, (size_t)size);  /* lint but OK */
-  devio((block_nr) (offset / BLOCK_SIZE), WRITING);
+  if (size != BLOCK_SIZE) devio((block_nr) (offset >> 10), READING);
+  memmove(&rwbuf[(int) (offset & (BLOCK_SIZE - 1))], buf, (size_t)size);
+  devio((block_nr) (offset >> 10), WRITING);
   changed = 1;
+}
+
+/* A directory entry from the disk into memory, and back (spec O.6). */
+void unpack(raw, dp)
+char *raw;
+dir_struct *dp;
+{
+  u32_t i32;
+  u16_t i16;
+
+  if (v3) {
+	memcpy(&i32, raw, 4);
+	dp->d_inum = i32;
+  } else {
+	memcpy(&i16, raw, 2);
+	dp->d_inum = i16;
+  }
+  memcpy(dp->d_name, raw + noff, (size_t) nlen);
+  dp->d_name[nlen] = 0;
+}
+
+void pack(dp, raw)
+dir_struct *dp;
+char *raw;
+{
+  u32_t i32 = dp->d_inum;
+  u16_t i16 = (u16_t) dp->d_inum;
+
+  if (v3)
+	memcpy(raw, &i32, 4);
+  else
+	memcpy(raw, &i16, 2);
+  memcpy(raw + noff, dp->d_name, (size_t) nlen);
+}
+
+/* A file position plus n, held at MAXPOS: a V3 triple indirect zone spans
+ * more than off_t holds (spec O.6). */
+off_t padd(pos, n)
+off_t pos, n;
+{
+  return(pos > MAXPOS - n ? MAXPOS : pos + n);
 }
 
 /* Print a string with either a singular or a plural pronoun. */
@@ -501,7 +711,7 @@ void lsuper()
 	printf("maxsize       = %ld", sb.s_max_size);
 	if (input(buf, 80)) sb.s_max_size = atol(buf);
 	if (yes("ok now")) {
-		devwrite(btoa(BLK_SUPER), (char *) &sb, sizeof(sb));
+		putsuper();
 		return;
 	}
   } while (yes("Do you want to try again"));
@@ -511,10 +721,52 @@ void lsuper()
 /* Get the super block from either disk or user.  Do some initial checks. */
 void getsuper()
 {
-  devread(btoa(BLK_SUPER), (char *) &sb, sizeof(sb));
+  u16_t w[16];
+  u32_t l[8];
+
+  devread(btoa(BLK_SUPER), (char *) w, sizeof(w));
+  memcpy(l, w, sizeof(l));
+  if (w[12] == SUPER_V3) {
+	/* V3 (spec O.6, as util-linux mkfs.minix -3): u32 ninodes at 0,
+	 * u16 imap 6, zmap 8, firstdatazone 10, log_zone_size 12, flags 14
+	 * (N.1), u32 max_size 16, zones 20, u16 magic 24, blocksize 28. */
+	v3 = 1;
+	sb.s_ninodes = l[0];
+	sb.s_imap_blocks = w[3];
+	sb.s_zmap_blocks = w[4];
+	sb.s_firstdatazone = w[5];
+	sb.s_log_zone_size = w[6];
+	sb.s_flags = w[7];
+	sb.s_max_size = (long) l[4];
+	sb.s_zones = l[5];
+	sb.s_magic = w[12];
+	if (w[14] != BLOCK_SIZE || w[6] != 0)
+		fatal("V3: only 1 KB blocks and zones");
+	esize = V3_DIRENT_SIZE;
+	nlen = V3_DIRSIZ;
+	noff = 4;
+  } else {
+	/* V1/V2: u16 ninodes at 0, nzones 2, imap 4, zmap 6, firstdatazone
+	 * 8, log_zone_size 10, u32 max_size 12, u16 magic 16, flags 18
+	 * (N.1), u32 zones 20. */
+	v3 = 0;
+	sb.s_ninodes = w[0];
+	sb.s_imap_blocks = w[2];
+	sb.s_zmap_blocks = w[3];
+	sb.s_firstdatazone = w[4];
+	sb.s_log_zone_size = (short) w[5];
+	sb.s_max_size = (long) l[3];
+	sb.s_magic = w[8];
+	sb.s_flags = w[9];
+	sb.s_zones = l[5];
+	esize = V2_DIRENT_SIZE;
+	nlen = DIRSIZ;
+	noff = 2;
+  }
   if (listsuper) lsuper();
   if (sb.s_magic == SUPER_MAGIC) fatal("Cannot handle V1 file systems");
-  if (sb.s_magic != SUPER_V2) fatal("bad magic number in super block");
+  if (sb.s_magic != SUPER_V2 && sb.s_magic != SUPER_V3)
+	fatal("bad magic number in super block");
   if (sb.s_ninodes <= 0) fatal("no inodes");
   if (sb.s_zones <= 0) fatal("no zones");
   if (sb.s_imap_blocks <= 0) fatal("no imap");
@@ -524,6 +776,36 @@ void getsuper()
   if (sb.s_max_size <= 0) fatal("max. file size <= 0");
 }
 
+/* Write the fields of -s back into block 1, in its own layout. */
+void putsuper()
+{
+  u16_t w[16];
+  u32_t l[8];
+
+  devread(btoa(BLK_SUPER), (char *) w, sizeof(w));
+  memcpy(l, w, sizeof(l));
+  if (v3) {
+	l[0] = sb.s_ninodes;
+	l[4] = sb.s_max_size;
+	l[5] = sb.s_zones;
+	memcpy(w, l, sizeof(l));
+	w[3] = sb.s_imap_blocks;
+	w[4] = sb.s_zmap_blocks;
+	w[5] = sb.s_firstdatazone;
+	w[6] = sb.s_log_zone_size;
+  } else {
+	l[3] = sb.s_max_size;
+	l[5] = sb.s_zones;
+	memcpy(w, l, sizeof(l));
+	w[0] = sb.s_ninodes;
+	w[2] = sb.s_imap_blocks;
+	w[3] = sb.s_zmap_blocks;
+	w[4] = sb.s_firstdatazone;
+	w[5] = sb.s_log_zone_size;
+  }
+  devwrite(btoa(BLK_SUPER), (char *) w, sizeof(w));
+}
+
 /* Check the super block for reasonable contents. */
 void chksuper()
 {
@@ -531,15 +813,18 @@ void chksuper()
   register off_t maxsize;
 
   n = bitmapsize((bit_t) sb.s_ninodes + 1);
-  if (sb.s_magic != SUPER_V2) fatal("bad magic number in super block");
   if (sb.s_imap_blocks < n) fatal("too few imap blocks");
   if (sb.s_imap_blocks != n) {
 	pr("warning: expected %d imap_block%s", n, "", "s");
 	printf(" instead of %d\n", sb.s_imap_blocks);
   }
-  n = bitmapsize((bit_t) sb.s_zones);
-  if (sb.s_zmap_blocks < n) fatal("too few zmap blocks");
-  if (sb.s_zmap_blocks != n) {
+  /* The zone map holds the data zones (bit 0 unused); MINIX's mkfs makes
+   * it for all s_zones, util-linux's mkfs.minix (V3) for the data zones. */
+  if (sb.s_zmap_blocks < bitmapsize((bit_t) N_DATA + 1))
+	fatal("too few zmap blocks");
+  n = v3 ? bitmapsize((bit_t) N_DATA + 1) : bitmapsize((bit_t) sb.s_zones);
+  /* V3: mkfs -3 -g leaves room for a larger file system (spec O.7) */
+  if (sb.s_zmap_blocks != n && !(v3 && sb.s_zmap_blocks > n)) {
 	pr("warning: expected %d zmap_block%s", n, "", "s");
 	printf(" instead of %d\n", sb.s_zmap_blocks);
   }
@@ -555,8 +840,8 @@ void chksuper()
 	printf("warning: expected first data zone to be %d ", n);
 	printf("instead of %u\n", sb.s_firstdatazone);
   }
-  maxsize = MAX_FILE_POS;
-  if (((maxsize - 1) >> sb.s_log_zone_size) / BLOCK_SIZE >= MAX_ZONES)
+  maxsize = v3 ? MAXPOS : MAX_FILE_POS;	/* V3: as mkfs.minix -3 */
+  if (!v3 && ((maxsize - 1) >> sb.s_log_zone_size) / BLOCK_SIZE >= MAX_ZONES)
 	maxsize = ((long) MAX_ZONES * BLOCK_SIZE) << sb.s_log_zone_size;
   if (sb.s_max_size != maxsize) {
 	printf("warning: expected max size to be %ld ", maxsize);
@@ -577,7 +862,7 @@ char **clist;
 
   if (clist == 0) return;
   while ((bit = getnumber(*clist++)) != NO_BIT) {
-	setbit(spec_imap, bit);
+	specset(spec_imap, bit);
 	ino = bit;
 	do {
 		devread(inoaddr(ino), (char *) ip, INODE_SIZE);
@@ -665,11 +950,13 @@ bitchunk_t *p;
 /* Get all the bitmaps used by this program. */
 void getbitmaps()
 {
-  imap = allocbitmap(N_IMAP);
-  zmap = allocbitmap(N_ZMAP);
-  spec_imap = allocbitmap(N_IMAP);
-  spec_zmap = allocbitmap(N_ZMAP);
-  dirmap = allocbitmap(N_IMAP);
+  /* Spec O.6: up to the highest inode in use (and its inode block), not
+   * the whole inode map: a big V3 /home has ~100 map blocks. */
+  imblk = bitmapsize((bit_t) maxino + INODES_PER_BLOCK + 1);
+  if (imblk > N_IMAP) imblk = N_IMAP;
+  imap = allocbitmap(imblk);
+  dirmap = allocbitmap(imblk);
+  /* zmap: getwindow(), after the count array */
 }
 
 /* Release all the space taken by the bitmaps. */
@@ -677,9 +964,12 @@ void putbitmaps()
 {
   freebitmap(imap);
   freebitmap(zmap);
-  freebitmap(spec_imap);
-  freebitmap(spec_zmap);
+  if (spec_imap) freebitmap(spec_imap);
+  if (spec_zmap) freebitmap(spec_zmap);
   freebitmap(dirmap);
+  if (winrec) free((char *) winrec);
+  spec_imap = spec_zmap = 0;
+  winrec = 0;
 }
 
 /* `w1' and `w2' are differing words from two bitmaps that should be
@@ -705,29 +995,68 @@ int *n, *report;
 /* Check if the given (correct) bitmap is identical with the one that is
  * on the disk.  If not, ask if the disk should be repaired.
  */
-void chkmap(cmap, dmap, bit, blkno, nblk, type)
-bitchunk_t *cmap, *dmap;
-bit_nr bit;
-block_nr blkno;
+void chkmap(cmap, cblk, bit, blkno, nblk, nbits, type)
+bitchunk_t *cmap;		/* computed map of these nblk blocks */
+int cblk;			/* blocks in cmap; the rest are zeros */
+bit_nr bit;			/* number (for messages) of its first bit */
+block_nr blkno;			/* the first of its blocks on the disk */
 int nblk;
+bit_nr nbits;			/* bits in use from here (the rest ignored) */
 char *type;
 {
-  register bitchunk_t *p = dmap, *q = cmap;
-  int report = 1, nerr = 0;
-  int w = nblk * WORDS_PER_BLOCK;
+/* Spec N.4: one disk block at a time (no second map in memory).  The bits
+ * past the end of the map are what the disk has (mkfs and mkfsimg.py
+ * differ there); a wrong block is written from the computed map.
+ */
+  bitchunk_t *dmap = mapbuf, *cblock, *zerobuf = 0;
+  register bitchunk_t *p, *q;
+  bitchunk_t mask;
+  bit_nr b0;
+  int report = 1, nerr = 0, i, w, bad, asked = 0, ok = 0;
 
   printf("Checking %s map\n", type);
-  loadbitmap(dmap, blkno, nblk);
-  do {
-	if (*p != *q) chkword(*p, *q, bit, type, &nerr, &report);
-	p++;
-	q++;
-	bit += 8 * sizeof(bitchunk_t);
-  } while (--w > 0);
+  cur_ino = 0;
+  for (i = 0; i < nblk; i++) {
+	devread(btoa(blkno + i), (char *) dmap, BLOCK_SIZE);
+	if (i == 0 && bit == (bit_nr) 0) dmap[0] |= 1;
+	if (i == 0 && type[0] == 'z' && wlo == 0) dmap[0] |= 1;
+	bad = 0;
+	if (i < cblk) {
+		cblock = cmap + i * WORDS_PER_BLOCK;
+	} else {
+		/* past the computed map: zeros (heap, not .bss) */
+		if (zerobuf == 0) zerobuf = (bitchunk_t *) alloc(1, BLOCK_SIZE);
+		cblock = zerobuf;
+		memset((void *) zerobuf, 0, BLOCK_SIZE);
+	}
+	for (w = 0, p = dmap, q = cblock;
+				w < WORDS_PER_BLOCK; w++, p++, q++) {
+		b0 = (bit_nr) i * BLOCK_SIZE * 8 + (bit_nr) w * 16;
+		if (b0 >= nbits) {
+			*q = *p;
+		} else if (b0 + 16 > nbits) {
+			mask = (bitchunk_t) ((1 << (int) (nbits - b0)) - 1);
+			*q = (*q & mask) | (*p & ~mask);
+		}
+		if (*p != *q) {
+			chkword(*p, *q, bit + b0, type, &nerr, &report);
+			bad = 1;
+		}
+	}
+	if (bad) {
+		if (!asked) {
+			asked = 1;
+			ok = yes("install a new map");
+		}
+		if (ok) devwrite(btoa(blkno + i), (char *) cblock,
+								BLOCK_SIZE);
+	}
+	vdone++;
+  }
 
+  if (zerobuf != 0) free((char *) zerobuf);
   if ((!repair || automatic) && !report) printf("etc. ");
   if (nerr > MAXPRINT || nerr > 10) printf("%d errors found. ", nerr);
-  if (nerr != 0 && yes("install a new map")) dumpbitmap(cmap, blkno, nblk);
   if (nerr > 0) printf("\n");
 }
 
@@ -737,24 +1066,258 @@ void chkilist()
   register ino_t ino = 1;
   mode_t mode;
 
+  ino_t last;
+
+  /* Spec N.4: inodes are given out from the bottom; past the highest in
+   * use (in either map) and its inode block nothing is to be cleared. */
+  last = maxino + INODES_PER_BLOCK;
+  if (last > sb.s_ninodes) last = sb.s_ninodes;
+  vset("inode list", (long) last);
   printf("Checking inode list\n");
   do
-	if (!bitset(imap, (bit_nr) ino)) {
+	if (vdone = ino, ino >= (ino_t) imblk * BLOCK_SIZE * 8
+					|| !bitset(imap, (bit_nr) ino)) {
 		devread(inoaddr(ino), (char *) &mode, sizeof(mode));
 		if (mode != I_NOT_ALLOC) {
+			cur_ino = ino;
 			printf("mode inode %u not cleared", ino);
 			if (yes(". clear")) devwrite(inoaddr(ino), nullbuf,
 					 INODE_SIZE);
 		}
 	}
-  while (++ino <= sb.s_ninodes);
+  while (++ino <= last);
   printf("\n");
 }
 
 /* Allocate an array to maintain the inode reference counts in. */
 void getcount()
 {
-  count = (nlink_t *) alloc((unsigned) (sb.s_ninodes + 1), sizeof(nlink_t));
+  /* Spec O.6: the records would take over half of fsck_mem: scratch on
+   * the swap partition (-T), if there is one and swap is off. */
+  if (scrname != 0 && 3L * (maxino + 1) > fsck_mem / 2) scropen();
+  if (scrfd < 0)
+	count = (nlink_t *) alloc((unsigned) (maxino + 1), sizeof(nlink_t));
+}
+
+/* Spec O.6: the scratch area at the start of the swap partition.  It is
+ * used only while swap is off on it (the boot checks run before swapon);
+ * swap keeps nothing there between boots (R12.34: disposable). */
+void scropen()
+{
+  struct stat sd, ss;
+  struct part_range pr;
+  struct swinfo *si;
+  message m;
+  int i;
+
+  if (stat(scrname, &ss) < 0 || !S_ISBLK(ss.st_mode)) {
+	printf("%s: not a block device: no scratch\n", scrname);
+	return;
+  }
+  if (stat(device, &sd) == 0 && sd.st_rdev == ss.st_rdev) return;
+  si = (struct swinfo *) alloc(1, sizeof(*si));
+  m.m1_p1 = (char *) si;
+  m.m1_i1 = sizeof(*si);
+  m.m1_i2 = MI_SWAPINFO;
+  /* Fail closed: if MM cannot say that swap is off there, the swap
+   * partition may be in use, so no scratch (#369 review). */
+  if (_syscall(MM, MEMINFO, &m) < 0) i = -1;
+  else i = (si->mode & 0x7F) != SW_OFF && si->dev == (int) ss.st_rdev;
+  free((char *) si);
+  if (i < 0) {
+	printf("%s: cannot ask MM about swap: no scratch\n", scrname);
+	return;
+  }
+  if (i) {
+	printf("%s: swap is on there: no scratch\n", scrname);
+	return;
+  }
+  if ((scrfd = open(scrname, O_RDWR)) < 0) {
+	printf("%s: cannot open: no scratch\n", scrname);
+	return;
+  }
+  spmax = (long) sb.s_ninodes / SRECS + 1;
+  if (ioctl(scrfd, DIOCGETPS, (void *) &pr) < 0
+		|| (long) (pr.count / (BLOCK_SIZE / 512)) < spmax) {
+	printf("%s: size unknown or too small for the scratch\n", scrname);
+	close(scrfd);
+	scrfd = -1;
+	return;
+  }
+  spg = (struct spage *) alloc(SPAGES, sizeof(struct spage));
+  for (i = 0; i < SPAGES; i++) {
+	spg[i].pno = -1;
+	spg[i].buf = (unsigned char *) alloc(1, BLOCK_SIZE);
+  }
+  sinit = (unsigned char *) alloc((unsigned) (spmax / 8 + 1), 1);
+  suse = 0;
+  if (verbose) vline("fsck: scratch on swap");
+}
+
+void scrclose()
+{
+  int i;
+
+  if (scrfd < 0) return;
+  for (i = 0; i < SPAGES; i++) free((char *) spg[i].buf);
+  free((char *) spg);
+  free((char *) sinit);
+  close(scrfd);
+  scrfd = -1;
+}
+
+void spageio(p, wr)
+struct spage *p;
+int wr;
+{
+  int n;
+
+  if (lseek(scrfd, (off_t) p->pno * BLOCK_SIZE, SEEK_SET) < 0)
+	fatal("scratch: seek");
+  n = wr ? write(scrfd, (char *) p->buf, BLOCK_SIZE)
+	 : read(scrfd, (char *) p->buf, BLOCK_SIZE);
+  if (n != BLOCK_SIZE) fatal("scratch: i/o error");
+  if (wr) sinit[p->pno >> 3] |= 1 << (int) (p->pno & 7);
+}
+
+/* The 4-byte record of inode `ino' (count, first and last window).  The
+ * page stays in RAM at least until the next call (LRU, SPAGES >= 2); a
+ * page taken out is written back (every loaded page may be changed). */
+unsigned char *srec(ino)
+ino_t ino;
+{
+  long pno = (long) (ino / SRECS);
+  register struct spage *p, *v;
+  int i;
+
+  for (i = 0, p = v = spg; i < SPAGES; i++, p++) {
+	if (p->pno == pno) {
+		p->use = ++suse;
+		return(p->buf + (int) (ino % SRECS) * 4);
+	}
+	if (p->use < v->use) v = p;
+  }
+  if (pno >= spmax) fatal("scratch: inode out of range");
+  if (v->pno >= 0) spageio(v, 1);
+  v->pno = pno;
+  if (sinit[pno >> 3] & (1 << (int) (pno & 7)))
+	spageio(v, 0);
+  else
+	memset((void *) v->buf, 0, BLOCK_SIZE);
+  v->use = ++suse;
+  return(v->buf + (int) (ino % SRECS) * 4);
+}
+
+/* Spec N.4: count[] and winrec[] (or the scratch) cover the inodes up to the highest
+ * in use in the disk map; an entry naming a higher one grows them. */
+void needino(ino)
+ino_t ino;
+{
+  ino_t newmax;
+  char *p;
+
+  if (ino <= maxino) return;
+  newmax = ino | 0xFF;
+  if (newmax > sb.s_ninodes) newmax = sb.s_ninodes;
+  if (scrfd >= 0) {	/* the scratch holds every inode */
+	maxino = newmax;
+	growmaps(newmax);
+	return;
+  }
+  if ((p = realloc((char *) count, (size_t) (newmax + 1) * sizeof(nlink_t)))
+							== NULL)
+	fatal("out of memory");
+  count = (nlink_t *) p;
+  memset(p + (maxino + 1) * sizeof(nlink_t), 0,
+			(size_t) (newmax - maxino) * sizeof(nlink_t));
+  if (winrec != 0) {
+	if ((p = realloc((char *) winrec, (size_t) (newmax + 1) * 2)) == NULL)
+		fatal("out of memory");
+	winrec = (unsigned char *) p;
+	memset(p + (maxino + 1) * 2, 0, (size_t) (newmax - maxino) * 2);
+  }
+  maxino = newmax;
+  growmaps(newmax);
+}
+
+/* imap and dirmap must hold bit `ino' and its inode block (spec O.6). */
+void growmaps(ino)
+ino_t ino;
+{
+  int n;
+  char *p;
+
+  n = bitmapsize((bit_t) ino + INODES_PER_BLOCK + 1);
+  if (n > N_IMAP) n = N_IMAP;
+  if (n <= imblk) return;
+  if ((p = realloc((char *) imap, (size_t) n * BLOCK_SIZE)) == NULL)
+	fatal("out of memory");
+  imap = (bitchunk_t *) p;
+  memset(p + imblk * BLOCK_SIZE, 0, (size_t) (n - imblk) * BLOCK_SIZE);
+  if ((p = realloc((char *) dirmap, (size_t) n * BLOCK_SIZE)) == NULL)
+	fatal("out of memory");
+  dirmap = (bitchunk_t *) p;
+  memset(p + imblk * BLOCK_SIZE, 0, (size_t) (n - imblk) * BLOCK_SIZE);
+  imblk = n;
+}
+
+/* The highest inode in use in the disk's inode map, and how many. */
+void findmaxino()
+{
+  bitchunk_t *m = mapbuf;
+  bit_nr b, last = ROOT_INODE;
+  int i, w, k;
+
+  nused = 0;
+  for (i = 0; i < N_IMAP; i++) {
+	devread(btoa(BLK_IMAP + i), (char *) m, BLOCK_SIZE);
+	for (w = 0; w < WORDS_PER_BLOCK; w++) {
+		if (m[w] == 0) continue;
+		for (k = 0; k < 16; k++) {
+			if (!(m[w] & (1 << k))) continue;
+			b = (bit_nr) i * BLOCK_SIZE * 8 + (bit_nr) w * 16 + k;
+			if (b == 0 || b > sb.s_ninodes) continue;
+			last = b;
+			nused++;
+		}
+	}
+  }
+  maxino = (ino_t) last;
+}
+
+/* Spec N.4: the computed zone map is a window of the zones, as large as
+ * fsck_mem allows after the other maps, whole map blocks. */
+void getwindow()
+{
+  long left;
+  int wblk;
+
+  left = fsck_mem - 2L * imblk * BLOCK_SIZE
+		- (scrfd >= 0 ? 0L : 3L * (maxino + 1))
+					- 4L * BLOCK_SIZE;	/* growth */
+  if (spec_imap) left -= (long) N_IMAP * BLOCK_SIZE;
+  if (spec_zmap) left -= (long) N_ZMAP * BLOCK_SIZE;
+  wblk = left < BLOCK_SIZE ? 1 : (int) (left / BLOCK_SIZE);
+  if (wblk > N_ZMAP) wblk = N_ZMAP;
+  while ((zmap = (bitchunk_t *) malloc((size_t) wblk * BLOCK_SIZE)) == 0
+							&& wblk > 1)
+	wblk--;		/* what fits of fsck_mem (fsck's chmem) */
+  if (zmap == 0) fatal("out of memory");
+  wbits = (bit_nr) wblk * BLOCK_SIZE * 8;
+  nwin = (N_ZMAP + wblk - 1) / wblk;
+  if (nwin > 1 && scrfd < 0)
+	winrec = (unsigned char *) alloc((unsigned) maxino + 1, 2);
+  setwindow(0);
+}
+
+void setwindow(w)
+int w;
+{
+  curwin = w;
+  wlo = (bit_nr) w * wbits;
+  whi = wlo + wbits;
+  memset((void *) zmap, 0, (size_t) (wbits / 8));
+  if (w == 0) *zmap |= 1;
 }
 
 /* The reference count for inode `ino' is wrong.  Ask if it should be adjusted. */
@@ -763,15 +1326,16 @@ ino_t ino;
 {
   d_inode inode;
 
+  cur_ino = ino;
   if (firstcnterr) {
 	printf("INODE NLINK COUNT\n");
 	firstcnterr = 0;
   }
   devread(inoaddr(ino), (char *) &inode, INODE_SIZE);
-  count[ino] += inode.i_nlinks;	/* it was already subtracted; add it back */
-  printf("%5u %5u %5u", ino, (unsigned) inode.i_nlinks, count[ino]);
+  CNT(ino) += inode.i_nlinks;	/* it was already subtracted; add it back */
+  printf("%5u %5u %5u", ino, (unsigned) inode.i_nlinks, CNT(ino));
   if (yes(" adjust")) {
-	if ((inode.i_nlinks = count[ino]) == 0) {
+	if ((inode.i_nlinks = CNT(ino)) == 0) {
 		fatal("internal error (counterror)");
 		inode.i_mode = I_NOT_ALLOC;
 		clrbit(imap, (bit_nr) ino);
@@ -791,15 +1355,17 @@ void chkcount()
 {
   register ino_t ino;
 
-  for (ino = 1; ino <= sb.s_ninodes; ino++)
-	if (count[ino] != 0) counterror(ino);
+  for (ino = 1; ino <= maxino; ino++)
+	if (CNT(ino) != 0) counterror(ino);
   if (!firstcnterr) printf("\n");
 }
 
 /* Deallocate the `count' array. */
 void freecount()
 {
-  free((char *) count);
+  if (count) free((char *) count);
+  count = 0;
+  scrclose();
 }
 
 /* Print the inode permission bits given by mode and shift. */
@@ -869,9 +1435,9 @@ d_inode *ip;
 int Remove(dp)
 dir_struct *dp;
 {
-  setbit(spec_imap, (bit_nr) dp->d_inum);
+  specset(spec_imap, (bit_nr) dp->d_inum);
   if (yes(". remove entry")) {
-	count[dp->d_inum]--;
+	CNT(dp->d_inum)--;
 	memset((void *) dp, 0, sizeof(dir_struct));
 	return(1);
   }
@@ -920,7 +1486,7 @@ ino_t ino, exp;
 off_t pos;
 dir_struct *dp;
 {
-  char printable_name[4 * NAME_MAX + 1];
+  char printable_name[4 * V3_DIRSIZ + 1];
 
   if (dp->d_inum != exp) {
 	make_printable_name(printable_name, dp->d_name, sizeof(dp->d_name));
@@ -928,23 +1494,23 @@ dir_struct *dp;
 	printpath(1, 0);
 	printf("%s is linked to %u ", printable_name, dp->d_inum);
 	printf("instead of %u)", exp);
-	setbit(spec_imap, (bit_nr) ino);
-	setbit(spec_imap, (bit_nr) dp->d_inum);
-	setbit(spec_imap, (bit_nr) exp);
+	specset(spec_imap, (bit_nr) ino);
+	specset(spec_imap, (bit_nr) dp->d_inum);
+	specset(spec_imap, (bit_nr) exp);
 	if (yes(". repair")) {
-		count[dp->d_inum]--;
+		CNT(dp->d_inum)--;
 		dp->d_inum = exp;
-		count[exp]++;
+		CNT(exp)++;
 		return(0);
 	}
-  } else if (pos != (dp->d_name[1] ? DIR_ENTRY_SIZE : 0)) {
+  } else if (pos != (dp->d_name[1] ? esize : 0)) {
 	make_printable_name(printable_name, dp->d_name, sizeof(dp->d_name));
 	printf("warning: %s has offset %ld in ", printable_name, pos);
 	printpath(1, 0);
 	printf("%s is linked to %u)\n", printable_name, dp->d_inum);
-	setbit(spec_imap, (bit_nr) ino);
-	setbit(spec_imap, (bit_nr) dp->d_inum);
-	setbit(spec_imap, (bit_nr) exp);
+	specset(spec_imap, (bit_nr) ino);
+	specset(spec_imap, (bit_nr) dp->d_inum);
+	specset(spec_imap, (bit_nr) exp);
   }
   return(1);
 }
@@ -954,20 +1520,20 @@ int chkname(ino, dp)
 ino_t ino;
 dir_struct *dp;
 {
-  register n = NAME_MAX + 1;
+  register n = nlen + 1;
   register char *p = dp->d_name;
 
   if (*p == '\0') {
 	printf("null name found in ");
 	printpath(0, 0);
-	setbit(spec_imap, (bit_nr) ino);
+	specset(spec_imap, (bit_nr) ino);
 	if (Remove(dp)) return(0);
   }
   while (*p != '\0' && --n != 0)
 	if (*p++ == '/') {
 		printf("found a '/' in entry of directory ");
 		printpath(1, 0);
-		setbit(spec_imap, (bit_nr) ino);
+		specset(spec_imap, (bit_nr) ino);
 		printf("entry = '");
 		printname(dp->d_name);
 		printf("')");
@@ -998,7 +1564,8 @@ dir_struct *dp;
 	}
 	return(1);
   }
-  if ((unsigned) count[dp->d_inum] == LINK_MAX) {
+  needino(dp->d_inum);
+  if ((unsigned) CNT(dp->d_inum) == LINK_MAX) {
 	printf("too many links to ino %u\n", dp->d_inum);
 	printf("discovered at entry '");
 	printname(dp->d_name);
@@ -1006,7 +1573,7 @@ dir_struct *dp;
 	printpath(0, 1);
 	if (Remove(dp)) return(0);
   }
-  count[dp->d_inum]++;
+  CNT(dp->d_inum)++;
   if (strcmp(dp->d_name, ".") == 0) {
 	ftop->st_presence |= DOT;
 	return(chkdots(ino, pos, dp, ino));
@@ -1037,22 +1604,25 @@ d_inode *ip;
 off_t pos;
 zone_nr zno;
 {
-  dir_struct dirblk[CDIRECT];
-  register dir_struct *dp;
-  register n = SCALE * (NR_DIR_ENTRIES / CDIRECT), dirty;
-  register long offset = zaddr(zno);
+  char raw[DIRCHUNK];		/* 16 V2 or 4 V3 entries (spec O.6) */
+  dir_struct de;
+  register n = ZONE_SIZE / DIRCHUNK, dirty, e;
+  addr_t offset = zaddr(zno);
   register off_t size = 0;
 
   do {
-	devread(offset, (char *) dirblk, DIRCHUNK);
+	devread(offset, raw, DIRCHUNK);
 	dirty = 0;
-	for (dp = dirblk; dp < &dirblk[CDIRECT]; dp++) {
-		if (dp->d_inum != NO_ENTRY && !chkentry(ino, pos, dp))
+	for (e = 0; e < DIRCHUNK; e += esize) {
+		unpack(raw + e, &de);
+		if (de.d_inum != NO_ENTRY && !chkentry(ino, pos, &de)) {
+			pack(&de, raw + e);
 			dirty = 1;
-		pos += DIR_ENTRY_SIZE;
-		if (dp->d_inum != NO_ENTRY) size = pos;
+		}
+		pos += esize;
+		if (de.d_inum != NO_ENTRY) size = pos;
 	}
-	if (dirty) devwrite(offset, (char *) dirblk, DIRCHUNK);
+	if (dirty) devwrite(offset, raw, DIRCHUNK);
 	offset += DIRCHUNK;
   } while (--n);
 
@@ -1060,7 +1630,7 @@ zone_nr zno;
 	printf("size not updated of directory ");
 	printpath(2, 0);
 	if (yes(". extend")) {
-		setbit(spec_imap, (bit_nr) ino);
+		specset(spec_imap, (bit_nr) ino);
 		ip->i_size = size;
 		devwrite(inoaddr(ino), (char *) ip, INODE_SIZE);
 	}
@@ -1102,13 +1672,24 @@ off_t pos;
 	errzone("out-of-range", zno, level, pos);
 	return(0);
   }
+  if (bit > hwm) hwm = bit;	/* spec O.6 */
+  if (bit >= whi) {	/* a later window (spec N.4): note it, go on */
+	/* the 2-byte record: first and last window (1..255, 255 also
+	 * means "and every later one"; 0: none) */
+	unsigned char *r = WREC(cur_ino);
+	int w = bit / wbits > 255 ? 255 : (int) (bit / wbits);
+
+	if (r[0] == 0 || w < r[0]) r[0] = w;
+	if (w > r[1]) r[1] = w;
+	return(1);
+  }
   if (bitset(zmap, bit)) {
-	setbit(spec_zmap, bit);
+	specset(spec_zmap, bit);
 	errzone("duplicate", zno, level, pos);
 	return(0);
   }
   nfreezone--;
-  if (bitset(spec_zmap, bit)) errzone("found", zno, level, pos);
+  if (specbit(spec_zmap, bit)) errzone("found", zno, level, pos);
   setbit(zmap, bit);
   return(1);
 }
@@ -1125,7 +1706,7 @@ int level;
 {
   zone_nr indirect[CINDIR];
   register n = NR_INDIRECTS / CINDIR;
-  register long offset = zaddr(zno);
+  addr_t offset = zaddr(zno);
 
   do {
 	devread(offset, (char *) indirect, INDCHUNK);
@@ -1143,9 +1724,8 @@ int level;
 {
   off_t power = ZONE_SIZE;
 
-  if (level != 0) do
-		power *= NR_INDIRECTS;
-	while (--level);
+  while (level-- > 0)	/* held at MAXPOS: V3 triple indirect (O.6) */
+	power = power > MAXPOS / NR_INDIRECTS ? MAXPOS : power * NR_INDIRECTS;
   return(power);
 }
 
@@ -1163,7 +1743,7 @@ int level;
 	if ((ip->i_mode & I_TYPE) == I_DIRECTORY &&
 	    !chkdirzone(ino, ip, *pos, zno))
 		return(0);
-	*pos += ZONE_SIZE;
+	*pos = padd(*pos, (off_t) ZONE_SIZE);
 	return(1);
   } else
 	return chkindzone(ino, ip, pos, zno, level);
@@ -1186,9 +1766,9 @@ int level;
    */
   for (i = 0; i < len /* && *pos < ip->i_size */ ; i++)
 	if (zlist[i] == NO_ZONE)
-		*pos += jump(level);
+		*pos = padd(*pos, jump(level));
 	else if (!markzone(zlist[i], level, *pos)) {
-		*pos += jump(level);
+		*pos = padd(*pos, jump(level));
 		ok = 0;
 	} else if (!zonechk(ino, ip, pos, zlist[i], level))
 		ok = 0;
@@ -1202,10 +1782,15 @@ d_inode *ip;
 {
   register ok, i, level;
   off_t pos = 0;
+  ino_t saved = cur_ino;
 
+  cur_ino = ino;
   ok = chkzones(ino, ip, &pos, &ip->i_zone[0], NR_DZONE_NUM, 0);
-  for (i = NR_DZONE_NUM, level = 1; i < NR_ZONE_NUMS; i++, level++)
+  for (i = NR_DZONE_NUM, level = 1; i < NR_ZONE_NUMS; i++, level++) {
+	cur_ino = ino;
 	ok &= chkzones(ino, ip, &pos, &ip->i_zone[i], 1, level);
+  }
+  cur_ino = saved;
   return(ok);
 }
 
@@ -1217,7 +1802,7 @@ d_inode *ip;
   register ok;
 
   setbit(dirmap, (bit_nr) ino);
-  if (ip->i_size > MAXDIRSIZE) {
+  if (ip->i_size > MAXDIRSIZE * (long) (esize / 16)) {
 	printf("warning: huge directory: ");
 	printpath(2, 1);
   }
@@ -1341,10 +1926,10 @@ d_inode *ip;
 	printf("link count too big in ");
 	printpath(1, 0);
 	printf("cnt = %u)\n", (unsigned) ip->i_nlinks);
-	count[ino] -= LINK_MAX;
-	setbit(spec_imap, (bit_nr) ino);
+	CNT(ino) -= LINK_MAX;
+	specset(spec_imap, (bit_nr) ino);
   } else {
-	count[ino] -= (unsigned) ip->i_nlinks;
+	CNT(ino) -= (unsigned) ip->i_nlinks;
   }
   return chkmode(ino, ip);
 }
@@ -1358,21 +1943,24 @@ dir_struct *dp;
   register visited;
   struct stack stk;
 
+  if (stopped) return(1);	/* -k: Back pressed, leave it as it is */
   stk.st_dir = dp;
   stk.st_next = ftop;
   ftop = &stk;
-  if (bitset(spec_imap, (bit_nr) ino)) {
+  if (specbit(spec_imap, (bit_nr) ino)) {
 	printf("found inode %u: ", ino);
 	printpath(0, 1);
   }
   visited = bitset(imap, (bit_nr) ino);
+  if (!visited) vdone++;
   if (!visited || listing) {
 	devread(inoaddr(ino), (char *) &inode, INODE_SIZE);
 	if (listing) list(ino, &inode);
 	if (!visited && !chkinode(ino, &inode)) {
-		setbit(spec_imap, (bit_nr) ino);
+		specset(spec_imap, (bit_nr) ino);
+		cur_ino = ino;		/* -v: the inode removed */
 		if (yes("remove")) {
-			count[ino] += inode.i_nlinks - 1;
+			CNT(ino) += inode.i_nlinks - 1;
 			clrbit(imap, (bit_nr) ino);
 			devwrite(inoaddr(ino), nullbuf, INODE_SIZE);
 			memset((void *) dp, 0, sizeof(dir_struct));
@@ -1421,43 +2009,330 @@ void printtotal()
   lpr("%6ld    Free zone%s\n", nfreezone, "", "s");
 }
 
+/* Spec N.4: a later window.  Walk the zones of every inode in use whose
+ * zones touch it, as chkfile() did in pass 1 (same positions, so the same
+ * zones), mark those inside the window; a duplicate there loses its zone
+ * pointer (the file keeps the rest; pass 1 owns the inodes and the tree).
+ */
+void wzones(zlist, len, level, pos, size, dirty)
+zone_nr *zlist;
+int len, level;
+off_t *pos, size;
+int *dirty;
+{
+  zone_nr indirect[CINDIR];
+  register int i, n;
+  addr_t offset;
+  bit_nr bit;
+  int d;
+
+  for (i = 0; i < len; i++) {
+	if (zlist[i] == NO_ZONE || zlist[i] < FIRST || zlist[i] >= sb.s_zones) {
+		*pos = padd(*pos, jump(level));
+		continue;
+	}
+	bit = (bit_nr) zlist[i] - FIRST + 1;
+	if (bit >= wlo && bit < whi) {
+		if (bitset(zmap, bit - wlo)) {
+			/* no path here (not the tree walk): the inode */
+			printf("duplicate zone %ld in inode %u, pos = %ld\n",
+				(long) zlist[i], (unsigned) cur_ino, (long) *pos);
+			if (yes("clear the zone pointer")) {
+				zlist[i] = NO_ZONE;
+				*dirty = 1;
+			}
+			*pos = padd(*pos, jump(level));
+			continue;
+		}
+		setbit(zmap, bit - wlo);
+		nfreezone--;
+	}
+	if (level == 0) {
+		*pos = padd(*pos, (off_t) ZONE_SIZE);
+		continue;
+	}
+	offset = zaddr(zlist[i]);
+	n = NR_INDIRECTS / CINDIR;
+	do {
+		devread(offset, (char *) indirect, INDCHUNK);
+		d = 0;
+		wzones(indirect, CINDIR, level - 1, pos, size, &d);
+		if (d) devwrite(offset, (char *) indirect, INDCHUNK);
+		offset += INDCHUNK;
+	} while (--n && *pos < size);
+  }
+}
+
+void winpass()
+{
+  d_inode inode;
+  register ino_t ino;
+  off_t pos;
+  int i, level, dirty, cw = curwin > 255 ? 255 : curwin;
+  unsigned char *r;
+
+  vset("zones", (long) maxino);
+  for (ino = ROOT_INODE; ino <= maxino && !stopped; ino++) {
+	vdone = ino;
+	if (!bitset(imap, (bit_nr) ino)) continue;
+	r = WREC(ino);
+	if (r[0] == 0 || cw < r[0] || (r[1] != 255 && curwin > r[1]))
+		continue;
+	devread(inoaddr(ino), (char *) &inode, INODE_SIZE);
+	switch (inode.i_mode & I_TYPE) {
+	    case I_REGULAR: case I_DIRECTORY: case I_NAMED_PIPE:
+#ifdef I_SYMBOLIC_LINK
+	    case I_SYMBOLIC_LINK:
+#endif
+		break;
+	    default:
+		continue;
+	}
+	cur_ino = ino;
+	pos = 0;
+	dirty = 0;
+	wzones(&inode.i_zone[0], NR_DZONE_NUM, 0, &pos, inode.i_size, &dirty);
+	for (i = NR_DZONE_NUM, level = 1; i < NR_ZONE_NUMS; i++, level++)
+		wzones(&inode.i_zone[i], 1, level, &pos, inode.i_size, &dirty);
+	if (dirty) devwrite(inoaddr(ino), (char *) &inode, INODE_SIZE);
+  }
+}
+
+/* -v (spec N.3): a line on the console (and in the -L log), no longer
+ * than the LCD's 32 columns; it overwrites the progress line. */
+void vline(s)
+char *s;
+{
+  if (vout != NULL) {
+	fprintf(vout, "\r%-31.31s\n", s);
+	fflush(vout);
+  }
+  if (vlog != NULL) {
+	fprintf(vlog, "%.31s\n", s);
+	fflush(vlog);
+  }
+  vlast = 0;		/* redraw the progress soon */
+}
+
+void vset(phase, total)
+char *phase;
+long total;
+{
+  vphase = phase;
+  vdone = 0;
+  vtotal = total;
+  vtick(1);
+}
+
+/* The progress line: a turning spinner (the owner: "so it's clear the
+ * Flipper is working and not hung"), the phase and a percentage, redrawn
+ * in place at most 4 times a second (at least once a second while the
+ * card is read).  -k: Back stops the check. */
+void vtick(force)
+int force;
+{
+  static char spin[] = "|/-\\";
+  struct tms tms;
+  clock_t now;
+  unsigned char ev[2];
+  long pct;
+  char pass[8];
+
+  if (!verbose && vfd < 0) return;
+  if (!force && (++vcalls & 7) != 0) return;
+  now = times(&tms);
+  if (now - vlast < CLK_TCK / 4) return;	/* a phase change too */
+  vlast = now;
+  if (vfd >= 0) {
+	while (read(vfd, ev, 2) == 2)
+		if ((ev[0] & 0x20) && ev[1]) stopped = 1;	/* Back */
+  }
+  if (vout == NULL) return;
+  pct = vtotal > 0 ? vdone * 100 / vtotal : 0;
+  if (pct > 100) pct = 100;
+  pass[0] = 0;
+  if (nwin > 1) sprintf(pass, " %d/%d", curwin + 1, nwin);
+  fprintf(vout, "\r%c %-12.12s%-6s %3ld%%", spin[vspin++ & 3], vphase,
+							pass, pct);
+  fflush(vout);
+}
+
+/* Change the CLEAN/CHECK bits of the super block (spec N.1). */
+int sflags(set, clr)
+int set, clr;
+{
+  unsigned short f;
+  addr_t off = btoa(BLK_SUPER) + FLAGS_OFF;	/* N.1; V3 at 14 (O.4) */
+
+  devread(off, (char *) &f, sizeof(f));
+  f = (f | set) & ~clr & SF_DISK;
+  devwrite(off, (char *) &f, sizeof(f));
+  return(f);
+}
+
+/* Is the device mounted, is it the root?  /etc/mtab may be old at boot,
+ * so the root is found by its device number. */
+void whereis()
+{
+  struct stat sd, sm;
+  FILE *mt;
+  char line[128], *m;
+
+  ismounted = isroot = 0;
+  if (stat(device, &sd) != 0 || !S_ISBLK(sd.st_mode)) return;
+  if (stat("/", &sm) == 0 && sm.st_dev == sd.st_rdev) {
+	ismounted = isroot = 1;
+	return;
+  }
+  if ((mt = fopen("/etc/mtab", "r")) == NULL) return;
+  while (fgets(line, sizeof(line), mt) != NULL) {
+	if ((m = strchr(line, ' ')) == NULL) continue;
+	while (*m == ' ') m++;
+	m[strcspn(m, " \n")] = 0;
+	if (*m && stat(m, &sm) == 0 && sm.st_dev == sd.st_rdev) ismounted = 1;
+  }
+  fclose(mt);
+}
+
 /* Check the device which name is given by `f'.  The inodes listed by `clist'
  * should be listed separately, and the inodes listed by `ilist' and the zones
  * listed by `zlist' should be watched for while checking the file system.
+ * Returns the BSD exit status (spec N.3).
  */
-
-void chkdev(f, clist, ilist, zlist)
+int chkdev(f, clist, ilist, zlist)
 char *f, **clist, **ilist, **zlist;
 {
-  if (automatic) repair = 1;
+  char line[40];
+  struct tms tms;
+  long t;
+  int w, rw, nb;
+
+  if (automatic || preen) repair = automatic = 1;
   device = f;
   initvars();
+  nfixed = nleft = 0;
+  stopped = 0;
+  nwin = 1;
+  curwin = 0;
+  wlo = 0;
+  whi = wbits = 0;
+  hwm = 0;
 
+  whereis();
+  /* -S (spec O.6) on a mounted file system only counts: FS may change a
+   * zone map block between the check and the write. */
+  if (sweep && ismounted) repair = automatic = 0;
   devopen();
-
   getsuper();
+
+  /* -p: a clean file system needs nothing (one block read); -S checks it. */
+  if (preen && !sweep && (sb.s_flags & (SF_CLEAN | SF_CHECK)) == SF_CLEAN) {
+	devclose();
+	return(0);
+  }
+  vstart = times(&tms);
+  if (verbose) {
+	sprintf(line, "fsck %.16s: %s", device,
+		(sb.s_flags & (SF_CLEAN | SF_CHECK)) != SF_CLEAN ? "unclean"
+								 : "check");
+	vline(line);
+  }
+
   chksuper();
 
   lsi(clist);
 
-  getbitmaps();
+  if (clist || ilist) spec_imap = allocbitmap(N_IMAP);
+  if (zlist) spec_zmap = allocbitmap(N_ZMAP);
 
   fillbitmap(spec_imap, (bit_nr) 1, (bit_nr) sb.s_ninodes + 1, ilist);
   fillbitmap(spec_zmap, (bit_nr) FIRST, (bit_nr) sb.s_zones, zlist);
 
+  findmaxino();
+  getbitmaps();		/* sized by maxino (spec O.6) */
   getcount();
+  getwindow();
+
+  /* Pass 1: the tree, link counts, the inode map, zones in window 0. */
+  vset("tree", nused);
   chktree();
-  chkmap(zmap, spec_zmap, (bit_nr) FIRST - 1, BLK_ZMAP, N_ZMAP, "zone");
-  chkcount();
-  chkmap(imap, spec_imap, (bit_nr) 0, BLK_IMAP, N_IMAP, "inode");
-  chkilist();
-  printtotal();
+  for (w = 0; w < nwin && !stopped; w++) {
+	if (w > 0) {
+		/* Spec O.6: above the high-water mark no inode owns a zone:
+		 * the only error there is a leak (space, not danger).  -p
+		 * stops at the mark; without -p, and with -S, the map there
+		 * is compared (a leak is freed). */
+		if (preen && !sweep && (bit_nr) w * wbits > hwm) break;
+		setwindow(w);
+		if (wlo <= hwm) winpass();
+	}
+	if (stopped) break;
+	nb = w == nwin - 1 ? (int) (N_ZMAP - wlo / (BLOCK_SIZE * 8))
+			   : (int) (wbits / (BLOCK_SIZE * 8));
+	if (preen && !sweep && (hwm - wlo) / (BLOCK_SIZE * 8) + 1 < nb)
+		nb = (int) ((hwm - wlo) / (BLOCK_SIZE * 8) + 1);
+	vset("zone map", (long) nb);
+	chkmap(zmap, (int) (wbits / (BLOCK_SIZE * 8)), (bit_nr) FIRST - 1 + wlo,
+		BLK_ZMAP + (block_nr) (wlo / (BLOCK_SIZE * 8)), nb,
+		(bit_nr) N_DATA + 1 - wlo, "zone");
+  }
+  if (!stopped) {
+	vset("links", 0L);
+	chkcount();
+	vset("inode map", (long) N_IMAP);
+	chkmap(imap, imblk, (bit_nr) 0, BLK_IMAP, N_IMAP, (bit_nr) sb.s_ninodes + 1,
+								"inode");
+	chkilist();
+	printtotal();
+  }
+
+  /* Spec N.3: checked with repairs allowed: CHECK = 0, and CLEAN = 1 when
+   * no one else writes it (not mounted).  Stopped (Back): CHECK = 1. */
+  if (repair) {
+	if (stopped)
+		(void) sflags(SF_CHECK, 0);
+	else if (nleft == 0)
+		(void) sflags(ismounted ? 0 : SF_CLEAN, SF_CHECK);
+	changed = changed && nfixed > 0;
+  }
 
   putbitmaps();
   freecount();
   devclose();
+  if (repair) sync();
 
   if (changed) printf("----- FILE SYSTEM HAS BEEN MODIFIED -----\n\n");
+  if (verbose) {
+	t = (long) (times(&tms) - vstart) * 10 / CLK_TCK;
+	if (stopped)
+		sprintf(line, "skipped (Back), %ld.%ld s", t / 10, t % 10);
+	else
+		sprintf(line, "fixed %d, left %d, %ld.%ld s", nfixed, nleft,
+							t / 10, t % 10);
+	vline(line);
+  }
+  /* Spec N.3: repairs stay on the screen until a key or -w seconds. */
+  if (verbose && waitsecs > 0 && (nfixed > 0 || nleft > 0)) {
+	struct pollfd pf;
+	unsigned char ev[2];
+	int fd = vfd;
+
+	if (fd < 0) fd = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+	if (fd < 0) {
+		sleep(waitsecs);
+	} else {
+		while (read(fd, ev, 2) == 2) {}		/* earlier presses */
+		pf.fd = fd;
+		pf.events = POLLIN;
+		(void) poll(&pf, 1, waitsecs * 1000);
+		while (read(fd, ev, 2) == 2) {}
+		if (fd != vfd) close(fd);
+	}
+  }
+  if (stopped) return(8);
+  if (nleft > 0) return(4);
+  if (nfixed > 0) return(isroot ? 2 : 1);
+  return(0);
 }
 
 int main(argc, argv)
@@ -1468,10 +2343,11 @@ char **argv;
 
   register devgiven = 0;
   register char *arg;
+  int r, worst = 0, fd;
 
   if ((1 << BITSHIFT) != 8 * sizeof(bitchunk_t)) {
 	printf("Fsck was compiled with the wrong BITSHIFT!\n");
-	exit(1);
+	exit(8);
   }
 
   sync();
@@ -1491,19 +2367,52 @@ char **argv;
 		    case 'r':	repair ^= 1;	break;
 		    case 'l':	listing ^= 1;	break;
 		    case 's':	listsuper ^= 1;	break;
+		    case 'p':	preen = 1;	break;
+		    case 'w':
+			if (*argv != 0) waitsecs = atoi(*argv++);
+			break;
+		    case 'k':	keyskip = 1;	break;
+		    case 'v':
+			if (!verbose) {
+				/* the long messages go nowhere; the short
+				 * lines to the console (fd 1 as it was) */
+				verbose = 1;
+				fflush(stdout);
+				if ((fd = dup(1)) >= 0)
+					vout = fdopen(fd, "w");
+				(void) freopen("/dev/null", "w", stdout);
+			}
+			break;
+		    case 'm':
+			if (*argv == 0 || (fsck_mem = atol(*argv++) * 1024L)
+								< 8192L)
+				fsck_mem = 8192L;	/* the minimum */
+			break;
+		    case 'S':	sweep = preen = 1;	break;
+		    case 'T':
+			if (*argv != 0) scrname = *argv++;
+			break;
+		    case 'L':
+			if (*argv == 0) break;
+			logname = *argv++;
+			vlog = fopen(logname, "a");
+			break;
 		    default:
 			printf("%s: unknown flag '%s'\n", prog, arg);
 		}
 	else {
-		chkdev(arg, clist, ilist, zlist);
+		if (keyskip && vfd < 0)
+			vfd = open("/dev/buttons", O_RDONLY | O_NONBLOCK);
+		r = chkdev(arg, clist, ilist, zlist);
+		if (r > worst) worst = r;
 		clist = 0;
 		ilist = 0;
 		zlist = 0;
 		devgiven = 1;
 	}
   if (!devgiven) {
-	printf("Usage: fsck [-acilrsz] file\n");
-	exit(1);
+	printf("Usage: fsck [-acilprSsvz] [-m KB] [-L log] [-T swapdev] file\n");
+	exit(8);
   }
-  return(0);
+  return(worst);
 }

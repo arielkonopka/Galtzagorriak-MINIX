@@ -19,6 +19,7 @@ FORWARD _PROTOTYPE( int write_map, (struct inode *rip, off_t position,
 			zone_t new_zone)				);
 
 FORWARD _PROTOTYPE( void wr_indir, (struct buf *bp, int index, zone_t zone) );
+FORWARD _PROTOTYPE( zone_t pipe_zone, (struct inode *rip, off_t position) );
 
 /*===========================================================================*
  *				do_write				     *
@@ -40,14 +41,13 @@ off_t position;			/* file address to be mapped */
 zone_t new_zone;		/* zone # to be inserted */
 {
 /* Write a new zone into an inode. */
-  int scale, ind_ex, new_ind, new_dbl, zones, nr_indirects, single, zindex, ex;
-  zone_t z, z1;
+  int scale, new_ind, zones, nr_indirects, slot, zindex, ex;
+  zone_t z;
   register block_t b;
-  long excess, zone;
+  long excess, zone, span;
   struct buf *bp;
 
   rip->i_dirt = DIRTY;		/* inode will be changed */
-  bp = NIL_BUF;
   scale = rip->i_sp->s_log_zone_size;		/* for zone-block conversion */
   zone = (position/BLOCK_SIZE) >> scale;	/* relative zone # to insert */
   zones = rip->i_ndzones;	/* # direct zones in the inode */
@@ -60,65 +60,59 @@ zone_t new_zone;		/* zone # to be inserted */
 	return(OK);
   }
 
-  /* It is not in the inode, so it must be single or double indirect. */
+  /* It is not in the inode: single, double or (V3, spec O.4) triple
+   * indirect.  Walk down from the inode, making missing indirect blocks.
+   */
   excess = zone - zones;	/* first Vx_NR_DZONES don't count */
+  span = 1;			/* zones under one entry at this level */
+  slot = zones;
+  if (excess >= nr_indirects) {
+	excess -= nr_indirects;
+	span = nr_indirects;
+	slot = zones + 1;
+	if (excess >= (long) nr_indirects * nr_indirects) {
+		excess -= (long) nr_indirects * nr_indirects;
+		span = (long) nr_indirects * nr_indirects;
+		slot = zones + 2;
+		if (!IS_V3(rip->i_sp) || excess / span >= nr_indirects)
+			return(EFBIG);
+	}
+  }
   new_ind = FALSE;
-  new_dbl = FALSE;
-
-  if (excess < nr_indirects) {
-	/* 'position' can be located via the single indirect block. */
-	z1 = rip->i_zone[zones];	/* single indirect zone */
-	single = TRUE;
-  } else {
-	/* 'position' can be located via the double indirect block. */
-	if ( (z = rip->i_zone[zones+1]) == NO_ZONE) {
-		/* Create the double indirect block. */
-		if ( (z = alloc_zone(rip->i_dev, rip->i_zone[0])) == NO_ZONE)
-			return(err_code);
-		rip->i_zone[zones+1] = z;
-		new_dbl = TRUE;	/* set flag for later */
-	}
-
-	/* Either way, 'z' is zone number for double indirect block. */
-	excess -= nr_indirects;	/* single indirect doesn't count */
-	ind_ex = (int) (excess / nr_indirects);
-	excess = excess % nr_indirects;
-	if (ind_ex >= nr_indirects) return(EFBIG);
-	b = (block_t) z << scale;
-	bp = get_block(rip->i_dev, b, (new_dbl ? NO_READ : NORMAL));
-	if (new_dbl) zero_block(bp);
-	z1 = rd_indir(bp, ind_ex);
-	single = FALSE;
-  }
-
-  /* z1 is now single indirect zone; 'excess' is index. */
-  if (z1 == NO_ZONE) {
-	/* Create indirect block and store zone # in inode or dbl indir blk. */
-	z1 = alloc_zone(rip->i_dev, rip->i_zone[0]);
-	if (single)
-		rip->i_zone[zones] = z1;	/* update inode */
-	else
-		wr_indir(bp, ind_ex, z1);	/* update dbl indir */
-
+  if ( (z = rip->i_zone[slot]) == NO_ZONE) {
+	if ( (z = alloc_zone(rip->i_dev, rip->i_zone[0])) == NO_ZONE)
+		return(err_code);
+	rip->i_zone[slot] = z;
 	new_ind = TRUE;
-	if (bp != NIL_BUF) bp->b_dirt = DIRTY;	/* if double ind, it is dirty*/
-	if (z1 == NO_ZONE) {
-		put_block(bp, INDIRECT_BLOCK);	/* release dbl indirect blk */
-		return(err_code);	/* couldn't create single ind */
-	}
   }
-  put_block(bp, INDIRECT_BLOCK);	/* release double indirect blk */
-
-  /* z1 is indirect block's zone number. */
-  b = (block_t) z1 << scale;
-  bp = get_block(rip->i_dev, b, (new_ind ? NO_READ : NORMAL) );
-  if (new_ind) zero_block(bp);
-  ex = (int) excess;			/* we need an int here */
-  wr_indir(bp, ex, new_zone);
-  bp->b_dirt = DIRTY;
-  put_block(bp, INDIRECT_BLOCK);
-
-  return(OK);
+  for (;;) {
+	b = (block_t) z << scale;
+	bp = get_block(rip->i_dev, b, (new_ind ? NO_READ : NORMAL));
+	if (new_ind) {
+		zero_block(bp);
+		bp->b_dirt = DIRTY;
+	}
+	ex = (int) (excess / span);	/* entry at this level */
+	excess %= span;
+	if (span == 1) {
+		wr_indir(bp, ex, new_zone);
+		bp->b_dirt = DIRTY;
+		put_block(bp, INDIRECT_BLOCK);
+		return(OK);
+	}
+	new_ind = FALSE;
+	if ( (z = rd_indir(bp, ex)) == NO_ZONE) {
+		if ( (z = alloc_zone(rip->i_dev, rip->i_zone[0])) == NO_ZONE) {
+			put_block(bp, INDIRECT_BLOCK);
+			return(err_code);
+		}
+		wr_indir(bp, ex, z);
+		bp->b_dirt = DIRTY;
+		new_ind = TRUE;
+	}
+	put_block(bp, INDIRECT_BLOCK);
+	span /= nr_indirects;
+  }
 }
 
 
@@ -205,7 +199,13 @@ off_t position;			/* file pointer */
   struct super_block *sp;
 
   /* Is another block available in the current zone? */
-  if ( (b = read_map(rip, position)) == NO_BLOCK) {
+  if ( (b = read_map(rip, position)) == NO_BLOCK
+			&& (z = pipe_zone(rip, position)) != NO_ZONE) {
+	/* Spec K.6: pipe data in the cache only.  No bit map, the inode is
+	 * not dirtied; the zone is past the end of the file system. */
+	rip->i_zone[(int) (position / BLOCK_SIZE)] = z;
+	b = (block_t) z;
+  } else if (b == NO_BLOCK) {
 	/* Choose first zone if possible. */
 	/* Lose if the file is nonempty but the first zone number is NO_ZONE
 	 * corresponding to a zone full of zeros.  It would be better to
@@ -235,6 +235,31 @@ off_t position;			/* file pointer */
   bp = get_block(rip->i_dev, b, NO_READ);
   zero_block(bp);
   return(bp);
+}
+
+
+/*===========================================================================*
+ *				pipe_zone				     *
+ *===========================================================================*/
+PRIVATE zone_t pipe_zone(rip, position)
+register struct inode *rip;	/* a pipe or FIFO, or another file */
+off_t position;			/* the new block's position */
+{
+/* Spec K.6: a pipe's (or FIFO's) new block needs no zone on the disk: its
+ * data never goes there.  It gets a number past the device's last zone,
+ * one per inode slot and direct zone, so no other file has it.  A block
+ * of it in the cache is PIPE_DIRTY: never written, never evicted while
+ * pipes keep at most half of the cache; beyond that (or with zones of
+ * more than a block) a real zone is used, as before (T9).
+ */
+  struct super_block *sp;
+
+  if (rip->i_pipe != I_PIPE) return(NO_ZONE);
+  sp = rip->i_sp;
+  if (sp->s_log_zone_size != 0 || position >= PIPE_SIZE) return(NO_ZONE);
+  if (pipe_bufs() >= NR_BUFS / 2) return(NO_ZONE);
+  return(sp->s_zones + (zone_t) (rip - &inode[0]) * V1_NR_DZONES
+					+ (zone_t) (position / BLOCK_SIZE));
 }
 
 

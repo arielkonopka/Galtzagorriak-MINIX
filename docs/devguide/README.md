@@ -24,16 +24,18 @@ For advanced users who want to write programs, apps, scripts and background jobs
 2. [Your first C program](part1/02-first-program.md): where the source goes, building,
    sending it to the Flipper, running it, measuring its memory, testing on the PC.
 3. [Using the hardware: device files](part1/03-devices.md): `/dev/lcd`, `/dev/buttons`, LED,
-   backlight, vibro, speaker, GPIO, ADC, infrared, iButton, the fuel gauge; from C and from
-   the shell.
-4. [Screen apps and the launcher](part1/04-screen-apps.md): the `gui` library, `/etc/apps`,
-   the foreground app, the long Back press, and how to keep an app quick.
+   backlight, vibro, speaker, GPIO, ADC, infrared, iButton, 125 kHz RFID, Sub-GHz, the RTC,
+   `poll()` and the pulse engine; NFC and Bluetooth **(planned)**; from C and from the shell.
+4. [Screen apps and the launcher](part1/04-screen-apps.md): the `gui` library, the
+   "Pine meets modern UX" screen style, `/etc/apps`, the foreground app, the long Back press,
+   and how to keep an app quick.
 5. [Packages and installing into flash](part1/05-packages.md): package format, `mkpkg.py`,
    `pkg`, scripts run at install, settings with defaults, putting program text into flash.
 6. [Daemons, jobs and background work](part1/06-background.md): what works today, the
-   background tiers, timers and alerts **(planned)**, and how to choose.
-7. [Desktop modules](part1/07-desktop-modules.md) **(planned, outline)**: modules in C, Berry
-   or shell that talk to the desktop over a TSV line protocol (spec K.2–K.4).
+   background tiers, timers and alerts (`timed`, `alert`, `libapp`), swap, and how to choose.
+7. [Desktop modules and window apps](part1/07-desktop-modules.md): window apps with `libgm`
+   (spec K.8, in the code), and modules in C, Berry or shell that talk to the desktop over a
+   TSV line protocol (spec K.2–K.4, **planned**).
 8. [Scripting in Berry](part1/08-berry.md) **(planned, outline)**: the Berry runtime, its
    bindings and limits (spec Phase 7c).
 
@@ -56,6 +58,14 @@ For people changing the kernel, the servers, the drivers and the build.
 6. [Testing radios against a second Flipper](part2/06-two-flipper-tests.md): a stock
    (Unleashed) Flipper as the partner for RFID, IR, iButton and Sub-GHz tests, the physical
    setup without special parts, and `twoflip.py` on Linux, macOS or Windows.
+7. [The overnight battery test](part2/07-overnight-power-test.md): AC6.6 (no reset, clock,
+   more than 99 % in Stop2) and the night's current, set up from a fresh computer, `nightpower.py`,
+   reading and recording the result, and the nights measured so far.
+8. [Dev mode and the debug serial line](part2/08-debug-uart.md): `reboot -d` and what dev mode
+   changes, the debug UART on pins 13/14, reading it through a second Flipper's USB-UART Bridge or
+   a USB-serial adapter, and a debugging session with both lines.
+9. [Signing the update file in CI](release-update-job.md): the one-time key and GitHub
+   environment steps for the user, and the `release-update` job to add to `build.yml` (RS.18).
 
 ## Where else to look
 

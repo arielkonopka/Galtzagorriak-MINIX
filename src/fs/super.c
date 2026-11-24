@@ -9,17 +9,62 @@
  *   get_super:       search the 'superblock' table for a device
  *   mounted:         tells if file inode is on mounted (or ROOT) file system
  *   read_super:      read a superblock
+ *   put_sflags:      change the CLEAN/CHECK bits on the disk (spec N.1)
+ *   sf_mounted:      a file system was mounted read-write (N.1)
+ *   sf_clean:        mark a file system clean when idle or at shutdown (N.2)
+ *   do_fstatfs:      the FSTATFS call: free space, and the idle recount (O.5)
  */
 
 #include "fs.h"
 #include <string.h>
 #include <minix/boot.h>
+#include <minix/com.h>
 #include "buf.h"
 #include "inode.h"
 #include "super.h"
+#include "file.h"
+#include "fproc.h"
+#include "param.h"
+#include <sys/statfs.h>
 
 #define BITCHUNK_BITS	(usizeof(bitchunk_t) * CHAR_BIT)
 #define BITS_PER_BLOCK	(BITMAP_CHUNKS * BITCHUNK_BITS)
+
+/* Spec O.5: the idle recount of one file system's maps, a few blocks per
+ * FSTATFS_RECOUNT call from update.  rc_count holds the free bits of the
+ * map blocks below rc_block; alloc_bit/free_bit in those blocks adjust it
+ * (the "delta"), so the result is exact when the last block is done.  One
+ * recount at a time: 8 B. */
+#define RC_NONE		0xFF	/* rc_slot: no recount running */
+#define RC_STEP		8	/* map blocks per call (8 KB, a few ms) */
+PRIVATE u32_t rc_count;		/* free bits below rc_block */
+PRIVATE u16_t rc_block;		/* next map block to count */
+PRIVATE unsigned char rc_slot = RC_NONE;	/* super_block[] index */
+PRIVATE unsigned char rc_map;	/* IMAP or ZMAP */
+
+FORWARD _PROTOTYPE( void count_free, (struct super_block *sp, int map,
+					unsigned block, int delta)	);
+FORWARD _PROTOTYPE( int recount_step, (void)				);
+
+/*===========================================================================*
+ *				count_free				     *
+ *===========================================================================*/
+PRIVATE void count_free(sp, map, block, delta)
+struct super_block *sp;
+int map;			/* IMAP or ZMAP */
+unsigned block;			/* map block of the bit that changed */
+int delta;			/* +1 a bit freed, -1 a bit allocated */
+{
+/* Spec O.5: keep the free counters, and the recount's partial sum, true. */
+  if (map == IMAP) {
+	if (delta > 0 || sp->s_ifree > 0) sp->s_ifree += delta;
+  } else {
+	if (delta > 0 || sp->s_zfree > 0) sp->s_zfree += delta;
+  }
+  if (rc_slot == (unsigned) (sp - &super_block[0]) && rc_map == map
+		&& block < rc_block && (delta > 0 || rc_count > 0))
+	rc_count += delta;
+}
 
 /*===========================================================================*
  *				alloc_bit				     *
@@ -88,6 +133,7 @@ bit_t origin;			/* number of bit to start searching at */
 		*wptr = conv2(sp->s_native, (int) k);
 		bp->b_dirt = DIRTY;
 		put_block(bp, MAP_BLOCK);
+		count_free(sp, map, block, -1);
 		return(b);
 	}
 	put_block(bp, MAP_BLOCK);
@@ -147,6 +193,7 @@ bit_t bit_returned;		/* number of bit to insert into the map */
   bp->b_dirt = DIRTY;
 
   put_block(bp, MAP_BLOCK);
+  count_free(sp, map, block, 1);
 }
 
 
@@ -203,12 +250,30 @@ register struct super_block *sp; /* pointer to a superblock */
   dev_t dev;
   int magic;
   int version, native;
+  u16_t *w;
+  u32_t *l;
+  u32_t htag, hz, hi;
 
   dev = sp->s_dev;		/* save device (will be overwritten by copy) */
   bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
-  memcpy( (char *) sp, bp->b_data, (size_t) SUPER_SIZE);
-  put_block(bp, ZUPER_BLOCK);
+  w = (u16_t *) bp->b_data;
+  l = (u32_t *) bp->b_data;
+  /* The V1/V2 layout, field by field: the in-core s_ninodes is 32-bit
+   * (spec O.4), so the block is no longer copied as it is. */
+  sp->s_ninodes = (ino_t) w[0];
+  sp->s_nzones = w[1];
+  sp->s_imap_blocks = w[2];
+  sp->s_zmap_blocks = w[3];
+  sp->s_firstdatazone = w[4];
+  sp->s_log_zone_size = w[5];
+  sp->s_max_size = (off_t) l[3];
+  sp->s_magic = w[8];
+  sp->s_flags = w[9];
+  sp->s_zones = (zone_t) l[5];
   sp->s_dev = NO_DEV;		/* restore later */
+  htag = l[SB_HINT_OFF / 4];	/* O.5: the free-count hint */
+  hz = l[SB_HINT_OFF / 4 + 1];
+  hi = l[SB_HINT_OFF / 4 + 2];
   magic = sp->s_magic;		/* determines file system type */
 
   /* Get file system version and type. */
@@ -218,10 +283,35 @@ register struct super_block *sp; /* pointer to a superblock */
   } else if (magic == SUPER_V2 || magic == conv2(BYTE_SWAP, SUPER_V2)) {
 	version = V2;
 	native  = (magic == SUPER_V2);
+  } else if (w[12] == SUPER_V3) {
+	/* Spec O.4: MINIX V3 as util-linux mkfs.minix -3 writes it (native
+	 * byte order only).  Its own layout: 32-bit inode count, 16-bit
+	 * fields moved up by 2, the magic at 24, the block size at 28. */
+	if (w[14] != BLOCK_SIZE || w[6] != 0) {
+		printf("FS: V3 file system with %u-byte blocks, zone shift %u: "
+			"only 1024 and 0 work, not mounted\n",
+			(unsigned) w[14], (unsigned) w[6]);
+		put_block(bp, ZUPER_BLOCK);
+		return(EINVAL);
+	}
+	sp->s_ninodes = (ino_t) l[0];
+	sp->s_nzones = 0;
+	sp->s_imap_blocks = w[3];
+	sp->s_zmap_blocks = w[4];
+	sp->s_firstdatazone = w[5];
+	sp->s_log_zone_size = 0;
+	sp->s_max_size = (off_t) l[4];
+	sp->s_zones = (zone_t) l[5];
+	sp->s_flags = (w[7] & SF_CLEAN) ? SF_DCLEAN : 0;
+	version = V3;
+	native = 1;
   } else {
+	put_block(bp, ZUPER_BLOCK);
 	return(EINVAL);
   }
+  put_block(bp, ZUPER_BLOCK);
 
+  if (version != V3) {
   /* If the super block has the wrong byte order, swap the fields; the magic
    * number doesn't need conversion. */
   sp->s_ninodes =       conv2(native, (int) sp->s_ninodes);
@@ -232,6 +322,9 @@ register struct super_block *sp; /* pointer to a superblock */
   sp->s_log_zone_size = conv2(native, (int) sp->s_log_zone_size);
   sp->s_max_size =      conv4(native, sp->s_max_size);
   sp->s_zones =         conv4(native, sp->s_zones);
+  /* N.1: in core only whether CLEAN is on the disk; never the disk bits. */
+  sp->s_flags = (conv2(native, (int) sp->s_flags) & SF_CLEAN) ? SF_DCLEAN : 0;
+  }
 
   /* In V1, the device size was kept in a short, s_nzones, which limited
    * devices to 32K zones.  For V2, it was decided to keep the size as a
@@ -250,10 +343,12 @@ register struct super_block *sp; /* pointer to a superblock */
 	sp->s_ndzones = V1_NR_DZONES;
 	sp->s_nindirs = V1_INDIRECTS;
   } else {
-	sp->s_inodes_per_block = V2_INODES_PER_BLOCK;
+	sp->s_inodes_per_block = V2_INODES_PER_BLOCK;	/* V3: same inode */
 	sp->s_ndzones = V2_NR_DZONES;
 	sp->s_nindirs = V2_INDIRECTS;
   }
+  if (sp->s_max_size < 0)		/* V3: a u32; files stay below 2 GiB */
+	sp->s_max_size = 0x7FFFFFFFL;
 
   sp->s_isearch = 0;		/* inode searches initially start at 0 */
   sp->s_zsearch = 0;		/* zone searches initially start at 0 */
@@ -283,6 +378,250 @@ register struct super_block *sp; /* pointer to a superblock */
 	printf("FS: inconsistent super block, not mounted\n");
 	return(EINVAL);
   }
+  /* Spec O.5: the counters start from the hint (0 if it is missing or
+   * does not fit) and are an estimate until the idle recount is done. */
+  if (!native || htag != SB_HINT_TAG
+		|| hz > (u32_t) (sp->s_zones - sp->s_firstdatazone)
+		|| hi > (u32_t) sp->s_ninodes)
+	hz = hi = 0;
+  sp->s_zfree = (zone_t) hz;
+  sp->s_ifree = (ino_t) hi;
+  sp->s_flags |= SF_ESTIMATE;
+  if (rc_slot == (unsigned) (sp - &super_block[0])) rc_slot = RC_NONE;
   sp->s_dev = dev;		/* restore device number */
   return(OK);
+}
+
+
+/*===========================================================================*
+ *				put_sflags				     *
+ *===========================================================================*/
+PUBLIC int put_sflags(sp, set, clr)
+register struct super_block *sp; /* a mounted file system */
+int set, clr;			/* SF_CLEAN / SF_CHECK bits to set, clear */
+{
+/* Spec N.1: change the flag bits of the super block on the disk by read-
+ * modify-write of block 1 through the cache, written through at once (one
+ * 1 KB write).  On success the in-core SF_DCLEAN follows the disk.  A failed
+ * write never leaves CLEAN = 1 in the cache (it could reach the disk after
+ * other blocks later); CLEAN = 0 or CHECK = 1 stay dirty, the safe way.
+ */
+  register struct buf *bp;
+  unsigned old, new;
+  int r;
+
+  bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
+  if (bp->b_dev != sp->s_dev) {		/* the read failed */
+	put_block(bp, ZUPER_BLOCK);
+	return(EIO);
+  }
+  old = (unsigned) conv2(sp->s_native, (int) SB_FLAGS(sp, bp)) & 0xFFFF;
+  new = ((old | set) & ~clr) & SF_DISK;
+  SB_FLAGS(sp, bp) = conv2(sp->s_native, (int) new);
+  if ((set & SF_CLEAN) && sp->s_native) {
+	/* Spec O.5: the free-count hint rides on the CLEAN write. */
+	u32_t *h = (u32_t *) &bp->b_data[SB_HINT_OFF];
+	h[0] = SB_HINT_TAG;
+	h[1] = (u32_t) sp->s_zfree;
+	h[2] = (u32_t) sp->s_ifree;
+  }
+  r = dev_io(DEV_WRITE, FALSE, sp->s_dev, (off_t) SUPER_BLOCK * BLOCK_SIZE,
+					BLOCK_SIZE, FS_PROC_NR, bp->b_data);
+  if (r == BLOCK_SIZE) {
+	bp->b_dirt = CLEAN;
+	if (new & SF_CLEAN) sp->s_flags |= SF_DCLEAN;
+	else sp->s_flags &= ~SF_DCLEAN;
+	r = OK;
+  } else {
+	if ((new & SF_CLEAN) && !(old & SF_CLEAN))
+		SB_FLAGS(sp, bp) = conv2(sp->s_native, (int) old);
+	else
+		bp->b_dirt = DIRTY;
+	if (r >= 0) r = EIO;
+  }
+  put_block(bp, ZUPER_BLOCK & ~WRITE_IMMED);
+  return(r);
+}
+
+
+/*===========================================================================*
+ *				sf_mounted				     *
+ *===========================================================================*/
+PUBLIC void sf_mounted(sp)
+register struct super_block *sp; /* just mounted read-write */
+{
+/* Spec N.1: a file system that was not left clean gets CHECK = 1 on the
+ * disk at once, so that a later boot checks it even if it is clean by then
+ * (one 1 KB write, only after an unclean end).
+ */
+  if (sp->s_rd_only || (sp->s_flags & SF_DCLEAN)) return;
+  (void) put_sflags(sp, SF_CHECK, 0);
+}
+
+
+/*===========================================================================*
+ *				sf_clean				     *
+ *===========================================================================*/
+PUBLIC void sf_clean(sp, force)
+register struct super_block *sp; /* a mounted file system, after a sync */
+int force;			/* shutdown or unmount: no idle period */
+{
+/* Spec N.2: called after a sync.  A read-write file system that is not
+ * CLEAN on the disk becomes CLEAN when nothing was written to it since the
+ * previous sync (unless 'force'), none of its buffers or in-core inodes is
+ * dirty (a write that failed, e.g. the card out, keeps it unclean) and no
+ * file of it is open after its last link went (unless 'force': every
+ * process has gone).  Unnamed pipes never reach the disk (T9).
+ */
+  register struct buf *bp;
+  register struct inode *rip;
+  dev_t dev = sp->s_dev;
+  int i;
+
+  if (dev == NO_DEV || sp->s_rd_only || (sp->s_flags & SF_DCLEAN)) return;
+  if (sp->s_flags & SF_WRITTEN) {
+	sp->s_flags &= ~SF_WRITTEN;
+	if (!force) return;
+  }
+  for (i = 0; i < NR_BUFS; i++)
+	if ((bp = BUF(i))->b_dev == dev && bp->b_dirt == DIRTY) return;
+  for (rip = &inode[0]; rip < &inode[NR_INODES]; rip++) {
+	if (rip->i_count == 0 || rip->i_dev != dev) continue;
+	if (rip->i_pipe == I_PIPE && (rip->i_nlinks & BYTE) == 0) continue;
+	if (rip->i_dirt == DIRTY) return;
+	if (!force && (rip->i_nlinks & BYTE) == 0) return;
+  }
+  (void) put_sflags(sp, SF_CLEAN, 0);
+}
+
+
+/*===========================================================================*
+ *				recount_step				     *
+ *===========================================================================*/
+PRIVATE int recount_step()
+{
+/* Spec O.5: count the free bits of up to RC_STEP map blocks of the file
+ * system being recounted (start one if a file system needs it).  1 while
+ * work is left, 0 when every mounted file system is exact.
+ */
+  struct super_block *sp;
+  struct buf *bp;
+  bit_t map_bits, b, base;
+  unsigned blocks, n, w, i;
+  block_t start;
+  bitchunk_t k;
+
+  if (rc_slot != RC_NONE) {
+	sp = &super_block[rc_slot];
+	if (sp->s_dev == NO_DEV || !(sp->s_flags & SF_ESTIMATE))
+		rc_slot = RC_NONE;		/* unmounted meanwhile */
+  }
+  if (rc_slot == RC_NONE) {
+	for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+		if (sp->s_dev != NO_DEV && (sp->s_flags & SF_ESTIMATE)) break;
+	if (sp == &super_block[NR_SUPERS]) return(0);
+	rc_slot = sp - &super_block[0];
+	rc_map = IMAP;
+	rc_block = 0;
+	rc_count = 0;
+  }
+  sp = &super_block[rc_slot];
+  if (rc_map == IMAP) {
+	start = SUPER_BLOCK + 1;
+	map_bits = sp->s_ninodes + 1;
+	blocks = sp->s_imap_blocks;
+  } else {
+	start = SUPER_BLOCK + 1 + sp->s_imap_blocks;
+	map_bits = sp->s_zones - (sp->s_firstdatazone - 1);
+	blocks = sp->s_zmap_blocks;
+  }
+  for (n = 0; n < RC_STEP && rc_block < blocks; n++, rc_block++) {
+	/* ONE_SHOT: the block goes to the front of the LRU, so a recount
+	 * reuses one buffer and does not push out the working set. */
+	bp = get_block(sp->s_dev, start + rc_block, NORMAL);
+	base = (bit_t) rc_block * BITS_PER_BLOCK;
+	for (w = 0; w < BITMAP_CHUNKS; w++) {
+		b = base + (bit_t) w * BITCHUNK_BITS;
+		if (b >= map_bits) break;
+		k = conv2(sp->s_native, (int) bp->b_bitmap[w]);
+		if (k == (bitchunk_t) ~0) continue;
+		for (i = 0; i < BITCHUNK_BITS && b + i < map_bits; i++)
+			if (!(k & (1 << i))) rc_count++;
+	}
+	put_block(bp, MAP_BLOCK | ONE_SHOT);
+  }
+  if (rc_block < blocks) return(1);
+  if (rc_map == IMAP) {
+	sp->s_ifree = (ino_t) rc_count;
+	rc_map = ZMAP;
+	rc_block = 0;
+	rc_count = 0;
+	return(1);
+  }
+  sp->s_zfree = (zone_t) rc_count;
+  sp->s_flags &= ~SF_ESTIMATE;
+  rc_slot = RC_NONE;
+  /* A file system that stays CLEAN (not written since the mount) gets no
+   * CLEAN write at umount, so the exact counts go out now: once per mount,
+   * and only if they differ from the hint on the disk.  put_sflags writes
+   * through dev_io, not the cache, so SF_WRITTEN stays as it was. */
+  if ((sp->s_flags & SF_DCLEAN) && !sp->s_rd_only && sp->s_native) {
+	u32_t *h;
+	int same;
+
+	bp = get_block(sp->s_dev, SUPER_BLOCK, NORMAL);
+	h = (u32_t *) &bp->b_data[SB_HINT_OFF];
+	same = bp->b_dev != sp->s_dev || (h[0] == SB_HINT_TAG
+		&& h[1] == (u32_t) sp->s_zfree && h[2] == (u32_t) sp->s_ifree);
+	put_block(bp, ZUPER_BLOCK & ~WRITE_IMMED);
+	if (!same) (void) put_sflags(sp, SF_CLEAN, 0);
+  }
+  return(1);			/* another file system may need one */
+}
+
+
+/*===========================================================================*
+ *				do_fstatfs				     *
+ *===========================================================================*/
+PUBLIC int do_fstatfs()
+{
+/* Spec O.5: fstatfs(fd, buf), statfs(path, buf) (m1_i1 FSTATFS_PATH), or
+ * one step of the idle recount (FSTATFS_RECOUNT, update).  The answer
+ * comes from the counters: no bit map is read.
+ */
+  struct statfs st;
+  struct super_block *sp;
+  struct inode *rip;
+  struct filp *f;
+  dev_t dev;
+
+  if (m.m1_i1 == FSTATFS_RECOUNT) {
+	if (!super_user) return(EPERM);
+	return(recount_step());
+  }
+  if (m.m1_i1 == FSTATFS_PATH) {
+	if (fetch_name(m.m1_p1, m.m1_i2, M1) != OK) return(err_code);
+	if ((rip = eat_path(user_path)) == NIL_INODE) return(err_code);
+	dev = rip->i_dev;
+	put_inode(rip);
+  } else {
+	if ((f = get_filp(m.m1_i1)) == NIL_FILP) return(err_code);
+	dev = f->filp_ino->i_dev;
+  }
+  for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+	if (sp->s_dev == dev && dev != NO_DEV) break;
+  if (sp == &super_block[NR_SUPERS]) return(EINVAL);	/* e.g. a pipe */
+
+  st.f_bsize = BLOCK_SIZE << sp->s_log_zone_size;
+  st.f_blocks = (long) (sp->s_zones - sp->s_firstdatazone);
+  st.f_bfree = st.f_bavail = (long) sp->s_zfree;
+  st.f_files = (long) sp->s_ninodes;
+  st.f_ffree = (long) sp->s_ifree;
+  st.f_dev = sp->s_dev;
+  st.f_namemax = DIR_NLEN(sp);
+  st.f_version = sp->s_version;
+  st.f_flag = (sp->s_rd_only ? ST_RDONLY : 0)
+	    | ((sp->s_flags & SF_ESTIMATE) ? ST_ESTIMATE : 0);
+  return(sys_copy(FS_PROC_NR, D, (phys_bytes) &st,
+		who, D, (phys_bytes) m.m1_p2, (phys_bytes) sizeof(st)));
 }

@@ -16,6 +16,10 @@
  *					of `rfid list` (case, spaces and /
  *					do not matter; EM = EM4100); HEX:
  *					its data bytes, or a .rfid file
+ *		  -hitag		straight to the Hitag micro magic chips
+ *					(ID8265, ID8210, H5.5: R9.0.7), which
+ *					are otherwise tried after T5577 and
+ *					EM4305 (not with -pass, -with, -lock)
  *		rfid copy [OPTS]	read a tag, then write it to the
  *					blank one put on next
  *		  -n TRIES		rounds, default 20 (a tag that
@@ -46,6 +50,14 @@
  *					FDX-B's 134.2 kHz (R9.0.4); the
  *					decoders run on 125 kHz captures,
  *					so -r shows the timings (T19b)
+ *		rfid raw FILE [-c MODE] [-t SECS]
+ *					record the signal as it is (default
+ *					10 s) in Unleashed's .ask.raw/.psk.raw
+ *					format, for tags no decoder knows
+ *					(R9.0.8; files on the SD card)
+ *		rfid -s SECS [-c MODE]	capture without a gap (R9.0.5) for
+ *					SECS and report halves, edges,
+ *					overruns and the durations' range
  *		rfid dump [-with HEX] [BLOCK]
  *					read one T5577 block (0 by default) and
  *					print its 32-bit word (block 0 is the
@@ -84,9 +96,13 @@
  */
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <errno.h>
+#include <time.h>
 #include <minix/rfid.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -180,7 +196,15 @@ static int em_decode(int nd, unsigned char id[5])
 				unsigned char b64[64];
 
 				for (j = 0; j < 64; j++) b64[j] = decbits[s + j] ^ inv;
-				if (em_frame(b64, 64, id)) return 1;
+				if (!em_frame(b64, 64, id)) continue;
+				/* An EM4100 tag sends the frame again at
+				 * once: its 9 header bits follow.  A longer
+				 * frame that begins with an EM4100 one
+				 * (Electra: two more blocks) is not this. */
+				if (s + 73 > nb) continue;
+				for (j = 0; j < 9; j++)
+					if ((decbits[s + 64 + j] ^ inv) != 1) break;
+				if (j == 9) return 1;
 			}
 	}
 	return 0;
@@ -197,15 +221,17 @@ static int em_decode(int nd, unsigned char id[5])
 #define T5577_EM4100	0x00148040UL	/* RF/64, Manchester, blocks 1-2 */
 #define T5577_PWD	0x00000010UL	/* block 0: a write needs block 7 */
 
-static int nt;			/* durations in d[], field on first */
+static int nt;			/* durations in dp[], field on first */
+static unsigned long *dp = d;	/* d[], or Hitag's longer list */
+static int dmax = MAXD;
 
 static void put_us(int on, unsigned long us)
 {
 	if (nt > 0 && ((nt - 1) & 1) == !on) {	/* the same state: longer */
-		d[nt - 1] += us;
+		dp[nt - 1] += us;
 		return;
 	}
-	if (nt < MAXD) d[nt++] = us;
+	if (nt < dmax) dp[nt++] = us;
 }
 
 static void put(int on, unsigned long tc)
@@ -227,6 +253,7 @@ static void wreset(void)
 }
 
 static int wlock;			/* -lock: the T5577 lock bit */
+static int whitag;			/* -hitag: straight to Hitag micro */
 static unsigned long wpass;		/* -pass: its password, or 0 */
 static unsigned long wsend;		/* -with HEX: the one it has now */
 
@@ -297,7 +324,7 @@ static void eword(int addr, unsigned long data)
 static int send(int fd)
 {
 	if (nt % 2 == 0) put_us(1, 8);		/* odd: ends with the field */
-	if (write(fd, d, nt * 4) != nt * 4) {
+	if (write(fd, dp, nt * 4) != nt * 4) {
 		perror("rfid: write");
 		return -1;
 	}
@@ -313,6 +340,128 @@ static int verify(int fd, unsigned char id[5], unsigned char got[5])
 		if (em_decode(n / 4, got)) return memcmp(got, id, 5) == 0 ? 1 : 0;
 	}
 	return -1;
+}
+
+/* ---- Hitag micro (ID8265, ID8210, H5.5): R9.0.7 ----
+ * "Magic" ID82xx chips that send an EM4100 number by themselves (TTF) once
+ * pages 0, 1 hold its 64 bits and page 0xFF the config.  The writer is
+ * Unleashed's lib/lfrfid/tools/hitagmicro.c (from Proxmark3): open loop,
+ * nothing is read back but the EM4100 afterwards.  Reader to tag is field
+ * gaps: every bit cell starts with a 64 us gap, then the field stays on
+ * 96 us (a 0) or 160 us (a 1); a frame starts with a 0 and a code
+ * violation (gap, 288 us on) and ends with a gap.  A frame is 5 flag bits,
+ * a 6-bit command, its data, a CRC-16 (0x1021, init 0, output reflected),
+ * fields LSB first, data and block bytes MSB first.  Each block is written
+ * in its own powered session (UID, SYSINFO, READ config, LOGIN, WRITE x2);
+ * config last, so a failed run keeps the old config; then a few clean
+ * power cycles latch it. */
+#define HM_GAP		64
+#define HM_B0		96
+#define HM_B1		160
+#define HM_VIOL		288
+#define HM_FLAGS	0x04
+#define HM_MAXD		1024		/* a session's durations (malloc) */
+
+static unsigned char hm_tx[80];		/* a frame's bits */
+static int hm_n;
+
+static void hm_lsb(unsigned v, int nbits)
+{
+	int i;
+
+	for (i = 0; i < nbits; i++) hm_tx[hm_n++] = (v >> i) & 1;
+}
+
+static void hm_msb(const unsigned char *b, int nbits)
+{
+	int i;
+
+	for (i = 0; i < nbits; i++) hm_tx[hm_n++] = b[i / 8] >> (7 - i % 8) & 1;
+}
+
+static void hm_crc(void)
+{
+	unsigned r = 0, out = 0;
+	int i;
+
+	for (i = 0; i < hm_n; i++) {		/* MSB-first, bit by bit */
+		unsigned top = (r >> 15 & 1) ^ hm_tx[i];
+
+		r = (r << 1) & 0xFFFF;
+		if (top) r ^= 0x1021;
+	}
+	for (i = 0; i < 16; i++) out |= ((r >> i) & 1) << (15 - i);	/* refout */
+	hm_lsb(out, 16);
+}
+
+/* The frame into the field list: SOF, the bits, EOF; then the field on
+ * for wait_us, while the tag answers (nobody listens). */
+static void hm_send(unsigned long wait_us)
+{
+	int i;
+
+	put_us(0, HM_GAP); put_us(1, HM_B0);		/* SOF: a 0, */
+	put_us(0, HM_GAP); put_us(1, HM_VIOL);		/* a violation */
+	for (i = 0; i < hm_n; i++) {
+		put_us(0, HM_GAP);
+		put_us(1, hm_tx[i] ? HM_B1 : HM_B0);
+	}
+	put_us(0, HM_GAP);				/* EOF */
+	put_us(1, wait_us);
+}
+
+static void hm_cmd(unsigned cmd, int page, const unsigned char *data)
+{
+	hm_n = 0;
+	hm_lsb(HM_FLAGS, 5);
+	hm_lsb(cmd, 6);
+	if (page >= 0) hm_lsb((unsigned) page, 8);
+	if (cmd == 0x12) hm_lsb(0, 8);			/* READ: count 0 */
+	if (data != NULL) hm_msb(data, 32);
+	hm_crc();
+}
+
+/* One block in a powered session.  Returns -1 on a device error. */
+static int hm_block(int fd, const unsigned char *pass, int page,
+						const unsigned char *data)
+{
+	nt = 0;
+	put_us(1, 3000);				/* charge */
+	hm_cmd(0x02, -1, NULL);	hm_send(21000);		/* READ UID */
+	hm_cmd(0x17, -1, NULL);	hm_send(13000);		/* SYSINFO */
+	hm_cmd(0x12, 0xFF, NULL); hm_send(17000);	/* READ config */
+	hm_cmd(0x28, -1, pass);	hm_send(9000);		/* LOGIN */
+	hm_cmd(0x14, page, data); hm_send(30000);	/* WRITE, twice: */
+	hm_send(30000);			/* the 8265 commits now and then */
+	if (send(fd) < 0) return -1;	/* the field goes off after it */
+	(void) poll((struct pollfd *) NULL, 0, 20);	/* the tag resets */
+	return 0;
+}
+
+/* Write an EM4100 frame (b[64]) to a Hitag micro chip with the password of
+ * one variant; clock: 64, 32 or 16 (the config's data rate). */
+static int hm_write(int fd, const unsigned char b[64], const unsigned char *pass,
+								int clock)
+{
+	unsigned char blk[2][4], cfg[4];
+	int i;
+
+	memset(blk, 0, sizeof blk);
+	for (i = 0; i < 64; i++)
+		if (b[i]) blk[i / 32][i % 32 / 8] |= 0x80 >> (i % 8);
+	cfg[0] = clock == 32 ? 0x85 : clock == 16 ? 0x45 : 0x05;
+	cfg[1] = cfg[2] = cfg[3] = 0;
+	(void) poll((struct pollfd *) NULL, 0, 100);	/* a cold chip */
+	if (hm_block(fd, pass, 0x00, blk[0]) < 0
+	    || hm_block(fd, pass, 0x01, blk[1]) < 0
+	    || hm_block(fd, pass, 0xFF, cfg) < 0) return -1;
+	for (i = 0; i < 6; i++) {			/* latch the config */
+		nt = 0;
+		put_us(1, 50000);
+		if (send(fd) < 0) return -1;
+		(void) poll((struct pollfd *) NULL, 0, 20);
+	}
+	return 0;
 }
 
 /* The 64 EM4100 bits of a number into b[64]: nine 1s, ten rows of 4 data
@@ -357,7 +506,7 @@ static int write_em(unsigned char id[5], int tries)
 	/* Rounds: a tag with a password answers a plain write only when the
 	 * gap happens to fall where it listens, which may take many tries
 	 * (the stock app does the same while the button is held). */
-	for (v = -1; tries-- > 0; ) {
+	for (v = -1; !whitag && tries-- > 0; ) {
 		nt = 0;				/* T5577 first, as stock */
 		wblock(1, blk[0]);		/* the data first and the */
 		wblock(2, blk[1]);		/* config last: once PWD is */
@@ -383,6 +532,37 @@ static int write_em(unsigned char id[5], int tries)
 				id[0], id[1], id[2], id[3], id[4]);
 			return 0;
 		}
+	}
+	if (!wpass && !wlock && !wsend) {	/* then Hitag micro (R9.0.7) */
+		static const struct { unsigned char pw[4]; const char *name; }
+		    hv[3] = { { { 0, 0, 0, 0 }, "8265" },
+			      { { 0x9A, 0xC4, 0x99, 0x9C }, "8210" },
+			      { { 0x49, 0x6B, 0x0E, 0x59 }, "H5.5" } };
+		unsigned long *hd = malloc(HM_MAXD * sizeof(unsigned long));
+
+		if (hd == NULL) {
+			fprintf(stderr, "rfid: no memory for Hitag\n");
+			return 1;
+		}
+		dp = hd;
+		dmax = HM_MAXD;
+		for (i = 0; i < 3; i++) {
+			if (hm_write(fd, b, hv[i].pw, 64) < 0) return 1;
+			dp = d;			/* the read-back uses d[] */
+			dmax = MAXD;
+			if ((v = verify(fd, id, got)) == 1) {
+				printf("written (Hitag micro %s): EM4100 %02X %02X "
+					"%02X %02X %02X\n", hv[i].name, id[0],
+					id[1], id[2], id[3], id[4]);
+				free(hd);
+				return 0;
+			}
+			dp = hd;
+			dmax = HM_MAXD;
+		}
+		dp = d;
+		dmax = MAXD;
+		free(hd);
 	}
 	if (v == 0)
 		printf("the tag still reads EM4100 %02X %02X %02X %02X %02X: "
@@ -863,6 +1043,27 @@ static int lf_rate(uint32_t cfg)
  * the stock rule, validate_count + 1 in a row, across captures). */
 static LfrfidReader rd[2];
 static int rd_on;
+static uint32_t rd_feature = LFRFIDFeatureASK;	/* PSK in the PSK field */
+
+/* Glitches: a level of at most SPIKE_US is not the tag's (the stock reader
+ * drops such pulses too, LFRFID_WORKER_READ_MIN_TIME_US 16).  It and the
+ * levels on both sides of it are one level; a spike inside a PSK bit
+ * otherwise reads as two phase changes.  In place; the new count.  The
+ * first level's polarity stays. */
+#define SPIKE_US	16
+
+static int despike(unsigned long *v, int n)
+{
+	int i, k = 0;
+
+	for (i = 0; i < n; i++) {
+		if (k > 0 && i + 1 < n && v[i] <= SPIKE_US) {
+			v[k - 1] += v[i] + v[i + 1];
+			i++;
+		} else v[k++] = v[i];
+	}
+	return k;
+}
 
 /* One capture d[0..n-1] through liblfrfid: the protocol once validated
  * (its data in *data), else -1.  *half: a protocol is half validated. */
@@ -872,8 +1073,8 @@ static int lf_capture(int n, uint8_t *data, int *half)
 	ProtocolId p;
 
 	if (!rd_on) {
-		lfrfid_reader_start(&rd[0], lf(), LFRFIDFeatureASK);
-		lfrfid_reader_start(&rd[1], lf(), LFRFIDFeatureASK);
+		lfrfid_reader_start(&rd[0], lf(), rd_feature);
+		lfrfid_reader_start(&rd[1], lf(), rd_feature);
 		rd_on = 1;
 	}
 	for (pol = 0; pol < 2; pol++) {
@@ -1149,28 +1350,125 @@ static int copy_any(int tries)
 	return write_lf(p, data, tries, 0);
 }
 
-/* rfid emulate PROTO HEX...: one frame of the protocol's Unleashed encoder
- * as RFIDIOCEMU segments (lfrfid_emu_segments: as stock's pulse_glue),
- * played round and round by the kernel at the reader's clock.  At most 512
- * segments today (FSK and PSK frames are longer: T19b, R9.0.6). */
+/* rfid emulate -runs EM ...: the EM4100, played from a run list
+ * (RFIDIOCEMURUN, R9.0.6) through the smallest ring (16 pairs: a refill
+ * every 8 segments, ~2 ms), so a reader that reads it proves the refill
+ * path the FSK and PSK frames use. */
+static int emulate_em_runs(unsigned char id[5])
+{
+	unsigned char b[64], h[128];
+	struct rfid_emu_run *ru = (struct rfid_emu_run *) &d[0];  /* <= 1 KB */
+	unsigned long *ring = &d[256];
+	struct rfid_emu_runs q;
+	int k, n = 0, fd;
+
+	em_bits(id, b);
+	for (k = 0; k < 64; k++) {		/* half bits: loaded or not */
+		h[2 * k] = b[k] != 0;
+		h[2 * k + 1] = b[k] == 0;
+	}
+	for (k = 0; k < 128; k++) {		/* equal neighbours: one run */
+		if (n > 0 && (ru[n - 1].pulse != 0) == h[k]) {
+			ru[n - 1].count++;
+			continue;
+		}
+		ru[n].period_m1 = 31;
+		ru[n].pulse = h[k] ? 32 : 0;
+		ru[n].count = 1;
+		ru[n].pad = 0;
+		n++;
+	}
+	q.runs = ru;
+	q.nruns = n;
+	q.ring = ring;
+	q.ring_n = 16;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMURUN, &q) < 0) {
+		perror("rfid: emulate (runs)");
+		close(fd);
+		return 1;
+	}
+	printf("emulating EM4100 %02X %02X %02X %02X %02X from %d runs; hold to "
+		"a reader, Ctrl-C to stop\n", id[0], id[1], id[2], id[3], id[4], n);
+	for (;;) sleep(60);
+	return 0;
+}
+
+
+/* Play a run list (4 uint16_t a run, struct rfid_emu_run) through a ring
+ * of ring_n pairs until Ctrl-C. */
+static int play_runs(uint16_t *runs, int n, int ring_n, const char *what)
+{
+	struct rfid_emu_runs q;
+	unsigned long *ring;
+	int fd;
+
+	if ((ring = malloc(2 * ring_n * sizeof(*ring))) == NULL) {
+		fprintf(stderr, "rfid: no memory for the ring\n");
+		return 1;
+	}
+	q.runs = (struct rfid_emu_run *) runs;
+	q.nruns = n;
+	q.ring = ring;
+	q.ring_n = ring_n;
+	if ((fd = open("/dev/rfid", O_RDWR)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (ioctl(fd, RFIDIOCEMURUN, &q) < 0) {
+		perror("rfid: emulate (runs)");
+		close(fd);
+		return 1;
+	}
+	printf("%s(%d runs); hold to a reader, Ctrl-C to stop\n", what, n);
+	for (;;) sleep(60);		/* Ctrl-C ends it; close stops it */
+	return 0;			/* not reached */
+}
+
+/* rfid emulate PROTO HEX...: one frame of the protocol's Unleashed encoder,
+ * played round and round by the kernel at the reader's clock: as
+ * RFIDIOCEMU segments (lfrfid_emu_segments, as stock's pulse_glue) when
+ * the frame has at most 512, else (FSK and PSK frames: 540 to 3534) as a
+ * run list of equal segments through a refilled ring (RFIDIOCEMURUN,
+ * R9.0.6). */
+/* The runs go into the segment buffer, which the segments did not fit:
+ * 2 KB hold 256 runs of 8 B, the longest frame needs 201 (Indala224,
+ * make lfrfidtest).  A separate 4 KB list ran rfid out of memory once the
+ * freed 2 KB could not hold it (twoflip: "lfrfid: out of memory"). */
+#define MAXRUNS	(MAXD * sizeof(unsigned long) / (4 * sizeof(uint16_t)))
+
 static int emulate_lf(int p, uint8_t *data)
 {
 	unsigned long *pulse;
 	struct rfid_emu e;
-	int nseg, fd;
+	uint16_t *runs;
+	int nseg, n, fd;
 
-	/* FSK and PSK loops are 540 to 3534 segments (make lfrfidtest) */
-	nseg = -1;
-	if (lf_readable(lf_config(p, data))) {
-		if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
-		nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
+	if ((pulse = malloc(MAXD * sizeof(*pulse))) == NULL) return 1;
+	nseg = lfrfid_emu_segments(p, data, lf_size(p), (uint32_t *) d,
 					(uint32_t *) pulse, MAXD);
-	}
-	if (nseg < 0) {
-		fprintf(stderr, "rfid: a %s frame is more than %d segments (%s): "
-			"emulating it needs T19b\n", protocol_dict_get_name(lf(), p),
-			MAXD, lf_modulation(lf_config(p, data)));
-		return 1;
+	if (nseg < 0) {			/* a long frame: runs */
+		runs = (uint16_t *) pulse;	/* the same 2 KB */
+		n = lfrfid_emu_runs(p, data, lf_size(p), runs, (int) MAXRUNS);
+		if (n == -1) {
+			fprintf(stderr, "rfid: a %s frame never repeats exactly (%s): "
+				"there is nothing to play round and round\n",
+				protocol_dict_get_name(lf(), p),
+				lf_modulation(lf_config(p, data)));
+			return 1;
+		}
+		if (n < 0) {
+			fprintf(stderr, "rfid: a %s frame is more than %d runs "
+				"(%s)\n", protocol_dict_get_name(lf(), p), (int) MAXRUNS,
+				lf_modulation(lf_config(p, data)));
+			return 1;
+		}
+		printf("emulating ");
+		lf_print(p, data);
+		return play_runs(runs, n, 128, "");
 	}
 	e.dur = d;
 	e.pulse = pulse;
@@ -1219,9 +1517,305 @@ static int list(void)
 }
 
 
+/* ---- streaming capture (R9.0.5) ----
+ * rfid -s SECONDS [-c MODE]: capture without a gap for that long and say
+ * how it went (halves, edges, overruns, the range of the durations): the
+ * device check of AC9.0.3, and the front end the T19 decoders will use. */
+#define RS_WORDS	1024		/* halves of 512 edges: >= 16 ms of FSK */
+
+static int stream_test(int secs, int carrier)
+{
+	struct rfid_stream st;
+	unsigned long *rs_ring = malloc(RS_WORDS * sizeof(unsigned long));
+	unsigned long prev = 0, d, lo = ~0UL, hi = 0, edges = 0;
+	unsigned long halves = 0, over = 0;
+	time_t end;
+	int fd, h, i, first = 1;
+
+	if (rs_ring == NULL) {
+		fprintf(stderr, "rfid: no memory for the ring\n");
+		return 1;
+	}
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
+		return 1;
+	}
+	st.ring = rs_ring;
+	st.words = RS_WORDS;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		perror("rfid: stream");
+		return 1;
+	}
+	end = time((time_t *) 0) + secs;
+	while (time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 1000) != 1) continue;	/* no tag: few edges */
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno == EOVERFLOW) { over++; first = 1; continue; }
+			perror("rfid: read");
+			break;
+		}
+		halves++;
+		for (i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2); i++) {
+			if (!first) {
+				d = rs_ring[i] - prev;
+				if (d < lo) lo = d;
+				if (d > hi) hi = d;
+				edges++;
+			}
+			prev = rs_ring[i];
+			first = 0;
+		}
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	close(fd);
+	printf("stream %d s: %lu halves, %lu edges, %lu overruns", secs,
+		halves, edges, over);
+	if (edges) printf(", %lu-%lu us", lo, hi);
+	printf("\n");
+	return over != 0;
+}
+
+/* ---- RAW read (R9.0.8) ----
+ * rfid raw FILE [-c MODE] [-t SECS]: the tag's signal as it is, for tags
+ * no decoder knows, in Unleashed's .ask.raw/.psk.raw format (lib/lfrfid/
+ * lfrfid_raw_file.c): a header (magic "RIFL", version 1, the carrier's
+ * frequency and duty as floats, the largest block), then blocks of a
+ * 32-bit length and varint pairs (LEB128): the time high, then the
+ * period, us, as stock's capture reports them (high width from a rising
+ * edge, period from rising to rising).  The edges come from the stream
+ * (R9.0.5); its level before the first edge gives their polarity.  A
+ * stream overrun skips whole halves of 512 edges, so the polarity stays;
+ * only the pair across the gap is dropped. */
+#define RAW_BLOCK	2048
+
+static volatile int raw_stop;
+
+static void raw_sig(int sig)
+{
+	raw_stop = 1;
+}
+
+static int raw_flush(int out, unsigned char *blk, int *n)
+{
+	unsigned long len = (unsigned long) *n;
+
+	if (*n == 0) return 0;
+	if (write(out, (char *) &len, 4) != 4 || write(out, (char *) blk, *n) != *n)
+		return -1;
+	*n = 0;
+	return 0;
+}
+
+static void raw_varint(unsigned char *blk, int *n, unsigned long v)
+{
+	while (v >= 0x80) {
+		blk[(*n)++] = (unsigned char) (v | 0x80);
+		v >>= 7;
+	}
+	blk[(*n)++] = (unsigned char) v;
+}
+
+static int raw_read(char *path, int secs, int carrier)
+{
+	static const unsigned long hz[3] = { 0x47F42400UL, 0x47742400UL,
+					      0x48030E00UL };	/* floats */
+	unsigned long hdr[5], *ring = malloc(1024 * sizeof(unsigned long));
+	unsigned char *blk = malloc(RAW_BLOCK);
+	unsigned long rise = 0, fall = 0, pairs = 0, over = 0;
+	struct rfid_stream st;
+	int fd, out, h, i, n = 0, level, have_rise = 0, have_fall = 0, r = 0;
+	time_t end = time((time_t *) 0) + secs;
+
+	if (ring == NULL || blk == NULL) {
+		fprintf(stderr, "rfid: no memory\n");
+		return 1;
+	}
+	if ((out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) {
+		perror(path);
+		return 1;
+	}
+	hdr[0] = 0x4C464952UL;			/* "RIFL" */
+	hdr[1] = 1;
+	hdr[2] = hz[carrier];
+	hdr[3] = carrier == RFID_CARRIER_PSK ? 0x3E800000UL : 0x3F000000UL;
+	hdr[4] = RAW_BLOCK;
+	if (write(out, (char *) hdr, sizeof hdr) != sizeof hdr) {
+		perror(path);
+		return 1;
+	}
+	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
+		perror("rfid: /dev/rfid");
+		return 1;
+	}
+	if (carrier != RFID_CARRIER_125
+			&& ioctl(fd, RFIDIOCCARRIER, &carrier) != 0) {
+		perror("rfid: carrier");
+		return 1;
+	}
+	st.ring = ring;
+	st.words = 1024;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		perror("rfid: stream");
+		return 1;
+	}
+	level = st.level;
+	signal(SIGINT, raw_sig);
+	printf("recording to %s for %d s (Ctrl-C ends it)...\n", path, secs);
+	fflush(stdout);
+	while (!raw_stop && time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 1000) != 1) continue;
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno == EOVERFLOW) {	/* whole halves skipped */
+				over++;
+				have_rise = have_fall = 0;
+				continue;
+			}
+			if (errno == EINTR) continue;
+			perror("rfid: read");
+			r = 1;
+			break;
+		}
+		for (i = h * 512; i < (h + 1) * 512; i++) {
+			level = !level;			/* this edge's new level */
+			if (level) {			/* rising */
+				if (have_rise) {
+					raw_varint(blk, &n, have_fall
+						? fall - rise : 0);
+					raw_varint(blk, &n, ring[i] - rise);
+					pairs++;
+					if (n > RAW_BLOCK - 10
+					    && raw_flush(out, blk, &n) < 0) {
+						perror(path);
+						raw_stop = r = 1;
+						break;
+					}
+				}
+				rise = ring[i];
+				have_rise = 1;
+				have_fall = 0;
+			} else if (have_rise) {
+				fall = ring[i];
+				have_fall = 1;
+			}
+		}
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	close(fd);
+	if (raw_flush(out, blk, &n) < 0 || close(out) < 0) {
+		perror(path);
+		r = 1;
+	}
+	printf("%lu pairs, %lu overruns\n", pairs, over);
+	return r || over != 0;
+}
+
+/* rfid read, gapless (R9.0.5): when the short captures found nothing, the
+ * stream's edges go straight into the decoders for up to secs seconds, so
+ * frames longer than one capture are read too (RF/32 and RF/16, FDX-B,
+ * Gallagher, the FSK protocols).  Durations go into d[] (no stack).  The
+ * protocol (data in data[]), or -1.
+ *
+ * Two things a real FSK tag showed on the device (a T5577 written as
+ * HIDProx, #210):
+ * - the envelope settles for about 300 ms after the field comes on, and
+ *   until then the comparator gives long pulses, not the tag's cycles: the
+ *   first RS_SETTLE_US are not decoded (stock waits 450 ms too,
+ *   LFRFID_WORKER_READ_STABILIZE_TIME_MS);
+ * - FSK is about 27000 edges a second, a half of the ring every 19 ms, and
+ *   feeding every edge to the decoders in both polarities takes longer:
+ *   38 of 40 halves were lost (EOVERFLOW) and nothing was read.  So both
+ *   polarities are fed only until halves get lost; then one at a time, the
+ *   other after RS_SLICE_US.  (An overrun skips whole halves of 512 edges,
+ *   so the levels stay right.) */
+#define RS_SETTLE_US	450000UL
+#define RS_SLICE_US	600000UL
+
+static int stream_read(int fd, int secs, uint8_t *data)
+{
+	struct rfid_stream st;
+	unsigned long *ring = malloc(RS_WORDS * sizeof(unsigned long));
+	unsigned long prev = 0, us = 0, slice = 0;
+	time_t end;
+	int h, i, n, first = 1, lv = 0, pol, p = -1, lost = 0, one = 0;
+
+	if (ring == NULL) return -1;
+	st.ring = ring;
+	st.words = RS_WORDS;
+	if (ioctl(fd, RFIDIOCSTREAM, &st) != 0) {
+		free(ring);
+		return -1;
+	}
+	lv = !st.level;			/* after the first edge */
+	rd_on = 0;
+	(void) lf_capture(0, data, &h);	/* both readers started */
+	end = time((time_t *) 0) + secs + 1;	/* + the settling */
+	while (p < 0 && time((time_t *) 0) < end) {
+		struct pollfd pf;
+
+		pf.fd = fd; pf.events = POLLIN; pf.revents = 0;
+		if (poll(&pf, 1, 500) != 1) continue;
+		if (read(fd, (char *) &h, 4) != 4) {
+			if (errno != EOVERFLOW) break;
+			first = 1;		/* edges lost: start over */
+			for (pol = 0; pol < 2; pol++) lfrfid_reader_gap(&rd[pol]);
+			if (us >= RS_SETTLE_US && ++lost >= 2) one = 1;
+			continue;
+		}
+		for (n = 0, i = h * (RS_WORDS / 2); i < (h + 1) * (RS_WORDS / 2);
+									i++) {
+			if (!first && n < MAXD) {
+				d[n] = ring[i] - prev;
+				us += d[n++];
+			}
+			prev = ring[i];
+			first = 0;
+		}
+		if (us < RS_SETTLE_US) {	/* the envelope still settles */
+			lv ^= n & 1;
+			continue;
+		}
+		h = n;				/* the levels that passed */
+		n = despike(d, n);
+		if (one && us - slice >= RS_SLICE_US) {	/* the other one now */
+			slice = us;
+			one = one == 1 ? 2 : 1;
+			for (pol = 0; pol < 2; pol++) lfrfid_reader_gap(&rd[pol]);
+		}
+		for (pol = 0; pol < 2 && p < 0; pol++) {
+			ProtocolId q;
+
+			if (one && pol != one - 1) continue;
+			q = lfrfid_reader_feed_edges(&rd[pol],
+				(const uint32_t *) d, (size_t) n, lv ^ pol);
+			if (q != PROTOCOL_NO) {
+				memcpy(data, rd[pol].data, lf_size(q));
+				p = q;
+			}
+		}
+		lv ^= h & 1;
+	}
+	st.words = 0;
+	(void) ioctl(fd, RFIDIOCSTREAM, &st);
+	free(ring);
+	return p;
+}
+
 int main(int argc, char **argv)
 {
-	int carrier = RFID_CARRIER_125;
+	int carrier = RFID_CARRIER_125, stream = 0;
 	int fd, n, i, tries = 4, raw = 0, p;
 	unsigned char id[5];
 	uint8_t data[LFRFID_DATA_MAX];
@@ -1233,10 +1827,33 @@ int main(int argc, char **argv)
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "emulate") == 0) {
-		if ((p = tag_args(argc, argv, 2, data)) < 0) goto use;
-		/* EM4100 at RF/64 keeps its own waveform (R6.5 part 4) */
-		if (p == LFRFIDProtocolEM4100) return emulate_em(data);
+		int runs = argc >= 3 && strcmp(argv[2], "-runs") == 0;
+
+		if ((p = tag_args(argc, argv, 2 + runs, data)) < 0) goto use;
+		/* EM4100 at RF/64 keeps its own waveform (R6.5 part 4); -runs
+		 * plays it from a run list instead (the R9.0.6 check) */
+		if (p == LFRFIDProtocolEM4100)
+			return runs ? emulate_em_runs(data) : emulate_em(data);
 		return emulate_lf(p, data);
+	}
+
+	if (argc >= 3 && strcmp(argv[1], "raw") == 0) {	/* R9.0.8 */
+		int secs = 10, c = RFID_CARRIER_125;
+
+		for (i = 3; i < argc; i++) {
+			if (strcmp(argv[i], "-t") == 0 && i + 1 < argc)
+				secs = atoi(argv[++i]);
+			else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+				i++;
+				if (strcmp(argv[i], "psk") == 0)
+					c = RFID_CARRIER_PSK;
+				else if (strcmp(argv[i], "134") == 0)
+					c = RFID_CARRIER_134;
+				else if (strcmp(argv[i], "125") != 0) goto use;
+			} else goto use;
+		}
+		if (secs < 1) goto use;
+		return raw_read(argv[2], secs, c);
 	}
 
 	if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
@@ -1285,6 +1902,7 @@ int main(int argc, char **argv)
 
 			if (strcmp(argv[i], "-lock") == 0) wlock = 1;
 			else if (strcmp(argv[i], "-em4305") == 0) em_only = 1;
+			else if (strcmp(argv[i], "-hitag") == 0) whitag = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				tries = atoi(argv[++i]);
 			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
@@ -1302,6 +1920,11 @@ int main(int argc, char **argv)
 			return copy_any(tries);
 		}
 		if ((p = tag_args(argc, argv, i, data)) < 0) goto use;
+		/* -hitag: Hitag micro chips take an EM4100 frame only, and
+		 * not with a password, a lock or -em4305 (R9.0.7) */
+		if (whitag && (p != LFRFIDProtocolEM4100 || em_only || wlock
+							|| wpass || wsend))
+			goto use;
 		/* EM4100 at RF/64: its own writer, as before (R6.5) */
 		if (p == LFRFIDProtocolEM4100 && !em_only)
 			return write_em(data, tries);
@@ -1311,6 +1934,8 @@ int main(int argc, char **argv)
 		if (strcmp(argv[i], "-r") == 0) raw = 1;
 		else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 			tries = atoi(argv[++i]);
+		else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc)
+			stream = atoi(argv[++i]);
 		else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			out = argv[++i];
 		else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -1324,18 +1949,20 @@ int main(int argc, char **argv)
 			else goto use;
 		} else {
 use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
-				"[-c 125|psk|134]\n"
+				"[-c 125|psk|134] [-s SECS]\n"
 				"       rfid write [-n N] [-pass HEX] [-with HEX] "
-				"[-lock] [-em4305] PROTO HEX...|-f FILE\n"
+				"[-lock] [-em4305] [-hitag] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
 				"[-with HEX] [-lock]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
-				"       rfid emulate PROTO HEX...|-f FILE\n"
+				"       rfid emulate [-runs] PROTO HEX...|-f FILE\n"
+				"       rfid raw FILE [-c 125|psk|134] [-t SECS]\n"
 				"       rfid list\n");
 			return 2;
 		}
 	}
+	if (stream > 0) return stream_test(stream, carrier);
 	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
 		perror("rfid: /dev/rfid");
 		return 1;
@@ -1345,14 +1972,14 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 		perror("rfid: carrier");
 		return 1;
 	}
+	if (carrier == RFID_CARRIER_PSK) rd_feature = LFRFIDFeaturePSK;
 	if ((p = read_any(fd, tries, raw, data, &n)) >= 0) {
 		lf_print(p, data);
 		if (out != NULL && save_rfid(out, p, data) < 0) return 1;
 		return 0;
 	}
 	if (p == -2) return 1;
-	if (n == 0) printf("no tag (no signal)\n");
-	else {
+	{
 		unsigned long lo = ~0UL, hi = 0, sum = 0;
 
 		for (i = 0; i < n; i++) {
@@ -1360,7 +1987,29 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 			if (d[i] > hi) hi = d[i];
 			sum += d[i];
 		}
-		printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
+		if (!raw && (p = stream_read(fd, 3, data)) >= 0) {
+			lf_print(p, data);
+			if (out != NULL && save_rfid(out, p, data) < 0)
+				return 1;
+			return 0;
+		}
+		/* no ASK or FSK tag: the PSK field and its decoders, as the
+		 * stock reader's turn-taking (Indala, Keri, Nexwatch, Idteck) */
+		if (!raw && carrier == RFID_CARRIER_125) {
+			int psk = RFID_CARRIER_PSK;
+
+			if (ioctl(fd, RFIDIOCCARRIER, &psk) == 0) {
+				rd_feature = LFRFIDFeaturePSK;
+				if ((p = stream_read(fd, 2, data)) >= 0) {
+					lf_print(p, data);
+					if (out != NULL && save_rfid(out, p, data) < 0)
+						return 1;
+					return 0;
+				}
+			}
+		}
+		if (n == 0) printf("no tag (no signal)\n");
+		else printf("no tag rfid reads (ASK); %d changes, %lu-%lu us, "
 			"mean %lu us\n", n, lo, hi, sum / n);
 	}
 	return 1;

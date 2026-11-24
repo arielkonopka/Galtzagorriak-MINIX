@@ -101,6 +101,8 @@ struct iorequest_s {
   char *io_buf;			/* buffer in user space */
   int io_nbytes;		/* size of request */
   unsigned short io_request;	/* read, write (optionally) */
+  unsigned short io_high;	/* R12.39: position bits 32-47 (in what was
+				 * padding: the size stays 16 B) */
 };
 #endif /* _TYPE_H */
 
@@ -164,12 +166,18 @@ struct kstack {
 #define MMSWAPRES	MI_SWAPRES
 #define MI_SWAPINFO	9	/* struct swinfo to m1_p1 (free -v) */
 #define MI_SWAPTEST	10	/* root, tests: m1_i1 1: swap out pid m1_i3
-			 * now, 2: act as if the card were pulled */
+			 * now, 2: act as if the card were pulled,
+			 * 3: the pid counter wraps, next pid m1_i3 */
 #define MI_FGEXEC	11	/* root: the next child's exec is the
 			 * foreground app: placed low (R12.22) */
 #define MI_MEMTEST	12	/* root (selftest, R7b.3.1): m1_i1 the address of
 			 * a 4 KB block of RAM; reply MT_* (MT_FAIL:
 			 * reply_i1 the failing word's address) */
+#define MI_BUILD	13	/* the system image's version and build id
+			 * ("0.1.1+12.g1a2b3c4", '\0'-ended) to m1_p1, at
+			 * most m1_i1 bytes (settings about, spec K.7) */
+#define MI_BLK		14	/* swappable blocks (12h): m1_p1 a struct
+			 * blkreq in the caller's memory, <minix/blk.h> */
 #define MT_PASS		0	/* free: March C- passed (left zeroed) */
 #define MT_FAIL		1	/* free: a word did not hold its pattern */
 #define MT_INUSE	2	/* a process (or part of one) is there */
@@ -178,6 +186,9 @@ struct kstack {
 #define SW_OFF		0
 #define SW_PLAIN	1
 #define SW_CRYPT	2
+#define SW_BLK		0x10	/* MI_SWAPON, or'ed into m1_i3: blocks on
+				 * (R12.38 blk=on); with SW_OFF the partition
+				 * serves blocks only */
 
 /* sys_flash() operations. */
 #define FL_INFO		0	/* cache region: base, size; with addr: */

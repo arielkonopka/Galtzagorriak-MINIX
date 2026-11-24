@@ -73,6 +73,67 @@ void hal_ow_delay(unsigned us)
 	while (DWT->CYCCNT - s < n) ;
 }
 
+/* A microsecond clock, mod 2^16, for the 1-Wire slave's slot times (the
+ * longest it measures is a reset, ~0.5-1 ms).  The cycle counter shifted:
+ * the core runs at 64 MHz whenever it does (2^6 cycles a microsecond),
+ * and 2^32 / 2^6 is a multiple of 2^16, so differences stay right across
+ * the counter's wrap. */
+uint16_t hal_ow_now(void)
+{
+	return (uint16_t) (DWT->CYCCNT >> 6);
+}
+
+/* R6.7 part 3, a Dallas key emulated: PB14 released (open drain, high by
+ * the pull-up) and EXTI line 14 on both edges.  Line 14 shares the
+ * EXTI15_10 vector with the Left/Right/Up/Back buttons (10-13); its
+ * handler asks hal_ib_edge() first.  Off: the line masked, the pin left
+ * released. */
+void hal_ib_emu(int on)
+{
+	if (on) {
+		hal_ow_line(0);
+		SYSCFG->EXTICR[3] = (SYSCFG->EXTICR[3] & ~SYSCFG_EXTICR4_EXTI14)
+					| 1u << SYSCFG_EXTICR4_EXTI14_Pos;  /* B */
+		EXTI->RTSR1 |= EXTI_RTSR1_RT14;
+		EXTI->FTSR1 |= EXTI_FTSR1_FT14;
+		EXTI->PR1 = EXTI_PR1_PIF14;
+		EXTI->IMR1 |= EXTI_IMR1_IM14;
+	} else {
+		EXTI->IMR1 &= ~EXTI_IMR1_IM14;
+		EXTI->PR1 = EXTI_PR1_PIF14;
+	}
+}
+
+/* 1 if line 14 had an edge (the flag cleared), else 0. */
+int hal_ib_edge(void)
+{
+	if (!(EXTI->PR1 & EXTI_PR1_PIF14)) return 0;
+	EXTI->PR1 = EXTI_PR1_PIF14;
+	return 1;
+}
+
+/* Forget an edge of our own (the presence pulse we drove). */
+void hal_ib_clear(void)
+{
+	EXTI->PR1 = EXTI_PR1_PIF14;
+}
+
+/* R6.7 part 3b, Cyfral and Metakom: not here yet.  The device side (the
+ * comparator capture, the pulse playback on PB14 by a timer) comes after
+ * the first version (issue #318); until then /dev/ibutton says ENXIO and
+ * ikey says so. */
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	(void) src; (void) n; (void) level;
+	return n == 0 ? 0 : -1;
+}
+
+int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
+{
+	(void) dst; (void) n; (void) ms; (void) level;
+	return -1;
+}
+
 /*===========================================================================*
  *				Radios parked (T14a)			     *
  *===========================================================================*/
@@ -195,6 +256,411 @@ void hal_radios_check(unsigned *cc_us, unsigned *nfc_op, unsigned *nfc_id,
 }
 
 /*===========================================================================*
+ *			The ST25R3916 as a poller (#390, R13.1)		     *
+ *===========================================================================*/
+/* NFC-A, polled: no IRQ pin, no static RAM (the state is in the chip's
+ * registers).  Register values and the order from the stock firmware
+ * (furi_hal_nfc*.c, st25r3916*.c; GPL).  SPI1 mode 1, CS PE4.  A register
+ * address with NR_B is in space B (a 0xFB prefix); a read is 0x40 | reg, a
+ * write reg, a direct command 0xC0 | n, the FIFO load 0x80 and read 0x9F. */
+static uint32_t ms_since(uint32_t start);
+#define NR_B		0x40
+#define NR_IRQ_OSC	0x00000080UL	/* main irq register, byte 0 ... */
+#define NR_IRQ_RXE	0x00000010UL
+#define NR_IRQ_TXE	0x00000008UL
+#define NR_IRQ_DCT	0x00008000UL	/* ... byte 1 ... */
+#define NR_IRQ_ERR	0x00F00000UL	/* ... byte 2: crc, par, err2, err1 */
+
+static uint8_t nr_r(unsigned reg)
+{
+	uint8_t v;
+
+	NFC_CS(1);
+	if (reg & NR_B) (void) spi1_xfer(0xFB);
+	(void) spi1_xfer(0x40 | (reg & 0x3F));
+	v = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	return v;
+}
+
+static void nr_w(unsigned reg, uint8_t v)
+{
+	NFC_CS(1);
+	if (reg & NR_B) (void) spi1_xfer(0xFB);
+	(void) spi1_xfer(reg & 0x3F);
+	(void) spi1_xfer(v);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_mod(unsigned reg, unsigned mask, unsigned val)
+{
+	nr_w(reg, (uint8_t) ((nr_r(reg) & ~mask) | (val & mask)));
+}
+
+static void nr_cmd(uint8_t c)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(c);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_test_mod(unsigned reg, unsigned mask, unsigned val)
+{
+	uint8_t v;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0xFC);			/* test register access */
+	(void) spi1_xfer(0x40 | reg);
+	v = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	NFC_CS(1);
+	(void) spi1_xfer(0xFC);
+	(void) spi1_xfer(reg);
+	(void) spi1_xfer((v & ~mask) | (val & mask));
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* The four interrupt registers (0x1A-0x1D) as one word; reading clears. */
+static uint32_t nr_irq(void)
+{
+	uint32_t v = 0;
+	int i;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0x40 | 0x1A);
+	for (i = 0; i < 4; i++) v |= (uint32_t) spi1_xfer(0) << (8 * i);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	return v;
+}
+
+/* Enable (not mask) these sources: a masked one is not recorded. */
+static void nr_enable(uint32_t on)
+{
+	int i;
+
+	NFC_CS(1);
+	(void) spi1_xfer(0x16);
+	for (i = 0; i < 4; i++) (void) spi1_xfer((uint8_t) (~on >> (8 * i)));
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* Wait for one of the sources in want (or ms): everything seen so far. */
+static uint32_t nr_wait(uint32_t want, unsigned ms)
+{
+	uint32_t t0 = DWT->CYCCNT, acc = 0;
+
+	while (!(acc & want) && ms_since(t0) < ms) acc |= nr_irq();
+	return acc;
+}
+
+static void nr_fifo_w(const uint8_t *p, unsigned n)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(0x80);
+	while (n-- > 0) (void) spi1_xfer(*p++);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+static void nr_fifo_r(uint8_t *p, unsigned n)
+{
+	NFC_CS(1);
+	(void) spi1_xfer(0x9F);
+	while (n-- > 0) *p++ = spi1_xfer(0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+}
+
+/* The chip ready to poll: 0; -1 no ST25R3916 answers; -2 the oscillator
+ * does not start; -3 SPI1 is in use (Sub-GHz).  *mv: the supply it
+ * measured. */
+/* Is the chip up as a poller?  The state is SPI1 itself: on, in mode 1
+ * (the CC1101 uses mode 0), so it costs no RAM. */
+int hal_nfc_active(void)
+{
+	return (RCC->APB2ENR & RCC_APB2ENR_SPI1EN)
+				&& (SPI1->CR1 & SPI_CR1_CPHA) != 0;
+}
+
+int hal_nfc_start(unsigned *mv)
+{
+	unsigned ad, v;
+
+	if (RCC->APB2ENR & RCC_APB2ENR_SPI1EN) return -3;	/* the CC1101's */
+	spi1_on(1);
+	nr_cmd(0xC1);				/* SET_DEFAULT */
+	hal_delay_ms(2);
+	nr_w(0x01, 0x04);			/* IO_CONF2: driver strength */
+	if ((nr_r(0x3F) & 0xF8) != 0x28) { spi1_off(); return -1; }
+	(void) nr_irq();
+	nr_enable(0);
+	nr_test_mod(0x04, 0x10, 0x10);		/* no overheat protection */
+	if (!(nr_r(0x02) & 0x80)) {		/* the oscillator */
+		nr_enable(NR_IRQ_OSC);
+		nr_mod(0x02, 0x80, 0x80);
+		(void) nr_wait(NR_IRQ_OSC, 10);
+	}
+	nr_enable(0);
+	if (!(nr_r(0x31) & 0x10)) { spi1_off(); return -2; }
+	nr_mod(0x2C, 0x07, 0x00);		/* measure VDD */
+	nr_enable(NR_IRQ_DCT);
+	nr_cmd(0xDF);
+	(void) nr_wait(NR_IRQ_DCT, 100);
+	nr_enable(0);
+	ad = nr_r(0x25);
+	v = ad * 23 + (ad * 4 + 5) / 10;
+	if (mv != NULL) *mv = v;
+	nr_mod(0x01, 0x80, v < 3600 ? 0x80 : 0x00);	/* sup3V */
+	nr_mod(0x00, 0x07, 0x07);		/* no MCU clock */
+	nr_mod(0x01, 0x18, 0x00);		/* no MISO pull-down */
+	nr_mod(0x28, 0x0F, 0x00);		/* driver resistance 1 Ohm */
+	nr_mod(NR_B | 0x2A, 0x80, 0x80);	/* minimum non-overlap */
+	nr_mod(0x2A, 0x7F, 0x11);		/* field detect on: 105 mV */
+	nr_mod(0x2B, 0x7F, 0x00);		/* off: 75 mV */
+	nr_mod(NR_B | 0x28, 0x30, 0x30);	/* load modulation */
+	nr_mod(0x08, 0xF0, 0x50);		/* FDT adjust */
+	nr_mod(0x29, 0xFF, 0x0F);		/* RFO resistance when modulated */
+	nr_mod(NR_B | 0x05, 0x40, 0x40);	/* RX start on 4 bits */
+	nr_w(0x26, 0x82);			/* antenna tuning */
+	nr_w(0x27, 0x82);
+	nr_mod(0x02, 0x03, 0x03);		/* automatic field detect */
+	if (!(nr_r(0x2C) & 0x80)) {		/* adjust the regulators */
+		nr_mod(0x2C, 0x80, 0x80);
+		nr_mod(0x2C, 0x80, 0x00);
+		nr_cmd(0xD6);
+		hal_delay_ms(6);
+	}
+	return 0;
+}
+
+/* NFC-A, 106 kbit/s, as the stock poller sets it. */
+void hal_nfc_mode_a(void)
+{
+	nr_mod(0x02, 0x04, 0x00);		/* no wake-up */
+	nr_mod(0x0A, 0x04, 0x00);		/* the correlator */
+	nr_w(NR_B | 0x30, 0x40);		/* over- and undershoot */
+	nr_w(NR_B | 0x31, 0x03);
+	nr_w(NR_B | 0x32, 0x40);
+	nr_w(NR_B | 0x33, 0x03);
+	nr_mod(0x03, 0x7C, 0x08);		/* ISO 14443A, OOK */
+	nr_w(0x0B, 0x08);			/* RX_CONF1: 600 kHz zero */
+	nr_w(0x0C, 0x2D);			/* AGC on, 3:1, squelch */
+	nr_w(0x0D, 0x00);
+	nr_w(0x0E, 0x00);
+	nr_w(NR_B | 0x0C, 0x51);		/* correlator */
+	nr_w(NR_B | 0x0D, 0x00);
+}
+
+void hal_nfc_field(int on)
+{
+	if (on) {
+		nr_w(NR_B | 0x15, 0);		/* minimum guard time */
+		nr_mod(0x02, 0x48, 0x48);	/* RX and TX on */
+		hal_delay_ms(5);
+	} else
+		nr_mod(0x02, 0x48, 0x00);
+}
+
+/* REQA: the ATQA (b0 | b1 << 8), or -1 no answer. */
+int hal_nfc_reqa(uint32_t *seen, int wupa)
+{
+	uint8_t b[2];
+	uint32_t acc;
+	unsigned n;
+
+	nr_cmd(0xDB);				/* clear the FIFO */
+	nr_mod(0x0A, 0x80, 0x80);		/* no CRC on receive */
+	nr_mod(0x05, 0xC0, 0x00);		/* parity as the standard */
+	nr_w(0x23, 0);
+	(void) nr_irq();
+	nr_enable(NR_IRQ_TXE | NR_IRQ_RXE | NR_IRQ_ERR);
+	nr_cmd(wupa ? 0xC7 : 0xC6);		/* TRANSMIT_REQA / WUPA */
+	acc = nr_wait(NR_IRQ_RXE, 8);
+	nr_enable(0);
+	if (seen != NULL) *seen = acc;
+	if (!(acc & NR_IRQ_RXE) || (acc & NR_IRQ_ERR)) return -1;
+	n = nr_r(0x1E) | (nr_r(0x1F) & 0xC0) << 2;
+	if (n != 2) return -1;
+	nr_fifo_r(b, 2);
+	return b[0] | b[1] << 8;
+}
+
+static unsigned nr_crc_a(const uint8_t *p, unsigned n)	/* ISO 14443-3 A */
+{
+	unsigned c = 0x6363;
+	uint8_t b;
+
+	while (n-- > 0) {
+		b = (uint8_t) (*p++ ^ c);
+		b ^= (uint8_t) (b << 4);
+		c = (c >> 8) ^ ((unsigned) b << 8) ^ ((unsigned) b << 3) ^ (b >> 4);
+		c &= 0xFFFF;
+	}
+	return c;
+}
+
+/* One frame out and, unless HAL_NFC_NO_RX, the answer in; lengths in bits
+ * (<minix/nfc.h> NFCIOCXFER, the flags are its NFC_XF_*).  The CRC is
+ * made and checked here, as the stock firmware does it in software; the
+ * chip keeps the parity.  fwt in 1/13.56 MHz, 0: 10 ms; polled, at most
+ * 100 ms (longer waits need the chip's timer and its interrupt: later).
+ * 0 and *rx_bits; -1 no answer; -2 CRC, parity or framing; -3 the answer is
+ * longer than the room; -4 not supported (a CRC with NFC_XF_PARITY or
+ * on a part byte). */
+int hal_nfc_xfer(const uint8_t *tx, unsigned tx_bits, uint8_t *rx,
+	unsigned rx_room, unsigned *rx_bits, unsigned fwt, unsigned flags)
+{
+	uint8_t crc[2];
+	uint32_t acc;
+	unsigned n, lb, c, i, tmo;
+
+	*rx_bits = 0;
+	nr_cmd(0xDB);				/* clear the FIFO */
+	nr_mod(0x12, 0x02, 0x00);		/* no EMV no-response timer */
+	nr_mod(0x0A, 0x80, 0x80);		/* the CRC is ours */
+	/* NFC_XF_PARITY: the caller's stream carries the parity bits (9 bits
+	 * a byte, MIFARE Classic's Crypto-1 encrypts them); otherwise the
+	 * chip makes and checks them. */
+	nr_mod(0x05, 0xC0, (flags & 0x04) ? 0xC0 : 0x00);
+	(void) nr_irq();
+	nr_enable(NR_IRQ_TXE | NR_IRQ_RXE | NR_IRQ_ERR);
+	if (flags & 0x10) {			/* NFC_XF_SHORT: REQA, WUPA */
+		nr_w(0x23, 0);
+		nr_cmd(tx[0] == 0x52 ? 0xC7 : 0xC6);
+	} else {
+		n = (tx_bits + 7) / 8;
+		if ((flags & 0x01) && ((tx_bits & 7) || (flags & 0x04))) {
+			nr_enable(0);
+			return -4;		/* a CRC needs whole plain bytes */
+		}
+		if (n + 2 > 512) { nr_enable(0); return -3; }
+		c = (flags & 0x01) ? nr_crc_a(tx, n) : 0;	/* NFC_XF_CRC_TX */
+		i = tx_bits + ((flags & 0x01) ? 16 : 0);
+		nr_w(0x23, (uint8_t) i);	/* the bits to send */
+		nr_w(0x22, (uint8_t) (i >> 8));
+		NFC_CS(1);
+		(void) spi1_xfer(0x80);		/* FIFO load */
+		for (i = 0; i < n; i++) (void) spi1_xfer(tx[i]);
+		if (flags & 0x01) {
+			(void) spi1_xfer((uint8_t) c);
+			(void) spi1_xfer((uint8_t) (c >> 8));
+		}
+		while (SPI1->SR & SPI_SR_BSY) ;
+		NFC_CS(0);
+		nr_cmd(0xC5);			/* TRANSMIT_WITHOUT_CRC */
+	}
+	acc = nr_wait(NR_IRQ_TXE | NR_IRQ_RXE, 20);
+	if (!(acc & (NR_IRQ_TXE | NR_IRQ_RXE))) { nr_enable(0); return -2; }
+	if (flags & 0x08) { nr_enable(0); return 0; }	/* NFC_XF_NO_RX */
+	tmo = fwt != 0 ? fwt / 13560 + 2 : 10;
+	if (tmo > 100) tmo = 100;
+	if (!(acc & NR_IRQ_RXE)) acc |= nr_wait(NR_IRQ_RXE, tmo);
+	nr_enable(0);
+	if (!(acc & NR_IRQ_RXE)) return (acc & 0x20) ? -2 : -1;	/* RXS only */
+	if ((acc & NR_IRQ_ERR) && !(flags & 0x04)) return -2;
+	i = nr_r(0x1F);
+	n = nr_r(0x1E) | (i & 0xC0) << 2;	/* bytes in the FIFO */
+	lb = i >> 1 & 7;			/* bits of an incomplete last byte */
+	if (n == 0) return -1;
+	if (flags & 0x02) {			/* NFC_XF_CRC_RX */
+		if (n < 3 || lb != 0 || (flags & 0x04)) return -2;
+		n -= 2;
+	}
+	if (n * 8 > rx_room + 7) return -3;
+	NFC_CS(1);
+	(void) spi1_xfer(0x9F);			/* FIFO read */
+	for (i = 0; i < n; i++) rx[i] = spi1_xfer(0);
+	if (flags & 0x02) {
+		crc[0] = spi1_xfer(0);
+		crc[1] = spi1_xfer(0);
+	}
+	while (SPI1->SR & SPI_SR_BSY) ;
+	NFC_CS(0);
+	if ((flags & 0x02) && nr_crc_a(rx, n) != (crc[0] | (unsigned) crc[1] << 8))
+		return -2;
+	*rx_bits = lb != 0 ? (n - 1) * 8 + lb : n * 8;
+	return 0;
+}
+
+void hal_nfc_stop(void)
+{
+	nr_cmd(0xC2);				/* STOP */
+	nr_mod(0x02, 0xCF, 0x00);		/* everything off */
+	spi1_off();
+}
+
+/* A text report for the first bring-up: the chip, the oscillator, the
+ * supply, then the field and a REQA.  Returns the length. */
+int hal_nfc_report(char *b, int n)
+{
+	static const char hx[] = "0123456789abcdef";
+	unsigned mv = 0;
+	int r, a, k = 0, i, j;
+	char d[8];
+
+	r = hal_nfc_start(&mv);
+	for (i = 0; i < 2; i++) {
+		const char *t = i == 0 ? "nfc start=" : " mv=";
+		int v = i == 0 ? r : (int) mv;
+
+		for (; *t; t++) b[k++] = *t;
+		if (v < 0) { b[k++] = '-'; v = -v; }
+		j = 0;
+		do d[j++] = '0' + v % 10; while ((v /= 10) != 0);
+		while (j > 0) b[k++] = d[--j];
+	}
+	if (r == 0) {
+		uint32_t seen = 0;
+		const char *t;
+
+		unsigned amp;
+
+		hal_nfc_mode_a();
+		hal_nfc_field(1);
+		nr_enable(NR_IRQ_DCT);			/* the amplitude on RFI */
+		nr_cmd(0xD3);
+		(void) nr_wait(NR_IRQ_DCT, 10);
+		nr_enable(0);
+		amp = nr_r(0x25);
+		a = hal_nfc_reqa(&seen, 0);
+		if (a < 0) a = hal_nfc_reqa(&seen, 1);
+		t = " atqa=";
+		for (; *t; t++) b[k++] = *t;
+		if (a < 0) b[k++] = '-';
+		else for (i = 12; i >= 0; i -= 4) b[k++] = hx[a >> i & 15];
+		t = " amp=";
+		for (; *t; t++) b[k++] = *t;
+		b[k++] = hx[amp >> 4 & 15];
+		b[k++] = hx[amp & 15];
+		t = " irq=";
+		for (; *t; t++) b[k++] = *t;
+		for (i = 20; i >= 0; i -= 4) b[k++] = hx[seen >> i & 15];
+		t = " regs=";
+		for (; *t; t++) b[k++] = *t;
+		for (i = 0; i < 6; i++) {	/* op control, aux display,
+						 * regulator, rssi, fifo 1, 2 */
+			static const uint8_t ra[6] = { 0x02, 0x31, 0x2C, 0x2D,
+								0x1E, 0x1F };
+			unsigned v = nr_r(ra[i]);
+
+			b[k++] = hx[v >> 4 & 15];
+			b[k++] = hx[v & 15];
+			b[k++] = ' ';
+		}
+		hal_nfc_stop();
+	}
+	b[k++] = '\n';
+	return k > n ? n : k;
+}
+
+/*===========================================================================*
  *			Sub-GHz receive (R8.1, part 1)			     *
  *===========================================================================*/
 /* The CC1101 as a receiver only: the stock firmware's OOK 650 kHz preset
@@ -251,7 +717,7 @@ static int cc_band(uint32_t hz)		/* stock's bands: 315 433 868, or -1 */
 
 long hal_subghz_rx(uint32_t hz)
 {
-	uint32_t w;
+	uint32_t w, t0;
 	unsigned i;
 	int band = cc_band(hz);
 
@@ -277,6 +743,12 @@ long hal_subghz_rx(uint32_t hz)
 	(void) cc_xfer2(0x00, band == 315 ? 0x2F : 0x2F | 0x40);	/* IOCFG2 */
 	cc_strobe(0x36);				/* SIDLE */
 	cc_strobe(0x34);				/* SRX (calibrates) */
+	/* The radio is listening when this returns: calibration takes about
+	 * 1 ms, and a read right after the write (Spectrum's) found "off"
+	 * and said "no radio".  RX is MARCSTATE 0x0D; 5 ms at most. */
+	t0 = DWT->CYCCNT;
+	while ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D
+	       && DWT->CYCCNT - t0 < hal_cpu_hz() / 200) ;
 	spi1_off();
 	return (long) (((uint64_t) w * 26000000u) >> 16);
 }
@@ -306,6 +778,18 @@ void hal_subghz_off(void)
 	spi1_off();
 	gpio_set(GPIOC, 4, 0);
 }
+
+/* Transmit and packets (R8.2): not written yet on the Flipper.  The
+ * kernel refuses with ENOTSUP until the local agent adds the CC1101 TX
+ * path (off by default, the Autonomy rule); the band and duty-cycle
+ * check runs before this either way. */
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max) { (void) p; (void) max; return -1; }
+int hal_subghz_fake(int what) { (void) what; return -1; }
+int hal_subghz_fake_take(int what) { (void) what; return 0; }
+int hal_subghz_pkt_fake(const uint8_t *p, unsigned n) { (void) p; (void) n; return -1; }
+int hal_subghz_line(uint32_t *hash) { (void) hash; return -1; }
 
 /*===========================================================================*
  *				Clocks					     *
@@ -566,6 +1050,9 @@ static void spi2_wait_idle(void)
 static void i2c1_init(void);
 static int lp5562_init(void);
 static void charger_init(void);
+static uint32_t boot_reg(void);
+static void boot_reg_set(uint32_t r);
+#define BOOT_POR	0x200u	/* this start follows a power-on (a fresh BOR flag): set by hal_early_boot at every start (BKP19R bit 9, with BOOT_DEV and BOOT_CAUSE below); the charging mode (#407) looks at it */
 static void bkp_set(volatile uint32_t *reg, uint32_t v);
 static void rtc_alarm_out(int on);
 static void rtc_boot(void);
@@ -633,6 +1120,153 @@ int hal_lcd_flush(const uint8_t *fb)
 		LCD_CS(0);
 	}
 	return 0;
+}
+
+/*===========================================================================*
+ *				The charging mode (#407)		     *
+ *===========================================================================*/
+/* A Flipper switched off and then plugged into USB (the charger's ship mode
+ * ends with the VBUS and the CPU starts) does not boot the system: it shows
+ * the charging screen and waits.  Back held for a second starts the system
+ * (a software reset: the next start is a normal one); the cable pulled out
+ * switches the Flipper off again.  Only a start after a power-on (BOOT_POR)
+ * with VBUS present and Back not held: a start by Back (the charger's QON)
+ * is a normal start, and so is every reset, the watchdog's, a DFU leave. */
+extern const unsigned char charge_fb[];		/* hal/common/chargeart.c */
+extern const unsigned char font_4x6[95][6];	/* hal/common/font4x6.c */
+
+static void cm_pix(uint8_t *pg, unsigned page, int x, int y, int on)
+{
+	if ((unsigned) x >= LCD_W || (unsigned) y >> 3 != page) return;
+	if (on) pg[x] |= 1u << (y & 7);
+	else pg[x] &= ~(1u << (y & 7));
+}
+
+static void cm_text(uint8_t *pg, unsigned page, int x, int y, const char *s)
+{
+	int gx, gy, bits;
+
+	for (; *s; s++, x += 4)
+		for (gy = 0; gy < 6; gy++) {
+			bits = font_4x6[(unsigned char) *s - 32][gy];
+			for (gx = 0; gx < 4; gx++)
+				cm_pix(pg, page, x + gx, y + gy, bits & (0x80 >> gx));
+		}
+}
+
+/* The screen, page by page (128 B on the stack): the picture, the battery
+ * on the Flipper's screen in it filled to soc (12 columns; the last one off
+ * while charging in the odd phase), the percentage in a box at the top
+ * left.  soc < 0: no gauge value, the outline only. */
+static void cm_draw(int soc, int charging, int phase)
+{
+	uint8_t pg[LCD_W], addr[3];
+	char txt[5];
+	unsigned page;
+	int x, y, c, cols, n, w;
+
+	n = 0;
+	if (soc >= 100) { txt[n++] = '1'; txt[n++] = '0'; txt[n++] = '0'; }
+	else if (soc >= 10) { txt[n++] = '0' + soc / 10; txt[n++] = '0' + soc % 10; }
+	else if (soc >= 0) txt[n++] = '0' + soc;
+	if (soc >= 0) txt[n++] = '%';
+	txt[n] = 0;
+	w = n * 4 + 3;
+	cols = soc < 0 ? 0 : (soc * 12 + 50) / 100;
+	for (page = 0; page < LCD_H / 8; page++) {
+		for (x = 0; x < LCD_W; x++) pg[x] = charge_fb[page * LCD_W + x];
+		for (y = 46; y <= 49; y++)		/* dark inside ... */
+			for (x = 15; x <= 30; x++) cm_pix(pg, page, x, y, 1);
+		for (x = 15; x <= 28; x++) {		/* ... the battery light */
+			cm_pix(pg, page, x, 46, 0);
+			cm_pix(pg, page, x, 49, 0);
+		}
+		for (y = 46; y <= 49; y++) {
+			cm_pix(pg, page, 15, y, 0);
+			cm_pix(pg, page, 28, y, 0);
+		}
+		cm_pix(pg, page, 29, 47, 0);
+		cm_pix(pg, page, 29, 48, 0);
+		for (c = 0; c < cols; c++) {
+			if (charging && soc < 100 && c == cols - 1 && phase)
+				continue;
+			cm_pix(pg, page, 16 + c, 47, 0);
+			cm_pix(pg, page, 16 + c, 48, 0);
+		}
+		if (soc >= 0) {
+			for (y = 1; y <= 9; y++)	/* the box */
+				for (x = 1; x <= 1 + w; x++)
+					cm_pix(pg, page, x, y,
+					    y == 1 || y == 9 || x == 1 || x == 1 + w);
+			cm_text(pg, page, 3, 2, txt);
+		}
+		addr[0] = 0xB0 | page;
+		addr[1] = 0x10;
+		addr[2] = 0x00;
+		lcd_cmds(addr, sizeof addr);
+		LCD_DATA(1);
+		LCD_CS(1);
+		spi2_block(pg, NULL, LCD_W);
+		spi2_wait_idle();
+		LCD_CS(0);
+	}
+}
+
+/* The ikurrina sequence of the kernel (red, green, white; 1 s each, 0.2 s
+ * glide into the colour) in 40 ms steps, for the loops that run without the
+ * kernel's LED task. */
+static void cm_led(unsigned n)
+{
+	static const uint8_t col[3][3] = {
+		{ 200, 0, 0 }, { 0, 128, 0 }, { 200, 128, 96 } };
+	unsigned c = n / 30 % 3, k = n % 30, p = (c + 2) % 3, i, v[3];
+
+	for (i = 0; i < 3; i++)
+		v[i] = k < 5 ? (col[p][i] * (4 - k) + col[c][i] * (k + 1)) / 5
+			     : col[c][i];
+	hal_led_pwm(v[0], v[1], v[2]);
+}
+
+void hal_charge_mode(void)
+{
+	uint32_t back = 0, t0;
+	unsigned n = 0, gone = 0;
+	int r, soc;
+
+	if (!(boot_reg() & BOOT_POR)) return;
+	boot_reg_set(boot_reg() & ~BOOT_POR);	/* once per start */
+	if (hal_buttons() & BTN_BACK) return;	/* a start by Back */
+	if ((r = hal_charger_read(HAL_CHG_STATUS)) < 0 || (r >> 5) == 0)
+		return;				/* no VBUS */
+	hal_backlight(60);			/* dim: the charge is the point */
+	hal_led(0, 0, 0);			/* the LED engines off, direct */
+	for (;;) {
+		hal_wdt_kick();
+		t0 = DWT->CYCCNT;
+		cm_led(n);
+		if (n % 25 == 0) {		/* every second */
+			soc = hal_gauge_read(HAL_GAUGE_SOC);
+			r = hal_charger_read(HAL_CHG_STATUS);
+			cm_draw(soc > 100 ? 100 : soc,
+				r >= 0 && ((r >> 3) & 3) >= 1 && ((r >> 3) & 3) <= 2,
+				(n / 50) & 1);
+		}
+		r = hal_charger_read(HAL_CHG_STATUS);
+		gone = (r >= 0 && (r >> 5) == 0) ? gone + 1 : 0;
+		if (gone >= 12) {			/* the cable is out */
+			hal_led(0, 0, 0);
+			hal_power_off();
+		}
+		if (!(hal_buttons() & BTN_BACK)) back = 0;
+		else if (back == 0) back = t0 | 1;
+		else if (ms_since(back) >= 1000) {
+			hal_led(0, 0, 0);
+			hal_lcd_flush(charge_fb);	/* no stale level */
+			NVIC_SystemReset();		/* a normal start */
+		}
+		while (ms_since(t0) < 40) ;
+		n++;
+	}
 }
 
 int hal_lcd_save(int on)
@@ -789,6 +1423,8 @@ static int charger_rmw(uint8_t reg, uint8_t mask, uint8_t val)
  * never set: the charger stays as the stock firmware left it. */
 #define CHG_REG		(RTC->BKP14R)
 #define CHG_MAGIC	0xC0000000u
+#define VOL_SET		0x00010000u	/* bits 8-16: the default volume */
+#define VOL_BITS	0x0001FF00u
 #define VREG_FULL	((4208 - 3840) / 16)
 #define VREG_CARE	((4000 - 3840) / 16)
 #define ICHG_STOCK	(2048 / 64)
@@ -828,9 +1464,29 @@ int hal_charger_set(int what, int on)
 		return charger_rmw(0x03, 0x10, on ? 0 : 0x10);
 	default:		return -1;
 	}
-	bkp_set(&CHG_REG, CHG_MAGIC | s);
+	bkp_set(&CHG_REG, CHG_MAGIC | (CHG_REG & VOL_BITS) | s);
 	charger_apply(s);
 	return 0;
+}
+
+/* The system's default speaker volume (K.7 Sound), 0-100, in bits 8-15 of
+ * the same register with bit 16 saying it was set (the charging bits and
+ * their magic untouched): survives a reset, 0 B of RAM.  Never set: 100,
+ * as before. */
+int hal_vol_default(void)
+{
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	return (CHG_REG & VOL_SET) ? (int) (CHG_REG >> 8 & 0xFF) : 100;
+}
+
+void hal_vol_default_set(int v)
+{
+	if (v < 0) v = 0;
+	if (v > 100) v = 100;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_RTCAPBEN;
+	(void) RCC->APB1ENR1;
+	bkp_set(&CHG_REG, (CHG_REG & ~VOL_BITS) | VOL_SET | (uint32_t) v << 8);
 }
 
 static void charger_init(void)
@@ -1312,11 +1968,49 @@ static int sd_discard_probe(uint8_t *buf)
 	return crc == (uint16_t) (t << 8 | spi2_xfer(0xFF)) ? yes : 0;
 }
 
+/* The card's power off and on, as stock's furi_hal_sd_init(power_reset):
+ * the peripheral 3.3 V switch (PA3, on unless pulled low) off, the bus
+ * and card detect low so that the card is not fed through its pins, 250 ms;
+ * then all back and 100 ms for the card to start.  The LCD shares SCK and
+ * MOSI: no other task may run meanwhile, so the wait is a busy one. */
+static void sd_power_cycle(void)
+{
+	uint32_t start;
+
+	gpio_set(GPIOA, 3, 0);
+	gpio_cfg(GPIOA, 3, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOD, 1, 0);
+	gpio_set(GPIOB, 15, 0);
+	gpio_set(GPIOC, 2, 0);
+	gpio_set(GPIOC, 10, 0);
+	gpio_set(GPIOC, 12, 0);
+	gpio_cfg(GPIOD, 1, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOB, 15, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOC, 2, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOC, 10, MODE_OUT, PULL_NONE, 0);
+	start = DWT->CYCCNT;
+	while (ms_since(start) < 250) ;
+	gpio_set(GPIOC, 12, 1);
+	gpio_cfg(GPIOD, 1, MODE_AF, PULL_NONE, 5);
+	gpio_cfg(GPIOB, 15, MODE_AF, PULL_NONE, 5);
+	gpio_cfg(GPIOC, 2, MODE_AF, PULL_UP, 5);
+	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);
+	gpio_cfg(GPIOA, 3, MODE_ANALOG, PULL_NONE, 0);
+	start = DWT->CYCCNT;
+	while (ms_since(start) < 100) ;
+}
+
+/* hal_disk_init returns 0, or minus why it failed: the step (1 CMD0, 2 CMD59,
+ * 3 CMD8, 4 ACMD41 timed out, 5 CMD58, 6 CMD16, 7 CMD9/CSD) << 8 and the
+ * last R1 the card sent (0xFF: nothing), for the kernel's "no card (init
+ * step N, R1 0xNN)". */
+#define SD_FAIL(step, r1)	do { why = (step) << 8 | ((r1) & 0xFF); goto fail; } while (0)
+
 int hal_disk_init(void)
 {
 	uint8_t ocr[4], csd[16];
 	uint32_t start, c_size;
-	int i, v2;
+	int i, v2, r, why = 1 << 8;
 
 	sd_ready = 0;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
@@ -1325,20 +2019,35 @@ int hal_disk_init(void)
 	DMAMUX1_Channel1->CCR = 9;		/* DMA1 ch 2: SPI2_TX */
 	gpio_cfg(GPIOC, 10, MODE_IN, PULL_UP, 0);	/* card detect */
 	spi2_speed(SPI_DIV_SD_INIT);
-	SD_CS(0);
-	for (i = 0; i < 10; i++) spi2_xfer(0xFF);	/* >= 74 clocks */
-
-	if (sd_cmd(CMD0, 0) != R1_IDLE) goto fail;
-	if (sd_cmd(CMD59, 1) > R1_IDLE) goto fail;	/* CRCs on */
+	/* CMD0 until the card says idle: some cards do not answer the first
+	 * one after power-up.  The clocks with CS high again before each
+	 * try; 20 tries, about 200 ms.  A card that still says nothing (a
+	 * 128 GB SDXC on the bench, after any reset of the CPU alone) gets
+	 * what stock gives every card: its power off, then 20 tries more. */
+	for (v2 = 0; ; v2++) {
+		if (v2 == 20) sd_power_cycle();
+		SD_CS(0);
+		for (i = 0; i < 10; i++) spi2_xfer(0xFF);	/* >= 74 clocks */
+		if ((r = sd_cmd(CMD0, 0)) == R1_IDLE) break;
+		if (v2 == 39) SD_FAIL(1, r);
+		sd_select(0);
+		/* (security review 2026-11-23, K9: the other tasks meanwhile,
+		 * as below; an empty slot held the CPU for 40 x 10 ms at
+		 * every open) */
+		start = DWT->CYCCNT;
+		while (ms_since(start) < 10) hal_disk_yield();
+		spi2_speed(SPI_DIV_SD_INIT);
+	}
+	if ((r = sd_cmd(CMD59, 1)) > R1_IDLE) SD_FAIL(2, r);	/* CRCs on */
 	v2 = 0;
-	if (!(sd_cmd(CMD8, 0x1AA) & R1_ILLEGAL)) {	/* SD v2+ */
+	if (!((r = sd_cmd(CMD8, 0x1AA)) & R1_ILLEGAL)) {	/* SD v2+ */
 		for (i = 0; i < 4; i++) ocr[i] = spi2_xfer(0xFF);
-		if (ocr[2] != 0x01 || ocr[3] != 0xAA) goto fail;
+		if (ocr[2] != 0x01 || ocr[3] != 0xAA) SD_FAIL(3, ocr[2] << 4 | ocr[3] & 0x0F);
 		v2 = 1;
 	}
 	start = DWT->CYCCNT;
-	while (sd_cmd(ACMD41, v2 ? 0x40000000 : 0) != 0) {	/* HCS */
-		if (ms_since(start) > 1000) goto fail;
+	while ((r = sd_cmd(ACMD41, v2 ? 0x40000000 : 0)) != 0) {	/* HCS */
+		if (ms_since(start) > 1000) SD_FAIL(4, r);
 		/* up to a second: the other tasks between tries (K3) */
 		sd_select(0);
 		hal_disk_yield();
@@ -1347,14 +2056,14 @@ int hal_disk_init(void)
 
 	sd_block_addr = 0;
 	if (v2) {
-		if (sd_cmd(CMD58, 0) != 0) goto fail;
+		if ((r = sd_cmd(CMD58, 0)) != 0) SD_FAIL(5, r);
 		for (i = 0; i < 4; i++) ocr[i] = spi2_xfer(0xFF);
 		sd_block_addr = (ocr[0] & 0x40) != 0;	/* CCS */
 	}
-	if (!sd_block_addr && sd_cmd(CMD16, 512) != 0) goto fail;
+	if (!sd_block_addr && (r = sd_cmd(CMD16, 512)) != 0) SD_FAIL(6, r);
 
-	if (sd_cmd(CMD9, 0) != 0 || sd_read_data(csd, sizeof csd) < 0)
-		goto fail;
+	if ((r = sd_cmd(CMD9, 0)) != 0 || sd_read_data(csd, sizeof csd) < 0)
+		SD_FAIL(7, r);
 	if ((csd[0] >> 6) == 1) {		/* CSD version 2 */
 		c_size = ((uint32_t) (csd[7] & 0x3F) << 16)
 			| ((uint32_t) csd[8] << 8) | csd[9];
@@ -1373,7 +2082,7 @@ int hal_disk_init(void)
 	return 0;
 fail:
 	sd_select(0);
-	return -1;
+	return -why;
 }
 
 uint32_t hal_disk_sectors(void)
@@ -1444,6 +2153,17 @@ int hal_disk_discard(uint32_t first, uint32_t last)
 out:
 	sd_select(0);
 	return r;
+}
+
+/* R12.33: ERASE comes with the disk driver work of T18b (CMD38 with
+ * argument 0, the card's erase timeout from its SD Status, card-detect
+ * checks as N.6).  Until then DIOCERASE answers ENOTTY and /etc/setup goes
+ * on without it. */
+int hal_disk_erase(uint32_t first, uint32_t last)
+{
+	(void) first;
+	(void) last;
+	return -2;
 }
 
 /* End a CMD18 transfer: CMD12 goes out while the card is streaming, so
@@ -1666,6 +2386,13 @@ int hal_btn_irq(int i)
 		{ EXTI3_IRQn, EXTI9_5_IRQn, EXTI15_10_IRQn, -1 };
 
 	return irq[(unsigned) i < 3 ? i : 3];
+}
+
+/* 1 if a button line has an edge waiting (its vector may be another's:
+ * the iButton's line 14 shares EXTI15_10). */
+int hal_btn_pending(void)
+{
+	return (EXTI->PR1 & EXTI->IMR1 & BTN_LINES) != 0;
 }
 
 void hal_btn_arm(int on)
@@ -1922,8 +2649,18 @@ void hal_early_boot(void)
 	(void) RCC->AHB2ENR;
 	GPIOB->PUPDR = (GPIOB->PUPDR & ~(3u << 22)) | (1u << 22);	/* PB11 pull-up */
 	GPIOB->MODER &= ~(3u << 22);					/* PB11 input */
+	/* The Left button has an RC debounce: after a cold start (the charger's
+	 * ship mode, then USB plugged in) its capacitor is empty and the
+	 * internal pull-up needs several ms to charge it, so a pin read after
+	 * 2000 loops (~2 ms at the reset clock) said 'held' and the start went
+	 * to ST's DFU loader: dark, Back did nothing (owner, 2026-11-20).  Held
+	 * means low after the settle time too: read it again, ~40 ms on. */
 	for (settle = 0; settle < 2000; settle++) ;
 	left = !(GPIOB->IDR & (1u << 11));
+	if (left) {
+		for (settle = 0; settle < 40000; settle++) ;
+		left = !(GPIOB->IDR & (1u << 11));
+	}
 
 	/* Put PB11 and the GPIOB clock back to their reset state. */
 	GPIOB->MODER |= 3u << 22;
@@ -1939,6 +2676,7 @@ void hal_early_boot(void)
 		*HAL_BOOT_WORD = 0;
 		left = 1;
 	}
+	br = (csr & RCC_CSR_BORRSTF) ? br | BOOT_POR : br & ~BOOT_POR;
 	boot_reg_set(br);
 	if (left) RCC->CSR |= RCC_CSR_RMVF;
 	if (!left) {
@@ -2114,14 +2852,24 @@ static void rtc_alarm_out(int on)
 void hal_power_off(void)
 {
 	uint8_t b[2];
+	int r;
 
 	__disable_irq();
 	hal_tone(0, 0);
-	hal_backlight(0);		/* it looks off at once, also on USB */
-	{
-		static const uint8_t off[] = { 0xAE, 0xA5 };	/* LCD sleeps */
+	/* On USB the Flipper stays powered (below): the screen stays as the
+	 * kernel left it (flipdev_off_notice: the boot screen and 'You can now
+	 * unplug the USB cable'), so that one sees the kernel is alive and
+	 * that Back starts it again (the owner, 2026-11-20).  On the battery
+	 * it is off in a moment: dark at once. */
+	if ((r = hal_charger_read(0x0B)) >= 0 && (r >> 5) != 0)
+		;			/* the screen stays as the kernel left it */
+	else {
+		hal_backlight(0);
+		{
+			static const uint8_t off[] = { 0xAE, 0xA5 }; /* LCD sleeps */
 
-		if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+			if (GPIOC->ODR & (1u << 12)) lcd_cmds(off, sizeof off);
+		}
 	}
 	rtc_off();				/* the alarm, early by the lead */
 	rtc_alarm_out(1);
@@ -2133,9 +2881,18 @@ void hal_power_off(void)
 		i2c1_write(BQ25896_ADDR, b, 2);
 	}
 	hal_vibro(0);
-	for (;;) {		/* on USB: powered until the cable goes */
-		hal_usb_poll();
-		hal_wdt_kick();
+	{	/* on USB: powered until the cable goes.  Back held for a second
+		 * starts the system again (the owner, 2026-11-20: it stayed dark
+		 * and Back did nothing; only Left + Back, a reset, woke it). */
+		uint32_t back = 0;
+
+		for (;;) {
+			hal_usb_poll();
+			hal_wdt_kick();
+			if (!(hal_buttons() & BTN_BACK)) back = 0;
+			else if (back == 0) back = DWT->CYCCNT | 1;
+			else if (ms_since(back) >= 1000) NVIC_SystemReset();
+		}
 	}
 }
 
@@ -2184,8 +2941,9 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 
 /* /dev/mem ranges: SRAM1 and the SRAM2 parts MINIX uses (the rest may be
  * CPU2's secure SRAM); flash up to CPU2's (SFSA), also at its alias at 0;
- * the ROM loader and the OTP area.  Anything else (holes, peripherals,
- * CPU2's areas) is refused instead of a bus fault in the MEMORY task. */
+ * the ROM loader and the OTP area; the 64-bit unique id (settings about,
+ * spec K.7).  Anything else (holes, peripherals, CPU2's areas) is refused
+ * instead of a bus fault in the MEMORY task. */
 #define RAM_RANGES	{ 0x20000000u, 0x20030000u }, \
 			{ 0x20030000u, 0x20032800u }, \
 			{ 0x20038000u, 0x2003A800u }
@@ -2196,6 +2954,8 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 	if ((n = span_in(addr, len, 0, sfsa - FLASH_BASE)) != 0) \
 		return n; \
 	if ((n = span_in(addr, len, 0x1FFF0000u, 0x1FFF7400u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x1FFF7580u, 0x1FFF7588u)) != 0) \
 		return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
@@ -2898,6 +3658,46 @@ int hal_pulse_rx(unsigned input, uint32_t dst, unsigned n, unsigned gap_us)
 	return 0;
 }
 
+/* #302: the CC1101's GDO0 (PA1, TIM2_CH2) as a gapless stream, as stock's
+ * furi_hal_subghz_start_async_rx does it (an ISR per edge; here circular
+ * DMA, the interrupt per half is hal_rfid_stream_irq's).  TIM2 runs free at
+ * 1 MHz and channel 2 captures both edges of TI2 straight into the caller's
+ * ring; stock's input filter (fDTS/4/32, 8 samples: 16 us) drops shorter
+ * spikes.  Returns the pin's level before the first edge. */
+int hal_subghz_stream(uint32_t dst, unsigned n)
+{
+	if (n == 0) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	ir_ready = 0;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	TIM2->OR = 0;
+	DMA1_Channel4->CCR = 0;
+	DMAMUX1_Channel3->CCR = 29;			/* TIM2_CH2 */
+	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR2;
+	DMA1_Channel4->CMAR = dst;
+	DMA1_Channel4->CNDTR = n;
+	DMA1->IFCR = DMA_IFCR_CGIF4;
+	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+		| DMA_CCR_CIRC | DMA_CCR_HTIE | DMA_CCR_TCIE | DMA_CCR_EN;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 0xFFFFFFFF;
+	TIM2->CCMR1 = (1u << TIM_CCMR1_CC2S_Pos) | (15u << TIM_CCMR1_IC2F_Pos);
+	TIM2->CCMR2 = 0;
+	TIM2->CCER = TIM_CCER_CC2E | TIM_CCER_CC2P | TIM_CCER_CC2NP;
+	TIM2->CNT = 0;
+	TIM2->EGR = TIM_EGR_UG;
+	TIM2->SR = 0;
+	gpio_cfg(GPIOA, 1, MODE_AF, PULL_NONE, 1);	/* TIM2_CH2 */
+	TIM2->DIER = TIM_DIER_CC2DE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN | (2u << TIM_CR1_CKD_Pos);
+	return gpio_get(GPIOA, 1) ? 1 : 0;
+}
+
 int hal_pulse_ack(void)
 {
 	uint32_t sr = TIM2->SR, dier = TIM2->DIER, cap, gap, de;
@@ -3075,8 +3875,8 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 {
 	/* R9.0.4: the field: 125 kHz/50 %, PSK 62.5 kHz/25 % (stock
 	 * furi_hal_rfid_tim_read_start(62500, 0.25)), 134.2 kHz/50 % */
-	uint32_t t0, hz = carrier == 1 ? 62500u : carrier == 2 ? 134200u
-								: 125000u;
+	uint32_t t0, hz = (carrier & 3) == 1 ? 62500u
+				: (carrier & 3) == 2 ? 134200u : 125000u;
 	uint32_t period = (SystemCoreClock + hz / 2) / hz;
 
 	if (n == 0) return -1;
@@ -3095,7 +3895,7 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM1->CR1 = 0;
 	TIM1->PSC = 0;
 	TIM1->ARR = period - 1;
-	TIM1->CCR1 = carrier == 1 ? period / 4 : period / 2;
+	TIM1->CCR1 = (carrier & 3) == 1 ? period / 4 : period / 2;
 	TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 	TIM1->CCMR2 = 0;
 	TIM1->CCER = TIM_CCER_CC1NE;
@@ -3120,8 +3920,11 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	DMA1_Channel4->CPAR = (uint32_t) &TIM2->CCR4;
 	DMA1_Channel4->CMAR = dst;
 	DMA1_Channel4->CNDTR = n;
+	DMA1->IFCR = DMA_IFCR_CGIF4;
 	DMA1_Channel4->CCR = DMA_CCR_MINC | DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
-							| DMA_CCR_EN;
+		| (carrier & HAL_RFID_STREAM ? DMA_CCR_CIRC | DMA_CCR_HTIE
+				| DMA_CCR_TCIE : 0)		/* R9.0.5 */
+		| DMA_CCR_EN;
 	TIM2->OR = TIM2_OR_TI4_RMP_0;			/* TI4 = COMP1 */
 	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
 	TIM2->ARR = 0xFFFFFFFF;
@@ -3133,8 +3936,27 @@ int hal_rfid_read(uint32_t dst, unsigned n, unsigned carrier)
 	TIM2->EGR = TIM_EGR_UG;
 	TIM2->SR = 0;
 	TIM2->DIER = TIM_DIER_CC4DE;
+	t0 = (COMP1->CSR & COMP_CSR_VALUE) != 0;	/* the level the first
+						 * captured edge leaves */
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
-	return 0;
+	return (int) t0;
+}
+
+/* R9.0.5: the stream's DMA interrupts (the half and the end of the ring):
+ * which halves have been filled since the last call (bit 0 the first, bit 1
+ * the second), acked. */
+int hal_rfid_stream_irq(void)
+{
+	return DMA1_Channel4_IRQn;
+}
+
+unsigned hal_rfid_stream_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF4 ? 1u : 0) | (isr & DMA_ISR_TCIF4 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF4 | DMA_IFCR_CTCIF4 | DMA_IFCR_CGIF4;
+	return r;
 }
 
 void hal_rfid_stop(void)
@@ -3145,11 +3967,13 @@ void hal_rfid_stop(void)
 	TIM2->DIER = 0;
 	TIM2->CR1 = 0;
 	TIM2->CCER = 0;
+	TIM2->CCMR1 = 0;				/* (#302: the Sub-GHz stream's) */
 	TIM2->CCMR2 = 0;
 	TIM2->OR = 0;
 	TIM2->SR = 0;
 	DMA1_Channel4->CCR = 0;
 	DMAMUX1_Channel3->CCR = 0;
+	gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);	/* GDO0, as stock */
 	COMP1->CSR = 0;
 	TIM1->CR1 = 0;
 	TIM1->CCER = 0;
@@ -3230,6 +4054,9 @@ void hal_rfid_capture_stop(void)
  * are physical addresses of n 32-bit words; the caller pins the memory. */
 int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 {
+	unsigned irq = n & HAL_RFID_REFILL;	/* R9.0.6: a ring, refilled */
+
+	n &= ~HAL_RFID_REFILL;
 	if (n == 0) return -1;
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
@@ -3268,13 +4095,31 @@ int hal_rfid_emulate(uint32_t dur, uint32_t pulse, unsigned n)
 	DMA1_Channel6->CMAR = pulse;
 	DMA1_Channel6->CNDTR = n;
 	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
-		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
+		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1
+		| (irq ? DMA_CCR_HTIE | DMA_CCR_TCIE : 0) | DMA_CCR_EN;
 	DMA1_Channel6->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_CIRC
 		| DMA_CCR_PSIZE_1 | DMA_CCR_MSIZE_1 | DMA_CCR_EN;
 	TIM2->DIER = TIM_DIER_UDE;		/* every update takes the next pair */
 	TIM2->CNT = 0;
 	TIM2->CR1 = TIM_CR1_CEN;
 	return 0;
+}
+
+/* R9.0.6: the emulation ring's half/complete interrupt (channel 6 takes
+ * its pairs on the same trigger, so channel 5's tells for both): which
+ * halves have been played since the last call (bit 0 the first), acked. */
+int hal_rfid_emu_irq(void)
+{
+	return DMA1_Channel5_IRQn;
+}
+
+unsigned hal_rfid_emu_ack(void)
+{
+	uint32_t isr = DMA1->ISR;
+	unsigned r = (isr & DMA_ISR_HTIF5 ? 1u : 0) | (isr & DMA_ISR_TCIF5 ? 2u : 0);
+
+	DMA1->IFCR = DMA_IFCR_CHTIF5 | DMA_IFCR_CTCIF5 | DMA_IFCR_CGIF5;
+	return r;
 }
 
 void hal_rfid_emulate_stop(void)
@@ -3412,13 +4257,15 @@ void hal_tone(unsigned hz, unsigned vol)
  * firmware does:
  *	0x08000000  system image (kernel, MM, FS, INIT)	HAL_SYS_IMAGE
  *	0x08030000  shared libc (R2b.9, <minix/shlibc.h>)	HAL_LIBC_SIZE
- *	0x08040000  installed programs (Phase 2b)	up to the cache
+ *	0x0803C000  shared libfuri + libapp (R2b.9)	  (both, 96 KB)
+ *	0x08048000  installed programs (Phase 2b)	up to the cache
  *	...         run-time text cache			HAL_CACHE_SIZE
  *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
  *	SFSA ..     CPU2 wireless stack and FUS, never touched
  */
 #define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
-#define HAL_LIBC_SIZE	0x10000u	/* 64 KB, SHLIBC_MAX; in minix.bin */
+#define HAL_LIBC_SIZE	0x18000u	/* 96 KB, SHLIBC_MAX + SHFURI_MAX;
+					 * both libraries are in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	16u
 

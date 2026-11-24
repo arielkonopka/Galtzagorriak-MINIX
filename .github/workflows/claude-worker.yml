@@ -8,7 +8,7 @@
 # docs/spec/next-tasks.md, "Two workers".  Its own instructions:
 # .github/claude-worker.md.
 #
-# Secrets (the owner adds them; never in the repo): ANTHROPIC_API_KEY, or
+# Secrets (the user adds them; never in the repo): ANTHROPIC_API_KEY, or
 # CLAUDE_CODE_OAUTH_TOKEN (a Pro/Max subscription, `claude setup-token`).
 # Optional repository variable CLAUDE_MODEL (default claude-opus-5-5).
 # Big tasks take 100+ turns: the worker commits and pushes after each
@@ -88,7 +88,7 @@ jobs:
             --max-turns 400
             --allowedTools "Bash(make:*),Bash(python3 -I tools/*),Bash(arm-none-eabi-size:*)"
 
-      # "@claude ..." from the owner on an issue or PR: plain tag mode.
+      # "@claude ..." from the user on an issue or PR: plain tag mode.
       - name: Claude (comment)
         if: github.event_name != 'issues'
         uses: anthropics/claude-code-action@v1

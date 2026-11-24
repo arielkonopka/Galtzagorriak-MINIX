@@ -7,6 +7,23 @@ export PATH
 
 . /etc/profile
 
+# Check the file systems that were not left clean (spec N.3), before
+# anything writes the card.  fsck -p reads one block and prints nothing
+# for a clean one.  The root first: if it was repaired, start again at
+# once (the system's copy of it may be older than the repaired card).
+. /etc/fstab
+fsck_mem=64
+test -f /etc/rc.conf && . /etc/rc.conf
+fsck -p -v -w 10 -m $fsck_mem $root
+case $? in
+0|1)	;;
+2)	echo "rc: the root file system was repaired: restarting"
+	reboot
+	exit 0 ;;
+*)	echo "rc: errors left on $root: reboot fsck"
+	fsck_err=1 ;;
+esac
+
 printroot >/etc/mtab			# /etc/mtab keeps track of mounts
 >/etc/utmp				# /etc/utmp keeps track of logins
 
@@ -17,16 +34,53 @@ mount /dev/rom /rom -r >/dev/null 2>&1
 # First boot: turn the rest of the SD card into /usr, swap and /home.
 test -f /etc/.setup-done || sh /etc/setup
 
-# Mount /usr and /home (see /etc/fstab).
-. /etc/fstab
+# Check /usr and /home before mounting them (spec N.3; Back skips one),
+# then mount them (see /etc/fstab).  One with errors left, or not
+# checked, is mounted read-only and checked again at the next boot.
+# setup -H keeps the copy of /home on the swap partition: no scratch.
+# Cards of 32 GB or more (/etc/.swap4, R12.34): swap is /dev/hd3a, and
+# /dev/hd3's first sector holds the subpartition table.
+sw=/dev/hd3
+test -f /etc/.swap4 && sw=/dev/hd3a
+scratch="-T $sw"
+test -f /etc/.home-v3 && scratch=
+# "sh /etc/fsckboot" asked for a full check and repair, now, with nothing
+# else running: /etc/fsckrun does it and restarts (issue #399).
+test -f /etc/.fsck-boot && test -f /etc/.setup-done && . /etc/fsckrun
 test -f /etc/.setup-done && {
-	mount $usr /usr || echo "rc: cannot mount $usr on /usr"
-	mount $home /home || echo "rc: cannot mount $home on /home"
+	rm -f /tmp/fsck.log
+	for fs in "$usr /usr" "$home /home"
+	do
+		set $fs
+		# swap is still off: past ~30 000 inodes in use fsck keeps
+		# its counts on the swap partition (spec O.6)
+		fsck -p -v -k -w 5 -m $fsck_mem $scratch -L /tmp/fsck.log $1
+		case $? in
+		0|1)	mount $1 $2 || echo "rc: cannot mount $1 on $2" ;;
+		*)	echo "rc: $1 has errors: mounted read-only, reboot fsck"
+			fsck_err=1
+			mount -r $1 $2 || echo "rc: cannot mount $1 on $2" ;;
+		esac
+	done
+	# keep what was found in /usr/adm/fsck.log (at most ~16 KB)
+	test -s /tmp/fsck.log && {
+		test -d /usr/adm || mkdir /usr/adm
+		cat /tmp/fsck.log >>/usr/adm/fsck.log &&
+		tail -400 /usr/adm/fsck.log >/tmp/fsck.log &&
+		cp /tmp/fsck.log /usr/adm/fsck.log
+	}
+	rm -f /tmp/fsck.log
 }
+# setup -H (spec O.7): the next step of converting /home to MINIX V3.
+test -f /etc/.home-v3 && sh /etc/setup -Hboot
+# The launcher says "Card has errors: reboot fsck" while this file is there.
+if test -n "$fsck_err"; then >/etc/.fsck-errors; else rm -f /etc/.fsck-errors; fi
 
 # Programs built into the firmware's flash (make base-flash): bind them to
 # their files the first time (one hash each), then exec finds them directly.
-pkg bind /bin/*
+pkg bind /bin
+# After an update (spec RS.15): the staged copies left over by gztree go.
+test -f /etc/gz-tree && gzupdate finish
 
 # Local settings (sh variables), e.g. fcache_budget=8: the run-time text
 # cache may erase at most that many flash pages a day (default 32).  The
@@ -37,19 +91,44 @@ fi
 test -n "$fcache_budget" && pkg budget $fcache_budget >/dev/null
 
 # Swap to the SD card's swap partition (spec Phase 12): swap=off|plain|crypt.
+# Off while setup -H keeps /home's copy there (/etc/.home-v3).
 # plain: no encryption, set-uid programs and Secret: yes packages are never
 # swapped.  crypt needs swap encryption (12b), not there yet: off.
+# blk=on: swappable memory blocks for apps (spec 12h, R12.38) on the same
+# partition, with swap=plain or alone with swap=off; none with crypt.
+blkarg=
+test "$blk" = on && blkarg=blk
 case "$swap" in
-plain)	test -f /etc/.setup-done && swapon /dev/hd3 plain &&
+plain)	test -f /etc/.setup-done && test ! -f /etc/.home-v3 && swapon $sw plain $blkarg &&
 		{ test -z "$swap_reserve" || swapon -r $swap_reserve; } ;;
-crypt)	echo "rc: swap=crypt is not available yet (no swap encryption): swap is off" ;;
+crypt)	echo "rc: swap=crypt is not available yet (no swap encryption): swap is off"
+	test -n "$blkarg" && echo "rc: blk=on needs swap=plain or off: blocks are off" ;;
+*)	test -n "$blkarg" && test -f /etc/.setup-done && test ! -f /etc/.home-v3 &&
+		swapon $sw blk ;;
 esac
+
+# The radio region (spec R8.2): the Sub-GHz transmit bands; set once per
+# boot, a transmit is refused until it is.  /etc/flipper/region holds the
+# country code (EU, the 27 member states, NO, GB, AL, BA, MK, US, CA; spec
+# section Q); no file, or a country without a table: no transmit.
+test -r /etc/flipper/region && test -x /usr/bin/subghz &&
+	/usr/bin/subghz region `cat /etc/flipper/region`
 
 # Flush the buffer cache to the SD card every 30 seconds.
 update &
 
 cfcat /etc/motd 2>/dev/null
 
+# The system settings (spec K.7): /etc/flipper/*.conf applied (brightness,
+# idle timeout, volume); a missing file keeps the defaults.
+settings apply
+
+# The boot screen goes: so does its LED, the ikurrina sequence the kernel
+# started with it.
+echo off >/dev/led
+
 # The main screen: replaces the boot screen on the LCD (runs as root, starts
 # the apps from /etc/apps with their own user rights).
 launcher &
+# The new system started (RS.15, RS.16): no more rollback question.
+test -f /usr/.gzupdate/trial && gzupdate commit

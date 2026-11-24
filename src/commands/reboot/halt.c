@@ -33,6 +33,7 @@ char **argv;
   int flag = RBT_HALT;		/* halting system is default */
   int fast = 0;			/* fast halt/reboot, don't kill all. */
   int dfu = 0;			/* reboot to the firmware loader */
+  int fsck = 0;			/* reboot fsck: check and repair the card first */
   struct stat dummy;
 
   prog = strrchr(*argv,'/');
@@ -46,11 +47,34 @@ char **argv;
       fast = 1;
     else if (strcmp(argv[1], "-d") == 0)
       dfu = 1;		/* Flipper: to the ROM DFU loader (RBT_MONITOR) */
+    else if (strcmp(argv[1], "fsck") == 0)
+      fsck = 1;		/* reboot fsck: /etc/rc checks and repairs, restarts */
     else {
-      fprintf(stderr, "Usage: %s [-f] [-d]\n", prog);
+      fprintf(stderr, "Usage: %s [-f] [-d]%s\n", prog,
+		strcmp(prog, "reboot") == 0 ? " [fsck]" : "");
       exit(1);
     }
     argc--, argv++;
+  }
+
+  if (fsck) {
+    /* The request of /etc/fsckboot (issue #399): a running system has no
+     * room to start fsck, so /etc/rc finds this file at the next start,
+     * checks and repairs /usr and /home before anything else, restarts
+     * once more and then starts normally. */
+    int fd;
+
+    if (strcmp(prog, "reboot") != 0 || dfu) {
+      fprintf(stderr, "Usage: %s [-f] [-d]\n(fsck is for reboot only, not with -d)\n", prog);
+      exit(1);
+    }
+    if ((fd = open("/etc/.fsck-boot", O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) {
+      fprintf(stderr, "%s: cannot write /etc/.fsck-boot (root only)\n", prog);
+      exit(1);
+    }
+    close(fd);
+    sync();
+    printf("Restarting to check and repair the card...\n");
   }
 
   /* Make sure that we don't die. */

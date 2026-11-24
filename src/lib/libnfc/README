@@ -1,0 +1,114 @@
+libnfc - the NFC protocol stacks of the Flipper, as plain C (spec Phase 14)
+===========================================================================
+
+Issue #387, spec Phase 14 (R14.*, AC14.1, AC14.2), D.3, D.4.  The stock
+`nfc` app's protocol layer, over one abstract transceiver, so it is written
+and host-tested now and meets the ST25R3916 driver (Phase 13, lane:local)
+later at one small interface.  Stock is the behaviour reference; code is
+reused from stock `lib/nfc` and Unleashed `lib/nfc/protocols` (both GPL-3.0,
+D.3/D.4).
+
+The one interface (this is the whole contract with the driver)
+---------------------------------------------------------------
+  nfc_xfer.h        the transceiver: nfc_xfer_t.transceive(buf, bits,
+                    flags) plus field/poll/delay hooks.  Three things fill
+                    it in: the ST25R3916 driver (/dev/nfc, <minix/nfc.h>),
+                    a host card model (flipper/tests/nfc), a QEMU mock.
+  <minix/nfc.h>     the /dev/nfc ioctls the driver will give (kernel
+                    <= +200 B, Phase 13).  See
+                    docs/devguide/nfc-driver-interface.md.
+
+Done so far
+----------
+  crypto1.c/.h      MIFARE Classic Crypto-1 cipher and the tag PRNG.
+                    D.3: ciphers are ported in full; no keys are shipped.
+                    Public algorithm (Crapto1, GPL-2.0-or-later -> GPL-3.0),
+                    reimplemented from the published polynomials.
+  mf_classic.c/.h   MIFARE Classic data model, reader-side three-pass
+                    authentication, block read, SAK -> type.
+  mf_dict.c/.h      the key dictionary read a line at a time (never whole).
+  mf_attack.c/.h    the dictionary attack as a streaming loop (AC14.2).
+  nfc_file.c/.h     the stock `.nfc` file reader/writer (AC14.1).
+  iso14443_3a.c/.h  the NFC-A poller: REQA, the anticollision cascade
+                    (4/7/10-byte UIDs) and SELECT.
+  mf_ultralight.c/.h  MIFARE Ultralight / NTAG: GET_VERSION -> subtype,
+                    page READ.
+  nfc_poller.c/.h   the top of the reader: poll -> identify by SAK ->
+                    read (MIFARE Classic with the found keys, Ultralight
+                    by page) into the nfc_device the file writer saves.
+
+All of the above is host-tested in flipper/tests/nfc (software 3A,
+MIFARE Classic 1K and NTAG215 card models) under ASan/UBSan.
+
+The vendored Unleashed stacks (src/lib/nfc, unchanged) on nfc_xfer (#404):
+  nfc_shim.c/.h     furi, FuriString and the `Nfc` API over nfc_xfer; the
+                    poller loop runs in the caller (step cap, no threads).
+  nfc_shim_mfc.c    thread flags without threads, and failing storage/
+                    stream/key-dictionary stubs for the MIFARE Classic
+                    poller's attack modes and nfc_device.c's file half.
+  nfc_shim_time.c   stock's datetime/locale (24 h, D.M.Y) and RTC calls.
+  nfc_poller_defs_shim.c, nfc_device_defs_shim.c
+                    the poller and device tables of the protocols built:
+                    3A, 3B, 4A, 4B, DESFire, 15693, SLIX, MIFARE Classic
+                    (with stock's mf_classic_poller_sync).
+  nfc_supported_cards.c/.h, nfc_supported_cards_list.h
+                    the supported_cards parsers linked in (no plugin
+                    loader): verify -> read with the parser's keys ->
+                    parse to text.  40 of them since #412.
+  shim/             the headers the vendored files include.
+Tested in flipper/tests/nfc/prototest.c and cardtest.c (software 4A, 4B,
+DESFire, SLIX2 and MIFARE Classic 1K/4K models).
+
+Part 5 (#412):
+  pollers           MIFARE Ultralight/NTAG (+ sync), FeliCa (+ sync),
+                    ST25TB (+ sync), EMV on 4A, in the poller and device
+                    tables; tested in p5test.c (NTAG215, Lite-S,
+                    ST25TB04K/512-AC and EMV models).
+  nfc_shim_crypto.c mbedTLS AES/3DES failed closed (error, output zeroed):
+                    Ultralight C / AES auth fails like a wrong key until a
+                    cipher is vendored.
+  nfc_shim_str.c    FuriString search/mid/replace/utf8_length etc.
+  nfc_shim_ff.c     read-only FlipperFormat over stdio (header,
+                    read_string from the current position, rewind) for
+                    the parsers' lookup files; "/ext/" maps to
+                    nfcshim_ext_dir, "/home/flipper/" by default.
+  nfc_emv_parser.c  the EMV AID/country/currency names from the user's
+                    aid.nfc / country_code.nfc / currency_code.nfc.
+  nfc_sha1.c/.h     SHA-1 (FIPS 180-4), for disney_infinity
+                    (shim/mbedtls/sha1.h); tested in nfctest.c.
+  patches/banapass.patch
+                    banapass.c's two `static const` case labels become
+                    #defines; applied to a copy in the build directory,
+                    the vendored file stays byte for byte.
+  nfc_supported_cards_list_notes()
+                    "No ID list found (<path>), showing the raw card" /
+                    "...: codes shown instead of names" for plantain,
+                    sev_tk, sk_tk, szppk_so, skylanders (D.3: the user's
+                    files in /home/flipper/nfc/assets, none shipped).
+  Build notes: the parsers are linked into one image, not loaded as
+  plugins, so names that clash are renamed per file in the build (ndef.c
+  is built per NDEF_PROTO with its own symbol names; ventra's time_now).
+  The host tests use -fshort-enums: MfUltralightConfigPages has an enum
+  bit-field in an unpacked inner struct and must be 16 bytes (checked in
+  p5test.c); the target build must use the same flag for these files.
+  Stock quirks kept and tested as such: emv_poller_read_afl() shifts by
+  a negative count for SFI 1 (the model uses SFI 2); the EMV read-failed
+  event keeps type ReadSuccess (the test looks at the data).
+
+Memory rules (spec Phase 14)
+----------------------------
+No big buffer stays resident: every protocol context is allocated per use
+and freed; the libraries cost flash only (XIP).  The dictionary is streamed
+from /home/flipper/nfc/assets a line at a time, never loaded whole.
+
+Still to port (needs the Unleashed lib/nfc tree copied byte for byte the
+way src/lib/subghz and src/lib/lfrfid were; that tree is not in this
+runner, so these are not reimplemented from memory):
+  - saflok (needs the app's nfc_app_i.h) and the parsers on protocols
+    not built yet (Type 4 Tag, MIFARE Plus, NTAG4xx); a real AES/3DES
+    for Ultralight C/AES and DESFire authentication;
+  - the full `mfkey` nonce recovery (lfsr_recovery32/64, nested): the
+    Crapto1 state-recovery, to be copied verbatim, not rewritten.
+Lane:local (the driver): the ST25R3916 /dev/nfc back end for nfc_xfer,
+card emulation (NFCIOCLISTEN), the field detector, the on-device `nfc`
+GUI app and `mfkey` nonce collection, and AC14.3 field tests.

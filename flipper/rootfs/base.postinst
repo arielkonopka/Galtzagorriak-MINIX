@@ -36,7 +36,7 @@ grep '/dev/rom' /etc/rc >/dev/null || {
 test -r /dev/power || mknod /dev/power c 6 8 || echo "base: could not make /dev/power"
 chmod 644 /dev/power 2>/dev/null	# R6.1: root writes charger settings
 grep '^Power:' /etc/apps >/dev/null || {
-	echo 'Power:nobody:/bin/power' >> /etc/apps
+	echo 'Power:nobody:@power:/bin/power' >> /etc/apps
 	echo "base: the launcher now has Power"
 }
 # The "RFID emu" entry of part 4 (/bin/rfidemu is gone): drop it whatever
@@ -46,8 +46,47 @@ grep '^RFID emu:' /etc/apps >/dev/null && {
 	echo "base: RFID emu is now part of the RFID app"
 }
 grep '^RFID:' /etc/apps >/dev/null || {
-	echo 'RFID:nobody:/bin/lfrfid' >> /etc/apps
+	echo 'RFID:nobody:@rfid:/bin/lfrfid' >> /etc/apps
 	echo "base: the launcher now has RFID"
+}
+# Issue #157: the Sub-GHz spectrum app on the launcher (a card without
+# its own /etc/apps uses /rom's, which has it).
+test -f /etc/apps && grep '^Spectrum:' /etc/apps >/dev/null || test ! -f /etc/apps || {
+	echo 'Spectrum:nobody:@subghz:/bin/spectrum' >> /etc/apps
+	echo "base: the launcher now has Spectrum"
+}
+# Issue #413: the Sub-GHz, iButton and GPIO window apps on the launcher.
+for a in 'Sub-GHz:nobody:@subghz:=/bin/subghzui' \
+	 'iButton:nobody:@ibutton:=/bin/ibuttonui' 'GPIO:nobody:@gpio:=/bin/gpioui'
+do
+	n=`echo "$a" | sed 's/:.*//'`
+	test -f /etc/apps && grep "^$n:" /etc/apps >/dev/null || test ! -f /etc/apps || {
+		echo "$a" >> /etc/apps
+		echo "base: the launcher now has $n"
+	}
+done
+# R5.6a: the base apps' lines as shipped get their icons (lines the owner
+# changed stay as they are).
+test -f /etc/apps &&	# a card without its own copy keeps using /rom's
+sed -e 's|^Console:nobody:/bin/console$|Console:nobody:@console:/bin/console|' \
+    -e 's|^About:nobody:/bin/info$|About:nobody:@info:/bin/info|' \
+    -e 's|^Lights:nobody:/bin/lights$|Lights:nobody:@light:/bin/lights|' \
+    -e 's|^Power:nobody:/bin/power$|Power:nobody:@power:/bin/power|' \
+    -e 's|^RFID:nobody:/bin/lfrfid$|RFID:nobody:@rfid:/bin/lfrfid|' \
+    /etc/apps > /etc/apps.new
+if test ! -f /etc/apps.new || cmp -s /etc/apps /etc/apps.new
+then rm -f /etc/apps.new
+else mv /etc/apps.new /etc/apps; echo "base: the launcher's apps have icons"
+fi
+# Cards made before K.7 do not apply the system settings at boot.
+grep 'settings apply' /etc/rc >/dev/null || {
+	(echo '/^launcher &/i'
+	 echo '# The system settings (spec K.7): /etc/flipper/*.conf applied.'
+	 echo 'settings apply'; echo ''; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
+	if grep 'settings apply' /etc/rc >/dev/null
+	then echo "base: /etc/rc now applies the system settings at boot"
+	else echo "base: could not add settings apply to /etc/rc; run pkg install again"
+	fi
 }
 # Cards made before R6.7 lack /dev/ibutton (read a key's ROM).
 if test ! -r /dev/ibutton
@@ -94,6 +133,14 @@ then
 	chgrp gui /dev/subghzraw 2>/dev/null
 	chmod 660 /dev/subghzraw 2>/dev/null
 fi
+# Cards made before issue #302 lack /dev/subghzpkt (Sub-GHz packets, as
+# stock's subghz chat).
+if test ! -r /dev/subghzpkt
+then
+	mknod /dev/subghzpkt c 6 20 || echo "base: could not make /dev/subghzpkt"
+	chgrp gui /dev/subghzpkt 2>/dev/null
+	chmod 660 /dev/subghzpkt 2>/dev/null
+fi
 # Cards made before R6.5 lack /dev/rfid (a 125 kHz tag's signal); test
 # builds of R6.5 made it minor 15, which is /dev/lat: made again each time.
 rm -f /dev/rfid
@@ -102,6 +149,51 @@ then
 	mknod /dev/rfid c 6 16 || echo "base: could not make /dev/rfid"
 	chgrp gui /dev/rfid 2>/dev/null
 	chmod 660 /dev/rfid 2>/dev/null
+fi
+# Cards made before R11.3.1 (T28a) lack the group usb and the USB HID
+# files (keyboard, mouse, consumer control; root and group usb).
+grep '^usb:' /etc/group >/dev/null || {
+	echo 'usb:*:12:' >> /etc/group
+	echo "base: /etc/group now has usb"
+}
+if test ! -r /dev/hidkbd
+then
+	mknod /dev/hidkbd c 6 17 || echo "base: could not make /dev/hidkbd"
+	chgrp usb /dev/hidkbd 2>/dev/null
+	chmod 660 /dev/hidkbd 2>/dev/null
+fi
+if test ! -r /dev/hidmouse
+then
+	mknod /dev/hidmouse c 6 18 || echo "base: could not make /dev/hidmouse"
+	chgrp usb /dev/hidmouse 2>/dev/null
+	chmod 660 /dev/hidmouse 2>/dev/null
+fi
+if test ! -r /dev/hidcons
+then
+	mknod /dev/hidcons c 6 19 || echo "base: could not make /dev/hidcons"
+	chgrp usb /dev/hidcons 2>/dev/null
+	chmod 660 /dev/hidcons 2>/dev/null
+fi
+# Cards made before issue #389 (Phase 7, AC7.3) lack the group ir; /dev/ir
+# moves to it from gui (the infrared app is set-gid ir).
+grep '^ir:' /etc/group >/dev/null || {
+	echo 'ir:*:13:root,nobody' >> /etc/group
+	echo "base: /etc/group now has ir"
+}
+chgrp ir /dev/ir 2>/dev/null
+chmod 660 /dev/ir 2>/dev/null
+# Cards made before issue #412 (Phase 14) lack the group nfc (the nfc app
+# is set-gid nfc; /dev/nfc comes with its driver and joins it then).
+grep '^nfc:' /etc/group >/dev/null || {
+	echo 'nfc:*:14:root,nobody' >> /etc/group
+	echo "base: /etc/group now has nfc"
+}
+# Cards made before the ST25R3916 driver (#390) lack /dev/nfc.
+if test ! -r /dev/nfc
+then
+	mknod /dev/nfc c 6 22 || echo "base: could not make /dev/nfc"
+	chgrp nfc /dev/nfc 2>/dev/null
+	chmod 660 /dev/nfc 2>/dev/null
 fi
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
@@ -130,4 +222,4 @@ then
 fi
 # The sticky bit on /tmp and /usr/tmp (R3.7): chmod dropped it before.
 chmod 1777 /tmp
-test -d /usr/tmp && chmod 1777 /usr/tmp
+if test -d /usr/tmp; then chmod 1777 /usr/tmp; fi

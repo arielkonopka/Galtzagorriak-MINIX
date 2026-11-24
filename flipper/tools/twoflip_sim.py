@@ -37,8 +37,18 @@ class Sim(threading.Thread):
 		self.lock = threading.Lock()
 
 	def out(self, s):
+		"""Like USB: a line can arrive in two pieces.  The last character
+		before the line break comes 20 ms later, so a pattern matched on
+		a line that is not complete yet ("command 0x0" of "0x08") shows
+		up here as a wrong value."""
+		b = s.encode() if isinstance(s, str) else s
+		i = b.rfind(b"\r\n")
 		with self.lock:
-			os.write(self.master, s.encode() if isinstance(s, str) else s)
+			if i > 1:
+				os.write(self.master, b[:i - 1])
+				time.sleep(0.02)
+				b = b[i - 1:]
+			os.write(self.master, b)
 
 	def run(self):
 		while True:
@@ -306,10 +316,14 @@ def expected(rid):
 		return "MISSING"
 	if rid.startswith("subghz-level_868"):
 		return "BLOCKED"
+	if rid.startswith("subghz-level_315"):
+		return "BLOCKED"	# not an EU band: twoflip refuses it (--region)
 	if rid.startswith("subghz-level"):
 		return "PASS"
 	if rid == "subghz-raw_timings-u2m":
 		return "INFO"
+	if rid.startswith("modem-"):
+		return "N/A"		# needs --peer-minix (spec section P)
 	return "MISSING"		# subghz tx/chat/decode, nfc
 
 

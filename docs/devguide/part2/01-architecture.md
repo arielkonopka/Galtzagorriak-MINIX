@@ -53,7 +53,7 @@ Messages are MINIX's: fixed-size `message` structs, `send`/`receive`/`sendrec`, 
    images their memory maps (virtual = physical); the first process is entered with `svc`.
 4. MM and FS initialise. FS mounts the root file system from the SD card.
 5. INIT runs `/etc/rc`: mounts `/rom` (default settings), runs `/etc/setup` on the first boot,
-   mounts `/usr` and `/home`, binds the programs built into flash (`pkg bind /bin/*`), reads
+   mounts `/usr` and `/home`, binds the programs built into flash (`pkg bind /bin`), reads
    `rc.conf`, starts `update` and the launcher. Then INIT starts the logins of `/etc/ttytab`.
 
 Budget L10 (boot to launcher menu) is 3 s.
@@ -67,12 +67,30 @@ Budget L10 (boot to launcher menu) is 3 s.
   be delayed are to sit above the kernel's lock level (R0.8a, R4a.1, with the radio drivers).
 - On entry, the whole register set goes into `proc_ptr->p_reg`; `restart` builds the hardware
   frame on the process stack again.
+- **FPU** (R5.7): lazy, and nothing in the process table. A process that used the FPU gets an
+  extended frame (S0-S15, FPSCR) from the CPU, written only when needed (lazy stacking);
+  `p_reg.control` gets `CONTROL_FPCA` and `p_reg.sp` points 64 bytes below the frame. Its
+  registers stay in the FPU (`CONTROL_FPLIVE`, only ever on `mpu_proc`) while the kernel runs and when it returns to the same
+  process. Only when `restart` enters another process does `fp_flush` store S16-S31 there (which
+  also makes the CPU do the lazy S0-S15 save) and clear the FPU, so nobody sees another
+  process's registers; `restart` loads S16-S31 back when the process runs again. All stores
+  and loads use the process's own rights (`strt`/`ldrt`, the lazy save with its MPU regions);
+  a bad stack gives it SIGSEGV (`fp_frame_recover`). The kernel, servers and libc are
+  soft-float and never use the FPU. Signal handlers start without an FP context; the
+  sigcontext keeps `CONTROL_FPCA`, so `sigreturn` finds the interrupted one again. Tests:
+  `/bin/fptest` (`m2/fptest.c`, run by `m2test`).
 - **MPU**: on every switch, `mpu_switch()` gives the process its own memory and read-only
   flash. Small or oddly aligned blocks are covered with several regions (`<minix/mpucover.h>`).
   There is no unprotected mode.
 - **Shadowing** (from the Atari ST port): after `fork` the child shares the parent's addresses;
   the kernel exchanges the two data images on a switch (`shadow.c`, `flip.S`). The idle task
   raises PendSV so a ready shadowed process is swapped in without waiting for the next tick.
+  Otherwise the clock swaps a group member in only at the end of a 100 ms quantum, because
+  each swap copies the images (#331). The swapped-in member goes to the tail of the user
+  queue, so processes already waiting there (the launcher with a key to draw) run first.
+  On the shadow queue a woken member (`ready()`) goes to the head and a preempted resident
+  goes to the tail. Before a flip, `unshadow()` saves the FP registers that are still live
+  in the FPU (`fp_save`), so that `fp_flush` cannot later write them into the other image.
 - **Scheduling**: MINIX's queues (tasks, servers, users, plus a shadow queue). Tasks are never
   preempted by tasks. The interactive queue for the foreground app is planned (R0.8a).
 - **Programs** are position-independent (`r9` = data base). MM places `exec` images at the top
@@ -98,8 +116,9 @@ share.
 | Region | Written by | Contents |
 |---|---|---|
 | system image, from `0x08000000`, ≤ 192 KB | DFU only | kernel, MM, FS, INIT (`minix.bin`); the build fails above 192 KB |
-| shared libc, from `0x08030000`, ≤ 64 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
-| installed region, from `0x08040000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
+| shared libc, from `0x08030000`, ≤ 48 KB | DFU only | the C library, once, for every program (`minix.bin`; spec R2b.9, see below) |
+| shared libfuri + libapp, from `0x0803C000`, ≤ 48 KB | DFU only | the GUI and app library, once, for the apps that use it (`minix.bin`; R2b.9, see below) |
+| installed region, from `0x08048000` | `make base-flash` (DFU), `pkg` at install | program texts with their directory (two pages); the ROM image (32 KB) right after the directory |
 | run-time text cache, 128 KB | MM in the background | texts of programs run often, within a daily erase budget |
 | guard pages, then the radio stack and FUS | never | the top of flash, from `SFSA` (read from `FLASH->SFR` at boot) |
 
@@ -128,6 +147,19 @@ Members with big per-process data stay static, linked into the programs that use
 (`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, `scanf`, the time
 zone code, the float tables, `regexp`, `getopt`, `termcap`, math, ...). `SHLIBC=0` builds every
 program static, as before.
+
+**The shared libfuri + libapp** (the "furi" library; `ld/shfuri.ld`, `flipper/furi.exports`,
+`tools/mkshlibc.py image --dep`). `libfuri` (core, GUI, u8g2, fonts) and `libapp` are linked once
+at `SHFURI_BASE`, right after the libc's slot, with the same header (magic `GZLF`) and a frozen,
+append-only entry table. Only the functions the apps call are exported, and only what they reach
+is in the library (`--gc-sections`): a ported app that needs another function appends it to
+`furi.exports`. The library calls the libc through the libc's stubs, so its per-process data
+(its GOT, data and bss, the *furi area*, about 2.4 KB) follows the libc area at `r9`, and its
+build id covers the libc's. Only the programs in `FURIPROGS` (`minix.mk`; `ld/user-shfuri.ld`,
+`elf2mnx.py --furi`) carry that area; `a_dbase` of their header holds the library's id, which
+exec checks like `a_tbase` (`ENOEXEC` on a mismatch, `0` = not used), and `mkpkg.py` writes
+`Furi: <id>`, which `pkg` checks. The static libc members the library needs (`localtime`,
+`mktime`) are inside it and exported, so an app does not get a second copy.
 
 ## 1.7 RTC backup registers
 

@@ -1,0 +1,10 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: FR
+Name: France
+Base: EU
+Checked: 2026-11-20
+Source: Decision 2006/771/EC ((EU) 2025/105); ERC/REC 70-03 (10.2026) App. 1, 2; Decision (EU) 2018/1538
+# 870-876 and 915-921 MHz: 70-03 App. 1 status "N" for h2, h3, no row
+# 870-873, 915-918 MHz: active only after the national text is checked (Q.5)
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref

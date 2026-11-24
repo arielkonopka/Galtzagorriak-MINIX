@@ -56,7 +56,7 @@ PUBLIC int do_pipe()
   fil_ptr1->filp_count = 1;
 
   /* Make the inode on the pipe device. */
-  if ( (rip = alloc_inode(PIPE_DEV, I_REGULAR) ) == NIL_INODE) {
+  if ( (rip = pipe_inode()) == NIL_INODE) {
 	rfp->fp_filp[fil_des[0]] = NIL_FILP;
 	fil_ptr0->filp_count = 0;
 	rfp->fp_filp[fil_des[1]] = NIL_FILP;

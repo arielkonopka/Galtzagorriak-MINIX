@@ -10,6 +10,7 @@
  *   free_zone:	  release a zone (when a file is removed)
  *   rw_block:	  read or write a block from the disk itself
  *   invalidate:  remove all the cache blocks on some device
+ *   pipe_bufs:   count the buffers that hold pipe data (K.6)
  */
 
 #include "fs.h"
@@ -21,6 +22,10 @@
 #include "super.h"
 
 FORWARD _PROTOTYPE( void rm_lru, (struct buf *bp) );
+FORWARD _PROTOTYPE( struct super_block *rw_super, (Dev_t dev) );
+FORWARD _PROTOTYPE( int sb_room, (Dev_t dev) );
+FORWARD _PROTOTYPE( int clean_off, (struct super_block *sp) );
+FORWARD _PROTOTYPE( int before_write, (Dev_t dev) );
 
 /*===========================================================================*
  *				get_block				     *
@@ -70,11 +75,15 @@ int only_search;		/* if NO_READ, don't read, else act normal */
   }
 
   /* Desired block is not on available chain.  Take the oldest clean block,
-   * else the oldest ('front'): a dirty one costs a write - and flushall()
-   * writes every dirty block, pipe data not yet read included (T9). */
+   * else the oldest dirty one: it costs a write - and flushall() writes
+   * every dirty block.  Pipe data (PIPE_DIRTY, spec K.6) has no place on
+   * the disk: it is taken last (never while pipes keep at most half of
+   * the cache, write.c), and then lost. */
   if ((bp = front) == NIL_BUF) panic("all buffers in use", NR_BUFS);
-  while (bp != NIL_BUF && bp->b_dirt == DIRTY) bp = bp->b_next;
-  if (bp == NIL_BUF) bp = front;
+  while (bp != NIL_BUF && bp->b_dirt != CLEAN) bp = bp->b_next;
+  if (bp == NIL_BUF)
+	for (bp = front; bp->b_dirt == PIPE_DIRTY && bp->b_next != NIL_BUF; )
+		bp = bp->b_next;
   rm_lru(bp);
 
   /* Remove the block that was just taken from its hash chain. */
@@ -98,6 +107,12 @@ int only_search;		/* if NO_READ, don't read, else act normal */
    */
   if (bp->b_dev != NO_DEV) {
 	if (bp->b_dirt == DIRTY) flushall(bp->b_dev);
+	if (bp->b_dirt != CLEAN) {	/* N.6: card out, every buffer dirty */
+		printf("Lost block %ld of device %d/%d: no room to keep it\n",
+			(long) bp->b_blocknr, (bp->b_dev>>MAJOR)&BYTE,
+			(bp->b_dev>>MINOR)&BYTE);
+		bp->b_dirt = CLEAN;
+	}
 #if ENABLE_CACHE2
 	put_block2(bp);
 #endif
@@ -147,6 +162,16 @@ int block_type;			/* INODE_BLOCK, DIRECTORY_BLOCK, or whatever */
   if (bp->b_count != 0) return;	/* block is still in use */
 
   bufs_in_use--;		/* one fewer block buffers in use */
+
+  /* Spec N.1: the first dirty block of a file system that is CLEAN on the
+   * disk clears CLEAN there now, while it is the only dirty block of that
+   * device and outside the LRU chain: getting block 1 for that then never
+   * has to write a block of this device first. */
+  if (bp->b_dirt == DIRTY && bp->b_blocknr != SUPER_BLOCK) {
+	struct super_block *sp = rw_super(bp->b_dev);
+
+	if (sp != NIL_SUPER && (sp->s_flags & SF_DCLEAN)) (void) clean_off(sp);
+  }
 
   /* Put this block back on the LRU chain.  If the ONE_SHOT bit is set in
    * 'block_type', the block is not likely to be needed again shortly, so put
@@ -242,7 +267,11 @@ zone_t numb;				/* zone to be returned */
 
   /* Locate the appropriate super_block and return bit. */
   sp = get_super(dev);
-  if (numb < sp->s_firstdatazone || numb >= sp->s_zones) return;
+  if (numb < sp->s_firstdatazone) return;
+  if (numb >= sp->s_zones) {	/* a pipe's zone, in core only (K.6) */
+	forget_zone(dev, numb, sp->s_log_zone_size);
+	return;
+  }
   bit = (bit_t) (numb - (sp->s_firstdatazone - 1));
   free_bit(sp, ZMAP, bit);
   if (bit < sp->s_zsearch) sp->s_zsearch = bit;
@@ -276,6 +305,21 @@ int scale;			/* log2 blocks per zone */
 
 
 /*===========================================================================*
+ *				pipe_bufs				     *
+ *===========================================================================*/
+PUBLIC int pipe_bufs()
+{
+/* How many buffers hold pipe data that has no place on the disk (K.6)?
+ * Write.c keeps it at most half of the cache, rahead() off it. */
+  register int i, n;
+
+  for (i = 0, n = 0; i < NR_BUFS; i++)
+	if (BUF(i)->b_dirt == PIPE_DIRTY) n++;
+  return(n);
+}
+
+
+/*===========================================================================*
  *				rw_block				     *
  *===========================================================================*/
 PUBLIC void rw_block(bp, rw_flag)
@@ -293,11 +337,27 @@ int rw_flag;			/* READING or WRITING */
   dev_t dev;
 
   if ( (dev = bp->b_dev) != NO_DEV) {
-	pos = (off_t) bp->b_blocknr * BLOCK_SIZE;
+	/* R12.39: the byte position in 64 bits, the high half as HIGHPOS
+	 * (dev_io's nonblock field): partitions past 4 GiB (spec O.3). */
+	pos = (off_t) (bp->b_blocknr << BLOCK_SHIFT);
 	op = (rw_flag == READING ? DEV_READ : DEV_WRITE);
-	r = dev_io(op, FALSE, dev, pos, BLOCK_SIZE, FS_PROC_NR, bp->b_data);
+	r = BLOCK_SIZE;
+	if (rw_flag == WRITING) {
+		if (bp->b_blocknr == SUPER_BLOCK) sb_written(bp);
+		else r = before_write(dev);
+	}
+	if (r != ENXIO)
+	   r = dev_io(op, (int) (bp->b_blocknr >> (32 - BLOCK_SHIFT)), dev,
+				pos, BLOCK_SIZE, FS_PROC_NR, bp->b_data);
+	if (r == ENXIO && rw_flag == WRITING) {
+		/* N.6: the card is out.  The block stays dirty in the cache
+		 * until the same card is back (the driver checks), so
+		 * nothing is lost and nothing goes to another card. */
+		return;
+	}
 	if (r != BLOCK_SIZE) {
 	    if (r >= 0) r = END_OF_FILE;
+	    if (r == ENXIO) r = EIO;	/* N.6: a read with the card out */
 	    if (r != END_OF_FILE)
 	      printf("Unrecoverable disk error on device %d/%d, block %ld\n",
 			(dev>>MAJOR)&BYTE, (dev>>MINOR)&BYTE, bp->b_blocknr);
@@ -324,7 +384,10 @@ dev_t device;			/* device whose blocks are to be purged */
   int i;
 
   for (i = 0; i < NR_BUFS; i++)
-	if ((bp = BUF(i))->b_dev == device) bp->b_dev = NO_DEV;
+	if ((bp = BUF(i))->b_dev == device) {
+		bp->b_dev = NO_DEV;
+		if (bp->b_dirt == PIPE_DIRTY) bp->b_dirt = CLEAN;  /* K.6 */
+	}
 
 #if ENABLE_CACHE2
   invalidate2(device);
@@ -367,7 +430,7 @@ int rw_flag;			/* READING or WRITING */
   register int i;
   register struct iorequest_s *iop;
   static struct iorequest_s iovec[NR_IOREQS];  /* static so it isn't on stack */
-  int j;
+  int j, r, out;
 
   /* (Shell) sort buffers on b_blocknr. */
   gap = 1;
@@ -387,21 +450,32 @@ int rw_flag;			/* READING or WRITING */
 	}
   }
 
+  /* Spec N.1: CLEAN off on the disk before any of these blocks goes there.
+   * N.6: with the card out, everything stays dirty. */
+  out = FALSE;
+  if (rw_flag == WRITING) {
+	for (i = 0; i < bufqsize; i++)
+		if (bufq[i]->b_blocknr == SUPER_BLOCK) sb_written(bufq[i]);
+	out = (before_write(dev) == ENXIO);
+  }
+
   /* Set up i/o vector and do i/o.  The result of dev_io is discarded because
    * all results are returned in the vector.  If dev_io fails completely, the
    * vector is unchanged and all results are taken as errors.
    */  
-  while (bufqsize > 0) {
+  while (bufqsize > 0 && !out) {
 	for (j = 0, iop = iovec; j < NR_IOREQS && j < bufqsize; j++, iop++) {
 		bp = bufq[j];
-		iop->io_position = (off_t) bp->b_blocknr * BLOCK_SIZE;
+		iop->io_position = (off_t) (bp->b_blocknr << BLOCK_SHIFT);
+		iop->io_high = bp->b_blocknr >> (32 - BLOCK_SHIFT); /* R12.39 */
 		iop->io_buf = bp->b_data;
 		iop->io_nbytes = BLOCK_SIZE;
 		iop->io_request = rw_flag == WRITING ?
 				  DEV_WRITE : DEV_READ | OPTIONAL_IO;
 	}
-	(void) dev_io(SCATTERED_IO, 0, dev, (off_t) 0, j, FS_PROC_NR,
+	r = dev_io(SCATTERED_IO, 0, dev, (off_t) 0, j, FS_PROC_NR,
 							(char *) iovec);
+	if (r == ENXIO) out = TRUE;	/* N.6: the card is out */
 
 	/* Harvest the results.  Leave read errors for rw_block() to complain. */
 	for (i = 0, iop = iovec; i < j; i++, iop++) {
@@ -411,12 +485,17 @@ int rw_flag;			/* READING or WRITING */
 			bp->b_dev = dev;	/* validate block */
 		    put_block(bp, PARTIAL_DATA_BLOCK);
 		} else {
-		    if (iop->io_nbytes != 0) {
+		    /* N.6: the card went out at this request (ENXIO): it and
+		     * the ones not tried after it stay dirty, not dropped. */
+		    if (iop->io_nbytes == ENXIO) out = TRUE;
+		    if (iop->io_nbytes == 0) {
+			bp->b_dirt = CLEAN;
+		    } else if (!out) {
 		     printf("Unrecoverable write error on device %d/%d, block %ld\n",
 				(dev>>MAJOR)&BYTE, (dev>>MINOR)&BYTE, bp->b_blocknr);
 			bp->b_dev = NO_DEV;	/* invalidate block */
+			bp->b_dirt = CLEAN;
 		    }
-		    bp->b_dirt = CLEAN;
 		}
 	}
 	bufq += j;
@@ -447,4 +526,102 @@ struct buf *bp;
 	next_ptr->b_prev = prev_ptr;
   else
 	rear = prev_ptr;	/* this block was at rear of chain */
+}
+
+
+/*===========================================================================*
+ *				rw_super				     *
+ *===========================================================================*/
+PRIVATE struct super_block *rw_super(dev)
+dev_t dev;
+{
+/* The super block of a file system mounted read-write on 'dev', or none. */
+  register struct super_block *sp;
+
+  if (dev == NO_DEV) return(NIL_SUPER);
+  for (sp = &super_block[0]; sp < &super_block[NR_SUPERS]; sp++)
+	if (sp->s_dev == dev) return(sp->s_rd_only ? NIL_SUPER : sp);
+  return(NIL_SUPER);
+}
+
+
+/*===========================================================================*
+ *				sb_room					     *
+ *===========================================================================*/
+PRIVATE int sb_room(dev)
+dev_t dev;
+{
+/* Spec N.1: can block 1 of 'dev' be had (get_block) without writing a block
+ * of a device that is still CLEAN on the disk first?  It can if it is in
+ * the cache or a clean buffer is free.  Else write one free dirty block of
+ * a device that is not CLEAN on the disk (nothing to keep in order there).
+ */
+  register struct buf *bp;
+  struct super_block *sp;
+
+  for (bp = buf_hash[SUPER_BLOCK & HASH_MASK]; bp != NIL_BUF; bp = bp->b_hash)
+	if (bp->b_blocknr == SUPER_BLOCK && bp->b_dev == dev) return(TRUE);
+  for (bp = front; bp != NIL_BUF; bp = bp->b_next)
+	if (bp->b_dirt == CLEAN) return(TRUE);
+  for (bp = front; bp != NIL_BUF; bp = bp->b_next) {
+	if (bp->b_dirt != DIRTY) continue;	/* pipe data: never (K.6) */
+	sp = rw_super(bp->b_dev);
+	if (sp != NIL_SUPER && (sp->s_flags & SF_DCLEAN)) continue;
+	rw_block(bp, WRITING);
+	if (bp->b_dirt == CLEAN) return(TRUE);
+  }
+  return(FALSE);
+}
+
+
+/*===========================================================================*
+ *				clean_off				     *
+ *===========================================================================*/
+PRIVATE int clean_off(sp)
+struct super_block *sp;		/* read-write, CLEAN on the disk */
+{
+/* Spec N.1: write CLEAN = 0 to the disk, synchronously.  OK, ENXIO (the card
+ * is out: write nothing else either), or another error (go on: a card that
+ * fails this write fails the others too).  With no room for block 1 (every
+ * free buffer dirty with blocks of CLEAN file systems: put_block's hook
+ * failed with the card out, and now it is back) go on too: losing a block
+ * would be worse than the order.  CLEAN stays set in core, so the next
+ * block retries.
+ */
+  if (!sb_room(sp->s_dev)) return(OK);
+  return(put_sflags(sp, 0, SF_CLEAN));
+}
+
+
+/*===========================================================================*
+ *				before_write				     *
+ *===========================================================================*/
+PRIVATE int before_write(dev)
+dev_t dev;
+{
+/* A block other than the super block goes to 'dev' now (spec N.1, N.2). */
+  struct super_block *sp;
+
+  if ((sp = rw_super(dev)) == NIL_SUPER) return(OK);
+  sp->s_flags |= SF_WRITTEN;
+  if (!(sp->s_flags & SF_DCLEAN)) return(OK);
+  return(clean_off(sp));
+}
+
+
+/*===========================================================================*
+ *				sb_written				     *
+ *===========================================================================*/
+PUBLIC void sb_written(bp)
+struct buf *bp;			/* block 1 of its device goes to the disk */
+{
+/* Block 1 written through the cache (fsck writing the device) carries the
+ * flag bits: the in-core "CLEAN on the disk" follows them (spec N.1). */
+  struct super_block *sp;
+
+  if ((sp = rw_super(bp->b_dev)) == NIL_SUPER) return;
+  if (conv2(sp->s_native, (int) SB_FLAGS(sp, bp)) & SF_CLEAN)
+	sp->s_flags |= SF_DCLEAN;
+  else
+	sp->s_flags &= ~SF_DCLEAN;
 }

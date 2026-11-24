@@ -11,9 +11,12 @@ SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	:= -O1 -g -Wall -Wno-unused-function $(SAN)
 B	:= build
 
-TESTS	:= parttest usbtest
+TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stocktest \
+	   spectest pmstattest
 
-all: $(TESTS:%=run-%) run-libfuri run-libapp run-native run-lfrfid
+all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
+     run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
+     run-music run-u2f run-libblk
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -23,6 +26,19 @@ run-libfuri:
 run-libapp:
 	$(MAKE) -C $(MROOT)/flipper/lib/app test
 
+# libblk (spec 12h, R12.38): frames over swappable memory blocks, against
+# a fake block space (make -C tests/libblk).
+run-libblk:
+	$(MAKE) -C $(MROOT)/flipper/tests/libblk test
+
+# libu2f (issue #420): U2F messages and U2FHID framing (make -C tests/u2f).
+run-u2f:
+	$(MAKE) -C $(MROOT)/flipper/tests/u2f test
+
+# The Music Player's song parser (issue #420): FMF and RTTTL, a fuzz.
+run-music:
+	$(MAKE) -C $(MROOT)/flipper/apps/music test
+
 # remind and alarm (spec 7b.1, 7b.2): the log reader, times, the form.
 run-native:
 	$(MAKE) -C $(MROOT)/flipper/apps/native test
@@ -30,6 +46,74 @@ run-native:
 # trip, encoder -> edges -> decoders (make lfrfidtest).
 run-lfrfid:
 	$(MAKE) -C $(MROOT)/flipper/tests/lfrfid test
+# libibkey (spec R6.7 part 3b): the Unleashed Cyfral and Metakom iButton
+# protocols, every key round trip (make ibkeytest).
+run-ibkey:
+	$(MAKE) -C $(MROOT)/flipper/tests/ibkey test
+# libdht (issue #358): the AM2301/DHT21/DHT22 frame decoder (make dhttest).
+run-dht:
+	$(MAKE) -C $(MROOT)/flipper/tests/dht test
+# libmodem (spec section P, ACP.1, ACP.2): data modems between two
+# Flippers; the lossy-channel, line-code, legal and fuzz tests (make modemtest).
+run-modem:
+	$(MAKE) -C $(MROOT)/flipper/tests/modem test
+# libhid (spec R11.3.2): layouts, all printable ASCII round trip in US and
+# DE, UTF-8, the report builders (make hidtest).
+run-hid:
+	$(MAKE) -C $(MROOT)/flipper/tests/hid test
+# libsubghz (Phase 9, issue #302): the Unleashed Sub-GHz protocols; every
+# RAW capture of the Unleashed unit tests, encoder round trips, a fuzz
+# (make subghztest).
+run-subghz:
+	$(MAKE) -C $(MROOT)/flipper/tests/subghz test
+# libir (Phase 7, issue #389): the stock infrared codecs against the stock
+# .irtest vectors, .ir files round trip (make irtest).
+run-ir:
+	$(MAKE) -C $(MROOT)/flipper/tests/infrared test
+
+# mtpd (spec R10.4, T29a): tools/mtphost.py against the PC build on a
+# pipe, then a short libFuzzer run of the container parser (AC10.4.6;
+# needs clang, skipped without it; the PR runs it for an hour).
+run-mtpd:
+	$(MAKE) -C $(MROOT)/flipper/mtpd test
+	if command -v clang >/dev/null; then \
+	  $(MAKE) -C $(MROOT)/flipper/mtpd fuzz FUZZTIME=60; \
+	else echo "mtpd fuzz: no clang, skipped"; fi
+
+# libnfc (Phase 14, #387): Crypto-1, the streaming key dictionary, the
+# MIFARE Classic reader authentication and the dictionary attack against a
+# software card model (make nfctest).
+run-nfc:
+	$(MAKE) -C $(MROOT)/flipper/tests/nfc test
+
+# gzsig (spec RS.4, ACS.1, T33a part 2): the update file's verifier
+# (make gzsigtest); a flipped bit at every 3rd byte here, every byte there.
+# libradio and radio-fetch.py (T30a, spec R16.0, R2b.1a).
+run-radio:
+	$(MAKE) -C $(MROOT)/flipper/tests/radio test
+
+# libflipperpb (#388): the stock RPC protobuf against golden frames.
+run-flipperpb:
+	$(MAKE) -C $(MROOT)/flipper/tests/flipperpb test
+
+# the rpcd core (#388, R15.5, R15.7): fake platform, golden frames.
+run-rpcd:
+	$(MAKE) -C $(MROOT)/flipper/tests/rpcd test
+
+# bled GATT serial service (#388): fake controller, rpcd behind it.
+run-bled:
+	$(MAKE) -C $(MROOT)/flipper/tests/bled test
+
+run-gzsig:
+	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
+
+# test(1) (src/commands/simple/test.c, #118): the POSIX file tests.
+run-testcmd: $(B)/testcmd testcmd.sh
+	sh testcmd.sh $(B)/testcmd
+
+$(B)/testcmd: $(MROOT)/src/commands/simple/test.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-unused-result '-D_PROTOTYPE(f,a)=f a' $< -o $@
 
 run-%: $(B)/%
 	./$<
@@ -60,7 +144,65 @@ $(B)/usbtest: usbtest.c $(B)/usb.c stubs/usb/*.h \
 	$(CC) $(CFLAGS) $(USBINC) -D'T_ASM(...)=((void) 0)' usbtest.c \
 	    $(B)/usb.c $(MROOT)/flipper/vendor/libusb_stm32/src/usbd_core.c -o $@
 
+# ibemu.c: the Dallas key's 1-Wire slave (R6.7 part 3), included whole.
+$(B)/ibemutest: ibemutest.c $(MROOT)/src/kernel/arm/ibemu.c
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-old-style-definition ibemutest.c -o $@
+
+# appline.c: the launcher's /etc/apps lines and icons (R5.6a, T21a).
+$(B)/icontest: icontest.c $(MROOT)/flipper/gui/appline.c $(MROOT)/flipper/gui/appline.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) icontest.c $(MROOT)/flipper/gui/appline.c -o $@
+
+# The launcher's Stock style (R5.6b, AC5.7): launcher_stock.c against the
+# stock menu.c and submenu as ported into libfuri, from the same entries.
+FURI	:= $(MROOT)/flipper/lib/furi
+FURI_SRC := $(FURI)/src/thread.c $(FURI)/src/sync.c $(FURI)/src/timer.c \
+	    $(FURI)/src/record.c $(FURI)/src/string.c $(FURI)/src/check.c \
+	    $(FURI)/src/fdwait.c $(FURI)/src/port_host.c \
+	    $(wildcard $(FURI)/src/gui/*.c $(FURI)/src/gui/modules/*.c \
+	    $(FURI)/src/gui/modules/widget_elements/*.c) $(wildcard $(FURI)/u8g2/*.c)
+$(B)/stocktest: stocktest.c $(MROOT)/flipper/gui/gui.c $(MROOT)/flipper/gui/launcher_stock.c \
+		$(MROOT)/flipper/gui/appline.c $(FURI_SRC)
+	@mkdir -p $(B)
+	$(CC) -O1 -g -Wall -Wno-unused-function -Wno-unused-parameter -std=gnu11 $(SAN) \
+	    -DFURI_HOST -I$(FURI)/include -I$(FURI)/include/gui \
+	    -I$(FURI)/include/gui/modules -I$(FURI)/u8g2 -I$(FURI)/src/gui -I$(FURI) \
+	    -I$(MROOT)/flipper/hal/common stocktest.c \
+	    $(MROOT)/flipper/gui/launcher_stock.c $(MROOT)/flipper/gui/appline.c \
+	    $(FURI_SRC) -lpthread -o $@
+
+# specmath.c: the Spectrum app's steps, scale, zoom and greys (issue #157).
+$(B)/spectest: spectest.c $(MROOT)/flipper/gui/specmath.c $(MROOT)/flipper/gui/specmath.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wextra spectest.c $(MROOT)/flipper/gui/specmath.c -o $@
+
+# winrec.c and libgm: the window records of spec K.8 (T23b).
+$(B)/wintest: wintest.c $(MROOT)/flipper/gui/winrec.c $(MROOT)/flipper/gui/winrec.h \
+		$(MROOT)/src/lib/gm/gm.c $(MROOT)/src/lib/gm/gm.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) wintest.c $(MROOT)/flipper/gui/winrec.c \
+	    $(MROOT)/src/lib/gm/gm.c -o $@
+
+# desktop.c: the desktop's module records, /var/run/gui (spec K.3, K.6, T23a).
+$(B)/desktest: desktest.c $(MROOT)/flipper/gui/desktop.c $(MROOT)/flipper/gui/desktop.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) desktest.c $(MROOT)/flipper/gui/desktop.c -o $@
+# settings time and about (spec K.7, T24b, T24d): the zone table, /etc/TZ,
+# local time from a rule, the About rows, a group's file.
+SETDIR	:= $(MROOT)/src/commands/settings
+SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c led.c power.c
+$(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
+		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
+
+# pmstat.h: the Stop2 counters of /dev/power (T14b, R6.8, #284).
+$(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) pmstattest.c -o $@
+
 clean:
 	rm -rf $(B)
 
-.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid
+.PHONY: all clean run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ir

@@ -132,6 +132,141 @@ Then `make BOARD=flipper flash` (= `dfu-util -a 0 -s 0x08000000:leave -D
 build/flipper/m0.bin`). Back to stock firmware: qFlipper → *Repair* from
 DFU mode. Iterating on MINIX never needs Repair.
 
+### The update file `Galtzagorriak.update` (spec section S, T33a)
+
+One signed file updates flash and SD card from one build (RS.1-RS.3).
+Format version 1, little endian, sector aligned (512 B). Host side:
+`tools/mkupdate.py` builds it, `tools/gzsign` signs it,
+`tools/gzupdate-check.py` checks it as the Flipper does; `make BOARD=flipper
+update` runs all three and writes `build/flipper/minix/Galtzagorriak.update`
+and its `.sha512`. `make updatetest` is ACS.1 on the host. On the Flipper
+`gzupdate` checks and stages it (T33a part 3, below); `atea`, which
+flashes it, is T33b.
+
+    sector 0     header, 448 signed bytes + Ed25519 signature (64 B)
+    sector 1     section table, 16 entries of 32 B
+    sector 2-3   full SHA-512 of each section, 16 x 64 B (entry i at i*64)
+    sector 4..   the sections in table order, each starting on a sector;
+                 the gaps and the end are zero-padded to a sector
+
+Header (sector 0):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `GZUPDATE` |
+| 8 | 2 | format version, 1 |
+| 10 | 2 | signed header size, 448 |
+| 12 | 4 | flags, 0 in version 1 |
+| 16 | 16 | board, NUL-padded: `flipper-f7` (QEMU: `qemu-mps2`) |
+| 32 | 4 | release: major, minor, patch, 0 |
+| 36 | 4 | `from_min`: the oldest release this file updates (same form) |
+| 40 | 4 | epoch (`GZ_EPOCH`, RS.13/RS.19) |
+| 44 | 4 | `GZ_ABI` |
+| 48 | 4 | shared-libc id (`libc.json` `id`, as in the a.out header) |
+| 52 | 4 | libfuri id (`furi.json` `id`) |
+| 56 | 8 | build time, s since 1970 (`GZ_BUILD_EPOCH`: the commit's time) |
+| 64 | 8 | key id: first 8 B of SHA-512 of the signer's public key |
+| 72 | 4 | number of sections, 1-16 |
+| 76 | 4 | file size in bytes (a multiple of 512) |
+| 80 | 64 | SHA-512 of sectors 1-3 (table + hashes) |
+| 144 | 32 | release text, NUL-padded: `0.1.2+17.g621a475` |
+| 176 | 272 | zero |
+| 448 | 64 | Ed25519 signature (RFC 8032, pure) of bytes 0-447 |
+
+Section entry (32 B): type (1 B), flags (1 B, 0), index (2 B, = its
+slot), offset (4 B, from the file's start, a multiple of 512), length (4 B,
+not 0), load address (4 B; `flash` only, a 2 KB page, else 0), the first
+16 B of the section's SHA-512 (the full hash is in sectors 2-3). Unused
+entries and their hash slots are zero. Types: 1 `flash` (`minix-base.bin`;
+until `atea` exists it starts at 0x0800_0000, afterwards at 0x0800_4000),
+2 `root` (the base package tar), 3 `pkg` (one app package tar each), 4
+`notes` (the release's CHANGELOG.md section, at most 4 KB; `Unreleased` for
+a build after the tag), 5 `radio` (reserved, refused by version 1). Exactly
+one `flash` and one `root`, at most one `notes`.
+
+Checks in this order (`gzupdate-check.py`, later the C verifier): magic,
+format, header size and flags, reserved bytes zero, key id names a trusted
+key (`atea`'s two slots, RS.6), **signature**; then board, file size, table
+hash, every entry (ascending, no overlap, inside the file, prefix = full
+hash), the padding is zero (no hash covers it), every section's SHA-512
+streamed 4 KB at a time; then epoch > running epoch (unless the downgrade
+press) and `from_min` <= running release. So a flipped bit anywhere is
+caught (`make updatetest` flips one at each byte).
+
+The C side is `src/lib/gzsig` (T33a part 2): `sha512.c` (FIPS 180-4,
+streaming), `ed25519.c` (RFC 8032 5.1.7 verification only, after the public
+domain TweetNaCl, field elements of 16 x 16-bit limbs in `int`, S < L and
+canonical points required) and `gzu.c` (the checks above in the same order
+with the same reasons; no libc, read through a callback, 512 B buffer or
+more). `gzupdate` and `atea` link the same three files; no secret key is in
+them. Measured with `arm-none-eabi-gcc -Os -mcpu=cortex-m4` (`-fstack-usage`):
+
+| Part | Code | Stack |
+|---|---|---|
+| `sha512.c` | 2.0 KB | 304 B (block) + 216 B state |
+| `ed25519.c` | 2.7 KB | 1.4 KB deepest (`gz_ed25519_verify` 640 + `unpackneg` 408 + `pack` 296 + 80) |
+| `gzu.c` | 3.1 KB | `gzu_check` 432 + 96 above the verifier, so about 2.0 KB in all |
+
+So the verifier is 4.7 KB of code (budget 8 KB, RS.4) and 1.4 KB of stack
+(budget 2 KB). One signature check is about 2 x 256 point doublings plus
+additions, about 9 000 field multiplications of 256 32x32->64 products; on
+the PC under ASan it takes 7 ms. The time at 64 MHz is measured on the
+Flipper with `atea` (T33b; budget 2 s). `make gzsigtest` (and tests/host,
+every 3rd byte) runs RFC 8032 7.1 tests 1-3 and SHA(abc), FIPS 180-4
+vectors, 64 signatures of Python's `cryptography` with bad variants (a bit
+flipped in R, S, message or key; S + L), every file of `make updatetest`
+with the same verdict as `gzupdate-check.py`, and a flipped bit at each byte
+of the good file, under ASan and UBSan.
+
+Keys: `tools/gzsign --new-key` writes `~/.config/galtzagorriak/update.key`
+(PKCS#8 PEM, mode 0600; never commit it) and `update.pub` (64 hex digits).
+`gzsign` takes the private key from `--key`, the environment variable
+`GZ_UPDATE_KEY` (the key file's text, the CI secret) or that file, and stops
+with a hint if there is none. The project's public release key goes to
+`flipper/keys/release.pub` once the user has made it (RS.20); `make update`
+checks with it and with `~/.config/galtzagorriak/update.pub`.
+
+On the Flipper (T33a part 3; `cmds/gzupdate.c`, `cmds/gztree.c`, INIT):
+
+1. `gzupdate check FILE` (RS.8): `gzu_check` with the keys built in
+   (`keys/release.pub`, the builder's `update.pub`; `atea`'s slots once it
+   exists), this system's board, epoch and release.  The window text on
+   the console; one line `gzupdate: <why>` and exit 1 on a bad file.
+2. `gzupdate apply FILE` (RS.10, root): the same check, the question (on
+   the console until `atea`'s LCD window, T33b), `swapon off`, the file raw
+   from sector 0 of `/dev/hd3` and read back (SHA-512 compared), the `root`
+   section unpacked into `/.gzupdate/E/` and `/usr/.gzupdate/E/` with
+   `/.gzupdate/E/MANIFEST` (`path mode uid gid` and the first 32 B of the
+   file's SHA-512 in hex) written last, `/usr/.gzupdate/cur.update` (the
+   running system's file) renamed to `prev.update` and the new file copied
+   to `cur.update`, `/usr/.gzupdate/trial`, then the **pending sector**,
+   the sector right after the staged file: `GZPEND1\0`, epoch (4 B), size
+   (4 B), the file's SHA-512 (64 B).  Then `reboot`.  Every step can run
+   again after a power cut; nothing is pending until the last write.
+3. `atea` (T33b; on QEMU `tools/ateasim.py` on the flash image): pending
+   sector found, or the first page erased: check the staged file again,
+   then flash.  The first page is erased first whenever any page differs
+   and programmed last; other pages are compared and only differing ones
+   erased and written; read back; the pending sector cleared.  `BKP11R`
+   (the one-word fast path and the trial counter) is T33b's.
+4. INIT (RS.14, +0 B static RAM, text +300 B): if `/etc/gz-tree` is not
+   `GZ_EPOCH` and `/.gzupdate/GZ_EPOCH/MANIFEST` exists, run
+   `/.gzupdate/E/bin/gztree` (else `/bin/gztree`) and wait.  `gztree`
+   mounts `/dev/hd2` on `/usr` itself, then per MANIFEST entry: in place
+   with that hash: skip; else the old file to `/.gzupdate/<old>/` (or
+   `/usr/.gzupdate/<old>/`; `<old>` from `/etc/gz-tree`, `0` if none) and
+   the staged one in; `/etc/gz-tree` last (temporary file, rename).
+5. `/etc/rc`: `gzupdate finish` after `pkg bind /bin/*` (the staged trees,
+   now only copies, are removed; the old files stay for one rollback),
+   `gzupdate commit` after the launcher (`trial` removed).
+
+`tools/gzapplytest.py` (QEMU) runs 2-5 on a real file of the build and
+cuts the power at each page operation of step 3 (ACS.3 for the flash
+step: 118 cuts, each finished by the next start).  Not yet: cuts inside
+`apply` and between `gztree`'s renames in QEMU, reinstalling official
+packages whose libc id changed (RS.15), the rollback (RS.16, needs
+`atea`).
+
 ### SD card layout
 
 One MBR partition (type 0x81, start 1 MiB, 4000 MiB) holding a MINIX V2
@@ -398,7 +533,7 @@ the cache is written (was 40 ms); L6 6-35 ms over 8 launches of "info",
 21.95 ms, programming 256 B per step 2.75 ms, at most one erase per
 ~270 ms; a 220-character line pasted during the copy arrived complete.
 
-Flash writes at run time (owner rule, 2026-11-14): a program is copied
+Flash writes at run time (user rule, 2026-11-14): a program is copied
 to the text cache only after its third run from RAM (MM counts runs of up
 to 8 uncached programs, nothing written for that), from its file, which
 exec leaves open for the copy; the directory is written only for a new
@@ -479,7 +614,7 @@ AC2b.R1/R2 (2026-11-15, Flipper, latcheck kernel):
   copy in progress is dropped and redone on a later run.  An install
   whose `pkg` died is dropped by the next install or cache copy.
 - Flash writes: unchanged (the same pages and record per program).
-- L1 during an install still needs the owner's hands (buttons).
+- L1 during an install still needs the user's hands (buttons).
 
 AC2b.5, power cuts during installs (2026-11-15, QEMU only, no Flipper
 flash written): `tools/powercut.py`.  The QEMU board's flash now behaves
@@ -513,7 +648,7 @@ and nothing printed "not erased", "damaged" or a panic.
   (their programs fell back to RAM).  Now the header is written last,
   so until then the old directory is the valid one.
 - The run-time cache's records were already safe: one is found only
-  when its last double word (the owner) matches.
+  when its last double word (the user) matches.
 - Also: the installed region is capped at 256 pages (the job's page
   index is a byte; the WB55 has about 160).
 - RAM 0 B.  Flash writes: unchanged (the header is one double word
@@ -690,6 +825,73 @@ are a local-agent check):
   libc-heavy command (each libc call is a stub and a load from flash),
   free flash after `make base-flash`.
 
+R2b.9 part 2, libfuri + libapp as one shared library (issue #201,
+2026-11-17, QEMU; device numbers are a local-agent check):
+- Layout: the libc's slot shrinks to 48 KB (0x08030000, the library is
+  18.5 KB, its address and id are unchanged), the furi library follows at
+  0x0803C000 (48 KB slot), the installed region starts at 0x08048000 (the
+  ROM image at 0x0804A000).  `minix.bin` carries both libraries (287 KB);
+  QEMU: 0x3C000, installed region 0x48000, cache 0x68000.
+- The library: libfuri (core, GUI, modules, u8g2, fonts) and libapp,
+  linked once at its flash address with `--gc-sections`; the roots are
+  the 73 functions in `furi.exports` (what furihello, remind, alarm,
+  timed and alert call, plus `localtime`/`mktime`, the static libc
+  members libapp needs, exported so the apps share that copy).  41 376 B
+  of text (the R5.2 budget is 45 KB; unfiltered, every libfuri member,
+  about 66 KB).  The u8g2 part that stays is about 7 KB (the four stock
+  fonts 3.5 KB); nothing of u8g2 is exported.
+- Same mechanism as the libc (`tools/mkshlibc.py image --dep`): header
+  (magic `GZLF`), frozen entry table, 12-byte stubs.  It calls the libc
+  through the libc's stubs (in its own text), so its area - GOT 1 304 B,
+  data 324 B, bss 784 B: 2 416 B - follows the libc area at r9
+  (`ld/shfuri.ld` starts its GOT section `SHLIBC_AREA` bytes in), and
+  its id covers the libc's id.  `a_dbase` of the 48-byte header holds
+  it; MM's exec refuses another build (ENOEXEC, abiexec tests 6), `pkg`
+  a package with another `Furi:`.  0 = not used: no ABI change, old
+  programs run as before.  The kernel takes its flash as a copy source
+  too (libapp's file names).
+- Per program (Flipper build), text / data+bss before -> after:
+  furihello 28 820 / 2 008 -> 1 060 / 3 108, remind 31 796 / 3 744 ->
+  5 324 / 4 164, alarm 34 592 / 3 864 -> 7 752 / 4 272, alert 13 988 /
+  4 092 -> 6 408 / 5 680, timed 11 924 / 3 256 -> 3 488 / 4 764.  Text
+  -96 KB for the five, +41 KB of library once.  Data + bss grow by 0.4 KB
+  (remind, alarm: they used most of the library anyway) to 1.6 KB
+  (alert, timed: libapp only, but the area is the whole library's).
+  Sharing saves flash, not RAM, for a program whose text runs from flash.
+- RAM while open (QEMU, `free -v` before and with the app open, nattest
+  "RAM:" lines; remind and alarm installed in flash, alert from RAM):
+  remind 16 128 -> 15 616 B, alarm 16 384 -> 16 128 B, alert 24 320 ->
+  18 688 B, furihello 16 896 B after (about 43 KB before, from its
+  sizes); data + bss + chmem, which is what exec takes: remind 15 432,
+  alarm 16 048, alert 11 824 + 6 408 of text (one alarm run gave 14 080:
+  a free delta can pick up another process).  remind and alarm gain from
+  a smaller chmem (12 KB -> 11 KB
+  and 11.5 KB: nattest leaves 3.8-4.0 KB and 3.2-3.4 KB of 12 KB never
+  used; what is left keeps at least 1 KB for the heap above MM's 1.5 KB
+  safety gap); alert and timed from the text they no longer load.  timed
+  (5 KB chmem, 1.9 KB used) and alert (6 KB, all touched) keep theirs.
+- What is left of the Phase 7b budgets (remind 4, alarm 5, alert 4,
+  timed 3 KB), remind as the example, 15.4 KB: chmem 11 KB = libfuri's
+  main stack 3 KB + the gui thread 2 KB (#188) + heap about 3 KB (Canvas
+  1.1 KB, views, the list) + MM's safety gap 1.5 KB + 1 KB to grow; data
+  4.1 KB = libc area 0.6 + furi area 2.4 + its own 1.1.  What would close
+  it: (1) a GUI server (one gui thread, Canvas and input for every app:
+  -3.1 KB per app); (2) a main stack sized per app instead of 3 KB
+  (`FURI_MAIN_STACK` is now inside the library: it needs a run-time
+  setting, e.g. from the package's chmem line); (3) a smaller furi area
+  (`const` pointer tables, fewer GOT entries in libapp's parser: 80 of
+  its 326 GOT words); (4) a smaller MM safety gap for programs whose heap
+  is bounded.  Even all four leave about 7 KB: 4 KB needs apps that hold
+  no GUI state of their own (a GUI server or 7c-style modules in one
+  host process).  alert and timed (no libfuri): text in flash (`Flash:
+  yes` for the timed package) would save their 6.4 / 3.5 KB of text in
+  RAM; their data is mostly the furi area and libapp's timer struct.
+- AC5.3: with remind and alarm installed, `free -v` shows `shared
+  libfuri: 41 KB at 0003c000 ...` once; `installed programs: 2, 16 of
+  128 KB` (they were 68 KB with libfuri inside).
+- Flash writes: none at run time; the library is written by DFU with
+  `minix.bin`.  M2 flashcheck cache 6/6, inst 0/0.
+
 T4b step 1, the SD card's busy wait (2026-11-15, Flipper): after a write
 the card programs for up to ~9 ms, and `sd_wait_ready` polled it all
 that time in the disk task: the last cause of infrared underruns (R0.8b
@@ -732,7 +934,7 @@ T4b step 2, SD data by DMA (2026-11-15, Flipper):
   2.2 s and 48 ms.
 - RAM 0 B.
 
-Backlight idle timeout (owner request 2026-11-15): without a key or
+Backlight idle timeout (user request 2026-11-15): without a key or
 button (USB console keys count too) the LCD backlight dims by 10 % a
 second in the last 5 s of the idle timeout, then fades out; it comes
 back at the next key.  Default 15 s, so dimming from 10 s on.
@@ -747,9 +949,9 @@ back at the next key.  Default 15 s, so dimming from 10 s on.
   current level to 0 in about 0.5 s on its own (no CPU, no I2C while it
   runs; the program and register sequence of the stock firmware's
   `lp5562_execute_ramp`).  On at once: `hal_backlight` gives the channel
-  back to direct control, stops the engine and sets the level.  Owner,
+  back to direct control, stops the engine and sets the level.  User,
   on the Flipper: "naprawdę super".
-- With the light off, a press only turns it on (owner): neither that
+- With the light off, a press only turns it on (user): neither that
   press nor anything else reaches the apps until every button is up.
   The flag is the top bit of flipdev's `last_buttons`, so no RAM.
 - Flipper: `backlight 255 10; sleep 15; backlight` → "now off (idle)";
@@ -843,7 +1045,7 @@ reply" and "reply -> run", and says who used the time in between):
 | Load | L5 before | L5 after |
 |---|---|---|
 | cksum of a 1.2 MB file in a loop, typing on the console | avg 37 us, max 37 us (27) | same |
-| launcher by hand (126 presses), cksum loop | avg 87 us, max 3.1 ms (248); the 3 ms all "reply -> run" | (needs the owner's hands again) |
+| launcher by hand (126 presses), cksum loop | avg 87 us, max 3.1 ms (248); the 3 ms all "reply -> run" | (needs the user's hands again) |
 | copies of 8 programs run 3 times each (the cache copies them in the background), typing | max 22 ms; all 4 slow ones with a flash operation in between | flash: 0 of the slow ones; max 47 ms, of which 43 ms in kernel tasks, longest slice 12.5 ms in the SD task (WINCHESTER) |
 
 - The flash stalls: during an erase (22 ms) or a double word (85 us)
@@ -904,6 +1106,8 @@ off for 30 s or more; the gauge counts in whole mA, so this is coarse):
 |---|---|---|---|
 | 2026-11-16 | main 9ddab7f + T14b part 2 (#116, Stop2) + T15a | -3 mA | Power app open (reads every 10 s), LCD still showing, SD card powered; 66 of ~90 s on battery in Stop2 |
 | 2026-11-16 | + T14d part 1 (#120, LCD power save) | -2 mA | same setup; the LCD blank after 15 s + 2 min |
+| 2026-11-17 | Galtzagorriak 0.1.1+124.g0566ba1 (built on the old laptop; the commit is not on GitHub) | < gauge resolution (`sby` -2 mA) | overnight, read with `nightpower.py end` and no start file: booted 22:05 UTC, on USB again 18:04 UTC, 20.0 h on battery. **Stop2 98.22 %** (70677 of 71959 s; the USB minutes before unplugging in the evening are unknown and count as awake), 151 button + ≈ 77143 other wake-ups (64 a minute; `wother` read 11607, wrapped u16, #284). No reset. Clock -1.6 s after 20 h, set by hand to the second (≈ 22 ppm). SoC ? -> 99 %. AC6.6 not passed on the Stop2 share |
+| 2026-11-21 | kernel: local bench branch = main a3005a95 + the NFC driver (#440) + the charging mode (#411) + the power-off notice; userland: base 4.76 from 7dbd2f15 (`ver`: 0.1.2+44.g7dbd2f15-dirty); 128 GB card | ≈ 1.7 mA from the charge (6 % of 2100 mAh in 73.4 h; coarse, 1 % steps) | the first multi-day run (`nightpower.py start` / `note` / `end`, #409): **73.4 h on battery, Stop2 99.85 %** (263466 of 263852 s), 24 button + 281867 other wake-ups (64 a minute), no reset (up 264030 s), clock +5.3 s (+20.1 ppm, limit ±69 ppm), SoC 100 -> 94 %, 4142 -> 4191 mV. One interim reading on USB after 2.26 days (95 %); the minutes on USB at the start, at the note and at the end count as awake. **AC6.6 passed** |
 
 Not measured: the build before T14a (#112) and the stock firmware's
 battery screen for comparison (each needs two more flashes; no meter on
@@ -1047,6 +1251,89 @@ time, `date -u ...` or a trailing `Z` sets UTC.
 conversion, once R6.2 reads the RTC; today one FS and one clock message)
 and `ls -l` of 100 files not measurably slower (both recorded here);
 the boot still takes the clock from the RTC (#70).
+
+## Berry (Phase 7c part 1, issue #385)
+
+**What is there.**  Upstream Berry 1.1.0 (MIT, `src/lib/berry/LICENSE`;
+github.com/berry-lang/berry at 9f6fbc9, 2026-11-11) in `src/lib/berry`,
+with `berry_conf.h` of our own and these changes: the per-script heap
+limit is one check in `be_realloc()` (`src/be_mem.c`, `be_heap_limit`);
+`default/be_port.c` includes `<sys/types.h>` first (MINIX headers);
+`gzmath.h`/`gzmath.c` give the float functions the VM needs (`fmodf`)
+and a printer for `%e/%f/%g` (`gz_snprintf`), because MINIX libc prints no
+floating point and its math needs `modf`/`frexp`, which exist only as i386
+assembly.  Not shipped: the `os`, `time`, `json`, `debug`, `introspect`,
+`strict` and `solidify` modules (their sources are removed), and `math`
+(off until a small float libm exists); upstream's `default/berry.c` is
+replaced by `gzberry.c`.  The bindings (R7c.3) are const modules in
+`src/lib/berry/gz/` (coc tables like the built-in ones): `tsv` (`split`,
+`join`, `records`), `pipe` (`where`, `map`, `head`, `sortby`; spec K.1)
+and a `sensor` stub (`list`, `read` of `/dev/sensor/NAME`); example
+`records.be`.  Ints are 32 bit, reals single float (FPU, R5.7),
+so host and device bytecode are the same.
+
+**Programs.**  `/usr/bin/berry` (package `berry`, `--flash`): `berry
+script.be|.bec [args]`, `berry -e code`, `berry -i` (REPL, R7c.5), `-m
+heap` (R7c.4, default 8192 B, 0 = none), `-n budget` (R7c.4, in units of
+1024 VM instructions, default 4096; 0 = none).  Exit status: 0 ok, 1
+exception, 2 usage, 3 budget spent (`budget_error`), 4 heap limit, 5 I/O.
+The host tool `src/lib/berry/build/berryc` (`make -C src/lib/berry`) is
+the same launcher with the bytecode saver: `berryc -c out.bec in.be`
+(R7c.2); the package's scripts are compiled with it at build time.
+
+**How the limits work.**  Budget: with `BE_USE_PERF_COUNTERS` the VM
+counts instructions and calls the observability hook every 1024 of them
+(`BE_VM_OBSERVABILITY_SAMPLING 11`); the hook counts down and raises
+`budget_error`, which unwinds to the launcher's `be_pcall()` (no system
+call, no time read; the cost is one increment and one test per
+instruction).  The REPL gives each line a fresh budget; the event
+callbacks of the `timer` binding will do the same.  Heap: over the limit
+an allocation fails like a full heap: one forced GC, then
+`BE_MALLOC_FAIL`; the script ends with status 4, its RAM goes back to MM.
+
+**Measured (QEMU, `tools/berrytest.py`, 2026-11-21).**
+
+| | bytes |
+|---|---|
+| text (flash, shared by every running script; 4.4 KB of it the bindings) | 79 948 |
+| `.data` + GOT per process | 6 220 + 964 |
+| `.bss` | 148 |
+| chmem (stack and heap gap, `CHMEM_berry`) | 12 288 |
+| one running script, `free -v` | 19 712 |
+| VM heap at start (`gc.allocated()`) | 1 501 |
+| endless loop with the default budget | ends after 0.5 s (QEMU) |
+
+The 7.2 KB of data per process are mostly the constant tables (`generate/`: the
+string table, the built-in classes and modules): they are pointer tables,
+and in a position-independent program every initialised pointer is data,
+copied to RAM per process.  This is why AC7c.1's 6 KB per script is not
+met yet.  **Next step (R7c.1):** link the VM as a shared library at a
+fixed address (like `libc.bin` and `furi.bin`, `tools/mkshlibc.py`), so
+the tables stay in flash and each script pays only for its GOT, `.bss`
+and heap.  The 48 KB slots after the system image are full, so this
+needs a new slot in the installed region (flash layout, R2b.1); then
+lower `CHMEM_berry` to the measured need (about 1.5 KB of heap at start
+plus the stack).  Also open: `#!` scripts (MM's exec has no `#!`), the
+`math` module, and solidify (bytecode as C constants in flash).
+
+**The `-n 0` hang (found in part 1, fixed in #429).**  Two runaway
+scripts with `-n 0` made QEMU stop answering.  The cause was the
+kernel, not the VM: the login `sh` and its fork child for the second
+`&` (not exec'd yet) share their addresses, a shadow group (#331).
+At the end of a quantum `sched()` moved the runaway to the tail, so
+the group's resident member came to the head, and then `unshadow()`
+swapped it out before it had run; the member swapped in went to the
+tail, behind the runaway, and at the next quantum the two traded places
+again.  Neither ran.  The same happens without Berry
+(`sh -c 'while :; do :; done' & (while :; do :; done) &`), and the
+main merges had hidden the two-script case only by changing the layout.
+Fix: `unshadow(p, ran)` (`src/kernel/arm/shadow.c`) swaps a ready
+resident member out only after its own quantum (`ran`, from
+`do_clocktick`); a blocked one goes at once as before.  Each member
+gets every other turn of the group; 0 B kernel RAM.
+`tools/berrytest.py` checks both cases (two loops; a loop and a
+subshell loop): the shell answers in 0.12 s and 0.51 s (QEMU).
+`-n 0` stays an explicit opt-in.
 
 ## Status
 

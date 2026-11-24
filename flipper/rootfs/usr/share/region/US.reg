@@ -1,0 +1,23 @@
+Filetype: Galtzagorriak region
+Version: 1
+Region: US
+Name: United States
+Checked: 2026-11-20
+Source: 47 CFR part 15 (eCFR 2026-11-01): 15.205, 15.231, 15.247, 15.249
+# dbm: e.i.r.p. from the field strength at 3 m, (E * 3 m)^2 / 30 ohm, rounded down
+# restricted bands (15.205) 322-335.4 and 399.9-410 MHz: no row touches them
+# 308.565 and 416.406 MHz: where the 15.231(b) interpolation reaches -20 and -15 dBm
+# ref: [id] = docs/regulation/<id>.md, where the limit is quoted
+# lo_mhz	hi_mhz	dbm	duty	bw_khz	use	ref
+902.000	928.000	-2	none	0	any	[cfr-47-15] 15.249(a)
+902.000	928.000	10	none	250	fhss	[cfr-47-15] 15.247(a)(1)(i), (b)(2)
+300.000	308.565	-21	none	750	ctl	[cfr-47-15] 15.231(a)-(c)
+308.565	322.000	-20	none	771	ctl	[cfr-47-15] 15.231(a)-(c)
+335.400	348.000	-19	none	838	ctl	[cfr-47-15] 15.231(a)-(c)
+387.000	399.900	-17	none	967	ctl	[cfr-47-15] 15.231(a)-(c)
+410.000	416.406	-16	none	1025	ctl	[cfr-47-15] 15.231(a)-(c)
+416.406	464.000	-15	none	1041	ctl	[cfr-47-15] 15.231(a)-(c)
+300.000	322.000	-29	none	750	per	[cfr-47-15] 15.231(e), (c)
+335.400	348.000	-27	none	838	per	[cfr-47-15] 15.231(e), (c)
+387.000	399.900	-25	none	967	per	[cfr-47-15] 15.231(e), (c)
+410.000	464.000	-24	none	1025	per	[cfr-47-15] 15.231(e), (c)

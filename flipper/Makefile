@@ -39,7 +39,7 @@ endif
 
 # freestanding string routines used by the HAL
 HAL_SRC	:= hal/common/vectors.c hal/common/kprintf.c hal/common/fbcon.c \
-	   hal/common/string.c hal/common/splash.c hal/$(BOARD)/board.c \
+	   hal/common/string.c hal/common/splash.c hal/common/chargeart.c hal/$(BOARD)/board.c \
 	   $(BOARD_SRC)
 SRC	:= $(HAL_SRC) $(PROG)/main.c
 OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
@@ -47,7 +47,7 @@ OBJ	:= $(SRC:%.c=$(BUILD)/%.o)
 QEMU	:= qemu-system-arm -M mps2-an386 -nographic -monitor none \
 	   -serial stdio -semihosting-config enable=on,target=native
 
-.PHONY: all run flash clean lfrfidtest
+.PHONY: all run flash clean lfrfidtest modemtest hidtest subghztest ibkeytest dhttest gzsigtest irtest
 all: $(BUILD)/$(PROG).elf $(BUILD)/$(PROG).bin
 
 $(BUILD)/%.o: %.c
@@ -68,6 +68,39 @@ $(BUILD)/$(PROG).bin: $(BUILD)/$(PROG).elf
 # liblfrfid on the PC (spec R9.0.2): every LF RFID protocol round trip.
 lfrfidtest:
 	$(MAKE) -C tests/lfrfid test
+
+# libibkey on the PC (spec R6.7 part 3b): Cyfral and Metakom iButton keys,
+# encoder -> the line -> decoders.
+ibkeytest:
+	$(MAKE) -C tests/ibkey test
+
+# libir on the PC (spec Phase 7, issue #389): the stock infrared codecs
+# against the stock .irtest vectors, .ir files read and written back.
+irtest:
+	$(MAKE) -C tests/infrared test
+
+# libdht on the PC (issue #358): the AM2301/DHT21/DHT22 frame decoder.
+dhttest:
+	$(MAKE) -C tests/dht test
+
+# gzsig on the PC (spec RS.4, ACS.1): SHA-512, Ed25519 and the update-file
+# check against RFC 8032 vectors and the bad files of tools/updatetest.py.
+gzsigtest:
+	$(MAKE) -C tests/gzsig test
+
+# libmodem on the PC (spec section P, ACP.1, ACP.2): frames, ARQ, carousel,
+# the RFID line code, the Sub-GHz presets, legal check and duty counter.
+modemtest:
+	$(MAKE) -C tests/modem test
+
+# libhid on the PC (spec R11.3.2): layouts, US and DE round trip, UTF-8.
+hidtest:
+	$(MAKE) -C tests/hid test
+
+# libsubghz on the PC (Phase 9, issue #302): the Unleashed Sub-GHz
+# captures decoded, encoder round trips, a decoder fuzz.
+subghztest:
+	$(MAKE) -C tests/subghz test
 
 run: $(BUILD)/$(PROG).elf
 	@test "$(BOARD)" = qemu || { echo "run needs BOARD=qemu"; exit 1; }

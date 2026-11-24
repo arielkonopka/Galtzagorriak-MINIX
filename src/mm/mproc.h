@@ -22,10 +22,12 @@ EXTERN struct mproc {
   uid_t mp_effuid;		/* process' effective uid */
   gid_t mp_realgid;		/* process' real gid */
   gid_t mp_effgid;		/* process' effective gid */
+  dev_t mp_dev;			/* device number of the program's file system;
+				 * here, beside the 16-bit fields, so the
+				 * 32-bit mp_ino costs no padding (spec O.4) */
 
   /* File identification for sharing. */
   ino_t mp_ino;			/* inode number of file */
-  dev_t mp_dev;			/* device number of file system */
   ftime32_t mp_ctime;		/* inode changed time (as stored, R2d.3) */
 
   /* Signal handling information. */
@@ -66,5 +68,15 @@ EXTERN struct mproc {
 #define FGAPP	       040000	/* the foreground app or a child of it: placed
 				 * low, never swapped (R12.22, AC12.R3) */
 #define SWAPBAD	      0100000	/* swap-in failed: to be killed (R12.25) */
+#define SWAPHOT	      0200000	/* woken from the card: the reserve waits
+				 * 120 s, not 10 s, once (R12.30) */
+#define SWAPHDR	      0400000	/* its slot's header on the card describes
+				 * the chunks there: compare, write only the
+				 * changed ones (R12.29) */
+
+#define BLKWAIT	     01000000	/* a background MI_BLK request waits for idle
+				 * (sw_step, R12.37); no reply yet */
+#define BLKUSED	     02000000	/* PUT a block since its run began: the run
+				 * is discarded at idle when it ends (R12.40) */
 
 #define NIL_MPROC ((struct mproc *) 0)

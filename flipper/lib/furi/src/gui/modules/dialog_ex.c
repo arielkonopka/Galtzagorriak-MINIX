@@ -4,6 +4,8 @@
 #include "dialog_ex.h"
 #include <gui/elements.h>
 #include <furi.h>
+#include "pine.h"
+#include <string.h>
 
 struct DialogEx {
     View* view;
@@ -36,8 +38,37 @@ typedef struct {
     FuriString* right_text;
 } DialogExModel;
 
+/* "<Left  OK Center  >Right" from the button labels, as far as they fit */
+static void dialog_ex_hint(char* h, size_t size, const char* key, FuriString* label) {
+    size_t n = strlen(h);
+    if(!furi_string_size(label)) return;
+    if(n > 0 && n + 2 < size) {
+        h[n++] = ' ';
+        h[n++] = ' ';
+        h[n] = 0;
+    }
+    for(; *key && n + 1 < size; key++)
+        h[n++] = *key;
+    for(const char* l = furi_string_get_cstr(label); *l && n + 1 < size; l++)
+        h[n++] = *l;
+    h[n] = 0;
+}
+
 static void dialog_ex_view_draw_callback(Canvas* canvas, void* _model) {
     DialogExModel* model = _model;
+
+    if(pine_on()) { /* spec K.2: the header as the title, the hints */
+        char hints[33];
+        hints[0] = 0;
+        pine_body(
+            canvas, furi_string_get_cstr(model->header.text), furi_string_get_cstr(model->text.text),
+            model->icon.icon, model->icon.x, model->icon.y);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyLeft), model->left_text);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyOk), model->center_text);
+        dialog_ex_hint(hints, sizeof hints, pine_str(PineKeyRight), model->right_text);
+        pine_hints(canvas, hints);
+        return;
+    }
 
     // Prepare canvas
     canvas_set_color(canvas, ColorBlack);

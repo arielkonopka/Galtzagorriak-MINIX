@@ -32,6 +32,7 @@
 #define UTIME		  30 
 #define ACCESS		  33 
 #define SYNC		  36 
+#define SYNC_SHUTDOWN	   1	/* m1_i1 of MM's SYNC in do_reboot (spec N.2) */
 #define KILL		  37
 #define RENAME		  38
 #define MKDIR		  39
@@ -39,6 +40,7 @@
 #define DUP		  41 
 #define PIPE		  42 
 #define TIMES		  43
+#define FSTATFS		  44	/* to FS: free space (spec O.5) */
 #define POLL		  45	/* to FS (R4b.6) */
 #define SETGID		  46
 #define GETGID		  47

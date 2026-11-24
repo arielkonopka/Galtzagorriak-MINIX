@@ -26,13 +26,42 @@ The `ikey` command works like the stock firmware's:
 ```
 ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8"
 ikey write Dallas 01A2B3C4D5E6F7A8
+ikey emulate Dallas 01A2B3C4D5E6F7A8
 ```
 
 `ikey write` copies a key onto an RW1990 blank held on the contacts (both kinds, RW1990.1 and .2,
 are tried) and reads it back; keep the blank on the contacts until it says "Write success" (a few
 seconds). The 16 hex digits are the whole ROM, the CRC byte last, as `ikey read` prints it.
-Emulating a key and the Cyfral/Metakom keys are **(planned)** (spec R6.7, later parts), as is
-an iButton app in the launcher.
+
+`ikey emulate` makes the Flipper the key: hold its iButton contacts to a reader (a door, an
+intercom, another Flipper) and the reader gets the ROM, as if from the key itself. It says
+"Read by a reader" each time a reader got the whole number, and runs until Ctrl-C (or `-t SECS`).
+Readers that ask for the number directly (READ ROM) and those that search the line for keys
+(SEARCH ROM) both work. While a key is emulated, reading `/dev/ibutton` and `ikey read`/`write`
+say "Resource busy", and the Flipper stays out of its deep sleep: emulation uses more battery.
+Programs do it with `ioctl(IBIOCEMU)` (`<minix/ibutton.h>`), which ends when they close the
+device or exit.
+
+**Cyfral and Metakom keys** (the Russian intercom keys, spec R6.7 part 3b) use the same command,
+with the key as the stock firmware prints it (Cyfral 4 hex digits, Metakom 8):
+
+```
+ikey read                    # also prints "Cyfral A1B2" or "Metakom 0305090A"
+ikey emulate Cyfral A1B2
+ikey emulate -t 30 Metakom 0305090A
+```
+
+These keys are not 1-Wire: they send their number over and over as long and short levels on the
+contact. `ikey read` tries a Dallas key first, then records the contact's levels and decodes them.
+`ikey emulate` plays the key's levels on the contact in a loop. A Metakom number needs every byte
+with an even number of 1 bits (readers check it); `ikey` refuses any other. Writing Cyfral or
+Metakom blanks (TM01x) is not there. **On the Flipper this is not working yet:** the capture and
+playback hardware part comes after the first version, and until then `ikey` says "not implemented
+on this board yet, Dallas only" (Dallas keys work as before). It works in QEMU. Programs use
+`ioctl(IBIOCCAPT)` and `ioctl(IBIOCPLAY)` (`<minix/ibutton.h>`) with the line code in
+`src/lib/ibkey`.
+
+An iButton app in the launcher is **(planned)**.
 
 ## Voltages on the header pins (`/dev/adc`)
 
@@ -85,8 +114,8 @@ is refused. `peak` is the strongest of the samples taken during the read (about 
 remote are not missed. The frequency read back is what the chip really tuned (in steps of about 400 Hz). The
 signal strength is in dBm: around −100 means quiet, a remote pressed nearby shows −40 or more. The
 radio keeps listening until `echo 0`, or until nobody has read it for about a minute (it draws
-about 15 mA while listening). A spectrum view and
-recording will build on this.
+about 15 mA while listening). The **Spectrum** app on the launcher sweeps it across a band
+([Sub-GHz](subghz.md#spectrum-what-is-on-the-air-launcher-app)).
 
 ## 125 kHz RFID tags (`rfid`, `/dev/rfid`)
 
@@ -103,10 +132,14 @@ EM4100 04 00 98 3D C5
 The first line is the protocol and the tag's data as the stock app shows and saves it (`Data:` in
 its `.rfid` files); the lines under it are what the stock app's info screen shows. `rfid -r` also
 prints the timings, `-n N` makes up to N attempts of half a second (default 4, more while a tag
-has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. Without a
-tag it says "no tag". `rfid -c psk` reads with the field PSK tags (Indala, Keri, Nexwatch) need,
-62.5 kHz at 25 %, and `rfid -c 134` with 134.2 kHz for FDX-B animal tags; their decoders do not
-use these captures yet (T19b), so for now use them with `-r` to see the timings. Members of `gui`
+has been seen but not yet confirmed), `-o FILE` also saves the tag as a `.rfid` file. When those
+short reads find nothing, `rfid` listens for up to 3 seconds more without a gap, which reads
+tags whose frames are longer than one short read (EM4100 at RF/32, FDX-B, Viking, Jablotron,
+Gallagher...) and the FSK ones (HID, AWID). That listening skips the first 450 ms, while the
+field settles, as the stock reader does. If there is still nothing, `rfid` switches the field to
+the one PSK tags need (62.5 kHz at 25 %) and listens 2 seconds more for Indala, Keri, Nexwatch
+and Idteck. Without a tag it says "no tag", after about 8 seconds. `rfid -c psk` starts with the
+PSK field, and `rfid -c 134` uses 134.2 kHz for FDX-B animal tags. Members of `gui`
 and root may read `/dev/rfid`: each read turns the field on for half a second and returns the
 times between the changes of the tag's signal, in µs, as 32-bit numbers; `ioctl(RFIDIOCCARRIER)`
 chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125 kHz.
@@ -124,17 +157,40 @@ chooses the field (`<minix/rfid.h>`), and closing the device sets it back to 125
 | Jablotron | Jablotron | diphase RF/64 | yes | yes |
 | GProxII | Guardall | biphase RF/64 | yes | yes |
 | PAC/Stanley | | direct RF/32 | yes | yes |
-| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox, IoProxXSF | HID and others | FSK | **(planned)** | **(planned)** |
-| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | **(planned)** | **(planned)** |
+| H10301, HIDProx, HIDExt, AWID, FDX-A, Pyramid, Paradox | HID and others | FSK | yes | yes (run list) |
+| IoProxXSF | Kantech | FSK | yes | **(planned)** |
+| Indala26, Indala224, Idteck, Keri, Nexwatch | Motorola and others | PSK | yes | yes (run list) |
 
 Every protocol can be **written** (below). Apart from EM4100 at RF/64, the protocols have been
 tested on the PC so far (`make lfrfidtest`); the checks with real tags and readers follow.
-Reading and emulating the FSK and PSK ones waits for
-more work (T19b): a capture longer than 512 edges, decoding with the PSK carrier (`-c psk`,
-already there), and emulation longer than 512 segments (their frames are 540 to 3534).
+FSK and PSK frames are 540 to 3534 segments long, more than the 512 of the plain emulation;
+`rfid emulate` plays them as a run list instead (equal segments in a row are one run: 17 to 201
+runs), refilled into a small ring while the reader reads (`ioctl(RFIDIOCEMURUN)`). They have
+been checked on the PC, not yet with a reader. IoProxXSF's encoder never repeats exactly, so it
+has no loop to play yet.
 
-Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, as the stock
-firmware does):
+Reading was checked on the device on 2026-11-19 with T5577 fobs written as HIDProx, AWID,
+Indala26, Keri, PAC/Stanley, Electra and EM4100: all seven read. From a second Flipper that
+emulates the tag, 18 of 25 protocols read; HIDProx, HIDExt, AWID, Pyramid and Indala224 do not
+that way (a Flipper's emulation is a weaker signal than a tag's), and EM4100 at RF/16 is too
+fast for the Flipper's receiver, on the stock firmware too.
+
+For tags whose frames are long (FSK, PSK), `ioctl(RFIDIOCSTREAM)` captures without a gap: the
+edges go round and round into a ring in the program's memory, `read` says which half is new, and
+falling behind is reported (`EOVERFLOW`), never silently. `rfid -s 10` (with `-c psk` for PSK
+tags) captures for 10 seconds and prints the halves, edges, overruns and the range of the times:
+a quick check that nothing is lost. Long frames are emulated the same way in reverse: `ioctl(RFIDIOCEMURUN)` takes a list of runs
+(segments of equal length and load) and the kernel refills a small ring from it while the reader's
+own carrier plays it; `rfid emulate -runs EM …` uses it for an EM4100 number.
+
+A tag no decoder knows can be recorded as it is: `rfid raw /home/flipper/tag.ask.raw` (10 s; `-t
+SECS` for longer, `-c psk` for PSK tags, Ctrl-C ends it early) writes the signal in the same RAW
+format as the Unleashed firmware (`.ask.raw`, `.psk.raw`), so the file can be looked at on a PC
+(`flipper/tools/lfrawdump.py FILE`) or on a Flipper with Unleashed.
+
+Writing a blank fob or card (T5577, the common kind; EM4305 is tried next, then the Hitag micro
+"magic" chips ID8265, ID8210 and H5.5 with their three passwords, as the Unleashed firmware does;
+`-hitag` goes straight to those):
 
 ```
 rfid write EM 00 DE AD BE EF
@@ -305,8 +361,10 @@ endian; 0 Hz is a rest. Up to 64 notes per write; the write returns when they ha
 
 **Volume.** A note with the frequency `0xFFFF` sets the volume, 0–100, to its duration field and
 plays nothing (a value above 100 counts as 100). It holds for the notes after it, in the same or
-later writes, until the next such note or until the device is closed. Closing sets 100 again, so
-programs that never set a volume sound as before. 100 is the full sound; the loudness follows a
+later writes, until the next such note or until the device is closed; closing goes back to the
+system's default volume, so programs that never set a volume sound at that level. A note of
+`0xFFFE` sets the volume the same way and also makes it the system's default, kept over a restart
+(Sound in SETTINGS uses it). The default is 100 until something sets it. 100 is the full sound; the loudness follows a
 cubic curve, as on the stock firmware (50 is about an eighth of the power, 20 is quiet but
 audible, 0 is silent).
 
@@ -335,7 +393,7 @@ The RGB LED next to the screen. Root and the `gui` group (the launcher's apps) m
 
 Three bytes set red, green and blue directly (0–255 each). A text line starts a pattern.
 The first four run in the LED driver chip itself, so the CPU can sleep meanwhile; the colour
-sequences (`rainbow`, `dual`, `dualsoft`, `morph`) are stepped by the kernel, which wakes the
+sequences (`rainbow`, `ikurrina`, `dual`, `dualsoft`, `morph`) are stepped by the kernel, which wakes the
 CPU briefly up to 25 times a second:
 
 ```
@@ -353,9 +411,11 @@ echo off >/dev/led
 | `double`| two short flashes, then a pause of about 1.6 s|
 | `pulse` | fades in and out, about every 1.8 s           |
 | `rainbow`| the six colours of the pride flag, 1 s each, gliding into the next in 0.2 s |
+| `ikurrina` | red, green and white, the colours of the Basque flag (the ikurriña), 1 s each, gliding into the next in 0.2 s; `ikurina` works too. The kernel starts it with the boot screen and `/etc/rc` ends it when the launcher takes over |
 | `dual A B` | switches between colours A and B every 0.5 s |
 | `dualsoft A B` | A and B, 1 s each, gliding into the other in 0.2 s |
 | `morph A B` | glides from A to B and back, 10 s for the round |
+| `console C` | a short flash of colour C whenever data goes over the USB console, in either direction: you see that the computer is talking to the Flipper |
 
 Colours: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, or any `#rrggbb` (hex,
 as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark colours such as
@@ -363,3 +423,9 @@ as on the web, corrected for the LEDs so that `#ff8000` looks orange; very dark 
 colour fails with "Invalid argument" (EINVAL). Setting the colour with three bytes, or `off`,
 stops the pattern; the screen's backlight does not (the chip has three
 program engines: one fades the backlight, two run the LED). The pattern stops with a reset.
+
+`echo console cyan >/dev/led` is useful when the Flipper is driven from a computer (scripts,
+`tools/twoflip.py`): every burst of USB console traffic flashes the LED for 40 ms, with at least
+60 ms dark in between. It is off until you switch it on, ends with `echo off >/dev/led` or any
+other pattern, and is not kept over a reboot (to have it always, add the line to `/etc/rc.conf`, which `/etc/rc`
+reads at every boot).

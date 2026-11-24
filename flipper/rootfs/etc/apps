@@ -1,7 +1,23 @@
-# Apps on the launcher's main screen: Label:user:/program arg ...
-# Apps run as the given user, in group "gui" (screen, buttons, LED).
-Console:nobody:/bin/console
-About:nobody:/bin/info
-Lights:nobody:/bin/lights
-Power:nobody:/bin/power
-RFID:nobody:/bin/lfrfid
+# Apps on the launcher's main screen, one per line:
+#	Label:user:/program arg ...
+#	Label:user:icon:/program arg ...
+# icon: @name (built in: app console info light power battery rfid nfc
+# subghz ir ibutton gpio usb ble clock alarm bell timer sensor game music
+# tools file settings), # and 12 hex digits (8x6 pixels, a byte a row,
+# top first), 1-2 characters, or empty.  Apps run as the given user, in
+# group "gui" (screen, buttons, LED).
+Console:nobody:@console:/bin/console
+About:nobody:@info:/bin/info
+Lights:nobody:@light:/bin/lights
+Power:nobody:@power:/bin/power
+RFID:nobody:@rfid:/bin/lfrfid
+Spectrum:nobody:@subghz:/bin/spectrum
+Charging:nobody:@battery:/bin/chargescreen
+Sub-GHz:nobody:@subghz:=/bin/subghzui
+Sub-GHz Remote:nobody:@subghz:=/bin/subrem
+Infrared:nobody:@ir:/bin/infrared
+iButton:nobody:@ibutton:=/bin/ibuttonui
+GPIO:nobody:@gpio:=/bin/gpioui
+Archive:nobody:@file:=/bin/archive
+NFC:nobody:@nfc:=/bin/nfc
+Snake:nobody:@game:=/bin/snakeui

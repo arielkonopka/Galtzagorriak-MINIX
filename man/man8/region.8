@@ -1,0 +1,108 @@
+.TH REGION 8
+.SH NAME
+region \- the radio region: which country's Sub-GHz rules apply
+.SH SYNOPSIS
+.nf
+\fBregion\fR
+\fBregion list\fR
+\fBregion show\fR [\fICC\fR]
+\fBregion check\fR \fICC MHZ\fR [\fB\-p\fR \fIpreset\fR] [\fB\-P\fR \fIdbm\fR] [\fB\-c\fR] [\fB\-a\fR \fIms\fR]
+\fBregion set\fR [\fB\-y\fR] [\fB\-f\fR] \fICC\fR
+\fBregion compile\fR \fICC file\fR
+.fi
+.SH DESCRIPTION
+Every Sub-GHz transmit is checked against the rules of one country, the
+radio region (Galtzagorriak MINIX, spec section Q).
+.I CC
+is its ISO 3166 two-letter code.
+The tables are text files,
+.BI /usr/share/region/ CC .reg ,
+one row per band with its power, duty cycle, bandwidth, kind of use and
+the legal source.
+.PP
+Without arguments,
+.B region
+prints the code in
+.B /etc/flipper/region
+and the one the kernel uses.
+.B list
+prints the countries with a table,
+.B show
+a country's table (default: the region set): the band, the power limit,
+the CC1101 step used (PA), the share of any hour that may be sent, the
+largest bandwidth and the kind of use.
+Rows marked
+.B ?
+are not checked against the national text yet and are never used.
+.PP
+.B check
+says whether one transmit at
+.I MHZ
+would be allowed, and in which row; it never sends.
+.B \-p
+is a
+.BR gmodem (1)
+preset (default std),
+.B \-P
+the power in dBm (default \-30),
+.B \-c
+a remote's code instead of data,
+.B \-a
+the airtime in ms (default 1000).
+.PP
+.B set
+(root only) checks the table (and its
+.B Base:
+file), prints it, compiles it into the region record, checks the
+files' SHA-256 against the list of the tables shipped with this firmware,
+asks "I will use this device under the rules of CC" (\fB\-y\fR answers
+yes), writes the code to
+.B /etc/flipper/region
+and logs the change, with the hashes, to
+.BR /usr/adm/messages .
+.B /etc/rc
+gives the code to the kernel at the next boot.
+A code without a table is refused: transmit stays off.
+.PP
+A file whose hash is not in the list is a
+.IR "custom table" :
+.B set
+says so, prints its hash and the shipped one of the same code, and
+refuses unless
+.B \-f
+is given.
+You are responsible for a custom table; the log line says
+.B custom
+and gives its hash.
+.PP
+The record (16 bytes, plus 16 for each row not marked
+.BR ? ,
+at most 528 bytes) carries the magic RGN1, the code, the row count and
+a CRC-32; \fBset\fR prints its size and CRC.
+.B compile
+writes it to
+.I file
+(any user; for tests and tools).
+The flash copy of the record, written once per change of region so the
+limits hold without the card, comes with the installed-region record of
+task T32b; until then the kernel keeps its own band set per country.
+.SH FILES
+.TP 25
+.B /usr/share/region/*.reg
+the tables (base package)
+.TP
+.B /etc/flipper/region
+the code set
+.TP
+.B /usr/adm/messages
+the log of every \fBregion set\fR
+.SH "SEE ALSO"
+.BR gmodem (1),
+.BR subghz (1).
+.SH NOTES
+You are responsible for using the radio legally where you are: when you
+travel, set the region of the country you are in.
+The tables follow the law, not the stock firmware's region data, which
+allows more.
+Tables exist for the 27 EU member states (each is the EU table plus its
+own unchecked 870/915 MHz rows), EU, NO, GB, AL, BA, MK, US and CA.

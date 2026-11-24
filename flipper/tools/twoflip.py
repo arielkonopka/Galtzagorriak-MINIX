@@ -6,6 +6,7 @@ receiving or reading.
 
 Usage: twoflip.py [-m PORT] [-u PORT] [-r N] [--map FILE] [--baseline FILE]
                   [--log FILE] [--t5577] [--rw1990] [PATTERN ...]
+       twoflip.py --peer-minix [-m PORT] [-u PORT] [-r N] [modem...]
        twoflip.py --list [PATTERN ...] | --ports | --selftest
 
 Both Flippers hang on the same PC by USB.  The MINIX one is logged in as
@@ -44,6 +45,10 @@ PATTERN selects rows by id (shell-style, or a prefix): "rfid", "ir-*-m2u",
   --rw1990        a blank RW1990 key is at hand: run the iButton write rows
   --freq HZ       Sub-GHz frequency of the raw and Princeton rows
   --log FILE      everything both consoles said, with times
+  --peer-minix    the second Flipper (-u) runs MINIX too: only the "modem"
+                  rows run (spec section P: data modems between two MINIX
+                  Flippers, which the Unleashed firmware does not have);
+                  without it those rows are N/A
 
 Linux, macOS and Windows.  pyserial is needed on Windows and for --ports
 ("pip install pyserial"); on Linux and macOS the script runs without it.
@@ -165,7 +170,11 @@ class Port:
 
 	def wait(self, pat, secs):
 		"""The first match of pat after pos (pos moves past it), or None
-		after secs."""
+		after secs.  USB delivers a line in pieces: a pattern that ends
+		in a number must also require the character after it ((?=\\D),
+		(?=[^0-9A-F]), (?=\\r?\\n)), or "0x08" can match as "0x0" and
+		"@@R=127" as "@@R=12" (seen on the device; the simulator splits
+		lines to catch it)."""
 		end = time.time() + secs
 		rx = re.compile(pat)
 		while True:
@@ -260,7 +269,7 @@ class Minix(Port):
 			for ln in body.split("\n"):
 				self.write(ln + "\r")
 			self.write("TFEOF\r")
-		m = self.wait(rb"@@R=(\d+)", secs)
+		m = self.wait(rb"@@R=(\d+)(?=\D)", secs)
 		if not m:
 			self.sync()
 			return None, self.text(start)
@@ -322,8 +331,32 @@ LF_PROTOCOLS = [("EM4100", 5), ("EM4100/32", 5), ("EM4100/16", 5),
 PATTERN = "1A2B3C4D5E6F708192A3B4C5D6E7F8091A2B3C4D5E6F708192A3B4C5D6E7F8"
 
 
+# Protocols that do not carry every bit of the pattern: the pattern's
+# canonical form, the bytes the Unleashed code itself gives back after
+# encoding and decoding it (found on the device 2026-11-19 and checked on
+# the host with the same code: Paradox drops the last nibble, Gallagher
+# bytes 2 and 5, Radio Key moves a parity bit, FDX-A needs its parity,
+# Keri sets bit 31, Idteck has the fixed "IDTK" prefix; HIDProx, AWID,
+# HIDExt and Indala26 do not send their last bits, which a reader leaves 0).
+# Computed by encoding with one protocol dictionary and decoding with a
+# fresh one: decoding with the encoder's own dictionary keeps the bits a
+# frame does not carry and hides that.  Nexwatch, GProxII,
+# Noralsy and Indala224 do not take the pattern at all (their checks
+# fail): they use the fixed vectors of flipper/tests/lfrfid/lfrfidtest.c,
+# which make lfrfidtest round-trips.
+LF_CANONICAL = {"Paradox": "1A2B3C4D5E60", "Gallagher": "1A003C4D006F7081",
+	"Radio Key": "1A693C4D5E6F", "FDX-A": "1AABBCCD5E",
+	"Keri": "9A2B3C4D", "Idteck": "4944544B5E6F7081",
+	"HIDProx": "1A2B3C4D5E60", "AWID": "1A2B3C4D5E6F708180",
+	"HIDExt": "1A2B3C4D5E6F708192A3B4C0", "Indala26": "1A2B3C48",
+	"Nexwatch": "00345678DC0365AA",
+	"GProxII": "FA0093200C421A161D080A00",
+	"Noralsy": "BB0456789000AC1B1EA80000",
+	"Indala224": "80000001B23EAEB0FFE8063AB156010F19D3457F5A3C96E12D4B78A5"}
+
+
 def lf_data(proto, n):
-	return PATTERN[:2 * n]
+	return LF_CANONICAL.get(proto, PATTERN[:2 * n])
 
 
 # IR: one message per protocol; values from Unleashed's own infrared unit
@@ -408,7 +441,46 @@ def mx_lf_cmd(verb, proto, data):
 	return 'rfid %s "%s" %s' % (verb, proto, data)
 
 
+# The RFID rows depend on how far apart the two antennas are (devguide
+# 6.4, checked 2026-11-19 with the Flippers in their silicone cases): the
+# ASK and FSK rows read with a thick spacer (about 5 mm of card), the PSK
+# rows with none (their short loads are too weak further away; with a thin
+# card 3 of 5, and that close most ASK/FSK rows are not read).  --spacer
+# says which is in; "ask" runs the thick rows first, then asks for the
+# change.
+LF_PSK = {"Keri", "Indala26", "Idteck", "Nexwatch", "Indala224"}
+SPACERS = ("none", "thin", "thick")
+
+
+def lf_spacers(proto):
+	"""The spacers a protocol's rows read with."""
+	return ("none",) if proto in LF_PSK else ("thick",)
+
+
+def spacer_gate(opt, proto):
+	"""None if the row may run with the spacer in, else its BLOCKED
+	status; with --spacer ask, ask for the change first."""
+	sp = getattr(opt, "spacer", None)
+	want = lf_spacers(proto)
+	if sp is None:
+		return None
+	if sp == "ask":
+		if getattr(opt, "spacer_now", None) not in want:
+			opt.spacer_now = want[-1]
+			ask(opt, "RFID: put the two Flippers back to back %s." % (
+				"with no spacer (cases on, backs touching)"
+				if want[-1] == "none" else
+				"with the thick spacer between them (about 5 mm of card)"))
+		return None
+	if sp not in want:
+		return "BLOCKED", "needs the %s spacer (--spacer %s or ask)" % (
+			" or ".join(want), want[-1])
+	return None
+
+
 def rfid_u2m(ul, mx, opt, proto, data):
+	# reading is not gated by --spacer: with rfid from #357 ASK and PSK
+	# tags read at every spacer (FSK ones at some; devguide 6.4)
 	if " " in proto:
 		return "BLOCKED", "the Unleashed CLI cannot take a protocol name " \
 			"with a space"
@@ -429,10 +501,15 @@ def ul_read_lf(ul):
 
 
 def rfid_m2u(ul, mx, opt, proto, data):
+	g = spacer_gate(opt, proto)
+	if g:
+		return g
+	# the run list of a long PSK frame takes a few seconds to find
+	# (Nexwatch 3.9 s on the device)
 	ok = mx.start(mx_lf_cmd("emulate", proto, data),
-		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 3)
+		rb"emulating|[Uu]sage|not found|[Uu]nknown|rror", 8)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "needs T19b" in txt:
 		mx.stop()
 		return "MISSING", "rfid emulate: " + last(txt)
 	if not ok:
@@ -481,8 +558,8 @@ def rfid_write_m2u(ul, mx, opt, proto, data):
 
 # --- infrared ------------------------------------------------------------
 
-MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)"
-UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)"
+MX_IR = rb"(\w+) address 0x([0-9a-fA-F]+) command 0x([0-9a-fA-F]+)(?=[^0-9a-fA-F])"
+UL_IR = rb"(\w+), A:0x([0-9A-Fa-f]+), C:0x([0-9A-Fa-f]+)(?=[^0-9A-Fa-f])"
 
 
 def ir_u2m(ul, mx, opt, p, a, c):
@@ -538,7 +615,7 @@ def close_to(want, got):
 def ir_raw_u2m(ul, mx, opt):
 	mx.start("ir rx -r -n 1")
 	ul.run("ir tx RAW F:38000 DC:33 " + " ".join(map(str, IR_RAW)), 5)
-	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)", 3)
+	m = mx.wait(rb"(?m)^\d+:((?: \d+)+)(?=\r?\n)", 3)
 	out = mx.stop()
 	if missing(None, out):
 		return "MISSING", "ir rx -r: " + last(out)
@@ -557,7 +634,7 @@ def ir_raw_m2u(ul, mx, opt):
 	if missing(rc, out):
 		ul.stop()
 		return "MISSING", "ir tx raw: " + last(out)
-	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)", 3)
+	m = ul.wait(rb"RAW, \d+ samples:\s*([\d ]+)(?=\r?\n)", 3)
 	ul.stop()
 	if not m:
 		return "FAIL", "Unleashed received nothing"
@@ -569,7 +646,7 @@ def ir_raw_m2u(ul, mx, opt):
 
 # --- iButton -------------------------------------------------------------
 
-UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)"
+UL_KEY = rb"(Dallas|Cyfral|Metakom) ([0-9A-F]+)(?=[^0-9A-F])"
 
 
 def od_bytes(text):
@@ -608,9 +685,21 @@ def ib_dev_u2m(ul, mx, opt, p, key):
 	return "PASS", "MINIX read ROM " + got
 
 
+def ikey_knows(mx, p):
+	"""Whether MINIX's ikey names the key type p in its usage (Dallas
+	only until spec R6.7 part 3b brings Cyfral and Metakom), cached."""
+	k = "ikey:" + p
+	if k not in mx.have:
+		rc, out = mx.run("ikey 2>&1", 10)
+		mx.have[k] = p in out
+	return mx.have[k]
+
+
 def ib_u2m(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	if not ul.start("ikey emulate %s %s" % (p, key)):
 		return "BLOCKED", "Unleashed refused: " + last(ul.stop())
 	mx.start("ikey read")
@@ -639,10 +728,12 @@ def ul_read_key(ul):
 def ib_m2u(ul, mx, opt, p, key):
 	if not mx.exists("ikey"):
 		return "MISSING", "no ikey command"
+	if not ikey_knows(mx, p):
+		return "MISSING", "ikey has no %s keys (spec R6.7 part 3b)" % p
 	mx.start("ikey emulate %s %s" % (p, key),
-		rb"[Ee]mulat|[Uu]sage|not found|[Uu]nknown", 3)
+		rb"Emulating |so far|[Uu]sage|not found|[Uu]nknown", 3)
 	txt = mx.text(mx.started)
-	if missing(None, txt):
+	if missing(None, txt) or "so far" in txt:
 		mx.stop()
 		return "MISSING", "ikey emulate: " + last(txt)
 	m = ul_read_key(ul)
@@ -694,6 +785,16 @@ MX_SG = r"rssi=(-?\d+)(?: peak=(-?\d+))?"
 UL_TX_REFUSED = rb"restricted|only be used for RX|must be in|[Ee]rror|failed"
 
 
+def ul_refused(out):
+	"""Why Unleashed did not transmit, with the usual cause named."""
+	why = last(out)
+	if "failed to start" in why:
+		why += " (Unleashed unlshd-095 CLI bug: the internal CC1101 has " \
+			"no begin(), so every subghz tx/rx on device 0 fails; use " \
+			"another Unleashed release)"
+	return why
+
+
 def sg_level(mx):
 	rc, out = mx.run("cat /dev/subghz", 5)
 	m = re.search(MX_SG, out)
@@ -719,7 +820,7 @@ def subghz_rssi_u2m(ul, mx, opt, freq):
 		out = ul.stop()
 		mx.run("echo 0 > /dev/subghz")
 		return "BLOCKED", "Unleashed does not transmit at %d Hz here: %s" \
-			% (freq, last(out))
+			% (freq, ul_refused(out))
 	loud = [x for x in (sg_level(mx) for _ in range(6)) if x is not None]
 	if ul.wait(UL_PROMPT, 15) is None:
 		ul.stop()
@@ -769,6 +870,22 @@ def judge_sub(f, out, who, nothing):
 		who, f["proto"])
 
 
+# A remote sends its frame several times; most decoders report a frame only
+# once they have seen it twice in a row (or after a first frame's guard
+# time), so one transmission is not enough.
+SUB_REPEAT = 10
+# The reference's tx_from_file ends after about a second whatever the repeat
+# count says (found on the device, #365): a listening window of several
+# seconds holds one short burst, and a receiver that is deaf for a moment
+# (or a burst that comes before it listens) misses it.  So the file is sent
+# SUB_SENDS times in a row inside the window.
+SUB_SENDS = 4
+# Unleashed unlshd-093 says "Error transmitter" and then reboots (its USB
+# port goes away) on tx_from_file with these files.
+UL_TX_CRASH = {"Proteco": "Unleashed unlshd-093 reboots on tx_from_file of this file (its own bug)", "Freezer": "Unleashed unlshd-093 reboots on tx_from_file "
+	"of this file (its own bug)"}
+
+
 def subghz_decode_u2m(ul, mx, opt, f):
 	if not mx.exists("subghz"):
 		return "MISSING", "no subghz command (MINIX: subghz rx FREQ)"
@@ -781,10 +898,14 @@ def subghz_decode_u2m(ul, mx, opt, f):
 	if missing(None, txt):
 		mx.stop()
 		return "MISSING", "subghz rx: " + last(txt)
-	ok, uo = ul.run("subghz tx_from_file %s 1 0" % path, 30)
-	if re.search(UL_TX_REFUSED.decode(), uo):
+	if f["proto"] in UL_TX_CRASH:
 		mx.stop()
-		return "BLOCKED", "Unleashed: " + last(uo)
+		return "BLOCKED", UL_TX_CRASH[f["proto"]]
+	for _ in range(SUB_SENDS):
+		ok, uo = ul.run("subghz tx_from_file %s %d 0" % (path, SUB_REPEAT), 30)
+		if re.search(UL_TX_REFUSED.decode(), uo):
+			mx.stop()
+			return "BLOCKED", "Unleashed: " + ul_refused(uo)
 	mx.wait(re.escape(f["proto"]).encode(), 3)
 	time.sleep(0.5)
 	out = mx.stop()
@@ -908,11 +1029,82 @@ def nfc_m2u(ul, mx, opt, f):
 		last(out, 2))
 
 
+# --- data modems between two MINIX Flippers (spec section P) -----------
+
+# A test text of 1 KB, the same every run, a little Basque in it.
+MODEM_TEXT = "".join("%04d Kaixo, galtzagorriak! Datuak irratiz doaz, "
+	"bit bat, bi bit, hiru bit.\n" % i for i in range(16))
+MODEM_IN = MX_TMP + "/mdm.in"
+MODEM_OUT = MX_TMP + "/mdm.out"
+MODEM_MEDIA = [("rfid", ["fast", "robust"]),
+	("subghz", ["narrow", "std", "wide", "max"]),
+	("nfc", [""]), ("ble", [""])]
+
+
+def modem_row(ul, mx, opt, medium, preset, dirn):
+	"""MINIX sends MODEM_TEXT with `gmodem send`, the other MINIX Flipper
+	receives it with `gmodem recv`; PASS when the checksums agree."""
+	if not opt.peer_minix:
+		return "N/A", "needs a second Flipper with MINIX (--peer-minix): " \
+			"the Unleashed firmware has no such modem"
+	tx, rx = (mx, ul) if dirn == "m2u" else (ul, mx)
+	for side, name in ((tx, "sender"), (rx, "receiver")):
+		if not side.exists("gmodem"):
+			return "MISSING", "no gmodem command on the " + name
+	p = " -p " + preset if preset else ""
+	if not tx.upload(MODEM_IN, MODEM_TEXT):
+		return "FAIL", "could not write " + MODEM_IN
+	rc, want = tx.run("cksum < " + MODEM_IN, 10)
+	rx.run("rm -f " + MODEM_OUT, 5)
+	rx.start("gmodem recv -m %s%s -o %s -t 60; echo @@M\"\"=$?"
+		% (medium, p, MODEM_OUT))
+	time.sleep(1)
+	tx.start("gmodem send -m %s%s %s" % (medium, p, MODEM_IN))
+	m = rx.wait(rb"@@M=(\d+)(?=\D)", 180)
+	txt = tx.stop()
+	got = rx.stop()
+	if missing(None, txt) or missing(None, got):
+		return "MISSING", "gmodem: " + last(txt if missing(None, txt)
+			else got)
+	if not m:
+		return "FAIL", "the receiver did not finish in 180 s: " + last(got)
+	if m.group(1) != b"0":
+		return "FAIL", "gmodem recv exit %s: %s" % (m.group(1).decode(),
+			last(got))
+	rc, have = rx.run("cksum < " + MODEM_OUT, 10)
+	if last(have) != last(want):
+		return "FAIL", "checksums differ: sent %s, got %s" % (last(want),
+			last(have))
+	s = re.search(r"(\d+) bytes, (\d+) frames, (\d+) s", got)
+	return "PASS", ("%s B in %s s" % (s.group(1), s.group(3))) if s else ""
+
+
 # --- the rows ------------------------------------------------------------
 
 def rid(*parts):
 	return "-".join(re.sub(r"[^A-Za-z0-9.+-]+", "_", p).strip("_")
 		for p in parts)
+
+
+# Sub-GHz: where the reference Flipper may transmit for a row.  The
+# Unleashed Flipper applies no region (it showed provisioned "00" with a
+# valid one), so the script must: by default only the EU short-range
+# bands (433.05-434.79, 868.0-868.6 MHz).  315 MHz is not allowed in the
+# EU; it ran once by mistake on 2026-11-18.  --region US or any to change.
+TX_BANDS = {"EU": [(433050000, 434790000), (868000000, 868600000)],
+	"US": [(304100000, 321950000), (433050000, 434790000),
+		(902000000, 928000000)]}
+
+
+def tx_allowed(opt, hz):
+	if opt.region == "any":
+		return True
+	return any(lo <= hz <= hi for lo, hi in TX_BANDS[opt.region])
+
+
+def tx_refused(ul, mx, opt, hz):
+	return "BLOCKED", "%.2f MHz is not a transmit band of region %s " \
+		"(--region)" % (hz / 1e6, opt.region)
 
 
 def build_rows(opt):
@@ -947,18 +1139,42 @@ def build_rows(opt):
 		IB_VECTORS[0][1])
 	for fr in (315000000, 433920000, 868350000):
 		add("subghz", "level %.2f MHz" % (fr / 1e6), "u2m",
-			subghz_rssi_u2m, fr)
+			subghz_rssi_u2m if tx_allowed(opt, fr) else tx_refused, fr)
 	add("subghz", "raw timings", "u2m", subghz_raw_u2m)
 	add("subghz", "tx Princeton", "m2u", subghz_tx_m2u)
 	add("subghz", "chat", "u2m", subghz_chat, "u2m")
 	add("subghz", "chat", "m2u", subghz_chat, "m2u")
 	for f in sub_files():
+		if not tx_allowed(opt, f["freq"]):
+			for d in ("u2m", "m2u"):
+				add("subghz-decode", f["proto"], d, tx_refused, f["freq"])
+			continue
 		add("subghz-decode", f["proto"], "u2m", subghz_decode_u2m, f)
 		add("subghz-decode", f["proto"], "m2u", subghz_decode_m2u, f)
 	for f in nfc_files():
 		add("nfc", f["file"][:-4], "u2m", nfc_u2m, f)
 		add("nfc", f["file"][:-4], "m2u", nfc_m2u, f)
+	for medium, presets in MODEM_MEDIA:
+		for pr in presets:
+			feat = medium + (" " + pr if pr else "")
+			add("modem", feat, "m2u", modem_row, medium, pr, "m2u")
+			add("modem", feat, "u2m", modem_row, medium, pr, "u2m")
+	if getattr(opt, "peer_minix", False):	# the rest needs Unleashed
+		rows = [r for r in rows if r[1] == "modem"]
 	return rows
+
+
+def spacer_order(rows):
+	"""The rfid rows that need no spacer after the others, so that
+	--spacer ask asks only once."""
+	rf = [i for i, r in enumerate(rows) if r[1] == "rfid"]
+	if not rf:
+		return rows
+	thin = [rows[i] for i in rf if "thick" not in lf_spacers(rows[i][5][0])]
+	thick = [rows[i] for i in rf if "thick" in lf_spacers(rows[i][5][0])]
+	first = rf[0]
+	rest = [r for i, r in enumerate(rows) if i not in rf]
+	return rest[:first] + thick + thin + rest[first:]
 
 
 def select_rows(rows, pats):
@@ -1016,6 +1232,7 @@ def write_map(path, res, info):
 	L = ["# Coverage map: Galtzagorriak MINIX vs Unleashed", "",
 		"Made by `flipper/tools/twoflip.py` on %s." % info["date"],
 		"MINIX: %s. Unleashed: %s." % (info["minix"], info["unleashed"]),
+		"RFID spacer: %s (devguide 6.4)." % (info.get("spacer") or "not given"),
 		"", "Statuses: PASS works; FAIL MINIX has it but it is wrong; "
 		"MISSING not in MINIX yet; BLOCKED the Unleashed side could not "
 		"do its part; N/A needs extra hardware; INFO measurement only.",
@@ -1134,6 +1351,9 @@ def login(mx, password):
 def versions(ul, mx):
 	rc, out = mx.run("ver", 5)
 	mv = last(out) if rc == 0 else "?"
+	if isinstance(ul, Minix):		# --peer-minix
+		rc, out = ul.run("ver", 5)
+		return mv, "MINIX " + (last(out) if rc == 0 else "?")
 	ok, uo = ul.run("info device", 5)
 	m = (re.search(r"firmware\.version\s*:\s*(\S+)", uo)
 		or re.search(r"firmware\.branch\.name\s*:\s*(\S+)", uo))
@@ -1146,8 +1366,14 @@ def main():
 	ap.add_argument("-u", "--unleashed", help="Unleashed Flipper's port")
 	ap.add_argument("-r", "--repeat", type=int, default=1)
 	ap.add_argument("--freq", type=int, default=433920000)
+	ap.add_argument("--region", choices=["EU", "US", "any"], default="EU",
+		help="Sub-GHz transmit bands the rows may use (default EU)")
 	ap.add_argument("--map")
 	ap.add_argument("--baseline")
+	ap.add_argument("--spacer", choices=SPACERS + ("ask",),
+		help="RFID: the spacer between the Flippers (devguide 6.4); "
+		"rows that need another are BLOCKED; ask: thick rows first, then "
+		"it asks for the change")
 	ap.add_argument("--t5577", action="store_true")
 	ap.add_argument("--rw1990", action="store_true")
 	ap.add_argument("--log")
@@ -1155,10 +1381,16 @@ def main():
 	ap.add_argument("--ports", action="store_true")
 	ap.add_argument("--password")
 	ap.add_argument("--selftest", action="store_true")
+	ap.add_argument("--peer-minix", action="store_true")
 	ap.add_argument("patterns", nargs="*")
 	opt = ap.parse_args()
+	if not tx_allowed(opt, opt.freq):
+		ap.error("--freq %d is not a transmit band of region %s (use --region)"
+			% (opt.freq, opt.region))
 
 	rows = select_rows(build_rows(opt), opt.patterns)
+	if opt.spacer == "ask":
+		rows = spacer_order(rows)
 	if not rows:
 		sys.exit("twoflip: no row matches (see --list)")
 	if opt.list:
@@ -1179,6 +1411,8 @@ def main():
 		return 0
 
 	mport, uport = opt.minix, opt.unleashed
+	if opt.peer_minix:
+		return main_peer_minix(opt, rows, mport, uport)
 	if not mport or not uport:
 		for path, desc in candidates():
 			if path in (mport, uport):
@@ -1206,6 +1440,33 @@ def main():
 	return finish(ul, mx, opt, rows)
 
 
+def main_peer_minix(opt, rows, mport, uport):
+	"""Both Flippers run MINIX: -m is "this" one, -u the peer."""
+	if not mport or not uport:
+		for path, desc in candidates():
+			if path in (mport, uport):
+				continue
+			if probe(path) not in ("minix", "login", "user shell"):
+				continue
+			if not mport:
+				mport = path
+			elif not uport:
+				uport = path
+	if not mport or not uport:
+		sys.exit("twoflip: --peer-minix needs two MINIX Flippers (found %s, "
+			"%s); run with --ports, then give -m and -u" % (mport, uport))
+	print("MINIX on %s, MINIX peer on %s" % (mport, uport), flush=True)
+	log = open(opt.log, "w") if opt.log else None
+	mx = Minix(mport, "M", log)
+	ul = Minix(uport, "P", log)
+	pw = opt.password or os.environ.get("TWOFLIP_PASSWORD")
+	for side, port in ((mx, mport), (ul, uport)):
+		if not login(side, pw) or not side.sync():
+			sys.exit("twoflip: no root shell on the MINIX Flipper on %s"
+				% port)
+	return finish(ul, mx, opt, rows)
+
+
 def finish(ul, mx, opt, rows):
 	mv, uv = versions(ul, mx)
 	print("MINIX %s, Unleashed %s; %d rows" % (mv, uv, len(rows)),
@@ -1214,7 +1475,8 @@ def finish(ul, mx, opt, rows):
 	summary(res)
 	if opt.map:
 		write_map(opt.map, res, {"date": time.strftime("%Y-%m-%d %H:%M"),
-			"minix": mv, "unleashed": uv})
+			"minix": mv, "unleashed": uv,
+			"spacer": getattr(opt, "spacer", None)})
 		print("map: %s (+ .json)" % opt.map)
 	bad = sum(1 for r in res if r["status"] == "FAIL")
 	if opt.baseline:

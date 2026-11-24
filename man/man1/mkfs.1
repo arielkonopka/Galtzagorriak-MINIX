@@ -2,7 +2,7 @@
 .SH NAME
 mkfs \- make a file system
 .SH SYNOPSIS
-\fBmkfs \fR[\fB\-Ldot\fR] [\fB\-i \fIinodes\fR] [\fB\-b \fIblocks\fR] \fIspecial \fIprototype\fR
+\fBmkfs \fR[\fB\-13Ldot\fR] [\fB\-i \fIinodes\fR] [\fB\-b \fIblocks\fR] [\fB\-g \fIblocks\fR] \fIspecial \fIprototype\fR
 .br
 .de FL
 .TP
@@ -20,13 +20,33 @@ mkfs \- make a file system
 .FL "\-o" "Use a drive other than 0 or 1 (safety precaution)"
 .FL "\-t" "Do not test if file system fits on the medium"
 .FL "\-1" "Make a version 1 file system (for backward compatibility)"
+.FL "\-3" "Make a MINIX V3 file system (names up to 60 characters, larger than 4 GB)"
 .FL "\-i" "Number of i-nodes (files)"
 .FL "\-b" "Filesystem size"
+.FL "\-g" "With \fB\-3\fR: room in the zone map for a file system of that many blocks"
 .SH EXAMPLES
 .EX "mkfs /dev/fd1 proto" "Make a file system on \fI/dev/fd1\fR"
 .EX "mkfs -b 360 /dev/fd1" "Make empty 360 block file system"
 .EX "mkfs /dev/fd1 360" "Alternate way to specify the size"
+.EX "mkfs -3 /dev/hd4" "Make an empty MINIX V3 file system on all of \fI/dev/hd4\fR"
+.EX "mkfs -3 -g 31000000 /dev/hd4" "The same, with zone map room for 31 GB"
 .SH DESCRIPTION
+.PP
+Without \fB\-1\fR or \fB\-3\fR, \fImkfs\fR makes a MINIX V2 file system
+(names up to 14 characters, at most 4 GB, at most 65535 i-nodes).
+With \fB\-3\fR it makes a MINIX V3 file system with 1 KB blocks, in the
+layout of util-linux \fImkfs.minix \-3\fR: directory entries of 64 bytes with
+names up to 60 characters, 32-bit i-node numbers, files up to 2 GB.
+Its size comes from the partition (\fBDIOCGETPS\fR), so it can be larger
+than 4 GB.
+The i-node table must end below block 65535, so a V3 file system has at
+most about one million i-nodes; \fB\-i\fR asks for fewer.
+\fB\-g \fIblocks\fR (V3 only) makes the zone map big enough for a file
+system of that many blocks, so the file system can later grow into the
+space after its partition without moving the i-node table.
+\fI/etc/setup\fR gives \fI/home\fR room up to the end of the card,
+over the swap partition (spec O.7).
+\fIfsck\fR(1) checks both, and \fIfsck.minix \-f\fR checks both on Linux.
 .PP
 .I Mkfs
 builds a file system and copies specified files to it.
@@ -88,5 +108,6 @@ version of
 you have to limit yourself to file systems of that size.
 .SH "SEE ALSO"
 .BR mkproto (1),
+.BR mkpart (8),
 .BR fsck (1),
 .BR mount (1).

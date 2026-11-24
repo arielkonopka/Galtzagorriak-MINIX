@@ -1,0 +1,35 @@
+mbedtls - the AES and DES ciphers of Mbed TLS for the NFC stacks (spec Phase 14)
+================================================================================
+
+Issue #447 (NFC part 6, step 2).  The vendored Unleashed NFC code
+(src/lib/nfc: Ultralight C 3DES and Ultralight AES authentication,
+MIFARE Plus SL3 crypto, FeliCa MAC) calls mbedTLS as stock firmware does.
+
+Source: Mbed-TLS/mbedtls tag v2.28.9 (commit
+b102d44b8500344336ddb5fdc6333aab18a99a34), the 2.28 LTS line stock
+Flipper firmware also builds (lib/mbedtls).  Files copied byte for byte:
+
+  LICENSE                         Apache-2.0 OR GPL-2.0-or-later (dual);
+                                  taken here under GPL-2.0-or-later, so it
+                                  combines with this GPL-3.0 project.
+  library/aes.c, library/des.c    the ciphers
+  library/common.h
+  include/mbedtls/{aes,des,config,platform,platform_util,error,
+                   check_config,platform_time,threading}.h
+
+Not taken: platform_util.c.  Its mbedtls_platform_zeroize keeps a
+volatile function pointer in .data (4 B of RAM per image); the libnfc
+shim gives the same function with a volatile byte loop instead
+(src/lib/libnfc/nfc_shim_crypto.c), 0 B.
+
+Build configuration: src/lib/libnfc/nfc_mbedtls_config.h, passed as
+-DMBEDTLS_CONFIG_FILE='"nfc_mbedtls_config.h"' (stock's config.h is not
+used).  It enables AES, DES/3DES, CBC and MBEDTLS_AES_ROM_TABLES: the
+S-boxes and T-tables are const (flash, XIP), nothing is generated into
+RAM at run time; the objects have no .data and no .bss.  A context
+(mbedtls_aes_context about 280 B, mbedtls_des3_context 384 B) lives on
+the caller's stack or in the per-use poller instance and is zeroed after
+use, as in stock.
+
+Tested: flipper/tests/nfc/cryptotest.c (FIPS-197, SP 800-38A, NIST
+SP 800-67/800-20 known-answer vectors, and the Ultralight C 3DES helpers).

@@ -188,6 +188,7 @@ PUBLIC void cstart()
   /* Boot screen; it stays until the launcher takes over the display.
    * Boot messages go to the console (USB) instead. */
   hal_lcd_init();		/* also turns the backlight on */
+  hal_charge_mode();		/* #407: a power-on from USB: charging screen */
   hal_lcd_flush(splash_fb);
 #endif
 
@@ -206,6 +207,16 @@ PUBLIC void cstart()
   /* Trap divide by zero; fault handlers instead of escalation. */
   SCB_CCR |= CCR_DIV_0_TRP | CCR_STKALIGN;
   SCB_SHCSR |= SHCSR_ENABLES;
+
+  /* R5.7: the FPU, for programs built with -mfloat-abi=softfp (the kernel,
+   * the servers and the libc stay soft-float and never touch it).  The
+   * CPU then stacks S0-S15 and FPSCR only for a process that used the FPU
+   * (ASPEN), and only lazily, when the registers are really needed
+   * (LSPEN); arm/mpx.S saves S16-S31 on that process's own stack when
+   * another process is entered.  No RAM in the process table. */
+  FPU_FPCCR |= FPCCR_ASPEN | FPCCR_LSPEN;
+  SCB_CPACR |= CPACR_CP10_CP11;
+  __asm volatile ("dsb; isb");
 
   /* MPU: code (flash) is read-only (and executable) for everyone, so stray
    * writes fault (on QEMU the "flash" is RAM and would silently be
@@ -863,12 +874,7 @@ PRIVATE int pm_sleep()
 #if LATTRACE
   lat_wake(hal_cycles() - cyc);
 #endif
-  pm_stat.stop += e;
-  if (pm_stat.stop >= 32768UL * 60) {	/* R6.8: whole minutes apart */
-	pm_stat.stop -= 32768UL * 60;
-	pm_stat.min++;
-  }
-  if (w & HAL_WAKE_BTN) pm_stat.btn++; else pm_stat.other++;
+  pm_stat_add(&pm_stat, e, w & HAL_WAKE_BTN);	/* pmstat.h */
 
   /* Microseconds since the last tick (32768 Hz: 15625/512 us a clock),
    * whole ticks in them, and the cycles left of the one we are in. */
@@ -986,21 +992,25 @@ unsigned exc;
 /*===========================================================================*
  *				user_frame_fault			     *
  *===========================================================================*/
-PUBLIC void user_frame_fault()
+PUBLIC void user_frame_fault(rp)
+struct proc *rp;
 {
 /* The unprivileged load or store of proc_ptr's exception frame faulted
- * (mpx.S, frame_recover): its stack pointer is not in its memory.  It gets
+ * (mpx.S, frame_recover), or the save of its FP registers (fp_flush,
+ * fp_frame_recover): its stack pointer is not in its memory.  It gets
  * SIGSEGV (a kernel SIGKILL would mean "everybody", do_ksig in MM); until
  * MM has handled that it is not runnable (cause_sig unreadies it).  Its
  * stack pointer is set to the top of its own stack, so the signal frame
  * and any later restart are inside its memory.
  */
-  struct proc *rp = proc_ptr;
-
   printf("%s[%d]: bad stack pointer %08lx, signal 11\n", rp->p_name,
 		proc_number(rp), (unsigned long) rp->p_reg.sp);
   rp->p_reg.sp = (reg_t) ((rp->p_map[S].mem_vir + rp->p_map[S].mem_len)
 							<< CLICK_SHIFT);
+  /* Its FP context (R5.7) is lost with the stack; a lazy save still
+   * pending would go to the bad stack. */
+  rp->p_reg.control &= ~CONTROL_FPCA;
+  if (rp->p_reg.control & CONTROL_FPLIVE) FPU_FPCCR &= ~FPCCR_LSPACT;
   /* The frame could not be stacked, so an SVC this process made is still
    * pending: it would be taken later in whatever process runs next. */
   SCB_SHCSR &= ~SHCSR_SVCALLPENDED;
@@ -1055,6 +1065,7 @@ int how;
 	/* T14c: power off (the charger's ship mode); hold Back, or plug in
 	 * USB, to start again.  On USB the power stays until the cable goes. */
 	printf("Power off.\n");
+	flipdev_off_notice();	/* on USB: "You can now unplug the cable" */
 	hal_power_off();
   }
   if (how == RBT_MONITOR) {

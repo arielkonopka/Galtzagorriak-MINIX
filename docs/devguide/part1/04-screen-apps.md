@@ -67,7 +67,8 @@ int main(void)
 		gui_title("TALLY");
 		sprintf(line, "%d", n);
 		gui_text_big((GUI_W - 12 * (int) strlen(line)) / 2, 20, line, 3);
-		gui_center(56, "UP/DOWN  OK buzz  BACK", 0);
+		gui_hline(0, GUI_W - 1, 56, 1);		/* the hint line (4.3) */
+		gui_text(1, 58, "Up +  Dn -  OK Buzz  Back Quit", 0);
 		gui_flush();
 
 		k = gui_key();
@@ -89,7 +90,7 @@ text console).
 
 ## 4.3 The look: the title bar
 
-The launcher and every app share one visual convention, and it is a rule (owner decision
+The launcher and every app share one visual convention, and it is a rule (user decision
 2026-11-16, spec K.2): **each screen starts with the title bar**, a black bar across the full
 width of the top text row with the screen's name in white, centred, in capitals. Call
 `gui_title("NAME")` first after `gui_clear()`, and draw your content below it (from y = 8 on).
@@ -108,18 +109,61 @@ width of the top text row with the screen's name in white, centred, in capitals.
 binding and the desktop's windows will draw it too, so apps look alike whatever they are
 written in.
 
+### The rest of the screen: "Pine meets modern UX"
+
+Since 2026-11-17 the whole screen follows one style (user decision, spec K.2 and R5.6a.7),
+modelled on the Pine mail program: text first, every screen says what its buttons do, nothing
+hidden. New apps follow it from the start, and reviews check it:
+
+- **Title bar** as above. On the right it may carry a short state of at most 6 characters: the
+  position `3/12` in a list, `REC`, `12%`.
+- **Hint line**: a 1-pixel rule at y = 56 and one line of button hints at y = 58, in Pine's
+  `key action` style: `<Back  OK Run  >More`, `OK Toggle  Back Done`. Name every button that
+  does something on that screen, and only those. Do not list the long Back press: it always ends
+  (or parks) the app.
+- **Selection**: a full-width inverted bar; `>` at x = 1 in lists of things to start or open.
+- **Values** of settings in brackets: `Icons   [on]`.
+- **Scrolling**: a 1-pixel scroll mark at x = 127 when a list or text is longer than the screen.
+- **Messages**: a short notice replaces the hint line for 2 s, then the hints come back; whole
+  screen notices are only for errors that end the app (and for alerts).
+- **Icons**: at most 8x6 pixels (two characters of the font) before a list entry.
+- Exceptions as for the title bar: the console, full-screen pictures and graphs, alerts, games
+  and ported stock apps that keep their own layout.
+
+Two `gui` helpers are there already: `gui_bits8()` draws an 8-pixel-wide bitmap (an icon), and
+`gui_input()`/`gui_click()` return keys as clicks (section 4.4). The ones that draw the other
+parts for you, at no RAM cost, are **(planned)** in task T22: `gui_title2(title, right)`,
+`gui_hints(text)`, `gui_note(text)` (with a timed key read) and `gui_scroll(top, shown, total)`.
+Until they land, draw the parts with `gui_hline` and `gui_text` at the positions above, as the
+example in 4.2 does; switching to the helpers later is a few lines. The launcher has the full
+look since T21a; the other built-in apps (`info`, `lights`, `power`, `lfrfid`, `console`,
+`selftest`, `remind`, `alarm`) are being aligned in T22. The standard `libfuri` modules draw it
+since T22b (section 4.9, "Screen style").
+
 ## 4.4 The launcher and `/etc/apps`
 
 The launcher (`flipper/gui/launcher.c`) is started as root by `/etc/rc` and shows the entries of
 `/etc/apps`, one per line:
 
 ```
-# Label:user:/program arg ...
-Console:nobody:/bin/console
-Tally:nobody:/usr/bin/tally
+# Label:user:icon:/program arg ...
+Console:nobody:@console:/bin/console
+Tally:nobody:#3C42A5A5423C:/usr/bin/tally
+Old:nobody:/usr/bin/old          (no icon field: still valid)
 ```
 
 - Up to 16 entries, 8 arguments each. Lines starting with `#` are comments.
+- The icon (spec R5.6a.1) is `@name` (a built-in one: the list is in the manual's launcher
+  chapter), `#` and 12 hex digits (8×6 pixels, a byte per row from the top, MSB left), one or two
+  characters, or empty. The program must start with `/`: that is how the launcher tells the
+  two forms apart. A bad icon is just not drawn. `flipper/gui/appline.c` parses the line; its
+  host test is `flipper/tests/host/icontest.c`.
+- Packages: `mkpkg.py -i @bell` puts `Icon: @bell` in the manifest; until the launcher reads
+  manifests, the `postinst` writes the same value into its line, e.g.
+  `echo 'Tally:nobody:@game:/usr/bin/tally' >> /etc/apps`.
+- Keys that switch pages or toggle things on a release (Left/Right in the launcher) use
+  `gui_input()` with those keys as clicks: a click is a key pressed alone and released within
+  ~1 s, so a two-button gesture never clicks. Up/Down/OK keep acting on the press (latency L1).
 - The app runs as the named user, in group `gui` (screen, buttons, LED, vibro, speaker, GPIO,
   infrared, iButton), with the user's home directory as the working directory. Only an entry
   naming `root` keeps root's rights. If the user does not exist or the ids cannot be set, the
@@ -127,6 +171,10 @@ Tally:nobody:/usr/bin/tally
 - `/etc/apps` is read with `cfopen()`: the card's copy if there is one, else the default in
   `/rom/etc/apps`. A package that adds an app appends its line in its `postinst` script
   (chapter 5); the base package does it for `Power` (see `flipper/rootfs/base.postinst`).
+- **Launcher settings** (R5.6a.4): `/etc/launcher.conf` with `Icons:`, `Hints:` and
+  `Battery:` (the battery on the title bar), each `on` by default; Left opens the launcher's
+  settings page, which writes the card's copy only when a value changed. The user's view is the
+  manual's [launcher chapter](../../manual/launcher.md).
 - Manifests in packages (label, icon, category, uid, groups) that the launcher reads by itself
   are **(planned)** (spec R5.5, R5.6, F.2).
 
@@ -141,6 +189,10 @@ When the launcher starts an app it makes it the **foreground app** with
 - **holding Back for one second sends `SIGTERM`** to the foreground app, and `SIGKILL` three
   seconds later if it is still there. This is the stock "leave the app" gesture, and it works
   even if the app hangs.
+
+Only root (the launcher) may name any process. An app that is not root may name itself, nobody
+(`pid` 0), or a process running under its own user id, such as a child it started; for anybody
+else's process `FGIOCSET` fails with `EPERM`.
 
 What that means for an app:
 
@@ -220,7 +272,7 @@ In practice:
 
 ## 4.8 Shell scripts as screen apps
 
-Any program can be in `/etc/apps`, including a shell script, but a shell costs about 12 KB and
+Any program can be in `/etc/apps`, including a shell script, but a shell costs about 10 KB and
 cannot draw text conveniently. Use scripts in the launcher for actions (toggle something, run a
 job, then exit) and C for anything with a screen. Desktop modules written in shell or Berry that
 only send text records to the desktop are **(planned)** (chapter 7).
@@ -231,7 +283,9 @@ only send text records to the desktop are **(planned)** (chapter 7).
 same names and behaviour: `#include <gui/gui.h>`, `<gui/view_dispatcher.h>`,
 `<gui/scene_manager.h>`, `<gui/elements.h>`, `<gui/modules/submenu.h>` (also `popup.h`,
 `dialog_ex.h`, `text_input.h`, `byte_input.h`, `variable_item_list.h`, `widget.h`,
-`loading.h`), `<input/input.h>`, `<assets_icons.h>`; link `libfuri.a`. `flipper/lib/furi/hello.c`
+`loading.h`), `<input/input.h>`, `<assets_icons.h>`; put the program in `FURIPROGS`
+(`flipper/minix.mk`) to use the shared libfuri + libapp in flash (part 2, 1.6; a function the
+library does not export yet goes at the end of `flipper/furi.exports`). `flipper/lib/furi/hello.c`
 (`furihello`) is a complete example. What differs from the stock firmware:
 
 - The GUI service lives in the app's own process. The first `furi_record_open(RECORD_GUI)` starts
@@ -261,6 +315,42 @@ same names and behaviour: `#include <gui/gui.h>`, `<gui/view_dispatcher.h>`,
   `--gc-sections`, so only what it calls) plus the 8 KB core; RAM is the 1 KB frame, about 0.6 KB
   of GUI state, the gui thread's 2 KB stack and the views' models.
 
+### Screen style
+
+Since T22b the standard modules draw the Pine look of section 4.3 themselves (spec K.2,
+R5.6a.7), so a ported app looks like the launcher without changing a line:
+
+- **Submenu**: the header is the screen's name on the title bar (no header: the appid), the
+  position `3/12` is on its right, 8 rows of the 4x6 font (7 in `GuiLayerWindow`), a full-width
+  selection bar with `>`, the scroll mark at x = 127, hints `OK Select  Back Done`.
+- **VariableItemList**: `Name   [value]` rows (value right-aligned), the position on the title
+  bar, the scroll mark; the hints name what the selected row does: `<>Change` only if it has
+  more than one value, `OK Select` only with an enter callback, `Back Done`.
+- **Popup** and **DialogEx**: the header is the title, the text in lines of the 4x6 font below
+  it, the icon at its x (moved up to fit above the hint line). DialogEx's hints come from its
+  own button labels (`<Cancel  OK Info  >Delete`); a Popup says `Any key Close` with a callback,
+  else `Back Close`.
+- **TextInput**: the header is the title, the text after `> ` on the first row, the stock
+  keyboard above the hint line; the hints follow the selected key (`OK Save`, `OK Delete`,
+  `OK Type`, each with `Back Cancel`).
+
+A view in `GuiLayerFullscreen` gets a 7-pixel title bar, as the launcher; in `GuiLayerWindow`
+the module paints the Gui's 11-pixel bar (its name and state) itself. The window keeps its size
+(y = 13, 51 rows), so custom views and the stock `elements_button_*` helpers are unchanged:
+an app that draws its own screens keeps its layout (the "games and ported stock apps" exception
+of 4.3). The modules draw with the helpers in `src/gui/pine.c`; they need no RAM beyond the
+stack, and the strings are one const table (in the shared library each string literal would
+cost every app a GOT word): the library's per-app area grew by 8 B, its flash by 2.7 KB.
+
+The stock drawing is still there: with `FURI_STYLE=stock` in the environment the modules draw as
+the stock firmware does. The launcher's `Style: stock` (R5.6b, T31) exports it to the apps it
+starts; any program can set it for itself (`setenv()` before its first redraw).
+
+![furihello before and after T22b](../img/libfuri-pine-furihello.png)
+
+![The modules in the Pine look](../img/libfuri-pine-modules.png)
+
 Host tests: `make -C flipper/lib/furi test` renders every module and compares it with the PBM
 images in `flipper/lib/furi/tests/gui` (`make gui-ref` rewrites them; look at them before you
-commit). The QEMU self-test runs `furihello` with fake buttons.
+commit): in the stock style with `FURI_STYLE=stock` (the images of R5.2), and in the Pine style
+fullscreen (`pine_*`) and in the window frame (`pinew_*`, `pine_gui_window`). The QEMU self-test runs `furihello` with fake buttons.

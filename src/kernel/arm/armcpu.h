@@ -31,6 +31,14 @@
 #define SCB_HFSR	REG32(0xE000ED2C)
 #define SCB_MMFAR	REG32(0xE000ED34)
 #define SCB_BFAR	REG32(0xE000ED38)
+#define SCB_CPACR	REG32(0xE000ED88)
+#define CPACR_CP10_CP11	(0xFu << 20)	/* FPU: full access */
+
+/* FPU (R5.7) */
+#define FPU_FPCCR	REG32(0xE000EF34)
+#define FPCCR_ASPEN	(1u << 31)	/* FP use sets CONTROL.FPCA */
+#define FPCCR_LSPEN	(1u << 30)	/* lazy stacking of S0-S15, FPSCR */
+#define FPCCR_LSPACT	(1u << 0)	/* a lazy save is pending */
 
 /* MPU (PMSAv7) */
 #define MPU_CTRL	REG32(0xE000ED94)

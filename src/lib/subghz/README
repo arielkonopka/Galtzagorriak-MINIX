@@ -1,0 +1,78 @@
+libsubghz - the Sub-GHz protocols of the Unleashed firmware (spec Phase 9)
+==========================================================================
+
+Every Sub-GHz protocol of the Flipper Zero's Unleashed firmware (70, KeeLoq
+and the other rolling codes included): decoders, encoders and their text,
+for the `subghz` command (flipper/cmds/subghz.c) and the host test
+(flipper/tests/subghz).  Issue #302.
+
+Source: DarkFlippers/unleashed-firmware, lib/ at commit
+53818b18f63e105baaf37ed8eac9a7def58ec8b1 (2026-11-16), GPLv3 (as this
+project), the same commit as src/lib/lfrfid.  The files below are copied
+byte for byte (checked with cmp against that commit); the commit is named
+here, not in their headers, so `cmp` against a newer Unleashed shows what
+changed.  The layout is Unleashed's, so their #include lines work
+unchanged:
+
+  subghz/protocols/*            all of lib/subghz/protocols except raw.c
+                                (protocol_items.c: the registry's table)
+  subghz/blocks/*               decoder, encoder, generic, math, const,
+                                custom_btn
+  subghz/environment.*, receiver.*, transmitter.*, registry.*, types.h,
+  subghz/subghz_protocol_registry.h, subghz_keystore.h,
+  subghz/subghz_keystore_i.h
+  toolbox/manchester_decoder.*, manchester_encoder.*, level_duration.h,
+  toolbox/hex.*                 from lib/toolbox
+
+Not taken (they drive the Flipper's radio, threads or the SD card; on MINIX
+the kernel's /dev/subghz* and `subghz` do that part):
+
+  devices/                      the CC1101 presets and device registry
+  subghz_worker.*, subghz_tx_rx_worker.*, subghz_file_encoder_worker.*
+  subghz_setting.*              the frequency list of the stock app
+  protocols/raw.c               writes RAW captures from a worker thread;
+                                `subghz` reads and plays .sub RAW files a
+                                line at a time itself (sgfile.c).  The
+                                registry entry stays (shim/furi_shim.c), so
+                                the name RAW is known
+
+Changed (ours, GPLv3, with the same interface):
+
+  subghz/subghz_keystore.c      rewritten.  Spec D.3: no manufacturer keys
+                                are shipped; the user's own plain key files
+                                are read from /home/flipper/subghz/assets
+                                (keeloq_mfcodes, keeloq_mfcodes_user, the
+                                nice_flor_s and alutech_at_4n rainbow
+                                tables).  Stock's files are AES-encrypted
+                                with a key in the CPU2 enclave, which MINIX
+                                has no client for: an encrypted file is
+                                refused.  At most SUBGHZ_KEYSTORE_MAX (512)
+                                keys are kept, so the RAM is bounded.
+
+Ours (GPLv3):
+
+  shim/                         the thin furi shim: furi.h (furi_check,
+                                FURI_LOG_*, FuriString with its own printf:
+                                MINIX's has no %ll or %z; malloc counted in
+                                subghz_heap_bytes, `subghz heap`), the
+                                furi_hal bits the protocols call, and
+                                flipper_format.c, FlipperFormat as a
+                                bounded text buffer (a key file of at most
+                                4 KB; changed keys written back, as stock
+                                does for a rolling code's counter)
+  sgfile.c, sgfile.h            the MINIX side: .sub files read a line at a
+                                time (never the whole file), the
+                                environment with every protocol and the
+                                keystore, one line per decoded packet
+                                ("Princeton 24bit Key:7C5703")
+
+Bin RAW (the protocol that collects unknown signals) takes 10 KB of
+capture buffers only when memmgr_heap_get_max_free_block() says they fit;
+`subghz rx` sets subghz_heap_room to 0, so it stays off there.
+
+Tests: `make -C flipper/tests/host` runs flipper/tests/subghz (ASan and
+UBSan): the 54 recorded captures of Unleashed's own tests decode to the
+protocol and key in decode.txt, encode -> decode round trips for 56
+protocols, 2 million random durations through all decoders.  In QEMU:
+`tools/nattest.py subghz`.  Updating to a newer Unleashed: copy the files
+listed above, `cmp` shows what moved, rerun both.
