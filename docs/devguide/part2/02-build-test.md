@@ -91,6 +91,15 @@ pkg install /lib/pkg/tests_1.0.tar
 for t in /usr/tests/*; do $t; done
 ```
 
+The test programs live in one of three places. Programs that m2test runs in QEMU are in
+`/bin` of the QEMU image only (`UPROGS` for `BOARD=qemu` in `flipper/minix.mk`). On the Flipper
+they are not in the base image; the ones a device test needs (`fptest`, the FPU checks of R5.7,
+and `furihello`) go into the `tests` package next to the security tests, so a normal unit pays
+no flash and no RAM for them: `pkg install /lib/pkg/tests_1.0.tar`, then `/usr/tests/fptest`
+(exit status = the number of failures). The rest (`flipper/tests/`) are in the `tests` package on
+every board. A test that runs itself again (as `fptest` does for its exec check) must exec its
+own `argv[0]`, not a fixed path, because the path differs between the images.
+
 ## 2.5 Power cuts and flash erases
 
 - `tools/powercut.py` boots QEMU repeatedly and cuts the "power" at chosen flash operations
