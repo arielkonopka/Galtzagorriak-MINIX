@@ -25,6 +25,16 @@ def load_font():
     return PcfFontFile.PcfFontFile(io.BytesIO(data))
 
 
+def font4x6():
+    """The LCD's 4x6 glyphs (hal/common/font4x6.c): 6 row bytes per char."""
+    import os
+    import re
+    src = open(os.path.join(os.path.dirname(__file__),
+                            "../hal/common/font4x6.c")).read()
+    return [[int(v, 16) for v in m.split(",")]
+            for m in re.findall(r"\{((?:0x[0-9a-f]{2},?){6})\}", src)]
+
+
 def draw_text(img, font, text, x0, y0, ink):
     """Draw text with an X11 PCF bitmap font; returns the width used."""
     ascent = max(-g[1][1] for g in font.glyph if g)
@@ -53,12 +63,31 @@ def main():
     ap.add_argument("--threshold", type=int,
                     help="plain threshold (0-255) instead of dithering; "
                     "better for line art")
+    ap.add_argument("--ready", action="store_true",
+                    help="IMAGE is already 128x64: no crop, scale or banner")
+    ap.add_argument("--bubble", metavar="TEXT",
+                    help="with --ready: TEXT in the speech bubble (4x6 font "
+                    "of the LCD, light on dark), centred in x 9..118, y 4..9")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="<1 lightens the picture before dithering")
     a = ap.parse_args()
     src, out = (a.args + [None])[:2] if len(a.args) == 2 else (None, a.args[0])
 
-    if src:
+    if src and a.ready:
+        img = Image.open(src).convert("L")
+        if img.size != (W, H):
+            raise SystemExit("%s: need %dx%d with --ready" % (src, W, H))
+        img = img.point(lambda v: 0 if v < 128 else 255)
+        if a.bubble:
+            rows = font4x6()
+            x = 9 + (110 - 4 * len(a.bubble)) // 2
+            for ch in a.bubble:
+                for gy in range(6):
+                    for gx in range(4):
+                        if rows[ord(ch) - 32][gy] & (0x80 >> gx):
+                            img.putpixel((x + gx, 4 + gy), 255)
+                x += 4
+    elif src:
         pic = Image.open(src).convert("L")
         if a.crop:
             pic = pic.crop(tuple(int(v) for v in a.crop.split(",")))
@@ -81,15 +110,16 @@ def main():
         img = Image.new("L", (W, H), 255)
 
     # Title banner: white box with a black frame along the bottom edge.
-    font = load_font()
-    tw = sum(font.glyph[ord(c)][0][0] for c in a.title if font.glyph[ord(c)])
+    font = None if a.ready else load_font()
+    tw = 0 if a.ready else sum(font.glyph[ord(c)][0][0] for c in a.title if font.glyph[ord(c)])
     bw, bh = min(W, tw + 6), 13
     bx, by = (W - bw) // 2, H - bh
-    for y in range(by, H):
-        for x in range(bx, bx + bw):
-            edge = y in (by, H - 1) or x in (bx, bx + bw - 1)
-            img.putpixel((x, y), 0 if edge else 255)
-    draw_text(img, font, a.title, bx + 3, by + 2, 0)
+    if not a.ready:
+        for y in range(by, H):
+            for x in range(bx, bx + bw):
+                edge = y in (by, H - 1) or x in (bx, bx + bw - 1)
+                img.putpixel((x, y), 0 if edge else 255)
+        draw_text(img, font, a.title, bx + 3, by + 2, 0)
 
     # LCD: a set bit is a dark pixel.
     fb = bytearray(W * H // 8)
