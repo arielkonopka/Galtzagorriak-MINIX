@@ -312,6 +312,91 @@ int mfkey_recover_nested_file(
     return found;
 }
 
+/* ---- the user dictionary (D.3: the user's own file, no keys shipped) ----- */
+
+static int hexval(int c) {
+    if(c >= '0' && c <= '9') return c - '0';
+    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Parse the leading 12 hex digits of a dictionary line into six bytes.
+ * Returns true on a well-formed key line (same rule as mf_dict_next:
+ * comments and blanks are not keys); false otherwise. */
+static bool parse_dict_key(const char* line, uint8_t key[6]) {
+    const char* p = line;
+    while(*p == ' ' || *p == '\t') p++;
+    if(*p == '#' || *p == '\n' || *p == '\r' || *p == '\0') return false;
+    for(int i = 0; i < 6; i++) {
+        int hi = hexval((unsigned char)p[0]);
+        int lo = (hi < 0) ? -1 : hexval((unsigned char)p[1]);
+        if(hi < 0 || lo < 0) return false;
+        key[i] = (uint8_t)(hi << 4 | lo);
+        p += 2;
+    }
+    return true;
+}
+
+int mfkey_append_keys_to_dict(const char* path, const MfkeyFoundKey* keys, int n) {
+    if(n <= 0) return 0;
+
+    /* A per-candidate "write me" flag: start true, clear a duplicate. */
+    bool want[64];
+    if(n > (int)(sizeof want / sizeof want[0])) n = (int)(sizeof want / sizeof want[0]);
+    for(int i = 0; i < n; i++) want[i] = true;
+
+    /* Drop keys that repeat inside this batch (keep the first). */
+    for(int i = 0; i < n; i++)
+        for(int j = 0; j < i; j++)
+            if(want[j] && memcmp(keys[i].key, keys[j].key, 6) == 0) {
+                want[i] = false;
+                break;
+            }
+
+    /* Stream the existing file (if any) a line at a time; clear the flag of
+     * any candidate already present.  A missing file is simply empty. */
+    FILE* f = fopen(path, "r");
+    if(f) {
+        char line[128];
+        while(fgets(line, sizeof line, f)) {
+            uint8_t k[6];
+            if(!parse_dict_key(line, k)) continue;
+            for(int i = 0; i < n; i++)
+                if(want[i] && memcmp(keys[i].key, k, 6) == 0) want[i] = false;
+        }
+        fclose(f);
+    }
+
+    int to_write = 0;
+    for(int i = 0; i < n; i++)
+        if(want[i]) to_write++;
+    if(to_write == 0) return 0;
+
+    FILE* out = fopen(path, "a");
+    if(!out) return -1;
+    int written = 0;
+    for(int i = 0; i < n; i++) {
+        if(!want[i]) continue;
+        const uint8_t* k = keys[i].key;
+        if(fprintf(
+               out,
+               "%02X%02X%02X%02X%02X%02X\n",
+               k[0],
+               k[1],
+               k[2],
+               k[3],
+               k[4],
+               k[5]) < 0) {
+            fclose(out);
+            return written ? written : -1;
+        }
+        written++;
+    }
+    if(fclose(out) != 0) return written ? written : -1;
+    return written;
+}
+
 /* ---- test nonce generator ------------------------------------------------ */
 
 /* Produce one self-consistent encrypted authentication: feed uid^nt (plain)

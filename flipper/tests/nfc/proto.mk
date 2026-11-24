@@ -4,6 +4,11 @@
 # it after nfctest.  Vendored files are compiled unchanged.
 V	:= $(MROOT)/src/lib/nfc
 VINC	:= -I$(L)/shim -I$(L) -I$(V) -I$(V)/nfc -I.
+# Mbed TLS AES/DES (src/lib/mbedtls, v2.28.9 byte for byte; #447) with
+# libnfc's config: ROM tables, no .data/.bss.
+MBED	:= $(MROOT)/src/lib/mbedtls
+VINC	+= -I$(MBED)/include -DMBEDTLS_CONFIG_FILE='"nfc_mbedtls_config.h"'
+MBEDSRC	:= $(MBED)/library/aes.c $(MBED)/library/des.c
 # -Wno-format: stock prints uint32_t with %lu (unsigned long on ARM).
 VSRC	:= $(L)/nfc_shim.c $(L)/nfc_poller_defs_shim.c \
 	   $(V)/nfc/nfc_poller.c $(V)/nfc/protocols/nfc_protocol.c \
@@ -107,8 +112,8 @@ $(B)/cardtest: cardtest.c $(VSRC) $(CSRC) $(VHDR) $(NDEF_OBJ)
 
 .PHONY: prototest cardtest
 # Part 5 (#412): MIFARE Ultralight/NTAG (poller and sync layer; mbedTLS
-# AES/3DES failed closed by nfc_shim_crypto.c), FeliCa, ST25TB, EMV.
-P5SRC	:= $(L)/nfc_shim_crypto.c $(L)/mf_ultralight.c $(L)/nfc_sha1.c \
+# AES/3DES from the vendored Mbed TLS, #447), FeliCa, ST25TB, EMV.
+P5SRC	:= $(L)/nfc_shim_crypto.c $(MBEDSRC) $(L)/mf_ultralight.c $(L)/nfc_sha1.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_aes_crypto.c \
 	   $(V)/nfc/protocols/mf_ultralight/mf_ultralight_poller.c \
@@ -140,3 +145,14 @@ $(B)/p5test: p5test.c $(VSRC) $(VHDR)
 	$(CC) $(CFLAGS) $(VWARN) $(VINC) -o $@ p5test.c $(VSRC) -lm
 
 .PHONY: p5test
+
+# Mbed TLS known-answer tests (#447), plus upstream's self-tests (test
+# build only: MBEDTLS_SELF_TEST pulls printf in).
+cryptotest: $(B)/cryptotest
+	./$(B)/cryptotest
+
+$(B)/cryptotest: cryptotest.c $(MBEDSRC) $(L)/nfc_shim_crypto.c $(L)/nfc_mbedtls_config.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(VINC) -DMBEDTLS_SELF_TEST -o $@ cryptotest.c $(MBEDSRC) $(L)/nfc_shim_crypto.c
+
+.PHONY: cryptotest
