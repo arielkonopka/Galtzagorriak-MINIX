@@ -180,6 +180,7 @@ $(MB)/kernel.elf: $(KOBJ) $(MB)/libc.a ld/$(BOARD).ld ld/sections.ld
 # Boot screen (shown from kernel start until the launcher takes the LCD).
 SPLASH_ART  := art/galtzagorri-boot.png
 SPLASH_OPTS := --ready --bubble "Ongi etorri Galtzagorriak!" \
+	   --bye "Agur, Galtzagorriak!" \
 	   --label "MINIX@77,20,0"
 hal/common/splash.c: $(SPLASH_ART) tools/mksplash.py
 	python3 -I tools/mksplash.py $(SPLASH_ART) $@ $(SPLASH_OPTS) \
