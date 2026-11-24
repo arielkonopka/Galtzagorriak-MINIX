@@ -4,9 +4,11 @@
  * app's screens and flow run in QEMU (and on a Flipper without the
  * /dev/nfc driver, Phase 13) as infrared -L does for IR.
  *
- * Two cards, chosen by nfcloop_card(): a MIFARE Classic 1K (4-byte UID,
+ * Three cards, chosen by nfcloop_card(): a MIFARE Classic 1K (4-byte UID,
  * key A FFFFFFFFFFFF on every sector, key B one no dictionary has, every
- * block a pattern) and an NTAG215 (7-byte UID, 135 pages).  The same
+ * block a pattern), an NTAG215 (7-byte UID, 135 pages) and an ISO
+ * 14443-4 Type 4 Tag (#451: an NDEF URI, and three more applications
+ * that answer SELECT: Visa, FIDO U2F and the payment directory PPSE).  The same
  * models as flipper/tests/nfc/nfctest.c, cut to what the app needs.
  * State: one struct (~1.6 KB), malloc'd by the app only while it runs.
  */
@@ -31,6 +33,9 @@ struct nfcloop {
 	crypto1_t c;
 	/* NTAG215 */
 	uint8_t page[135][4];
+	/* Type 4 Tag */
+	int rats, sel;
+	uint16_t file;
 };
 
 static uint32_t be32(const uint8_t *p)
@@ -75,6 +80,15 @@ void nfcloop_card(struct nfcloop *k, int kind)
 			k->blk[b][8] = 0x80; k->blk[b][9] = 0x69;
 			key6(k->blk[b] + 10, LB_KEYB);
 		}
+		return;
+	}
+	if (kind == NFCLOOP_T4T) {
+		static const uint8_t u[7] = { 0x04, 0x51, 0x7A, 0x22, 0x31, 0x6E, 0x80 };
+
+		memcpy(k->uid, u, 7);
+		k->uid_len = 7; k->atqa[0] = 0x44; k->atqa[1] = 0x03;
+		k->sak = 0x20;
+		k->sel = -1;
 		return;
 	}
 	{	/* NTAG215 */
@@ -245,6 +259,97 @@ static int ntag(struct nfcloop *k, const uint8_t *tx, size_t tx_bits,
 	return activate(k, tx, tx_bits, rx, rx_bits);
 }
 
+/* ---- the Type 4 Tag: RATS, ISO-DEP I-blocks, ISO 7816-4 ---- */
+
+static const uint8_t t4_ats[5] = { 0x05, 0x78, 0x80, 0x70, 0x02 };
+static const uint8_t t4_aid[][15] = {	/* length first */
+	{ 7, 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01 },	/* NDEF */
+	{ 7, 0xA0, 0x00, 0x00, 0x00, 0x03, 0x10, 0x10 },	/* Visa */
+	{ 8, 0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01 },	/* FIDO U2F */
+	{ 14, '2', 'P', 'A', 'Y', '.', 'S', 'Y', 'S', '.', 'D', 'D', 'F',
+	  '0', '1' },						/* PPSE */
+};
+static const uint8_t t4_cc[15] = {
+	0x00, 0x0F, 0x20, 0x00, 0x3B, 0x00, 0x34,
+	0x04, 0x06, 0xE1, 0x04, 0x00, 0x40, 0x00, 0x00,
+};
+static const uint8_t t4_ndef[] = {	/* NLEN, then one URI record */
+	0x00, 0x18, 0xD1, 0x01, 0x14, 'U', 0x04,
+	'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'o', 'r', 'g', '/', 'm', 'i',
+	'n', 'i', 'x', '/', 't',
+};
+
+static size_t sw(uint8_t *r, size_t n, unsigned v)
+{
+	r[n] = (uint8_t) (v >> 8);
+	r[n + 1] = (uint8_t) v;
+	return n + 2;
+}
+
+static size_t t4_app(struct nfcloop *k, const uint8_t *c, size_t n, uint8_t *r)
+{
+	size_t i;
+
+	if (n >= 5 && c[0] == 0 && c[1] == 0xA4 && c[2] == 0x04) {
+		k->file = 0;
+		for (i = 0; i < sizeof t4_aid / sizeof t4_aid[0]; i++)
+			if (c[4] == t4_aid[i][0] && n >= 5u + c[4]
+			    && !memcmp(c + 5, t4_aid[i] + 1, c[4])) {
+				k->sel = (int) i;
+				return sw(r, 0, 0x9000);
+			}
+		k->sel = -1;
+		return sw(r, 0, 0x6A82);
+	}
+	if (n >= 7 && c[0] == 0 && c[1] == 0xA4 && c[2] == 0x00 && c[4] == 2) {
+		unsigned f = (unsigned) c[5] << 8 | c[6];
+
+		if (k->sel != 0 || (f != 0xE103 && f != 0xE104))
+			return sw(r, 0, 0x6A82);
+		k->file = (uint16_t) f;
+		return sw(r, 0, 0x9000);
+	}
+	if (n >= 5 && c[0] == 0 && c[1] == 0xB0 && k->file) {
+		const uint8_t *f = k->file == 0xE103 ? t4_cc : t4_ndef;
+		size_t fs = k->file == 0xE103 ? sizeof t4_cc : sizeof t4_ndef;
+		size_t off = (size_t) c[2] << 8 | c[3], le = c[4] ? c[4] : 256;
+
+		if (off >= fs) return sw(r, 0, 0x6B00);
+		if (le > fs - off) le = fs - off;
+		if (le > 200) le = 200;
+		memcpy(r, f + off, le);
+		return sw(r, le, 0x9000);
+	}
+	return sw(r, 0, 0x6D00);
+}
+
+static int t4(struct nfcloop *k, const uint8_t *tx, size_t tx_bits,
+	      uint8_t *rx, size_t *rx_bits)
+{
+	size_t n = tx_bits / 8;
+
+	if (tx_bits == 7) k->rats = 0;
+	if (!k->rats && tx_bits == 16 && tx[0] == 0xE0) {
+		k->rats = 1;
+		memcpy(rx, t4_ats, sizeof t4_ats);
+		*rx_bits = NFC_BITS(sizeof t4_ats);
+		return NFC_OK;
+	}
+	if (k->rats && n >= 1 && (tx[0] & 0xEE) == 0x02) {	/* I-block */
+		rx[0] = tx[0];
+		*rx_bits = NFC_BITS(1 + t4_app(k, tx + 1, n - 1, rx + 1));
+		return NFC_OK;
+	}
+	if (k->rats && n == 1 && tx[0] == 0xC2) {		/* DESELECT */
+		rx[0] = 0xC2;
+		*rx_bits = 8;
+		k->rats = 0;
+		return NFC_OK;
+	}
+	if (k->rats) return NFC_ERR_TIMEOUT;
+	return activate(k, tx, tx_bits, rx, rx_bits);
+}
+
 static int xfer(void *ctx, const uint8_t *tx, size_t tx_bits, uint8_t *rx,
 		size_t rx_room, size_t *rx_bits, uint32_t fwt, uint32_t flags)
 {
@@ -253,6 +358,7 @@ static int xfer(void *ctx, const uint8_t *tx, size_t tx_bits, uint8_t *rx,
 	(void) fwt; (void) flags; (void) rx_room;
 	if (k->kind == NFCLOOP_MFC1K) return mfc(k, tx, tx_bits, rx, rx_bits);
 	if (k->kind == NFCLOOP_NTAG215) return ntag(k, tx, tx_bits, rx, rx_bits);
+	if (k->kind == NFCLOOP_T4T) return t4(k, tx, tx_bits, rx, rx_bits);
 	return NFC_ERR_TIMEOUT;		/* an empty field */
 }
 

@@ -11,13 +11,18 @@
  *			prints "nfc: N ok, M bad", exit 0 when all ok
  *	nfc -c		may this user open /dev/nfc?  0 opened, 1 not in
  *			group nfc, 2 no device (AC7.3's rule for NFC)
+ *	nfc scan [-L] [DICT]  the service scanner without a screen: SELECT
+ *			every AID of DICT (default: yours, else the example)
+ *			and print the ones the card answers to (#451)
  *
  * Screens: Read (poll, identify, MIFARE Classic keys from the streaming
  * dictionary, read, Save), Detect reader (a stub until /dev/nfc can
  * listen, Phase 13), Saved (the .nfc files in /home/flipper/nfc: Info,
  * Delete), Extra actions (MIFARE Classic keys: the dictionaries and how
- * many keys they hold) and Add manually (type and UID, saved as a blank
- * card).  The reader side is libnfc (src/lib/libnfc) on one nfc_xfer: the
+ * many keys they hold), Add manually (type and UID, saved as a blank
+ * card) and Scan services (#451: which applications an ISO 14443-4 card
+ * answers SELECT for, from a dictionary file read a line at a time;
+ * nothing but SELECT is sent).  Read shows a Type 4 Tag's NDEF record.  The reader side is libnfc (src/lib/libnfc) on one nfc_xfer: the
  * /dev/nfc ioctls (<minix/nfc.h>, driver lane:local) or nfcloop.c.
  *
  * /dev/nfc is group nfc (14); nfc is set-gid nfc and opens it only for a
@@ -46,6 +51,9 @@
 #include "nfc_poller.h"
 #include "mf_attack.h"
 #include "nfcloop.h"
+#include "iso_dep.h"
+#include "aid_scan.h"
+#include "t4t.h"
 
 #define HOME	"/home/flipper"
 #define NFCDIR	HOME "/nfc"
@@ -53,6 +61,8 @@
 #define PATHMAX	128
 #define PAGE	8
 #define NAMEMAX	24
+#define AID_EXAMPLE	"/usr/share/nfc/aid_scan.nfc"	/* base package */
+#define T4NOTE	48
 
 static int loopback;			/* -L, -t */
 static int nfcfd = -1;			/* /dev/nfc */
@@ -64,6 +74,9 @@ static nfc_device_t *card;		/* the card read or opened */
 static int keys_a, keys_b, nblk;	/* what the last read found */
 static const char *dictnote;		/* "no dictionary" note, or NULL */
 static const char *dict_t;		/* -t DICT */
+static char *t4note;			/* a Type 4 Tag's NDEF (malloc'd) */
+static aid_scan_t *scan;		/* the last scan (malloc'd) */
+static const char *scandict;		/* the dictionary it used */
 static char file[PATHMAX];		/* the saved file shown */
 static char top;			/* window on top: m r s f c n x k a */
 static int lfirst;
@@ -229,7 +242,8 @@ static const char *type_name(const nfc_device_t *d)
 			: "MIFARE Classic 1K";
 	case NFC_DEV_MF_ULTRALIGHT:
 		return d->ul_subtype[0] ? d->ul_subtype : "Ultralight";
-	case NFC_DEV_ISO14443_3A: return "ISO14443-3A";
+	case NFC_DEV_ISO14443_3A:
+		return d->sak & 0x20 ? "ISO14443-4A" : "ISO14443-3A";
 	default: return "Unknown";
 	}
 }
@@ -245,6 +259,33 @@ static void card_free(void)
 {
 	free(card);
 	card = NULL;
+	free(t4note);
+	t4note = NULL;
+}
+
+/* An ISO 14443-4 card (SAK bit 0x20): RATS, then its NDEF message if it
+ * is a Type 4 Tag, summed up in t4note.  Read only. */
+static void read_t4(void)
+{
+	iso_dep_t *d = malloc(sizeof *d);
+	t4t_t *t = malloc(sizeof *t);
+	int r;
+
+	t4note = malloc(T4NOTE);
+	if (d == NULL || t == NULL || t4note == NULL) goto out;
+	strcpy(t4note, "no ATS");
+	if (iso_dep_activate(d, &xf) != NFC_OK) goto out;
+	r = t4t_read(d, t);
+	if (r == NFC_OK) {
+		t4t_ndef_summary(t->ndef, t->got, t4note, T4NOTE);
+		nblk = t->nlen;
+	} else
+		strcpy(t4note, r == NFC_ERR_NOTSUP ? "No NDEF application"
+		       : "NDEF read failed");
+	iso_dep_deselect(d);
+out:
+	free(d);
+	free(t);
 }
 
 /* ---- reading a card ---- */
@@ -262,7 +303,8 @@ static int do_read(const char *dict)
 	if (card_new() < 0) return -1;
 	if (lb) {
 		nfcloop_card(lb, lbnext);
-		lbnext = lbnext == NFCLOOP_MFC1K ? NFCLOOP_NTAG215 : NFCLOOP_MFC1K;
+		lbnext = lbnext == NFCLOOP_MFC1K ? NFCLOOP_NTAG215
+			: lbnext == NFCLOOP_NTAG215 ? NFCLOOP_T4T : NFCLOOP_MFC1K;
 	}
 	(void) nfc_field(&xf, 1, NFC_TECH_A);
 	if (nfc_poll_identify(&xf, card) != NFC_OK) {
@@ -272,6 +314,8 @@ static int do_read(const char *dict)
 	}
 	if (card->type == NFC_DEV_MF_ULTRALIGHT) {
 		if (nfc_poll_read_ul(&xf, card) == NFC_OK) nblk = card->ul_pages;
+	} else if (card->type == NFC_DEV_ISO14443_3A && (card->sak & 0x20)) {
+		read_t4();
 	} else if (card->type == NFC_DEV_MF_CLASSIC
 		   && (f = malloc(sizeof *f)) != NULL) {
 		mf_found_init(f, card->mfc.type);
@@ -381,6 +425,40 @@ static int make_card(void)
 	return 0;
 }
 
+/* ---- the service scanner (#451) ---- */
+
+/* Your dictionary if there is one, else the example. */
+static const char *scan_dict(void)
+{
+	return access(AID_SCAN_DICT, R_OK) == 0 ? AID_SCAN_DICT : AID_EXAMPLE;
+}
+
+/* Scan the card in the field with dict.  The aid_scan result. */
+static int do_scan(const char *dict)
+{
+	int r;
+
+	if (scan == NULL && (scan = malloc(sizeof *scan)) == NULL)
+		return NFC_ERR_IO;
+	scandict = dict;
+	(void) nfc_field(&xf, 1, NFC_TECH_A);
+	r = aid_scan(&xf, dict, scan, NULL, NULL);
+	(void) nfc_field(&xf, 0, 0);
+	return r;
+}
+
+static void scan_free(void)
+{
+	free(scan);
+	scan = NULL;
+}
+
+/* "Visa credit/debit" "Payments" "A0000000031010" "9000": a hit's text. */
+static const char *sw_text(uint16_t sw)
+{
+	return sw == 0x6283 ? "blocked" : "selected";
+}
+
 /* ---- windows ---- */
 
 static void w_main(void)
@@ -391,6 +469,7 @@ static void w_main(void)
 	gm_item("saved", "Saved", "");
 	gm_item("extra", "Extra actions", "");
 	gm_item("add", "Add manually", "");
+	gm_item("scan", "Scan services", "");
 	gm_show();
 	top = 'm';
 }
@@ -438,6 +517,10 @@ static void card_rows(void)
 	} else if (card->type == NFC_DEV_MF_ULTRALIGHT) {
 		sprintf(r, "%d", card->ul_pages);
 		gm_item("i_pg", "Pages", r);
+	}
+	if (t4note) {
+		gm_item("i_ndef", "NDEF", "");
+		gm_line(t4note);
 	}
 }
 
@@ -565,6 +648,80 @@ static void w_keys(void)
 	top = 'k';
 }
 
+/* The services a card answered to: ATQA/SAK and ATS first, then one row
+ * per service (its name; its group on the right).  OK on one tells what
+ * it is. */
+static void w_scan(void)
+{
+	char r[48], k[6];
+	unsigned i;
+
+	gm_win("scan", "list", "Services", 0, 0);
+	hex(r, scan->atqa, 2);
+	sprintf(r + 4, " %02X", scan->sak);
+	gm_item("s_as", "ATQA SAK", r);
+	hex(r, scan->ats, scan->ats_len > 10 ? 10 : scan->ats_len);
+	gm_item("s_ats", "ATS", r);
+	for (i = 0; i < scan->nhits && i < AID_HITS_MAX; i++) {
+		sprintf(k, "h%02u", i);
+		gm_item(k, scan->hit[i].e.name[0] ? scan->hit[i].e.name : "?",
+			scan->hit[i].e.group);
+	}
+	if (scan->nhits > AID_HITS_MAX) {
+		sprintf(r, "+%u more (nfc scan)", scan->nhits - AID_HITS_MAX);
+		gm_line(r);
+	}
+	if (scan->nhits == 0) gm_line("No service answered");
+	sprintf(r, "%u AIDs tried%s", scan->tried, scan->lost ? ", card lost" : "");
+	gm_line(r);
+	gm_show();
+	top = 'S';
+}
+
+/* What a found service is: its group's line from the dictionary. */
+static void w_hit(unsigned i)
+{
+	aid_hit_t *h = &scan->hit[i];
+	char d[AID_DESC_MAX], a[2 * AID_MAX + 1], *sp;
+
+	gm_win("hit", "text", h->e.group[0] ? h->e.group : "Service", 0, 0);
+	gm_line(h->e.name);
+	if (aid_dict_group_desc(scandict, h->e.group, d, sizeof d) == 0) {
+		/* two lines of about 30 characters, cut at a blank */
+		sp = strlen(d) > 30 ? strchr(d + 20, ' ') : NULL;
+		if (sp && sp - d <= 32) { *sp = 0; gm_line(d); gm_line(sp + 1); }
+		else gm_line(d);
+	}
+	aid_hex(a, h->e.aid, h->e.aid_len);
+	gm_line(a);
+	sprintf(d, "SW %04X: %s", h->sw, sw_text(h->sw));
+	gm_line(d);
+	gm_show();
+	top = 'h';
+}
+
+static void w_scanrun(void)
+{
+	char sak[24];
+	int r;
+
+	if (!have_reader()) { no_reader(); return; }
+	if (lb) nfcloop_card(lb, NFCLOOP_T4T);	/* -L: the Type 4 card */
+	r = do_scan(scan_dict());
+	if (r == AID_SCAN_NODICT)
+		w_note("Scan services", "No AID dictionary", "nfc/assets/aid_scan.nfc");
+	else if (r == NFC_ERR_NOTSUP) {
+		sprintf(sak, "(SAK %02X: no apps)", scan->sak);
+		w_note("Scan services", "Not an ISO 14443-4 card", sak);
+	} else if (r != NFC_OK)
+		w_note("Scan services", "No card found", "Hold a card to the back");
+	else {
+		w_scan();
+		return;
+	}
+	scan_free();
+}
+
 static void w_add(void)
 {
 	gm_win_live("add", "list", "Add manually", 1);
@@ -584,6 +741,7 @@ static void redraw(void)
 	case 'x': w_extra(); break;
 	case 'k': w_keys(); break;
 	case 'a': w_add(); break;
+	case 'S': case 'h': if (scan) { w_scan(); break; } w_main(); break;
 	case 'r': if (card) { w_card(); break; } /* FALLTHROUGH */
 	default: w_main();
 	}
@@ -603,7 +761,12 @@ static void ok(const char *win, const char *key)
 		else if (!strcmp(key, "saved")) w_saved(0);
 		else if (!strcmp(key, "extra")) w_extra();
 		else if (!strcmp(key, "add")) w_add();
+		else if (!strcmp(key, "scan")) w_scanrun();
 		else gm_busy(0);
+	} else if (!strcmp(win, "scan") && key[0] == 'h' && scan
+		   && (unsigned) atoi(key + 1) < scan->nhits
+		   && atoi(key + 1) < AID_HITS_MAX) {
+		w_hit((unsigned) atoi(key + 1));
 	} else if (!strcmp(win, "card") && !strcmp(key, "save") && card) {
 		card_name(name);
 		if (do_save(name, p) == 0) w_note("Saved", base(p), NULL);
@@ -658,8 +821,53 @@ static void back(const char *win)
 	else if (!strcmp(win, "file")) top = 's';
 	else if (!strcmp(win, "delq")) top = 'f';
 	else if (!strcmp(win, "keys")) top = 'x';
+	else if (!strcmp(win, "hit")) top = 'S';
+	else if (!strcmp(win, "scan")) { scan_free(); top = 'm'; }
 	else if (!strcmp(win, "note")) top = card ? 'r' : 'm';
 	else top = 'm';
+}
+
+/* ---- nfc scan: the scanner without a screen ---- */
+
+static int cli_scan(const char *dict)
+{
+	char a[2 * AID_MAX + 1], u[21];
+	unsigned i;
+	int r;
+
+	if (!have_reader()) {
+		printf("nfc scan: %s\n", devwhy == 1 ? "not in group nfc"
+		       : "no /dev/nfc");
+		return 1;
+	}
+	if (lb) nfcloop_card(lb, NFCLOOP_T4T);
+	r = do_scan(dict);
+	if (r == AID_SCAN_NODICT) {
+		printf("nfc scan: no dictionary %s\n", dict);
+		return 1;
+	}
+	if (r != NFC_OK && r != NFC_ERR_NOTSUP) {
+		printf("nfc scan: no card\n");
+		return 1;
+	}
+	hex(u, scan->uid, scan->uid_len);
+	printf("UID %s ATQA %02X%02X SAK %02X\n", u, scan->atqa[0],
+	       scan->atqa[1], scan->sak);
+	if (r == NFC_ERR_NOTSUP) {
+		printf("nfc scan: not an ISO 14443-4 card\n");
+		return 1;
+	}
+	hex(a, scan->ats, scan->ats_len);
+	printf("ATS %s\n", a);
+	for (i = 0; i < scan->nhits && i < AID_HITS_MAX; i++) {
+		aid_hex(a, scan->hit[i].e.aid, scan->hit[i].e.aid_len);
+		printf("%-12s %-32s %04X %s\n", scan->hit[i].e.group, a,
+		       scan->hit[i].sw, scan->hit[i].e.name);
+	}
+	printf("nfc scan: %u AIDs tried, %u answered%s (%s)\n", scan->tried,
+	       scan->nhits, scan->lost ? ", card lost" : "", dict);
+	scan_free();
+	return 0;
 }
 
 /* ---- nfc -t: the flow without a screen ---- */
@@ -703,6 +911,38 @@ static int selftest(void)
 		"loopback: NTAG215 identified (7-byte UID)");
 	t_check(r == 0 && nblk == 135 && card->ul_page[3][0] == 0xE1,
 		"NTAG215: 135 pages read");
+	r = do_read(dict_t);
+	t_check(r == 0 && card->type == NFC_DEV_ISO14443_3A
+		&& card->sak == 0x20 && card->uid_len == 7,
+		"loopback: ISO 14443-4A card identified (SAK 20)");
+	t_check(r == 0 && t4note
+		&& !strcmp(t4note, "URI https://example.org/minix/t"),
+		"Type 4 Tag: NDEF URI read");
+	{
+		static const char sd[] = "/tmp/nfcscan.txt";
+		FILE *fp = fopen(sd, "w");
+
+		if (fp) {
+			fputs("[Payments] Bank cards\nA0000000031010 Visa\n"
+			      "A0000000041010 Mastercard\n[Access] Keys\n"
+			      "A0000006472F0001 FIDO U2F\nzz bad line\n", fp);
+			fclose(fp);
+		}
+		r = do_scan(sd);
+		t_check(r == NFC_OK && scan->tried == 3 && scan->nhits == 2
+			&& !strcmp(scan->hit[0].e.name, "Visa")
+			&& !strcmp(scan->hit[1].e.group, "Access")
+			&& scan->bad_lines == 1 && scan->ats_len == 5,
+			"scan: Visa and FIDO U2F found, Mastercard not");
+		scan_free();
+		lbnext = NFCLOOP_MFC1K;
+		r = do_read(dict_t);
+		r = r == 0 ? do_scan(sd) : -1;
+		t_check(r == NFC_ERR_NOTSUP,
+			"scan: a MIFARE Classic has no applications");
+		scan_free();
+		unlink(sd);
+	}
 	nfcloop_card(lb, NFCLOOP_NONE);
 	lbnext = NFCLOOP_NONE;
 	t_check(do_read(dict_t) < 0 && card == NULL, "empty field: no card");
@@ -752,9 +992,16 @@ int main(int argc, char **argv)
 		nfc_open();
 		return selftest();
 	}
+	if (argc > 1 && !strcmp(argv[1], "scan")) {
+		int a = 2;
+
+		if (argc > a && !strcmp(argv[a], "-L")) { loopback = 1; a++; }
+		nfc_open();
+		return cli_scan(argc > a ? argv[a] : scan_dict());
+	}
 	if (argc > 1 && !strcmp(argv[1], "-L")) loopback = 1;
 	else if (argc > 1) {
-		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c | -r]\n");
+		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c | -r | scan [-L] [DICT]]\n");
 		return 2;
 	}
 	nfc_open();

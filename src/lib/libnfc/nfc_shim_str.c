@@ -24,6 +24,22 @@ void furi_string_mid(FuriString* s, size_t start, size_t len) {
     s->buf[len] = 0;
 }
 
+size_t nfcshim_str_replace(FuriString* s, const char* from, const char* to, size_t start) {
+    size_t fl = strlen(from), at;
+    const char* q;
+    if(!fl || start > s->len || (q = strstr(s->buf + start, from)) == NULL)
+        return FURI_STRING_FAILURE;
+    at = (size_t)(q - s->buf);
+    FuriString* out = furi_string_alloc();
+    furi_string_set_str(out, s->buf);
+    furi_string_left(out, at);
+    furi_string_cat_str(out, to);
+    furi_string_cat_str(out, s->buf + at + fl);
+    furi_string_set_s(s, out);
+    furi_string_free(out);
+    return at;
+}
+
 void furi_string_replace_all(FuriString* s, const char* from, const char* to) {
     size_t fl = strlen(from), tl = strlen(to);
     if(!fl) return;

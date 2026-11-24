@@ -135,6 +135,10 @@ size_t nfcshim_str_search(const FuriString* s, const char* needle, size_t start)
 #define furi_string_search_str(s, n, ...) nfcshim_str_search(s, n, (0, ##__VA_ARGS__))
 void furi_string_mid(FuriString* s, size_t start, size_t len);
 void furi_string_replace_all(FuriString* s, const char* from, const char* to);
+/* The first `from` at or after start becomes `to` (NTAG4xx's short name,
+ * #451); returns its index or FURI_STRING_FAILURE. */
+size_t nfcshim_str_replace(FuriString* s, const char* from, const char* to, size_t start);
+#define furi_string_replace(s, f, t, ...) nfcshim_str_replace(s, f, t, (0, ##__VA_ARGS__))
 /* Last c in s, or FURI_STRING_FAILURE (stock's optional start is not used). */
 size_t furi_string_search_rchar(const FuriString* s, char c, ...);
 /* Code points in the (UTF-8) string. */
