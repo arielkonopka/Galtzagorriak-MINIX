@@ -73,6 +73,7 @@ int nfc_poll_read_mfc(const nfc_xfer_t *x, nfc_device_t *d, const mf_found_t *f)
 			continue;
 		if(mf_read_block(x, &c, (uint8_t)blk, &b) != NFC_OK)
 			continue;
+		mf_halt(x, &c);
 		d->mfc.block[blk] = b;
 		if(blk < 64) d->mfc.block_read |= (uint64_t)1 << blk;
 		read++;

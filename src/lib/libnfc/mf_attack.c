@@ -37,6 +37,7 @@ unsigned mf_attack_key(const nfc_xfer_t *x, uint32_t uid,
 				f->have_a[s] = 1;
 				f->key_a[s] = *key;
 				got++;
+				mf_halt(x, &cs);
 			}
 		}
 		if(!f->have_b[s]) {
@@ -45,6 +46,7 @@ unsigned mf_attack_key(const nfc_xfer_t *x, uint32_t uid,
 				f->have_b[s] = 1;
 				f->key_b[s] = *key;
 				got++;
+				mf_halt(x, &cs);
 			}
 		}
 	}

@@ -71,24 +71,32 @@ static int card_xfer(void *ctx,
 		}
 		return NFC_ERR_TIMEOUT;	/* nothing else before auth */
 	}
-	/* phase 1: the reader's {nr}{ar}. */
+	/* phase 1: the reader's {nr}{ar}, 9-bit frames. */
 	k->phase = 0;
-	if(tx_bits != 64) return NFC_ERR_PROTO;
+	if(tx_bits != 72) return NFC_ERR_PROTO;
 	{
-		uint32_t nr_enc = be32(tx), ar_enc = be32(tx + 4);
 		const mf_key_t *key = (k->ktype == MF_KEY_A)
 			? &k->keya[k->sector] : &k->keyb[k->sector];
-		uint32_t ks_ar, ar, at;
+		uint8_t pl[8], in2[5], f[5];
+		size_t b, o = 0, pos = 0;
+		uint32_t ar, at;
+
 		crypto1_init(&k->c, mf_key_to_num(key));
 		(void)crypto1_word(&k->c, k->uid ^ k->nt, 0);
-		(void)crypto1_word(&k->c, nr_enc, 1);	/* feeds plaintext nr */
-		ks_ar = crypto1_word(&k->c, 0, 0);
-		ar = ar_enc ^ ks_ar;
+		if(mf_open(&k->c, tx, 36, 1, pl, 4) != 4) return NFC_ERR_TIMEOUT;
+		memset(in2, 0, sizeof in2);
+		for(b = 36; b < 72; b++, o++)
+			if(tx[b / 8] >> (b % 8) & 1) in2[o / 8] |= 1 << (o % 8);
+		if(mf_open(&k->c, in2, 36, 0, pl + 4, 4) != 4) return NFC_ERR_TIMEOUT;
+		ar = be32(pl + 4);
 		if(ar != crypto1_prng_successor(k->nt, 64))
 			return NFC_ERR_TIMEOUT;		/* wrong key: silent */
 		at = crypto1_prng_successor(k->nt, 96);
-		put32(rx, at ^ crypto1_word(&k->c, 0, 0));
-		*rx_bits = 32;
+		put32(pl, at);
+		memset(f, 0, sizeof f);
+		mf_seal(&k->c, pl, 4, 0, f, &pos);
+		memcpy(rx, f, 5);
+		*rx_bits = pos;
 		k->authed = 1;
 		return NFC_OK;
 	}
@@ -458,17 +466,24 @@ static int card_rw_xfer(void *ctx,
 	card_rw_t *k = ctx;
 	(void)fwt; (void)flags; (void)rx_room;
 
-	if(k->phase == 2) {		/* encrypted READ(0x30, block) */
-		uint8_t cmd, blk;
+	if(k->phase == 2) {		/* encrypted READ(0x30, block), 9-bit frames */
+		uint8_t pl[18], f[24], blk;
+		size_t pos = 0;
+		unsigned crc;
 		int i;
 		k->phase = 0;
-		if(tx_bits != 16) return NFC_ERR_PROTO;
-		cmd = tx[0] ^ crypto1_byte(&k->c, tx[0], 1);
-		blk = tx[1] ^ crypto1_byte(&k->c, tx[1], 1);
-		if(cmd != 0x30 || blk >= 64) return NFC_ERR_PROTO;
-		for(i = 0; i < 16; i++)
-			rx[i] = k->block[blk].data[i] ^ crypto1_byte(&k->c, 0, 0);
-		*rx_bits = NFC_BITS(16);
+		if(mf_open(&k->c, tx, tx_bits, 0, pl, 4) != 4) return NFC_ERR_TIMEOUT;
+		crc = mf_crc_a(pl, 2);
+		if(pl[0] != 0x30 || pl[1] >= 64 || (pl[2] | pl[3] << 8) != (int)crc)
+			return NFC_ERR_TIMEOUT;
+		blk = pl[1];
+		for(i = 0; i < 16; i++) pl[i] = k->block[blk].data[i];
+		crc = mf_crc_a(pl, 16);
+		pl[16] = (uint8_t)crc; pl[17] = (uint8_t)(crc >> 8);
+		memset(f, 0, sizeof f);
+		mf_seal(&k->c, pl, 18, 0, f, &pos);
+		memcpy(rx, f, (pos + 7) / 8);
+		*rx_bits = pos;
 		return NFC_OK;
 	}
 	if(k->phase == 0) {
@@ -483,20 +498,29 @@ static int card_rw_xfer(void *ctx,
 		}
 		return card_a_activate(&k->a, tx, tx_bits, rx, rx_bits);
 	}
-	/* phase 1: the reader's {nr}{ar}. */
+	/* phase 1: the reader's {nr}{ar}, 9-bit frames. */
 	k->phase = 0;
-	if(tx_bits != 64) return NFC_ERR_PROTO;
+	if(tx_bits != 72) return NFC_ERR_PROTO;
 	{
-		uint32_t nr_enc = be32(tx), ar_enc = be32(tx + 4), ar, at;
+		uint8_t pl[8], in2[5], f[5];
+		size_t b, o = 0, pos = 0;
+		uint32_t ar, at;
 		crypto1_init(&k->c, mf_key_to_num(&k->keya0));
 		(void)crypto1_word(&k->c, k->uid ^ k->nt, 0);
-		(void)crypto1_word(&k->c, nr_enc, 1);
-		ar = ar_enc ^ crypto1_word(&k->c, 0, 0);
+		if(mf_open(&k->c, tx, 36, 1, pl, 4) != 4) return NFC_ERR_TIMEOUT;
+		memset(in2, 0, sizeof in2);
+		for(b = 36; b < 72; b++, o++)
+			if(tx[b / 8] >> (b % 8) & 1) in2[o / 8] |= 1 << (o % 8);
+		if(mf_open(&k->c, in2, 36, 0, pl + 4, 4) != 4) return NFC_ERR_TIMEOUT;
+		ar = be32(pl + 4);
 		if(k->sector != 0 || ar != crypto1_prng_successor(k->nt, 64))
 			return NFC_ERR_TIMEOUT;		/* wrong/unknown key */
 		at = crypto1_prng_successor(k->nt, 96);
-		put32(rx, at ^ crypto1_word(&k->c, 0, 0));
-		*rx_bits = 32;
+		put32(pl, at);
+		memset(f, 0, sizeof f);
+		mf_seal(&k->c, pl, 4, 0, f, &pos);
+		memcpy(rx, f, 5);
+		*rx_bits = pos;
 		k->phase = 2;				/* ready for the read */
 		return NFC_OK;
 	}
