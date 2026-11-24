@@ -40,7 +40,11 @@ step, a benign redefinition if both are included).
 time in `fc` units (`NFC_FC` = 13.56 MHz; 0 means the technology default) and the flags:
 
 - `NFC_XF_CRC_TX` / `NFC_XF_CRC_RX` — the chip appends / checks the ISO 14443 CRC.
-- `NFC_XF_PARITY` — keep per-byte parity bits (transparent mode, for Crypto-1).
+- `NFC_XF_PARITY` — keep per-byte parity bits (transparent mode, for Crypto-1). Both
+  directions are then a stream of 9 bits a byte (the data LSB first, then its parity bit),
+  `tx_bits`/`rx_bits` count all of them, and a short answer (a 4-bit ACK/NAK) comes back as
+  it is. The driver does this in the poller without `NFCIOCTRANSP` (the chip only stops
+  making and checking parity); a CRC flag together with it is refused (`ENOTTY`).
 - `NFC_XF_NO_RX` — send only.
 - `NFC_XF_SHORT` — a 7-bit short frame (REQA / WUPA).
 
