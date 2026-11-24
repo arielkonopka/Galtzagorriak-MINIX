@@ -1,0 +1,59 @@
+# NFC service scanner dictionary - an EXAMPLE (Galtzagorriak MINIX, #451)
+#
+# The scanner sends "SELECT <AID>" for every line below, one after the
+# other, and lists the ones the card answers to.  Nothing else is sent:
+# no READ, no PIN, no authentication.  The file is read a line at a time.
+#
+# Your own copy: /home/flipper/nfc/assets/aid_scan.nfc (used instead of
+# this one when it is there).  Copy this file there and add your lines.
+#
+# Format:
+#   # comment
+#   [Group] one line telling what these services are (max 63 chars)
+#   <AID in hex, 5 to 16 bytes> <name of the service>
+#
+# Only public application identifiers: no keys, no secrets (rule D.3).
+# Sources: EMV and the card schemes' published AIDs, ICAO Doc 9303,
+# ISO/IEC 18013-5, BSI TR-03110, NIST SP 800-73-4, FIDO U2F NFC, the
+# OpenPGP card spec, gematik (eGK), NFC Forum Type 4 Tag, Calypso, and
+# the AID lists of public reader tools (Proxmark3 aidlist.json).
+
+[Payments] Bank cards: what a shop terminal talks to when you tap
+325041592E5359532E4444463031 Payment directory (PPSE 2PAY.SYS.DDF01)
+A0000000031010 Visa credit/debit
+A0000000032010 Visa Electron
+A0000000032020 V PAY
+A0000000041010 Mastercard credit/debit
+A0000000043060 Maestro
+D27600002545500100 girocard
+A00000002501 American Express
+A0000001523010 Discover
+A0000000651010 JCB
+A000000333010101 UnionPay debit
+A0000002771010 Interac
+
+[Documents] Passports and ID cards: chip with your photo and data
+A0000002471001 ICAO e-passport (eMRTD LDS1)
+E80704007F00070302 eID (BSI TR-03110, e.g. German ID card)
+A0000002480400 Mobile driving licence (ISO 18013-5)
+
+# DESFire city cards (Opal, myki, ITSO and others) keep their data in
+# 3-byte DESFire applications, which SELECT by AID cannot reach: use Read.
+[Transport] Travel cards: tickets and balance of a transport network
+315449432E494341 Calypso (1TIC.ICA)
+
+[Access] Badges and keys: doors, logins and signing
+A000000308000010000100 PIV (US government ID, NIST SP 800-73)
+A0000006472F0001 FIDO U2F security key
+D27600012401 OpenPGP card
+A0000004400001010001 HID SEOS
+
+[Health] Health insurance cards: your insurance and health data
+D2760001448000 German eGK (root)
+D27600000102 German eGK health application (DF.HCA)
+
+[Phones] Phones and tags: NDEF data, wallets, HCE services
+D2760000850101 NFC Forum Type 4 Tag (NDEF)
+D2760000850100 NFC Forum Type 4 Tag v1 (NDEF)
+4F53452E5641532E3031 Apple Wallet passes (VAS)
+A000000476D0000101 Google Wallet passes (Smart Tap)

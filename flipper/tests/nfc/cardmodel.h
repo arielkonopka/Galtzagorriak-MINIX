@@ -103,7 +103,43 @@ typedef struct {
     cm_app_fn app;
     void* app_ctx;
     unsigned iblocks, wtx_seen;
+    /* Chaining (#451), off when 0: answers longer than `chunk` bytes go
+     * out as a chain of I-blocks, one per reader R(ACK); a reader's
+     * chained command is gathered (R(ACK) per block). */
+    size_t chunk;
+    int chain_in;
+    uint8_t out[300];
+    size_t out_len, out_off;
+    unsigned chains_in, chains_out;
+    uint8_t last_bn;     /* the card's block number (its last I-block) */
+    unsigned naks;
 } cm_isodep_t;
+
+/* The next piece of a chained answer, PCB block number bn. */
+static void cm_isodep_piece(cm_isodep_t* k, uint8_t bn, uint8_t* rx, size_t* rx_n) {
+    size_t c = k->out_len - k->out_off;
+    int more = k->chunk && c > k->chunk;
+    if(more) c = k->chunk;
+    rx[0] = 0x02 | bn | (more ? 0x10 : 0);
+    k->last_bn = bn;
+    memcpy(rx + 1, k->out + k->out_off, c);
+    k->out_off += c;
+    *rx_n = 1 + c;
+    if(more) k->chains_out++;
+}
+
+/* The application's answer to k->cmd, chained if long. */
+static void cm_isodep_answer(cm_isodep_t* k, uint8_t* rx, size_t* rx_n) {
+    k->last_bn = k->pcb & 1;
+    if(!k->chunk) {
+        rx[0] = k->pcb;
+        *rx_n = 1 + k->app(k->app_ctx, k->cmd, k->cmd_len, rx + 1);
+        return;
+    }
+    k->out_len = k->app(k->app_ctx, k->cmd, k->cmd_len, k->out);
+    k->out_off = 0;
+    cm_isodep_piece(k, k->pcb & 1, rx, rx_n);
+}
 
 /* tx without CRC (checked by the caller); answer without CRC. */
 static int cm_isodep(cm_isodep_t* k, const uint8_t* tx, size_t n, uint8_t* rx, size_t* rx_n) {
@@ -113,21 +149,39 @@ static int cm_isodep(cm_isodep_t* k, const uint8_t* tx, size_t n, uint8_t* rx, s
             if(!k->wtx_pending || n != 2) return -1;
             k->wtx_pending = 0;
             k->wtx_seen++;
-            rx[0] = k->pcb;
-            *rx_n = 1 + k->app(k->app_ctx, k->cmd, k->cmd_len, rx + 1);
+            cm_isodep_answer(k, rx, rx_n);
             return 0;
         }
         rx[0] = pcb;                       /* DESELECT */
         *rx_n = 1;
         return 0;
     }
-    if((pcb & 0xE2) == 0x02) {             /* I-block, no chaining */
+    if((pcb & 0xF6) == 0xB2 && n == 1 && (pcb & 1) != k->last_bn) {
+        k->naks++;                         /* R(NAK): the reader's block */
+        rx[0] = 0xA2 | k->last_bn;         /* never came: ACK (rule 13) */
+        *rx_n = 1;
+        return 0;
+    }
+    if((pcb & 0xF6) == 0xA2 && k->chunk && k->out_off < k->out_len) {
+        cm_isodep_piece(k, pcb & 1, rx, rx_n); /* R(ACK): the next piece */
+        return 0;
+    }
+    if((pcb & 0xE2) == 0x02) {             /* I-block */
         size_t hdr = 1 + ((pcb & 0x08) ? 1 : 0) + ((pcb & 0x04) ? 1 : 0);
-        if(n < hdr || n - hdr > sizeof k->cmd) return -1;
+        size_t base = k->chain_in ? k->cmd_len : 0;
+        if(n < hdr || base + n - hdr > sizeof k->cmd) return -1;
         k->iblocks++;
-        k->pcb = pcb & 0xF3;               /* no CID/NAD in the answer */
-        memcpy(k->cmd, tx + hdr, n - hdr);
-        k->cmd_len = n - hdr;
+        memcpy(k->cmd + base, tx + hdr, n - hdr);
+        k->cmd_len = base + n - hdr;
+        if(pcb & 0x10) {                   /* chained: ACK, wait for more */
+            k->chain_in = 1;
+            k->chains_in++;
+            rx[0] = 0xA2 | (pcb & 1);
+            *rx_n = 1;
+            return 0;
+        }
+        k->chain_in = 0;
+        k->pcb = pcb & 0xE3;               /* no CID/NAD in the answer */
         if(k->wtx_left > 0) {
             k->wtx_left--;
             k->wtx_pending = 1;
@@ -136,8 +190,7 @@ static int cm_isodep(cm_isodep_t* k, const uint8_t* tx, size_t n, uint8_t* rx, s
             *rx_n = 2;
             return 0;
         }
-        rx[0] = k->pcb;
-        *rx_n = 1 + k->app(k->app_ctx, k->cmd, k->cmd_len, rx + 1);
+        cm_isodep_answer(k, rx, rx_n);
         return 0;
     }
     return -1;
@@ -168,6 +221,8 @@ static int cm_4a_xfer(void* ctx, const uint8_t* tx, size_t bits, uint8_t* rx, si
     size_t out;
     if(!k->rats_done && n == 2 && tx[0] == 0xE0) {
         k->rats_done = 1;
+        k->dep.last_bn = 1;          /* the PICC starts at 1 */
+        k->dep.chain_in = 0;
         k->rats_seen++;
         memcpy(rx, k->ats, k->ats[0]);
         out = k->ats[0];

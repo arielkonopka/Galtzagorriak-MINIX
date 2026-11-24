@@ -44,7 +44,7 @@ MFKEY_SRC := $(V)/mfkey/crypto1.c $(V)/mfkey/mfkey_attack.c \
 	     $(L)/mfkey_host.c
 MFKEY_HDR := $(L)/mfkey_host.h $(wildcard $(L)/mfkey_shim/*.h)
 
-test: $(B)/nfctest $(B)/mfkeytest prototest cardtest p5test cryptotest
+test: $(B)/nfctest $(B)/mfkeytest prototest cardtest p5test cryptotest t4test
 	cd . && ./$(B)/nfctest
 	cd . && ./$(B)/mfkeytest
 
@@ -55,6 +55,19 @@ $(B)/nfctest: nfctest.c $(NFC_SRC) $(NFC_HDR)
 $(B)/mfkeytest: $(V)/mfkeytest.c $(MFKEY_SRC) $(MFKEY_HDR)
 	@mkdir -p $(B)
 	$(CC) $(MFKEY_CFLAGS) $(MFKEY_INC) -o $@ $(V)/mfkeytest.c $(MFKEY_SRC)
+
+# t4test (#451): libnfc's ISO-DEP layer, the Type 4 Tag NDEF reader and
+# the read-only service scanner against cm_t4.h, plus the example AID
+# dictionary (flipper/rootfs/usr/share/nfc/aid_scan.nfc).
+T4_SRC	:= $(L)/iso_dep.c $(L)/aid_scan.c $(L)/t4t.c $(L)/iso14443_3a.c
+t4test: $(B)/t4test
+	./$(B)/t4test
+
+$(B)/t4test: t4test.c cm_t4.h cardmodel.h $(T4_SRC) $(NFC_HDR) ../../rootfs/usr/share/nfc/aid_scan.nfc
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) -Wno-unused-function $(INC) -o $@ t4test.c $(T4_SRC)
+
+.PHONY: t4test
 
 include proto.mk
 
