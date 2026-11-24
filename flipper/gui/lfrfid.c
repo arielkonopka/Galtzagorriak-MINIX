@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include "gui.h"
 #include "ui.h"
+#include "../cmds/rfid_pw.h"
 
 #define DIR_RFID	"/home/lfrfid"
 #define PATHMAX		64
@@ -391,9 +392,46 @@ static void do_add(void)
 	gui_key();
 }
 
+/* ---- the copier's password (issue #448): where `rfid copy` gets it ---- */
+static int pw_item(void *ctx, int i, char *buf)
+{
+	unsigned long w;
+
+	(void) ctx;
+	if (!pw_nth(PW_DICT, i, &w)) return 0;
+	sprintf(buf, "%08lX", w);
+	return 1;
+}
+
+static void do_copier(void)
+{
+	static const char *const modes[] =
+		{ "Legacy: none", "Own: new random", "Previous copier", "From dictionary" };
+	unsigned long w;
+	char hex[12], line[40];
+	char *av[] = { "rfid", "copier", NULL, NULL, NULL };
+	int m, n, k;
+
+	m = menu("COPIER PASSWORD", modes, 4);
+	if (m < 0) return;
+	av[2] = (char *) pw_mode_name[m];
+	if (m == PW_DICT_PICK) {
+		if ((n = pw_count(PW_DICT)) == 0) {
+			ui_note("dictionary is empty", "BACK to return");
+			return;
+		}
+		k = ui_list("DICTIONARY", pw_item, NULL, n, 0, 0, NULL);
+		if (k < 0 || !pw_nth(PW_DICT, k, &w)) return;
+		sprintf(hex, "%08lX", w);
+		av[3] = hex;
+	}
+	ui_note(run_rfid(av, line, sizeof line) == 0 ? "saved" : "not saved", "BACK to return");
+}
+
 int main(int argc, char **argv)
 {
-	static const char *const main_items[] = { "Read", "Saved", "Add manually" };
+	static const char *const main_items[] =
+		{ "Read", "Saved", "Add manually", "Copier password" };
 	int sel;
 
 	if (gui_open() < 0) return 1;
@@ -403,11 +441,12 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	for (;;) {
-		sel = menu("RFID", main_items, 3);
+		sel = menu("RFID", main_items, 4);
 		if (sel < 0) break;
 		if (sel == 0) do_read();
 		else if (sel == 1) do_saved();
-		else do_add();
+		else if (sel == 2) do_add();
+		else do_copier();
 	}
 	gui_led(0, 0, 0);
 	return 0;
