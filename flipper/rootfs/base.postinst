@@ -188,6 +188,13 @@ grep '^nfc:' /etc/group >/dev/null || {
 	echo 'nfc:*:14:root,nobody' >> /etc/group
 	echo "base: /etc/group now has nfc"
 }
+# Cards made before the ST25R3916 driver (#390) lack /dev/nfc.
+if test ! -r /dev/nfc
+then
+	mknod /dev/nfc c 6 22 || echo "base: could not make /dev/nfc"
+	chgrp nfc /dev/nfc 2>/dev/null
+	chmod 660 /dev/nfc 2>/dev/null
+fi
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then
