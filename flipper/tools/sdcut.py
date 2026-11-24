@@ -134,7 +134,7 @@ def pwr(r):
 		return False
 	want = r.output("cksum /home/pwr")
 	halt(r, "kill -16 1")
-	if b"battery low: powering off" not in r.out:
+	if b"init: powering off" not in r.out:
 		print("  PWR: INIT did not say it powers off")
 		ok = False
 	r.restart()
