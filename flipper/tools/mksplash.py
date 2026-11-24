@@ -68,6 +68,10 @@ def main():
     ap.add_argument("--bubble", metavar="TEXT",
                     help="with --ready: TEXT in the speech bubble (4x6 font "
                     "of the LCD, light on dark), centred in x 9..118, y 4..9")
+    ap.add_argument("--label", action="append", default=[],
+                    metavar="TEXT@X,Y,INK",
+                    help="with --ready: more 4x6 text, top left at X,Y; "
+                    "INK 0 dark, 1 light (repeatable)")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="<1 lightens the picture before dithering")
     a = ap.parse_args()
@@ -78,14 +82,19 @@ def main():
         if img.size != (W, H):
             raise SystemExit("%s: need %dx%d with --ready" % (src, W, H))
         img = img.point(lambda v: 0 if v < 128 else 255)
+        rows = font4x6()
+        labels = list(a.label)
         if a.bubble:
-            rows = font4x6()
-            x = 9 + (110 - 4 * len(a.bubble)) // 2
-            for ch in a.bubble:
+            labels.append("%s@%d,4,1" % (a.bubble,
+                                         9 + (110 - 4 * len(a.bubble)) // 2))
+        for lab in labels:
+            text, at = lab.rsplit("@", 1)
+            x, y, ink = (int(v) for v in at.split(","))
+            for ch in text:
                 for gy in range(6):
                     for gx in range(4):
                         if rows[ord(ch) - 32][gy] & (0x80 >> gx):
-                            img.putpixel((x + gx, 4 + gy), 255)
+                            img.putpixel((x + gx, y + gy), 255 if ink else 0)
                 x += 4
     elif src:
         pic = Image.open(src).convert("L")
