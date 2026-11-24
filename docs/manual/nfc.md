@@ -29,9 +29,10 @@ firmware (spec Phase 14).
 > signature, counter; it tries the default password only when the card allows unlimited
 > tries), **FeliCa** (IDm/PMm, the FeliCa Lite-S blocks), **ST25TB / SRIX** (every block and the
 > system block) and **EMV** (the payment application's label, card number, expiry, PIN tries;
-> shown on screen only, never written to a file by the reader). MIFARE Ultralight C and
-> Ultralight AES cards need a cipher library this port does not have yet: their protected pages
-> show as not read, the open ones are read. More parsers: all_in_one, ndef (Ultralight and MIFARE
+> shown on screen only, never written to a file by the reader). MIFARE Ultralight C (3DES) and
+> Ultralight AES authentication now use a real cipher (the AES and DES of Mbed TLS, vendored in
+> `src/lib/mbedtls`, part 6 #447), so their protected pages are read once the right key is in
+> your dictionary. More parsers: all_in_one, ndef (Ultralight and MIFARE
 > Classic tags: URLs, text, Wi-Fi, vCards), sonicare, trt, ventra, aic, mykey, disney_infinity,
 > banapass and emv, 40 in all.
 >
@@ -93,12 +94,15 @@ keys out. The recovery itself (the Unleashed `mfkey` engine) is in the code and 
 two forms: **mfkey32** (two reader authentications on one sector) from a stock-format
 `.mfkey32.log`, and **static_nested** (one tag-static sector, two tag nonces with their
 keystream words) from a stock nested-nonce log. Each recovers a planted key in one to two
-seconds per key on the host; mfkey32 also recovers the all-`F` transport key. **(planned: the
-on-device nonce collection; the static-encrypted attack, which needs a per-card candidate-key
-dictionary.)**
+seconds per key on the host; mfkey32 also recovers the all-`F` transport key. A recovered key
+is added to your user dictionary (`mf_classic_dict_user.nfc`), skipping any key already there,
+so the next read finds it; the file is appended a key at a time and never loaded whole. No keys
+are shipped (D.3), and — a rule of this port — any key or password a test writes to a card is
+added to the dictionary first. **(planned: the on-device nonce collection; the static-encrypted
+attack, which needs a per-card candidate-key dictionary.)**
 
 ```
-mfkey nonneak.txt            # nonneak = nonces; prints the recovered keys
+mfkey nonneak.txt            # nonneak = nonces; prints the recovered keys, adds them to the dictionary
 ```
 
 ## The `nfc` app

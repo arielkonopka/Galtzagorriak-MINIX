@@ -78,4 +78,19 @@ bool mfkey_write_test_nested_nonces(
     uint32_t uid,
     int count);
 
+/* The user key dictionary recovered keys are added to (D.3: no keys are
+ * shipped; the user's own file).  Matches mf_dict.h's MF_DICT_USER; a
+ * define here keeps mfkey_host free of the mf_dict/mf_classic headers. */
+#define MFKEY_DICT_USER "/home/flipper/nfc/assets/mf_classic_dict_user.nfc"
+
+/* Append each of `keys` (big-endian six bytes) to the dictionary at `path`
+ * (12 uppercase hex digits a line, as stock writes), skipping any key the
+ * file already holds.  The existing file is read one line at a time (the
+ * R14 memory rule: never the whole file), so a large dictionary costs no
+ * RAM.  A missing file is created.  Returns the number of keys actually
+ * written (0 if all were duplicates), or -1 on an I/O error.  `found_from`
+ * may hold the sector/uid records from recovery; only the six key bytes
+ * are used, through MfkeyFoundKey. */
+int mfkey_append_keys_to_dict(const char* path, const MfkeyFoundKey* keys, int n);
+
 #endif

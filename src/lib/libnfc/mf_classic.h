@@ -53,6 +53,26 @@ typedef struct mf_classic_data {
 	uint64_t block_read;		/* up to 64 blocks (1K): bit = known */
 } mf_classic_data_t;
 
+/* Crypto-1 frames as the air has them: 9 bits a byte (data LSB first, then
+ * the parity bit), every bit ciphered.  The parity bit is odd_parity(plain
+ * byte) XOR the next keystream bit (the filter, not clocked).  These go to
+ * the front end with NFC_XF_PARITY; a real chip cannot cipher parity for us.
+ * mf_seal appends n plain bytes at bit position *pos of out (zeroed by the
+ * caller); feed 1: the plain byte is fed into the cipher (the reader's {nr}).
+ * mf_open reads bits/9 bytes, returns how many, or -1 on a parity error;
+ * feed 1: the bytes are fed in (the card receiving {nr}).  A 4-bit answer
+ * (ACK 0xA / NAK) is not a 9-bit frame: see mf_nibble. */
+void mf_seal(crypto1_t *c, const uint8_t *plain, size_t n, int feed,
+	     uint8_t *out, size_t *pos);
+int mf_open(crypto1_t *c, const uint8_t *in, size_t bits, int feed,
+	    uint8_t *plain, size_t max);
+int mf_nibble(crypto1_t *c, const uint8_t *in, size_t bits);
+uint16_t mf_crc_a(const uint8_t *p, size_t n);
+/* HLTA, ciphered, after a session: the card goes to HALT and answers a WUPA
+ * again (an authenticated card ignores one).  mf_authenticate wakes the card
+ * itself, but only a halted one. */
+void mf_halt(const nfc_xfer_t *x, crypto1_t *c);
+
 uint64_t mf_key_to_num(const mf_key_t *k);
 void mf_num_to_key(uint64_t n, mf_key_t *k);
 uint16_t mf_block_count(mf_type_t t);

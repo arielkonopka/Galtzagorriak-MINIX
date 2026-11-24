@@ -145,42 +145,69 @@ static int mfc(struct nfcloop *k, const uint8_t *tx, size_t tx_bits,
 {
 	int i;
 
-	if (k->phase == 2) {		/* an encrypted READ */
-		uint8_t cmd, b;
+	if (k->phase == 2) {		/* an encrypted READ, 9-bit frames */
+		uint8_t pl[18], f[24], blk;
+		size_t pos = 0;
+		unsigned crc;
 
 		k->phase = 0;
-		if (tx_bits != 16) return NFC_ERR_PROTO;
-		cmd = tx[0] ^ crypto1_byte(&k->c, tx[0], 1);
-		b = tx[1] ^ crypto1_byte(&k->c, tx[1], 1);
-		if (cmd != 0x30 || b >= 64 || mf_block_to_sector(b) != k->sector)
-			return NFC_ERR_PROTO;
+		if (mf_open(&k->c, tx, tx_bits, 0, pl, 4) != 4)
+			return NFC_ERR_TIMEOUT;
+		crc = mf_crc_a(pl, 2);
+		if (pl[0] != 0x30 || pl[1] >= 64
+		    || mf_block_to_sector(pl[1]) != k->sector
+		    || (pl[2] | pl[3] << 8) != (int) crc)
+			return NFC_ERR_TIMEOUT;
+		blk = pl[1];
 		for (i = 0; i < 16; i++) {
-			uint8_t v = k->blk[b][i];
+			uint8_t v = k->blk[blk][i];
 
-			if (mf_sector_trailer(k->sector) == b && i < 6) v = 0;
-			rx[i] = v ^ crypto1_byte(&k->c, 0, 0);
+			if (mf_sector_trailer(k->sector) == blk && i < 6) v = 0;
+			pl[i] = v;
 		}
-		*rx_bits = NFC_BITS(16);
+		crc = mf_crc_a(pl, 16);
+		pl[16] = (uint8_t) crc;
+		pl[17] = (uint8_t) (crc >> 8);
+		memset(f, 0, sizeof f);
+		mf_seal(&k->c, pl, 18, 0, f, &pos);
+		memcpy(rx, f, (pos + 7) / 8);
+		*rx_bits = pos;
 		return NFC_OK;
 	}
-	if (k->phase == 1) {		/* the reader's {nr}{ar} */
+	if (k->phase == 1) {		/* the reader's {nr}{ar}, 9-bit frames */
 		uint32_t ar, at;
 		uint64_t key;
+		uint8_t pl[8], f[5];
+		size_t pos = 0;
 		const uint8_t *t = k->blk[mf_sector_trailer(k->sector)];
 
 		k->phase = 0;
-		if (tx_bits != 64) return NFC_ERR_PROTO;
+		if (tx_bits != 72) return NFC_ERR_PROTO;
 		key = 0;
 		for (i = 0; i < 6; i++)
 			key = key << 8 | t[k->keyb ? 10 + i : i];
 		crypto1_init(&k->c, key);
 		(void) crypto1_word(&k->c, be32(k->uid) ^ k->nt, 0);
-		(void) crypto1_word(&k->c, be32(tx), 1);
-		ar = be32(tx + 4) ^ crypto1_word(&k->c, 0, 0);
+		/* the reader's nonce is fed in as sent, then {ar} */
+		if (mf_open(&k->c, tx, 36, 1, pl, 4) != 4) return NFC_ERR_TIMEOUT;
+		{
+			uint8_t in2[5];
+			size_t b, o = 0;
+
+			memset(in2, 0, sizeof in2);
+			for (b = 36; b < 72; b++, o++)
+				if (tx[b / 8] >> (b % 8) & 1) in2[o / 8] |= 1 << (o % 8);
+			if (mf_open(&k->c, in2, 36, 0, pl + 4, 4) != 4)
+				return NFC_ERR_TIMEOUT;
+		}
+		ar = be32(pl + 4);
 		if (ar != crypto1_prng_successor(k->nt, 64)) return NFC_ERR_TIMEOUT;
 		at = crypto1_prng_successor(k->nt, 96);
-		put32(rx, at ^ crypto1_word(&k->c, 0, 0));
-		*rx_bits = 32;
+		put32(pl, at);
+		memset(f, 0, sizeof f);
+		mf_seal(&k->c, pl, 4, 0, f, &pos);
+		memcpy(rx, f, 5);
+		*rx_bits = pos;
 		k->phase = 2;
 		return NFC_OK;
 	}

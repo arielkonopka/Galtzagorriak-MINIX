@@ -81,6 +81,40 @@ int main(void) {
             ne,
             ne / 1e6);
 
+    /* The user dictionary (D.3): recovered keys are added to the user's
+     * own file, deduplicated, and the file is streamed, never held whole. */
+    const char* dict_path = "build/mf_classic_dict_user.nfc";
+    remove(dict_path);
+    MfkeyFoundKey dk[4];
+    memcpy(dk[0].key, key, 6);  /* A0..A5 */
+    memcpy(dk[1].key, key2, 6); /* FF..FF */
+    memcpy(dk[2].key, key, 6);  /* a duplicate inside the batch */
+    memcpy(dk[3].key, nkey, 6); /* 1337C0DEBABE */
+    int w = mfkey_append_keys_to_dict(dict_path, dk, 4);
+    check(w == 3, "dict: three unique keys written (batch duplicate dropped)");
+    int w2 = mfkey_append_keys_to_dict(dict_path, dk, 4);
+    check(w2 == 0, "dict: a second append writes nothing (all already present)");
+    MfkeyFoundKey dk2[1];
+    static const uint8_t key3[6] = {0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5};
+    memcpy(dk2[0].key, key3, 6);
+    check(mfkey_append_keys_to_dict(dict_path, dk2, 1) == 1, "dict: a new key appends");
+    {
+        FILE* df = fopen(dict_path, "r");
+        int lines = 0;
+        char ln[64];
+        bool saw_a0 = false, saw_ff = false, saw_1337 = false, saw_b0 = false;
+        while(df && fgets(ln, sizeof ln, df)) {
+            lines++;
+            if(strncmp(ln, "A0A1A2A3A4A5", 12) == 0) saw_a0 = true;
+            if(strncmp(ln, "FFFFFFFFFFFF", 12) == 0) saw_ff = true;
+            if(strncmp(ln, "1337C0DEBABE", 12) == 0) saw_1337 = true;
+            if(strncmp(ln, "B0B1B2B3B4B5", 12) == 0) saw_b0 = true;
+        }
+        if(df) fclose(df);
+        check(lines == 4, "dict: exactly four key lines on disk");
+        check(saw_a0 && saw_ff && saw_1337 && saw_b0, "dict: every key present, uppercase hex");
+    }
+
     /* AC14.2 report: time per key, for the on-device comparison later. */
     if(n >= 1)
         printf(
