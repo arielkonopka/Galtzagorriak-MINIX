@@ -732,6 +732,20 @@ int main(int argc, char **argv)
 		       : "no /dev/nfc");
 		return devwhy;
 	}
+	if (argc > 1 && !strcmp(argv[1], "-r")) {	/* read once, no screen */
+		int r;
+
+		nfc_open();
+		if (nfcfd < 0) { printf("nfc: no %s\n", DEV_NFC); return 1; }
+		r = do_read(NULL);
+		printf("nfc: read %d, keys %d/%d, blocks %d/%d\n", r,
+		       keys_a + keys_b, card ? 2 * (card->mfc.block_count / 4) : 0,
+		       nblk, card ? (int) card->mfc.block_count : 0);
+		if (card) printf("nfc: blocks read %08lx%08lx\n",
+			(unsigned long) (card->mfc.block_read >> 32),
+			(unsigned long) card->mfc.block_read);
+		return r < 0;
+	}
 	if (argc > 1 && !strcmp(argv[1], "-t")) {
 		loopback = 1;
 		dict_t = argc > 2 ? argv[2] : MF_DICT_SYS;
@@ -740,7 +754,7 @@ int main(int argc, char **argv)
 	}
 	if (argc > 1 && !strcmp(argv[1], "-L")) loopback = 1;
 	else if (argc > 1) {
-		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c]\n");
+		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c | -r]\n");
 		return 2;
 	}
 	nfc_open();
