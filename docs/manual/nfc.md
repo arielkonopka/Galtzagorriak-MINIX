@@ -48,6 +48,11 @@ firmware (spec Phase 14).
 > No ID list found (/home/flipper/nfc/assets/sz_id.nfc): codes shown instead of names.
 > ```
 >
+> Part 7 (#451) adds the **service scanner** (below), the **Type 4 Tag** NDEF reader in the app,
+> and, tested on a PC, stock's Type 4 Tag and **MIFARE Plus** pollers (EV1/EV2, 2K/4K, security
+> level 0–3; the SL3 sector read with your AES keys is in the vendored poller but not yet in the
+> app, **(planned)**).
+>
 > Like the rest, all of this reaches real cards once the driver is there.
 
 ## Card files
@@ -127,6 +132,84 @@ moves like Archive and the settings. One list a screen, OK opens, Back goes up:
   `/home/flipper/nfc/assets/`.
 - **Add manually** — a type (*Classic 1K* or *NTAG215*), a UID in hex (4 or 7 bytes; NTAG215
   needs 7) and a name; **Save** writes a blank card of that type with that UID.
+- **Scan services** — which services (applications) an ISO 14443-4 card answers to: a bank
+  card, a passport, a transport card, a badge, a phone. See *The service scanner* below.
+
+On **Read**, a card that speaks ISO 14443-4 (SAK bit 0x20) shows as *ISO14443-4A*; if it is an
+NFC Forum **Type 4 Tag** (a DESFire or NTAG4xx with an NDEF application, a phone's tag emulation)
+the app reads its NDEF message and shows the first record: *URI https://…*, *Text en: …*,
+*MIME text/vcard*. Read only: nothing is written, no password is tried. Saving keeps the UID,
+ATQA and SAK (a full Type 4 Tag file as stock writes it is **(planned)**).
+
+## The service scanner
+
+**Scan services** in the `nfc` app (and `nfc scan` on the command line) tells you which
+services a contactless chip card offers, without reading anything from them. Hold the card to
+the back of the Flipper and press OK. The app wakes the card (ISO 14443-3A, then RATS) and sends
+one ISO 7816-4 **SELECT** command per AID (application identifier) from a dictionary file, one
+after another, and notes each AID the card accepts. **Nothing else is sent**: no READ, no PIN,
+no authentication, no payment command. SELECT changes nothing on a card; it only picks the
+application a next command would go to, and there is no next command.
+
+The result screen shows ATQA and SAK, the card's ATS, then one line per service found: its name,
+with its group on the right. OK on a service tells what it is: the group's one-line description
+from the dictionary (*Bank cards: what a shop terminal talks to when you tap*), the AID, and the
+card's answer (*selected*, or *blocked* when the card has the application but has disabled it).
+A card that is not ISO 14443-4 (a MIFARE Classic, an Ultralight) says *Not an ISO 14443-4 card*.
+
+```
+$ nfc scan -L                  # the loopback test card
+UID 04517A22316E80 ATQA 4403 SAK 20
+ATS 0578807002
+Payments     325041592E5359532E4444463031     9000 Payment directory (PPSE)
+Payments     A0000000031010                   9000 Visa credit/debit
+Access       A0000006472F0001                 9000 FIDO U2F security key
+Phones       D2760000850101                   9000 Type 4 Tag (NDEF)
+nfc scan: 26 AIDs tried, 4 answered (/usr/share/nfc/aid_scan.nfc)
+```
+
+`nfc scan -L` scans the loopback test card (no driver needed), `nfc scan` the card on
+`/dev/nfc`; `nfc scan FILE` uses another
+dictionary. Up to 16 services are listed on the screen; `nfc scan` prints the count of the rest.
+
+### The AID dictionary
+
+The scanner reads `/home/flipper/nfc/assets/aid_scan.nfc` (on the SD card, `/ext/nfc/assets`) if
+it is there, else the **example** the base package installs, `/usr/share/nfc/aid_scan.nfc`. The
+file is read a line at a time and never loaded whole, so a long list costs no memory. It is a
+text file:
+
+```
+# a comment
+[Payments] Bank cards: what a shop terminal talks to when you tap
+A0000000031010 Visa credit/debit
+A0000000041010 Mastercard credit/debit
+
+[Access] Badges and keys: doors, logins and signing
+A0000006472F0001 FIDO U2F security key
+```
+
+- `[Group] description` starts a group. The description (up to 63 characters) is the
+  "what is this?" line the app shows for the services of that group.
+- An AID line is the AID in hex, 5 to 16 bytes, no spaces inside, then blanks, then the
+  service's name (up to 27 characters shown). Upper or lower case hex.
+- `#` starts a comment line. Bad lines are skipped (the scan counts them).
+
+The example holds only public AIDs (payment schemes, ICAO e-passports, the ISO 18013-5 mobile
+driving licence, Calypso, PIV, FIDO U2F, OpenPGP, SEOS, the German eGK, NFC Forum Type 4 Tag,
+the Apple and Google wallet pass services), with no keys or secrets (rule D.3). **To add your own
+AIDs**, copy it and edit the copy:
+
+```
+cp /usr/share/nfc/aid_scan.nfc /home/flipper/nfc/assets/aid_scan.nfc
+mined /home/flipper/nfc/assets/aid_scan.nfc     # or edit it on the PC (/ext/nfc/assets)
+```
+
+DESFire transport cards (Opal, myki, ITSO and others) keep their data in 3-byte DESFire
+applications that SELECT by AID cannot reach; **Read** shows those.
+
+**On the device** the scan needs the `/dev/nfc` driver (Phase 13) like Read; until it is there
+the app says *No NFC device* and `nfc scan -L` shows the flow with the test card.
 
 **Who may use the reader.** `/dev/nfc` belongs to group `nfc` (14). The app is set-gid `nfc`,
 but it opens the device only for root and the members of `nfc` (in `/etc/group`; `nobody`,

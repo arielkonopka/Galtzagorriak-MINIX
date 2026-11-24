@@ -19,7 +19,7 @@
 # the AID lists of public reader tools (Proxmark3 aidlist.json).
 
 [Payments] Bank cards: what a shop terminal talks to when you tap
-325041592E5359532E4444463031 Payment directory (PPSE 2PAY.SYS.DDF01)
+325041592E5359532E4444463031 Payment directory (PPSE)
 A0000000031010 Visa credit/debit
 A0000000032010 Visa Electron
 A0000000032020 V PAY
@@ -33,9 +33,9 @@ A000000333010101 UnionPay debit
 A0000002771010 Interac
 
 [Documents] Passports and ID cards: chip with your photo and data
-A0000002471001 ICAO e-passport (eMRTD LDS1)
-E80704007F00070302 eID (BSI TR-03110, e.g. German ID card)
-A0000002480400 Mobile driving licence (ISO 18013-5)
+A0000002471001 e-passport (ICAO eMRTD)
+E80704007F00070302 eID card (BSI TR-03110)
+A0000002480400 Mobile driving licence mDL
 
 # DESFire city cards (Opal, myki, ITSO and others) keep their data in
 # 3-byte DESFire applications, which SELECT by AID cannot reach: use Read.
@@ -43,17 +43,17 @@ A0000002480400 Mobile driving licence (ISO 18013-5)
 315449432E494341 Calypso (1TIC.ICA)
 
 [Access] Badges and keys: doors, logins and signing
-A000000308000010000100 PIV (US government ID, NIST SP 800-73)
+A000000308000010000100 PIV (US gov ID, SP 800-73)
 A0000006472F0001 FIDO U2F security key
 D27600012401 OpenPGP card
 A0000004400001010001 HID SEOS
 
 [Health] Health insurance cards: your insurance and health data
 D2760001448000 German eGK (root)
-D27600000102 German eGK health application (DF.HCA)
+D27600000102 German eGK health (DF.HCA)
 
 [Phones] Phones and tags: NDEF data, wallets, HCE services
-D2760000850101 NFC Forum Type 4 Tag (NDEF)
-D2760000850100 NFC Forum Type 4 Tag v1 (NDEF)
+D2760000850101 Type 4 Tag (NDEF)
+D2760000850100 Type 4 Tag v1 (NDEF)
 4F53452E5641532E3031 Apple Wallet passes (VAS)
-A000000476D0000101 Google Wallet passes (Smart Tap)
+A000000476D0000101 Google Wallet (Smart Tap)
