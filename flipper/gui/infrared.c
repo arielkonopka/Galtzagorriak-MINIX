@@ -26,14 +26,16 @@
  * The device: /dev/ir (kernel/arm/flipdev.c), 32-bit durations, mark
  * first; a first word with bit 31 set gives the carrier (bits 0-19) and the
  * duty (bits 20-26, %).  A read blocks until a frame ends (30 ms without
- * carrier); Learn and Debug read in a forked child that passes frames up a
- * pipe, so the buttons stay live.  -L replaces the device by a loopback in
- * this process: a sent frame is the next frame read.
+ * carrier); Learn and Debug read in a child (this program again, as
+ * `infrared -R IRFD PIPEFD`: its own image, see reader_main) that passes
+ * frames up a pipe, so the buttons stay live.  -L replaces the device by a
+ * loopback in this process: a sent frame is the next frame read.
  */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -142,7 +144,7 @@ static long ir_recv(int fd)
 
 	if (loopback) { r = (int) lb_n; lb_n = 0; return r ? r : -1; }
 	r = read(fd, (char *) (t + 1), MAXT * 4);
-	return r > 0 ? r / 4 : -1;
+	return r > 0 ? r / 4 : -1;	/* errno stays from the read */
 }
 
 /* Encode a parsed message as stock sends it (infrared_send: at least the
@@ -217,26 +219,71 @@ static void describe(const InfraredMessage *m, char *l1, char *l2)
 
 static pid_t rpid = -1;
 static int rfd = -1;
+static const char *self = "/bin/infrared";	/* argv[0] if a path */
 
-/* Start a child that reads frames from /dev/ir and writes each to the
- * pipe as a count word and the timings. */
-static int reader_start(void)
+static void rd_alarm(int sig)
 {
-	int p[2];
+	(void) sig;
+}
+
+/* The reader (infrared -R IRFD PIPEFD, started by reader_start): reads
+ * frames from /dev/ir and writes each to the pipe as a count word and the
+ * timings.  It is a program of its own, not a fork()ed copy: a process
+ * waiting in a read of /dev/ir is pinned in memory (the DMA goes into its
+ * buffer), and a pinned fork copy can never be swapped with its parent,
+ * which then never runs (#416: the frozen screen, Back not seen).
+ * A killed app (Back held 4 s) leaves the reader behind, and it would hold
+ * /dev/ir for ever (every later read: EBUSY): a 1 s alarm ends its read,
+ * and it ends itself when the app is gone. */
+static int reader_main(int ifd, int pfd)
+{
+	struct sigaction sa;
+	pid_t parent = getppid();
 	long n;
 	uint32_t c;
+	int en;
+
+	sa.sa_handler = rd_alarm;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sigaction(SIGALRM, &sa, NULL);
+	for (;;) {
+		alarm(1);
+		n = ir_recv(ifd);
+		en = errno;
+		alarm(0);
+		if (n < 0 && en == EINTR) {
+			if (getppid() != parent) return 0;
+			continue;
+		}
+		if (n < 0) return 1;
+		c = (uint32_t) n;
+		if (write(pfd, (char *) &c, 4) != 4) return 0;
+		if (write(pfd, (char *) (t + 1), n * 4) != n * 4) return 0;
+	}
+}
+
+/* Start the reader: this program again, with /dev/ir and the pipe. */
+static int reader_start(void)
+{
+	static char a1[8], a2[8];
+	char *av[5];
+	int p[2];
 
 	if (loopback) return 0;
 	if (irfd < 0 || pipe(p) < 0) return -1;
-	if ((rpid = fork()) < 0) { close(p[0]); close(p[1]); return -1; }
+	sprintf(a1, "%d", irfd);
+	sprintf(a2, "%d", p[1]);
+	av[0] = (char *) self;
+	av[1] = "-R";
+	av[2] = a1;
+	av[3] = a2;
+	av[4] = NULL;
+	if ((rpid = vfork()) < 0) { close(p[0]); close(p[1]); return -1; }
 	if (rpid == 0) {
 		close(p[0]);
-		for (;;) {
-			if ((n = ir_recv(irfd)) < 0) _exit(1);
-			c = (uint32_t) n;
-			if (write(p[1], (char *) &c, 4) != 4) _exit(0);
-			if (write(p[1], (char *) (t + 1), n * 4) != n * 4) _exit(0);
-		}
+		execv(self, av);
+		_exit(127);
 	}
 	close(p[1]);
 	rfd = p[0];
@@ -678,6 +725,12 @@ int main(int argc, char **argv)
 		"Saved Remotes", "Universal Remotes", "Debug" };
 	int sel = 0;
 	uint32_t *keep = NULL;	/* -t, -c FILE: the self-test's 4 KB */
+
+	if (argc > 0 && argv[0][0] == '/') self = argv[0];
+	if (argc == 4 && !strcmp(argv[1], "-R")) {	/* the reader child */
+		if (getegid() != getgid() && setgid(getgid()) < 0) return 1;
+		return reader_main(atoi(argv[2]), atoi(argv[3]));
+	}
 
 	/* -c and -t: a few lines of output, unbuffered (no 1 KB stdout
 	 * buffer: the self-test's heap is its 4 KB and the codecs) */
