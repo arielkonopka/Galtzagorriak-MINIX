@@ -301,6 +301,7 @@ PRIVATE u8_t rb_user[2][3];		/* dual, dualsoft, morph: PWM */
 FORWARD _PROTOTYPE( void rb_step, (void)				);
 FORWARD _PROTOTYPE( void rb_iku_start, (void)			);
 extern const unsigned char splash_fb[];	/* hal/common/splash.c */
+extern const unsigned char splash_bye_fb[];
 FORWARD _PROTOTYPE( void ca_step, (void)				);
 FORWARD _PROTOTYPE( int led_text, (phys_bytes user, int count)		);
 FORWARD _PROTOTYPE( int deliver, (int proc, vir_bytes vir, int count)	);
@@ -2666,9 +2667,9 @@ PRIVATE void ge_task()
 		mt_arm(MT_VIBRO, 150);		/* a longer buzz */
 		unlock();
 		hal_vibro(1);
-		/* at once: the boot screen and the ikurrina LED, so that one sees
+		/* at once: the goodbye screen and the ikurrina LED, so that one sees
 		 * the kernel is alive while init ends the programs (owner) */
-		hal_lcd_flush(splash_fb);
+		hal_lcd_flush(splash_bye_fb);
 		rb_iku_start();
 		cause_sig(INIT_PROC_NR, SIGPWR);	/* init: the orderly halt */
 	} else if ((a = ge_match(b)) != 0) {
@@ -2887,7 +2888,7 @@ PUBLIC void flipdev_off_notice()
   int r, i;
 
   if ((r = hal_charger_read(HAL_CHG_STATUS)) < 0 || (r >> 5) == 0) return;
-  for (i = 0; i < FB_SIZE; i++) fbuf[i] = splash_fb[i];
+  for (i = 0; i < FB_SIZE; i++) fbuf[i] = splash_bye_fb[i];
   nt_box("You can now unplug", "the USB cable");
   hal_lcd_flush(fbuf);
 }
