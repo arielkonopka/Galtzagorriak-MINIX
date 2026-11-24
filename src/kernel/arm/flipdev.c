@@ -322,6 +322,7 @@ FORWARD _PROTOTYPE( void ib_edge, (void)				);
 FORWARD _PROTOTYPE( int ib_play, (message *m_ptr)			);
 FORWARD _PROTOTYPE( int ib_capt, (message *m_ptr)			);
 FORWARD _PROTOTYPE( void gp_stop, (void)				);
+FORWARD _PROTOTYPE( void gp_exti, (void)				);
 FORWARD _PROTOTYPE( void nt_over, (void)				);
 FORWARD _PROTOTYPE( void nt_box, (char *l1, char *l2)			);
 FORWARD _PROTOTYPE( void nt_text, (char *s, int y)			);
@@ -442,6 +443,12 @@ PUBLIC void flipdev_task()
 	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler: no
 					 * new slot (all NR_IRQ_HANDLERS used);
 					 * it passes this vector to rs_int */
+	enable_irq(r);
+  }
+  if ((r = hal_gpio_edge_irq()) >= 0) {	/* R6.4: PA4's EXTI line */
+	put_irq_handler(r, btn_int);	/* the buttons' handler: no new
+					 * slot (all NR_IRQ_HANDLERS used);
+					 * it acks the GPIO lines first */
 	enable_irq(r);
   }
   if ((r = hal_rtc_alarm_irq()) >= 0) {	/* R7b.1 */
@@ -588,12 +595,35 @@ PRIVATE void gp_stop()
 {
 /* R6.4: no pin is watched any more (the watcher stopped, closed the
  * device or exited): the tick stops sampling, Stop2 is allowed again. */
+  unsigned i;
+
   lock();
   gp_watch = gp_chg = 0;
   gp_proc = 0;
   unlock();
+  for (i = 0; i < HAL_GPIO_PINS; i++)
+	if (hal_gpio_edge_pins() & 1 << i) (void) hal_gpio_edge(i, 0);
   pm_busy &= ~PM_GPIO;
 }
+
+
+/*===========================================================================*
+ *				gp_exti					     *
+ *===========================================================================*/
+PRIVATE void gp_exti()
+{
+/* In an interrupt handler (R6.4): the EXTI pins that changed.  An edge
+ * counts even if the pin is back where it was (a short pulse). */
+  unsigned m = hal_gpio_edge_ack(), i;
+
+  if ((m &= gp_watch) == 0) return;
+  for (i = 0; i < HAL_GPIO_PINS; i++)
+	if (m & 1 << i)
+		gp_last = (gp_last & ~(1 << i)) | (hal_gpio_read(i) == 1) << i;
+  gp_chg |= m;
+  if (sel_wait & SEL_GPIO) interrupt(PRINTER);
+}
+
 
 
 /*===========================================================================*
@@ -1733,8 +1763,12 @@ message *m_ptr;
 			} else gp_watch &= ~(1 << pin);
 			gp_chg &= ~(1 << pin);
 			unlock();
-			if (gp_watch) pm_busy |= PM_GPIO;
-			else gp_stop();
+			if (hal_gpio_edge_pins() & 1 << pin)	/* EXTI */
+				(void) hal_gpio_edge(pin, o == 6);
+			/* only sampled pins keep the CPU out of Stop2 */
+			if (gp_watch & ~hal_gpio_edge_pins()) pm_busy |= PM_GPIO;
+			else pm_busy &= ~PM_GPIO;
+			if (gp_watch == 0) gp_stop();
 			continue;
 		}
 		if (hal_gpio(pin, o) < 0) return(i > 0 ? i : EINVAL);
@@ -2380,11 +2414,13 @@ PUBLIC void flipdev_tick()
   if (gp_watch) {		/* R6.4: the watched header pins' edges */
 	unsigned i, now = 0;
 
+	unsigned w = gp_watch & ~hal_gpio_edge_pins();	/* not EXTI */
+
 	for (i = 0; i < HAL_GPIO_PINS; i++)
-		if ((gp_watch & 1 << i) && hal_gpio_read(i) == 1) now |= 1 << i;
-	if ((now ^ gp_last) & gp_watch) {
-		gp_chg |= (now ^ gp_last) & gp_watch;
-		gp_last = now;
+		if ((w & 1 << i) && hal_gpio_read(i) == 1) now |= 1 << i;
+	if ((now ^ gp_last) & w) {
+		gp_chg |= (now ^ gp_last) & w;
+		gp_last = (gp_last & ~w) | now;
 		if (sel_wait & SEL_GPIO) interrupt(PRINTER);
 	}
   }
@@ -2736,6 +2772,7 @@ int irq;
 /* An edge on a button (T14b): take it now, then turn the edges off; the
  * ms timer samples while any is down, which also debounces.
  */
+  gp_exti();			/* R6.4: PA7 shares EXTI9_5 with a button */
   if (ie.st != IE_OFF && ie.st != IE_PLAY && hal_ib_edge()) {
 					/* R6.7: iButton line 14 */
 	ib_edge();

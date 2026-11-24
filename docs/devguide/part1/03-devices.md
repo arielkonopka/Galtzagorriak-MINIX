@@ -198,16 +198,18 @@ The eight free header pins, numbered 0–7 in the device:
   }
   ```
   The watch belongs to the process that set it and ends when it closes `/dev/gpio` or exits; one
-  process at a time may watch (`EBUSY` otherwise). The pins are sampled on the clock tick (1/60 s),
-  so a pulse shorter than about 17 ms can be missed, and while a pin is watched the Flipper stays
-  out of deep sleep (Stop2). Without any watched pin `/dev/gpio` is always readable.
+  process at a time may watch (`EBUSY` otherwise). **Header pins 2 (PA7) and 4 (PA4)** have their
+  own interrupt line: their edges are caught at once, even a short pulse, and the Flipper may
+  sleep in Stop2 meanwhile (an edge wakes it), so use them for a sensor that waits long (a PIR
+  motion sensor, a door contact). The other pins are sampled on the clock tick (1/60 s): a pulse
+  shorter than about 17 ms can be missed, and while one of them is watched the Flipper stays out
+  of deep sleep. Without any watched pin `/dev/gpio` is always readable.
 
 The shell command `gpio` takes header pin numbers or port names: `gpio 2 1`, `gpio pa7 up`,
 `gpio` (all levels). Pins 13 and 14 (PB6/PB7) are the debug UART and are not offered. Logic is
 3.3 V; never feed a pin more than that.
 
-Edge interrupts (PA4 and PA7 have a free EXTI line: no sampling, deep sleep allowed), pulse
-capture and the 5 V supply on pin 1 are **(planned)** (spec R4b.7, R6.4, H.2).
+Pulse capture and the 5 V supply on pin 1 are **(planned)** (spec R4b.7, H.2).
 
 ## 3.8 Voltages: `/dev/adc` and `/dev/adcs`
 

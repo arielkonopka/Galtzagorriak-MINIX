@@ -223,6 +223,14 @@ enum { HAL_GPIO_LOW, HAL_GPIO_HIGH, HAL_GPIO_IN, HAL_GPIO_IN_UP,
        HAL_GPIO_IN_DOWN, HAL_GPIO_OFF };	/* OFF: analog, high impedance */
 int hal_gpio(unsigned pin, unsigned op);	/* 0, or -1: bad pin/op */
 int hal_gpio_read(unsigned pin);		/* level 0/1, or -1 */
+/* R6.4: header pins whose edges interrupt (a mask of pins; the rest are
+ * sampled), their extra vector (-1: none; one may share the buttons'),
+ * switch one on/off (-1: cannot), and in an interrupt handler: which of
+ * them changed (acked). */
+unsigned hal_gpio_edge_pins(void);
+int hal_gpio_edge_irq(void);
+int hal_gpio_edge(unsigned pin, int on);
+unsigned hal_gpio_edge_ack(void);
 /* R6.4: mV on each header pin left analog ("off") with an ADC input, -1
  * for the others, HAL_ADC_OVER above the reference; returns the reference
  * (VREF+, ~2500 mV) in mV, or -1 (no ADC). */

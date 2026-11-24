@@ -449,6 +449,11 @@ int hal_gpio(unsigned pin, unsigned op)
 	if (op <= HAL_GPIO_HIGH) gpio_level[pin] = op;
 	return 0;
 }
+/* R6.4: no EXTI on the QEMU board: watched pins are sampled. */
+unsigned hal_gpio_edge_pins(void) { return 0; }
+int hal_gpio_edge_irq(void) { return -1; }
+int hal_gpio_edge(unsigned pin, int on) { (void) pin; (void) on; return -1; }
+unsigned hal_gpio_edge_ack(void) { return 0; }
 int hal_gpio_read(unsigned pin)
 {
 	return pin < HAL_GPIO_PINS ? gpio_level[pin] : -1;
