@@ -109,6 +109,7 @@
 #include <unistd.h>
 #include <furi.h>			/* liblfrfid's shim: FuriString */
 #include <lfrfid_read.h>
+#include "rfid_pw.h"
 
 #define MAXD	512		/* ~3 EM frames; .bss under 4 KB (R2a.5) */
 #define MAXH	(2 * MAXD)
@@ -254,6 +255,8 @@ static void wreset(void)
 
 static int wlock;			/* -lock: the T5577 lock bit */
 static int whitag;			/* -hitag: straight to Hitag micro */
+static int wnopass;			/* copy -nopass: no password this time */
+static int wquiet;			/* the dictionary sweep: say nothing */
 static unsigned long wpass;		/* -pass: its password, or 0 */
 static unsigned long wsend;		/* -with HEX: the one it has now */
 
@@ -564,6 +567,7 @@ static int write_em(unsigned char id[5], int tries)
 		dmax = MAXD;
 		free(hd);
 	}
+	if (wquiet) return 1;
 	if (v == 0)
 		printf("the tag still reads EM4100 %02X %02X %02X %02X %02X: "
 			"not written (locked, or a password?)\n",
@@ -1311,6 +1315,7 @@ static int write_lf(int p, uint8_t *data, int tries, int em_only)
 			return 0;
 		}
 	}
+	if (wquiet) return 1;
 	if (v == 0) {
 		printf("not written (locked, or a password?); the tag still reads ");
 		lf_print(gp, got);
@@ -1320,10 +1325,83 @@ static int write_lf(int p, uint8_t *data, int tries, int em_only)
 
 /* rfid copy: read a tag (any ASK protocol), then write it to the blank one
  * put on next. */
+static int copy_write(int p, uint8_t *data, int tries)
+{
+	if (p == LFRFIDProtocolEM4100) return write_em(data, tries);
+	return write_lf(p, data, tries, 0);
+}
+
+/* Does protocol p leave block 7 free for a password? */
+static int pw_fits(int p, const uint8_t *data)
+{
+	LFRFIDWriteRequest req;
+	uint8_t tmp[LFRFID_DATA_MAX];
+
+	if (p == LFRFIDProtocolEM4100) return 1;
+	memcpy(tmp, data, lf_size(p));
+	protocol_dict_set_data(lf(), p, tmp, lf_size(p));
+	if (!lfrfid_normalize(lf(), p, &req)) return 1;	/* write_lf says so */
+	return req.t5577.blocks_to_write <= LFRFID_T5577_PASSWORD_BLOCK;
+}
+
+/* The copier's password (issue #448): per Copier in copier.conf, unless
+ * -pass, -lock or -nopass say otherwise.  A new one is in the dictionary
+ * before anything is written to the tag.  0, or -1: nothing may be written. */
+static int copy_pw(int p, const uint8_t *data)
+{
+	unsigned long w, chosen;
+	int mode, made;
+
+	if (wpass || wlock || wnopass) return 0;
+	pw_conf_load(PW_CONF, &mode, &chosen);
+	if (mode == PW_LEGACY) return 0;
+	if (!pw_fits(p, data)) {
+		printf("%s fills block 7: no password this time\n",
+			protocol_dict_get_name(lf(), p));
+		return 0;
+	}
+	if (pw_pick(mode, chosen, PW_DICT, PW_RAND, &w, &made) < 0) {
+		fprintf(stderr, "rfid: cannot save a password in %s: "
+			"not writing (rfid copy -nopass writes without)\n", PW_DICT);
+		return -1;
+	}
+	wpass = w;
+	printf("tag password %08lX (%s the dictionary)\n", w,
+		made ? "new, saved in" : "from");
+	return 0;
+}
+
+/* The plain write failed and a password is being set: the blank may carry
+ * one from an earlier copy.  Try the 32 newest dictionary words, once each
+ * (not those with bit 31 set, nor this copy's own). */
+static int copy_sweep(int p, uint8_t *data)
+{
+	FILE *f;
+	unsigned long w, mine = wpass;
+	int n, k = 0, r = 1;
+
+	if ((n = pw_count(PW_DICT)) == 0) return 1;
+	if ((f = fopen(PW_DICT, "r")) == NULL) return 1;
+	printf("trying the passwords of the dictionary...\n");
+	wquiet = 1;
+	while (r && pw_next(f, &w, NULL)) {
+		if (k++ < n - 32 || (w & 0x80000000UL) || w == mine) continue;
+		wsend = w;
+		if ((r = copy_write(p, data, 1)) == 0)
+			printf("the tag had the password %08lX\n", w);
+	}
+	wquiet = 0;
+	wsend = 0;
+	fclose(f);
+	if (r) printf("not written: none of the dictionary's passwords opened "
+		"the tag (locked?)\n");
+	return r;
+}
+
 static int copy_any(int tries)
 {
 	uint8_t data[LFRFID_DATA_MAX], got[LFRFID_DATA_MAX];
-	int fd, p, q, n, t;
+	int fd, p, q, n, t, r;
 
 	if ((fd = open("/dev/rfid", O_RDONLY)) < 0) {
 		perror("rfid: /dev/rfid");
@@ -1346,8 +1424,57 @@ static int copy_any(int tries)
 		if (q < 0 && (p == LFRFIDProtocolEM4100 || n < 16)) break;
 	}
 	close(fd);
-	if (p == LFRFIDProtocolEM4100) return write_em(data, tries);
-	return write_lf(p, data, tries, 0);
+	if (copy_pw(p, data) < 0) return 1;
+	r = copy_write(p, data, tries);
+	if (r == 0 || wsend || !wpass) return r;
+	return copy_sweep(p, data);
+}
+
+/* rfid copier [MODE]: show or choose where `rfid copy` gets the password it
+ * gives the T5577 (issue #448).  `dict HEX` picks one of the dictionary
+ * (added if it is not there); `list` shows the dictionary. */
+static int copier_cmd(int argc, char **argv)
+{
+	int mode, i, n;
+	unsigned long w, x;
+	char *e;
+
+	pw_conf_load(PW_CONF, &mode, &w);
+	if (argc == 2) {
+		printf("copier password: %s", pw_mode_name[mode]);
+		if (mode == PW_DICT_PICK) printf(" (%08lX)", w);
+		if (mode == PW_PREVIOUS && pw_previous(PW_DICT, &x))
+			printf(" (%08lX)", x);
+		printf("\ndictionary: %s, %d passwords\n", PW_DICT, pw_count(PW_DICT));
+		return 0;
+	}
+	if (strcmp(argv[2], "list") == 0 && argc == 3) {
+		for (i = 0; pw_nth(PW_DICT, i, &x); i++) printf("%08lX\n", x);
+		return 0;
+	}
+	for (n = 0; n < PW_MODES; n++)
+		if (strcmp(argv[2], pw_mode_name[n]) == 0) break;
+	if (n == PW_MODES || (n == PW_DICT_PICK) != (argc == 4)) {
+		fprintf(stderr, "usage: rfid copier [legacy|own|previous|dict HEX|list]\n");
+		return 2;
+	}
+	if (n == PW_DICT_PICK) {
+		w = strtoul(argv[3], &e, 16);
+		if (*e != 0 || w == 0 || strlen(argv[3]) > 8) {
+			fprintf(stderr, "rfid: HEX is a password of up to 8 digits\n");
+			return 2;
+		}
+		if (!pw_has(PW_DICT, w) && pw_record(PW_DICT, w, 0) < 0) {
+			perror("rfid: dictionary");
+			return 1;
+		}
+	}
+	if (pw_conf_save(PW_CONF, n, w) < 0) {
+		perror("rfid: " PW_CONF);
+		return 1;
+	}
+	printf("copier password: %s\n", pw_mode_name[n]);
+	return 0;
 }
 
 /* rfid emulate -runs EM ...: the EM4100, played from a run list
@@ -1892,6 +2019,11 @@ int main(int argc, char **argv)
 		return dump_block(block, with, pass);
 	}
 
+	if (argc >= 2 && strcmp(argv[1], "copier") == 0) {
+		if (argc > 4) goto use;
+		return copier_cmd(argc, argv);
+	}
+
 	if (argc >= 2 && (strcmp(argv[1], "write") == 0
 				|| strcmp(argv[1], "copy") == 0)) {
 		int tries = 20, cp = argv[1][0] == 'c', em_only = 0;
@@ -1903,6 +2035,7 @@ int main(int argc, char **argv)
 			if (strcmp(argv[i], "-lock") == 0) wlock = 1;
 			else if (strcmp(argv[i], "-em4305") == 0) em_only = 1;
 			else if (strcmp(argv[i], "-hitag") == 0) whitag = 1;
+			else if (strcmp(argv[i], "-nopass") == 0) wnopass = 1;
 			else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
 				tries = atoi(argv[++i]);
 			else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
@@ -1915,6 +2048,7 @@ int main(int argc, char **argv)
 		}
 		if (tries < 1 || (wlock && wpass)) goto use;
 		if (em_only && (wlock || wpass || wsend)) goto use;
+		if (wnopass && !cp) goto use;
 		if (cp) {
 			if (i != argc || em_only) goto use;
 			return copy_any(tries);
@@ -1953,7 +2087,9 @@ use:			fprintf(stderr, "usage: rfid [-r] [-n TRIES] [-o FILE] "
 				"       rfid write [-n N] [-pass HEX] [-with HEX] "
 				"[-lock] [-em4305] [-hitag] PROTO HEX...|-f FILE\n"
 				"       rfid copy [-n N] [-pass HEX] "
-				"[-with HEX] [-lock]\n"
+				"[-with HEX] [-lock] [-nopass]\n"
+				"       rfid copier [legacy|own|previous|dict "
+				"HEX|list]\n"
 				"       rfid clear [-with HEX] [-n N]\n"
 				"       rfid dump [-with HEX] [BLOCK]\n"
 				"       rfid emulate [-runs] PROTO HEX...|-f FILE\n"

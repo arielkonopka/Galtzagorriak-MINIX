@@ -226,6 +226,42 @@ written by another cloner may be), or a kind that cannot be written. Each round 
 both ways (T5577, then EM4305); `-n N` sets how many rounds (default 20), because a tag that
 wants a password only answers now and then.
 
+### The copier's password
+
+By default `rfid copy` now protects the copy: it makes a **random password**, saves it in your
+password dictionary **before** it writes anything, and gives it to the T5577 (the Settings choice
+below). The dictionary is a text file on the SD card, one 8-digit hex word per line, `#` starts a
+comment: `/home/flipper/lfrfid/assets/t5577_dict_user.lfrfid`. Passwords the copier made carry
+`# copy`:
+
+```
+rfid copy
+read EM4100 04 00 98 3D C5
+now put the blank one on
+tag password 3A91C07E (new, saved in the dictionary)
+written (T5577, password set): EM4100 04 00 98 3D C5
+```
+
+`rfid copier` shows the choice, `rfid copier MODE` changes it (the RFID app has the same under
+**Copier password**):
+
+| Mode | The copy gets |
+|---|---|
+| `own` (default) | a new random password every time |
+| `previous` | the password of the last copy (the last `# copy` line, so it survives a reboot) |
+| `dict HEX` | one password you chose from the dictionary (`rfid copier list` shows them; a word that is not there is added) |
+| `legacy` | no password, exactly as before this change; `rfid copy -nopass` does it for one copy |
+
+The file is read a line at a time and only appended to, so it costs no RAM, and the only write is
+one short line to the SD card per copy (nothing in the Flipper's own flash). If the line cannot be
+saved, nothing is written to the tag. When the blank you put on already has a password (from an
+earlier copy, say), and the plain write fails, `rfid copy` tries the 32 newest dictionary words on
+it, once each, and tells you which one opened it. The random words have bit 31 clear (31 random bits
+are plenty for a door fob; it also means the word can never be mistaken for the lock bit by a tag
+that has no password). `-pass HEX`, `-lock` and `-nopass` on the command line win over the
+setting; HIDExt and Indala224 fill block 7, so they are copied without a password and `rfid` says
+so. **Lagun-ak** (friends): keep the dictionary, it is the only record of the passwords.
+
 `-pass HEX` gives a T5577 that password as well (not for HIDExt and Indala224, which fill
 block 7), so that nothing can rewrite it without the word (some door entry systems try to overwrite a copy they find). Write the password down:
 changing the tag afterwards needs `-with HEX`, which sends it (the tag keeps the password

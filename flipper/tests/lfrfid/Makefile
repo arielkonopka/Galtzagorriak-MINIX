@@ -27,8 +27,14 @@ SRC	:= $(shell find $(L) -name '*.c')
 HDR	:= $(shell find $(L) -name '*.h')
 B	:= build
 
-test: $(B)/lfrfidtest
+test: $(B)/lfrfidtest $(B)/rfidpwtest
 	./$(B)/lfrfidtest render.txt
+	./$(B)/rfidpwtest
+
+# the copier's password and dictionary (issue #448)
+$(B)/rfidpwtest: rfidpwtest.c ../../cmds/rfid_pw.h
+	@mkdir -p $(B)
+	$(CC) -std=gnu11 -O2 -g -Wall $(SAN) -o $@ rfidpwtest.c
 
 $(B)/lfrfidtest: lfrfidtest.c $(SRC) $(HDR)
 	@mkdir -p $(B)
