@@ -1291,30 +1291,120 @@ callbacks of the `timer` binding will do the same.  Heap: over the limit
 an allocation fails like a full heap: one forced GC, then
 `BE_MALLOC_FAIL`; the script ends with status 4, its RAM goes back to MM.
 
-**Measured (QEMU, `tools/berrytest.py`, 2026-11-21).**
+**Where the 19.7 KB of part 1 went (QEMU, issue #431, from the link map
+and `free -v`).**  Berry was one position-independent program (80 KB of
+text, in place in the installed region):
 
-| | bytes |
+| per running script | bytes |
 |---|---|
-| text (flash, shared by every running script; 4.4 KB of it the bindings) | 79 948 |
-| `.data` + GOT per process | 6 220 + 964 |
-| `.bss` | 148 |
-| chmem (stack and heap gap, `CHMEM_berry`) | 12 288 |
-| one running script, `free -v` | 19 712 |
-| VM heap at start (`gc.allocated()`) | 1 501 |
-| endless loop with the default budget | ends after 0.5 s (QEMU) |
+| `.data.rel.ro`: the constant tables (pointer tables, copied to RAM to be relocated) | 6 208 |
+| of it: the string table `be_string.o` / bytes, base, list, lexer, string, map, range ... | 2 444 / 3 764 |
+| GOT: the libc area (608) and the program's own entries (356) | 964 |
+| `.data` + `.bss` (launcher line buffer, the heap limit, module cache) | 160 |
+| chmem: heap and stack gap (`CHMEM_berry`) | 12 288 |
+| sum (MM rounds to clicks) | 19 620 → 19 712 measured |
 
-The 7.2 KB of data per process are mostly the constant tables (`generate/`: the
-string table, the built-in classes and modules): they are pointer tables,
-and in a position-independent program every initialised pointer is data,
-copied to RAM per process.  This is why AC7c.1's 6 KB per script is not
-met yet.  **Next step (R7c.1):** link the VM as a shared library at a
-fixed address (like `libc.bin` and `furi.bin`, `tools/mkshlibc.py`), so
-the tables stay in flash and each script pays only for its GOT, `.bss`
-and heap.  The 48 KB slots after the system image are full, so this
-needs a new slot in the installed region (flash layout, R2b.1); then
-lower `CHMEM_berry` to the measured need (about 1.5 KB of heap at start
-plus the stack).  Also open: `#!` scripts (MM's exec has no `#!`), the
-`math` module, and solidify (bytecode as C constants in flash).
+The loaded bytecode is not in that list: a script's functions, constants
+and strings are allocated in the VM heap (1 501 B at start, `gc.allocated()`)
+and count inside the chmem.  libc's code is in the shared libc already.
+
+**The shared library (R7c.1, issue #431; the user's decision on #433).**
+The VM and the bindings build as a third shared library on top of libc
+(`ld/shberry.ld`, `berry.exports`, `tools/mkshlibc.py tab --berry`, magic
+GZLB; `make shberry`).  Its `.data.rel.ro` is linked into its text, so the
+pointers of the constant tables are final at link time and the tables run
+from flash; `mkshlibc.py` refuses the image if one of them points into RAM.
+Its per-process "berry area" (GOT 336 B incl. data and bss) follows the
+libc area at r9, like the furi area.  The launcher keeps only `gzberry.c`:
+1.4 KB of text, 16 stubs.
+
+The first version (#433, the numbers below) gave the library a fixed
+96 KB slot at `0x08048000` in `minix.bin` and moved the installed region
+to `0x08060000`.  The user decided against that: **Berry is optional, and
+units without it must not lose 96 KB of the installed region.**  The flash
+layout is again as on main (`hal_flash_layout`, `QFL_INST`, `RD_INST`,
+`mkbaseflash`, `radioslot.py` unchanged), `minix.bin` does not carry the
+library, and until it is placed at install time the launcher is built as
+one program again (`SHBERRY=0`, the default; part 1's 19.7 KB per script).
+
+**Placing it at install time: possible.**  The library has no fixed place
+then: `pkg install --flash berry` writes it where MM finds room, like any
+program.  Only words holding the library's own flash addresses depend on
+that place; `make shberry` counts them (link address 0x08048000, 85 072 B,
+21 pages, 2026-11-21):
+
+| words to change by (place - link address) | count |
+|---|---|
+| text: constant tables, entry table (16 slots), other absolute words | 733 |
+| berry area template (GOT entries of its functions and strings) | 71 |
+| launcher: one literal per stub | 16 |
+| the libc's flash addresses, data addresses | 0 (fixed, or relocated at exec as today) |
+
+820 words in all, 3.2 KB as a list of 32-bit offsets (less as 16-bit word
+deltas), once at install time.  Plan (no change to MM's flash layout, no
+fixed slot):
+
+1. Build: link the library and the launcher twice (two link addresses);
+   the words that differ are the relocation list (no relocation parsing,
+   and checked: every difference must be the same delta).  The library
+   goes into the berry package as an a.out file with `A_SEP` and without
+   `A_EXEC` (`/usr/lib/berry/libberry`, its id computed at the first link
+   address and kept), the lists as a sidecar file.
+2. MM (`finst.c`): `MI_INSTALL` op 5 "where would N pages go" (the
+   first fit of `in_find_run`), and op 0 with a required address (fails
+   with `EAGAIN` if the first fit moved meanwhile).  Exec: for `a_dbase`
+   not the furi id, look up the live installed record whose text starts
+   with GZLB and that id (63 records at most, only for that exec).
+3. pkg: for a package with a library: ask MM for the place, patch the
+   library's text and the launcher's stub literals and area template,
+   install both with `--flash` (a package with a library refuses a RAM
+   install).  `pkg remove berry` marks both records dead as for any
+   program, so the pages are free again.
+4. `SHBERRY=1` by default, `free -v` shows the library from its record,
+   `berrytest.py` checks the 13.3 KB again.
+
+If (2) should not go into MM, the smallest fixed-address alternative is
+a slot of 21 pages at a fixed place inside the installed region that MM
+gives to other programs last (first fit from the other end), so a unit
+without Berry keeps all its room and installing Berry fails with a clear
+message only when the region is full there.  The relocation above needs
+no reserved place at all, so it is the one proposed.
+
+**Measured with the fixed slot of #433 (QEMU, `tools/berrytest.py`, 2026-11-21).**
+
+| | part 1 | now |
+|---|---|---|
+| text in flash, shared by every script | 79 948 (program) | 85 072 (library, tables included) + 1 404 (launcher) |
+| data per process: libc area + Berry area + launcher GOT and data | 7 184 | 1 008 |
+| `.bss` | 148 | 140 |
+| chmem (`CHMEM_berry`) | 12 288 | 12 288 |
+| **one running script, `free -v`** | **19 712** | **13 568** |
+| a second (and third) idle script at the same time | 19 712 | 13 568 each |
+| VM heap at start (`gc.allocated()`) | 1 501 | 1 501 |
+
+**AC7c.1 (≤ 6 KB for an idle script, with its stack): not met with the
+default 8 KB heap, and it cannot be while the heap is reserved up front.**
+MINIX gives a process its whole data+gap+stack at exec (`a_total`); brk
+only moves inside it.  So `berry` reserves what its default limit needs:
+MM's `memuse` (`free -t on`) shows the heap bomb at the 8 KB limit leaves
+1 712 B of the 12 288 untouched (MM's 1.5 KB safety gap), so the chmem
+cannot shrink without lowering the default `-m`.  What a script itself
+uses: `hello.bec` ran in a 5 KB chmem (heap brk 3 072 B, stack ~1 KB,
+992 B untouched), i.e. **≈ 6.3 KB for the smallest bytecode script**
+(1.15 KB data + 5 KB); source scripts need ~2 KB of C stack for the parser
+(`hello.be` overflowed the 5 KB stack).  What is missing for AC7c.1:
+(1) per-script chmem: script packages with a `Heap:` field get their own
+copy of the 1.4 KB launcher with chmem = heap + 3 KB (R7c.4's manifest
+heap), so the default 8 KB stays for `berry` on the shell; (2) the malloc
+growth step (1.5 KB of VM heap took 3 KB of brk).  Both are follow-ups;
+this part does not lower `CHMEM_berry`, so no limit of part 1 changes.
+
+**Found: a stack overflow of an FP process could panic the kernel.**  With
+`CHMEM_berry` at 5 KB (test build only), `berry primes.bec 30` faulted on
+its stack, and right after that MM faulted with CFSR 0x20 (MLSPERR: the
+lazy FP state save): "Kernel panic: exception in system code".  Fixed on
+main by #434 (#435: `fp_flush` clears the pended fault and kills the
+process).
 
 **The `-n 0` hang (found in part 1, fixed in #429).**  Two runaway
 scripts with `-n 0` made QEMU stop answering.  The cause was the

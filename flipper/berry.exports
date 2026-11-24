@@ -1,0 +1,27 @@
+# The shared Berry interpreter's entry table (spec R7c.1, Phase 7c part 3,
+# issue #431; tools/mkshlibc.py, ld/shberry.ld, <minix/shlibc.h>).
+#
+# One function per line; the line number (from 0, comments and blank lines
+# not counted) is its slot in the table at the start of the library in
+# flash (SHBERRY_BASE).  FROZEN like furi.exports: never reorder, insert
+# or remove a name while GZ_ABI stays the same; new functions go at the END.
+#
+# Started 2026-11-21 with the functions the launcher (gzberry.c) calls,
+# sorted by name.  (be_heap_limit, a variable, has no slot: it is
+# PROVIDEd at its place in the berry area.)
+be_data_push
+be_dumpexcept
+be_loadbuffer
+be_loadmode
+be_newobject
+be_pcall
+be_pop
+be_pushstring
+be_raise
+be_repl
+be_set_obs_hook
+be_setglobal
+be_toindex
+be_tostring
+be_vm_delete
+be_vm_new

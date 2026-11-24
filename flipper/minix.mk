@@ -108,6 +108,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 SHLIBC	?= 1
 SHL	:= $(MB)/shlibc
 SHF	:= $(MB)/shfuri
+SHB	:= $(MB)/shberry
 SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
 SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
@@ -1075,12 +1076,13 @@ CHMEM_u2f := 4096	# K.8: P-256 on the stack (micro-ecc, ~1.5 KB at most),
 			# no handler, so no MM gap
 # Berry (spec Phase 7c, R7c.1, R7c.4, R7c.5; issue #385): the interpreter
 # (src/lib/berry, upstream MIT, berry_conf.h) and its launcher gzberry.c,
-# one program `berry' in the installed region; its text runs in place, so
-# every running script shares it.  C99, the FPU (single float, R5.7).
-# The const tables (string table, built-in classes and modules, coc's
-# generate/) are pointer tables: in a PIC program they land in .data, so
-# per process in RAM; the shared library slot that keeps them in flash is
-# the next step (PORTING.md "Berry").  The bindings (R7c.3) are in gz/:
+# the VM in the shared Berry library (below, issue #431) and the launcher
+# `berry' in the installed region; both run in place, so every running
+# script shares them.  C99, the FPU (single float, R5.7).  The const
+# tables (string table, built-in classes and modules, coc's generate/)
+# are pointer tables: in a PIC program they would land in .data, per
+# process in RAM; in the library they stay in flash (PORTING.md
+# "Berry").  The bindings (R7c.3) are in gz/:
 # tsv, pipe (spec K.1) and the sensor stub.  Package berry.
 BERRY_DIR := $(MROOT)/src/lib/berry
 BERRY_SRC := $(wildcard $(BERRY_DIR)/src/*.c $(BERRY_DIR)/gz/*.c) \
@@ -1097,10 +1099,65 @@ $(BERRY_GEN): $(BERRY_SRC) $(BERRY_DIR)/berry_conf.h
 $(MB)/berry/%.o: $(BERRY_DIR)/%.c $(BERRY_GEN) $(BERRY_DIR)/berry_conf.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(BERRY_CFLAGS) -MMD -MP -c $< -o $@
-OBJS_berry = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRY_OBJ = $(patsubst $(BERRY_DIR)/%.c,$(MB)/berry/%.o,$(BERRY_SRC))
+BERRY_LIBOBJ = $(filter-out $(MB)/berry/gzberry.o,$(BERRY_OBJ))
 BERRYPROGS := berry
-CHMEM_berry := 12288	# R7c.4: the 8 KB script heap (-m), the VM and
-			# its stack; PORTING.md "Berry" has the measured split
+# The shared Berry library (spec R7c.1, issues #431, #433; the "berry"
+# library, ld/shberry.ld, tools/mkshlibc.py): the VM and the bindings,
+# with their constant tables (.data.rel.ro) in the library's text, so a
+# script's RAM is the libc and berry areas, the launcher's few words and
+# the chmem.  Only the launcher's calls are exported (berry.exports).
+# The user's decision on #433: the library is optional, carried by the
+# berry package and written into the installed region only when that
+# package is installed, never a fixed slot taken from every unit.  Its
+# install-time placement is not done yet (PORTING.md "Berry", the
+# relocation numbers); until then SHBERRY=0 builds the launcher as one
+# program, as before, and `make shberry` links the library at a link
+# address (SHBERRY_LINK) to check it (mkshlibc's guard, the numbers).
+SHBERRY ?= 0
+SHBERRY_LINK := $(if $(filter flipper,$(BOARD)),0x08048000,0x00048000)
+$(SHB)/tab.S: berry.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
+	@mkdir -p $(dir $@)
+	python3 -I tools/mkshlibc.py tab $< $@ --berry
+$(SHB)/tab.o: $(SHB)/tab.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+$(SHB)/berry.elf: $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
+		$(MB)/libc-static.a $(SHL)/shlibc-syms.ld ld/shberry.ld
+	@echo "  LD $@"
+	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
+	   -Wl,--gc-sections -Wl,-q -L$(SHL) \
+	   -Wl,--defsym=SHBERRY_BASE=$(SHBERRY_LINK) -Tld/shberry.ld \
+	   -Wl,-Map=$@.map $(SHB)/tab.o $(BERRY_LIBOBJ) $(SHL)/stubs.o \
+	   $(MB)/libc-static.a -lgcc -o $@
+$(SHB)/berry.bin $(SHB)/berry.json $(SHB)/stubs.S $(SHB)/shberry-syms.ld &: \
+		$(SHB)/berry.elf berry.exports tools/mkshlibc.py $(SHL)/libc.json
+	python3 -I tools/mkshlibc.py image $< berry.exports $(SHB)/berry.bin \
+	   $(SHB)/berry.json $(SHB)/stubs.S $(SHB)/shberry-syms.ld \
+	   --dep $(SHL)/libc.json --name SHBERRY --max 0x18000
+$(SHB)/stubs.o: $(SHB)/stubs.S
+	$(CC) $(MCFLAGS) -c $< -o $@
+.PHONY: shberry
+shberry: $(SHB)/berry.bin
+ifeq ($(SHLIBC)$(SHBERRY),11)
+OBJS_berry = $(MB)/berry/gzberry.o
+define berry_prog
+$(MB)/user/$(1).elf: $(call objs_of,$(1)) $(MB)/user/crtso-sh.o \
+		$(SHB)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a \
+		ld/user-shberry.ld $(SHL)/shlibc-syms.ld $(SHB)/shberry-syms.ld
+	@mkdir -p $$(dir $$@)
+	@$(CC) $(MLDFLAGS) -Wl,-q -L$(SHL) -L$(SHB) -Tld/user-shberry.ld \
+	   -Wl,-Map=$$@.map $(MB)/user/crtso-sh.o $(call objs_of,$(1)) \
+	   $(SHB)/stubs.o $(SHL)/stubs.o $(MB)/libc-static.a -lgcc -o $$@
+endef
+ELF2MNX_BERRY = $(if $(filter $*,$(BERRYPROGS)),--furi $(SHB)/berry.json)
+else
+OBJS_berry = $(BERRY_OBJ)
+berry_prog = $(call user_prog,$(1))
+endif
+# chmem: the default 8 KB script heap (-m, R7c.4) with malloc's headers,
+# the C stack of the VM (parser and calls; ~2 KB measured, berrytest) and
+# MM's 1.5 KB safety gap; PORTING.md "Berry" has the measured split.
+CHMEM_berry := 12288
 $(MB)/cmd/furihello.o: $(FURI_DIR)/hello.c $(MB)/libfuri.a
 	@mkdir -p $(dir $@)
 	@$(CC) $(FURI_GUI_CFLAGS) -I$(FURI_DIR) -MMD -MP -c $< -o $@
@@ -1160,8 +1217,9 @@ CHMEM_av := 2048
 CHMEM_pins := 2048
 CHMEM_memory := 2048
 CHMEM_flash := 4096	# SHA-256 work space, opendir() (1 KB) when naming one
-$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS) $(BERRYPROGS)),$(eval $(call user_prog,$(p))))
+$(foreach p,$(filter-out $(FURIPROGS) $(STATICPROGS),$(sort $(UPROGS) $(APPS)) $(LIBPROGS) $(TESTS) $(TIMEDPROGS) $(STPROGS) $(NATPROGS) $(WINAPPS) $(BUPROGS) $(SGPROGS)),$(eval $(call user_prog,$(p))))
 $(foreach p,$(FURIPROGS),$(eval $(call furi_prog,$(p))))
+$(foreach p,$(BERRYPROGS),$(eval $(call berry_prog,$(p))))
 $(foreach p,$(STATICPROGS),$(eval $(call static_prog,$(p))))
 $(MB)/cmd/app/%.o: apps/%.c
 	@mkdir -p $(dir $@)
@@ -1399,7 +1457,7 @@ $(MB)/bin/%: $(MB)/user/%.elf tools/elf2mnx.py minix.mk \
 	@python3 -I tools/elf2mnx.py $< $@ $(if $(CHMEM_$*),--stack $(CHMEM_$*)) \
 	   $(if $(filter $*,$(SECRETPROGS)),--secret) \
 	   $(if $(filter $*,$(STATICPROGS)),,$(ELF2MNX_LIBC)) \
-	   $(ELF2MNX_FURI)
+	   $(ELF2MNX_FURI) $(ELF2MNX_BERRY)
 $(if $(filter 1,$(SHLIBC)),$(FURIPROGS:%=$(MB)/bin/%)): $(SHF)/furi.json
 
 # Root file system: rootfs/proto -> fs.img (dd to the SD card partition)
