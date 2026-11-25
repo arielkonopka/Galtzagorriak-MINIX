@@ -5,6 +5,7 @@
 #
 # Hard gates (a red check blocks the merge):
 #   ramcheck    static RAM of every image <= flipper/ram-budget.txt
+#   sizecheck   flash size of each big program <= flipper/size-budget.txt
 #   flashcheck  flash pages erased in the M2 run <= flipper/flash-budget.txt
 #   M2          the QEMU self-test passes
 #   latbuild    the latency trace build (spec R0.8e, make latcheck) compiles
@@ -44,6 +45,9 @@ jobs:
 
       - name: RAM budget and version check
         run: make BOARD=flipper ramcheck
+
+      - name: Flash size of the programs (size-budget.txt)
+        run: make BOARD=flipper sizecheck
 
       - name: QEMU self-test (M2)
         run: |
