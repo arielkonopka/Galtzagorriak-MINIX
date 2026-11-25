@@ -16,7 +16,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
      run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
-     run-music run-u2f run-libblk run-blescan run-pgpenc
+     run-music run-u2f run-libblk run-blescan run-pgpenc run-canary
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -111,6 +111,10 @@ run-blescan:
 # pgpenc (user request 2026-11-25): gpg decrypts what the command writes.
 run-pgpenc:
 	$(MAKE) -C $(MROOT)/flipper/tests/pgpenc test
+
+# The canary cores (T35): beacons, gpio rules, jamming alarm, tracker following.
+run-canary:
+	$(MAKE) -C $(MROOT)/flipper/apps/canary test
 
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3

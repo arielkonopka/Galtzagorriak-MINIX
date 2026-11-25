@@ -257,3 +257,10 @@ $ python3 flipper/tools/rpc.py --port /dev/ttyACM1 ping kaixo     (planned)
 Commands: `ping`, `version`, `info`, `power`, `time`, `settime`, `ls`,
 `stat`, `df`, `cat`. Build the PC side with
 `make -C flipper/tests/rpcd test`.
+
+## Canaries: jamming and followers (coming)
+
+The *canary* app listens and warns, it never transmits. Two of its rules are ready and wait for the radio side:
+
+- **Jamming** (`subghz` canary): if the chosen band stays loud (default: -60 dBm or stronger) for 3 seconds without a gap longer than 0.2 s, the Flipper says so, and says when the band is quiet again for 2 seconds. A short burst, such as the doorbell of your neighbour in Bilbo, does not raise it. If the Flipper sleeps between samples the count starts again, so a sleeping gadget never cries wolf.
+- **Follower** (`ble` canary): a device that your scans meet again and again, at least 6 times a minute or more apart, for 15 minutes or longer, is flagged once, for example a tracker that travelled with you from the bus to the *etxea*. Someone who only walked past is not flagged.
