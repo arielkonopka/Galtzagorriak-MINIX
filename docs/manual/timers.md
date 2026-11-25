@@ -12,7 +12,7 @@ from the shell.
 ## Installing
 
 ```
-pkg install /lib/pkg/timed_1.2.tar
+pkg install /lib/pkg/timed_1.4.tar
 ```
 
 This puts `timed` and `alert` in `/usr/lib`, makes the spool `/var/timers` (owner root, group
@@ -125,7 +125,14 @@ In QEMU there is no alarm: `timed` says `no RTC alarm, next at …` instead.
 
 When the alert or a timer's program cannot start (most often too little free RAM: several alerts
 still ringing, or a big app open), `timed` writes `timed: ID: cannot start it: REASON` to the
-console log instead of firing it silently. A `once` timer is still deleted then.
+console log instead of firing it silently, with the number of the try, for example
+`timed: wake: cannot start it: Resource temporarily unavailable (try 1/10)`. The timer is **kept**:
+its file gets `Try: 1` and `Retry: TIME` (one minute later) and `timed` tries again then, up to 10
+times. After the tenth failure it says `timed: ID: gave up after 10 tries` and drops the timer
+(a `daily` or `interval` timer only loses that one occurrence and keeps its schedule). When a
+try works, the two lines disappear (or the `once` timer is deleted, as always). Each try writes
+the small timer file once, with the same owner and mode 600; nothing goes to the internal flash.
+Ikusi arte, patience: a ringing alarm that holds the RAM simply delays the next one by a minute.
 
 ## Where it writes
 

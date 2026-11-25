@@ -8,9 +8,9 @@ done today, or use the desk clock.
 ## Installing
 
 ```
-pkg install /lib/pkg/timed_1.2.tar     # needed by both
+pkg install /lib/pkg/timed_1.4.tar     # needed by both
 pkg install /lib/pkg/remind_1.1.tar
-pkg install /lib/pkg/alarm_1.1.tar
+pkg install /lib/pkg/alarm_1.2.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
@@ -113,7 +113,7 @@ keeps the form.
 | Volume | 10–100 % in steps of 10 (a cubic curve, as on the stock firmware: 50 % is much quieter than 100 %) |
 | Beep | on/off: the speaker |
 | Sound | `melody` (the tune) or `single` (beeps of one note) |
-| Melody | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, then your own tone file (below) |
+| Melody | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, and the three **1980s digital-watch** tunes `watch` (a rising arpeggio, as an hourly chime), `hourly` (double chirps) and `jingle` (a short square-wave tune), then your own tone file (below) |
 | Vibro, LED blink, Screen flash | on/off each; the screen flash blinks the backlight and leaves it as it was afterwards |
 | Snooze | off, 5, 10, 15, 20, 30 minutes |
 | Ring for | 1, 5, 10, 15, 30, 60 minutes before it gives up |

@@ -26,6 +26,12 @@ notifications) and RUNNING are described in [Desktop and modules](desktop.md).
 - Short notices, such as `unknown user` or `app crashed`, appear on the bottom line for 2
   seconds instead of covering the screen. The list stays visible.
 
+- **Folders.** Related apps sit in a folder, so the list stays short: `Tools/` (remotes, the
+  spectrum, GPIO, Snake) and `System/` (console, lights, power, charging, about). A folder shows
+  a `/` after its name; **OK** opens it, the title bar shows its name, and **Back** goes up to
+  where you were. Apps started from a folder bring you back into that folder. The same in the
+  [Stock style](#stock-style).
+
 **Left** opens **SETTINGS**, the system settings, **Right** the **HOME** page. Left and Right
 count only as a short press on their own, when you let go: holding Left+Up to turn off the
 backlight (see [Buttons and gestures](buttons.md)) does not turn the page.
@@ -318,6 +324,23 @@ Label:user:icon:/program arg ...
 Label:user:/program arg ...          (no icon: the older form, still valid)
 Label:user:icon:=/program arg ...    (a window app, see below)
 ```
+
+A line `[Label:icon]` starts a **folder** and the app lines after it are inside it, up to the next
+`[]` (or the next `[...]`); one level only. The icon is any of the forms below, or none (`[Games]`).
+End the last folder with `[]`: an app that a package adds later is put at the end of the file, and
+lands on the top level only then.
+
+```
+[Tools:@tools]
+Sub-GHz Remote:nobody:@subghz:=/bin/subrem
+Snake:nobody:@game:=/bin/snakeui
+[]
+Archive:nobody:@file:=/bin/archive
+```
+
+The launcher holds at most 20 entries (folders count). The list shipped with the system has six
+apps and the two folders `Tools` and `System` on the top level; if your SD card has an older flat
+`/etc/apps`, it keeps working as it is, and you can copy `/rom/etc/apps` over it to get the folders.
 
 The program must be an absolute path (starting with `/`). The app runs as `user`, in group `gui`.
 With `=` before the program it is a **window app**: it runs as `user` in that user's own group
