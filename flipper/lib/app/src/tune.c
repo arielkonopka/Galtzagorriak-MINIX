@@ -18,7 +18,7 @@
 const char *const tune_names[] = {
 	"beep", "chime", "rise", "classic", "gentle", "pips",
 	"watch", "hourly", "jingle", "catch", "eggs", "game", "duel",
-	"marsel", "saints", "ode", "elise", "troll", "korob", "spy", NULL
+	"marsel", "saints", "ode", "elise", "troll", "korob", "spy", "growl", NULL
 };
 static const char *const tune_text[] = {
 	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
@@ -49,6 +49,9 @@ static const char *const tune_text[] = {
 	"troll:d=8,o=5,b=140:e,f#,g,a,b,g,4b,a#,f#,4a#,a,e,4a,e,f#,g,a,b,g,b,e6,d6,b,g,b,2d6",
 	"korob:d=4,o=6,b=140:e,8b5,8c,d,8c,8b5,a5,8a5,8c,e,d,8c,8b5,4c.,8d,e,c,a5,4a5,2p",
 	"spy:d=8,o=5,b=150:a,c6,a,e,4a,p,g,b,g,d,4g,p,a,c6,e6,c6,a,4e6,2a",
+	/* a synthetic alarm: a low growl (fast pitch jitter around 220 Hz) and
+	 * a high whistle near the piezo's loudest range (3 to 4 kHz), in turns */
+	"growl:d=32,o=3,b=125:a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,8p,16f#7,16g#7,16a7,4b7,8p,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,8p,16f#7,16g#7,16a7,4b7",
 };
 
 const char *tune_builtin(const char *name)
