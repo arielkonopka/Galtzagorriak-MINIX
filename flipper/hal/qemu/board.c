@@ -331,6 +331,8 @@ int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
 	return 0;
 }
 
+void hal_subghz_tx_end(void) { }
+
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n)
 {
 	static const char hex[] = "0123456789abcdef";

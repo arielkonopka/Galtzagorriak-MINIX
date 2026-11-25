@@ -225,7 +225,8 @@ PRIVATE u8_t ir_paused;			/* bit 0: a frame went out meanwhile;
 #define IR_GAP_OF(b)	(((b) >> 1) * 2)
 PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
 PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
-PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna */
+PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna
+					 * (1) or the CC1101's data pin (2) */
 PRIVATE u8_t rf_held;			/* R6.5 p3: the field held up across a
 					 * T5577 command and its reply */
 PRIVATE u8_t rf_emu;			/* R6.5 p4: the emulating process + 1, 0 none */
@@ -352,7 +353,8 @@ FORWARD _PROTOTYPE( int subghz_write, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int subghz_read, (phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int sg_put, (char *line, int n, int v) );
 FORWARD _PROTOTYPE( int sg_tx_check, (u32_t ms, u32_t *hzp, u32_t *limit) );
-FORWARD _PROTOTYPE( int sg_raw_write, (phys_bytes user, int count) );
+FORWARD _PROTOTYPE( int sg_raw_write, (message *m_ptr, phys_bytes user,
+							int count) );
 FORWARD _PROTOTYPE( int sg_pkt_rw, (message *m_ptr, phys_bytes user, int count) );
 FORWARD _PROTOTYPE( int sg_ioctl, (message *m_ptr) );
 FORWARD _PROTOTYPE( int adcs_config, (phys_bytes user, int count) );
@@ -548,7 +550,11 @@ PUBLIC void flipdev_task()
 		if (tx_on && tx_proc == fm.PROC_NR) {	/* stop sending */
 			ir_stop_tx();
 			tx_on = FALSE;
-			if (tx_rfid && rf_held) {	/* the whole session */
+			if (tx_rfid == 2) {		/* Sub-GHz */
+				hal_subghz_tx_end();
+				hal_ir_target(0);
+				tx_rfid = FALSE;
+			} else if (tx_rfid && rf_held) {	/* the whole session */
 				rfid_field_off();
 				tx_rfid = FALSE;
 			} else if (tx_rfid) rfid_tx_off();
@@ -901,7 +907,8 @@ u32_t *limit;				/* out: the band's ms per hour */
   return(OK);
 }
 
-PRIVATE int sg_raw_write(user, count)
+PRIVATE int sg_raw_write(m_ptr, user, count)
+message *m_ptr;
 phys_bytes user;
 int count;
 {
@@ -936,9 +943,23 @@ int count;
   }
   if (ir_rd || tx_on) return(EBUSY);	/* one radio: a reader listens */
   if ((r = sg_tx_check((us + 999) / 1000, &hz, &limit)) != OK) return(r);
-  if (hal_subghz_tx(hz, (u32_t) user, (unsigned) n) < 0) return(ENOTSUP);
+  if ((r = hal_subghz_tx(hz, (u32_t) user, (unsigned) n)) < 0)
+	return(ENOTSUP);
   sg_air_ms += (us + 999) / 1000;
-  return(count);
+  if (r == 0) return(count);		/* sent before the return (QEMU) */
+  /* The Flipper: the chip is in TX; the IR transmit engine (TIM2, its
+   * ring, the writer suspended until the last duration) drives its data
+   * pin, as for the RFID antenna (tx_rfid 2: the CC1101). */
+  tx_rfid = 2;
+  r = ir_write(m_ptr, user, n % 2 ? count : count - 4);	/* a last space:
+					 * silence anyway */
+  if (r != SUSPEND) {
+	hal_subghz_tx_end();
+	tx_rfid = FALSE;
+	return(r);
+  }
+  tx_count = count;			/* the reply: the whole frame */
+  return(SUSPEND);
 }
 
 PRIVATE int sg_pkt_rw(m_ptr, user, count)
@@ -967,7 +988,8 @@ int count;
 	return(hal_subghz_pkt_fake(p, (unsigned) count) < 0 ? EINVAL : count);
   ms = ((u32_t) count + 12) * 8 * 1000 / 9990 + 1;
   if ((r = sg_tx_check(ms, &hz, &limit)) != OK) return(r);
-  if (hal_subghz_pkt_tx(hz, p, (unsigned) count) < 0) return(ENOTSUP);
+  if ((r = hal_subghz_pkt_tx(hz, p, (unsigned) count)) < 0)
+	return(r == -2 ? EAGAIN : ENOTSUP);	/* -2: the last one still out */
   sg_air_ms += ms;
   return(count);
 }
@@ -1851,7 +1873,7 @@ message *m_ptr;
 	/* R4b.7 part 2: what the receiver demodulates, as /dev/ir's
 	 * durations, high (carrier) first; tune with /dev/subghz first.
 	 * A write sends such a frame (R8.2). */
-	if (m_ptr->m_type == DEV_WRITE) return(sg_raw_write(user, count));
+	if (m_ptr->m_type == DEV_WRITE) return(sg_raw_write(m_ptr, user, count));
 	if (rs_on) return(rfid_read(m_ptr, user, count));	/* #302: a stream's half */
 	if (!(sg_state & SG_ON)) return(EIO);	/* not listening */
 	sg_state |= SG_READ;			/* in use: it stays on */
@@ -2355,7 +2377,11 @@ PRIVATE void do_hardint()
   if (tx_on) {
 	if (tx_done) {				/* the frame is out */
 		tx_on = FALSE;
-		if (tx_rfid && !rf_held) rfid_tx_off();
+		if (tx_rfid == 2) {		/* Sub-GHz: the chip back to RX */
+			hal_subghz_tx_end();
+			hal_ir_target(0);
+			tx_rfid = FALSE;
+		} else if (tx_rfid && !rf_held) rfid_tx_off();
 		else if (tx_rfid) tx_rfid = FALSE;	/* field held: keep it */
 		if (ir_rd && (ir_paused & IR_PAUSED)) {	/* the reader's capture again */
 			ir_paused &= ~IR_PAUSED;
@@ -3118,7 +3144,7 @@ PRIVATE int ir_rx_arm()
 /* The pulse engine (R4b.7) captures the reader's frame straight into its
  * buffer: the durations between edges, in us, by DMA. */
   if (hal_pulse_rx(pu_input, ir_buf, (unsigned) ir_count / 4,
-		(pu_input ? SG_GAP_MS : IR_GAP_OF(ir_paused) ? IR_GAP_OF(ir_paused)
+		(pu_input ? SG_GAP_MS : IR_GAP_OF(ir_paused) != 0 ? IR_GAP_OF(ir_paused)
 						: IR_GAP_MS) * 1000) < 0)
 	return(-1);
   lock();
@@ -3719,7 +3745,7 @@ int count;
 	duty = 50;
   }
   hal_ir_target(tx_rfid);
-  hal_ir_freq(hz, duty);
+  if (tx_rfid != 2) hal_ir_freq(hz, duty);	/* 2: the CC1101 modulates */
   first_us = IR_DEC(ir_txq[tx_t % IR_TXQ]);
   tx_t++;
   next_us = first_us;

@@ -921,7 +921,7 @@ def subghz_decode_m2u(ul, mx, opt, f):
 		return "FAIL", "could not write %s on MINIX" % path
 	if not ul.start("subghz rx %d 0" % f["freq"]):
 		return "BLOCKED", "Unleashed rx did not start: " + last(ul.stop())
-	rc, out = mx.run("subghz tx_from_file %s 1" % path, 30)
+	rc, out = mx.run("subghz tx_from_file %s %d" % (path, SUB_REPEAT), 30)
 	if missing(rc, out):
 		ul.stop()
 		return "MISSING", "subghz tx_from_file: " + last(out)
