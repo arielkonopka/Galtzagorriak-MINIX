@@ -164,6 +164,49 @@ the same code on a PC:
 
 Pairing data will be kept on the SD card (R15.4), never in internal flash.
 
+### `blescan`: the devices around, and a tracker finder
+
+```
+blescan [-t] [FILE]          read the controller's HCI events from FILE (or standard
+                             input) until it ends, then list the devices around you,
+                             strongest first; -t only the trackers
+blescan -F ADDR [FILE]       finder: one line with bars for every report of the device
+                             ADDR (AA:BB:CC:DD:EE:FF): the more `#`, the closer
+```
+
+```
+$ blescan -t /tmp/scan.hci
+ADDRESS            RSSI BARS       KIND       NAME
+DE:AD:BE:EF:00:01  -60 [#####   ] Tile       Tile
+C0:11:22:33:44:55  -78 [###     ] Find My
+$ blescan -F C0:11:22:33:44:55 /tmp/scan.hci
+[##      ] -80 dBm (avg -80)
+[####    ] -70 dBm (avg -78)
+```
+
+Walk around with the Flipper and watch the bars grow (hot and cold) to find a lost tracker
+(*galdu duzun giltza*, the lost key).
+
+What it knows from the advertisement alone, no connecting: the address, the signal strength
+(averaged over the last reports, so the bars do not jump), the name, and a *kind* when the packet
+says so: **Find My** (Apple's network: AirTags and others, manufacturer data `4C 00 12`), **Tile**
+(service `FEED`/`FEEC`), **SmartTag** (Samsung, service `FD5A`), **Find Hub** (Google's network,
+Eddystone service data with frame `40`/`41`), plus plain Eddystone, iBeacon and other Apple
+packets. These are guesses from what the packet claims, not proof; a tag that rotates its
+address (Apple and Google tags do, every few minutes to 24 hours) shows up as a new device each
+time, so use `-F` with the address you see now. At most 16 devices are kept; a weaker newcomer
+does not push out a stronger one.
+
+**Status.** The command and its library (`src/lib/blescan`, tested on the PC with recorded
+HCI frames) are ready. The source is a stream of HCI events (H4, LE Advertising Report): a file,
+a pipe, or an external controller. The Flipper's own radio feeds it when CPU2 scanning exists
+(`radio use` and the FUS client, a task for the device lane); until then the command works only
+on a recording. It needs about 4 KB of memory and writes nothing to flash.
+
+**Not possible: the Flipper as a Bluetooth speaker.** The Flipper's chip has Bluetooth Low
+Energy only, not the Classic profile (A2DP) that MP3 players and phones use for music, so it
+cannot play their sound. It can still play tunes of its own on the piezo.
+
 ### `rpcd` on MINIX
 
 ```

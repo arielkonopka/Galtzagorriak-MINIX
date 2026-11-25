@@ -312,7 +312,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree radio
+	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -462,6 +462,8 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
 			# 6272 B) and nanopb's request strings (a 1 KB ping,
 			# a 255 B path) from the heap, stdio, stack
+CHMEM_blescan  := 4096	# issue #388: the table (16 x 40 B), one HCI packet
+			# (258 B), stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -822,6 +824,16 @@ $(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
 OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
+# blescan (issue #388): the BLE scanner / tracker finder core (src/lib/blescan)
+# and the command; the same core runs on the PC (make -C tests/blescan test).
+BLESCAN_DIR := $(MROOT)/src/lib/blescan
+$(MB)/cmd/port/blescan.o: cmds/blescan.c $(BLESCAN_DIR)/blescan.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(BLESCAN_DIR) -MMD -MP -c $< -o $@
+$(MB)/blescan/blescan.o: $(BLESCAN_DIR)/blescan.c $(BLESCAN_DIR)/blescan.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(BLESCAN_DIR) -MMD -MP -c $< -o $@
+OBJS_blescan = $(MB)/cmd/port/blescan.o $(MB)/blescan/blescan.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
