@@ -1,0 +1,4 @@
+MAINS antenna: pin A7
+(header pin 3). A bare wire
+in the pin helps. Optional:
+10 MOhm from pin to GND.
