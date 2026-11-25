@@ -4099,6 +4099,124 @@ void hal_ir_tx_stop(void)
 }
 
 /*===========================================================================*
+ *			CPU2 probe (R2b.10)				     *
+ *===========================================================================*/
+/* The radio CPU (Cortex-M0+, ST's FUS and wireless stack, flash from SFSA)
+ * is started on request (/dev/power "cpu2") and only as far as its
+ * "system ready" event: the shared tables of ST's transport layer
+ * (STM32CubeWB tl_mbox.c, mbox_def.h), in SRAM2a where CPU2 looks for the
+ * reference table (0x20030000, the first 832 bytes, .cpu2map; the FS
+ * buffer cache starts after it), the system event queue and the memory
+ * manager's spare buffers, IPCC and HSEM clocked, CPU2 told to boot.  CPU2
+ * fills the device information table (FUS and stack versions, stack type)
+ * and raises IPCC channel 2.  Nothing is sent to it: no BLE.  A reset
+ * stops it again.  The state is the hardware's (C2BOOT, the IPCC flag): no
+ * RAM in SRAM1.
+ *
+ * Not yet: CPU1 flash erase and program while CPU2 runs should take HSEM 7
+ * and wait for FLASH_SR.PESD (ST's rule, so the radio's timing is kept);
+ * with no radio activity CPU2 only stalls during an erase, but this must
+ * come before CPU2 runs at every boot. */
+struct cpu2_list { uint32_t next, prev; };
+struct cpu2_map {
+	uint32_t ref[10];	/* MB_RefTable_t: devinfo, ble, thread, sys, mm,
+				 * traces, mac, zigbee, lld tests, ble lld */
+	uint32_t devinfo[8];	/* safe boot ver; FUS ver, mem, info;
+				 * stack ver, mem, InfoStack, reserved */
+	uint32_t ble[4];	/* cmd, cs, evt queue, acl */
+	uint32_t sys[2];	/* cmd buffer, event queue */
+	uint32_t mm[7];		/* spare ble, spare sys, ble pool, size,
+				 * free queue, traces pool, size */
+	uint32_t traces[1];
+	struct cpu2_list sys_q, free_q, ble_q, traces_q;
+	uint32_t cmd[68];	/* TL_CmdPacket_t: 8 + 1 + 3 + 255, rounded */
+	uint32_t sys_spare[68];	/* the spare system event buffer */
+};
+static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
+/* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
+ * spare BLE event buffer and the asynchronous event pool CPU2's stack
+ * takes at its start (stock gives them before booting it; left NULL, the
+ * BLE light stack hard-faulted at its start, 2026-11-25). */
+struct cpu2_mem2 {
+	uint32_t ble_spare[68];
+	uint32_t pool[136];		/* two event frames */
+};
+static struct cpu2_mem2 cpu2b __attribute__((section(".cpu2mem2"), used));
+
+#define C2_ADDR(x)	((uint32_t) (x))
+
+int hal_cpu2_start(void)
+{
+	struct cpu2_map *m = &cpu2;
+	unsigned i;
+
+	if (PWR->CR4 & PWR_CR4_C2BOOT) return 1;	/* started already */
+	for (i = 0; i < sizeof *m / 4; i++) ((volatile uint32_t *) m)[i] = 0;
+	for (i = 0; i < sizeof cpu2b / 4; i++) ((volatile uint32_t *) &cpu2b)[i] = 0;
+	m->ref[0] = C2_ADDR(m->devinfo);
+	m->ref[1] = C2_ADDR(m->ble);
+	m->ref[3] = C2_ADDR(m->sys);
+	m->ref[4] = C2_ADDR(m->mm);
+	m->ref[5] = C2_ADDR(m->traces);
+	m->sys_q.next = m->sys_q.prev = C2_ADDR(&m->sys_q);	/* empty lists */
+	m->free_q.next = m->free_q.prev = C2_ADDR(&m->free_q);
+	m->ble_q.next = m->ble_q.prev = C2_ADDR(&m->ble_q);
+	m->traces_q.next = m->traces_q.prev = C2_ADDR(&m->traces_q);
+	m->sys[0] = C2_ADDR(m->cmd);
+	m->sys[1] = C2_ADDR(&m->sys_q);
+	m->ble[0] = C2_ADDR(m->cmd);			/* no BLE yet: valid */
+	m->ble[1] = C2_ADDR(m->cmd);
+	m->ble[2] = C2_ADDR(&m->ble_q);
+	m->ble[3] = C2_ADDR(m->cmd);
+	m->mm[0] = C2_ADDR(cpu2b.ble_spare);
+	m->mm[1] = C2_ADDR(m->sys_spare);
+	m->mm[2] = C2_ADDR(cpu2b.pool);
+	m->mm[3] = sizeof cpu2b.pool;
+	m->mm[4] = C2_ADDR(&m->free_q);
+	m->traces[0] = C2_ADDR(&m->traces_q);
+	__asm volatile ("dsb" ::: "memory");
+	RCC->AHB3ENR |= RCC_AHB3ENR_IPCCEN | RCC_AHB3ENR_HSEMEN;
+	(void) RCC->AHB3ENR;
+	if (RCC->BDCR & RCC_BDCR_LSERDY)		/* the RF wake-up clock */
+		RCC->CSR = (RCC->CSR & ~RCC_CSR_RFWKPSEL_Msk) | RCC_CSR_RFWKPSEL_0;
+	/* CPU2 wakes on IPCC through EXTI line 41, as ST's HW_IPCC_Enable */
+	EXTI->C2EMR2 |= 1u << (41 - 32);
+	EXTI->RTSR2 |= 1u << (41 - 32);
+	__asm volatile ("sev; wfe; wfe" ::: "memory");	/* as ST, clears the event */
+	PWR->CR4 |= PWR_CR4_C2BOOT;
+	return 0;
+}
+
+/* -1: not started; 0: started, no ready event yet; 1: ready, v[] =
+ * FUS version, stack version, InfoStack, the ready event's SysStatus
+ * (0 the wireless stack runs, 1 FUS; 0xFF unknown). */
+int hal_cpu2_info(uint32_t v[4])
+{
+	struct cpu2_map *m = &cpu2;
+	const uint8_t *e;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return -1;
+	if (m->ref[0] == 0x1170FD0Fu) {		/* CPU2's hard fault record */
+		v[0] = m->ref[1];		/* pc */
+		v[1] = m->ref[2];		/* lr */
+		v[2] = m->ref[3];		/* sp */
+		return 2;
+	}
+	if (!(IPCC->C2TOC1SR & (1u << 1))) return 0;	/* channel 2: system */
+	v[0] = m->devinfo[1];
+	v[1] = m->devinfo[4];
+	v[2] = m->devinfo[6];
+	v[3] = 0xFF;
+	if (m->sys_q.next != C2_ADDR(&m->sys_q)) {
+		/* TL_EvtPacket_t: list node, type, evtcode, plen, payload:
+		 * subevtcode (2, 0x9200 ready) then SysStatus */
+		e = (const uint8_t *) m->sys_q.next;
+		if (e[9] == 0xFF && (e[11] | e[12] << 8) == 0x9200) v[3] = e[13];
+	}
+	return 1;
+}
+
+/*===========================================================================*
  *				Random numbers				     *
  *===========================================================================*/
 /* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
