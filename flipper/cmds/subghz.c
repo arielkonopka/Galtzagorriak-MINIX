@@ -780,7 +780,9 @@ static int cmd_chat(int argc, char **argv)
 			if (pkt[n - 1] != '\n') putchar('\n');
 			fflush(stdout);
 		} else if (n < 0 && errno != EAGAIN && errno != EINTR) {
-			bad("receive", errtext(errno));
+			bad("receive", errno == ENOTSUP
+				? "no packet receiver on this device"
+				: errtext(errno));
 			break;
 		}
 		if (n <= 0)	/* poll: 20 times a second */

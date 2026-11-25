@@ -968,7 +968,11 @@ def subghz_chat(ul, mx, opt, dirn):
 	word = CHAT % (int(time.time()) % 10000)
 	time.sleep(0.5)
 	if dirn == "u2m":
-		ul.write(word + "\r")
+		# Unleashed's chat drops characters of a line written in one
+		# go (its own echo shows them missing): type it
+		for ch in word + "\r":
+			ul.write(ch)
+			time.sleep(0.02)
 		got = mx.wait(word.encode(), 5)
 	else:
 		mx.write(word + "\r")
