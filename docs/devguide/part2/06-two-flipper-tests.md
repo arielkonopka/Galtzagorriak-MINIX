@@ -134,6 +134,23 @@ so), or use `--spacer ask`: it runs the thick rows first and then asks you to ta
 out. Real tags (T5577 fobs written as HIDProx, AWID, Indala26, Keri, PAC/Stanley, Electra,
 EM4100) read without any of this (#357); the spacer only matters for a Flipper's emulation.
 
+**A second measurement (2026-11-25, the bench without silicone cases, the spacer a flap of the
+original Flipper box, not cut, folded once or twice):**
+
+| Spacer | U→M passes | M→U passes |
+|---|---|---|
+| none (the backs touch) | EM4100, EM4100/32, Electra, FDX-B, Viking, Jablotron and the PSK ones; **no FSK row** | not run |
+| one layer of the box | 13: EM4100, Idteck, Indala26, Indala224, FDX-B, Viking, Jablotron, Keri, Gallagher, Nexwatch, Electra, GProxII, Noralsy | 9: EM4100, Idteck, Indala26, Indala224, Jablotron, Keri, Nexwatch, Electra, GProxII |
+| two layers | also H10301, IoProxXSF, Paradox; AWID, FDX-A, HIDProx 1 of 2 | also H10301, AWID, FDX-A, HIDProx, Pyramid, Paradox; HIDExt 1 of 2 |
+| four layers | no FSK row, EM4100 still reads | not run |
+
+**Why an FSK row says "no tag (no signal)".** It is not the reader. The stock firmware starts
+to emulate an FSK protocol about a second after the field comes on (`rfid -s 1` on MINIX
+counts 511 edges, `rfid -s 2` counts 33 000). A plain `rfid` read keeps the field on for half a
+second per try, so it is over before the emulator starts, and only the longer stream fallback
+can catch the frame. A real FSK card answers at once and reads without any of this. So a
+"no signal" on an FSK row tells you about the spacer and the stock emulator, not about MINIX.
+
 1. Silicone cases may stay on if you use the table above; without them the distances differ,
    so find your own thick and thin spacers the same way.
 2. Put the two Flippers back to back, screens facing outwards, **both top edges (the GPIO
@@ -206,11 +223,16 @@ Avoid direct sunlight on the windows.
 **The reference's transmission is short.** `subghz tx KEY FREQ TE REPEAT` and `tx_from_file FILE REPEAT` of the reference end after about a second, whatever REPEAT says. A receiver that listens for several seconds sees a burst and then silence, and results then depend on the burst falling into the listening window. Send several times inside the window (`tools/twoflip.py` sends each file 10 times; a longer window needs a loop of such commands).
 
 
-The antennas are inside, but **take the stack apart for the Sub-GHz rows and put the two
-Flippers about 1 m apart** (both stay on USB; unplug the 17/18 wires). Back to back the
-receiver is overloaded: MINIX measures about -37 dBm during Unleashed's transmission, the
-CC1101's demodulated output is choppy noise, and almost nothing decodes. At about 1 m it reads
--59 dBm and the frames are clean (checked 2026-11-19: 31 decode rows PASS, 0 back to back).
+So **take the stack apart for the Sub-GHz rows** (both stay on USB; unplug the 17/18 wires).
+Back to back the receiver is overloaded: MINIX measures about -37 dBm during Unleashed's
+transmission, the CC1101's demodulated output is choppy noise, and almost nothing decodes.
+Either distance of the paragraph above works: flat with the antenna corners about 5 cm apart
+(-44 to -55 dBm), or about 1 m apart (-59 dBm; checked 2026-11-19: 31 decode rows PASS, 0 back
+to back). Say which with `--setup` (6.6), so the maps of different days compare.
+
+**`subghz` runs from flash.** The command is about 150 KB, more than the largest free block of
+RAM, so install it into flash once (`pkg get --flash`, or `flsend --flash subghz.tar`; flsend
+wants a file name of at most 13 characters). Run from the card it says "no memory to start it".
 Keep other 433 MHz remotes away during the test. The test sends a short burst (a few
 seconds, low power, in the 433 MHz band that remotes use); check that this is allowed where you
 are.
@@ -304,6 +326,33 @@ on GitHub, press **Download raw file** on each, and put both into the same folde
 
 All commands are run in the folder with `twoflip.py` (`flipper/tools` in a clone). On
 Windows write `py` instead of `python3`.
+
+**The short version (Linux, both Flippers plugged in, nothing else holding their ports):**
+
+```
+cd flipper/tools
+export TWOFLIP_PASSWORD=minix                 # the MINIX root password
+M=$(ls /dev/serial/by-id/usb-Galtzagorriak*)  # the MINIX Flipper
+U=$(ls /dev/serial/by-id/usb-Flipper_Devices*) # the Unleashed one
+python3 twoflip.py -m $M -u $U --map today.md --log today.log ir          # top edges facing
+python3 twoflip.py -m $M -u $U --map today.md --log today.log nfc rfid    # back to back, spacer in
+python3 twoflip.py -m $M -u $U -r 2 'rfid-H10301-*' 'rfid-Paradox-*'      # some rows again, twice each
+```
+
+IR needs the two IR windows (top edges) to see each other; NFC and RFID need the Flippers
+back to back (6.4). One stack with the top edges at the same end serves all three if a sheet
+of paper stands over the top edges as a reflector. A run of `ir nfc rfid` takes about half an
+hour and needs no hands. The table at the end counts PASS, FAIL, MISSING, BLOCKED and N/A per
+group; the lines above it give the reason for each row. To see at a glance that a long run is
+still going, set the LED before it and clear it after (the script itself does not touch it):
+
+```
+echo ikurrina > /dev/led      # on the MINIX console, before the run
+echo off > /dev/led           # after it
+```
+
+While a run is going, do not type on either console and do not open the RFID, NFC or Infrared
+app on the MINIX Flipper: they take the device the script reads.
 
 1. **Self-test, no hardware.** It runs every row against two simulated Flippers and checks
    the script itself works on this computer (a few minutes):
@@ -400,6 +449,7 @@ Windows write `py` instead of `python3`.
 | `-r N` | run each row N times; a row that passed only sometimes is FAIL "k/N passed" (shows marginal distance or alignment) |
 | `--map FILE` | write the coverage map (Markdown) and FILE.json |
 | `--baseline FILE.json` | compare with an earlier run |
+| `--setup TEXT` | how the Flippers lay, in your words (`"flat, antennas 5 cm apart"`, `"back to back, box folded twice"`); written into the map |
 | `--spacer none\|thin\|thick\|ask` | RFID: the spacer between the Flippers (6.4). RFID rows that need another one are BLOCKED; `ask` runs the thick-spacer rows first, then asks for the change. Written into the map. |
 | `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
 | `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |
@@ -467,7 +517,41 @@ speed). The commands the script uses today, on main:
 | Sub-GHz level | `subghz tx 74BADE 433920000 403 100 0` | `echo 433920000 > /dev/subghz`, `cat /dev/subghz`, `echo 0 > /dev/subghz` |
 | Sub-GHz raw | (as above) | `ir rx -r -n 1 -d /dev/subghzraw` |
 | Sub-GHz file | `storage write_chunk /ext/twoflip/came.sub SIZE`, then `subghz tx_from_file /ext/twoflip/came.sub 10 0` (10 transmissions: most decoders report a frame only after seeing it twice in a row); `subghz rx 433920000 0` | `subghz rx 433920000`, `subghz tx_from_file FILE 10` |
-| NFC | `nfc`, then `emulate -f /ext/twoflip/Ntag215.nfc` or `scanner`, then `exit` | (planned, 6.10) |
+| NFC U→M | `nfc`, then `emulate -f /ext/twoflip/Ntag215.nfc` (Ctrl-C ends), then `exit` | `nfc -r` (type, UID, keys and blocks or pages), `nfc scan` (services of an ISO 14443-4 card) |
+| NFC M→U | `nfc`, `scanner`, `exit` | (no card emulation yet) |
+| IR learn | `ir tx NEC 04 08` | `ir learn /home/flipper/infrared/Test.ir Power`, `ir list FILE`, `ir send FILE Power` |
+
+Traps of the Unleashed console, all met on the bench:
+
+- **Hex without `0x`.** `ir tx NEC 0x00 0x08` answers "Wrong arguments" and sends nothing;
+  write `ir tx NEC 00 08`.
+- **`rfid read`, not `rfid read normal`.** The plain form switches between ASK and PSK by
+  itself and is the one that reads MINIX's emulation.
+- **Never type `exit` at the main prompt** (`>: `): the console is gone until the Flipper is
+  replugged. `exit` belongs to the `nfc` sub-shell (`[nfc]>: `) only.
+- **Files** go up with `storage write_chunk PATH SIZE`, then exactly SIZE bytes; end the
+  command line with a carriage return only, and send a larger file in pieces of 256 bytes
+  (each `write_chunk` appends). An `.nfc` or `.ir` file must start with its `Filetype:` line.
+- An FSK emulation starts about a second after the field comes on (6.4).
+
+### Three tests worth doing by hand
+
+**Copying a remote over the air** (the whole infrared path at once). Read a remote file of
+the Unleashed Flipper (`storage read /ext/infrared/assets/TVs/LG/LG_32LN5406.ir`), then for
+each signal start `ir learn /home/flipper/infrared/LG.ir NAME` on MINIX and send the signal
+from the Unleashed side (`ir tx PROTOCOL ADDRESS COMMAND`, or `ir tx RAW F:38000 DC:33
+SAMPLES...` for a raw one), and compare the file MINIX wrote with the original. Parsed signals
+must come out with the same protocol, address and command; raw ones with the same number of
+durations (Learn waits 150 ms of silence, so repeat bursts stay in the signal).
+
+**The Infrared app's Learn and Debug.** Open Infrared, Learn New Remote on MINIX, send
+`ir tx NEC 04 08` from the Unleashed side: the screen must show LEARNED with the protocol and
+`A:4 C:8`; OK saves, Back leaves at once. After leaving, `ir rx -n 1` on the console must not
+say "Resource busy" (nothing of the app may be left holding `/dev/ir`).
+
+**A card with a key that is not in the dictionary.** Emulate a MIFARE Classic file whose
+sector 1 has an unknown key A (keep made-up test files apart from real card dumps): `nfc -r`
+must report one key fewer (31/32), not fail.
 
 The Unleashed sources these were checked against: `applications/main/lfrfid/lfrfid_cli.c`,
 `infrared/infrared_cli.c`, `ibutton/ibutton_cli.c`, `subghz/subghz_cli.c`, `nfc/cli/` and
@@ -497,7 +581,7 @@ in the same PR.
 | `subghz rx FREQ` (**present**, #302) | each decoded packet with the protocol name and its key in hex (as stock): `Princeton 24bit Key:7C5703` |
 | `subghz tx KEY FREQ TE REPEAT`, `subghz tx_from_file FILE REPEAT` (**present**, #302; on the Flipper they say "no transmitter on this device yet" until the CC1101 transmit path exists) | sends, then exits 0 |
 | `subghz chat FREQ` (**present**, #302; transmit as above) | lines typed are sent, lines received are printed |
-| `nfc scanner` | the detected protocol names as stock (`ISO14443-3A`, `NTAG/Ultralight`, `FeliCa`, `SLIX`) |
+| `nfc -r` (**present**: read once, no screen) | a line `nfc: TYPE, UID .., ATQA .., SAK ..` with the protocol name as stock (`ISO14443-3A`, `NTAG/Ultralight ...`; `FeliCa` and `SLIX` when those pollers exist), then what was read; `nfc: no card` and exit 1 otherwise |
 | `nfc emulate -f FILE` | prints "Emulating..." and runs until Ctrl-C |
 
 A command that is missing, or answers with a usage message or "unknown protocol", makes the row
