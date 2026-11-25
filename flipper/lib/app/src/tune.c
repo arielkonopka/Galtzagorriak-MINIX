@@ -17,7 +17,8 @@
  * the others "chime".  const: in flash. */
 const char *const tune_names[] = {
 	"beep", "chime", "rise", "classic", "gentle", "pips",
-	"watch", "hourly", "jingle", NULL
+	"watch", "hourly", "jingle", "catch", "eggs", "game", "duel",
+	"marsel", "saints", "ode", "elise", "troll", "korob", "spy", "growl", NULL
 };
 static const char *const tune_text[] = {
 	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
@@ -31,6 +32,26 @@ static const char *const tune_text[] = {
 	"watch:d=16,o=6,b=170:c,e,g,c7,g,e,c,8p,c,e,g,c7,4p",
 	"hourly:d=16,o=6,b=190:e,e,p,e,e,4p,g,g,p,g,g,4p,8c7",
 	"jingle:d=8,o=6,b=150:e,g,4c7,g,e,4c,e,g,a,4g,p,f,a,4c7,a,f,4c,16e,16g,2c7",
+	/* game blips in the style of the pocket LCD games of the 1980s and
+	 * their eastern clones (catch the eggs, game over, the alarm race):
+	 * original, square-wave, short */
+	"catch:d=16,o=6,b=200:c,e,g,e,c,e,g,c7,4p",
+	"eggs:d=16,o=6,b=210:g,p,g,p,e,p,e,p,c,p,c,4p,8g",
+	"game:d=8,o=6,b=140:g,e,c,4p,e,c,a5,4p,2c5",
+	"duel:d=16,o=6,b=240:a,e7,a,e7,a,e7,a,e7,4p,a,e7,a,e7,a,e7,a,e7",
+	/* our own square-wave arrangements of public-domain tunes (first
+	 * phrases, as alarm tones); "spy" is an original riff in a surf/spy
+	 * style, not a copy of any film or TV theme */
+	"marsel:d=8,o=5,b=110:g4,4c,c,c,4e,4e,8d,8c,4d,4g,8g,4a,a,4b4,4c6,4c6.",
+	"saints:d=8,o=5,b=140:4c,4e,4f,2g,4c,4e,4f,2g,4c,4e,4f,g,e,4c,4e,2d",
+	"ode:d=4,o=5,b=130:e,e,f,g,g,f,e,d,c,c,d,e,4e.,8d,2d",
+	"elise:d=16,o=6,b=120:e,d#,e,d#,e,b5,d,c,4a5,p,c5,e5,a5,4b5,p,e5,g#5,b5,4c,p,e5,e,d#,e,d#,e,b5,d,c,4a5",
+	"troll:d=8,o=5,b=140:e,f#,g,a,b,g,4b,a#,f#,4a#,a,e,4a,e,f#,g,a,b,g,b,e6,d6,b,g,b,2d6",
+	"korob:d=4,o=6,b=140:e,8b5,8c,d,8c,8b5,a5,8a5,8c,e,d,8c,8b5,4c.,8d,e,c,a5,4a5,2p",
+	"spy:d=8,o=5,b=150:a,c6,a,e,4a,p,g,b,g,d,4g,p,a,c6,e6,c6,a,4e6,2a",
+	/* a synthetic alarm: a low growl (fast pitch jitter around 220 Hz) and
+	 * a high whistle near the piezo's loudest range (3 to 4 kHz), in turns */
+	"growl:d=32,o=3,b=125:a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,8p,16f#7,16g#7,16a7,4b7,8p,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,a,g#,a,a#,8p,16f#7,16g#7,16a7,4b7",
 };
 
 const char *tune_builtin(const char *name)
