@@ -193,3 +193,7 @@ Until the USB part lands, the files exist on the card (new cards, and `pkg insta
 older ones) but the bus always reads "not attached" and writes fail with `EAGAIN`. Then the USB
 port becomes a composite device (console + one HID interface for keyboard, mouse and media keys),
 and a computer sees a keyboard named after the Flipper.
+
+## The USB canary: what does this port try to do? (coming)
+
+Plug the Flipper into a charger or computer you do not trust, and the *usb* canary only watches: it shows how far the other side goes, with the time since you plugged in. **Power only** (a real charger: no data in 3 seconds), **host alive** (the port talks, but does not ask for anything), **enumerates** (it read the device and gave it an address), **configures** (a driver wants to use it) and **uses the function**. The Flipper never answers anything it does not have to, and the console is off while the canary runs, so a stranger's computer never sees a shell. Seeing *enumerates* on a "charging only" socket in a café is exactly the warning you want. *Kontuz!*
