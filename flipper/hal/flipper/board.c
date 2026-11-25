@@ -962,8 +962,65 @@ static int hal_subghz_tx_begin(void)
 	return r;
 }
 
+/* The frame by DMA, as stock's async TX: DMA1 channel 5 on TIM2's update
+ * request writes each duration (us, the writer's pinned memory: src, n
+ * words) into ARR as its segment starts (no preload: the value written at
+ * an update is the segment that update begins), and TIM2_CH2 flips GDO0 2 us
+ * into every segment (CCR2 = 2; the short first period, ARR = 1, never
+ * reaches it).  No interrupt per segment: channel 5's transfer-complete
+ * comes when the last duration is in (hal_subghz_tx_last then asks for the
+ * update that ends it).  A segment lasts its value + 1 us. */
+int hal_subghz_tx_dma(uint32_t src, unsigned n)
+{
+	if (n < 2) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	TIM2->OR = 0;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 1;
+	TIM2->CCR2 = 2;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;				/* PSC now */
+	TIM2->SR = 0;
+	DMA1_Channel5->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF5;
+	DMAMUX1_Channel4->CCR = 32;			/* TIM2_UP -> channel 5 */
+	DMA1_Channel5->CPAR = (uint32_t) &TIM2->ARR;
+	DMA1_Channel5->CMAR = src;
+	DMA1_Channel5->CNDTR = n;
+	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_PSIZE_1
+		| DMA_CCR_MSIZE_1 | DMA_CCR_TCIE | DMA_CCR_EN;
+	TIM2->DIER = TIM_DIER_UDE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+/* Channel 5's interrupt in a DMA transmission: 1 if it was the transfer
+ * complete (acked; the last segment is playing, its end comes as TIM2's
+ * update interrupt now), else 0. */
+int hal_subghz_tx_last(void)
+{
+	uint32_t isr = DMA1->ISR;
+
+	DMA1->IFCR = DMA_IFCR_CGIF5 | DMA_IFCR_CTCIF5 | DMA_IFCR_CHTIF5;
+	if (!(isr & DMA_ISR_TCIF5)) return 0;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_UIE;		/* no more DMA: the end, please */
+	return 1;
+}
+
 void hal_subghz_tx_end(void)
 {
+	DMA1_Channel5->CCR = 0;			/* a DMA transmission, if any */
+	DMA1->IFCR = DMA_IFCR_CGIF5;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
 	TIM2->CCMR1 = 4u << TIM_CCMR1_OC2M_Pos;		/* forced low */
 	TIM2->CCER = 0;
 	TIM2->CCMR1 = 0;			/* the receiver's capture sets its own */

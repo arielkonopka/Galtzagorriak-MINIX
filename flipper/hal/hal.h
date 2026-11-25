@@ -130,6 +130,8 @@ void hal_subghz_off(void);
 #define HAL_SG_FAKE_PKT	2
 int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n);
 void hal_subghz_tx_end(void);
+int hal_subghz_tx_dma(uint32_t src, unsigned n);	/* the frame by DMA (Flipper) */
+int hal_subghz_tx_last(void);		/* channel 5 IRQ: 1 = the last one is in */
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n);
 int hal_subghz_pkt_rx(uint8_t *p, unsigned max);
 int hal_subghz_fake(int what);

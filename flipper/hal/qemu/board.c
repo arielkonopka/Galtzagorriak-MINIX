@@ -332,6 +332,8 @@ int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
 }
 
 void hal_subghz_tx_end(void) { }
+int hal_subghz_tx_dma(uint32_t src, unsigned n) { (void) src; (void) n; return -1; }
+int hal_subghz_tx_last(void) { return 0; }
 
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n)
 {

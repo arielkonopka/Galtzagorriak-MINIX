@@ -553,6 +553,7 @@ PUBLIC void flipdev_task()
 			if (tx_rfid == 2) {		/* Sub-GHz */
 				hal_subghz_tx_end();
 				hal_ir_target(0);
+				proc_addr(tx_proc)->p_physio = FALSE;
 				tx_rfid = FALSE;
 			} else if (tx_rfid && rf_held) {	/* the whole session */
 				rfid_field_off();
@@ -889,8 +890,13 @@ u32_t *limit;				/* out: the band's ms per hour */
   u32_t hz, now = (u32_t) (get_uptime() / HZ);
   int set;
 
-  if (!(sg_state & SG_ON) || hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF)
-	return(EIO);			/* not tuned (R8.1: read back) */
+  if (!(sg_state & SG_ON)) return(EIO);	/* not tuned */
+  /* Tuned, but the chip not in RX (between the frames of one
+   * transmission it may still be calibrating back from TX): set it
+   * again before saying "not tuned" (R8.1: read back) */
+  if (hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF
+	&& (hal_subghz_rx(hz) < 0 || hal_subghz_rssi(&hz) == HAL_SUBGHZ_OFF))
+	return(EIO);
   if ((set = sg_set(sg_region)) == 0) return(EPERM);
   for (i = 0; i < SG_NBANDS; i++) {
 	if (SG_REGION(sg_bands[i].rg[0], sg_bands[i].rg[1]) == set
@@ -950,15 +956,35 @@ int count;
   /* The Flipper: the chip is in TX; the IR transmit engine (TIM2, its
    * ring, the writer suspended until the last duration) drives its data
    * pin, as for the RFID antenna (tx_rfid 2: the CC1101). */
-  tx_rfid = 2;
-  r = ir_write(m_ptr, user, n % 2 ? count : count - 4);	/* a last space:
-					 * silence anyway */
-  if (r != SUSPEND) {
+  if (n % 2 == 0) n--;			/* a last space: silence anyway */
+  if (as_proc != 0 || rs_on || rf_emu != 0 || n < 3) {	/* TIM2, DMA 5 */
 	hal_subghz_tx_end();
-	tx_rfid = FALSE;
-	return(r);
+	sg_air_ms -= (us + 999) / 1000;
+	return(EBUSY);
   }
-  tx_count = count;			/* the reply: the whole frame */
+  /* By DMA from the writer's memory (pinned, the writer suspended until
+   * the frame is out): the timing needs no task and no interrupt per
+   * segment, so short pulses survive a busy system (#469). */
+  tx_caller = m_ptr->m_source;
+  tx_proc = m_ptr->PROC_NR;
+  tx_count = count;
+  tx_total = n;
+  tx_fetch = n;				/* nothing for ir_fill */
+  tx_h = tx_t = 0;
+  tx_seg = 0;
+  tx_done = tx_err = FALSE;
+  tx_on = TRUE;
+  tx_rfid = 2;
+  hal_ir_target(2);
+  proc_addr(tx_proc)->p_physio = TRUE;
+  if (hal_subghz_tx_dma((u32_t) user, (unsigned) n) < 0) {
+	proc_addr(tx_proc)->p_physio = FALSE;
+	tx_on = FALSE;
+	tx_rfid = FALSE;
+	hal_ir_target(0);
+	hal_subghz_tx_end();
+	return(EIO);
+  }
   return(SUSPEND);
 }
 
@@ -2380,6 +2406,7 @@ PRIVATE void do_hardint()
 		if (tx_rfid == 2) {		/* Sub-GHz: the chip back to RX */
 			hal_subghz_tx_end();
 			hal_ir_target(0);
+			proc_addr(tx_proc)->p_physio = FALSE;
 			tx_rfid = FALSE;
 		} else if (tx_rfid && !rf_held) rfid_tx_off();
 		else if (tx_rfid) tx_rfid = FALSE;	/* field held: keep it */
@@ -3797,6 +3824,12 @@ int irq;
   int update;
 
   if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
+  if (irq == hal_rfid_emu_irq() && tx_on && tx_rfid == 2) {
+	/* Sub-GHz by DMA: the last duration is in; its end is the next
+	 * update interrupt, which the code below takes as the frame's end */
+	if (hal_subghz_tx_last()) tx_seg = tx_total;
+	return(1);
+  }
   if (irq == hal_rfid_emu_irq()) {	/* R9.0.6: a half played: refill */
 	unsigned k = hal_rfid_emu_ack();
 
