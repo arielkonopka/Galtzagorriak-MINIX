@@ -8,6 +8,10 @@
  *  noise  CC1101 RSSI at a few frequencies against a baseline taken away
  *         from the wall: clock harmonics of a data cable (wf_noise).
  *
+ * The on-device instructions are help.txt (the user must not need a
+ * computer): the app shows it on its Help screen, from flash.
+ * The pin in it is a placeholder until the device lane confirms the pin.
+ *
  * Pure C, integer only, no malloc, no writable statics; the caller owns
  * the states.  Host-tested.  The sensors (coil ADC, pin ADC, CC1101) are
  * the device lane's; thresholds are tuned on the device (#109).
