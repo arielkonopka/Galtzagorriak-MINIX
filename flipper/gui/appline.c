@@ -191,3 +191,29 @@ int app_line(char *line, struct app_fields *a)
 	a->cmd = c;
 	return 0;
 }
+
+/* A folder line of /etc/apps (#461): "[Label:icon]" opens a folder, whose
+ * entries are the lines after it, and "[]" ends it (one level).  1 and
+ * label, icon (NULL when there is none), user "" and command "" in *a;
+ * 2 for "[]"; 0 if the line is not one (an app line, a comment).  The
+ * line is changed. */
+int app_dir(char *line, struct app_fields *a)
+{
+	char *e;
+
+	line[strcspn(line, "\n")] = 0;
+	if (line[0] != '[') return 0;
+	if ((e = strrchr(line, ']')) == NULL) return -1;
+	*e = 0;
+	line++;
+	if (line[0] == 0) return 2;
+	a->icon = NULL;
+	if ((e = strchr(line, ':')) != NULL) {
+		*e++ = 0;
+		if (e[0] != 0) a->icon = e;
+	}
+	if (strlen(line) > 23) line[23] = 0;
+	a->label = line;
+	a->user = a->cmd = line + strlen(line);	/* "" */
+	return 1;
+}

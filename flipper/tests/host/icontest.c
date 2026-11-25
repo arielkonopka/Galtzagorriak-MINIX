@@ -50,6 +50,20 @@ int main(void)
 		&& parse("nocolon", &a, buf) < 0 && parse("L:u", &a, buf) < 0
 		&& parse("L:u:Zz", &a, buf) < 0, "comments, empty and broken lines");
 
+	strcpy(buf, "[Tools:@tools]\n");
+	CHECK(app_dir(buf, &a) == 1 && strcmp(a.label, "Tools") == 0
+		&& strcmp(a.icon, "@tools") == 0 && a.user[0] == 0
+		&& a.cmd[0] == 0, "#461: [Label:icon] opens a folder");
+	strcpy(buf, "[Games]\n");
+	CHECK(app_dir(buf, &a) == 1 && strcmp(a.label, "Games") == 0
+		&& a.icon == NULL, "#461: a folder without an icon");
+	strcpy(buf, "[]\n");
+	CHECK(app_dir(buf, &a) == 2, "#461: [] ends the folder");
+	strcpy(buf, "Snake:nobody:/bin/snake\n");
+	CHECK(app_dir(buf, &a) == 0, "#461: an app line is not a folder line");
+	strcpy(buf, "[broken\n");
+	CHECK(app_dir(buf, &a) < 0, "#461: a broken folder line");
+
 	CHECK(icon_parse("@bell", r, glyph) && icon_name(0, want) != NULL,
 		"@bell is built in");
 	CHECK(!icon_parse("@nosuch", r, glyph), "@nosuch: no icon");
