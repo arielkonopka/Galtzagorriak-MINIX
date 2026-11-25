@@ -97,7 +97,8 @@ static const char *errtext(int e)
 		"region set (subghz region)";
 	case EAGAIN: return "refused: the band's duty cycle for this hour is "
 		"used up";
-	case EIO: return "the radio is not tuned";
+	case EIO: return "the radio is not tuned, or the frame could not be fed "
+		"in time (short pulses, a busy system: send again)";
 	case ENOTSUP: return "no transmitter on this device yet";
 	case EBUSY: return "the radio is busy";
 	default: return strerror(e);
