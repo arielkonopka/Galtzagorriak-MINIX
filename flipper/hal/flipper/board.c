@@ -779,13 +779,111 @@ void hal_subghz_off(void)
 	gpio_set(GPIOC, 4, 0);
 }
 
-/* Transmit and packets (R8.2): not written yet on the Flipper.  The
- * kernel refuses with ENOTSUP until the local agent adds the CC1101 TX
- * path (off by default, the Autonomy rule); the band and duty-cycle
- * check runs before this either way. */
+/* Receiving packets (R8.2, receive half): stock's chat preset, GFSK at
+ * 9.99 kBd, sync word 0x464C, variable length, CRC checked by the chip
+ * (stock lib/subghz/devices/cc1101_configs.c,
+ * subghz_device_cc1101_preset_gfsk_9_99kb_async_regs; GPL).  Receive only:
+ * no PA table, no STX.  The preset is loaded at the first call on a tuned
+ * radio, keeping the frequency and the RF path; hal_subghz_rx sees the
+ * other modem settings and loads its own again (the registers say which
+ * preset is in: no static RAM).  Poll it: it never waits. */
+static const uint8_t cc_pkt_regs[] = {
+	0x02, 0x06,	/* IOCFG0: GDO0 high from sync to the packet's end */
+	0x03, 0x47,	/* FIFOTHR */
+	0x08, 0x05,	/* PKTCTRL0: variable length, CRC */
+	0x0B, 0x06,	/* FSCTRL1 */
+	0x04, 0x46,	/* SYNC1 */
+	0x05, 0x4C,	/* SYNC0 */
+	0x09, 0x00,	/* ADDR */
+	0x06, 0x00,	/* PKTLEN (variable: the first byte) */
+	0x10, 0xC8,	/* MDMCFG4: 9.99 kBd */
+	0x11, 0x93,	/* MDMCFG3 */
+	0x12, 0x12,	/* MDMCFG2: GFSK, 16/16 sync bits */
+	0x15, 0x34,	/* DEVIATN: 19 kHz */
+	0x17, 0x3C,	/* MCSM1: stay in RX after a packet (stock goes
+			 * idle and re-arms; here packets queue in the FIFO:
+			 * stock's chat sends a line as several short ones) */
+	0x18, 0x18,	/* MCSM0 */
+	0x19, 0x16,	/* FOCCFG */
+	0x1B, 0x43,	/* AGCCTRL2 */
+	0x1C, 0x40,	/* AGCCTRL1 */
+	0x1D, 0x91,	/* AGCCTRL0 */
+	0x20, 0xFB,	/* WORCTRL */
+};
+
+int hal_subghz_pkt_rx(uint8_t *p, unsigned max)
+{
+	uint8_t f[3], g2, n, lqi;
+	unsigned i, k;
+	int r = 0;
+
+
+	spi1_on(0);
+	if (cc_xfer2(0x10 | 0x80, 0) != 0xC8 || cc_xfer2(0x08 | 0x80, 0) != 0x05) {
+		/* the OOK receiver is in: keep frequency and path, load chat's */
+		if ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D) {
+			spi1_off();
+			return -1;			/* not tuned: no radio */
+		}
+		for (i = 0; i < 3; i++) f[i] = cc_xfer2((0x0D + i) | 0x80, 0);
+		g2 = cc_xfer2(0x00 | 0x80, 0);		/* IOCFG2: the path */
+		cc_strobe(0x36);			/* SIDLE */
+		cc_strobe(0x30);			/* SRES */
+		(void) cc_ready();
+		CC_CS(0);
+		for (i = 0; i < sizeof cc_pkt_regs; i += 2)
+			(void) cc_xfer2(cc_pkt_regs[i], cc_pkt_regs[i + 1]);
+		for (i = 0; i < 3; i++) (void) cc_xfer2(0x0D + i, f[i]);
+		(void) cc_xfer2(0x00, g2);
+		cc_strobe(0x34);			/* SRX (calibrates) */
+		spi1_off();
+		return 0;
+	}
+	if ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) == 0x11) {	/* RX overflow */
+		cc_strobe(0x3A);			/* SFRX */
+		cc_strobe(0x34);
+		spi1_off();
+		return 0;
+	}
+	/* Only with no packet coming in (GDO0 low), so every packet in the
+	 * FIFO is complete: length, data, then RSSI and LQI|CRC_OK. */
+	if ((cc_xfer2(0x38 | 0xC0, 0) & 0x01)		/* PKTSTATUS GDO0 */
+	    || (cc_xfer2(0x3B | 0xC0, 0) & 0x7F) == 0) {	/* RXBYTES */
+		spi1_off();
+		return 0;
+	}
+	(void) cc_ready();				/* FIFO burst read */
+	(void) spi1_xfer(0x3F | 0xC0);
+	n = spi1_xfer(0);				/* the length byte */
+	if (n > 61) {					/* not a length: lost sync */
+		while (SPI1->SR & SPI_SR_BSY) ;
+		CC_CS(0);
+		cc_strobe(0x36);			/* SIDLE */
+		cc_strobe(0x3A);			/* SFRX */
+		cc_strobe(0x34);			/* SRX */
+		spi1_off();
+		return 0;
+	}
+	for (k = 0; k < n; k++) {
+		uint8_t b = spi1_xfer(0);
+
+		if (k < max) p[k] = b;
+	}
+	(void) spi1_xfer(0);				/* RSSI */
+	lqi = spi1_xfer(0);				/* LQI, bit 7 CRC_OK */
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	if (lqi & 0x80) r = n < max ? n : (int) max;
+	spi1_off();
+	return r;
+}
+
+/* Transmit (R8.2): not written yet on the Flipper.  The kernel refuses
+ * with ENOTSUP until the local agent adds the CC1101 TX path (off by
+ * default, the Autonomy rule); the band and duty-cycle check runs before
+ * this either way. */
 int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
-int hal_subghz_pkt_rx(uint8_t *p, unsigned max) { (void) p; (void) max; return -1; }
 int hal_subghz_fake(int what) { (void) what; return -1; }
 int hal_subghz_fake_take(int what) { (void) what; return 0; }
 int hal_subghz_pkt_fake(const uint8_t *p, unsigned n) { (void) p; (void) n; return -1; }
