@@ -17,7 +17,7 @@
  * the others "chime".  const: in flash. */
 const char *const tune_names[] = {
 	"beep", "chime", "rise", "classic", "gentle", "pips",
-	"watch", "hourly", "jingle", NULL
+	"watch", "hourly", "jingle", "catch", "eggs", "game", "duel", NULL
 };
 static const char *const tune_text[] = {
 	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
@@ -31,6 +31,13 @@ static const char *const tune_text[] = {
 	"watch:d=16,o=6,b=170:c,e,g,c7,g,e,c,8p,c,e,g,c7,4p",
 	"hourly:d=16,o=6,b=190:e,e,p,e,e,4p,g,g,p,g,g,4p,8c7",
 	"jingle:d=8,o=6,b=150:e,g,4c7,g,e,4c,e,g,a,4g,p,f,a,4c7,a,f,4c,16e,16g,2c7",
+	/* game blips in the style of the pocket LCD games of the 1980s and
+	 * their eastern clones (catch the eggs, game over, the alarm race):
+	 * original, square-wave, short */
+	"catch:d=16,o=6,b=200:c,e,g,e,c,e,g,c7,4p",
+	"eggs:d=16,o=6,b=210:g,p,g,p,e,p,e,p,c,p,c,4p,8g",
+	"game:d=8,o=6,b=140:g,e,c,4p,e,c,a5,4p,2c5",
+	"duel:d=16,o=6,b=240:a,e7,a,e7,a,e7,a,e7,4p,a,e7,a,e7,a,e7,a,e7",
 };
 
 const char *tune_builtin(const char *name)
