@@ -1363,9 +1363,21 @@ Without CPU2 started nothing changes. Device check: with CPU2 up, `pkg install -
 (pages erased and programmed), `hello` run from flash, `pkg remove hello`: all fine, CPU2 still
 ready afterwards.
 
-Before CPU2 runs at every boot (Phase 15): Stop2 and the current with CPU2 running must be
-measured, and the ready event's SysStatus read (shown as 255 now: the event was not found in
-the system queue).
+Stop2 with CPU2 running: first try (old Stop2 path) the USB did not come back after the cable
+was plugged in again, and the average on battery was -11 mA (display on: -20 mA). The Stop2 path
+did what is right for one CPU only: always onto HSI16, and it set CPU2's low-power mode (C2CR1)
+itself; and nothing kept CPU2 from switching the 48 MHz clock (the RNG's), which the USB runs
+on. Now, once CPU2 was started: CPU1 holds HSEM 5 (CLK48) for good (hal_random no longer drops
+it), and hal_stop2 follows stock's furi_hal_power_deep_sleep: HSEM 3 around the clock changes,
+HSEM 4 for the entry, onto HSI16 only if CPU2 is in deep sleep (C2DS/C2SBF) or holds HSEM 4,
+C2CR1 left to CPU2, the PLL restored only if the system clock left it. Device check: 290 s off
+USB with CPU2 up, Stop2 239 s (82 %), the USB back 1 s after plugging in, CPU2 still ready.
+Still to look at: 799 other wake-ups in those 290 s (about 2.7 a second; without CPU2 a few
+hundred an hour), probably CPU2's IPCC/EXTI 41.
+
+Before CPU2 runs at every boot (Phase 15): the wake-ups above, a current measurement on battery
+over a longer time, and the ready event's SysStatus read (shown as 255 now: the event was not
+found in the system queue).
 
 ## Status
 

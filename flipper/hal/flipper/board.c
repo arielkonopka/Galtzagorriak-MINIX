@@ -2844,8 +2844,8 @@ unsigned hal_buttons(void)
 /*===========================================================================*
  *				Stop2					     *
  *===========================================================================*/
-/* Stop2 (T14b, R6.8) as the stock furi_hal_power_deep_sleep, without the
- * CPU2 semaphores (CPU2 is never started): onto HSI16, Stop2 for both CPUs,
+/* Stop2 (T14b, R6.8) as the stock furi_hal_power_deep_sleep (with CPU2's
+ * semaphores once CPU2 was started, see below): onto HSI16, Stop2 for both CPUs,
  * SLEEPDEEP, WFI; the wake-up comes on HSI16 (STOPWUCK), then back to HSE
  * and the PLL (and PLLSAI1, USB's 48 MHz, if it ran).  Stop2 turns HSE and
  * the PLLs off.  The crystal's start-up is waited for here, interrupts
@@ -2858,38 +2858,67 @@ int hal_can_stop2(void)
 	return (RCC->CFGR & RCC_CFGR_SWS) == (3u << RCC_CFGR_SWS_Pos);
 }
 
+/* With CPU2 running (R2b.10) the clocks are shared, so as stock's
+ * furi_hal_power_deep_sleep: HSEM 3 (RCC) around every clock change, and
+ * HSEM 4 (entry to Stop): onto HSI16 only if CPU2 is asleep too (or holds
+ * HSEM 4), else stay on the PLL - CPU2 runs on it; CPU2's own low-power
+ * mode (C2CR1) is CPU2's.  After the wake-up the PLL comes back only if
+ * the system clock really left it. */
+#define C2_COREID	(4u << HSEM_R_COREID_Pos)	/* CPU1 */
+#define C2_SEM_RCC	3
+#define C2_SEM_STOP	4
+
 int hal_stop2(void)
 {
-	uint32_t sai = RCC->CR & RCC_CR_PLLSAI1ON;
-	int w;
+	uint32_t sai = RCC->CR & RCC_CR_PLLSAI1ON, n;
+	int w, c2 = (PWR->CR4 & PWR_CR4_C2BOOT) != 0, hsi = 1;
 
 	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) return -1;
-	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_STOPWUCK
+	if (c2) {
+		for (n = 0; HSEM->RLR[C2_SEM_RCC] != (HSEM_RLR_LOCK | C2_COREID); )
+			if (++n == 1000000u) return -1;	/* no Stop2 now */
+		if (HSEM->RLR[C2_SEM_STOP] == (HSEM_RLR_LOCK | C2_COREID)) {
+			if (PWR->EXTSCR & (PWR_EXTSCR_C2DS | PWR_EXTSCR_C2SBF))
+				HSEM->R[C2_SEM_STOP] = C2_COREID;
+			else hsi = 0;		/* CPU2 runs on the PLL */
+		}
+	}
+	if (hsi) {
+		RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_STOPWUCK
 						| (1u << RCC_CFGR_SW_Pos);
-	while ((RCC->CFGR & RCC_CFGR_SWS) != (1u << RCC_CFGR_SWS_Pos)) ;
+		while ((RCC->CFGR & RCC_CFGR_SWS) != (1u << RCC_CFGR_SWS_Pos)) ;
+	}
+	if (c2) HSEM->R[C2_SEM_RCC] = C2_COREID;
 	PWR->CR1 = (PWR->CR1 & ~PWR_CR1_LPMS) | PWR_CR1_LPMS_1;
-	PWR->C2CR1 = (PWR->C2CR1 & ~PWR_C2CR1_LPMS) | PWR_C2CR1_LPMS_1;
+	if (!c2) PWR->C2CR1 = (PWR->C2CR1 & ~PWR_C2CR1_LPMS) | PWR_C2CR1_LPMS_1;
 	SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
 	__DSB();
 	__WFI();
 	SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
 	/* Stop0 selected again, as stock: a stray deep sleep is no Stop2 */
 	PWR->CR1 &= ~PWR_CR1_LPMS;
-	PWR->C2CR1 &= ~PWR_C2CR1_LPMS;
+	if (!c2) PWR->C2CR1 &= ~PWR_C2CR1_LPMS;
 	PWR->EXTSCR = PWR_EXTSCR_C1CSSF;
 	w = (EXTI->PR1 & BTN_LINES) ? HAL_WAKE_BTN : 0;
 	if (LPTIM1->ISR & (LPTIM_ISR_CMPM | LPTIM_ISR_CMPOK)) w |= HAL_WAKE_TIMER;
 
-	RCC->CR |= RCC_CR_HSEON;
-	while (!(RCC->CR & RCC_CR_HSERDY)) ;
-	RCC->CR |= RCC_CR_PLLON;
-	while (!(RCC->CR & RCC_CR_PLLRDY)) ;
-	if (sai) {
-		RCC->CR |= RCC_CR_PLLSAI1ON;
-		while (!(RCC->CR & RCC_CR_PLLSAI1RDY)) ;
+	if (c2) {
+		HSEM->R[C2_SEM_STOP] = C2_COREID;	/* if ours */
+		while (HSEM->RLR[C2_SEM_RCC] != (HSEM_RLR_LOCK | C2_COREID)) ;
 	}
-	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
-	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
+	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) {
+		RCC->CR |= RCC_CR_HSEON;
+		while (!(RCC->CR & RCC_CR_HSERDY)) ;
+		RCC->CR |= RCC_CR_PLLON;
+		while (!(RCC->CR & RCC_CR_PLLRDY)) ;
+		if (sai) {
+			RCC->CR |= RCC_CR_PLLSAI1ON;
+			while (!(RCC->CR & RCC_CR_PLLSAI1RDY)) ;
+		}
+		RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
+		while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
+	}
+	if (c2) HSEM->R[C2_SEM_RCC] = C2_COREID;
 	return w;
 }
 
@@ -4180,6 +4209,9 @@ int hal_cpu2_start(void)
 	/* CPU2 wakes on IPCC through EXTI line 41, as ST's HW_IPCC_Enable */
 	EXTI->C2EMR2 |= 1u << (41 - 32);
 	EXTI->RTSR2 |= 1u << (41 - 32);
+	/* USB runs on the 48 MHz clock, which CPU2 may switch for the RNG
+	 * unless CPU1 holds HSEM 5 (AN5289; stock's furi_hal_usb): kept */
+	(void) (HSEM->RLR[5]);
 	__asm volatile ("sev; wfe; wfe" ::: "memory");	/* as ST, clears the event */
 	PWR->CR4 |= PWR_CR4_C2BOOT;
 	return 0;
@@ -4253,7 +4285,8 @@ int hal_random(uint32_t *w)
 			RCC->CCIPR |= 1u << RCC_CCIPR_RNGSEL_Pos;	/* LSI */
 			RNG->CR |= RNG_CR_CED;
 		}
-		sem_give(SEM_CLK48);
+		if (!(PWR->CR4 & PWR_CR4_C2BOOT))	/* else held for USB */
+			sem_give(SEM_CLK48);
 	}
 	if (sem_take(SEM_RNG) < 0) return -1;
 	if (!on) {
