@@ -223,11 +223,16 @@ Avoid direct sunlight on the windows.
 **The reference's transmission is short.** `subghz tx KEY FREQ TE REPEAT` and `tx_from_file FILE REPEAT` of the reference end after about a second, whatever REPEAT says. A receiver that listens for several seconds sees a burst and then silence, and results then depend on the burst falling into the listening window. Send several times inside the window (`tools/twoflip.py` sends each file 10 times; a longer window needs a loop of such commands).
 
 
-The antennas are inside, but **take the stack apart for the Sub-GHz rows and put the two
-Flippers about 1 m apart** (both stay on USB; unplug the 17/18 wires). Back to back the
-receiver is overloaded: MINIX measures about -37 dBm during Unleashed's transmission, the
-CC1101's demodulated output is choppy noise, and almost nothing decodes. At about 1 m it reads
--59 dBm and the frames are clean (checked 2026-11-19: 31 decode rows PASS, 0 back to back).
+So **take the stack apart for the Sub-GHz rows** (both stay on USB; unplug the 17/18 wires).
+Back to back the receiver is overloaded: MINIX measures about -37 dBm during Unleashed's
+transmission, the CC1101's demodulated output is choppy noise, and almost nothing decodes.
+Either distance of the paragraph above works: flat with the antenna corners about 5 cm apart
+(-44 to -55 dBm), or about 1 m apart (-59 dBm; checked 2026-11-19: 31 decode rows PASS, 0 back
+to back). Say which with `--setup` (6.6), so the maps of different days compare.
+
+**`subghz` runs from flash.** The command is about 150 KB, more than the largest free block of
+RAM, so install it into flash once (`pkg get --flash`, or `flsend --flash subghz.tar`; flsend
+wants a file name of at most 13 characters). Run from the card it says "no memory to start it".
 Keep other 433 MHz remotes away during the test. The test sends a short burst (a few
 seconds, low power, in the 433 MHz band that remotes use); check that this is allowed where you
 are.
@@ -444,6 +449,7 @@ app on the MINIX Flipper: they take the device the script reads.
 | `-r N` | run each row N times; a row that passed only sometimes is FAIL "k/N passed" (shows marginal distance or alignment) |
 | `--map FILE` | write the coverage map (Markdown) and FILE.json |
 | `--baseline FILE.json` | compare with an earlier run |
+| `--setup TEXT` | how the Flippers lay, in your words (`"flat, antennas 5 cm apart"`, `"back to back, box folded twice"`); written into the map |
 | `--spacer none\|thin\|thick\|ask` | RFID: the spacer between the Flippers (6.4). RFID rows that need another one are BLOCKED; `ask` runs the thick-spacer rows first, then asks for the change. Written into the map. |
 | `--t5577` | a blank T5577 tag is at hand: run the `rfid-write` rows. Interactive: the script tells you where to hold the tag and waits for Enter. Take the stack apart for these rows. |
 | `--rw1990` | a blank RW1990 iButton key is at hand: run the iButton write rows (hold it to the contacts of either Flipper: the 1-Wire line is shared by the wires) |

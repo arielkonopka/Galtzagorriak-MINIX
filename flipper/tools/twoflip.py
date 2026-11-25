@@ -1240,6 +1240,7 @@ def write_map(path, res, info):
 		"Made by `flipper/tools/twoflip.py` on %s." % info["date"],
 		"MINIX: %s. Unleashed: %s." % (info["minix"], info["unleashed"]),
 		"RFID spacer: %s (devguide 6.4)." % (info.get("spacer") or "not given"),
+		"Setup: %s." % (info.get("setup") or "not given"),
 		"", "Statuses: PASS works; FAIL MINIX has it but it is wrong; "
 		"MISSING not in MINIX yet; BLOCKED the Unleashed side could not "
 		"do its part; N/A needs extra hardware; INFO measurement only.",
@@ -1381,6 +1382,10 @@ def main():
 		help="RFID: the spacer between the Flippers (devguide 6.4); "
 		"rows that need another are BLOCKED; ask: thick rows first, then "
 		"it asks for the change")
+	ap.add_argument("--setup", metavar="TEXT",
+		help="how the Flippers lay, in words, written into the map: "
+		"'back to back, box folded twice' or 'flat, antennas 5 cm "
+		"apart' (devguide 6.4); results depend on it")
 	ap.add_argument("--t5577", action="store_true")
 	ap.add_argument("--rw1990", action="store_true")
 	ap.add_argument("--log")
@@ -1483,7 +1488,8 @@ def finish(ul, mx, opt, rows):
 	if opt.map:
 		write_map(opt.map, res, {"date": time.strftime("%Y-%m-%d %H:%M"),
 			"minix": mv, "unleashed": uv,
-			"spacer": getattr(opt, "spacer", None)})
+			"spacer": getattr(opt, "spacer", None),
+			"setup": getattr(opt, "setup", None)})
 		print("map: %s (+ .json)" % opt.map)
 	bad = sum(1 for r in res if r["status"] == "FAIL")
 	if opt.baseline:
