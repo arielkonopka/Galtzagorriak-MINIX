@@ -60,7 +60,7 @@
 #include "desktop.h"
 #include "launcher_stock.h"
 
-#define MAXAPPS	16
+#define MAXAPPS	20		/* with the folder entries (#461) */
 #define MAXARGS	8
 #define CMDMAX	APP_CMDMAX
 #define ROW_Y(i)	(7 + (i) * 6)
@@ -80,7 +80,13 @@ struct app {
 } apps[MAXAPPS];
 int napps;
 static char fsck_err;	/* /etc/rc found errors on the card (spec N.3) */
-static unsigned short has_icon, has10;	/* 16 bits: MAXAPPS */
+static unsigned long has_icon, has10;	/* 32 bits: MAXAPPS */
+/* Folders (#461): isdir bit i: entry i is a folder; agrp[i] the folder
+ * it is in (0: the top level, else the folder's index + 1); the view is
+ * the entries of the folder shown now (cur: 0 the top level), in order:
+ * view(i) is the i-th of them (a scan: no table, RAM). */
+static unsigned long isdir;
+static unsigned char agrp[MAXAPPS], nview, cur;
 static unsigned char opt;		/* OPT_* below */
 /* Repeat (#361): the period of a held Up/Down in the lists, in ms; 0 is
  * off.  rep_lvl indexes rep_tab; 5 (152 ms) is the owner's default. */
@@ -93,7 +99,8 @@ static unsigned char rep_lvl = REP_DEF;
 #define OPT_BATT	4
 #define OPT_LOG		8		/* GuiLog: on (spec K.3, K.8) */
 #define OPT_STOCK	16		/* Style: stock (spec R5.6b) */
-#define HAS10(i)	(has10 & (1U << (i)))
+#define HAS10(i)	(has10 & (1UL << (i)))
+#define ISDIR(i)	(isdir & (1UL << (i)))
 /* The battery on the title bar (owner 2026-11-17): the charge in percent
  * (BAT_NONE: not read yet or no gauge) and BAT_CHG while charging, read
  * from /dev/power at a redraw when the last reading is a minute old - so
@@ -123,48 +130,89 @@ static void free_apps(void)
 		     : has_icon & (1UL << napps) ? (char *) ICON(napps)
 		     : apps[napps].label);
 	}
-	has_icon = has10 = 0;
+	has_icon = has10 = isdir = 0;
+}
+
+/* The entries shown: those in the folder `cur` (0: the top level). */
+static void build_view(void)
+{
+	int i;
+
+	nview = 0;
+	for (i = 0; i < napps; i++)
+		if (agrp[i] == cur) nview++;
+}
+
+/* The index in apps[] of the i-th entry shown. */
+static int view(int i)
+{
+	int a;
+
+	for (a = 0; a < napps; a++)
+		if (agrp[a] == cur && i-- == 0) return a;
+	return 0;
+}
+
+/* Put one entry (an app or a folder) in the next slot. */
+static int add_app(const struct app_fields *a, int dir, int grp)
+{
+	unsigned char rows[ICON_H], rows10[ICON10_B];
+	size_t la = strlen(a->label), lu = strlen(a->user), lc = strlen(a->cmd);
+	int ic, ic10;
+	char *m;
+
+	ic = a->icon != NULL && icon_parse(a->icon, rows, gui_glyph_row);
+	ic10 = a->icon != NULL && icon10_parse(a->icon, rows10);
+	if ((m = malloc((ic10 ? ICON10_B : 0) + (ic ? ICON_H : 0)
+			+ la + lu + lc + 3)) == NULL)
+		return -1;
+	if (ic10) {
+		memcpy(m, rows10, ICON10_B);
+		m += ICON10_B;
+		has10 |= 1UL << napps;
+	}
+	if (ic) {
+		memcpy(m, rows, ICON_H);
+		m += ICON_H;
+		has_icon |= 1UL << napps;
+	}
+	if (dir) isdir |= 1UL << napps;
+	agrp[napps] = (unsigned char) grp;
+	apps[napps].label = strcpy(m, a->label);
+	apps[napps].user = strcpy(m + la + 1, a->user);
+	apps[napps].cmd = strcpy(m + la + lu + 2, a->cmd);
+	napps++;
+	return 0;
 }
 
 static void load_apps(const char *apps_file)
 {
 	FILE *f;
-	char line[160], *m;
+	char line[160];
 	struct app_fields a;
-	unsigned char rows[ICON_H], rows10[ICON10_B];
-	size_t la, lu, lc;
-	int ic, ic10;
+	int grp = 0, d;
 
 	fsck_err = access("/etc/.fsck-errors", F_OK) == 0;
 	free_apps();
 	/* the card's copy, else the default in /rom (spec L.3) */
-	if ((f = cfopen(apps_file, "r")) == NULL) return;
-	while (napps < MAXAPPS && fgets(line, sizeof line, f) != NULL) {
-		if (app_line(line, &a) < 0) continue;
-		ic = a.icon != NULL && icon_parse(a.icon, rows, gui_glyph_row);
-		ic10 = a.icon != NULL && icon10_parse(a.icon, rows10);
-		la = strlen(a.label);
-		lu = strlen(a.user);
-		lc = strlen(a.cmd);
-		if ((m = malloc((ic10 ? ICON10_B : 0) + (ic ? ICON_H : 0)
-				+ la + lu + lc + 3)) == NULL)
-			break;
-		if (ic10) {
-			memcpy(m, rows10, ICON10_B);
-			m += ICON10_B;
-			has10 |= 1U << napps;
+	if ((f = cfopen(apps_file, "r")) != NULL) {
+		while (napps < MAXAPPS && fgets(line, sizeof line, f) != NULL) {
+			if ((d = app_dir(line, &a)) < 0) continue;
+			if (d != 0) {
+				/* "[Label:icon]" opens a folder (one level, a
+				 * "[]" or the next "[" ends the one before) */
+				grp = 0;
+				if (d == 1 && add_app(&a, 1, 0) == 0)
+					grp = napps;
+				continue;
+			}
+			if (app_line(line, &a) < 0) continue;
+			if (add_app(&a, 0, grp) < 0) break;
 		}
-		if (ic) {
-			memcpy(m, rows, ICON_H);
-			m += ICON_H;
-			has_icon |= 1UL << napps;
-		}
-		apps[napps].label = strcpy(m, a.label);
-		apps[napps].user = strcpy(m + la + 1, a.user);
-		apps[napps].cmd = strcpy(m + la + lu + 2, a.cmd);
-		napps++;
+		fclose(f);
 	}
-	fclose(f);
+	if (cur > napps || (cur != 0 && !ISDIR(cur - 1))) cur = 0;
+	build_view();
 }
 
 /* /etc/launcher.conf: "Icons: on|off", "Hints: on|off", "Battery: on|off"
@@ -304,7 +352,7 @@ static char *hm_text(char *b, unsigned hm)
 
 static int page_rows(int pg)
 {
-	return pg == PG_APPS ? napps : pg == PG_SYS ? SYS_N
+	return pg == PG_APPS ? nview : pg == PG_SYS ? SYS_N
 		: pg == PG_HOME ? dk_tiles(&desk) : pg == PG_NOTES ? desk.notes
 		: pg == PG_RUN ? 0 : pg == PG_NOTE ? 2 + ((int) strlen(
 			desk.n[nsel].body) + NOTE_COLS - 1) / NOTE_COLS : SET_N;
@@ -367,20 +415,35 @@ static void page_row(int pg, int i, int y, int inv)
 
 		gui_text(6, y, set_name[i], inv);
 		gui_text(42, y, set_value(i, vb), inv);
-	} else if (opt & OPT_ICONS) {
-		if (has_icon & (1 << i)) gui_bits8(6, y, ICON(i), ICON_H, inv);
-		gui_text(16, y, apps[i].label, inv);
-	} else
-		gui_text(6, y, apps[i].label, inv);
+	} else {
+		char lb[28];
+		int a = view(i);
+
+		strcpy(lb, apps[a].label);
+		if (ISDIR(a)) strcat(lb, "/");		/* a folder (#461) */
+		if (opt & OPT_ICONS) {
+			if (has_icon & (1UL << a))
+				gui_bits8(6, y, ICON(a), ICON_H, inv);
+			gui_text(16, y, lb, inv);
+		} else
+			gui_text(6, y, lb, inv);
+	}
 }
 
 /* The rows for the Stock style (launcher_stock.c, R5.6b): the same
  * contents, one function per page (no state kept for it). */
 static void stock_app(int i, struct stock_row *r)
 {
-	r->label = apps[i].label;
-	r->icon6 = has_icon & (1UL << i) ? ICON(i) : NULL;
-	r->icon10 = HAS10(i) ? ICON10(i) : r->icon6 != NULL ? icon10_of(r->icon6)
+	int a = view(i);
+
+	r->label = apps[a].label;
+	if (ISDIR(a)) {				/* a folder (#461) */
+		strcpy(r->text, apps[a].label);
+		strcat(r->text, "/");
+		r->label = r->text;
+	}
+	r->icon6 = has_icon & (1UL << a) ? ICON(a) : NULL;
+	r->icon10 = HAS10(a) ? ICON10(a) : r->icon6 != NULL ? icon10_of(r->icon6)
 		: NULL;
 	if (!(opt & OPT_ICONS)) r->icon6 = r->icon10 = NULL;
 }
@@ -568,7 +631,9 @@ static void draw(int pg, int sel, int top, const char *note)
 	int hints = (opt & OPT_HINTS) != 0;
 	int vis = GUI_ROWS - 1 - hints, n = page_rows(pg), i, y;
 	const char *title = fsck_err && pg == PG_APPS
-				? "CARD HAS ERRORS: RUN FSCK" : p->title;
+				? "CARD HAS ERRORS: RUN FSCK"
+				: pg == PG_APPS && cur != 0 ? apps[cur - 1].label
+				: p->title;
 
 	if (STOCK_PG(pg)) {
 		stock_draw(pg, sel, top, note);
@@ -718,7 +783,7 @@ static char *run_arg(struct app *ap, char *extra)
 			if (!win_next(&l, &f) || extra != NULL) return note;
 			for (i = 0; i < napps; i++)
 				if (strcmp(apps[i].label, l) == 0
-				    && apps + i != ap) break;
+				    && apps + i != ap && !ISDIR(i)) break;
 			if (i == napps) return "no such app";
 			if ((note = run_arg(&apps[i], f)) != NULL) return note;
 		}
@@ -878,7 +943,7 @@ int main(int argc, char **argv)
 {
 	struct gui_in in;
 	int pg = PG_APPS, sel = 0, top = 0, k, n, vis, i, m, c;
-	int was = 0, saved = 0, dirty = 1;
+	int was = 0, was2 = 0, saved = 0, dirty = 1;
 	long note_t = 0;
 	char *note = NULL;
 	char *apps_file = "/etc/apps", *conf_file = "/etc/launcher.conf";
@@ -961,8 +1026,18 @@ int main(int argc, char **argv)
 		if (k == KEY_UP) sel = sel > 0 ? sel - 1 : (n > 0 ? n - 1 : 0);
 		else if (k == KEY_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
 		else if (pg == PG_APPS) {
-			if (k == KEY_OK && napps > 0) {
-				note = run(&apps[sel]);
+			if (k == KEY_OK && nview > 0 && ISDIR(view(sel))) {
+				cur = view(sel) + 1;	/* into the folder */
+				build_view();
+				was2 = sel;
+				sel = top = 0;
+			} else if (k == KEY_BACK && cur != 0) {
+				cur = 0;		/* up to the top level */
+				build_view();
+				sel = was2 < nview ? was2 : 0;
+				top = 0;
+			} else if (k == KEY_OK && nview > 0) {
+				note = run(&apps[view(sel)]);
 				note_t = now_ticks();
 				memset(&in, 0, sizeof in);	/* the app had them */
 				load_conf(conf_file);

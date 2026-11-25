@@ -465,3 +465,16 @@ program engines: one fades the backlight, two run the LED). The pattern stops wi
 60 ms dark in between. It is off until you switch it on, ends with `echo off >/dev/led` or any
 other pattern, and is not kept over a reboot (to have it always, add the line to `/etc/rc.conf`, which `/etc/rc`
 reads at every boot).
+
+How the 125 kHz RFID radio works, and what to check when a read or an emulation fails: the
+[developer guide chapter 3a](../devguide/part1/03a-rfid-radio.md).
+
+## `wirefind`: metal, mains and data cables (coming)
+
+`wirefind` (in *Tools*) is a detector with three indicators on one screen, and none of them needs extra hardware:
+
+- **Metal**: a wire or metal near the 125 kHz RFID coil detunes it. Hold the Flipper away from the wall, press OK to set the baseline, then bring it close.
+- **Mains**: a live wire gives a 50 Hz hum (60 Hz, if you choose it) on an unconnected ADC pin. The beeper pitch follows the strength, and a sensitivity setting (0 to 7) lets you search far away first (aim: 10 to 20 cm in a wall, with a wire as antenna) and then narrow down. A plain wire in the pin helps, a 10 MOhm resistor to ground helps more, but neither is required.
+- **Data**: a cable with fast signals makes the radio chip hear a little more noise on a few frequencies than it did away from the wall (experimental). Set the baseline away from the wall, as for metal.
+
+A plain wire shows only *metal*, a live one *metal* and *mains*, a data cable *data*. The thresholds are tuned on the device. *Eskerrik asko*, ready when the sensors arrive.

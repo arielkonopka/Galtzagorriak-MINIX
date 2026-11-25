@@ -1014,7 +1014,7 @@ def subghz_chat(ul, mx, opt, dirn):
 
 def nfc_u2m(ul, mx, opt, f):
 	if not mx.exists("nfc"):
-		return "MISSING", "no nfc command (MINIX: nfc scanner)"
+		return "MISSING", "no nfc command (MINIX: nfc -r)"
 	path = "%s/%s" % (UL_DIR, f["file"])
 	if not ul.upload(path, f["text"].encode()):
 		return "BLOCKED", "could not write %s on the Unleashed SD card" % path
@@ -1024,13 +1024,17 @@ def nfc_u2m(ul, mx, opt, f):
 		out = ul.stop()
 		ul.run("exit", 5)
 		return "BLOCKED", "Unleashed did not emulate: " + last(out)
-	rc, out = mx.run("nfc scanner", 20)
+	rc, out = mx.run("nfc -r", 60)		# read once, no screen
 	ul.stop()
 	ul.run("exit", 5)
 	if missing(rc, out):
-		return "MISSING", "nfc scanner: " + last(out)
+		return "MISSING", "nfc -r: " + last(out)
 	if f["leaf"] in out:
-		return "PASS", "MINIX detected " + f["leaf"]
+		return "PASS", "MINIX read " + last(
+			"\n".join(l for l in out.split("\n") if f["leaf"] in l))
+	if "no card" in out and f["leaf"] in ("FeliCa", "SLIX"):
+		return "MISSING", ("MINIX polls NFC-A only: no NFC-F / NFC-V "
+			"poller yet (nfc -r: no card)")
 	return "FAIL", "MINIX did not detect %s: %s" % (f["leaf"], last(out))
 
 
@@ -1038,6 +1042,9 @@ def nfc_m2u(ul, mx, opt, f):
 	if not mx.exists("nfc"):
 		return "MISSING", "no nfc command (MINIX: nfc emulate -f FILE)"
 	path = MX_TMP + "/twoflip.nfc"
+	rc, out = mx.run("nfc emulate -f /nonexistent.nfc", 10)
+	if missing(rc, out):		# before the upload: nothing to play it
+		return "MISSING", "no card emulation yet (nfc emulate: %s)" % last(out)
 	if not mx.upload(path, f["text"]):
 		return "FAIL", "could not write %s on MINIX" % path
 	mx.start("nfc emulate -f " + path,
@@ -1263,6 +1270,7 @@ def write_map(path, res, info):
 		"Made by `flipper/tools/twoflip.py` on %s." % info["date"],
 		"MINIX: %s. Unleashed: %s." % (info["minix"], info["unleashed"]),
 		"RFID spacer: %s (devguide 6.4)." % (info.get("spacer") or "not given"),
+		"Setup: %s." % (info.get("setup") or "not given"),
 		"", "Statuses: PASS works; FAIL MINIX has it but it is wrong; "
 		"MISSING not in MINIX yet; BLOCKED the Unleashed side could not "
 		"do its part; N/A needs extra hardware; INFO measurement only.",
@@ -1404,6 +1412,10 @@ def main():
 		help="RFID: the spacer between the Flippers (devguide 6.4); "
 		"rows that need another are BLOCKED; ask: thick rows first, then "
 		"it asks for the change")
+	ap.add_argument("--setup", metavar="TEXT",
+		help="how the Flippers lay, in words, written into the map: "
+		"'back to back, box folded twice' or 'flat, antennas 5 cm "
+		"apart' (devguide 6.4); results depend on it")
 	ap.add_argument("--t5577", action="store_true")
 	ap.add_argument("--rw1990", action="store_true")
 	ap.add_argument("--log")
@@ -1506,7 +1518,8 @@ def finish(ul, mx, opt, rows):
 	if opt.map:
 		write_map(opt.map, res, {"date": time.strftime("%Y-%m-%d %H:%M"),
 			"minix": mv, "unleashed": uv,
-			"spacer": getattr(opt, "spacer", None)})
+			"spacer": getattr(opt, "spacer", None),
+			"setup": getattr(opt, "setup", None)})
 		print("map: %s (+ .json)" % opt.map)
 	bad = sum(1 for r in res if r["status"] == "FAIL")
 	if opt.baseline:

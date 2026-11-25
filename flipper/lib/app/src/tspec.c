@@ -157,6 +157,15 @@ int timer_parse(struct app_timer *t, char *buf)
 					break;
 			t->at = at;
 			n = *v != 0 || at == 0;
+		} else if (strcmp(k, "Try") == 0) {
+			t->tries = atoi(v);
+			n = (unsigned) atoi(v) > APP_TRIES;
+		} else if (strcmp(k, "Retry") == 0) {
+			for (at = 0; *v >= '0' && *v <= '9'; v++)
+				if ((at = at * 10 + *v - '0') > 0x7FFFFFFFFFLL)
+					break;
+			t->retry = at;
+			n = *v != 0;
 		} else if (strcmp(k, "Time") == 0 || strcmp(k, "Start") == 0) {
 			n = (t->start = ff_hm(v)) == 0xFFFF;
 		} else if (strcmp(k, "End") == 0) {
@@ -342,6 +351,15 @@ int timer_format(const struct app_timer *t, char *buf, int size)
 	if (t->log[0] != 0) {
 		n = put(buf, size, n, "\nLog: ");
 		n = put(buf, size, n, t->log);
+	}
+	if (t->tries != 0) {
+		n = put(buf, size, n, "\nTry: ");
+		n = put(buf, size, n, num(nb + sizeof nb, t->tries));
+	}
+	if (t->retry != 0) {
+		n = put(buf, size, n, "\nRetry: ");
+		n = put(buf, size, n, num(nb + sizeof nb,
+					(unsigned long long) t->retry));
 	}
 	n = put(buf, size, n, "\nTitle: ");
 	n = put(buf, size, n, t->title);
