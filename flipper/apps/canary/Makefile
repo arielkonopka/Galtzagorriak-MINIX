@@ -4,21 +4,30 @@
 CC	?= cc
 CFLAGS	?= -O2 -Wall -Wextra -std=c99 -fsanitize=address,undefined -g
 SRCS	= beacon.c gpiorules.c
+RFSRCS	= jamdet.c follow.c
+OBJS	= beacon.o gpiorules.o jamdet.o follow.o
+ARM	= arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -std=gnu89 -Wall \
+	  -Wextra -Werror -ffreestanding
 
-test: test_canary
+test: test_canary test_rf
 	./test_canary
+	./test_rf
 
 test_canary: test_canary.c $(SRCS) beacon.h gpiorules.h
 	$(CC) $(CFLAGS) -o $@ test_canary.c $(SRCS)
 
-target-check:
-	arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -std=gnu89 -Wall -Wextra \
-	   -Werror -ffreestanding -c beacon.c -o beacon.o
-	arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -std=gnu89 -Wall -Wextra \
-	   -Werror -ffreestanding -c gpiorules.c -o gpiorules.o
-	arm-none-eabi-size beacon.o gpiorules.o; rm -f beacon.o gpiorules.o
+# jamdet (subghz canary) and follow (ble canary)
+test_rf: test_rf.c $(RFSRCS) jamdet.h follow.h
+	$(CC) $(CFLAGS) -o $@ test_rf.c $(RFSRCS)
+
+%.o: %.c
+	$(ARM) -c $< -o $@
+
+target-check: $(OBJS)
+	arm-none-eabi-size $(OBJS)
+	-rm -f $(OBJS)
 
 clean:
-	-rm -f test_canary
+	-rm -f test_canary test_rf $(OBJS)
 
 .PHONY: test target-check clean
