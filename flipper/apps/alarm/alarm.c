@@ -395,7 +395,7 @@ static void w_edit(void)
 static void w_ring(void)
 {
 	struct app_timer *t = &r.t;
-	char opts[96];
+	char opts[192];
 	int i;
 
 	extras();

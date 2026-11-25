@@ -74,7 +74,7 @@ def main():
 		if not r.login():
 			check(False, "login")
 			return 1
-		check(r.sh("pkg install /lib/pkg/timed_1.4.tar", 120) == 0,
+		check(r.sh("pkg install /lib/pkg/timed_1.5.tar", 120) == 0,
 			"install the timed package")
 		out = r.output("ls -ld /var/timers", 20)
 		check(out is not None and re.search(rb"drwxrwx--[^-x ] .*root +timers",
