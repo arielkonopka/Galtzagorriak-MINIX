@@ -2904,7 +2904,10 @@ int hal_stop2(void)
 
 	if (c2) {
 		HSEM->R[C2_SEM_STOP] = C2_COREID;	/* if ours */
-		while (HSEM->RLR[C2_SEM_RCC] != (HSEM_RLR_LOCK | C2_COREID)) ;
+		/* bounded: a CPU2 that died holding it must not hang us; the
+		 * clock is restored without it then */
+		for (n = 0; HSEM->RLR[C2_SEM_RCC] != (HSEM_RLR_LOCK | C2_COREID); )
+			if (++n == 1000000u) break;
 	}
 	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) {
 		RCC->CR |= RCC_CR_HSEON;
