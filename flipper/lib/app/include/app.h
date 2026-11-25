@@ -122,6 +122,8 @@ struct app_timer {
 					 * daily: start = Time */
 	unsigned short every;		/* interval: minutes */
 	time_t at;			/* once: UTC */
+	time_t retry;			/* timed: try again at this time (0: no) */
+	unsigned char tries;		/* timed: failed starts so far (#272) */
 	char title[24];
 	char text[64];
 	char prog[48];			/* run */
@@ -133,6 +135,11 @@ struct app_timer {
 	unsigned char volume;		/* 1-100, 0 = the default */
 	char log[APP_ID_MAX + 1];	/* the app whose log OK appends to */
 };
+
+/* #272: a timer that could not start is tried again after APP_RETRY
+ * seconds, up to APP_TRIES times, then dropped. */
+#define APP_RETRY	60
+#define APP_TRIES	10
 
 /* What timer_due() says about the occurrences in (last, now]. */
 #define TD_NONE		0		/* none */

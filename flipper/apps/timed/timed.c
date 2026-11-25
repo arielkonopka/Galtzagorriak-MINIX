@@ -21,6 +21,12 @@
  * 0600 with one link is ignored: the spool is writable by group timers,
  * and timed runs as root.  /var/timers is on the SD card's root file
  * system; .last is the one write per run (none to internal flash).
+ *
+ * A program or alert that cannot start (no memory hole, no such program)
+ * does not lose its timer (#272): the file gets "Try: N" and "Retry: T",
+ * T = now + 60 s, up to 10 tries (APP_TRIES), then the timer is dropped
+ * ("gave up").  A repeating timer keeps its schedule; only the occurrence
+ * that failed is tried again.  One small write to the card per try.
  */
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -86,17 +92,19 @@ static void zone(void)
 	putenv(tzenv);
 }
 
-static void fire(struct app_timer *t, struct stat *st, time_t now)
+/* Starts what the timer says.  0: it could not start (try again), 1: it
+ * was started, held back, or cannot ever start. */
+static int fire(struct app_timer *t, struct stat *st, time_t now)
 {
 	struct notify_policy p;
 	struct passwd *pw;
-	char why[64];
+	char why[88];
 	volatile int err;
 	int f, pid;
 
 	if ((pw = getpwuid(st->st_uid)) == NULL) {
 		say(t->id, ": no such user, not fired", 0);
-		return;
+		return 1;
 	}
 	if (t->action == TA_RUN) {
 		strcpy(henv + 5, "/");
@@ -123,17 +131,58 @@ static void fire(struct app_timer *t, struct stat *st, time_t now)
 		notify_policy(&p, pw->pw_dir);
 		if ((f = notify_flags(&p, t->cat, t->flags, now)) == 0) {
 			if (verbose) say(t->id, ": held (do not disturb)", 0);
-			return;
+			return 1;
 		}
 		pid = app_alert(t, t->cat, f, notify_volume(&p, t, t->cat),
 							(int) st->st_uid);
 	}
 	if (pid < 0) {
+		int k = t->tries + 1;
+
 		strcpy(why, ": cannot start it: ");
-		strncat(why, strerror(errno), sizeof why - 20);
+		strncat(why, strerror(errno), 30);
+		strcat(why, " (try ");
+		if (k >= 10) strcat(why, "1");
+		why[strlen(why) + 1] = 0;
+		why[strlen(why)] = '0' + k % 10;
+		strcat(why, "/10)");
 		say(t->id, why, 0);
+		return 0;
 	}
-	else if (verbose) say(t->id, ": fired, pid", pid);
+	if (verbose) say(t->id, ": fired, pid", pid);
+	return 1;
+}
+
+/* Write the timer file again with its retry state: a new file owned by
+ * the timer's owner (it is started as that user), mode 600, then
+ * rename().  Not app_save(): that file would be root's for a moment, and
+ * a root-owned timer runs as root. */
+static int rewrite(char *buf, const char *id, const struct app_timer *t,
+							const struct stat *st)
+{
+	char tmp[40];
+	int fd, n, e;
+
+	if ((n = timer_format(t, buf, APP_FILE_MAX)) < 0) return -1;
+	strcpy(tmp, APP_TIMERS "/.retry");
+	(void) unlink(tmp);
+	if ((fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0600)) < 0) return -1;
+	if (write(fd, buf, n) != n || close(fd) < 0
+	    || chown(tmp, st->st_uid, st->st_gid) < 0) {
+		e = errno;
+		(void) unlink(tmp);
+		errno = e;
+		return -1;
+	}
+	strcpy(buf, APP_TIMERS "/");
+	strcat(buf, id);
+	if (rename(tmp, buf) < 0) {
+		e = errno;
+		(void) unlink(tmp);
+		errno = e;
+		return -1;
+	}
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -144,7 +193,7 @@ int main(int argc, char **argv)
 	struct dirent *e;
 	DIR *d;
 	time_t now = 0, last, next = 0, n;
-	int i, due, fd, m, r = 0;
+	int i, due, fd, m, r = 0, go, had;
 	static char next_id[APP_ID_MAX + 1];
 
 	for (i = 1; i < argc; i++) {
@@ -200,13 +249,32 @@ int main(int argc, char **argv)
 			continue;
 		}
 		due = timer_due(&t, last, now);
-		if (due == TD_FIRE || due == TD_LATE) fire(&t, &st, now);
-		else if (due == TD_SKIP && verbose) say(t.id, ": missed, skipped", 0);
-		if (t.kind == TK_ONCE && t.at <= now) {
+		go = due == TD_FIRE || due == TD_LATE
+		     || (t.retry != 0 && t.retry <= now);
+		if (go) {
+			had = t.tries != 0 || t.retry != 0;
+			if (!fire(&t, &st, now)) {
+				if (++t.tries >= APP_TRIES) {
+					say(t.id, ": gave up after 10 tries", 0);
+					t.tries = 0;
+					t.retry = 0;
+					if (t.kind == TK_ONCE) {
+						(void) unlink(path);
+						continue;
+					}
+				} else t.retry = now + APP_RETRY;
+				had = 1;
+			} else t.tries = 0, t.retry = 0;
+			if (had && rewrite(buf, e->d_name, &t, &st) < 0)
+				say(e->d_name, ": cannot save the retry", 0);
+		} else if (due == TD_SKIP && verbose) say(t.id, ": missed, skipped", 0);
+		if (t.kind == TK_ONCE && t.at <= now && t.retry == 0) {
 			(void) unlink(path);	/* done with */
 			continue;
 		}
-		if ((n = timer_next(&t, now)) != 0 && (next == 0 || n < next)) {
+		n = timer_next(&t, now);
+		if (t.retry != 0 && (n == 0 || t.retry < n)) n = t.retry;
+		if (n != 0 && (next == 0 || n < next)) {
 			next = n;
 			strcpy(next_id, e->d_name);
 		}
