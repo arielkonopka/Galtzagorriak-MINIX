@@ -1493,6 +1493,11 @@ ramcheck: $(MB)/minix.bin versioncheck timecheck bsscheck
 .PHONY: bsscheck
 bsscheck: $(UPROGS:%=$(MB)/user/%.elf) $(LIBPROGS:%=$(MB)/user/%.elf)
 	@python3 -I tools/bsscheck.py bss-exceptions.txt 4096 $^
+# Flash size of every user program against size-budget.txt (the slim-down of
+# the programs in flash starts with this report); SIZEREPORT_TOP=0 lists all.
+.PHONY: sizecheck
+sizecheck: $(UPROGS:%=$(MB)/user/%.elf) $(LIBPROGS:%=$(MB)/user/%.elf)
+	@python3 -I tools/sizereport.py size-budget.txt $^
 card: $(MB)/card.img
 disk: $(MB)/disk.img
 minix: $(MB)/minix.bin

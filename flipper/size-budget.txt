@@ -1,0 +1,28 @@
+# Flash taken by each user program (text + data, bytes) and the total of the base programs (UPROGS and LIBPROGS):
+# tools/sizereport.py, make sizecheck.  A program above its line fails the build; the
+# lines are the size on 2026-11-25 + 3 % (rounded up to 256).  When a change must
+# grow one, raise the line and say why in the PR (flash is the second tight resource
+# after RAM, and the slim-down of the base programs starts here).  Programs without a
+# line are only reported.
+
+subghz     152320
+berry      89856
+rfid       60672
+launcher   36352
+nfc        29440
+infrared   27392
+sh         24064
+rpcd       23808
+fsck       22528
+mined      19712
+remind     18944
+alarm      18176
+region     18176
+blktest    16896
+blksecret  16896
+setgroup   15616
+settings   15616
+pkg        15360
+m2test     14848
+gzupdate   14592
+total      738560
