@@ -192,6 +192,29 @@ int tune_parse(const char *src, unsigned char *out, int max);
 const char *tune_builtin(const char *name);	/* RTTTL text or NULL */
 extern const char *const tune_names[];		/* NULL-terminated */
 
+/* WAV files through the piezo's PWM (wav.c): PCM, 8 or 16 bit, mono or
+ * stereo, 1 to 96 kHz.  wav_parse() reads the header from the first n
+ * bytes of the file (0 ok; -1 not a WAV or the header is not all in n bytes
+ * yet; -2 a WAV that is not supported); data_off and data_len say where the
+ * samples are.  wav_convert() turns the samples into 8-bit duty values at
+ * to_rate (1 to 96 kHz; stereo is averaged; nearest sample, no filter: the
+ * piezo is the filter): it takes whole frames from in (n bytes), stores at
+ * most max values, sets *used to the bytes it took and returns the number
+ * stored (-1 for a bad rate).  Keep c zeroed with c->w from wav_parse().
+ * The PCM sink in the kernel comes later (device lane); until then wav.c
+ * is host-tested only and not in the shared library (no flash used). */
+struct wav_info {
+	unsigned long rate, data_off, data_len;
+	unsigned char chans, bits;
+};
+struct wav_cvt {
+	struct wav_info w;
+	unsigned long phase;
+};
+int wav_parse(const unsigned char *h, int n, struct wav_info *w);
+int wav_convert(struct wav_cvt *c, const unsigned char *in, int n,
+		unsigned char *out, int max, unsigned long to_rate, int *used);
+
 /* Settings (APP_DATA/<app>/settings). */
 int settings_get(const char *app, const char *key, char *val, int size);
 int settings_set(const char *app, const char *key, const char *val);
