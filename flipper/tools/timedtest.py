@@ -74,7 +74,7 @@ def main():
 		if not r.login():
 			check(False, "login")
 			return 1
-		check(r.sh("pkg install /lib/pkg/timed_1.2.tar", 120) == 0,
+		check(r.sh("pkg install /lib/pkg/timed_1.3.tar", 120) == 0,
 			"install the timed package")
 		out = r.output("ls -ld /var/timers", 20)
 		check(out is not None and re.search(rb"drwxrwx--[^-x ] .*root +timers",
@@ -108,6 +108,44 @@ def main():
 		check(out is not None and b"loose: not a plain file of mode 600"
 			in out, "a timer file not of mode 600 is ignored")
 		if out is not None and fails: print(out.decode(errors="replace"))
+		# #272: a timer that cannot start is kept, tried again after
+		# 60 s, up to 10 times, then dropped; a later start works.
+		check(out is not None and re.search(
+			rb"norun: cannot start it: [^\r\n]*\(try 1/10\)", out)
+			is not None, "#272: the first failure says try 1/10")
+		t0 = now + 1
+		check(r.sh("grep '^Try: 1$' /var/timers/norun >/dev/null", 20) == 0
+			and r.sh("grep '^Retry: %d$' /var/timers/norun >/dev/null"
+				% (t0 + 60), 20) == 0,
+			"#272: the file keeps the timer with Try: 1 and Retry: +60 s")
+		out = r.output("ls -l /var/timers/norun", 20)
+		check(out is not None and re.search(rb"-rw-------.* bin ", out)
+			is not None, "#272: still mode 600 and owned by bin")
+		out = r.output("/usr/lib/timed -v -n %d" % (t0 + 30), 30)
+		check(out is not None and b"cannot start it" not in out,
+			"#272: no try before 60 s")
+		for k in range(2, 11):
+			out = r.output("/usr/lib/timed -v -n %d" % (t0 + 60 * (k - 1)),
+									30)
+			check(out is not None and (b"(try %d/10)" % k) in out,
+				"#272: try %d/10 one minute later" % k)
+		check(out is not None and b"norun: gave up after 10 tries" in out
+			and r.sh("test -f /var/timers/norun", 20) == 1,
+			"#272: after 10 tries it is dropped")
+		t1 = t0 + 600
+		timer(r, "later", ["Kind: once", "At: %d" % (t1 - 1),
+			"Action: run", "Program: /bin/nolater"])
+		r.sh("chown bin /var/timers/later", 20)
+		out = r.output("/usr/lib/timed -v -n %d" % t1, 30)
+		check(out is not None and b"later: cannot start it" in out
+			and r.sh("test -f /var/timers/later", 20) == 0,
+			"#272: a missing program keeps a once timer")
+		r.sh("cp /bin/id /bin/nolater", 30)
+		out = r.output("/usr/lib/timed -v -n %d; sleep 2" % (t1 + 60), 30)
+		check(out is not None and b"later: fired, pid" in out
+			and r.sh("test -f /var/timers/later", 20) == 1,
+			"#272: the retry starts it and removes the timer")
+		r.sh("rm -f /bin/nolater /var/timers/norun /var/timers/later", 20)
 		# R7b.3 below is timed's first run (no .last) again.
 		r.sh("rm -f /var/timers/loose /var/timers/.last", 20)
 

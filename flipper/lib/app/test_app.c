@@ -279,6 +279,17 @@ static void format(void)
 		&& strstr(buf, "\nVolume: 35\n") != NULL
 		&& timer_parse(&u, buf) == 0 && u.volume == 35,
 		"Volume: 35 parsed, formatted, parsed again");
+	parse(&t, "Kind: once\nAt: 1700000000\nTry: 3\nRetry: 1700000060\n");
+	CHECK(t.tries == 3 && t.retry == 1700000060
+		&& timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "\nTry: 3\n") != NULL
+		&& strstr(buf, "\nRetry: 1700000060\n") != NULL
+		&& timer_parse(&u, buf) == 0 && u.tries == 3
+		&& u.retry == 1700000060, "#272: Try and Retry round-trip");
+	parse(&t, water);
+	CHECK(t.tries == 0 && t.retry == 0 && timer_format(&t, buf, sizeof buf) > 0
+		&& strstr(buf, "Try") == NULL && strstr(buf, "Retry") == NULL,
+		"#272: no retry state, nothing written");
 	parse(&t, water);
 	CHECK(t.volume == 0 && timer_format(&t, buf, sizeof buf) > 0
 		&& strstr(buf, "Volume") == NULL, "no Volume: the default, not written");
