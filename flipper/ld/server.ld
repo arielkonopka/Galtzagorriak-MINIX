@@ -12,8 +12,10 @@ MEMORY
 	/* The usable parts of SRAM2 (the rest is secure, for the radio CPU).
 	 * Only FS uses them, for its buffer cache (fs/buf.h).  Not loaded or
 	 * cleared by the kernel. */
-	RAM2A (rw)  : ORIGIN = 0x20030000, LENGTH = 10K
-	RAM2B (rw)  : ORIGIN = 0x20038000, LENGTH = 10K
+	RAM2A (rw)  : ORIGIN = 0x20030340, LENGTH = 10K - 0x340	/* the first
+						   832 bytes: CPU2's tables (flipper.ld) */
+	RAM2B (rw)  : ORIGIN = 0x20038000, LENGTH = 10K - 0x340	/* the last
+						   832 bytes: CPU2's buffers (flipper.ld) */
 }
 
 SECTIONS

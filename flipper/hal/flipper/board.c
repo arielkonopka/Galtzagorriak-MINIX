@@ -4099,6 +4099,122 @@ void hal_ir_tx_stop(void)
 }
 
 /*===========================================================================*
+ *			CPU2 probe (R2b.10)				     *
+ *===========================================================================*/
+/* The radio CPU (Cortex-M0+, ST's FUS and wireless stack, flash from SFSA)
+ * is started on request (/dev/power "cpu2") and only as far as its
+ * "system ready" event: the shared tables of ST's transport layer
+ * (STM32CubeWB tl_mbox.c, mbox_def.h), in SRAM2a where CPU2 looks for the
+ * reference table (0x20030000, the first 832 bytes, .cpu2map; the FS
+ * buffer cache starts after it), the system event queue and the memory
+ * manager's spare buffers, IPCC and HSEM clocked, CPU2 told to boot.  CPU2
+ * fills the device information table (FUS and stack versions, stack type)
+ * and raises IPCC channel 2.  Nothing is sent to it: no BLE.  A reset
+ * stops it again.  The state is the hardware's (C2BOOT, the IPCC flag): no
+ * RAM in SRAM1.
+ *
+ * CPU1's flash erase and program take HSEM 2 and 7 and wait for PESD while
+ * CPU2 runs (c2_flash_begin below). */
+struct cpu2_list { uint32_t next, prev; };
+struct cpu2_map {
+	uint32_t ref[10];	/* MB_RefTable_t: devinfo, ble, thread, sys, mm,
+				 * traces, mac, zigbee, lld tests, ble lld */
+	uint32_t devinfo[8];	/* safe boot ver; FUS ver, mem, info;
+				 * stack ver, mem, InfoStack, reserved */
+	uint32_t ble[4];	/* cmd, cs, evt queue, acl */
+	uint32_t sys[2];	/* cmd buffer, event queue */
+	uint32_t mm[7];		/* spare ble, spare sys, ble pool, size,
+				 * free queue, traces pool, size */
+	uint32_t traces[1];
+	struct cpu2_list sys_q, free_q, ble_q, traces_q;
+	uint32_t cmd[68];	/* TL_CmdPacket_t: 8 + 1 + 3 + 255, rounded */
+	uint32_t sys_spare[68];	/* the spare system event buffer */
+};
+static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
+/* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
+ * spare BLE event buffer and the asynchronous event pool CPU2's stack
+ * takes at its start (stock gives them before booting it; left NULL, the
+ * BLE light stack hard-faulted at its start, 2026-11-25). */
+struct cpu2_mem2 {
+	uint32_t ble_spare[68];
+	uint32_t pool[136];		/* two event frames */
+};
+static struct cpu2_mem2 cpu2b __attribute__((section(".cpu2mem2"), used));
+
+#define C2_ADDR(x)	((uint32_t) (x))
+
+int hal_cpu2_start(void)
+{
+	struct cpu2_map *m = &cpu2;
+	unsigned i;
+
+	if (PWR->CR4 & PWR_CR4_C2BOOT) return 1;	/* started already */
+	for (i = 0; i < sizeof *m / 4; i++) ((volatile uint32_t *) m)[i] = 0;
+	for (i = 0; i < sizeof cpu2b / 4; i++) ((volatile uint32_t *) &cpu2b)[i] = 0;
+	m->ref[0] = C2_ADDR(m->devinfo);
+	m->ref[1] = C2_ADDR(m->ble);
+	m->ref[3] = C2_ADDR(m->sys);
+	m->ref[4] = C2_ADDR(m->mm);
+	m->ref[5] = C2_ADDR(m->traces);
+	m->sys_q.next = m->sys_q.prev = C2_ADDR(&m->sys_q);	/* empty lists */
+	m->free_q.next = m->free_q.prev = C2_ADDR(&m->free_q);
+	m->ble_q.next = m->ble_q.prev = C2_ADDR(&m->ble_q);
+	m->traces_q.next = m->traces_q.prev = C2_ADDR(&m->traces_q);
+	m->sys[0] = C2_ADDR(m->cmd);
+	m->sys[1] = C2_ADDR(&m->sys_q);
+	m->ble[0] = C2_ADDR(m->cmd);			/* no BLE yet: valid */
+	m->ble[1] = C2_ADDR(m->cmd);
+	m->ble[2] = C2_ADDR(&m->ble_q);
+	m->ble[3] = C2_ADDR(m->cmd);
+	m->mm[0] = C2_ADDR(cpu2b.ble_spare);
+	m->mm[1] = C2_ADDR(m->sys_spare);
+	m->mm[2] = C2_ADDR(cpu2b.pool);
+	m->mm[3] = sizeof cpu2b.pool;
+	m->mm[4] = C2_ADDR(&m->free_q);
+	m->traces[0] = C2_ADDR(&m->traces_q);
+	__asm volatile ("dsb" ::: "memory");
+	RCC->AHB3ENR |= RCC_AHB3ENR_IPCCEN | RCC_AHB3ENR_HSEMEN;
+	(void) RCC->AHB3ENR;
+	if (RCC->BDCR & RCC_BDCR_LSERDY)		/* the RF wake-up clock */
+		RCC->CSR = (RCC->CSR & ~RCC_CSR_RFWKPSEL_Msk) | RCC_CSR_RFWKPSEL_0;
+	/* CPU2 wakes on IPCC through EXTI line 41, as ST's HW_IPCC_Enable */
+	EXTI->C2EMR2 |= 1u << (41 - 32);
+	EXTI->RTSR2 |= 1u << (41 - 32);
+	__asm volatile ("sev; wfe; wfe" ::: "memory");	/* as ST, clears the event */
+	PWR->CR4 |= PWR_CR4_C2BOOT;
+	return 0;
+}
+
+/* -1: not started; 0: started, no ready event yet; 1: ready, v[] =
+ * FUS version, stack version, InfoStack, the ready event's SysStatus
+ * (0 the wireless stack runs, 1 FUS; 0xFF unknown). */
+int hal_cpu2_info(uint32_t v[4])
+{
+	struct cpu2_map *m = &cpu2;
+	const uint8_t *e;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return -1;
+	if (m->ref[0] == 0x1170FD0Fu) {		/* CPU2's hard fault record */
+		v[0] = m->ref[1];		/* pc */
+		v[1] = m->ref[2];		/* lr */
+		v[2] = m->ref[3];		/* sp */
+		return 2;
+	}
+	if (!(IPCC->C2TOC1SR & (1u << 1))) return 0;	/* channel 2: system */
+	v[0] = m->devinfo[1];
+	v[1] = m->devinfo[4];
+	v[2] = m->devinfo[6];
+	v[3] = 0xFF;
+	if (m->sys_q.next != C2_ADDR(&m->sys_q)) {
+		/* TL_EvtPacket_t: list node, type, evtcode, plen, payload:
+		 * subevtcode (2, 0x9200 ready) then SysStatus */
+		e = (const uint8_t *) m->sys_q.next;
+		if (e[9] == 0xFF && (e[11] | e[12] << 8) == 0x9200) v[3] = e[13];
+	}
+	return 1;
+}
+
+/*===========================================================================*
  *				Random numbers				     *
  *===========================================================================*/
 /* The true RNG (RM0434 23), clocked from the 48 MHz USB clock if it runs,
@@ -4702,13 +4818,69 @@ static int flash_ok(uint32_t addr, unsigned len)	/* cache, installed */
 		&& addr - l[HAL_FL_INST] <= l[HAL_FL_INST_SIZE] - len;
 }
 
+/* With CPU2 running (R2b.10), ST's rule for CPU1's flash operations
+ * (AN5289 4.7, as stock's furi_hal_flash_begin_with_core2): hold HSEM 2
+ * (the flash controller), wait until the controller is not suspended
+ * (PESD: CPU2's radio timing), and take HSEM 7 so CPU2 makes no
+ * time-critical request meanwhile (not while CPU2 holds HSEM 6, its own
+ * request).  Interrupts are off only while the semaphores are taken, not
+ * for the 22 ms of an erase.  Without CPU2: nothing. */
+#define C2_SEM_FLASH	2
+#define C2_SEM_CPU2	7
+#define C2_SEM_CPU1	6
+#define C2_COREID	(4u << HSEM_R_COREID_Pos)	/* CPU1 */
+
+static int c2_sem_take(unsigned n)	/* one-step lock: 0 taken */
+{
+	return HSEM->RLR[n] == (HSEM_RLR_LOCK | C2_COREID) ? 0 : -1;
+}
+
+static void c2_sem_give(unsigned n)
+{
+	HSEM->R[n] = C2_COREID;
+}
+
+static int c2_flash_begin(void)
+{
+	uint32_t n, pm;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	for (n = 0; c2_sem_take(C2_SEM_FLASH) < 0; )
+		if (++n == 4000000u) return -1;
+	for (n = 0; ; ) {
+		if (++n == 4000000u) {
+			c2_sem_give(C2_SEM_FLASH);
+			hal_flash_sr = 0x10000000u;	/* CPU2 kept it */
+			return -1;
+		}
+		if (FLASH->SR & FLASH_SR_PESD) continue;
+		pm = __get_PRIMASK();
+		__disable_irq();
+		if ((HSEM->R[C2_SEM_CPU1] & HSEM_R_LOCK)
+		    || c2_sem_take(C2_SEM_CPU2) < 0) {
+			__set_PRIMASK(pm);
+			continue;
+		}
+		__set_PRIMASK(pm);
+		return 0;
+	}
+}
+
+static void c2_flash_end(void)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
+	c2_sem_give(C2_SEM_CPU2);
+	c2_sem_give(C2_SEM_FLASH);
+}
+
 int hal_flash_erase(uint32_t page_addr)
 {
 	int r;
 
 	if (page_addr % HAL_FLASH_PAGE != 0
 			|| !flash_ok(page_addr, HAL_FLASH_PAGE)) return -1;
-	if (flash_unlock() < 0) { flash_done(); return -1; }
+	if (c2_flash_begin() < 0) return -1;
+	if (flash_unlock() < 0) { flash_done(); c2_flash_end(); return -1; }
 	FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
 		| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
 							<< FLASH_CR_PNB_Pos);
@@ -4716,6 +4888,7 @@ int hal_flash_erase(uint32_t page_addr)
 	r = flash_wait();
 	FLASH->CR &= ~(FLASH_CR_PER | FLASH_CR_PNB);
 	flash_done();
+	c2_flash_end();
 	return r;
 }
 
@@ -4726,7 +4899,8 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	int r = 0;
 
 	if (dst % 8 != 0 || len % 8 != 0 || !flash_ok(dst, len)) return -1;
-	if (flash_unlock() < 0) { flash_done(); return -1; }
+	if (c2_flash_begin() < 0) return -1;
+	if (flash_unlock() < 0) { flash_done(); c2_flash_end(); return -1; }
 	FLASH->CR |= FLASH_CR_PG;
 	for (; len > 0; len -= 8, dst += 8, s += 8) {
 		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;
@@ -4744,5 +4918,6 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	}
 	FLASH->CR &= ~FLASH_CR_PG;
 	flash_done();
+	c2_flash_end();
 	return r;
 }
