@@ -3,8 +3,9 @@ GALTZAGORRIAK MINIX - MINIX 2.0.0 FOR THE FLIPPER ZERO
 Galtzagorriak MINIX is a small distribution of MINIX 2.0.0 for the Flipper
 Zero, named after the galtzagorriak, the small, helpful spirits of Basque
 mythology.  This tree is MINIX 2.0.0 ported to run bare-metal on the Flipper Zero
-(STM32WB55, ARM Cortex-M4, 64 MHz, 256 KB RAM, no MMU), replacing the
-Flipper firmware.  The root file system lives on the microSD card.  A QEMU
+(STM32WB55, ARM Cortex-M4, 64 MHz, 256 KB SRAM of which 192 KB (SRAM1) is
+the system's main RAM and about 20 KB of SRAM2 is usable, the rest of SRAM2
+being reserved for the radio core; no MMU), replacing the Flipper firmware.  The root file system lives on the microSD card.  A QEMU
 target (mps2-an386, also a Cortex-M4) runs the same system for testing.
 
 A machine's tribute to a machine: this project quietly honours AmigaOS.
