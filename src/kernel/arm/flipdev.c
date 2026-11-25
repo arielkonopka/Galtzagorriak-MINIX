@@ -1534,8 +1534,9 @@ PRIVATE int power_read(user, count)
 phys_bytes user;
 int count;
 {
-  char line[176], d[10];
+  char line[232], d[10];
   const char *k = pw_key;
+  u32_t c2[4];
   unsigned long u;
   int i, j, n = 0, v, r6, r4, r3;
 
@@ -1587,6 +1588,35 @@ int count;
 	do d[j++] = '0' + u % 10; while ((u /= 10) != 0);
 	while (j > 0) line[n++] = d[--j];
   }
+  /* R2b.10: once CPU2 was started, what it reports: cpu2=wait, or the FUS
+   * and stack versions (major.minor.sub), the stack type and the ready
+   * event's status (0 the stack runs, 1 FUS) */
+  if ((v = hal_cpu2_info(c2)) >= 0) {
+	if (v == 2) {			/* CPU2 hard-faulted: pc lr sp */
+		for (k = " cpu2=fault"; *k != 0; k++) line[n++] = *k;
+		for (i = 0; i < 3; i++) {
+			line[n++] = i == 0 ? ':' : ',';
+			for (j = 28; j >= 0; j -= 4)
+				line[n++] = "0123456789abcdef"[c2[i] >> j & 15];
+		}
+		v = -1;
+	}
+	if (v >= 0) for (k = v == 0 ? " cpu2=wait" : " cpu2=fus"; *k != 0; k++)
+		line[n++] = *k;
+	for (i = 0; v == 1 && i < 4; i++) {
+		if (i == 1) for (k = ",stack"; *k != 0; k++) line[n++] = *k;
+		if (i == 2) for (k = ",type"; *k != 0; k++) line[n++] = *k;
+		if (i == 3) for (k = ",status"; *k != 0; k++) line[n++] = *k;
+		for (j = i < 2 ? 24 : 0; j >= (i < 2 ? 8 : 0); j -= 8) {
+			u = i < 2 ? c2[i] >> j & 0xFF : i == 2 ? c2[2] & 0xFF
+								: c2[3];
+			r6 = 0;
+			do d[r6++] = '0' + u % 10; while ((u /= 10) != 0);
+			while (r6 > 0) line[n++] = d[--r6];
+			if (i < 2 && j > 8) line[n++] = '.';
+		}
+	}
+  }
   line[n++] = '\n';
   if (count > n) count = n;
   phys_copy(vir2phys(line), user, (phys_bytes) count);
@@ -1601,6 +1631,8 @@ int count;
  *	profile full|care	end of charge 4.208 V / 4.0 V (kept)
  *	gentle on|off		charge current 1 A / the stock 2 A (kept)
  *	otg on|off		5 V on the GPIO header
+ *	cpu2			start the radio CPU as far as its ready
+ *				event (R2b.10); a read shows its versions
  * Text rather than ioctl: FS checks the write permission, the kernel does
  * not know the caller's uid. */
 PRIVATE const char *const pw_cmds[] = {
@@ -1623,6 +1655,8 @@ int count;
 	if (hal_charger_set(HAL_CHG_CARE + i / 2, i & 1) < 0) return(EIO);
 	return(count);
   }
+  if (strcmp(cmd, "cpu2") == 0)		/* R2b.10: start it, see read */
+	return(hal_cpu2_start() < 0 ? ENXIO : count);
   return(EINVAL);
 }
 

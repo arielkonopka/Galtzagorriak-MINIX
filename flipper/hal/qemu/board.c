@@ -1100,3 +1100,6 @@ uint32_t hal_cycles(void)
 	seen = ms;
 	return (ms + missed) * 25000u;
 }
+
+int hal_cpu2_start(void) { return -1; }
+int hal_cpu2_info(uint32_t v[4]) { (void) v; return -1; }

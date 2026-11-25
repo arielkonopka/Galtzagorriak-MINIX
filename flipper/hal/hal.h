@@ -186,6 +186,12 @@ int hal_charger_read(unsigned reg);
 #define HAL_CHG_OTG		3
 #define HAL_CHG_PAUSE		4	/* charging paused (CHG_CONFIG off) */
 int hal_charger_set(int what, int on);
+/* R2b.10: start CPU2 as far as its ready event (0, or 1 if it runs), and
+ * read what it reports (-1 off, 0 not ready, 1 v[] = FUS version, stack
+ * version, InfoStack, SysStatus; 2 CPU2 hard-faulted: v[] = pc, lr, sp);
+ * QEMU: -1. */
+int hal_cpu2_start(void);
+int hal_cpu2_info(uint32_t v[4]);
 /* The default speaker volume (0-100; 100 if never set), kept over resets
  * in a backup register (K.7 Sound). */
 int hal_vol_default(void);

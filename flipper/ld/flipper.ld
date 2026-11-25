@@ -12,3 +12,13 @@ MEMORY
 	RAM2B (xrw) : ORIGIN = 0x20038000, LENGTH = 10K
 }
 INCLUDE sections.ld
+
+/* R2b.10: CPU2's shared tables, where it looks for them (0x20030000, the
+ * reference table first); the FS buffer cache starts after (server.ld). */
+SECTIONS
+{
+	.cpu2map 0x20030000 (NOLOAD) : { KEEP(*(.cpu2map)) } > RAM2A
+	.cpu2mem2 0x200394C0 (NOLOAD) : { KEEP(*(.cpu2mem2)) } > RAM2B
+}
+ASSERT(SIZEOF(.cpu2mem2) <= 0x340, "CPU2 buffers over their 832 bytes of SRAM2b")
+ASSERT(SIZEOF(.cpu2map) <= 0x340, "CPU2 tables over their 832 bytes of SRAM2a")

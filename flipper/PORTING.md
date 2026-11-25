@@ -1335,6 +1335,38 @@ gets every other turn of the group; 0 B kernel RAM.
 subshell loop): the shell answers in 0.12 s and 0.51 s (QEMU).
 `-n 0` stays an explicit opt-in.
 
+## CPU2 probe (R2b.10), 2026-11-25
+
+`echo cpu2 > /dev/power` (root) starts the radio CPU as far as its system ready event; `cat
+/dev/power` then ends with `cpu2=wait`, `cpu2=fus..,stack..,type..,status..`, or
+`cpu2=fault:PC,LR,SP` (CPU2's hard fault record, AN5289 4.8.2: magic 0x1170FD0F at SRAM2a's
+start). Nothing is started at boot yet; a reset stops CPU2.
+
+The user's Flipper (F1266294): **FUS 1.2.0, wireless stack 1.20.0 (release 2), type 3 = BLE
+light**, the same as the stock firmware reports for its Flipper (`info device`: radio.fus 1.2.0,
+radio.stack.type 3, 1.20.0 release 2; stack memory SRAM2a 14K, SRAM2b 19K, flash 116K).
+
+Memory: the shared tables in SRAM2a's first 832 bytes (`.cpu2map`, the reference table at
+0x20030000 where CPU2 looks for it, 704 bytes used), the spare BLE event buffer and the event
+pool in SRAM2b's last 832 bytes (`.cpu2mem2`, 816 used); the FS buffer cache moved up by 832
+bytes in SRAM2a and its SRAM2b part ends 832 bytes earlier; both still hold their 9 buffers
+(0x24B4 bytes each half). No SRAM1. ramcheck shows them on a line of their own.
+
+Found on the way: with the event pool NULL and size 0 the BLE light stack wrote the device
+information table, then hard-faulted at its start (pc 0x8560, lr 0x72d3, sp 0x2003f9c0); with a
+pool (two event frames) and its own spare BLE buffer it comes up.
+
+Flash while CPU2 runs: `hal_flash_erase` and `hal_flash_write` take HSEM 2 (the controller),
+wait for FLASH_SR.PESD to clear and take HSEM 7 (not while CPU2 holds HSEM 6), as stock's
+`furi_hal_flash_begin_with_core2`; interrupts are off only while the semaphores are taken.
+Without CPU2 started nothing changes. Device check: with CPU2 up, `pkg install --flash hello`
+(pages erased and programmed), `hello` run from flash, `pkg remove hello`: all fine, CPU2 still
+ready afterwards.
+
+Before CPU2 runs at every boot (Phase 15): Stop2 and the current with CPU2 running must be
+measured, and the ready event's SysStatus read (shown as 255 now: the event was not found in
+the system queue).
+
 ## Status
 
 - **Milestone 0: done in QEMU, built for Flipper (hardware test pending).**
