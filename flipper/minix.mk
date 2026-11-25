@@ -1183,9 +1183,9 @@ $(MB)/cmd/app/%.o: apps/%.c
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.3.tar \
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.4.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.2.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
 	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
@@ -1204,9 +1204,9 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.3.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.4.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.3 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.4 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
@@ -1219,9 +1219,9 @@ $(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
 	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 # Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
-$(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+$(PKGDIR)/alarm_1.2.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.1 -d timed -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n alarm -v 1.2 -d timed -o $(PKGDIR) \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
