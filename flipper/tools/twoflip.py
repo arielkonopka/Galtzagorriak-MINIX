@@ -984,7 +984,7 @@ def subghz_chat(ul, mx, opt, dirn):
 
 def nfc_u2m(ul, mx, opt, f):
 	if not mx.exists("nfc"):
-		return "MISSING", "no nfc command (MINIX: nfc scanner)"
+		return "MISSING", "no nfc command (MINIX: nfc -r)"
 	path = "%s/%s" % (UL_DIR, f["file"])
 	if not ul.upload(path, f["text"].encode()):
 		return "BLOCKED", "could not write %s on the Unleashed SD card" % path
@@ -994,13 +994,17 @@ def nfc_u2m(ul, mx, opt, f):
 		out = ul.stop()
 		ul.run("exit", 5)
 		return "BLOCKED", "Unleashed did not emulate: " + last(out)
-	rc, out = mx.run("nfc scanner", 20)
+	rc, out = mx.run("nfc -r", 60)		# read once, no screen
 	ul.stop()
 	ul.run("exit", 5)
 	if missing(rc, out):
-		return "MISSING", "nfc scanner: " + last(out)
+		return "MISSING", "nfc -r: " + last(out)
 	if f["leaf"] in out:
-		return "PASS", "MINIX detected " + f["leaf"]
+		return "PASS", "MINIX read " + last(
+			"\n".join(l for l in out.split("\n") if f["leaf"] in l))
+	if "no card" in out and f["leaf"] in ("FeliCa", "SLIX"):
+		return "MISSING", ("MINIX polls NFC-A only: no NFC-F / NFC-V "
+			"poller yet (nfc -r: no card)")
 	return "FAIL", "MINIX did not detect %s: %s" % (f["leaf"], last(out))
 
 
@@ -1008,6 +1012,9 @@ def nfc_m2u(ul, mx, opt, f):
 	if not mx.exists("nfc"):
 		return "MISSING", "no nfc command (MINIX: nfc emulate -f FILE)"
 	path = MX_TMP + "/twoflip.nfc"
+	rc, out = mx.run("nfc emulate -f /nonexistent.nfc", 10)
+	if missing(rc, out):		# before the upload: nothing to play it
+		return "MISSING", "no card emulation yet (nfc emulate: %s)" % last(out)
 	if not mx.upload(path, f["text"]):
 		return "FAIL", "could not write %s on MINIX" % path
 	mx.start("nfc emulate -f " + path,
