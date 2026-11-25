@@ -112,3 +112,56 @@ jobs:
             gh release create "$TAG" --verify-tag --title "$TAG" \
               --notes "See CHANGELOG.md."
           gh release upload "$TAG" out/* --clobber
+
+  # RS.18: the signed update file Galtzagorriak-X.Y.Z.update + .sha512.
+  # GZ_UPDATE_KEY lives in the environment `release` (the user approves
+  # each tag run); without it the job says so and attaches nothing.
+  release-update:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: flipper
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/toolchain
+      - name: Version and epoch (RS.19)
+        run: make versioncheck
+      - name: Build, sign and check the update file
+        id: upd
+        env:
+          GZ_UPDATE_KEY: ${{ secrets.GZ_UPDATE_KEY }}
+        run: |
+          if [ -z "$GZ_UPDATE_KEY" ]; then
+            echo "::warning::GZ_UPDATE_KEY is not set in the environment" \
+                 "'release': no update file for this release (see" \
+                 "docs/devguide/release-update-job.md)"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test -f keys/release.pub || {
+            echo "::error::flipper/keys/release.pub missing: commit the public key first"
+            exit 1; }
+          make BOARD=flipper -j"$(nproc)" minix card base-flash base pkgs
+          make BOARD=flipper update
+          v=$(sed -n 's/^#define GZ_RELEASE[^"]*"\(.*\)"/\1/p' \
+                ../include/minix/gzversion.h)
+          mkdir -p ../upd
+          cp build/flipper/minix/Galtzagorriak.update \
+             ../upd/Galtzagorriak-$v.update
+          cd ../upd && sha512sum Galtzagorriak-$v.update \
+             > Galtzagorriak-$v.update.sha512 && cat *.sha512
+      - name: Attach to the release
+        if: steps.upd.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" ../upd/* --clobber
