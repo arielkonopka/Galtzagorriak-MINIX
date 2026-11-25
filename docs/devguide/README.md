@@ -26,6 +26,8 @@ For advanced users who want to write programs, apps, scripts and background jobs
 3. [Using the hardware: device files](part1/03-devices.md): `/dev/lcd`, `/dev/buttons`, LED,
    backlight, vibro, speaker, GPIO, ADC, infrared, iButton, 125 kHz RFID, Sub-GHz, the RTC,
    `poll()` and the pulse engine; NFC and Bluetooth **(planned)**; from C and from the shell.
+3a. [How the 125 kHz RFID radio works](part1/03a-rfid-radio.md): the coil, load modulation, the
+    pins and timers, ASK/FSK/PSK, what we measured, a troubleshooting table.
 4. [Screen apps and the launcher](part1/04-screen-apps.md): the `gui` library, the
    "Pine meets modern UX" screen style, `/etc/apps`, the foreground app, the long Back press,
    and how to keep an app quick.

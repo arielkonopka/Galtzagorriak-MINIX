@@ -332,7 +332,8 @@ a hang just reboots the Flipper, like the stock firmware.
 ### Updating with the update file
 
 Every release comes with one signed file, `Galtzagorriak-X.Y.Z.update`, on its GitHub release page,
-with a `.sha512` next to it. It holds the whole system from one build: the firmware for the
+with a `.sha512` next to it. The file is signed with the project's release key (its public half is
+`flipper/keys/release.pub`); the Flipper refuses a file signed with any other key. It holds the whole system from one build: the firmware for the
 Flipper's flash, the base programs on the SD card, the official apps and the release notes.
 
 > **Not finished yet.** The Flipper can already check the file and prepare the update. The step

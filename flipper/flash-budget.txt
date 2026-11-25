@@ -65,5 +65,11 @@
 # page with the two FP-fault checks.  Nothing changed in how often the cache
 # writes.
 # 2026-11-24: 15 pages measured on main a3005a9 (the 16 of #435 was one page too many).
+# 2026-11-25 (#461 launcher folders): 16.  The launcher's text grew by about
+# 1.7 KB (the folder view) past a 4 KB page of the run-time cache in the M2
+# test, which runs it for the window-app tests.  On the Flipper the launcher
+# is in the base flash image (BASE_FLASH), executes in place and is not
+# cached: no run-time write more there.
+# 2026-11-25: 15 again on merged main (the launcher folder view measured 16 alone; with main it fits 15).
 m2      cache   15
 m2      inst    0

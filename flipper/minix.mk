@@ -312,7 +312,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree radio
+	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -462,6 +462,11 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
 			# 6272 B) and nanopb's request strings (a 1 KB ping,
 			# a 255 B path) from the heap, stdio, stack
+CHMEM_pgpenc   := 12288	# the file is read in 512 B pieces; RSA's five 512 B
+			# numbers, the 1.5 KB message context and the key
+			# block (3 KB, .bss) with stdio and stack
+CHMEM_blescan  := 4096	# issue #388: the table (16 x 40 B), one HCI packet
+			# (258 B), stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
 
@@ -822,6 +827,27 @@ $(MB)/radio/radio.o: $(RADIO_DIR)/radio.c $(RADIO_DIR)/radio.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(RADIO_DIR) -MMD -MP -c $< -o $@
 OBJS_radio = $(MB)/cmd/port/radio.o $(MB)/radio/radio.o $(MB)/modem/rgsha.o
+# blescan (issue #388): the BLE scanner / tracker finder core (src/lib/blescan)
+# and the command; the same core runs on the PC (make -C tests/blescan test).
+BLESCAN_DIR := $(MROOT)/src/lib/blescan
+$(MB)/cmd/port/blescan.o: cmds/blescan.c $(BLESCAN_DIR)/blescan.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(BLESCAN_DIR) -MMD -MP -c $< -o $@
+$(MB)/blescan/blescan.o: $(BLESCAN_DIR)/blescan.c $(BLESCAN_DIR)/blescan.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(BLESCAN_DIR) -MMD -MP -c $< -o $@
+# pgpenc (user request 2026-11-25): encrypt a file to an OpenPGP RSA public
+# key (src/lib/pgpenc); the same sources run on the PC (make -C tests/pgpenc
+# test: gpg decrypts what it writes).
+PGPENC_DIR := $(MROOT)/src/lib/pgpenc
+$(MB)/cmd/port/pgpenc.o: cmds/pgpenc.c $(PGPENC_DIR)/pgpenc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(PGPENC_DIR) -MMD -MP -c $< -o $@
+$(MB)/pgpenc/pgpenc.o: $(PGPENC_DIR)/pgpenc.c $(PGPENC_DIR)/pgpenc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(PGPENC_DIR) -MMD -MP -c $< -o $@
+OBJS_pgpenc = $(MB)/cmd/port/pgpenc.o $(MB)/pgpenc/pgpenc.o
+OBJS_blescan = $(MB)/cmd/port/blescan.o $(MB)/blescan/blescan.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
@@ -1171,9 +1197,9 @@ $(MB)/cmd/app/%.o: apps/%.c
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.2.tar \
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.4.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.1.tar \
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.2.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
 	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
@@ -1192,9 +1218,9 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.2.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.4.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.2 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.4 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
@@ -1207,9 +1233,9 @@ $(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
 	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 # Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
-$(PKGDIR)/alarm_1.1.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+$(PKGDIR)/alarm_1.2.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.1 -d timed -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n alarm -v 1.2 -d timed -o $(PKGDIR) \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
@@ -1318,7 +1344,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.83
+BASE_VER := 4.85
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.

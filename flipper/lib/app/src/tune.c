@@ -16,7 +16,8 @@
 /* The built-in tones, as RTTTL: the default of an alarm is "beep", of
  * the others "chime".  const: in flash. */
 const char *const tune_names[] = {
-	"beep", "chime", "rise", "classic", "gentle", "pips", NULL
+	"beep", "chime", "rise", "classic", "gentle", "pips",
+	"watch", "hourly", "jingle", NULL
 };
 static const char *const tune_text[] = {
 	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
@@ -25,6 +26,11 @@ static const char *const tune_text[] = {
 	"classic:d=16,o=7,b=200:c,p,c,p,c,p,c,8p,c,p,c,p,c,p,c",
 	"gentle:d=8,o=5,b=100:e,g,a,4b,p,a,4g",
 	"pips:d=16,o=6,b=120:a,4p,a,4p,a,4p,4a6",
+	/* 1980s digital watch, on the piezo's square wave (issue "radyjko z
+	 * lat 80"): original little tunes in that style */
+	"watch:d=16,o=6,b=170:c,e,g,c7,g,e,c,8p,c,e,g,c7,4p",
+	"hourly:d=16,o=6,b=190:e,e,p,e,e,4p,g,g,p,g,g,4p,8c7",
+	"jingle:d=8,o=6,b=150:e,g,4c7,g,e,4c,e,g,a,4g,p,f,a,4c7,a,f,4c,16e,16g,2c7",
 };
 
 const char *tune_builtin(const char *name)

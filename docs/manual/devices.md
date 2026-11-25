@@ -465,3 +465,6 @@ program engines: one fades the backlight, two run the LED). The pattern stops wi
 60 ms dark in between. It is off until you switch it on, ends with `echo off >/dev/led` or any
 other pattern, and is not kept over a reboot (to have it always, add the line to `/etc/rc.conf`, which `/etc/rc`
 reads at every boot).
+
+How the 125 kHz RFID radio works, and what to check when a read or an emulation fails: the
+[developer guide chapter 3a](../devguide/part1/03a-rfid-radio.md).
