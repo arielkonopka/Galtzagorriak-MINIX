@@ -1348,7 +1348,7 @@ radio.stack.type 3, 1.20.0 release 2; stack memory SRAM2a 14K, SRAM2b 19K, flash
 
 Memory: the shared tables in SRAM2a's first 832 bytes (`.cpu2map`, the reference table at
 0x20030000 where CPU2 looks for it, 704 bytes used), the spare BLE event buffer and the event
-pool in SRAM2b's last 832 bytes (`.cpu2mem2`, 816 used); the FS buffer cache moved up by 832
+pool in SRAM2b's last 832 bytes (`.cpu2mem2` at 0x2003A4C0, 816 used); the FS buffer cache moved up by 832
 bytes in SRAM2a and its SRAM2b part ends 832 bytes earlier; both still hold their 9 buffers
 (0x24B4 bytes each half). No SRAM1. ramcheck shows them on a line of their own.
 
@@ -1363,9 +1363,30 @@ Without CPU2 started nothing changes. Device check: with CPU2 up, `pkg install -
 (pages erased and programmed), `hello` run from flash, `pkg remove hello`: all fine, CPU2 still
 ready afterwards.
 
-Before CPU2 runs at every boot (Phase 15): Stop2 and the current with CPU2 running must be
-measured, and the ready event's SysStatus read (shown as 255 now: the event was not found in
-the system queue).
+Stop2 with CPU2 running: first try (old Stop2 path) the USB did not come back after the cable
+was plugged in again, and the average on battery was -11 mA (display on: -20 mA). The Stop2 path
+did what is right for one CPU only: always onto HSI16, and it set CPU2's low-power mode (C2CR1)
+itself; and nothing kept CPU2 from switching the 48 MHz clock (the RNG's), which the USB runs
+on. Now, once CPU2 was started: CPU1 holds HSEM 5 (CLK48) for good (hal_random no longer drops
+it), and hal_stop2 follows stock's furi_hal_power_deep_sleep: HSEM 3 around the clock changes,
+HSEM 4 for the entry, onto HSI16 only if CPU2 is in deep sleep (C2DS/C2SBF) or holds HSEM 4,
+C2CR1 left to CPU2, the PLL restored only if the system clock left it. Device check: 290 s off
+USB with CPU2 up, Stop2 239 s (82 %), the USB back 1 s after plugging in, CPU2 still ready.
+Still to look at: 799 other wake-ups in those 290 s (about 2.7 a second; without CPU2 a few
+hundred an hour), probably CPU2's IPCC/EXTI 41.
+
+A mistake of #473, found here: `.cpu2mem2` was placed at 0x200394C0, inside the FS buffer cache
+(SRAM2b holds 9 buffers of 0x414 bytes, 0x20038000..0x2003A4B4; the end was computed with 0x14B4
+for 0x24B4). With CPU2 up, its pool and FS buffer 6 overlapped: the ready event was overwritten
+(SysStatus read as 255) and FS blocks could be. Found with a DWT data watchpoint on the address
+(the FS process, `rw_inode` with `bp` = buf_b[6]). Now at 0x2003A4C0, the real last 832 bytes,
+and flipper.ld ASSERTs the place. The DWT keeps its comparators over a system reset (only a
+power-on clears it), so a watchpoint set by hand fired on every following start: `intr_init`
+now switches comparators 2 and 3 off. The ready event now reads SysStatus 0 (the wireless stack
+runs).
+
+Before CPU2 runs at every boot (Phase 15): the wake-ups above and a current measurement on
+battery over a longer time.
 
 ## Status
 

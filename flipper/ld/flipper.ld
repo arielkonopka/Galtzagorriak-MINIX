@@ -18,7 +18,10 @@ INCLUDE sections.ld
 SECTIONS
 {
 	.cpu2map 0x20030000 (NOLOAD) : { KEEP(*(.cpu2map)) } > RAM2A
-	.cpu2mem2 0x200394C0 (NOLOAD) : { KEEP(*(.cpu2mem2)) } > RAM2B
+	.cpu2mem2 0x2003A4C0 (NOLOAD) : { KEEP(*(.cpu2mem2)) } > RAM2B
 }
 ASSERT(SIZEOF(.cpu2mem2) <= 0x340, "CPU2 buffers over their 832 bytes of SRAM2b")
+/* SRAM2b is the FS buffer cache up to 0x2003A4C0 (server.ld): the CPU2
+ * buffers are its last 832 bytes, 0x2003A4C0..0x2003A800. */
+ASSERT(ADDR(.cpu2mem2) == 0x20038000 + 10K - 0x340, "CPU2 buffers not at the end of SRAM2b")
 ASSERT(SIZEOF(.cpu2map) <= 0x340, "CPU2 tables over their 832 bytes of SRAM2a")

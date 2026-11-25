@@ -492,6 +492,10 @@ int mine;
   DWT_MASK(0) = DWT_MASK(1) = 2;		/* one word */
   DWT_COMP(0) = DWT_COMP(1) = 0;
   DWT_FUNC(0) = DWT_FUNC(1) = DWT_FUNC_WRITE;
+  /* The other comparators off: the DWT keeps its settings over a system
+   * reset (only a power-on clears it), so a watchpoint set by hand or by
+   * an earlier image would fire on every start. */
+  DWT_FUNC(2) = DWT_FUNC(3) = 0;
 }
 
 PUBLIC void put_irq_handler(irq, handler)
