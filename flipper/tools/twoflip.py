@@ -856,10 +856,36 @@ def subghz_raw_u2m(ul, mx, opt):
 		len(d), near)
 
 
+# Unleashed unlshd-093's Linear decoder reads every bit the other way round
+# from its own encoder (and from the sources src/lib/subghz vendors): MINIX's
+# frame was captured on the air bit-exact (+500 -1500 ... for 0x1E4), the
+# stock decoder shows Key:0x21B; the stock's own transmission of the file
+# decodes as 0x1E4 on MINIX (2026-11-25, PR #469).
+UL_DECODES_INVERTED = {"Linear": 10}
+
+
 def judge_sub(f, out, who, nothing):
 	"""Decoded text (either side's rx) against the .sub file."""
 	if f["proto"] not in out:
 		return nothing
+	if who == "Unleashed" and f["proto"] in UL_DECODES_INVERTED:
+		bits = UL_DECODES_INVERTED[f["proto"]]
+		inv = "%X" % (int(f["key"], 16) ^ ((1 << bits) - 1))
+		if ("KEY:0X" + inv) in compact(out).replace("KEY0X", "KEY:0X"):
+			return "PASS", ("Unleashed decoded %s as 0x%s, the bitwise "
+				"inverse: its decoder's known quirk (sent 0x%s)" % (
+				f["proto"], inv, f["key"].lstrip("0") or "0"))
+	if who == "Unleashed" and f["proto"] == "Dickert_MAHS":
+		# stock shows no key, only the switches: the 36 bits as 18 pairs,
+		# 00 '-', 11 '+', 01 '0' (User-Dips then Fac-Code)
+		v = int(f["key"], 16)
+		want = "".join({0: "-", 3: "+", 1: "0"}.get((v >> (34 - 2 * i)) & 3, "?")
+			for i in range(18))
+		m1 = re.search(r"User-Dips:\s*(\S+)", out)
+		m2 = re.search(r"Fac-Code:\s*(\S+)", out)
+		if m1 and m2 and m1.group(1) + m2.group(1) == want:
+			return "PASS", "Unleashed decoded Dickert_MAHS switches %s %s (as the key)" % (
+				m1.group(1), m2.group(1))
 	if f["proto"] not in SUBGHZ_DYNAMIC:
 		k = f["key"].lstrip("0") or "0"
 		if k[-6:] not in compact(out):
