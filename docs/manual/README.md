@@ -27,6 +27,7 @@ that brings them.
 17. [Infrared remotes](infrared.md): the `infrared` app (learn, saved and universal remotes, debug), stock `.ir` files, group `ir`.
 18. [The Archive app](archive.md): the files under `/home/flipper` by type, rename, delete, favourites, open in their app.
 19. [iButton keys](ibutton.md): the iButton app (read, saved, add manually, write, emulate), stock `.ibtn` files.
+19b. [Encrypting files to your OpenPGP key](pgpenc.md): `pgpenc`, your public key on the card, `gpg -d` on the PC.
 20. [The GPIO header](gpio.md): the GPIO app (pin levels and modes).
 21. [Small apps](apps.md): Music Player (`.fmf`, RTTTL), Clock, Dice, Passport; U2F (the USB part planned) and its key files.
 22. [Games](games.md): Snake.

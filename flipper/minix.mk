@@ -312,7 +312,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan
+	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -462,6 +462,9 @@ CHMEM_mtpd     := 2048	# R10.4 (<= 8 KB running, with data + bss):
 CHMEM_rpcd     := 16384	# issue #388: the session (rpc_state_size(),
 			# 6272 B) and nanopb's request strings (a 1 KB ping,
 			# a 255 B path) from the heap, stdio, stack
+CHMEM_pgpenc   := 12288	# the file is read in 512 B pieces; RSA's five 512 B
+			# numbers, the 1.5 KB message context and the key
+			# block (3 KB, .bss) with stdio and stack
 CHMEM_blescan  := 4096	# issue #388: the table (16 x 40 B), one HCI packet
 			# (258 B), stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
@@ -833,6 +836,17 @@ $(MB)/cmd/port/blescan.o: cmds/blescan.c $(BLESCAN_DIR)/blescan.h
 $(MB)/blescan/blescan.o: $(BLESCAN_DIR)/blescan.c $(BLESCAN_DIR)/blescan.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(UCFLAGS) -I$(BLESCAN_DIR) -MMD -MP -c $< -o $@
+# pgpenc (user request 2026-11-25): encrypt a file to an OpenPGP RSA public
+# key (src/lib/pgpenc); the same sources run on the PC (make -C tests/pgpenc
+# test: gpg decrypts what it writes).
+PGPENC_DIR := $(MROOT)/src/lib/pgpenc
+$(MB)/cmd/port/pgpenc.o: cmds/pgpenc.c $(PGPENC_DIR)/pgpenc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(PGPENC_DIR) -MMD -MP -c $< -o $@
+$(MB)/pgpenc/pgpenc.o: $(PGPENC_DIR)/pgpenc.c $(PGPENC_DIR)/pgpenc.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -I$(PGPENC_DIR) -MMD -MP -c $< -o $@
+OBJS_pgpenc = $(MB)/cmd/port/pgpenc.o $(MB)/pgpenc/pgpenc.o
 OBJS_blescan = $(MB)/cmd/port/blescan.o $(MB)/blescan/blescan.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
@@ -1330,7 +1344,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.84
+BASE_VER := 4.85
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.

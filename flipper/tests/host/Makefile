@@ -16,7 +16,7 @@ TESTS	:= parttest usbtest ibemutest icontest wintest desktest settimetest stockt
 
 all: $(TESTS:%=run-%) run-testcmd run-libfuri run-libapp run-native run-lfrfid run-modem run-hid run-subghz run-ibkey run-dht run-ir \
      run-mtpd run-gzsig run-nfc run-radio run-flipperpb run-rpcd run-bled \
-     run-music run-u2f run-libblk run-blescan
+     run-music run-u2f run-libblk run-blescan run-pgpenc
 
 # libfuri core (spec R5.1): its own host tests, run here so CI runs them.
 run-libfuri:
@@ -107,6 +107,10 @@ run-bled:
 # BLE scanner core and command (#388): golden HCI frames, a recorded stream.
 run-blescan:
 	$(MAKE) -C $(MROOT)/flipper/tests/blescan test
+
+# pgpenc (user request 2026-11-25): gpg decrypts what the command writes.
+run-pgpenc:
+	$(MAKE) -C $(MROOT)/flipper/tests/pgpenc test
 
 run-gzsig:
 	$(MAKE) -C $(MROOT)/flipper/tests/gzsig test STEP=3
