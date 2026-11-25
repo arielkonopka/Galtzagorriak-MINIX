@@ -4113,10 +4113,8 @@ void hal_ir_tx_stop(void)
  * stops it again.  The state is the hardware's (C2BOOT, the IPCC flag): no
  * RAM in SRAM1.
  *
- * Not yet: CPU1 flash erase and program while CPU2 runs should take HSEM 7
- * and wait for FLASH_SR.PESD (ST's rule, so the radio's timing is kept);
- * with no radio activity CPU2 only stalls during an erase, but this must
- * come before CPU2 runs at every boot. */
+ * CPU1's flash erase and program take HSEM 2 and 7 and wait for PESD while
+ * CPU2 runs (c2_flash_begin below). */
 struct cpu2_list { uint32_t next, prev; };
 struct cpu2_map {
 	uint32_t ref[10];	/* MB_RefTable_t: devinfo, ble, thread, sys, mm,
@@ -4820,13 +4818,69 @@ static int flash_ok(uint32_t addr, unsigned len)	/* cache, installed */
 		&& addr - l[HAL_FL_INST] <= l[HAL_FL_INST_SIZE] - len;
 }
 
+/* With CPU2 running (R2b.10), ST's rule for CPU1's flash operations
+ * (AN5289 4.7, as stock's furi_hal_flash_begin_with_core2): hold HSEM 2
+ * (the flash controller), wait until the controller is not suspended
+ * (PESD: CPU2's radio timing), and take HSEM 7 so CPU2 makes no
+ * time-critical request meanwhile (not while CPU2 holds HSEM 6, its own
+ * request).  Interrupts are off only while the semaphores are taken, not
+ * for the 22 ms of an erase.  Without CPU2: nothing. */
+#define C2_SEM_FLASH	2
+#define C2_SEM_CPU2	7
+#define C2_SEM_CPU1	6
+#define C2_COREID	(4u << HSEM_R_COREID_Pos)	/* CPU1 */
+
+static int c2_sem_take(unsigned n)	/* one-step lock: 0 taken */
+{
+	return HSEM->RLR[n] == (HSEM_RLR_LOCK | C2_COREID) ? 0 : -1;
+}
+
+static void c2_sem_give(unsigned n)
+{
+	HSEM->R[n] = C2_COREID;
+}
+
+static int c2_flash_begin(void)
+{
+	uint32_t n, pm;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	for (n = 0; c2_sem_take(C2_SEM_FLASH) < 0; )
+		if (++n == 4000000u) return -1;
+	for (n = 0; ; ) {
+		if (++n == 4000000u) {
+			c2_sem_give(C2_SEM_FLASH);
+			hal_flash_sr = 0x10000000u;	/* CPU2 kept it */
+			return -1;
+		}
+		if (FLASH->SR & FLASH_SR_PESD) continue;
+		pm = __get_PRIMASK();
+		__disable_irq();
+		if ((HSEM->R[C2_SEM_CPU1] & HSEM_R_LOCK)
+		    || c2_sem_take(C2_SEM_CPU2) < 0) {
+			__set_PRIMASK(pm);
+			continue;
+		}
+		__set_PRIMASK(pm);
+		return 0;
+	}
+}
+
+static void c2_flash_end(void)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
+	c2_sem_give(C2_SEM_CPU2);
+	c2_sem_give(C2_SEM_FLASH);
+}
+
 int hal_flash_erase(uint32_t page_addr)
 {
 	int r;
 
 	if (page_addr % HAL_FLASH_PAGE != 0
 			|| !flash_ok(page_addr, HAL_FLASH_PAGE)) return -1;
-	if (flash_unlock() < 0) { flash_done(); return -1; }
+	if (c2_flash_begin() < 0) return -1;
+	if (flash_unlock() < 0) { flash_done(); c2_flash_end(); return -1; }
 	FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
 		| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
 							<< FLASH_CR_PNB_Pos);
@@ -4834,6 +4888,7 @@ int hal_flash_erase(uint32_t page_addr)
 	r = flash_wait();
 	FLASH->CR &= ~(FLASH_CR_PER | FLASH_CR_PNB);
 	flash_done();
+	c2_flash_end();
 	return r;
 }
 
@@ -4844,7 +4899,8 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	int r = 0;
 
 	if (dst % 8 != 0 || len % 8 != 0 || !flash_ok(dst, len)) return -1;
-	if (flash_unlock() < 0) { flash_done(); return -1; }
+	if (c2_flash_begin() < 0) return -1;
+	if (flash_unlock() < 0) { flash_done(); c2_flash_end(); return -1; }
 	FLASH->CR |= FLASH_CR_PG;
 	for (; len > 0; len -= 8, dst += 8, s += 8) {
 		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;
@@ -4862,5 +4918,6 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 	}
 	FLASH->CR &= ~FLASH_CR_PG;
 	flash_done();
+	c2_flash_end();
 	return r;
 }

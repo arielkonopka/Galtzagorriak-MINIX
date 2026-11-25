@@ -1356,9 +1356,16 @@ Found on the way: with the event pool NULL and size 0 the BLE light stack wrote 
 information table, then hard-faulted at its start (pc 0x8560, lr 0x72d3, sp 0x2003f9c0); with a
 pool (two event frames) and its own spare BLE buffer it comes up.
 
-Before CPU2 runs at every boot (Phase 15): CPU1's flash erase and program must take HSEM 7 and
-wait for FLASH_SR.PESD while CPU2 runs, Stop2 with CPU2 running must be measured, and the ready
-event's SysStatus read (shown as 255 now: the event was not found in the system queue).
+Flash while CPU2 runs: `hal_flash_erase` and `hal_flash_write` take HSEM 2 (the controller),
+wait for FLASH_SR.PESD to clear and take HSEM 7 (not while CPU2 holds HSEM 6), as stock's
+`furi_hal_flash_begin_with_core2`; interrupts are off only while the semaphores are taken.
+Without CPU2 started nothing changes. Device check: with CPU2 up, `pkg install --flash hello`
+(pages erased and programmed), `hello` run from flash, `pkg remove hello`: all fine, CPU2 still
+ready afterwards.
+
+Before CPU2 runs at every boot (Phase 15): Stop2 and the current with CPU2 running must be
+measured, and the ready event's SysStatus read (shown as 255 now: the event was not found in
+the system queue).
 
 ## Status
 
