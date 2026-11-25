@@ -375,6 +375,22 @@ static void tunes(void)
 		fails += c < 1;
 		checks++;
 	}
+	/* the watch tunes sit on the piezo's range (200 Hz .. 4 kHz) */
+	for (i = 0; tune_names[i] != NULL; i++) {
+		int j, bad = 0;
+
+		c = tune_parse(tune_builtin(tune_names[i]), n, TUNE_MAX);
+		for (j = 0; j < c; j++) {
+			unsigned f = n[4 * j] | n[4 * j + 1] << 8;
+
+			if (f != 0 && (f < 200 || f > 4000)) bad = 1;
+		}
+		if (bad) printf("FAIL: tone %s outside 200..4000 Hz\n", tune_names[i]);
+		fails += bad;
+		checks++;
+	}
+	CHECK(tune_builtin("watch") != NULL && tune_builtin("hourly") != NULL
+		&& tune_builtin("jingle") != NULL, "the 1980s watch tunes");
 	CHECK(tune_builtin("nope") == NULL, "unknown tone");
 	/* d=4 at 120 bpm: 500 ms; a4 440 Hz; 8c#6: 1109 Hz, 250 ms */
 	c = tune_parse("t:d=4,o=5,b=120:a4,8c#6,p,4e.,16b#", n, TUNE_MAX);

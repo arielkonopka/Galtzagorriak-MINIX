@@ -14,6 +14,7 @@ struct app_fields {
 };
 
 int app_line(char *line, struct app_fields *a);
+int app_dir(char *line, struct app_fields *a);	/* folder lines, #461 */
 int icon_parse(const char *f, unsigned char *rows,
 		int (*glyph)(int c, int row));
 int icon10_parse(const char *f, unsigned char *rows10);
