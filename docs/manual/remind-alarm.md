@@ -160,3 +160,7 @@ Everything is on the SD card: the timer files in `/var/timers`, the reminder log
 per OK) and off alarms in `/home/flipper/apps_data/<app>/`.
 Nothing is written to the internal flash at run time; the programs are written there once, by
 `pkg install`.
+
+### Sound files as alarm tones (coming)
+
+After the watch melodies, an alarm will be able to play a WAV file from the SD card through the beeper: plain PCM, 8 or 16 bit, mono or stereo, 8 kHz is plenty (the piezo has no deep bass anyway). Short files only, a few seconds: a *kaixo* or a rooster. The file side is ready; the sound output arrives with the PCM driver.

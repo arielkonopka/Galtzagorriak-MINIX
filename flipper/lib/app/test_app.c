@@ -508,6 +508,58 @@ static void desk_record(void)
 		"at most 128 B");
 }
 
+static void wavs(void)
+{
+	unsigned char h[64] = "RIFF\0\0\0\0WAVEfmt \x10\0\0\0\1\0\1\0\x40\x1f\0\0\x40\x1f\0\0\1\0\x08\0data\x08\0\0\0";
+	unsigned char pcm[16], out[64];
+	struct wav_info w;
+	struct wav_cvt c;
+	int i, used, n;
+
+	CHECK(wav_parse(h, 44, &w) == 0 && w.rate == 8000 && w.chans == 1 &&
+	      w.bits == 8 && w.data_off == 44 && w.data_len == 8, "wav header");
+	CHECK(wav_parse(h, 30, &w) == -1, "wav header cut short");
+	CHECK(wav_parse((const unsigned char *)"RIFX0000WAVE", 12, &w) == -1,
+							"not a wav");
+	h[20] = 3;	/* float */
+	CHECK(wav_parse(h, 44, &w) == -2, "wav float: unsupported");
+	h[20] = 1;
+	h[22] = 6;	/* 6 channels */
+	CHECK(wav_parse(h, 44, &w) == -2, "wav 6 channels: unsupported");
+	h[22] = 1;
+	wav_parse(h, 44, &w);
+	for (i = 0; i < 8; i++) pcm[i] = (unsigned char)(i * 30);
+	memset(&c, 0, sizeof(c));
+	c.w = w;
+	n = wav_convert(&c, pcm, 8, out, 64, 8000, &used);
+	CHECK(n == 8 && used == 8 && out[3] == 90 && out[7] == 210,
+							"wav 8 kHz as is");
+	memset(&c, 0, sizeof(c));
+	c.w = w;
+	n = wav_convert(&c, pcm, 8, out, 64, 16000, &used);
+	CHECK(n == 16 && out[0] == 0 && out[1] == 0 && out[2] == 30,
+							"wav doubled");
+	memset(&c, 0, sizeof(c));
+	c.w = w;
+	n = wav_convert(&c, pcm, 8, out, 64, 4000, &used);
+	CHECK(n == 4 && used == 8, "wav halved");
+	memset(&c, 0, sizeof(c));
+	c.w = w;
+	n = wav_convert(&c, pcm, 8, out, 4, 8000, &used);
+	CHECK(n <= 4 && used <= 4 && n >= 3, "wav output limited");
+	CHECK(wav_convert(&c, pcm, 8, out, 64, 5, &used) == -1, "bad rate");
+	/* 16 bit stereo: (-32768 + 32767) / 2 -> 128; full scale */
+	w.bits = 16; w.chans = 2;
+	memset(&c, 0, sizeof(c));
+	c.w = w;
+	memset(pcm, 0, sizeof(pcm));
+	pcm[1] = 0x80; pcm[3] = 0x7f;	/* L = -32768, R = 32767 */
+	pcm[5] = 0x7f; pcm[7] = 0x7f;	/* both max */
+	n = wav_convert(&c, pcm, 9, out, 64, 8000, &used);
+	CHECK(n == 2 && used == 8 && out[0] == 127 && out[1] == 255,
+					"wav 16 bit stereo, whole frames only");
+}
+
 int main(void)
 {
 	desk_record();
@@ -524,6 +576,7 @@ int main(void)
 	format();
 	spool();
 	tunes();
+	wavs();
 	logs();
 	printf("libapp: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

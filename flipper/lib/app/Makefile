@@ -4,7 +4,7 @@
 CC	?= cc
 SAN	:= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS	?= -O1 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(SAN)
-SRC	:= src/tspec.c src/io.c src/tune.c
+SRC	:= src/tspec.c src/io.c src/tune.c src/wav.c
 B	:= build
 
 test: $(B)/test_app
