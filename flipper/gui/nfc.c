@@ -978,13 +978,31 @@ int main(int argc, char **argv)
 		nfc_open();
 		if (nfcfd < 0) { printf("nfc: no %s\n", DEV_NFC); return 1; }
 		r = do_read(NULL);
-		printf("nfc: read %d, keys %d/%d, blocks %d/%d\n", r,
-		       keys_a + keys_b, card ? 2 * (card->mfc.block_count / 4) : 0,
-		       nblk, card ? (int) card->mfc.block_count : 0);
-		if (card) printf("nfc: blocks read %08lx%08lx\n",
-			(unsigned long) (card->mfc.block_read >> 32),
-			(unsigned long) card->mfc.block_read);
-		return r < 0;
+		if (r < 0 || card == NULL) {
+			printf("nfc: no card\n");
+			return 1;
+		}
+		/* the family as the stock scanner names it, then our name */
+		/* SAK 00 with no answer to an Ultralight read: a plain
+		 * ISO 14443-3A tag, as the stock scanner says */
+		if (card->type == NFC_DEV_MF_ULTRALIGHT && nblk == 0)
+			printf("nfc: ISO14443-3A, UID");
+		else printf("nfc: %s%s, UID", card->type == NFC_DEV_MF_ULTRALIGHT
+			? "NTAG/Ultralight " : "", type_name(card));
+		for (r = 0; r < card->uid_len; r++) printf(" %02X", card->uid[r]);
+		printf(", ATQA %02X%02X, SAK %02X\n", card->atqa[0],
+			card->atqa[1], card->sak);
+		if (card->type == NFC_DEV_MF_ULTRALIGHT && nblk > 0)
+			printf("nfc: pages read %d\n", nblk);
+		else if (card->type == NFC_DEV_MF_CLASSIC) {
+			printf("nfc: read 0, keys %d/%d, blocks %d/%d\n",
+			       keys_a + keys_b, 2 * (card->mfc.block_count / 4),
+			       nblk, (int) card->mfc.block_count);
+			printf("nfc: blocks read %08lx%08lx\n",
+				(unsigned long) (card->mfc.block_read >> 32),
+				(unsigned long) card->mfc.block_read);
+		} else if (t4note != NULL) printf("nfc: %s\n", t4note);
+		return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "-t")) {
 		loopback = 1;
