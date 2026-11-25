@@ -1,23 +1,4 @@
-wirefind - metal, mains, data cables
-Needs no extra hardware.
-
-METAL  (125 kHz coil)
- Hold away from the wall,
- press OK = baseline. Then
- bring the back of the
- Flipper close.
-MAINS  (50 Hz, GPIO pin)
- Pin A7 (header pin 3) is
- the antenna. A bare wire
- in the pin helps; a 10 MOhm
- resistor from the pin to
- GND is better, not needed.
- Pitch = strength.
- Left/Right = sensitivity
- 0-7: search far at 7, then
- narrow down. 10-20 cm in a
- wall is the aim.
-DATA   (CC1101, experimental)
- Baseline away from the
- wall, as for metal.
-Back = exit.
+MAINS antenna: pin A7
+(header pin 3). A bare wire
+in the pin helps. Optional:
+10 MOhm from pin to GND.
