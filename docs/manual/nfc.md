@@ -238,3 +238,7 @@ the driver.
 See also: [Sub-GHz remotes](subghz.md) for the same "your own key file, no shipped secrets"
 rule on the radio side, and the development guide's
 [`/dev/nfc` driver interface](../devguide/nfc-driver-interface.md).
+
+### Copying a card with a password (coming)
+
+When the copier writes an NTAG or Ultralight copy, it can give the copy a password too. In Settings you choose: **random** (a new one for each copy, the default), **own** (one you typed), **previous** (the one of the last copy), **dictionary** (a chosen line of `/home/flipper/nfc/assets/t2t_pwd_user.nfc`) or **legacy** (no password, as stock does). Whatever is chosen is written into that dictionary file first, with your note (for example *Tokia*), and only then onto the card, so a copy that was cut short can still be opened with the Flipper. Keep an eye on the file: it holds your secrets, and it never leaves the SD card.
