@@ -101,9 +101,12 @@ void hal_subghz_off(void);
  * - hal_subghz_pkt_tx / _pkt_rx: one packet (at most HAL_SUBGHZ_PKT
  *   bytes) through the chip's FIFO, as stock's `subghz chat`; _pkt_rx
  *   gives a received one (its length) or 0 when none has come.
- * All return -1 when there is no such path: on the Flipper until the
- * CC1101 TX and packet paths are written (local agent; off by default,
- * the Autonomy rule).  QEMU's backend prints each frame or packet as
+ * All return -1 when there is no such path.  hal_subghz_tx returns 0 when
+ * the frame was sent before it returned (QEMU), or 1 on the Flipper: the
+ * CC1101 is then in TX and the kernel's IR transmit engine sends the frame
+ * on its data pin (hal_ir_target(2)), the writer suspended; the kernel
+ * calls hal_subghz_tx_end when the frame is out or cancelled.
+ * hal_subghz_pkt_tx: -2 while the packet before is still going out.  QEMU's backend prints each frame or packet as
  * console lines ("sg> tx ...", "sg> pkt ..."); hal_subghz_line gives the
  * FNV-1a hash of what the last one printed, hal_subghz_fake (QEMU tests,
  * -1 on the Flipper) makes the next frame or packet a received one
@@ -126,6 +129,9 @@ void hal_subghz_off(void);
 #define HAL_SG_FAKE_RAW	1
 #define HAL_SG_FAKE_PKT	2
 int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n);
+void hal_subghz_tx_end(void);
+int hal_subghz_tx_dma(uint32_t src, unsigned n);	/* the frame by DMA (Flipper) */
+int hal_subghz_tx_last(void);		/* channel 5 IRQ: 1 = the last one is in */
 int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n);
 int hal_subghz_pkt_rx(uint8_t *p, unsigned max);
 int hal_subghz_fake(int what);
@@ -250,7 +256,8 @@ void hal_adc_stream_stop(void);
  * hal_ir_tx_start(first, next) and fed by hal_ir_tx_next(the one after),
  * all in microseconds (spec R6.6). */
 void hal_ir_carrier(int on);
-void hal_ir_target(int rfid);		/* 0 IR LED, 1 the 125 kHz antenna */
+void hal_ir_target(int rfid);		/* 0 IR LED, 1 the 125 kHz antenna,
+					 * 2 the CC1101's data pin */
 void hal_ir_freq(unsigned hz, unsigned duty);
 int hal_ir_tx_irq(void);		/* NVIC line, or -1: no transmitter */
 void hal_ir_tx_start(uint32_t first_us, uint32_t next_us);

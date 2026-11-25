@@ -800,7 +800,8 @@ static const uint8_t cc_pkt_regs[] = {
 	0x11, 0x93,	/* MDMCFG3 */
 	0x12, 0x12,	/* MDMCFG2: GFSK, 16/16 sync bits */
 	0x15, 0x34,	/* DEVIATN: 19 kHz */
-	0x17, 0x3C,	/* MCSM1: stay in RX after a packet (stock goes
+	0x17, 0x3F,	/* MCSM1: stay in RX after a packet, and go to RX
+			 * after one is sent (stock goes
 			 * idle and re-arms; here packets queue in the FIFO:
 			 * stock's chat sends a line as several short ones) */
 	0x18, 0x18,	/* MCSM0 */
@@ -811,33 +812,41 @@ static const uint8_t cc_pkt_regs[] = {
 	0x20, 0xFB,	/* WORCTRL */
 };
 
+/* SPI on.  0: the packet preset is in; 1: it was loaded just now (on the
+ * tuned OOK receiver, frequency and path kept, RX started); -1: the radio
+ * is not tuned. */
+static int cc_pkt_mode(void)
+{
+	uint8_t f[3], g2;
+	unsigned i;
+
+	if (cc_xfer2(0x10 | 0x80, 0) == 0xC8 && cc_xfer2(0x08 | 0x80, 0) == 0x05)
+		return 0;
+	if ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D) return -1;
+	for (i = 0; i < 3; i++) f[i] = cc_xfer2((0x0D + i) | 0x80, 0);
+	g2 = cc_xfer2(0x00 | 0x80, 0);		/* IOCFG2: the path */
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x30);				/* SRES */
+	(void) cc_ready();
+	CC_CS(0);
+	for (i = 0; i < sizeof cc_pkt_regs; i += 2)
+		(void) cc_xfer2(cc_pkt_regs[i], cc_pkt_regs[i + 1]);
+	for (i = 0; i < 3; i++) (void) cc_xfer2(0x0D + i, f[i]);
+	(void) cc_xfer2(0x00, g2);
+	cc_strobe(0x34);				/* SRX (calibrates) */
+	return 1;
+}
+
 int hal_subghz_pkt_rx(uint8_t *p, unsigned max)
 {
-	uint8_t f[3], g2, n, lqi;
-	unsigned i, k;
+	uint8_t n, lqi;
+	unsigned k;
 	int r = 0;
 
-
 	spi1_on(0);
-	if (cc_xfer2(0x10 | 0x80, 0) != 0xC8 || cc_xfer2(0x08 | 0x80, 0) != 0x05) {
-		/* the OOK receiver is in: keep frequency and path, load chat's */
-		if ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D) {
-			spi1_off();
-			return -1;			/* not tuned: no radio */
-		}
-		for (i = 0; i < 3; i++) f[i] = cc_xfer2((0x0D + i) | 0x80, 0);
-		g2 = cc_xfer2(0x00 | 0x80, 0);		/* IOCFG2: the path */
-		cc_strobe(0x36);			/* SIDLE */
-		cc_strobe(0x30);			/* SRES */
-		(void) cc_ready();
-		CC_CS(0);
-		for (i = 0; i < sizeof cc_pkt_regs; i += 2)
-			(void) cc_xfer2(cc_pkt_regs[i], cc_pkt_regs[i + 1]);
-		for (i = 0; i < 3; i++) (void) cc_xfer2(0x0D + i, f[i]);
-		(void) cc_xfer2(0x00, g2);
-		cc_strobe(0x34);			/* SRX (calibrates) */
+	if ((r = cc_pkt_mode()) != 0) {
 		spi1_off();
-		return 0;
+		return r < 0 ? -1 : 0;
 	}
 	if ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) == 0x11) {	/* RX overflow */
 		cc_strobe(0x3A);			/* SFRX */
@@ -878,12 +887,204 @@ int hal_subghz_pkt_rx(uint8_t *p, unsigned max)
 	return r;
 }
 
-/* Transmit (R8.2): not written yet on the Flipper.  The kernel refuses
- * with ENOTSUP until the local agent adds the CC1101 TX path (off by
- * default, the Autonomy rule); the band and duty-cycle check runs before
- * this either way. */
-int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n) { (void) hz; (void) src; (void) n; return -1; }
-int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n) { (void) hz; (void) p; (void) n; return -1; }
+/* Transmit (R8.2).  The kernel has checked the region, the band and the
+ * hour's air time (sg_tx_check) before any of these is called; they only
+ * drive the chip, on the frequency it is tuned to.  Power as stock's
+ * presets: PATABLE 0xC0, +10 dBm.
+ *
+ * OOK frames: hal_subghz_tx_begin puts the tuned OOK receiver into async
+ * TX (FREND0 0x11: a 1 on GDO0 is PATABLE[1], a 0 is PATABLE[0] = off)
+ * and gives PA1 (GDO0, the chip's data input in TX) to TIM2_CH2 in toggle
+ * mode; the kernel's IR transmit engine (TIM2, its ring of durations)
+ * then times the segments and the timer flips the pin at each boundary
+ * in hardware, as stock's async TX does (hal_ir_target(2)).  hal_subghz_tx_end: low, idle, PATABLE off, RX again. */
+static void cc_patable(uint8_t on)
+{
+	unsigned i;
+
+	(void) cc_ready();
+	(void) spi1_xfer(0x3E | 0x40);			/* PATABLE, burst */
+	(void) spi1_xfer(0x00);
+	(void) spi1_xfer(on);
+	for (i = 2; i < 8; i++) (void) spi1_xfer(0x00);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+}
+
+static int cc_wait_state(uint8_t st)		/* MARCSTATE, 5 ms at most */
+{
+	uint32_t t0 = DWT->CYCCNT;
+
+	while ((cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != st)
+		if (DWT->CYCCNT - t0 >= hal_cpu_hz() / 200) return -1;
+	return 0;
+}
+
+static int hal_subghz_tx_begin(void)
+{
+	int r = 0;
+
+	spi1_on(0);
+	if (cc_xfer2(0x10 | 0x80, 0) != 0x17 || cc_xfer2(0x08 | 0x80, 0) != 0x32
+	    || (cc_xfer2(0x35 | 0xC0, 0) & 0x1F) != 0x0D) {
+		spi1_off();
+		return -1;			/* not the tuned OOK receiver */
+	}
+	/* GDO0 (PA1) as TIM2_CH2, toggled by the timer itself 1 us after
+	 * every segment starts (CCR2 = 1, toggle on match): the edges are
+	 * as exact as the transmit engine's ARR, whatever the interrupt
+	 * latency, as stock's async TX.  Low until the first toggle. */
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->CCER = 0;
+	TIM2->CCR2 = 1;
+	TIM2->CCMR1 = 4u << TIM_CCMR1_OC2M_Pos;		/* forced low */
+	TIM2->CCER = TIM_CCER_CC2E;
+	TIM2->CCMR1 = 3u << TIM_CCMR1_OC2M_Pos;		/* toggle on match */
+	gpio_cfg(GPIOA, 1, MODE_AF, PULL_NONE, 1);	/* TIM2_CH2 */
+	cc_strobe(0x36);				/* SIDLE */
+	(void) cc_xfer2(0x22, 0x11);			/* FREND0 */
+	cc_patable(0xC0);
+	cc_strobe(0x35);				/* STX (calibrates) */
+	if (cc_wait_state(0x13) < 0) {			/* TX */
+		cc_strobe(0x36);
+		cc_patable(0x00);
+		cc_strobe(0x34);
+		r = -1;
+	}
+	spi1_off();
+	if (r < 0) {
+		TIM2->CCER = 0;
+		TIM2->CCMR1 = 0;
+		gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);
+	}
+	return r;
+}
+
+/* The frame by DMA, as stock's async TX: DMA1 channel 5 on TIM2's update
+ * request writes each duration (us, the writer's pinned memory: src, n
+ * words) into ARR as its segment starts (no preload: the value written at
+ * an update is the segment that update begins), and TIM2_CH2 flips GDO0 2 us
+ * into every segment (CCR2 = 2; the short first period, ARR = 1, never
+ * reaches it).  No interrupt per segment: channel 5's transfer-complete
+ * comes when the last duration is in (hal_subghz_tx_last then asks for the
+ * update that ends it).  A segment lasts its value + 1 us. */
+int hal_subghz_tx_dma(uint32_t src, unsigned n)
+{
+	if (n < 2) return -1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	(void) RCC->APB1ENR1;
+	TIM2->CR1 = 0;
+	TIM2->DIER = 0;
+	TIM2->SMCR = 0;
+	TIM2->CR2 = 0;
+	TIM2->OR = 0;
+	TIM2->PSC = SystemCoreClock / 1000000u - 1;	/* 1 us */
+	TIM2->ARR = 1;
+	TIM2->CCR2 = 2;
+	TIM2->CNT = 0;
+	TIM2->CR1 = TIM_CR1_URS;
+	TIM2->EGR = TIM_EGR_UG;				/* PSC now */
+	TIM2->SR = 0;
+	DMA1_Channel5->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF5;
+	DMAMUX1_Channel4->CCR = 32;			/* TIM2_UP -> channel 5 */
+	DMA1_Channel5->CPAR = (uint32_t) &TIM2->ARR;
+	DMA1_Channel5->CMAR = src;
+	DMA1_Channel5->CNDTR = n;
+	DMA1_Channel5->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_PSIZE_1
+		| DMA_CCR_MSIZE_1 | DMA_CCR_TCIE | DMA_CCR_EN;
+	TIM2->DIER = TIM_DIER_UDE;
+	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+/* Channel 5's interrupt in a DMA transmission: 1 if it was the transfer
+ * complete (acked; the last segment is playing, its end comes as TIM2's
+ * update interrupt now), else 0. */
+int hal_subghz_tx_last(void)
+{
+	uint32_t isr = DMA1->ISR;
+
+	DMA1->IFCR = DMA_IFCR_CGIF5 | DMA_IFCR_CTCIF5 | DMA_IFCR_CHTIF5;
+	if (!(isr & DMA_ISR_TCIF5)) return 0;
+	TIM2->SR = 0;
+	TIM2->DIER = TIM_DIER_UIE;		/* no more DMA: the end, please */
+	return 1;
+}
+
+void hal_subghz_tx_end(void)
+{
+	DMA1_Channel5->CCR = 0;			/* a DMA transmission, if any */
+	DMA1->IFCR = DMA_IFCR_CGIF5;
+	TIM2->DIER = 0;
+	TIM2->CR1 = 0;
+	TIM2->CCMR1 = 4u << TIM_CCMR1_OC2M_Pos;		/* forced low */
+	TIM2->CCER = 0;
+	TIM2->CCMR1 = 0;			/* the receiver's capture sets its own */
+	gpio_set(GPIOA, 1, 0);
+	gpio_cfg(GPIOA, 1, MODE_OUT, PULL_NONE, 0);	/* low while the PA stops */
+	spi1_on(0);
+	cc_strobe(0x36);				/* SIDLE */
+	cc_patable(0x00);
+	(void) cc_xfer2(0x22, 0x10);			/* FREND0 default */
+	cc_strobe(0x34);				/* SRX: listening again */
+	/* until it is (calibration, about 1 ms): the next frame of the same
+	 * transmission is written at once, and the kernel's check reads the
+	 * state back ("not tuned" otherwise) */
+	(void) cc_wait_state(0x0D);
+	spi1_off();
+	gpio_cfg(GPIOA, 1, MODE_ANALOG, PULL_NONE, 0);	/* as stock */
+}
+
+int hal_subghz_tx(uint32_t hz, uint32_t src, unsigned n)
+{
+	(void) hz; (void) src; (void) n;	/* the kernel's engine sends */
+	return hal_subghz_tx_begin() < 0 ? -1 : 1;
+}
+
+/* Packets: stock's chat preset (loaded by the first read or send).  The packet goes into the
+ * TX FIFO with its length byte, STX sends it, and MCSM1 brings the chip
+ * back to RX by itself: nothing waits here.  -1: not in the packet preset;
+ * -2: the one before is still going out. */
+int hal_subghz_pkt_tx(uint32_t hz, const uint8_t *p, unsigned n)
+{
+	unsigned i;
+	uint8_t st;
+
+	(void) hz;
+	if (n == 0 || n > HAL_SUBGHZ_PKT) return -1;
+	spi1_on(0);
+	if ((i = (unsigned) cc_pkt_mode()) == (unsigned) -1) {
+		spi1_off();
+		return -1;			/* not tuned */
+	}
+	if (i == 1) (void) cc_wait_state(0x0D);	/* just loaded: calibrating */
+	st = cc_xfer2(0x35 | 0xC0, 0) & 0x1F;
+	if (st == 0x13 || st == 0x14 || st == 0x15) {	/* TX, TX_END, RX->TX */
+		spi1_off();
+		return -2;
+	}
+	cc_strobe(0x36);				/* SIDLE */
+	cc_strobe(0x3B);				/* SFTX */
+	(void) cc_xfer2(0x22, 0x10);			/* FREND0: PATABLE[0] */
+	(void) cc_ready();
+	(void) spi1_xfer(0x3E | 0x40);			/* PATABLE[0] = 0xC0 */
+	(void) spi1_xfer(0xC0);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	(void) cc_ready();
+	(void) spi1_xfer(0x3F | 0x40);			/* TX FIFO, burst */
+	(void) spi1_xfer((uint8_t) n);
+	for (i = 0; i < n; i++) (void) spi1_xfer(p[i]);
+	while (SPI1->SR & SPI_SR_BSY) ;
+	CC_CS(0);
+	cc_strobe(0x35);				/* STX */
+	spi1_off();
+	return 0;
+}
 int hal_subghz_fake(int what) { (void) what; return -1; }
 int hal_subghz_fake_take(int what) { (void) what; return 0; }
 int hal_subghz_pkt_fake(const uint8_t *p, unsigned n) { (void) p; (void) n; return -1; }
@@ -3621,7 +3822,8 @@ void hal_ir_freq(unsigned hz, unsigned duty)
 
 static unsigned char ir_ready;			/* TIM1 set up for the carrier; the
 					 * RFID field takes TIM1 and clears it */
-static unsigned char ir_tgt;			/* 0 the IR LED, 1 the RFID antenna */
+static unsigned char ir_tgt;			/* 0 the IR LED, 1 the RFID antenna,
+					 * 2 the CC1101 (Sub-GHz OOK) */
 
 /* The transmitter drives the IR LED (TIM1 CH3N, PB9) or, for writing a
  * T5577 tag (R6.5), the 125 kHz antenna (TIM1 CH1N, PB13; PA2 high: the
@@ -3631,6 +3833,7 @@ void hal_ir_target(int rfid)
 	if (rfid == ir_tgt && ir_ready) return;
 	ir_tgt = rfid;
 	ir_ready = 0;
+	if (rfid == 2) return;		/* the CC1101's GDO0: hal_subghz_tx_begin */
 	if (rfid) {
 		gpio_set(GPIOA, 2, 1);
 		gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
@@ -3642,6 +3845,7 @@ void hal_ir_target(int rfid)
 
 void hal_ir_carrier(int on)
 {
+	if (ir_tgt == 2) return;	/* Sub-GHz OOK: TIM2_CH2 toggles GDO0 */
 	if (!ir_ready) {
 		RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
 		(void) RCC->APB2ENR;
