@@ -30,6 +30,11 @@ grep -q 'SHA-256' "$T/out"; test ! -e "$T/card/ble-light"
 # too-new FUS
 $R get ble-light --fus 1.2.0 --to "$T/card" | grep -q 'needs FUS 2.0.0'
 ! $R get nosuch --to "$T/card" >/dev/null
+# --tag: only tags with a checked table; v1.20.0's stacks install on FUS 1.2.0
+! $R --tag v9.9.9 list >/dev/null 2>&1 || { echo "unknown tag accepted"; exit 1; }
+$R --tag v1.20.0 list --fus 1.2.0 | grep ble-full | grep -qv 'needs FUS'
+! $R --tag v1.20.0 get ble-light --to "$T/card" >"$T/out" || { echo "fake 1.20 image accepted"; exit 1; }
+grep -q 'SHA-256' "$T/out"; test ! -e "$T/card/ble-light"
 # notes that disagree stop `list --check`
 sed -i 's/0x080D7000/0x080D8000/' "$D/Release_Notes.html"
 ! $R list --check >/dev/null 2>&1 || { echo "disagreeing notes accepted"; exit 1; }
