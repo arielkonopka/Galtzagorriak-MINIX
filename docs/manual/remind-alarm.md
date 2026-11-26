@@ -129,7 +129,7 @@ launcher: `timed` and `alert` ring it, over whatever app is open.
 alarm has, then the first of these names that are there, and `chirp.txt`). An alarm made by the older Ordua with
 another file name keeps it, and the Melody row shows it.
 
-**Own chirp** (an idea of the owner's): build a two-tone alarm sound and try it at once.
+**Own chirp** (an idea of the user's): build a two-tone alarm sound and try it at once.
 
 | Row | What it does |
 |---|---|

@@ -150,7 +150,7 @@ static const char *fmf_key(const char *src, const char *key)
 	return NULL;
 }
 
-/* ---- own chirps (owner's idea, #480): two tones in Hz, not notes ---- */
+/* ---- own chirps (user's idea, #480): two tones in Hz, not notes ---- */
 
 static int clamp(int v, int lo, int hi)
 {

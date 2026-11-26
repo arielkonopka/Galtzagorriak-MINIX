@@ -494,7 +494,7 @@ static void w_tones(int first)
 	r.cur = W_TONES;
 }
 
-/* The own chirp (#480, the owner's idea): two tones, how fast, how much
+/* The own chirp (#480, the user's idea): two tones, how fast, how much
  * sound, how much on A; Try plays it, Save writes APP_DATA/alarm/chirp.txt
  * (a text tune_parse() reads, like any own tone) and makes it the
  * alarm's melody. */
