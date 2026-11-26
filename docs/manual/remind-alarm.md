@@ -128,6 +128,11 @@ launcher: `timed` and `alert` ring it, over whatever app is open.
 alarm has, and the first of these names that is there). An alarm made by the older Ordua with
 another file name keeps it, and the Melody row shows it.
 
+How much of a tune rings: an alarm plays up to 15 seconds of it at each ring (and at most 64
+notes), a reminder or a notice up to 3 seconds; the rest is cut. The piezo is loudest between
+about 1 and 4 kHz: write a tune in octaves 6 and 7 (`c6` is 1047 Hz); below 500 Hz it is
+hardly heard.
+
 An alarm that is **off** is kept as `/home/flipper/apps_data/alarm/alarm-N.off`, so `timed`
 never looks at it; switching it on moves it back to `/var/timers/alarm-N`. Ordua uses the ids
 `alarm-1` to `alarm-14`.
