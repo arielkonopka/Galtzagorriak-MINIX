@@ -474,6 +474,11 @@ static void tunes(void)
 	CHECK(timer_parse(&u, buf) == -1, "unknown built-in tone refused");
 	strcpy(buf, "Kind: once\nAt: 5\nTone: /a/../b\n");
 	CHECK(timer_parse(&u, buf) == -1, "tone path with .. refused");
+	strcpy(buf, "Kind: once\nAt: 5\nTone: alarm/tone.rtttl\n");
+	CHECK(timer_parse(&u, buf) == 0 && strcmp(u.tone, "alarm/tone.rtttl")
+		== 0, "Tone: a file under APP_DATA");
+	strcpy(buf, "Kind: once\nAt: 5\nTone: alarm/../x\n");
+	CHECK(timer_parse(&u, buf) == -1, "Tone under APP_DATA with .. refused");
 	strcpy(buf, "Kind: once\nAt: 5\nRing: 61\n");
 	CHECK(timer_parse(&u, buf) == -1, "Ring over 60 refused");
 	strcpy(buf, "Kind: once\nAt: 5\nLog: ../x\n");

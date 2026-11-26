@@ -12,7 +12,7 @@ from the shell.
 ## Installing
 
 ```
-pkg install /lib/pkg/timed_1.6.tar
+pkg install /lib/pkg/timed_1.7.tar
 ```
 
 This puts `timed` and `alert` in `/usr/lib`, makes the spool `/var/timers` (owner root, group

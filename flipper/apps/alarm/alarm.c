@@ -62,7 +62,8 @@ static const char *const own_tones[] = { "tone.fmf", "tone.rtttl", "tone.txt",
 					 CHIRP };
 #define NOWN	(int) (sizeof own_tones / sizeof *own_tones)
 
-enum { W_LIST, W_EDIT, W_RING, W_MSG, W_CLOCK, W_CHIRP };
+enum { W_LIST, W_EDIT, W_RING, W_MSG, W_CLOCK, W_CHIRP, W_TONES };
+#define TPAGE	12		/* melodies a page of the Melody list */
 #define NEXTRA	3		/* own melody files in the Melody row */
 
 static struct {
@@ -72,7 +73,10 @@ static struct {
 	char from;		/* W_*: the parent of the message window */
 	const char *msg;
 	char extra[NEXTRA][24];	/* the melody options after the built-ins */
+	char xlabel[NEXTRA][13];	/* their names in the list */
 	struct tune_chirp ch;	/* the own chirp window's fields */
+	int spk;		/* /dev/speaker for Try, or -1 */
+	int tfirst;		/* the Melody list's page */
 } r;
 
 /* ---- small helpers ---- */
@@ -301,6 +305,34 @@ static int nbuiltin(void)
 
 /* r.extra: the file of the alarm (if it has one), then the own tone
  * files that are there and not the same. */
+/* The list's name of own file i: an RTTTL tune's own name ("guk"),
+ * "own chirp", or the file's name. */
+static void xlabel(int i)
+{
+	char path[64], b[24];
+	int fd, n = 0, k;
+
+	strcpy(path, ADIR "/");
+	strcat(path, r.extra[i]);
+	if ((fd = open(path, O_RDONLY | O_NONBLOCK)) >= 0) {
+		n = read(fd, b, sizeof b - 1);
+		close(fd);
+	}
+	b[n > 0 ? n : 0] = 0;
+	if (strncmp(b, "Chirp:", 6) == 0) {
+		strcpy(r.xlabel[i], "own chirp");
+		return;
+	}
+	for (k = 0; b[k] != 0 && b[k] != ':' && b[k] != '\n' && k < 12; k++) ;
+	if (k > 0 && b[k] == ':' && strncmp(b, "Filetype", 8) != 0) {
+		memcpy(r.xlabel[i], b, k);	/* RTTTL: name:d=...: */
+		r.xlabel[i][k] = 0;
+	} else {
+		strncpy(r.xlabel[i], r.extra[i], 12);
+		r.xlabel[i][12] = 0;
+	}
+}
+
 static void extras(void)
 {
 	const char *cur = r.t.tone, *p = strrchr(cur, '/');
@@ -318,6 +350,7 @@ static void extras(void)
 		if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
 			strcpy(r.extra[n++], own_tones[i]);
 	}
+	for (i = 0; i < n; i++) xlabel(i);
 }
 
 static int tone_index(void)
@@ -343,8 +376,10 @@ static void tone_set(int i)
 
 	if (i >= 0 && i < nb) strcpy(r.t.tone, tune_names[i]);
 	else if (i >= nb && i < nb + NEXTRA && r.extra[i - nb][0]
-		 && strlen(ADIR "/") + strlen(r.extra[i - nb]) < sizeof r.t.tone) {
-		strcpy(r.t.tone, ADIR "/");
+		 && strlen(APP "/") + strlen(r.extra[i - nb]) < sizeof r.t.tone) {
+		/* under APP_DATA: the whole path of tone.rtttl is 40 chars,
+		 * one too many for the timer's Tone */
+		strcpy(r.t.tone, APP "/");
 		strcat(r.t.tone, r.extra[i - nb]);
 	}
 }
@@ -399,31 +434,36 @@ static void w_edit(void)
 	r.cur = W_EDIT;
 }
 
+/* The name of melody i (built-in, then the own files). */
+static const char *tone_name(int i)
+{
+	int nb = nbuiltin();
+
+	return i < nb ? tune_names[i] : r.xlabel[i - nb];
+}
+
+/* The melodies the list offers: the built-ins and the own files there. */
+static int ntones(void)
+{
+	int n = nbuiltin(), i;
+
+	for (i = 0; i < NEXTRA && r.extra[i][0]; i++) n++;
+	return n;
+}
+
 static void w_ring(void)
 {
 	struct app_timer *t = &r.t;
-	char opts[224];
-	int i;
 
 	extras();
-	opts[0] = 0;
-	for (i = 0; tune_names[i] != NULL; i++) {
-		if (i > 0) strcat(opts, "|");
-		strcat(opts, tune_names[i]);
-	}
-	for (i = 0; i < NEXTRA; i++)
-		if (r.extra[i][0] && strlen(opts) + strlen(r.extra[i]) + 2
-				     < sizeof opts) {
-			strcat(opts, "|");
-			strcat(opts, r.extra[i]);
-		} else r.extra[i][0] = 0;
 	gm_win("ring", "list", "Ring", 0, 0);
 	gm_enum("mode", "Mode", t->ramp ? 0 : 1, "escalating|steady");
 	gm_int("step", "Stage", 10, 120, 10, t->step ? t->step : 10, "s");
 	gm_int("vol", "Volume", 10, 100, 10, t->volume ? t->volume : 100, "%");
 	gm_bool("beep", "Beep", t->flags & NF_SOUND);
 	gm_enum("stype", "Sound", t->single ? 1 : 0, "melody|single");
-	gm_enum("tone", "Melody", tone_index(), opts);
+	/* a list of its own: the names do not fit one record (128 B) */
+	gm_item("tone", "Melody", tone_name(tone_index()));
 	gm_item("chirp", "Own chirp", "");
 	gm_bool("vibro", "Vibro", t->flags & NF_VIBRO);
 	gm_bool("led", "LED blink", t->flags & NF_LED);
@@ -434,6 +474,24 @@ static void w_ring(void)
 		"1 min|5 min|10 min|15 min|30 min|60 min");
 	gm_show();
 	r.cur = W_RING;
+}
+
+/* The Melody list, a page at a time; OK picks one, * marks the alarm's. */
+static void w_tones(int first)
+{
+	char key[6];
+	int i, n = ntones(), cur = tone_index();
+
+	if (first < 0 || first >= n) first = 0;
+	r.tfirst = first;
+	gm_win("tones", "list", "Melody", n, first);
+	for (i = first; i < first + TPAGE && i < n; i++) {
+		key[0] = 'm';
+		nat_num(key + 1, (unsigned) i);
+		gm_item(key, tone_name(i), i == cur ? "*" : "");
+	}
+	gm_show();
+	r.cur = W_TONES;
 }
 
 /* The own chirp (#480, the owner's idea): two tones, how fast, how much
@@ -482,16 +540,18 @@ static void chirp_try(void)
 	unsigned char n[4 * TUNE_MAX], vn[4];
 	int fd, k, v = r.t.volume ? r.t.volume : 100;
 
-	if ((k = tune_chirp(&r.ch, n, TUNE_MAX)) <= 0
-	    || (fd = open("/dev/speaker", O_WRONLY)) < 0) {
-		r.msg = "No speaker: another app has it.";
+	if ((fd = r.spk) < 0) {
+		r.msg = "No speaker for Ordua.";
 		w_msg();
 		return;
 	}
+	if ((k = tune_chirp(&r.ch, n, TUNE_MAX)) <= 0) return;
 	vn[0] = vn[1] = 0xFF; vn[2] = (unsigned char) v; vn[3] = 0;
-	(void) write(fd, vn, 4);
-	(void) write(fd, n, 4 * k);		/* returns when it has played */
-	close(fd);
+	if (write(fd, vn, 4) != 4 || write(fd, n, 4 * k) != 4 * k) {
+		r.msg = "The speaker is busy: try again.";
+		w_msg();
+		return;
+	}					/* it returns when it has played */
 	(void) gm_busy(0);
 }
 
@@ -514,7 +574,7 @@ static const char *chirp_save(void)
 	close(fd);
 	if (rename(ADIR "/" CHIRP ".new", ADIR "/" CHIRP) < 0)
 		return "Could not save.";
-	strcpy(r.t.tone, ADIR "/" CHIRP);
+	strcpy(r.t.tone, APP "/" CHIRP);
 	return "Saved as chirp.txt, the alarm's melody now. Save the alarm.";
 }
 
@@ -563,6 +623,7 @@ static void redraw(void)
 	case W_MSG: w_msg(); break;
 	case W_CLOCK: w_clock(); break;
 	case W_CHIRP: w_chirp(); break;
+	case W_TONES: w_tones(r.tfirst); break;
 	default: w_list();
 	}
 }
@@ -621,7 +682,6 @@ static void values(const char *win, char **f)
 				t->flags = (unsigned char) (x ? t->flags | NF_SCREEN
 							      : t->flags & ~NF_SCREEN);
 			else if (strcmp(k, "stype") == 0) t->single = x != 0;
-			else if (strcmp(k, "tone") == 0) tone_set(x);
 			else if (strcmp(k, "snooze") == 0 && x >= 0 && x < NSNOOZE)
 				t->snooze = snoozes[x];
 			else if (strcmp(k, "ring") == 0 && x >= 0 && x < NRING)
@@ -673,6 +733,14 @@ static void ok(const char *win, const char *key)
 			w_list();
 		} else
 			(void) gm_busy(0);
+	} else if (strcmp(win, "ring") == 0 && strcmp(key, "tone") == 0) {
+		extras();
+		w_tones(tone_index() / TPAGE * TPAGE);
+	} else if (strcmp(win, "tones") == 0 && key[0] == 'm') {
+		/* the * moves; Back goes to Ring (the desktop keeps only
+		 * two windows: showing Ring from here upset its stack) */
+		tone_set(num(key + 1));
+		w_tones(r.tfirst);
 	} else if (strcmp(win, "ring") == 0 && strcmp(key, "chirp") == 0) {
 		chirp_load();
 		w_chirp();
@@ -710,6 +778,12 @@ int main(int argc, char **argv)
 {
 	char buf[128], ev[160], *f[GM_FIELDS];
 
+	/* Ordua is set-gid gui for /dev/speaker (Try, #480): open it, then
+	 * back to its own group at once, so timers and files stay group
+	 * timers. */
+	r.spk = argc == 1 ? open("/dev/speaker", O_WRONLY) : -1;
+	if (r.spk >= 0) (void) fcntl(r.spk, F_SETFD, FD_CLOEXEC);
+	if (getegid() != getgid() && setgid(getgid()) < 0) return 1;
 	if (argc == 2 && strcmp(argv[1], "-n") == 0) {
 		if (nat_become(APP) < 0) return 1;
 		return print_next();
@@ -736,10 +810,18 @@ int main(int argc, char **argv)
 			if (f[1] == NULL) break;
 			if (strcmp(f[1], "msg") == 0) r.cur = r.from;
 			else if (strcmp(f[1], "ring") == 0) r.cur = W_EDIT;
-			else if (strcmp(f[1], "chirp") == 0) r.cur = W_RING;
+			else if (strcmp(f[1], "chirp") == 0
+				 || strcmp(f[1], "tones") == 0)
+				w_ring();	/* its Melody row anew */
 			else r.cur = W_LIST;
 			break;
 		case GM_PAGE:
+			if (f[1] != NULL && f[2] != NULL
+			    && strcmp(f[1], "tones") == 0) {
+				w_tones(num(f[2]));
+				break;
+			}
+			/* FALLTHROUGH */
 		case GM_REDRAW:
 			redraw();
 			break;

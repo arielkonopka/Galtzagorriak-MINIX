@@ -10,8 +10,9 @@
  *		16 screen (blink the backlight), added
  *	-z	Up or Down snoozes: timer _ID fires again in MINUTES
  *	-u	the timer belongs to UID (alert started by root)
- *	-t	the tone: a built-in name (libapp tune_names) or an RTTTL or
- *		.fmf file (as root: only one of UID's or a world-readable one)
+ *	-t	the tone: a built-in name (libapp tune_names) or an RTTTL,
+ *		.fmf or chirp file, a path or DIR/FILE under APP_DATA (as
+ *		root: only one of UID's or a world-readable one)
  *	-r	ring for MINUTES (1-60; default alarm 10, else 1)
  *	-R	escalating (Mode: escalating; else steady)
  *	-S	escalating: SECONDS per stage (5-120, default 30)
@@ -114,6 +115,14 @@ static void load_tune(const char *name, int cat, int uid)
 	struct stat st;
 	int fd, m = 0, r = 0, ms = 0, i;
 
+	char path[sizeof APP_DATA + 48];
+
+	if (name != NULL && name[0] != '/' && strchr(name, '/') != NULL
+	    && strlen(name) < 48 && strstr(name, "..") == NULL) {
+		strcpy(path, APP_DATA "/");	/* "alarm/tone.rtttl" */
+		strcat(path, name);
+		name = path;
+	}
 	if (name != NULL && name[0] == '/') {
 		if (stat(name, &st) == 0 && S_ISREG(st.st_mode)
 		    && (fd = open(name, O_RDONLY | O_NONBLOCK)) >= 0) {
