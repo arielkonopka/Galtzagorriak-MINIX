@@ -18,7 +18,7 @@
 const char *const tune_names[] = {
 	"beep", "chime", "rise", "classic", "gentle", "pips",
 	"watch", "hourly", "jingle", "catch", "eggs", "game", "duel",
-	"marsel", "saints", "ode", "elise", "troll", "korob", "spy", "chirp", NULL
+	"marsel", "saints", "ode", "elise", "troll", "korob", "moon", "spy", "chirp", NULL
 };
 static const char *const tune_text[] = {
 	"beep:d=16,o=7,b=150:b6,p,b6,p,b6",		/* ~2 kHz x3 */
@@ -48,6 +48,10 @@ static const char *const tune_text[] = {
 	"elise:d=16,o=6,b=120:e,d#,e,d#,e,b5,d,c,4a5,p,c5,e5,a5,4b5,p,e5,g#5,b5,4c,p,e5,e,d#,e,d#,e,b5,d,c,4a5",
 	"troll:d=8,o=5,b=140:e,f#,g,a,b,g,4b,a#,f#,4a#,a,e,4a,e,f#,g,a,b,g,b,e6,d6,b,g,b,2d6",
 	"korob:d=4,o=6,b=140:e,8b5,8c,d,8c,8b5,a5,8a5,8c,e,d,8c,8b5,4c.,8d,e,c,a5,4a5,2p",
+	/* Beethoven, Moonlight Sonata (public domain): the triplet
+	 * arpeggio, then the melody entering over it, a little faster
+	 * than adagio */
+	"moon:d=8,o=5,b=130:12g#4,12c#5,12e5,12g#4,12c#5,12e5,12g#4,12c#5,12e5,12g#4,12c#5,12e5,4g#5,12g#4,12c#5,12e5,4a5,12g#4,12c#5,12e5,4g#5,12g#4,12c#5,12e5,4b5,12g#4,12c#5,12e5,4g#5,12f#4,12a4,12d#5,4g#5,12e4,12g#4,12c#5,2c#6",
 	"spy:d=8,o=5,b=150:a,c6,a,e,4a,p,g,b,g,d,4g,p,a,c6,e6,c6,a,4e6,2a",
 	/* a synthetic alarm: fast chirps up and down the piezo's loudest
 	 * range (2 to 4 kHz), each a sweep c7..b7..c7 */
