@@ -6,14 +6,14 @@ R=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 export RADIO_ROOT=$T
-mkdir -p "$T/etc" "$T/ext/radio"
+mkdir -p "$T/etc" "$T/home/flipper/radio"
 img() {	# name addr fus [bytes]
-	mkdir -p "$T/ext/radio/$1"
-	printf '%s' "${4:-image of $1}" > "$T/ext/radio/$1/stm32wb5x_$1_fw.bin"
-	h=$(sha256sum "$T/ext/radio/$1/stm32wb5x_$1_fw.bin" | cut -c1-64)
-	n=$(wc -c < "$T/ext/radio/$1/stm32wb5x_$1_fw.bin")
+	mkdir -p "$T/home/flipper/radio/$1"
+	printf '%s' "${4:-image of $1}" > "$T/home/flipper/radio/$1/stm32wb5x_$1_fw.bin"
+	h=$(sha256sum "$T/home/flipper/radio/$1/stm32wb5x_$1_fw.bin" | cut -c1-64)
+	n=$(wc -c < "$T/home/flipper/radio/$1/stm32wb5x_$1_fw.bin")
 	printf 'name\t%s\ntype\t%s\nversion\t1.23.0\nfus\t%s\naddr\t%s\nsize\t%s\nsha256\t%s\n' \
-		"$1" "$1" "$3" "$2" $n "$h" > "$T/ext/radio/$1/manifest"
+		"$1" "$1" "$3" "$2" $n "$h" > "$T/home/flipper/radio/$1/manifest"
 }
 fail() { echo "clitest: $*"; exit 1; }
 $R | grep -q 'radio slot: none'
@@ -25,7 +25,7 @@ grep -q '^0x0807F000$' "$T/etc/radio.slot" || fail "slot not the lowest"
 # too-new FUS refused
 $R add -F 1.2.0 ble-light 2>&1 | grep -q 'FUS too old' || fail "old FUS accepted"
 # bad hash: refused and left out of the slot
-printf 'x' >> "$T/ext/radio/zigbee-baserria/stm32wb5x_zigbee-baserria_fw.bin"
+printf 'x' >> "$T/home/flipper/radio/zigbee-baserria/stm32wb5x_zigbee-baserria_fw.bin"
 ! $R add zigbee-baserria 2>"$T/e" || fail "bad image accepted"
 grep -q 'size differs' "$T/e"
 $R list | grep zigbee-baserria | grep -q 'size differs'
@@ -37,12 +37,12 @@ img huge 0x08060000 1.2.0
 grep -q 'slot too low' "$T/e"
 # a manifest whose name is not its directory
 img other 0x080D7000 1.2.0
-sed -i 's/^name\tother/name\tnot-other/' "$T/ext/radio/other/manifest"
+sed -i 's/^name\tother/name\tnot-other/' "$T/home/flipper/radio/other/manifest"
 ! $R add other 2>/dev/null || fail "renamed manifest accepted"
 # rm: the slot follows, and goes when the last good image goes
 $R rm zigbee-baserria >/dev/null
-test ! -e "$T/ext/radio/zigbee-baserria" || fail "rm left the directory"
+test ! -e "$T/home/flipper/radio/zigbee-baserria" || fail "rm left the directory"
 $R rm ble-light >/dev/null
 test ! -e "$T/etc/radio.slot" || fail "slot left without images"
-! $R rm ../etc 2>/dev/null || fail "rm outside /ext/radio"
+! $R rm ../etc 2>/dev/null || fail "rm outside /home/flipper/radio"
 echo "clitest: all passed"

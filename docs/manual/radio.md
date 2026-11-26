@@ -90,9 +90,9 @@ optional. Any other key is an error.
 
 ```
 radio                  the flash layout: where CPU2 starts, programs, cache, the slot
-radio list [-F 2.0.0]  the images in /ext/radio and whether they pass the checks
-radio add [-F 2.0.0] NAME    (root) check /ext/radio/NAME, then update the slot
-radio rm NAME          (root) delete /ext/radio/NAME, then update the slot
+radio list [-F 2.0.0]  the images in /home/flipper/radio and whether they pass the checks
+radio add [-F 2.0.0] NAME    (root) check /home/flipper/radio/NAME, then update the slot
+radio rm NAME          (root) delete /home/flipper/radio/NAME, then update the slot
 ```
 
 `radio add` checks the manifest, the image's size and SHA-256, the FUS
