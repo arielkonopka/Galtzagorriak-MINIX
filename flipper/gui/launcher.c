@@ -970,7 +970,7 @@ static long now_ticks(void)
 }
 
 /* The keys are locked: the time and a hint; Back, OK, Back in a row
- * unlocks (the owner's choice, so that a pocket does not unlock it: two
+ * unlocks (the user's choice, so that a pocket does not unlock it: two
  * different keys in order; stock uses Back three times).  A wrong key
  * starts again (a Back counts as the first).  Records from modules are
  * read and dropped from the screen's point of view, so their FIFO never
