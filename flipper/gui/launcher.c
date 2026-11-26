@@ -849,11 +849,17 @@ static void load_lock(void)
 	fclose(f);
 }
 
+/* lock_min LOCK_RELOAD: read power.conf again once the app that ran has
+ * really ended.  A window app (Settings' "Auto off" group) writes the file
+ * when it gets "close", after its window is gone and win_run() returned:
+ * read at once, the old value came back and the lock never came. */
+#define LOCK_RELOAD	0xFF
+
 static char *run(struct app *ap)
 {
 	char *r = run_arg(ap, NULL);
 
-	load_lock();			/* the app may have been Settings */
+	lock_min = LOCK_RELOAD;		/* the app may have been Settings */
 	idle_t = now_ticks();
 	return r;
 }
@@ -963,12 +969,16 @@ static long now_ticks(void)
 	return (long) times(&tm);
 }
 
-/* The keys are locked: the time and a hint; Back three times in a row
- * unlocks (stock's gesture).  Records from modules are read and dropped
- * from the screen's point of view, so their FIFO never fills. */
+/* The keys are locked: the time and a hint; Back, OK, Back in a row
+ * unlocks (the owner's choice, so that a pocket does not unlock it: two
+ * different keys in order; stock uses Back three times).  A wrong key
+ * starts again (a Back counts as the first).  Records from modules are
+ * read and dropped from the screen's point of view, so their FIFO never
+ * fills. */
 static void lock_screen(struct gui_in *in)
 {
-	int backs = 0, k;
+	static const int seq[3] = { KEY_BACK, KEY_OK, KEY_BACK };
+	int step = 0, k;
 	char b[8];
 
 	for (;;) {
@@ -984,14 +994,14 @@ static void lock_screen(struct gui_in *in)
 		gui_clear();
 		gui_title("LOCKED");
 		gui_center(26, b, 0);
-		gui_center(52, "Back x3 unlocks", 0);
+		gui_center(52, "Back OK Back unlocks", 0);
 		gui_flush();
 		in->rep = 0;
 		k = gui_wait(in, 0, (int) (60 - now % 60) * 1000, dk_rfd);
 		if (k == GUI_FD) { (void) desk_read(); continue; }
 		if (k == 0) continue;
-		backs = k == KEY_BACK ? backs + 1 : 0;
-		if (backs >= 3) return;
+		step = k == seq[step] ? step + 1 : k == KEY_BACK ? 1 : 0;
+		if (step == 3) return;
 	}
 }
 
@@ -1042,7 +1052,11 @@ int main(int argc, char **argv)
 			if (i < 0 || m < i) i = m;
 		}
 		if ((m = minute_ms()) >= 0 && (i < 0 || m < i)) i = m;
-		if (lock_min) {			/* the idle time left, in ms */
+		if (lock_min == LOCK_RELOAD && win_pending() < 0) {	/* gone */
+			load_lock();
+			idle_t = now_ticks();
+		}
+		if (lock_min && lock_min != LOCK_RELOAD) {	/* idle ms left */
 			m = (int) (lock_min * 60000L - (now_ticks() - idle_t)
 							* 1000L / CLK_TCK);
 			if (m <= 0) {
