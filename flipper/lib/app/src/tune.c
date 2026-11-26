@@ -42,7 +42,7 @@ static const char *const tune_text[] = {
 	/* our own square-wave arrangements of public-domain tunes (first
 	 * phrases, as alarm tones); "spy" is an original riff in a surf/spy
 	 * style, not a copy of any film or TV theme */
-	"marsel:d=8,o=5,b=110:g4,4c,c,c,4e,4e,8d,8c,4d,4g,8g,4a,a,4b4,4c6,4c6.",
+	"marsel:d=8,o=5,b=150:16a4,16a4,a4,4d,4d,4e,4e,4a,4f#,p,d,d,c#,4b4,2g,e,c#,4d,8d.,16d,4d,8d.,16e,4f#,8f#.,16f#,4f#,g,f#,f#,e,4f#,4p,e,f#,4g,8g.,16g,4g,8a.,16g,4f#,8f#.,16f#,4f#,a,a,4a,f#,d,4a,f#,d,4a4,8a4.,16a4,4a4,8a4.,16a4,2e,4g,e,c#,2d",
 	"saints:d=8,o=5,b=140:4c,4e,4f,2g,4c,4e,4f,2g,4c,4e,4f,g,e,4c,4e,2d",
 	"ode:d=4,o=5,b=130:e,e,f,g,g,f,e,d,c,c,d,e,4e.,8d,2d",
 	"elise:d=16,o=6,b=120:e,d#,e,d#,e,b5,d,c,4a5,p,c5,e5,a5,4b5,p,e5,g#5,b5,4c,p,e5,e,d#,e,d#,e,b5,d,c,4a5",
