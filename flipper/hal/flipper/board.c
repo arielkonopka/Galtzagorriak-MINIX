@@ -4680,9 +4680,15 @@ void hal_tone(unsigned hz, unsigned vol)
 	arr = SystemCoreClock / ((psc + 1) * hz) - 1;
 	/* (vol^3 / 100) is 0..10000; arr / 2 * 10000 fits 32 bits */
 	ccr = (arr / 2) * (vol * vol * vol / 100) / 10000u;
+	if (ccr == 0) ccr = 1;
+	/* The same tone again (the next 100 ms piece of a long note): leave
+	 * the timer running, as a new start resets its phase and the note
+	 * sounds rough (the owner, 2026-11-26). */
+	if ((TIM16->CR1 & TIM_CR1_CEN) && TIM16->PSC == psc
+	    && TIM16->ARR == arr && TIM16->CCR1 == ccr) return;
 	TIM16->PSC = psc;
 	TIM16->ARR = arr;
-	TIM16->CCR1 = ccr != 0 ? ccr : 1;
+	TIM16->CCR1 = ccr;
 	TIM16->EGR = TIM_EGR_UG;
 	gpio_cfg(GPIOB, 8, MODE_AF, PULL_NONE, 14);
 	TIM16->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;

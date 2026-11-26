@@ -191,7 +191,11 @@ PRIVATE union {
 #define ir_txq		sbuf.ir.txq
 PRIVATE volatile int note_n, note_i;	/* count, current; note_i == note_n:
 					 * done */
-PRIVATE volatile unsigned note_left;	/* ticks left of the current one */
+PRIVATE volatile unsigned note_left;	/* ticks left of the current one;
+					 * after the last: of the tail */
+#define SP_TAIL		2		/* ticks the last tone goes on, so
+					 * that the next write (a long note
+					 * in pieces) joins it without a gap */
 PRIVATE int sp_waiting, sp_caller, sp_proc, sp_count;
 #define SPK_VOL		0xFFFF		/* the volume note's "frequency" */
 #define SPK_VOLDEF	0xFFFE		/* the same, and the system default
@@ -565,6 +569,7 @@ PUBLIC void flipdev_task()
 		if (sp_waiting && sp_proc == fm.PROC_NR) {	/* stop it */
 			sp_waiting = FALSE;
 			note_i = note_n;
+			note_left = 0;
 			hal_tone(0, 0);
 		}
 		r = EINTR;
@@ -2485,7 +2490,7 @@ PRIVATE void sp_play()
 	note_left = note_ticks[note_i];
 	hal_tone(note_hz[note_i], 100 - sp_quiet);
   } else
-	hal_tone(0, 0);
+	note_left = SP_TAIL;		/* quiet after the tail (the tick) */
 }
 
 
@@ -2504,11 +2509,14 @@ PUBLIC void flipdev_tick()
 	lc_wait = 0;
 	interrupt(PRINTER);
   }
-  if (note_i < note_n && --note_left == 0) {	/* next note, or quiet */
-	note_i++;
-	sp_play();
-	if (note_i >= note_n) interrupt(PRINTER);
-  }
+  if (note_i < note_n) {
+	if (--note_left == 0) {			/* the next note, or the tail */
+		note_i++;
+		sp_play();
+		if (note_i >= note_n) interrupt(PRINTER);
+	}
+  } else if (note_left != 0 && --note_left == 0)
+	hal_tone(0, 0);				/* the tail is over: quiet */
   if (gp_watch) {		/* R6.4: the watched header pins' edges */
 	unsigned i, now = 0;
 
@@ -2565,7 +2573,7 @@ clock_t now;
   u32_t st = hal_bl_state();
   clock_t t = (clock_t) HAL_BL_TIMEOUT(st) * HZ, idle = TDIFF(now, k_input), d;
 
-  if (lc_dirty || note_i < note_n || tx_on) return(0);
+  if (lc_dirty || note_i < note_n || note_left || tx_on) return(0);
   if (last_buttons & FG_KILL) return(HZ);	/* SIGKILL due soon */
   if (bl_want(st, now) != bl_state(st)) return(0);	/* bl_apply due */
   if (HAL_BL_MODE(st) == 2) return(LONG_MAX);		/* forced on */
