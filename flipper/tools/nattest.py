@@ -1127,7 +1127,7 @@ def main():
 					f.write(r.out)
 			print("%d failed" % fails)
 			return fails
-		for p in ("timed_1.6", "remind_1.1", "alarm_1.4"):
+		for p in ("timed_1.7", "remind_1.1", "alarm_1.5"):
 			check(r.sh("pkg install /lib/pkg/%s.tar" % p, 120) == 0,
 				"install the %s package" % p)
 		out = r.output("grep -c '^remind:.:21:11:' /etc/passwd; "
