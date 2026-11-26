@@ -180,7 +180,9 @@ static int event(int type, char **f)
 		}
 		if (v <= nzones && (v < nzones || zone0 == nzones)) zone = (short) v;
 		show_time();
-		sg_show(2);			/* the parent again, updated */
+		sg_show(sg_find("time"));	/* the parent again, updated (not
+					 * a number: LED came before Time
+					 * and "2" showed LED) */
 	}
 	return 1;
 }
