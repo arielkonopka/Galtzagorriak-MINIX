@@ -21,7 +21,8 @@ words of page 0 with ones, which must not be programmed twice).
 
 The image is only flashed with DFU, which needs physical access, so the
 records are not signed.  Programs that do not fit the region on a given
-Flipper (it ends 16 pages below CPU2's flash, at 0x080A7000 on most) are
+Flipper (it ends 4 pages and the 128 KB cache below CPU2's flash, at
+0x080B3000 with the BLE light stack) are
 ignored there: MM finds no binding for them and they run from the cache.
 """
 import hashlib

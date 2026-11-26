@@ -3215,7 +3215,7 @@ Package signatures (Phase 17, R17.2) become mandatory for this path once they ex
 | System image (kernel, MM, FS, INIT) | 0x0800_0000 (0x0800_4000 once `atea` exists) | **192 KB** (was 128 KB; drivers of Phases 4b–15 need ≈ +60 KB) | DFU only |
 | **Installed programs** (new) | 0x0803_0000 (0x0803_4000 once `atea` exists, S.8) | from there up to the cache; grows with `INST_SIZE` | firmware build (DFU), or `pkg install` as root |
 | Run-time text cache | after the installed region | 128 KB default (`CACHE_SIZE`) | exec (as now) |
-| Guard | `SFSA − 16 pages` to `SFSA` | 64 KB | never |
+| Guard | `SFSA − 4 pages` to `SFSA` | 16 KB | never |
 | CPU2 wireless stack + FUS | from `SFSA` to 0x080F_FFFF | set by ST's FUS (≈ 200 KB with the BLE light stack stock uses) | never by MINIX, except a stack swap (`radio use`, R16.0; same FUS path as R17.3) |
 
 With the BLE light stack the flash between 0x0803_0000 and the guard is about 520 KB. That has to
@@ -3225,13 +3225,15 @@ hold the base userland (436 KB of text measured, mostly duplicate libc) plus the
 Requirements:
 - **R2b.1** The board code MUST read the CPU2 secure start (`SFSA` in `FLASH->SFR`, in 4 KB pages)
   at boot, as the stock firmware does (user confirmed 2026-11-14). It MUST refuse to use any
-  page at or above `SFSA − 16 pages`, so FUS has room below the stack for its own upgrade process
-  (check AN5185 for the exact space a stack upgrade needs). Print `SFSA` once at boot. The
+  page at or above `SFSA − 4 pages`, a margin (it was 16 pages "so FUS has room below the stack";
+  checked 2026-11-26: a swap that deletes the old stack first, R16.0.3, needs no room below `SFSA`,
+  AN5185; the stock firmware keeps no guard at all. Room below is needed only to upgrade over an
+  installed stack, which we do not do). Print `SFSA` once at boot. The
   installed region and the cache are laid out from this value at boot, not at build time.
   Placement is tiered: base system and launcher first (lowest addresses), then installed
   packages, then the run-time cache at the top.
 - **R2b.1a Radio slot** (user decision 2026-11-18, R16.0): the installed region ends at
-  `min(SFSA − 16 pages, SLOT)`, where `SLOT` is the lowest ST install address among the stack
+  `min(SFSA − 4 pages, SLOT)`, where `SLOT` is the lowest ST install address among the stack
   images registered on the SD card (`/etc/radio.slot`, written by `radio add`/`radio rm`, one
   number; missing file = no slot, today's layout). Between `SLOT` and the guard only the run-time
   cache lives, so the space is used while a smaller stack runs and a swap destroys only cache
@@ -3361,7 +3363,7 @@ Acceptance:
 - AC2b.5 Cutting power during an install (simulated in QEMU by killing it at random points) leaves
   either the old or the new version working, never a half-written record in use.
 - AC2b.6 Boot prints `SFSA`; a debug build that sets the installed region to overlap
-  `SFSA − 16 pages` refuses to start the region and says why.
+  `SFSA − 4 pages` refuses to start the region and says why.
 
 Responsiveness:
 - AC2b.R1 L6 ≤ 300 ms for `sh`, `ls` and the launcher from the installed region.

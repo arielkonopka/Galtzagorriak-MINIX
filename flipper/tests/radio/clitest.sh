@@ -32,7 +32,7 @@ $R list | grep zigbee-baserria | grep -q 'size differs'
 $R add ble-light >/dev/null
 grep -q '^0x080D7000$' "$T/etc/radio.slot" || fail "bad image counted"
 # an image that would reach the system, libc or launcher
-img huge 0x08060000 1.2.0
+img huge 0x0805D000 1.2.0
 ! $R add huge 2>"$T/e" || fail "slot over the base accepted"
 grep -q 'slot too low' "$T/e"
 # a manifest whose name is not its directory
