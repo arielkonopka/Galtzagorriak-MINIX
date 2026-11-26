@@ -51,9 +51,10 @@ Last updated: 2026-11-27.
     R19.11 (hopping in TDD slots, the sequence from the pairing key, adaptive hopping with a
     bad-channel map). The single channel is the first step and the range test. In the EU
     hopping does not raise the duty budget, and it needs MINIX on both Flippers.
-  - **A decision for the user, later:** the second bench Flipper runs stock firmware as the
-    reference. A two-way test needs MINIX on both (on its own SD card; stock can be flashed
-    back), or a stock-side script that speaks `gmodem`'s frames.
+  - **Decided by the user (2026-11-27):** the second bench Flipper stays on stock firmware
+    as the reference for as long as the tests need it; it gets MINIX once stock is no longer
+    needed for testing. Until then a two-way test needs a stock-side script that speaks
+    `gmodem`'s frames, or waits.
 - **A Bluetooth mesh** was the first form of this idea. Not pursued: 2.4 GHz does not go
   through the walls between flats, ST's stacks have no Coded PHY, and SIG Mesh is not part of
   the CPU2 stack.
