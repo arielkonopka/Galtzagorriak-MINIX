@@ -4683,7 +4683,7 @@ void hal_tone(unsigned hz, unsigned vol)
 	if (ccr == 0) ccr = 1;
 	/* The same tone again (the next 100 ms piece of a long note): leave
 	 * the timer running, as a new start resets its phase and the note
-	 * sounds rough (the owner, 2026-11-26). */
+	 * sounds rough (the user, 2026-11-26). */
 	if ((TIM16->CR1 & TIM_CR1_CEN) && TIM16->PSC == psc
 	    && TIM16->ARR == arr && TIM16->CCR1 == ccr) return;
 	TIM16->PSC = psc;

@@ -73,7 +73,7 @@
 
 #define GID_NOGROUP	99		/* /etc/group nogroup */
 #define PIECE	100			/* ms of tune per /dev/speaker write */
-/* At most this much tune a ring: an alarm plays a whole tune (the owner's
+/* At most this much tune a ring: an alarm plays a whole tune (the user's
  * four bars took 9.6 s, 2026-11-26), a reminder or info stays short.  A
  * key still ends it within PIECE ms. */
 #define TUNE_MS(cat)	((cat) == TC_ALARM ? 15000L : 3000L)
