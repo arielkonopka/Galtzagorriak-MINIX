@@ -427,10 +427,38 @@ static int has_sig(const char *path, const char *name)
 	return r;
 }
 
+/* Does remote file path already have a parsed button with msg's command? */
+static int has_cmd(const char *path, const InfraredMessage *m)
+{
+	FILE *fp = fopen(path, "r");
+	struct irf f;
+	struct irf_sig s;
+	int r, found = 0;
+
+	if (!fp) return 0;
+	if (irf_open(&f, fp) == 0) {
+		s.data = t + 1;
+		s.cap = MAXT;
+		while (!found && (r = irf_next(&f, &s)) != 0)
+			found = r > 0 && s.type == IRF_PARSED
+			    && s.msg.protocol == m->protocol
+			    && s.msg.address == m->address
+			    && s.msg.command == m->command;
+	}
+	fclose(fp);
+	return found;
+}
+
+static void offer_library(const char *path, const InfraredMessage *lm, int nl);
+
+#define LIB_AFTER	4	/* parsed buttons learned before the library is asked */
+
 /* Learn buttons into remote file path (new or existing). */
 static void learn_into(const char *path)
 {
 	char l1[24], l2[32];
+	InfraredMessage lm[LIB_AFTER];
+	int nl = 0, asked = 0;
 	struct irf_sig s;
 	InfraredMessage m;
 	long n;
@@ -471,8 +499,16 @@ static void learn_into(const char *path)
 		sprintf(s.name, "Button_%d", nb + 1);
 		if (!ui_text("BUTTON NAME", s.name, 21)) continue;
 		if (has_sig(path, s.name)) { ui_note("name already used", s.name); continue; }
-		if (save_sig(path, &s) < 0) ui_note("could not save", NULL);
-		else nb++;
+		if (save_sig(path, &s) < 0) { ui_note("could not save", NULL); continue; }
+		nb++;
+		if (!asked && s.type == IRF_PARSED && nl < LIB_AFTER)
+			lm[nl++] = s.msg;
+		if (!asked && nl == LIB_AFTER) {
+			asked = 1;
+			reader_stop();
+			offer_library(path, lm, nl);
+			if (reader_start() < 0) break;
+		}
 	}
 	reader_stop();
 	if (nb > 0) {
@@ -674,6 +710,87 @@ static const struct uni unis[] = {
 		"Brightness_dn", "Red", "Green", "Blue", "White", NULL } },
 };
 #define NUNI	(sizeof unis / sizeof unis[0])
+
+/* ---- Recognise a remote from the library ---- */
+
+/* Stream database db: how many of the nl learned messages it has (same
+ * protocol, address and command), and in *addr the message of the first
+ * match, whose protocol and address the library remote is known by. */
+static int lib_score(const char *db, const InfraredMessage *lm, int nl,
+	InfraredMessage *hit)
+{
+	FILE *fp = fopen(db, "r");
+	struct irf f;
+	struct irf_sig s;
+	int r, i, got = 0, seen = 0;
+
+	if (!fp) return 0;
+	if (irf_open(&f, fp) < 0) { fclose(fp); return 0; }
+	s.data = t + 1;
+	s.cap = MAXT;
+	while ((r = irf_next(&f, &s)) != 0) {
+		if (r < 0 || s.type != IRF_PARSED) continue;
+		for (i = 0; i < nl; i++)
+			if (!(got & 1 << i) && s.msg.protocol == lm[i].protocol
+			    && s.msg.address == lm[i].address
+			    && s.msg.command == lm[i].command) {
+				got |= 1 << i;
+				if (!seen++) *hit = s.msg;
+			}
+	}
+	fclose(fp);
+	for (i = r = 0; i < nl; i++) r += got >> i & 1;
+	return r;
+}
+
+/* Add every signal of db with msg's protocol and address to remote path
+ * (names the remote has already are kept as they are).  Count added. */
+static int lib_copy(const char *db, const char *path, const InfraredMessage *hit)
+{
+	FILE *fp = fopen(db, "r");
+	struct irf f;
+	struct irf_sig s;
+	int r, n = 0;
+
+	if (!fp) return 0;
+	if (irf_open(&f, fp) < 0) { fclose(fp); return 0; }
+	s.data = t + 1;
+	s.cap = MAXT;
+	while ((r = irf_next(&f, &s)) != 0) {
+		if (r < 0 || s.type != IRF_PARSED || s.msg.protocol != hit->protocol
+		    || s.msg.address != hit->address) continue;
+		/* same command already learned under its own name? */
+		if (has_cmd(path, &s.msg)) continue;
+		if (has_sig(path, s.name)) continue;
+		if (save_sig(path, &s) == 0) n++;
+	}
+	fclose(fp);
+	return n;
+}
+
+/* After LIB_AFTER learned buttons: if three of them are in a library
+ * remote, offer to take the whole remote from the library. */
+static void offer_library(const char *path, const InfraredMessage *lm, int nl)
+{
+	static const char *const yn[] = { "Use library", "Keep mine" };
+	InfraredMessage hit;
+	char db[PATHMAX], l1[32];
+	unsigned k;
+	int n;
+
+	ui_msg("Looking in the", "library...");
+	for (k = 0; k < NUNI; k++) {
+		sprintf(db, "%s/%s", DIR_DB, unis[k].file);
+		if (lib_score(db, lm, nl, &hit) < nl - 1) continue;
+		sprintf(l1, "In library: %s", unis[k].label);
+		if (ui_menu(l1, yn, 2) != 0) return;
+		ui_msg("Adding buttons", NULL);
+		n = lib_copy(db, path, &hit);
+		sprintf(l1, "%d buttons added", n);
+		ui_note(l1, NULL);
+		return;
+	}
+}
 
 /* Send every signal called button in db, as stock's brute force does,
  * until the end or Back.  Shows the progress.  The count sent, or -1. */

@@ -10,7 +10,7 @@ berry      89856
 rfid       60672
 launcher   36352
 nfc        29440
-infrared   27648
+infrared   28416
 sh         24064
 rpcd       23808
 fsck       22528

@@ -19,6 +19,13 @@ these is kept as raw timings (at most 1024, as stock).
   `Bolumena_gora`); Back skips it. A name already used in the remote is refused. All buttons go
   into the one file `/home/flipper/infrared/NAME.ir`. Back at the "point the remote" screen ends
   learning. You can rename the file later in the Archive app (Infrared tab, Name).
+  **Library match:** after the fourth button you learn (known protocols only, not RAW), the app
+  looks in the six universal databases. If three or four of your buttons are in one of them, it
+  asks `In library: TVs`, with **Use library** and **Keep mine**. Use library adds the other
+  buttons of that library remote (same protocol and address) to your remote, under the library's
+  names; your own names stay. It asks once per learning session. The databases are read one
+  signal at a time, so it takes a few seconds and no memory; without the databases in
+  `assets`, nothing is offered.
 - **Saved Remotes.** The `.ir` files in `/home/flipper/infrared`, then the buttons of the one
   you pick. OK sends the selected button; the LED is blue while it is sent. **Right** opens the
   button's actions: **Rename**, **Delete** (asks once), and **Add button**, which learns more
