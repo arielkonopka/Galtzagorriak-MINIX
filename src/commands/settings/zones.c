@@ -1,7 +1,7 @@
 /* zones.c - the time zones and /etc/TZ (spec I.1, K.7, R18b.2).
  *
  * The zones people choose from are a text file on the card,
- * /usr/share/zones (the owner's choice, 2026-11-26: a dictionary that
+ * /usr/share/zones (the user's choice, 2026-11-26: a dictionary that
  * can grow without a new build, and no table in flash): a label and a
  * POSIX TZ rule a line, '#' comments.  Rules in the forms the ACK libc
  * parses (src/lib/ansi/misc.c): alphabetic names of 3 or more letters (no
