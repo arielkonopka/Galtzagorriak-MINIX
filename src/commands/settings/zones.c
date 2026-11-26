@@ -1,147 +1,119 @@
-/* zones.c - the time zone table and /etc/TZ (spec I.1, K.7, R18b.2).
+/* zones.c - the time zones and /etc/TZ (spec I.1, K.7, R18b.2).
  *
- * Rules are POSIX TZ strings in the forms the ACK libc parses
- * (src/lib/ansi/misc.c): alphabetic names of 3 or more letters (no <+03>),
- * hours below 24 in the change times (no /24, /26).  Zones whose rule
- * needs more (Israel, Egypt, Chile, Morocco) are left out rather than
- * given a wrong one; "other" keeps whatever /etc/TZ holds.  Rules as of
- * 2026 (tzdata 2025): Mexico and Iran without summer time, Kazakhstan on
- * +05.  One const string, "label\0rule\0label\0rule\0...\0": flash, 0 B
- * RAM (an array of pointers would sit in RAM, relocated, in a PIC
- * program); a lookup walks it, 80 short entries. */
+ * The zones people choose from are a text file on the card,
+ * /usr/share/zones (the user's choice, 2026-11-26: a dictionary that
+ * can grow without a new build, and no table in flash): a label and a
+ * POSIX TZ rule a line, '#' comments.  Rules in the forms the ACK libc
+ * parses (src/lib/ansi/misc.c): alphabetic names of 3 or more letters (no
+ * <+03>), hours below 24 in the change times; zones whose rule needs more
+ * (Israel, Egypt, Chile, Morocco) are left out rather than given a wrong
+ * one, and "other" keeps whatever /etc/TZ holds.  No file (or nothing
+ * in it): UTC alone.  The file is read a line at a time, again for each
+ * lookup (a page of the list: a dozen reads of 3 KB from the cache), into
+ * one entry kept in 72 B, through 136 B of static buffers (not the
+ * stack: setgroup has 1536 B of it). */
 #include <sys/types.h>
+#include <fcntl.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "zones.h"
 
-#define EU_CET	"CET-1CEST,M3.5.0,M10.5.0/3"
-#define EU_EET	"EET-2EEST,M3.5.0/3,M10.5.0/4"
-#define EU_WET	"WET0WEST,M3.5.0/1,M10.5.0"
-#define US(s, d)	s d ",M3.2.0,M11.1.0"
+static const char *tz_path = TZ_FILE;	/* tz_use(): another file */
+static short z_n = -1;			/* entries, counted once */
+static short z_i = -1;			/* the entry in z_label, z_rule */
+static char z_label[TZ_LABEL_MAX], z_rule[TZ_RULE_MAX];
 
-#define ZONES \
-	Z("UTC", "UTC0") \
-	Z("Europe/London", "GMT0BST,M3.5.0/1,M10.5.0") \
-	Z("Europe/Dublin", "GMT0IST,M3.5.0/1,M10.5.0") \
-	Z("Europe/Lisbon", EU_WET) \
-	Z("Europe/Madrid", EU_CET) \
-	Z("Europe/Paris", EU_CET) \
-	Z("Europe/Brussels", EU_CET) \
-	Z("Europe/Amsterdam", EU_CET) \
-	Z("Europe/Berlin", EU_CET) \
-	Z("Europe/Zurich", EU_CET) \
-	Z("Europe/Rome", EU_CET) \
-	Z("Europe/Vienna", EU_CET) \
-	Z("Europe/Prague", EU_CET) \
-	Z("Europe/Warsaw", EU_CET) \
-	Z("Europe/Budapest", EU_CET) \
-	Z("Europe/Belgrade", EU_CET) \
-	Z("Europe/Copenhagen", EU_CET) \
-	Z("Europe/Oslo", EU_CET) \
-	Z("Europe/Stockholm", EU_CET) \
-	Z("Europe/Helsinki", EU_EET) \
-	Z("Europe/Tallinn", EU_EET) \
-	Z("Europe/Riga", EU_EET) \
-	Z("Europe/Vilnius", EU_EET) \
-	Z("Europe/Kyiv", EU_EET) \
-	Z("Europe/Bucharest", EU_EET) \
-	Z("Europe/Sofia", EU_EET) \
-	Z("Europe/Athens", EU_EET) \
-	Z("Europe/Istanbul", "TRT-3") \
-	Z("Europe/Minsk", "MSK-3") \
-	Z("Europe/Moscow", "MSK-3") \
-	Z("Atlantic/Reykjavik", "GMT0") \
-	Z("Atlantic/Canary", EU_WET) \
-	Z("Atlantic/Azores", "AZOT1AZOST,M3.5.0/0,M10.5.0/1") \
-	Z("Africa/Lagos", "WAT-1") \
-	Z("Africa/Johannesburg", "SAST-2") \
-	Z("Africa/Nairobi", "EAT-3") \
-	Z("Asia/Riyadh", "AST-3") \
-	Z("Asia/Tehran", "IRST-3:30") \
-	Z("Asia/Dubai", "GST-4") \
-	Z("Asia/Tbilisi", "GET-4") \
-	Z("Asia/Yerevan", "AMT-4") \
-	Z("Asia/Karachi", "PKT-5") \
-	Z("Asia/Tashkent", "UZT-5") \
-	Z("Asia/Almaty", "ALMT-5") \
-	Z("Asia/Yekaterinburg", "YEKT-5") \
-	Z("Asia/Kolkata", "IST-5:30") \
-	Z("Asia/Kathmandu", "NPT-5:45") \
-	Z("Asia/Dhaka", "BDT-6") \
-	Z("Asia/Bangkok", "ICT-7") \
-	Z("Asia/Jakarta", "WIB-7") \
-	Z("Asia/Novosibirsk", "NOVT-7") \
-	Z("Asia/Shanghai", "CST-8") \
-	Z("Asia/Hong_Kong", "HKT-8") \
-	Z("Asia/Singapore", "SGT-8") \
-	Z("Asia/Manila", "PHT-8") \
-	Z("Australia/Perth", "AWST-8") \
-	Z("Asia/Seoul", "KST-9") \
-	Z("Asia/Tokyo", "JST-9") \
-	Z("Australia/Darwin", "ACST-9:30") \
-	Z("Australia/Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3") \
-	Z("Australia/Brisbane", "AEST-10") \
-	Z("Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3") \
-	Z("Asia/Vladivostok", "VLAT-10") \
-	Z("Pacific/Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3") \
-	Z("Pacific/Honolulu", "HST10") \
-	Z("America/Anchorage", US("AKST9", "AKDT")) \
-	Z("America/Los_Angeles", US("PST8", "PDT")) \
-	Z("America/Phoenix", "MST7") \
-	Z("America/Denver", US("MST7", "MDT")) \
-	Z("America/Chicago", US("CST6", "CDT")) \
-	Z("America/Mexico_City", "CST6") \
-	Z("America/New_York", US("EST5", "EDT")) \
-	Z("America/Bogota", "COT5") \
-	Z("America/Lima", "PET5") \
-	Z("America/Halifax", US("AST4", "ADT")) \
-	Z("America/Caracas", "VET4") \
-	Z("America/St_Johns", US("NST3:30", "NDT")) \
-	Z("America/Sao_Paulo", "BRT3") \
-	Z("America/Buenos_Aires", "ART3")
-
-#define Z(l, r)	l "\0" r "\0"
-static const char zones[] = ZONES;	/* and the final '\0': the end */
-#undef Z
-
-/* Entry i's label (rule: its next string), or NULL past the end. */
-static const char *entry(int i)
+/* A line of the file (no '\n'): an entry into z_label and z_rule, 1; a
+ * comment, a blank line or a bad one, 0. */
+static int entry_line(char *p, int n)
 {
-	const char *p = zones;
+	char *e = p + n, *r;
+	int ln, rn;
 
-	if (i < 0) return NULL;
-	for (; *p != 0 && i > 0; i--) {
-		p += strlen(p) + 1;
-		p += strlen(p) + 1;
+	while (p < e && (*p == ' ' || *p == '\t')) p++;
+	while (e > p && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) e--;
+	if (p == e || *p == '#') return 0;
+	for (r = p; r < e && *r != ' ' && *r != '\t'; r++) ;
+	ln = (int) (r - p);
+	while (r < e && (*r == ' ' || *r == '\t')) r++;
+	rn = (int) (e - r);
+	if (ln < 1 || ln >= TZ_LABEL_MAX || rn < 1 || rn >= TZ_RULE_MAX)
+		return 0;
+	memcpy(z_label, p, (size_t) ln);
+	z_label[ln] = 0;
+	memcpy(z_rule, r, (size_t) rn);
+	z_rule[rn] = 0;
+	return 1;
+}
+
+/* Entry i into z_label, z_rule (i < 0: none, to count them): the number
+ * of entries read; i is there if it is more than i. */
+static int scan(int i)
+{
+	/* static: setgroup has 1536 B of stack in all, and 136 B more on it
+	 * overflowed it under the launcher's environment (the user's test:
+	 * OK on Zone ended Time) */
+	static char c[64], ln[TZ_LABEL_MAX + TZ_RULE_MAX + 2];
+	int fd, r, k, n = 0, m = 0, over = 0;
+
+	z_i = -1;
+	if ((fd = open(tz_path, O_RDONLY)) < 0) return 0;
+	while ((r = (int) read(fd, c, sizeof c)) > 0)
+		for (k = 0; k < r; k++) {
+			if (c[k] != '\n') {
+				if (m < (int) sizeof ln) ln[m++] = c[k];
+				else over = 1;		/* too long: skipped */
+				continue;
+			}
+			if (!over && entry_line(ln, m) && n++ == i) {
+				close(fd);
+				z_i = (short) i;
+				return n;
+			}
+			m = over = 0;
+		}
+	if (r == 0 && m > 0 && !over && entry_line(ln, m) && n++ == i)
+		z_i = (short) i;		/* a last line without '\n' */
+	close(fd);
+	return n;
+}
+
+/* Entry i, from the file or, with none, the built-in UTC: 1, or 0 past
+ * the end. */
+static int entry(int i)
+{
+	if (i < 0 || i >= tz_count()) return 0;
+	if (z_n == 0) {				/* no file: UTC alone */
+		strcpy(z_label, "UTC");
+		strcpy(z_rule, "UTC0");
+		z_i = 0;
+		return 1;
 	}
-	return *p != 0 ? p : NULL;
+	if (z_i != i) (void) scan(i);
+	return z_i == i;
+}
+
+void tz_use(const char *path)
+{
+	tz_path = path;
+	z_n = z_i = -1;
 }
 
 int tz_count(void)
 {
-	const char *p = zones;
-	int n = 0;
-
-	while (*p != 0) {
-		p += strlen(p) + 1;
-		p += strlen(p) + 1;
-		n++;
-	}
-	return n;
+	if (z_n < 0) z_n = (short) scan(-1);
+	return z_n > 0 ? z_n : 1;
 }
 
 const char *tz_label(int i)
 {
-	const char *p = entry(i);
-
-	return p != NULL ? p : "other";
+	return entry(i) ? z_label : "other";
 }
 
 const char *tz_rule(int i)
 {
-	const char *p = entry(i);
-
-	return p != NULL ? p + strlen(p) + 1 : "";
+	return entry(i) ? z_rule : "";
 }
 
 /* One line of buf at p, without its '\n' and blanks around it: its start
@@ -203,11 +175,12 @@ int tz_find(const char *label, const char *rule)
 
 int tz_format(char *buf, int n, int i)
 {
-	const char *l = entry(i), *r;
+	const char *l, *r;
 	int k;
 
-	if (l == NULL) return -1;
-	r = l + strlen(l) + 1;
+	if (!entry(i)) return -1;
+	l = z_label;
+	r = z_rule;
 	k = (int) (strlen(l) + strlen(r)) + 4;
 	if (k + 1 > n) return -1;
 	strcpy(buf, "# ");

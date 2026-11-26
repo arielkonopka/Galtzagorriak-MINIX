@@ -213,9 +213,12 @@ $(B)/desktest: desktest.c $(MROOT)/flipper/gui/desktop.c $(MROOT)/flipper/gui/de
 SETDIR	:= $(MROOT)/src/commands/settings
 SETSRC	:= zones.c afmt.c conf.c groups.c display.c sound.c led.c power.c
 $(B)/settimetest: settimetest.c $(SETSRC:%=$(SETDIR)/%) $(SETDIR)/zones.h \
+		$(MROOT)/flipper/rootfs/usr/share/zones \
 		$(SETDIR)/afmt.h $(SETDIR)/sgroup.h
 	@mkdir -p $(B)
-	$(CC) $(CFLAGS) -Wno-unused-result settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
+	$(CC) $(CFLAGS) -Wno-unused-result \
+	    -DTZ_SRC='"$(MROOT)/flipper/rootfs/usr/share/zones"' \
+	    settimetest.c $(SETSRC:%=$(SETDIR)/%) -o $@
 
 # pmstat.h: the Stop2 counters of /dev/power (T14b, R6.8, #284).
 $(B)/pmstattest: pmstattest.c $(MROOT)/src/kernel/pmstat.h stubs/kernel.h

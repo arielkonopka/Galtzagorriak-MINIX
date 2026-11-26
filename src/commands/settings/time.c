@@ -5,8 +5,8 @@
  * time keeps the date and sets the seconds to 0, as on a watch.  The
  * local time comes from the zone's POSIX rule (zones.c tz_off): no
  * localtime(), mktime() or putenv(), whose zone code and data would be
- * linked into the program.  Zone opens a list of the const table shared
- * with the first-boot wizard (zones.c), a long list read page by page
+ * linked into the program.  Zone opens a list of the zones in the card's
+ * /usr/share/zones (zones.c), a long list read page by page
  * (K.8 ROWS=); choosing one only changes what this screen shows until
  * Back, which writes /etc/TZ once (through a new file and rename,
  * R18b.3) and gives INIT SIGHUP (the zone of what it starts) and SIGRTC
@@ -180,7 +180,9 @@ static int event(int type, char **f)
 		}
 		if (v <= nzones && (v < nzones || zone0 == nzones)) zone = (short) v;
 		show_time();
-		sg_show(2);			/* the parent again, updated */
+		sg_show(sg_find("time"));	/* the parent again, updated (not
+					 * a number: LED came before Time
+					 * and "2" showed LED) */
 	}
 	return 1;
 }

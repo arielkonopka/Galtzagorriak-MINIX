@@ -1345,7 +1345,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.96
+BASE_VER := 4.97
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.
@@ -1360,6 +1360,7 @@ $(BASEPKG): $(UPROGS:%=$(MB)/bin/%) $(LIBPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 	   $(foreach p,$(LIBPROGS),/lib/$(p)=$(MB)/bin/$(p)$(COMMA)4755) \
 	   $(foreach r,$(REGION_FILES),/usr/share/region/$(notdir $(r))=$(r)$(COMMA)644) \
 	   /usr/share/nfc/aid_scan.nfc=$(AID_EXAMPLE)$(COMMA)644 \
+	   /usr/share/zones=rootfs/usr/share/zones$(COMMA)644 \
 	   $(foreach a,$(ALIASES),/bin/$(word 1,$(subst =, ,$(a)))=$(MB)/bin/$(word 2,$(subst =, ,$(a))))
 .PHONY: base
 base: $(BASEPKG)
