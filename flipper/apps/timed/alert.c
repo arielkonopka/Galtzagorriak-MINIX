@@ -73,7 +73,10 @@
 
 #define GID_NOGROUP	99		/* /etc/group nogroup */
 #define PIECE	100			/* ms of tune per /dev/speaker write */
-#define TUNE_MS	3000			/* at most this much tune per ring */
+/* At most this much tune a ring: an alarm plays a whole tune (the user's
+ * four bars took 9.6 s, 2026-11-26), a reminder or info stays short.  A
+ * key still ends it within PIECE ms. */
+#define TUNE_MS(cat)	((cat) == TC_ALARM ? 15000L : 3000L)
 #define STAGE_S	10			/* escalating: default s per stage */
 
 static unsigned char tune[4 * TUNE_MAX];
@@ -130,7 +133,7 @@ static void load_tune(const char *name, int cat, int uid)
 							: "chime"), tune, TUNE_MAX);
 	for (i = 0; i < ntune; i++) {		/* at most TUNE_MS a ring */
 		ms += tune[4*i+2] | tune[4*i+3] << 8;
-		if (ms > TUNE_MS) { ntune = i > 0 ? i : 1; break; }
+		if (ms > TUNE_MS(cat)) { ntune = i > 0 ? i : 1; break; }
 	}
 	if (ntune < 1) {			/* nothing at all: one beep */
 		tune[0] = 2000 & 0xFF; tune[1] = 2000 >> 8;
