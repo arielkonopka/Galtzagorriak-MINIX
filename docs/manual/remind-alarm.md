@@ -8,9 +8,9 @@ done today, or use the desk clock.
 ## Installing
 
 ```
-pkg install /lib/pkg/timed_1.6.tar     # needed by both
+pkg install /lib/pkg/timed_1.7.tar     # needed by both
 pkg install /lib/pkg/remind_1.1.tar
-pkg install /lib/pkg/alarm_1.4.tar
+pkg install /lib/pkg/alarm_1.5.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
@@ -113,7 +113,8 @@ keeps the form.
 | Volume | 10–100 % in steps of 10 (a cubic curve, as on the stock firmware: 50 % is much quieter than 100 %) |
 | Beep | on/off: the speaker |
 | Sound | `melody` (the tune) or `single` (beeps of one note) |
-| Melody | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, and the three **1980s digital-watch** tunes `watch` (a rising arpeggio, as an hourly chime), `hourly` (double chirps) and `jingle` (a short square-wave tune), and four **pocket-game** blips, `catch` (rising blips), `eggs` (the egg-catching rhythm), `game` (the game-over slide) and `duel` (a fast two-tone race), then short arrangements of old tunes, `marsel` (La Marseillaise), `saints` (When the Saints Go Marching In), `ode` (Ode to Joy), `elise` (Für Elise), `troll` (In the Hall of the Mountain King) and `korob` (Korobeiniki), `spy`, an original spy-film style riff, and `chirp`, fast chirps up and down at 2 to 4 kHz, where the piezo is loudest (the most annoying one: for heavy sleepers), then your own tone file (below) |
+| Melody | the built-in `beep`, `chime`, `rise`, `classic`, `gentle`, `pips`, and the three **1980s digital-watch** tunes `watch` (a rising arpeggio, as an hourly chime), `hourly` (double chirps) and `jingle` (a short square-wave tune), and four **pocket-game** blips, `catch` (rising blips), `eggs` (the egg-catching rhythm), `game` (the game-over slide) and `duel` (a fast two-tone race), then short arrangements of old tunes, `marsel` (La Marseillaise), `saints` (When the Saints Go Marching In), `ode` (Ode to Joy), `elise` (Für Elise), `troll` (In the Hall of the Mountain King) and `korob` (Korobeiniki), `spy`, an original spy-film style riff, and `chirp`, fast chirps up and down at 2 to 4 kHz, where the piezo is loudest (the most annoying one: for heavy sleepers), then your own tone files (below) |
+| Own chirp | opens the chirp editor (below) |
 | Vibro, LED blink, Screen flash | on/off each; the screen flash blinks the backlight and leaves it as it was afterwards |
 | Snooze | off, 5, 10, 15, 20, 30 minutes |
 | Ring for | 1, 5, 10, 15, 30, 60 minutes before it gives up |
@@ -124,9 +125,34 @@ launcher: `timed` and `alert` ring it, over whatever app is open.
 
 **Your own tone:** put an RTTTL file `tone.rtttl` (or `tone.txt`) or a Flipper music file
 `tone.fmf` into `/home/flipper/apps_data/alarm/` (as root or the user `alarm`, readable by
-`alarm`); the Melody row offers it after the built-in ones (at most two files: the one the
-alarm has, and the first of these names that is there). An alarm made by the older Ordua with
+`alarm`); the Melody row offers it after the built-in ones (at most three files: the one the
+alarm has, then the first of these names that are there, and `chirp.txt`). An alarm made by the older Ordua with
 another file name keeps it, and the Melody row shows it.
+
+**Own chirp** (an idea of the user's): build a two-tone alarm sound and try it at once.
+
+| Row | What it does |
+|---|---|
+| Shape | `sweep` (glides from A to B and back) or `jump` (A, then B) |
+| Tone A, Tone B | the two tones, 200 to 4000 Hz in steps of 100 (the piezo is loudest at 2 to 4 kHz) |
+| Rate | cycles a second, 1 to 20 |
+| Sound | the part of each cycle that sounds, 10 to 100 %; the rest is quiet |
+| On A | the part of the sound on A (a sweep: going up), 10 to 90 % |
+| Length | 1 to 5 seconds a ring (at most 64 notes: a high rate with a long length is cut) |
+| Try | plays it now, at the alarm's volume |
+| Save as melody | writes `chirp.txt` into `/home/flipper/apps_data/alarm/` and makes it the alarm's melody; then Save the alarm |
+
+`chirp.txt` is a short text that any tone field reads, e.g.:
+
+```
+Chirp: sweep
+A: 2100
+B: 4000
+Rate: 2
+Duty: 80
+Balance: 50
+Length: 2
+```
 
 How much of a tune rings: an alarm plays up to 15 seconds of it at each ring (and at most 64
 notes), a reminder or a notice up to 3 seconds; the rest is cut. The piezo is loudest between

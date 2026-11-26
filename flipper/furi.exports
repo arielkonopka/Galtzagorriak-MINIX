@@ -89,3 +89,6 @@ view_port_input_callback_set
 view_port_update
 view_set_previous_callback
 notify_post
+tune_chirp
+tune_chirp_read
+tune_chirp_text

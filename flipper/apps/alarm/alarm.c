@@ -35,6 +35,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>		/* rename() only: no stdio */
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -53,11 +55,16 @@ static const unsigned char snoozes[] = { 0, 5, 10, 15, 20, 30 };
 static const unsigned char rings[] = { 1, 5, 10, 15, 30, 60 };
 #define NSNOOZE	(int) sizeof snoozes
 #define NRING	(int) sizeof rings
-/* own melodies: any of these in APP_DATA/alarm (looked up with stat()) */
-static const char *const own_tones[] = { "tone.fmf", "tone.rtttl", "tone.txt" };
+/* own melodies: any of these in APP_DATA/alarm (looked up with stat());
+ * chirp.txt is the one the own chirp window writes (#480) */
+#define CHIRP	"chirp.txt"
+static const char *const own_tones[] = { "tone.fmf", "tone.rtttl", "tone.txt",
+					 CHIRP };
 #define NOWN	(int) (sizeof own_tones / sizeof *own_tones)
 
-enum { W_LIST, W_EDIT, W_RING, W_MSG, W_CLOCK };
+enum { W_LIST, W_EDIT, W_RING, W_MSG, W_CLOCK, W_CHIRP, W_TONES };
+#define TPAGE	12		/* melodies a page of the Melody list */
+#define NEXTRA	3		/* own melody files in the Melody row */
 
 static struct {
 	struct app_timer t;	/* the alarm in the form; scratch in get() */
@@ -65,7 +72,11 @@ static struct {
 	char cur;		/* W_*: the window the desktop shows */
 	char from;		/* W_*: the parent of the message window */
 	const char *msg;
-	char extra[2][24];	/* the melody options after the built-ins */
+	char extra[NEXTRA][24];	/* the melody options after the built-ins */
+	char xlabel[NEXTRA][13];	/* their names in the list */
+	struct tune_chirp ch;	/* the own chirp window's fields */
+	int spk;		/* /dev/speaker for Try, or -1 */
+	int tfirst;		/* the Melody list's page */
 } r;
 
 /* ---- small helpers ---- */
@@ -292,8 +303,36 @@ static int nbuiltin(void)
 	return n;
 }
 
-/* r.extra: the file of the alarm (if it has one), then the first own
- * tone file that is there and not the same. */
+/* r.extra: the file of the alarm (if it has one), then the own tone
+ * files that are there and not the same. */
+/* The list's name of own file i: an RTTTL tune's own name ("guk"),
+ * "own chirp", or the file's name. */
+static void xlabel(int i)
+{
+	char path[64], b[24];
+	int fd, n = 0, k;
+
+	strcpy(path, ADIR "/");
+	strcat(path, r.extra[i]);
+	if ((fd = open(path, O_RDONLY | O_NONBLOCK)) >= 0) {
+		n = read(fd, b, sizeof b - 1);
+		close(fd);
+	}
+	b[n > 0 ? n : 0] = 0;
+	if (strncmp(b, "Chirp:", 6) == 0) {
+		strcpy(r.xlabel[i], "own chirp");
+		return;
+	}
+	for (k = 0; b[k] != 0 && b[k] != ':' && b[k] != '\n' && k < 12; k++) ;
+	if (k > 0 && b[k] == ':' && strncmp(b, "Filetype", 8) != 0) {
+		memcpy(r.xlabel[i], b, k);	/* RTTTL: name:d=...: */
+		r.xlabel[i][k] = 0;
+	} else {
+		strncpy(r.xlabel[i], r.extra[i], 12);
+		r.xlabel[i][12] = 0;
+	}
+}
+
 static void extras(void)
 {
 	const char *cur = r.t.tone, *p = strrchr(cur, '/');
@@ -301,16 +340,17 @@ static void extras(void)
 	struct stat st;
 	int i, n = 0;
 
-	r.extra[0][0] = r.extra[1][0] = 0;
+	for (i = 0; i < NEXTRA; i++) r.extra[i][0] = 0;
 	if (p != NULL && strlen(p + 1) < sizeof r.extra[0])
 		strcpy(r.extra[n++], p + 1);
-	for (i = 0; i < NOWN && n < 2; i++) {
+	for (i = 0; i < NOWN && n < NEXTRA; i++) {
 		if (strcmp(own_tones[i], r.extra[0]) == 0) continue;
 		strcpy(path, ADIR "/");
 		strcat(path, own_tones[i]);
 		if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
 			strcpy(r.extra[n++], own_tones[i]);
 	}
+	for (i = 0; i < n; i++) xlabel(i);
 }
 
 static int tone_index(void)
@@ -320,7 +360,7 @@ static int tone_index(void)
 
 	if (cur[0] == 0) return 0;		/* the default: beep */
 	if (p != NULL) {
-		for (i = 0; i < 2; i++)
+		for (i = 0; i < NEXTRA; i++)
 			if (r.extra[i][0] && strcmp(p + 1, r.extra[i]) == 0)
 				return nb + i;
 		return 0;
@@ -335,9 +375,11 @@ static void tone_set(int i)
 	int nb = nbuiltin();
 
 	if (i >= 0 && i < nb) strcpy(r.t.tone, tune_names[i]);
-	else if (i >= nb && i < nb + 2 && r.extra[i - nb][0]
-		 && strlen(ADIR "/") + strlen(r.extra[i - nb]) < sizeof r.t.tone) {
-		strcpy(r.t.tone, ADIR "/");
+	else if (i >= nb && i < nb + NEXTRA && r.extra[i - nb][0]
+		 && strlen(APP "/") + strlen(r.extra[i - nb]) < sizeof r.t.tone) {
+		/* under APP_DATA: the whole path of tone.rtttl is 40 chars,
+		 * one too many for the timer's Tone */
+		strcpy(r.t.tone, APP "/");
 		strcat(r.t.tone, r.extra[i - nb]);
 	}
 }
@@ -392,31 +434,37 @@ static void w_edit(void)
 	r.cur = W_EDIT;
 }
 
+/* The name of melody i (built-in, then the own files). */
+static const char *tone_name(int i)
+{
+	int nb = nbuiltin();
+
+	return i < nb ? tune_names[i] : r.xlabel[i - nb];
+}
+
+/* The melodies the list offers: the built-ins and the own files there. */
+static int ntones(void)
+{
+	int n = nbuiltin(), i;
+
+	for (i = 0; i < NEXTRA && r.extra[i][0]; i++) n++;
+	return n;
+}
+
 static void w_ring(void)
 {
 	struct app_timer *t = &r.t;
-	char opts[192];
-	int i;
 
 	extras();
-	opts[0] = 0;
-	for (i = 0; tune_names[i] != NULL; i++) {
-		if (i > 0) strcat(opts, "|");
-		strcat(opts, tune_names[i]);
-	}
-	for (i = 0; i < 2; i++)
-		if (r.extra[i][0] && strlen(opts) + strlen(r.extra[i]) + 2
-				     < sizeof opts) {
-			strcat(opts, "|");
-			strcat(opts, r.extra[i]);
-		} else r.extra[i][0] = 0;
 	gm_win("ring", "list", "Ring", 0, 0);
 	gm_enum("mode", "Mode", t->ramp ? 0 : 1, "escalating|steady");
 	gm_int("step", "Stage", 10, 120, 10, t->step ? t->step : 10, "s");
 	gm_int("vol", "Volume", 10, 100, 10, t->volume ? t->volume : 100, "%");
 	gm_bool("beep", "Beep", t->flags & NF_SOUND);
 	gm_enum("stype", "Sound", t->single ? 1 : 0, "melody|single");
-	gm_enum("tone", "Melody", tone_index(), opts);
+	/* a list of its own: the names do not fit one record (128 B) */
+	gm_item("tone", "Melody", tone_name(tone_index()));
+	gm_item("chirp", "Own chirp", "");
 	gm_bool("vibro", "Vibro", t->flags & NF_VIBRO);
 	gm_bool("led", "LED blink", t->flags & NF_LED);
 	gm_bool("flash", "Screen flash", t->flags & NF_SCREEN);
@@ -426,6 +474,108 @@ static void w_ring(void)
 		"1 min|5 min|10 min|15 min|30 min|60 min");
 	gm_show();
 	r.cur = W_RING;
+}
+
+/* The Melody list, a page at a time; OK picks one, * marks the alarm's. */
+static void w_tones(int first)
+{
+	char key[6];
+	int i, n = ntones(), cur = tone_index();
+
+	if (first < 0 || first >= n) first = 0;
+	r.tfirst = first;
+	gm_win("tones", "list", "Melody", n, first);
+	for (i = first; i < first + TPAGE && i < n; i++) {
+		key[0] = 'm';
+		nat_num(key + 1, (unsigned) i);
+		gm_item(key, tone_name(i), i == cur ? "*" : "");
+	}
+	gm_show();
+	r.cur = W_TONES;
+}
+
+/* The own chirp (#480, the user's idea): two tones, how fast, how much
+ * sound, how much on A; Try plays it, Save writes APP_DATA/alarm/chirp.txt
+ * (a text tune_parse() reads, like any own tone) and makes it the
+ * alarm's melody. */
+static void w_msg(void);
+
+static void w_chirp(void)
+{
+	struct tune_chirp *c = &r.ch;
+
+	gm_win("chirp", "list", "Own chirp", 0, 0);
+	gm_enum("shape", "Shape", c->shape, "sweep|jump");
+	gm_int("a", "Tone A", TC_HZMIN, TC_HZMAX, 100, c->a, "Hz");
+	gm_int("b", "Tone B", TC_HZMIN, TC_HZMAX, 100, c->b, "Hz");
+	gm_int("rate", "Rate", 1, 20, 1, c->rate, "/s");
+	gm_int("duty", "Sound", 10, 100, 10, c->duty, "%");
+	gm_int("bal", "On A", 10, 90, 10, c->bal, "%");
+	gm_int("len", "Length", 1, 5, 1, c->len, "s");
+	gm_action("try", "Try");
+	gm_action("save", "Save as melody");
+	gm_show();
+	r.cur = W_CHIRP;
+}
+
+/* The saved chirp, or the defaults. */
+static void chirp_load(void)
+{
+	char buf[128];
+	int fd, n = 0;
+
+	buf[0] = 0;
+	if ((fd = open(ADIR "/" CHIRP, O_RDONLY)) >= 0) {
+		n = read(fd, buf, sizeof buf - 1);
+		close(fd);
+		buf[n > 0 ? n : 0] = 0;
+	}
+	tune_chirp_read(&r.ch, buf[0] ? buf : NULL);
+}
+
+/* Try: the notes straight to the speaker, at the alarm's volume (a
+ * volume note first, on its own: a tune fills the driver's 64). */
+static void chirp_try(void)
+{
+	unsigned char n[4 * TUNE_MAX], vn[4];
+	int fd, k, v = r.t.volume ? r.t.volume : 100;
+
+	if ((fd = r.spk) < 0) {
+		r.msg = "No speaker for Ordua.";
+		w_msg();
+		return;
+	}
+	if ((k = tune_chirp(&r.ch, n, TUNE_MAX)) <= 0) return;
+	vn[0] = vn[1] = 0xFF; vn[2] = (unsigned char) v; vn[3] = 0;
+	if (write(fd, vn, 4) != 4 || write(fd, n, 4 * k) != 4 * k) {
+		r.msg = "The speaker is busy: try again.";
+		w_msg();
+		return;
+	}					/* it returns when it has played */
+	(void) gm_busy(0);
+}
+
+static const char *chirp_save(void)
+{
+	char buf[128];
+	int fd, n;
+
+	if ((n = tune_chirp_text(buf, sizeof buf, &r.ch)) < 0)
+		return "Could not save.";
+	(void) mkdir(ADIR, 0700);
+	if ((fd = open(ADIR "/" CHIRP ".new", O_WRONLY | O_CREAT | O_TRUNC,
+								0644)) < 0)
+		return "Could not save.";
+	if (write(fd, buf, n) != n) {
+		close(fd);
+		(void) unlink(ADIR "/" CHIRP ".new");
+		return "Could not save.";
+	}
+	close(fd);
+	if (rename(ADIR "/" CHIRP ".new", ADIR "/" CHIRP) < 0)
+		return "Could not save.";
+	strcpy(r.t.tone, APP "/" CHIRP);
+	return "Saved as chirp.txt, the alarm's melody now. Save the alarm.";
 }
 
 static void w_msg(void)
@@ -472,6 +622,8 @@ static void redraw(void)
 	case W_RING: w_ring(); break;
 	case W_MSG: w_msg(); break;
 	case W_CLOCK: w_clock(); break;
+	case W_CHIRP: w_chirp(); break;
+	case W_TONES: w_tones(r.tfirst); break;
 	default: w_list();
 	}
 }
@@ -530,11 +682,20 @@ static void values(const char *win, char **f)
 				t->flags = (unsigned char) (x ? t->flags | NF_SCREEN
 							      : t->flags & ~NF_SCREEN);
 			else if (strcmp(k, "stype") == 0) t->single = x != 0;
-			else if (strcmp(k, "tone") == 0) tone_set(x);
 			else if (strcmp(k, "snooze") == 0 && x >= 0 && x < NSNOOZE)
 				t->snooze = snoozes[x];
 			else if (strcmp(k, "ring") == 0 && x >= 0 && x < NRING)
 				t->ring = rings[x];
+		} else if (strcmp(win, "chirp") == 0) {
+			struct tune_chirp *c = &r.ch;
+
+			if (strcmp(k, "shape") == 0) c->shape = x != 0;
+			else if (strcmp(k, "a") == 0) c->a = (unsigned short) x;
+			else if (strcmp(k, "b") == 0) c->b = (unsigned short) x;
+			else if (strcmp(k, "rate") == 0) c->rate = (unsigned char) x;
+			else if (strcmp(k, "duty") == 0) c->duty = (unsigned char) x;
+			else if (strcmp(k, "bal") == 0) c->bal = (unsigned char) x;
+			else if (strcmp(k, "len") == 0) c->len = (unsigned char) x;
 		}
 	}
 }
@@ -572,6 +733,22 @@ static void ok(const char *win, const char *key)
 			w_list();
 		} else
 			(void) gm_busy(0);
+	} else if (strcmp(win, "ring") == 0 && strcmp(key, "tone") == 0) {
+		extras();
+		w_tones(tone_index() / TPAGE * TPAGE);
+	} else if (strcmp(win, "tones") == 0 && key[0] == 'm') {
+		/* the * moves; Back goes to Ring (the desktop keeps only
+		 * two windows: showing Ring from here upset its stack) */
+		tone_set(num(key + 1));
+		w_tones(r.tfirst);
+	} else if (strcmp(win, "ring") == 0 && strcmp(key, "chirp") == 0) {
+		chirp_load();
+		w_chirp();
+	} else if (strcmp(win, "chirp") == 0 && strcmp(key, "try") == 0)
+		chirp_try();
+	else if (strcmp(win, "chirp") == 0 && strcmp(key, "save") == 0) {
+		r.msg = chirp_save();
+		w_msg();
 	} else
 		(void) gm_busy(0);	/* nothing to open: "idle" */
 }
@@ -601,6 +778,12 @@ int main(int argc, char **argv)
 {
 	char buf[128], ev[160], *f[GM_FIELDS];
 
+	/* Ordua is set-gid gui for /dev/speaker (Try, #480): open it, then
+	 * back to its own group at once, so timers and files stay group
+	 * timers. */
+	r.spk = argc == 1 ? open("/dev/speaker", O_WRONLY) : -1;
+	if (r.spk >= 0) (void) fcntl(r.spk, F_SETFD, FD_CLOEXEC);
+	if (getegid() != getgid() && setgid(getgid()) < 0) return 1;
 	if (argc == 2 && strcmp(argv[1], "-n") == 0) {
 		if (nat_become(APP) < 0) return 1;
 		return print_next();
@@ -627,9 +810,18 @@ int main(int argc, char **argv)
 			if (f[1] == NULL) break;
 			if (strcmp(f[1], "msg") == 0) r.cur = r.from;
 			else if (strcmp(f[1], "ring") == 0) r.cur = W_EDIT;
+			else if (strcmp(f[1], "chirp") == 0
+				 || strcmp(f[1], "tones") == 0)
+				w_ring();	/* its Melody row anew */
 			else r.cur = W_LIST;
 			break;
 		case GM_PAGE:
+			if (f[1] != NULL && f[2] != NULL
+			    && strcmp(f[1], "tones") == 0) {
+				w_tones(num(f[2]));
+				break;
+			}
+			/* FALLTHROUGH */
 		case GM_REDRAW:
 			redraw();
 			break;
