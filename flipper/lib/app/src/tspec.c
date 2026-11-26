@@ -198,8 +198,11 @@ int timer_parse(struct app_timer *t, char *buf)
 			n = (unsigned) atoi(v) > 60;
 			t->snooze = atoi(v);
 		} else if (strcmp(k, "Tone") == 0) {
-			n = (v[0] == '/' ? strstr(v, "..") != NULL
-					 : tune_builtin(v) == NULL)
+			/* /a/path, dir/file under APP_DATA (an app's own
+			 * tone: "alarm/tone.rtttl" fits where the whole path
+			 * does not), or a built-in name */
+			n = (strchr(v, '/') != NULL ? strstr(v, "..") != NULL
+						    : tune_builtin(v) == NULL)
 				|| strlen(v) >= sizeof t->tone;
 			copy(t->tone, v, sizeof t->tone);
 		} else if (strcmp(k, "Ring") == 0) {

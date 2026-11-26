@@ -185,12 +185,30 @@ extern const char *const app_cats[3];
 
 /* Tunes for /dev/speaker (tune.c): 4 bytes a note, Hz and ms, 16-bit
  * little endian.  tune_parse() takes RTTTL ("name:d=4,o=5,b=100:8e,c6")
- * or the Flipper Music Format (BPM:, Duration:, Octave:, Notes: lines)
- * and returns the number of notes (at most max), -1 if it is neither. */
+ * or the Flipper Music Format (BPM:, Duration:, Octave:, Notes: lines),
+ * or an own chirp (below), and returns the number of notes (at most max), -1 if it is neither. */
 #define TUNE_MAX	64		/* notes per /dev/speaker write */
 int tune_parse(const char *src, unsigned char *out, int max);
 const char *tune_builtin(const char *name);	/* RTTTL text or NULL */
 extern const char *const tune_names[];		/* NULL-terminated */
+
+/* An own chirp (tune.c, #480), a text "Chirp: sweep|jump" with the lines
+ * A: and B: (the two tones, Hz), Rate: (cycles a second, 1-20), Duty:
+ * (% of a cycle with sound, 10-100), Balance: (% of the sound on A, or
+ * going up in a sweep, 10-90), Length: (s, 1-5).  tune_parse() takes it
+ * too.  tune_chirp() gives the notes (at most max), tune_chirp_read()
+ * the fields of a text (NULL: the defaults), tune_chirp_text() the text
+ * (buf at least 96 B) and its length. */
+#define TC_HZMIN	200		/* the piezo's range */
+#define TC_HZMAX	4000
+struct tune_chirp {
+	unsigned short a, b;		/* Hz */
+	unsigned char shape;		/* 0 sweep, 1 jump */
+	unsigned char rate, duty, bal, len;
+};
+int tune_chirp(const struct tune_chirp *c, unsigned char *out, int max);
+void tune_chirp_read(struct tune_chirp *c, const char *src);
+int tune_chirp_text(char *buf, int size, const struct tune_chirp *c);
 
 /* WAV files through the piezo's PWM (wav.c): PCM, 8 or 16 bit, mono or
  * stereo, 1 to 96 kHz.  wav_parse() reads the header from the first n
