@@ -12,14 +12,25 @@ these is kept as raw timings (at most 1024, as stock).
 
 ## The menu
 
-- **Learn New Remote.** Point the remote at the Flipper's IR window and press a button. The
+- **Learn New Remote.** First type the remote's name (for example `Telebista_Gela`; the
+  suggestion is `Remote_N`). Point the remote at the Flipper's IR window and press a button. The
   screen shows the protocol and the address and command, or `RAW` and how many timings were
   read. OK saves the button: type its name on the keyboard (for example `Piztu` or
-  `Bolumena_gora`); Back skips it. Each button goes into a new remote file,
-  `/home/flipper/infrared/Remote_N.ir`. Back at the "point the remote" screen ends learning.
-  You can rename the file later in the Archive app (Infrared tab, Name).
+  `Bolumena_gora`); Back skips it. A name already used in the remote is refused. All buttons go
+  into the one file `/home/flipper/infrared/NAME.ir`. Back at the "point the remote" screen ends
+  learning. You can rename the file later in the Archive app (Infrared tab, Name).
+  **Library match:** after the fourth button you learn (known protocols only, not RAW), the app
+  looks in the six universal databases. If three or four of your buttons are in one of them, it
+  asks `In library: TVs`, with **Use library** and **Keep mine**. Use library adds the other
+  buttons of that library remote (same protocol and address) to your remote, under the library's
+  names; your own names stay. It asks once per learning session. The databases are read one
+  signal at a time, so it takes a few seconds and no memory; without the databases in
+  `assets`, nothing is offered.
 - **Saved Remotes.** The `.ir` files in `/home/flipper/infrared`, then the buttons of the one
-  you pick. OK sends the selected button; the LED is blue while it is sent.
+  you pick. OK sends the selected button; the LED is blue while it is sent. **Right** opens the
+  button's actions: **Rename**, **Delete** (asks once), and **Add button**, which learns more
+  buttons into this remote. The file is rewritten through `NAME.ir.tmp` and `rename`, so a
+  power cut leaves the old remote whole.
 - **Universal Remotes.** Pick a kind (TVs, Audio Players, Projectors, Air Conditioners, Fans,
   LEDs) and a button (Power, Mute, Vol_up, ...). The app sends every signal of that name in the
   kind's database, one after the other, as stock does, and shows how many it has sent. Back
