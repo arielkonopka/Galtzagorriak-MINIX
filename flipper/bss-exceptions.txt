@@ -34,7 +34,8 @@ infrared	5152
 # #461 (app folders): +80 B, 4 more entries (20 in all: the folders count),
 # the folder of each entry (1 B) and the open folder; the shown entries are
 # found by a scan, no table.
-launcher	5548
+# Auto lock: +8 B, the delay in minutes and the tick of the last key.
+launcher	5556
 # mtpd: files to a PC over MTP (spec R10.4, T29a).  The spec's parent ring
 # (256 x 8 B = 2 KB) and one-block buffer (1 KB), two 256 B paths, and its
 # one DIR (1 KB) kept here instead of opendir()'s malloc: no heap, so no

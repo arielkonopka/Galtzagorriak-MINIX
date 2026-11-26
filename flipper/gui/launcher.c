@@ -829,9 +829,33 @@ static char *run_arg(struct app *ap, char *extra)
 	return NULL;
 }
 
+/* ---- Auto lock (Settings > Auto off > Auto lock, spec K.7) ---- */
+#define POWER_CONF	"/etc/flipper/power.conf"
+static unsigned char lock_min;		/* idle minutes before the lock; 0: never */
+static long idle_t;			/* now_ticks() of the last key */
+static long now_ticks(void);
+
+/* Auto lock from power.conf ("Auto lock: 5 min" / "never"). */
+static void load_lock(void)
+{
+	FILE *f = fopen(POWER_CONF, "r");
+	char line[40];
+
+	lock_min = 0;
+	if (f == NULL) return;
+	while (fgets(line, sizeof line, f) != NULL)
+		if (strncmp(line, "Auto lock:", 10) == 0)
+			lock_min = (unsigned char) atoi(line + 10);	/* "never": 0 */
+	fclose(f);
+}
+
 static char *run(struct app *ap)
 {
-	return run_arg(ap, NULL);
+	char *r = run_arg(ap, NULL);
+
+	load_lock();			/* the app may have been Settings */
+	idle_t = now_ticks();
+	return r;
 }
 
 /*===========================================================================*
@@ -939,6 +963,38 @@ static long now_ticks(void)
 	return (long) times(&tm);
 }
 
+/* The keys are locked: the time and a hint; Back three times in a row
+ * unlocks (stock's gesture).  Records from modules are read and dropped
+ * from the screen's point of view, so their FIFO never fills. */
+static void lock_screen(struct gui_in *in)
+{
+	int backs = 0, k;
+	char b[8];
+
+	for (;;) {
+		time_t now = time((time_t *) NULL);
+		struct tm *tm = localtime(&now);
+
+		b[0] = (char) ('0' + tm->tm_hour / 10);
+		b[1] = (char) ('0' + tm->tm_hour % 10);
+		b[2] = ':';
+		b[3] = (char) ('0' + tm->tm_min / 10);
+		b[4] = (char) ('0' + tm->tm_min % 10);
+		b[5] = 0;
+		gui_clear();
+		gui_title("LOCKED");
+		gui_center(26, b, 0);
+		gui_center(52, "Back x3 unlocks", 0);
+		gui_flush();
+		in->rep = 0;
+		k = gui_wait(in, 0, (int) (60 - now % 60) * 1000, dk_rfd);
+		if (k == GUI_FD) { (void) desk_read(); continue; }
+		if (k == 0) continue;
+		backs = k == KEY_BACK ? backs + 1 : 0;
+		if (backs >= 3) return;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	struct gui_in in;
@@ -959,6 +1015,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	load_conf(conf_file);
+	load_lock();
+	idle_t = now_ticks();
 	load_apps(apps_file);
 	desk_open();
 	bat_stale();				/* read at the first frame */
@@ -984,6 +1042,18 @@ int main(int argc, char **argv)
 			if (i < 0 || m < i) i = m;
 		}
 		if ((m = minute_ms()) >= 0 && (i < 0 || m < i)) i = m;
+		if (lock_min) {			/* the idle time left, in ms */
+			m = (int) (lock_min * 60000L - (now_ticks() - idle_t)
+							* 1000L / CLK_TCK);
+			if (m <= 0) {
+				lock_screen(&in);
+				memset(&in, 0, sizeof in);
+				idle_t = now_ticks();
+				dirty = 1;
+				continue;
+			}
+			if (i < 0 || m < i) i = m;
+		}
 		if (i < 0 && clock_shown) {	/* the light went off: no old
 						 * time when it comes back */
 			dirty = 1;
@@ -1022,6 +1092,7 @@ int main(int argc, char **argv)
 		}
 		note = NULL;
 		dirty = 1;
+		idle_t = now_ticks();
 		if (pg == PG_HOME) (void) dk_purge(&desk, alive);
 		if (k == KEY_UP) sel = sel > 0 ? sel - 1 : (n > 0 ? n - 1 : 0);
 		else if (k == KEY_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
