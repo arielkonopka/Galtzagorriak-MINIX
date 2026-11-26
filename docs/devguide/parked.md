@@ -47,6 +47,10 @@ Last updated: 2026-11-27.
 - **Two computers, two Flippers, data over Sub-GHz** ([#486](https://github.com/arielkonopka/Galtzagorriak-MINIX/issues/486)).
   `gmodem` already has the Sub-GHz medium (106 to 1741 B/s peak at 433.92 MHz, 10 % duty in
   PL). Missing: the PC side, encryption, a range table through walls, relaying.
+  - **The user wants it on changing frequencies**, to cope with interference: that is spec
+    R19.11 (hopping in TDD slots, the sequence from the pairing key, adaptive hopping with a
+    bad-channel map). The single channel is the first step and the range test. In the EU
+    hopping does not raise the duty budget, and it needs MINIX on both Flippers.
   - **A decision for the user, later:** the second bench Flipper runs stock firmware as the
     reference. A two-way test needs MINIX on both (on its own SD card; stock can be flashed
     back), or a stock-side script that speaks `gmodem`'s frames.
