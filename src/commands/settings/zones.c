@@ -10,7 +10,8 @@
  * one, and "other" keeps whatever /etc/TZ holds.  No file (or nothing
  * in it): UTC alone.  The file is read a line at a time, again for each
  * lookup (a page of the list: a dozen reads of 3 KB from the cache), into
- * one entry kept in 72 B. */
+ * one entry kept in 72 B, through 136 B of static buffers (not the
+ * stack: setgroup has 1536 B of it). */
 #include <sys/types.h>
 #include <fcntl.h>
 #include <string.h>
@@ -50,7 +51,10 @@ static int entry_line(char *p, int n)
  * of entries read; i is there if it is more than i. */
 static int scan(int i)
 {
-	char c[64], ln[TZ_LABEL_MAX + TZ_RULE_MAX + 2];
+	/* static: setgroup has 1536 B of stack in all, and 136 B more on it
+	 * overflowed it under the launcher's environment (the user's test:
+	 * OK on Zone ended Time) */
+	static char c[64], ln[TZ_LABEL_MAX + TZ_RULE_MAX + 2];
 	int fd, r, k, n = 0, m = 0, over = 0;
 
 	z_i = -1;
