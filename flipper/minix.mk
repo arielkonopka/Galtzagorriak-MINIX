@@ -320,7 +320,7 @@ EDITCMDS := mined
 # ZMODEM (src/commands/zmodem): rz.c and sz.c include rbsb.c and zm.c.
 ZMODEM	:= rz sz
 # Programs for the LCD and buttons (flipper/gui), linked with gui.c.
-GUIAPPS	:= launcher info lights console power lfrfid spectrum infrared bootscreen chargescreen
+GUIAPPS	:= launcher info lights console power lfrfid carddet spectrum infrared bootscreen chargescreen
 # archive (issue #389): a window app (K.8), libgm statically, no gui.c.
 WINBASE	:= archive nfc
 # Stock app ports part 2 (issue #413): window apps over the commands.
@@ -550,6 +550,8 @@ OBJS_spectrum += $(MB)/cmd/gui/specmath.o
 OBJS_infrared += $(MB)/cmd/gui/ui.o $(LIBIR_OBJ)
 # lfrfid on the shared list, message and keyboard screens (issue #413)
 OBJS_lfrfid += $(MB)/cmd/gui/ui.o
+# carddet: RFID and NFC taking turns, over rfid and nfc -r (stack only)
+OBJS_carddet += $(MB)/cmd/gui/ui.o
 # the desktop's module records (spec K.3, K.6): guimod builds them
 OBJS_guimod = $(MB)/cmd/port/guimod.o $(MB)/cmd/gui/desktop.o
 # Programs linked statically against libc-pic, never the shared libc:

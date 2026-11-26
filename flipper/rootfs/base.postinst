@@ -65,6 +65,11 @@ do
 		echo "base: the launcher now has $n"
 	}
 done
+# The Card detect app (RFID and NFC taking turns), in the Tools folder.
+test -f /etc/apps && grep '^Card detect:' /etc/apps >/dev/null || test ! -f /etc/apps || {
+	(echo '/^\[Tools:/a'; echo 'Card detect:nobody:@rfid:/bin/carddet'; echo '.'; echo 'w'; echo 'q') | ed /etc/apps >/dev/null
+	echo "base: the launcher now has Card detect"
+}
 # R5.6a: the base apps' lines as shipped get their icons (lines the owner
 # changed stay as they are).
 test -f /etc/apps &&	# a card without its own copy keeps using /rom's

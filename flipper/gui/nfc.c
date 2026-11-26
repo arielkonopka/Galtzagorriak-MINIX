@@ -974,6 +974,7 @@ int main(int argc, char **argv)
 	}
 	if (argc > 1 && !strcmp(argv[1], "-r")) {	/* read once, no screen */
 		int r;
+		const char *outf = argc > 3 && !strcmp(argv[2], "-o") ? argv[3] : NULL;
 
 		nfc_open();
 		if (nfcfd < 0) { printf("nfc: no %s\n", DEV_NFC); return 1; }
@@ -1002,6 +1003,11 @@ int main(int argc, char **argv)
 				(unsigned long) (card->mfc.block_read >> 32),
 				(unsigned long) card->mfc.block_read);
 		} else if (t4note != NULL) printf("nfc: %s\n", t4note);
+		/* -o FILE (carddet): the card as a .nfc file, only after a read */
+		if (outf != NULL && nfc_file_save(card, outf) != 0) {
+			printf("nfc: cannot save %s\n", outf);
+			return 1;
+		}
 		return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "-t")) {
@@ -1019,7 +1025,7 @@ int main(int argc, char **argv)
 	}
 	if (argc > 1 && !strcmp(argv[1], "-L")) loopback = 1;
 	else if (argc > 1) {
-		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c | -r | scan [-L] [DICT]]\n");
+		fprintf(stderr, "Usage: nfc [-L | -t [DICT] | -c | -r [-o FILE] | scan [-L] [DICT]]\n");
 		return 2;
 	}
 	nfc_open();

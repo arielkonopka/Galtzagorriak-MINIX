@@ -15,6 +15,7 @@ NFC:nobody:@nfc:=/bin/nfc
 Infrared:nobody:@ir:/bin/infrared
 iButton:nobody:@ibutton:=/bin/ibuttonui
 [Tools:@tools]
+Card detect:nobody:@rfid:/bin/carddet
 Sub-GHz Remote:nobody:@subghz:=/bin/subrem
 Spectrum:nobody:@subghz:/bin/spectrum
 GPIO:nobody:@gpio:=/bin/gpioui
