@@ -8,7 +8,9 @@
  * of them against known offsets in winter and summer. */
 #define _DEFAULT_SOURCE
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -120,9 +122,12 @@ int main(void)
 {
 	char rule[TZ_RULE_MAX], label[TZ_LABEL_MAX], buf[128], v[24];
 	unsigned char uid[8] = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 };
-	int i, j, n = tz_count(), ok;
+	char l1[TZ_LABEL_MAX];
+	int i, j, n, ok, fd;
 
-	/* the table */
+	/* the zones file (TZ_SRC: the source tree's /usr/share/zones) */
+	tz_use(TZ_SRC);
+	n = tz_count();
 	check(n >= 60 && n <= 100, "about 80 zones");
 	check(strcmp(tz_label(0), "UTC") == 0 && strcmp(tz_rule(0), "UTC0") == 0,
 		"entry 0 is UTC");
@@ -138,10 +143,35 @@ int main(void)
 				|| strlen(tz_label(i)) >= TZ_LABEL_MAX
 				|| strlen(tz_label(i)) > 22)
 			ok = 0;		/* "[label]" fits the row (24 chars) */
+		strcpy(l1, tz_label(i));	/* one entry kept at a time */
 		for (j = 0; j < i; j++)
-			if (strcmp(tz_label(i), tz_label(j)) == 0) ok = 0;
+			if (strcmp(l1, tz_label(j)) == 0) ok = 0;
 	}
 	check(ok, "every rule parses in the ACK libc, labels fit and differ");
+
+	/* no file: UTC alone; a file of one's own: comments, blanks, bad
+	 * lines skipped, the last line without '\n' */
+	tz_use("/nonexistent/zones");
+	check(tz_count() == 1 && strcmp(tz_label(0), "UTC") == 0
+		&& strcmp(tz_rule(0), "UTC0") == 0
+		&& strcmp(tz_label(1), "other") == 0, "no zones file: UTC");
+	fd = open("settimetest.zones", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	{
+		static const char t[] = "# mine\n\n  Here/One  "
+			"CET-1CEST,M3.5.0,M10.5.0/3 \nBad\nToo/Long "
+			"ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN\nHere/Two\tEET-2";
+
+		(void) write(fd, t, sizeof t - 1);
+	}
+	close(fd);
+	tz_use("settimetest.zones");
+	check(tz_count() == 2 && strcmp(tz_label(1), "Here/Two") == 0
+		&& strcmp(tz_rule(1), "EET-2") == 0
+		&& strcmp(tz_label(0), "Here/One") == 0
+		&& strcmp(tz_rule(0), "CET-1CEST,M3.5.0,M10.5.0/3") == 0
+		&& tz_find("Here/Two", NULL) == 1, "a zones file of one's own");
+	unlink("settimetest.zones");
+	tz_use(TZ_SRC);
 
 	zone_offset("UTC", 0, 0);
 	zone_offset("Europe/London", 0, 60);

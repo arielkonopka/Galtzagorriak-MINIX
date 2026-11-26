@@ -1,13 +1,13 @@
 /* zones.h - the time zones people choose from (spec I.1, K.7, R18b.2):
- * a const table in flash, label -> POSIX TZ rule, shared by settings
- * time and the first-boot wizard (setup, Phase 18b).  No tz database on
- * the device.  /etc/TZ is the rule on its own line, with the label in a
+ * the text file /usr/share/zones on the card (TZ_FILE), label -> POSIX
+ * TZ rule, for settings time.  No tz database on the device.  /etc/TZ is the rule on its own line, with the label in a
  * '#' comment before it:
  *
  *	# Europe/Warsaw
  *	CET-1CEST,M3.5.0,M10.5.0/3
  *
- * Pure functions (no I/O), tested on the PC (tests/host/settimetest). */
+ * Tested on the PC (tests/host/settimetest, tz_use() on the source
+ * tree's file). */
 #ifndef ZONES_H
 #define ZONES_H
 
@@ -15,8 +15,13 @@
 
 #define TZ_RULE_MAX	40	/* longest rule kept, '\0' included */
 #define TZ_LABEL_MAX	32
+#define TZ_FILE		"/usr/share/zones"
 
-int tz_count(void);		/* entries 0 .. tz_count() - 1 */
+void tz_use(const char *path);	/* another file than TZ_FILE (tests) */
+
+/* Entries 0 .. tz_count() - 1 (no file: 1, UTC).  A label or rule is
+ * good until the next call of either. */
+int tz_count(void);
 const char *tz_label(int i);	/* "other" past the end */
 const char *tz_rule(int i);	/* "" past the end */
 

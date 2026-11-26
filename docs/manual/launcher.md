@@ -100,7 +100,7 @@ starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Bac
 | | Test | OK shows white at that brightness for a moment |
 | Time | Date | the local date; when the edit ends (OK) the clock moves to it at once and keeps the time of day (years up to 2099, as the clock chip counts) |
 | | Time | the local time of day (hours, minutes); when the edit ends the clock is set at once, with the seconds at 0 |
-| | Zone | the time zone: OK opens a list of about 80 places (`UTC`, `Europe/Warsaw`, `America/New_York`, ...), starting at the current one (`*`); OK chooses one. `other` is a zone you wrote into `/etc/TZ` yourself, kept as it is |
+| | Zone | the time zone: OK opens a list of about 80 places (`UTC`, `Europe/Warsaw`, `America/New_York`, ...), starting at the current one (`*`); OK chooses one. `other` is a zone you wrote into `/etc/TZ` yourself, kept as it is. The list is the text file `/usr/share/zones` on the card, a place and its POSIX rule a line (`Europe/Warsaw CET-1CEST,M3.5.0,M10.5.0/3`); add your own lines there. Without the file only `UTC` is offered |
 | | Clock | 24 h or 12 h, for the clock apps |
 | | Date fmt | D.M.Y, M/D/Y or Y-M-D, the order of a date's fields for the clock apps |
 | Auto off | Auto off | never, 10 min ... 4 h: power off after so long without a key (kept now; acting on it waits for the shutdown work, (planned)) |
