@@ -409,17 +409,34 @@ static int get_sig(const char *path, int i, struct irf_sig *s)
 
 /* ---- Learn ---- */
 
-static void learn(void)
+/* Does remote file path already have a button called name? */
+static int has_sig(const char *path, const char *name)
 {
-	char path[PATHMAX], l1[24], l2[32];
+	FILE *fp = fopen(path, "r");
+	struct irf f;
+	struct irf_sig s;
+	int r = 0;
+
+	if (!fp) return 0;
+	if (irf_open(&f, fp) == 0) {
+		s.data = t + 1;
+		s.cap = MAXT;
+		r = irf_find(&f, name, &s);
+	}
+	fclose(fp);
+	return r;
+}
+
+/* Learn buttons into remote file path (new or existing). */
+static void learn_into(const char *path)
+{
+	char l1[24], l2[32];
 	struct irf_sig s;
 	InfraredMessage m;
 	long n;
 	int key, nb = 0;
 
-	if (ensure_dir() < 0) { ui_note("cannot write", DIR_IR); return; }
 	if (irfd < 0 && !loopback) { ui_note("cannot open /dev/ir", "group ir?"); return; }
-	new_remote(path);
 	if (reader_start() < 0) { ui_note("cannot start", "the reader"); return; }
 	for (;;) {
 		ui_msg("Point the remote", "at the IR window, press");
@@ -453,6 +470,7 @@ static void learn(void)
 		if (key != KEY_OK) continue;
 		sprintf(s.name, "Button_%d", nb + 1);
 		if (!ui_text("BUTTON NAME", s.name, 21)) continue;
+		if (has_sig(path, s.name)) { ui_note("name already used", s.name); continue; }
 		if (save_sig(path, &s) < 0) ui_note("could not save", NULL);
 		else nb++;
 	}
@@ -461,6 +479,52 @@ static void learn(void)
 		sprintf(l2, "%d buttons", nb);
 		ui_note(strrchr(path, '/') + 1, l2);
 	}
+}
+
+/* Learn New Remote: ask for the remote's name (Back: cancel). */
+static void learn(void)
+{
+	char name[24], path[PATHMAX];
+
+	if (ensure_dir() < 0) { ui_note("cannot write", DIR_IR); return; }
+	new_remote(path);
+	strcpy(name, strrchr(path, '/') + 1);
+	name[strlen(name) - 3] = 0;			/* without ".ir" */
+	if (!ui_text("REMOTE NAME", name, 21) || !name[0]) return;
+	sprintf(path, "%s/%.21s.ir", DIR_IR, name);
+	learn_into(path);
+}
+
+/* Rewrite remote path without button i (nn == NULL) or with it renamed
+ * to nn, through path.tmp and rename(): a power cut keeps the old file. */
+static int edit_sig(const char *path, int i, const char *nn)
+{
+	char tmp[PATHMAX + 8];
+	FILE *in, *out;
+	struct irf f;
+	struct irf_sig s;
+	int r, k = 0, bad = 0;
+
+	sprintf(tmp, "%s.tmp", path);
+	if ((in = fopen(path, "r")) == NULL) return -1;
+	if (irf_open(&f, in) < 0) { fclose(in); return -1; }
+	if ((out = fopen(tmp, "w")) == NULL) { fclose(in); return -1; }
+	if (irf_write_header(out, IRF_SIGNALS) < 0) bad = 1;
+	s.data = t + 1;
+	s.cap = MAXT;
+	while (!bad && (r = irf_next(&f, &s)) != 0) {
+		if (r < 0) continue;
+		if (k++ == i) {
+			if (!nn) continue;
+			strncpy(s.name, nn, IRF_NAME_MAX);
+			s.name[IRF_NAME_MAX] = 0;
+		}
+		if (irf_write(out, &s) < 0) bad = 1;
+	}
+	fclose(in);
+	if (fclose(out) != 0) bad = 1;
+	if (bad || rename(tmp, path) < 0) { unlink(tmp); return -1; }
+	return 0;
 }
 
 /* ---- Saved remotes ---- */
@@ -516,18 +580,46 @@ static int sig_item(void *ctx, int i, char *buf)
 	return 0;
 }
 
-/* One remote: OK sends the selected button. */
+/* One remote: OK sends the selected button; Right: Rename, Delete,
+ * Add button (learn into this remote). */
 static void remote(const char *path, const char *title)
 {
+	static const char *const acts[] = { "Rename", "Delete", "Add button" };
 	struct sigctx c;
 	struct irf_sig s;
-	int n, sel = 0;
+	char nn[24];
+	int n, sel = 0, key, a;
 
 	c.path = path;
-	if ((n = count_sigs(path)) <= 0) { ui_note("no buttons in", title); return; }
 	for (;;) {
-		sel = ui_list(title, sig_item, &c, n, sel, 0, NULL);
+		if ((n = count_sigs(path)) <= 0) {
+			ui_note("no buttons in", title);
+			if (ui_menu("EMPTY REMOTE", &acts[2], 1) == 0) {
+				learn_into(path);
+				continue;
+			}
+			return;
+		}
+		sel = ui_list(title, sig_item, &c, n, sel, 1, &key);
 		if (sel < 0) return;
+		if (key == KEY_RIGHT) {
+			a = ui_menu("BUTTON", acts, 3);
+			if (a == 2) learn_into(path);
+			else if (a == 0 && get_sig(path, sel, &s) == 0) {
+				strcpy(nn, s.name);
+				if (!ui_text("BUTTON NAME", nn, 21)) continue;
+				if (strcmp(nn, s.name) && has_sig(path, nn))
+					ui_note("name already used", nn);
+				else if (edit_sig(path, sel, nn) < 0)
+					ui_note("could not save", NULL);
+			} else if (a == 1) {
+				a = ui_menu("DELETE BUTTON?", &acts[1], 1);
+				if (a == 0 && edit_sig(path, sel, NULL) < 0)
+					ui_note("could not save", NULL);
+				if (sel > 0) sel--;
+			}
+			continue;
+		}
 		if (get_sig(path, sel, &s) < 0) continue;
 		gui_led(0, 0, 40);
 		if (send_sig(&s) < 0) ui_note("not sent", irfd < 0 && !loopback
