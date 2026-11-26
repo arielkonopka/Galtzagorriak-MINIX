@@ -361,6 +361,50 @@ static unsigned ms(const unsigned char *n, int i)
 	return n[4*i+2] | n[4*i+3] << 8;
 }
 
+/* Own chirps (#480): the text both ways, the notes, the ranges. */
+static void chirps(void)
+{
+	unsigned char n[4 * TUNE_MAX], m[4 * TUNE_MAX];
+	struct tune_chirp c, d;
+	char txt[128];
+	int i, k, bad = 0;
+	long sum;
+
+	tune_chirp_read(&c, NULL);		/* the defaults */
+	CHECK(c.shape == 0 && c.a == 2100 && c.b == 4000 && c.rate == 2
+		&& c.duty == 80 && c.bal == 50 && c.len == 2, "chirp defaults");
+	k = tune_chirp_text(txt, sizeof txt, &c);
+	tune_chirp_read(&d, txt);
+	CHECK(k == (int) strlen(txt) && c.a == d.a && c.b == d.b
+		&& c.shape == d.shape && c.rate == d.rate && c.duty == d.duty
+		&& c.bal == d.bal && c.len == d.len
+		&& strncmp(txt, "Chirp: sweep\nA: 2100\n", 21) == 0,
+		"chirp text and back");
+	k = tune_parse(txt, n, TUNE_MAX);
+	CHECK(k > 0 && k <= TUNE_MAX && k == tune_chirp(&c, m, TUNE_MAX)
+		&& memcmp(n, m, 4 * k) == 0 && hz(n, 0) == 2100,
+		"tune_parse takes a chirp");
+	for (i = 0, sum = 0; i < k; i++) sum += ms(n, i);
+	CHECK(sum == 2000, "chirp: rate 2, 2 s: 2000 ms");
+	/* jump 700/1500, 4 a second, 70 % sound, 30 % of it on A, 3 s:
+	 * 250 ms a cycle = A 52, B 123, quiet 75 */
+	k = tune_parse("Chirp: jump\nA: 700\nB: 1500\nRate: 4\nDuty: 70\n"
+		       "Balance: 30\nLength: 3\n", n, TUNE_MAX);
+	CHECK(k == 36 && hz(n, 0) == 700 && ms(n, 0) == 52 && hz(n, 1) == 1500
+		&& ms(n, 1) == 123 && hz(n, 2) == 0 && ms(n, 2) == 75,
+		"chirp jump notes");
+	/* out of range: into the piezo's range; many cycles: cut to max */
+	tune_chirp_read(&c, "Chirp: sweep\nA: 50\nB: 9000\nRate: 99\n"
+			    "Duty: 100\nBalance: 0\nLength: 9\n");
+	CHECK(c.a == TC_HZMIN && c.b == TC_HZMAX && c.rate == 20
+		&& c.duty == 100 && c.bal == 10 && c.len == 5, "chirp ranges");
+	k = tune_chirp(&c, n, TUNE_MAX);
+	for (i = 0; i < k; i++)
+		if (hz(n, i) != 0 && (hz(n, i) < 200 || hz(n, i) > 4000)) bad = 1;
+	CHECK(k > 0 && k <= TUNE_MAX && !bad, "chirp: at most max, in range");
+	CHECK(tune_chirp_text(txt, 20, &c) == -1, "chirp text: small buffer");
+}
+
 /* Tones (7b.2): built-in, RTTTL, FMF; the alarm's fields. */
 static void tunes(void)
 {
@@ -409,6 +453,7 @@ static void tunes(void)
 		&& tune_parse("t:x=4:a", n, TUNE_MAX) == -1
 		&& tune_parse("t:d=4,o=5,b=120:a,z", n, TUNE_MAX) == -1
 		&& tune_parse("t:b=0:a", n, TUNE_MAX) == -1, "bad tunes");
+	chirps();
 
 	parse(&t, "Kind: daily\nTime: 07:00\nCategory: alarm\nTone: rise\n"
 		  "Ring: 15\nRamp: yes\nSnooze: 9\nTitle: Wake\n");

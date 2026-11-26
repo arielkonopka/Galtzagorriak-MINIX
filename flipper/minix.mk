@@ -1199,7 +1199,7 @@ $(MB)/cmd/app/%.o: apps/%.c
 PKGDIR	:= $(MB)/pkgs
 PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.6.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.4.tar \
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.5.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
 	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
@@ -1233,9 +1233,9 @@ $(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   -i @bell --postinst rootfs/remind.postinst --prerm rootfs/remind.prerm \
 	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 # Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
-$(PKGDIR)/alarm_1.4.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+$(PKGDIR)/alarm_1.5.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.4 -d timed -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n alarm -v 1.5 -d timed -o $(PKGDIR) \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<
@@ -1344,7 +1344,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.95
+BASE_VER := 4.96
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.

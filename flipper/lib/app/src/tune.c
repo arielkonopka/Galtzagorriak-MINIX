@@ -6,7 +6,9 @@
  * RTTTL:	name:d=4,o=5,b=100:8e6,8p,c#.6,...
  * FMF:		Filetype: Flipper Music Format / Version: 0 / BPM: 120 /
  *		Duration: 8 / Octave: 5 / Notes: 8A#5., P, C6, ...
- * A note in either: [duration]letter[#][.][octave][.]; letters a-g (h
+ * Chirp:	Chirp: sweep / A: 2100 / B: 4000 / Rate: 2 / Duty: 80 /
+ *		Balance: 50 / Length: 2 (two tones in Hz, app.h)
+ * A note in RTTTL or FMF: [duration]letter[#][.][octave][.]; letters a-g (h
  * is b), p is a rest.  The tunes are short: the alert writes one
  * /dev/speaker block (TUNE_MAX notes) per ring, longer tunes are cut.
  */
@@ -148,11 +150,150 @@ static const char *fmf_key(const char *src, const char *key)
 	return NULL;
 }
 
+/* ---- own chirps (owner's idea, #480): two tones in Hz, not notes ---- */
+
+static int clamp(int v, int lo, int hi)
+{
+	return v < lo ? lo : v > hi ? hi : v;
+}
+
+static int put(unsigned char *out, int n, long hz, long ms)
+{
+	if (ms < 1) return n;
+	if (ms > 65535) ms = 65535;
+	out[4*n] = hz & 0xFF; out[4*n+1] = hz >> 8;
+	out[4*n+2] = ms & 0xFF; out[4*n+3] = ms >> 8;
+	return n + 1;
+}
+
+static void chirp_fix(struct tune_chirp *c)
+{
+	c->a = (unsigned short) clamp(c->a, TC_HZMIN, TC_HZMAX);
+	c->b = (unsigned short) clamp(c->b, TC_HZMIN, TC_HZMAX);
+	c->shape = c->shape != 0;
+	c->rate = (unsigned char) clamp(c->rate, 1, 20);
+	c->duty = (unsigned char) clamp(c->duty, 10, 100);
+	c->bal = (unsigned char) clamp(c->bal, 10, 90);
+	c->len = (unsigned char) clamp(c->len, 1, 5);
+}
+
+/* One cycle: the sound (duty of it), A for bal of the sound and B for
+ * the rest (jump), or a sweep A to B in bal of it and back to A (sweep),
+ * then the silence.  As many cycles as rate * len and max allow. */
+int tune_chirp(const struct tune_chirp *cp, unsigned char *out, int max)
+{
+	struct tune_chirp c = *cp;
+	long per, snd, gap, up, dn, a, b;
+	int cyc, k, steps = 2, su, sd, n = 0, i, j;
+
+	chirp_fix(&c);
+	per = 1000L / c.rate;
+	snd = per * c.duty / 100;
+	gap = per - snd;
+	up = snd * c.bal / 100;
+	dn = snd - up;
+	a = c.a;
+	b = c.b;
+	cyc = c.rate * c.len;
+	k = gap > 0;				/* the rest note */
+	if (c.shape == 0) {			/* a sweep: steps of >= 10 ms */
+		steps = max / cyc - k;
+		if (steps > 24) steps = 24;
+		if (steps > snd / 10) steps = (int) (snd / 10);
+		if (steps < 2) steps = 2;
+	}
+	if (cyc * (steps + k) > max) cyc = max / (steps + k);
+	su = steps * c.bal / 100;
+	if (su < 1) su = 1;
+	if (su > steps - 1) su = steps - 1;
+	sd = steps - su;
+	for (i = 0; i < cyc; i++) {
+		if (c.shape != 0) {
+			n = put(out, n, a, up);
+			n = put(out, n, b, dn);
+		} else {
+			for (j = 0; j < su; j++)
+				n = put(out, n, a + (b - a) * j / su,
+					up * (j + 1) / su - up * j / su);
+			for (j = 0; j < sd; j++)
+				n = put(out, n, b + (a - b) * j / sd,
+					dn * (j + 1) / sd - dn * j / sd);
+		}
+		n = put(out, n, 0, gap);
+	}
+	return n;
+}
+
+static int keynum(const char *src, const char *key, int def)
+{
+	const char *p = fmf_key(src, key);
+	int v;
+
+	return p != NULL && (v = number(&p)) >= 0 ? v : def;
+}
+
+void tune_chirp_read(struct tune_chirp *c, const char *src)
+{
+	const char *p = src != NULL ? fmf_key(src, "Chirp") : NULL;
+
+	c->shape = p != NULL && lower(*p) == 'j';
+	if (src == NULL) src = "";
+	c->a = (unsigned short) keynum(src, "A", 2100);
+	c->b = (unsigned short) keynum(src, "B", 4000);
+	c->rate = (unsigned char) keynum(src, "Rate", 2);
+	c->duty = (unsigned char) keynum(src, "Duty", 80);
+	c->bal = (unsigned char) keynum(src, "Balance", 50);
+	c->len = (unsigned char) keynum(src, "Length", 2);
+	chirp_fix(c);
+}
+
+static char *dec(char *s, unsigned v)
+{
+	char t[6];
+	int i = 0;
+
+	do t[i++] = '0' + v % 10; while ((v /= 10) != 0 && i < 5);
+	while (i > 0) *s++ = t[--i];
+	return s;
+}
+
+int tune_chirp_text(char *buf, int size, const struct tune_chirp *cp)
+{
+	static const char *const k[6] = {
+		"\nA: ", "\nB: ", "\nRate: ", "\nDuty: ", "\nBalance: ",
+		"\nLength: "
+	};
+	struct tune_chirp c = *cp;
+	unsigned v[6];
+	char *s = buf;
+	int i;
+
+	if (size < 96) return -1;
+	chirp_fix(&c);
+	v[0] = c.a; v[1] = c.b; v[2] = c.rate; v[3] = c.duty; v[4] = c.bal;
+	v[5] = c.len;
+	strcpy(s, c.shape ? "Chirp: jump" : "Chirp: sweep");
+	s += strlen(s);
+	for (i = 0; i < 6; i++) {
+		strcpy(s, k[i]);
+		s = dec(s + strlen(s), v[i]);
+	}
+	*s++ = '\n';
+	*s = 0;
+	return (int) (s - buf);
+}
+
 int tune_parse(const char *src, unsigned char *out, int max)
 {
 	const char *p, *q;
 	int d = 4, o = 6, b = 63, v;
 
+	if (fmf_key(src, "Chirp") != NULL) {
+		struct tune_chirp c;
+
+		tune_chirp_read(&c, src);
+		return tune_chirp(&c, out, max);
+	}
 	if (fmf_key(src, "Notes") != NULL) {
 		if ((p = fmf_key(src, "BPM")) != NULL) b = number(&p);
 		if ((p = fmf_key(src, "Duration")) != NULL) d = number(&p);
