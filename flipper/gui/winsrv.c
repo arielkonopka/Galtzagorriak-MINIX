@@ -98,6 +98,9 @@ struct ses {
 	unsigned short keep_first;
 	char root[16];			/* the id of the first window */
 	unsigned char rkey;		/* pad: the key that repeats, 0 none */
+	unsigned char locked;		/* WIN_LOCKED: the app is the lock
+					 * screen, no key reaches it */
+	unsigned char unlock;		/* keys of Back, OK, Back so far */
 	unsigned char rep_iv;		/* its repeats: every so many ticks */
 	long rep_t;			/* ticks: its next repeat */
 };
@@ -874,7 +877,8 @@ static void hints(struct ses *s, struct wr_win *w, char *h)
 	int i;
 
 	h[0] = 0;
-	if (s->kb) t = "OK Type  Back Cancel";
+	if (s->locked) t = "Back OK Back unlocks";
+	else if (s->kb) t = "OK Type  Back Cancel";
 	else if (w == NULL) ;
 	else if (w->kind == WK_PAD) t = "Keys go to the app  Back";
 	else if (w->kind == WK_LIST && w->nrows > 0) {
@@ -1006,7 +1010,8 @@ static void draw(struct ses *s)
 		t[3] = (char) ('0' + tm->tm_min / 10);
 		t[4] = (char) ('0' + tm->tm_min % 10);
 		t[5] = 0;
-		gui_text_big(24, 10, t, 4);
+		gui_text_seg(24, 10, t);	/* 16x24 segments: the same
+						 * 80x24 as the 4x6 font x4 */
 		for (i = 0, y = 38; i < w->nrows && y < 52; i++)
 			if (w->row[i].kind == RK_LINE) {
 				center_n(y, wr_label(w, i));
@@ -1072,6 +1077,8 @@ static void timed(struct ses *s)
 
 /* Start a window app and serve it until it ends or Back closes it.  NULL,
  * or a notice for the launcher's message line. */
+const char win_unlocked[] = "";		/* win_run's note: the keys unlocked it */
+
 char *win_run(const char *label, const char *cmd, struct passwd *pw, int log,
 	      char *extra)
 {
@@ -1095,7 +1102,8 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log,
 	}
 	memset(&s, 0, sizeof s);
 	s.label = label;
-	s.log = (char) log;
+	s.log = (char) (log & 1);
+	s.locked = (log & WIN_LOCKED) != 0;
 	s.cur = s.par = s.bslot = -1;
 	s.evfd = evp[1];
 	s.recfd = recp[0];
@@ -1147,6 +1155,19 @@ char *win_run(const char *label, const char *cmd, struct passwd *pw, int log,
 		}
 		if (k == 0) {
 			timed(&s);
+			continue;
+		}
+		if (s.locked) {		/* the lock screen: only the unlock keys
+					 * count, the app sees none */
+			static const int seq[3] = { KEY_BACK, KEY_OK, KEY_BACK };
+
+			k &= ~GUI_CLICK;
+			s.unlock = k == seq[s.unlock] ? s.unlock + 1
+						      : k == KEY_BACK ? 1 : 0;
+			if (s.unlock == 3) {
+				(void) end(&s, 1);
+				note = (char *) win_unlocked;
+			}
 			continue;
 		}
 		if (s.note != NULL && !s.kb) s.note = NULL;

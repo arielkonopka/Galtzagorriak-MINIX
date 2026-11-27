@@ -10,7 +10,7 @@ done today, or use the desk clock.
 ```
 pkg install /lib/pkg/timed_1.7.tar     # needed by both
 pkg install /lib/pkg/remind_1.1.tar
-pkg install /lib/pkg/alarm_1.5.tar
+pkg install /lib/pkg/alarm_1.6.tar
 ```
 
 Each package adds its own user (`remind`, uid 21; `alarm`, uid 22; both in group `timers`), a line
@@ -167,6 +167,9 @@ never looks at it; switching it on moves it back to `/var/timers/alarm-N`. Ordua
 lines under it: the next alarm (`Next 07:00`, or `Next Tue 07:00` when it is more than a day
 away; `No alarm on`) and its label. Ordua sleeps meanwhile (no wake-ups). Back returns to the
 list. The backlight follows the system setting (Settings → Display).
+The time is in seven-segment digits. The desk clock can also be the launcher's lock screen
+(Settings → Auto off → `Lock clock: desk clock`): the launcher then opens Ordua at the desk clock
+when it locks, and only Back, OK, Back in a row leave it.
 
 From the shell:
 

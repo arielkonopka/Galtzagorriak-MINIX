@@ -4,6 +4,8 @@
  *
  * Usage:	alarm		the app (started by the launcher: "=" in
  *				/etc/apps, its pipes on fd 3 and 4)
+ *		alarm -c	the app, opened at the desk clock (the
+ *				launcher's lock screen, "Lock clock")
  *		alarm -n	the next alarm, as text
  *
  * The desktop draws; the app only describes its windows (libgm) and
@@ -788,8 +790,9 @@ int main(int argc, char **argv)
 		if (nat_become(APP) < 0) return 1;
 		return print_next();
 	}
-	if (argc != 1) {
-		(void) write(2, "usage: alarm [-n]\n", 18);
+	if (argc == 2 && strcmp(argv[1], "-c") == 0) argc = 0;	/* the clock */
+	else if (argc != 1) {
+		(void) write(2, "usage: alarm [-n|-c]\n", 21);
 		return 2;
 	}
 	if (gm_init(buf, sizeof buf) < 0) {
@@ -797,7 +800,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	if (nat_become(APP) < 0) return 1;	/* never on as root */
-	w_list();
+	if (argc == 0) w_clock();
+	else w_list();
 	for (;;) {
 		switch (gm_event(ev, sizeof ev, f, GM_FIELDS)) {
 		case GM_OK:

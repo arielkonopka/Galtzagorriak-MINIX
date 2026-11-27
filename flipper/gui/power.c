@@ -89,16 +89,21 @@ int main(void)
 		if (!ok) {
 			gui_center(26, "no gauge", 0);
 		} else {
-			sprintf(line, "%d mA", g.ma);
-			w = (int) strlen(line) * 4 * 3;
-			gui_text_big((GUI_W - w) / 2, 10, line, 3);
+			/* the current in segment digits (16x24, the user's
+			 * wish), its unit beside it in the small font; the
+			 * rows below moved 2 pixels down for it */
+			sprintf(line, "%d", g.ma);
+			w = (int) strlen(line) * 16 + 2 + 2 * 4;
+			k = (GUI_W - w) / 2;
+			k += gui_text_seg(k, 8, line) + 2;
+			gui_text(k, 8 + 24 - 6, "mA", 0);
 			sprintf(line, "avg %d mA   %d%%", g.avg, g.soc);
-			gui_center(31, line, 0);
+			gui_center(33, line, 0);
 			sprintf(line, "%d.%03d V   %d.%d C", g.mv / 1000,
 				g.mv % 1000, g.temp / 10,
 				(g.temp < 0 ? -g.temp : g.temp) % 10);
-			gui_center(38, line, 0);
-			gui_center(45, g.chg == 3 ? "charged" :
+			gui_center(40, line, 0);
+			gui_center(47, g.chg == 3 ? "charged" :
 				g.chg != 0 || g.ma > 0 ? "charging" :
 				usb ? "on USB" : "on battery", 0);
 			if (usb) {

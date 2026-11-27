@@ -30,6 +30,9 @@ void gui_frame(int x0, int y0, int x1, int y1);
 int gui_text(int x, int y, const char *s, int inverse);	/* pixels used */
 void gui_center(int y, const char *s, int inverse);
 int gui_text_big(int x, int y, const char *s, int k);	/* k times larger */
+/* Seven-segment digits, 16x24 a character (segfont.h): 0-9, ':' and '-';
+ * any other character is a blank cell.  Returns the width drawn. */
+int gui_text_seg(int x, int y, const char *s);
 void gui_title(const char *s);		/* inverse bar on the top line */
 void gui_flush(void);
 int gui_key(void);			/* next key press (blocking) */

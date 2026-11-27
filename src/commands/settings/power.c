@@ -11,6 +11,9 @@ const struct srow power_rows[] = {
 	  "never|10 min|30 min|1 h|2 h|4 h" },
 	{ "Auto lock", S_ENUM, 0, 0, 4, 1, "",
 	  "never|1 min|5 min|10 min|30 min" },
+	/* the locked screen: the time in the small font, or Ordua's desk
+	 * clock (the user's wish, 2026-11-27) */
+	{ "Lock clock", S_ENUM, 0, 0, 1, 1, "", "small|desk clock" },
 };
 
 int power_fn(int op, int row, void *buf)
@@ -19,6 +22,6 @@ int power_fn(int op, int row, void *buf)
 
 	(void) row; (void) buf;
 	if (op == SG_LOAD)
-		for (i = 0; i < 2; i++) if (sg_val[i] < 0) sg_val[i] = 0;
+		for (i = 0; i < 3; i++) if (sg_val[i] < 0) sg_val[i] = 0;
 	return 0;
 }

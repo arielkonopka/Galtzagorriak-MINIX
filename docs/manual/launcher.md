@@ -105,6 +105,7 @@ starts editing it (Left/Right choose the field, Up/Down change it, OK ends), Bac
 | | Date fmt | D.M.Y, M/D/Y or Y-M-D, the order of a date's fields for the clock apps |
 | Auto off | Auto off | never, 10 min ... 4 h: power off after so long without a key (kept now; acting on it waits for the shutdown work, (planned)) |
 | | Auto lock | never, 1 min ... 30 min: the launcher locks after so long without a key. The screen shows `LOCKED`, the time and `Back OK Back unlocks`; press Back, OK, Back in a row (a wrong key starts again; stock uses Back three times). It counts from your last key on the launcher, and from the moment a program you started ends. Only the launcher locks: a program that is running keeps its keys |
+| | Lock clock | `small`: the lock screen shows `LOCKED` and the time in the small font. `desk clock`: Ordua's Desk clock is the lock screen (the time in segment digits, the next alarm, `Back OK Back unlocks` on the hint line); no key reaches Ordua while it is locked. Without the `alarm` package the launcher shows the time in segment digits itself |
 | Region | Set | the radio region in `/etc/flipper/region` (read-only here: `region set CC` changes it, see [Sub-GHz](subghz.md)) |
 | | Kernel | the region the kernel applies now |
 | | Transmit | `region rules`, or `off (rx only)` when no region is set |
