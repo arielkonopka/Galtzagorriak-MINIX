@@ -9,6 +9,13 @@
  *				rewrite /etc/radio.slot
  *	radio rm NAME		(root) delete /home/flipper/radio/NAME, rewrite the
  *				slot
+ *	radio write NAME	(root; T30b) check NAME again, write its image
+ *				at the manifest's address and read it back.
+ *				Only with FUS alone in CPU2's flash (the old
+ *				stack deleted): the kernel refuses any other
+ *				place (the radio window)
+ *	radio wtest		(root) try the writer on the 16 KB guard
+ *				under CPU2's flash: a pattern, read back
  *
  * /etc/radio.slot holds one number: the lowest ST install address of the
  * images on the card that pass the checks (missing: no slot).  The flash
@@ -41,6 +48,7 @@
 #define FILE_SLOT "/etc/radio.slot"
 
 static char root[128];			/* HOST tests: RADIO_ROOT prefix */
+static char imgpath[192];		/* check(): the image it hashed */
 static const char *fus;			/* -F */
 
 static const char *path(char *buf, size_t bs, const char *a, const char *b,
@@ -109,6 +117,7 @@ static int check(const char *name, struct rd_man *m)
 	if (!img[0]) return 100;
 	if ((fd = open(path(p, sizeof(p), DIR_RD, name, img), O_RDONLY)) < 0)
 		return 100;
+	strcpy(imgpath, p);
 	mdm_sha_init(&c);
 	while ((n = (int) read(fd, buf, sizeof(buf))) > 0) {
 		mdm_sha_add(&c, buf, (unsigned long) n);
@@ -248,6 +257,105 @@ static int rm(const char *name)
 	return slot_write();
 }
 
+#ifndef HOST
+/* One piece (8-256 bytes, a multiple of 8) into the radio window, through
+ * MM and the kernel's flash path; a piece at a page start erases the page. */
+static int piece(unsigned long addr, unsigned char *b, int n)
+{
+	message m;
+
+	m.m1_i1 = n;
+	m.m1_i2 = MI_RADIOWR;
+	m.m1_i3 = (int) addr;
+	m.m1_p1 = (char *) b;
+	return _syscall(MM, MEMINFO, &m);
+}
+
+/* size bytes to addr: from the file fd, or (fd < 0) a pattern; then read
+ * back through /dev/mem and compared.  0, or 1 with a message. */
+static int put(int fd, unsigned long addr, unsigned long size)
+{
+	unsigned char b[256], c[256];
+	unsigned long done;
+	int n, i, mem, pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		if (fd >= 0 && lseek(fd, (off_t) 0, SEEK_SET) < 0) return 1;
+		if (pass == 1 && ((mem = open("/dev/mem", O_RDONLY)) < 0
+		    || lseek(mem, (off_t) addr, SEEK_SET) == (off_t) -1)) {
+			fprintf(stderr, "radio: /dev/mem: %s\n", strerror(errno));
+			return 1;
+		}
+		for (done = 0; done < size; done += (unsigned long) n) {
+			n = size - done > sizeof(b) ? (int) sizeof(b)
+						    : (int) (size - done);
+			if (fd >= 0) {
+				if (read(fd, b, (size_t) n) != n) {
+					fprintf(stderr, "radio: the image: %s\n",
+						strerror(errno));
+					return 1;
+				}
+			} else for (i = 0; i < n; i++)
+				b[i] = (unsigned char) ((done + i) * 7 + 3);
+			while (n % 8 != 0) b[n++] = 0xFF;	/* erased */
+			if (pass == 0) {
+				if (piece(addr + done, b, n) < 0) {
+					fprintf(stderr, "radio: write at 0x%08lX: "
+						"%s\n", addr + done, strerror(errno));
+					return 1;
+				}
+			} else if (read(mem, c, (size_t) n) != n
+				   || memcmp(b, c, (size_t) n) != 0) {
+				fprintf(stderr, "radio: 0x%08lX does not read "
+					"back\n", addr + done);
+				close(mem);
+				return 1;
+			}
+			if ((done & 0x3FFF) == 0) {
+				putchar(pass == 0 ? '.' : '+');
+				fflush(stdout);
+			}
+		}
+	}
+	close(mem);
+	printf("\n%lu bytes at 0x%08lX written and read back\n", size, addr);
+	return 0;
+}
+
+static int wr(const char *name)
+{
+	struct rd_man m;
+	int r, fd;
+
+	if (!*name || strchr(name, '/') || name[0] == '.') return usage();
+	if ((r = check(name, &m)) != 0) {
+		fprintf(stderr, "radio: %s: %s\n", name, r >= 100
+			? "no manifest or image" : rd_err(r));
+		return 1;
+	}
+	if ((fd = open(imgpath, O_RDONLY)) < 0) {
+		fprintf(stderr, "radio: %s: %s\n", imgpath, strerror(errno));
+		return 1;
+	}
+	printf("%s %s: %lu bytes to 0x%08lX\n", m.name, m.version, m.size,
+		m.addr);
+	r = put(fd, m.addr, m.size);
+	close(fd);
+	return r;
+}
+
+static int wtest(void)
+{
+	struct fcinfo fi;
+	message m;
+
+	m.m1_p1 = (char *) &fi;
+	m.m1_i2 = MI_FCACHE;
+	if (_syscall(MM, MEMINFO, &m) < 0) return 1;
+	return put(-1, fi.sfsa - 4 * RD_PAGE, 4 * RD_PAGE);
+}
+#endif
+
 static int status(void)
 {
 	struct rd_layout l;
@@ -297,10 +405,14 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "list") == 0 && argc == i) return list();
 #ifndef HOST
 	if (geteuid() != 0 && (strcmp(argv[1], "add") == 0
-			       || strcmp(argv[1], "rm") == 0)) {
+			       || strcmp(argv[1], "rm") == 0
+			       || strcmp(argv[1], "write") == 0
+			       || strcmp(argv[1], "wtest") == 0)) {
 		fprintf(stderr, "radio: %s: only root\n", argv[1]);
 		return 1;
 	}
+	if (strcmp(argv[1], "write") == 0 && argc == 3) return wr(argv[2]);
+	if (strcmp(argv[1], "wtest") == 0 && argc == 2) return wtest();
 #endif
 	if (strcmp(argv[1], "add") == 0 && argc == i + 1) return add(argv[i]);
 	if (strcmp(argv[1], "rm") == 0 && argc == 3) return rm(argv[2]);

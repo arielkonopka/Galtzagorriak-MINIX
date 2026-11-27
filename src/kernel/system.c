@@ -329,7 +329,7 @@ message *m_ptr;
 			|| TDIFF(get_uptime(), k_input) < HZ
 			|| ir_busy()))
 	return(EAGAIN);
-  if (op == FL_WRITE) {
+  if ((op & ~FL_RADIO) == FL_WRITE) {
 	src = umap(proc_addr(MM_PROC_NR), D, (vir_bytes) m_ptr->m1_p1,
 							(vir_bytes) len);
 	if (src == 0) return(EFAULT);

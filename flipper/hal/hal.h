@@ -447,6 +447,7 @@ enum { HAL_FL_SFSA, HAL_FL_INST, HAL_FL_INST_SIZE, HAL_FL_CACHE,
 #define HAL_ROM_SIZE	(32 * 1024u)
 uint32_t hal_rom_base(void);	/* the same, without the layout table */
 void hal_flash_layout(uint32_t *l);
+int hal_flash_radio_ok(uint32_t addr, uint32_t len);	/* T30b */
 /* /dev/mem and /dev/kmem: how many of the len bytes from addr can be read
  * (write: written) without a bus fault; 0: none (outside every range). */
 uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write);

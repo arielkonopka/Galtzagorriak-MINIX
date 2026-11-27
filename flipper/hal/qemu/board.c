@@ -783,6 +783,12 @@ unsigned hal_disk_mhz;
 #define QFL_GUARD	(4u * 4096u)	/* as the Flipper's GUARD_PAGES */
 #define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xB000u)	/* dirs, /dev/rom, a page */
 
+int hal_flash_radio_ok(uint32_t addr, uint32_t len)	/* no CPU2 */
+{
+	(void) addr; (void) len;
+	return 0;
+}
+
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
 {
 	uint32_t sfsa = FAKE_SFSA[0], top;

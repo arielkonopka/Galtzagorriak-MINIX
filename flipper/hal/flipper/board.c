@@ -4932,6 +4932,16 @@ void hal_tone(unsigned hz, unsigned vol)
 					 * both libraries are in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	4u
+/* T30b, changing CPU2's stack.  With FUS alone in CPU2's flash (the old
+ * stack deleted) SFSA is FUS's own start, above every stack's install
+ * address: seen from HAL_NOSTACK up.  Then there is no cache (it would be
+ * laid where the new image goes) and the installed region is the one of
+ * the BLE light stack, so MM sees no change; the image is written into
+ * the radio window, HAL_RADIO_FLOOR .. SFSA.  With a stack installed the
+ * window is the guard, which nothing of ours uses: a place to try the
+ * writer. */
+#define HAL_NOSTACK	(FLASH_BASE + 0xF0000u)
+#define HAL_RADIO_FLOOR	(FLASH_BASE + 0xB3000u)
 
 void hal_flash_layout(uint32_t *l)
 {
@@ -4949,10 +4959,26 @@ void hal_flash_layout(uint32_t *l)
 	}
 	l[HAL_FL_ROM] = inst + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
+	if (sfsa >= HAL_NOSTACK) {		/* FUS alone: see above */
+		l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+		l[HAL_FL_INST] = inst;
+		l[HAL_FL_INST_SIZE] = HAL_RADIO_FLOOR - inst;
+		return;
+	}
 	l[HAL_FL_CACHE] = top - HAL_CACHE_SIZE;
 	l[HAL_FL_CACHE_SIZE] = HAL_CACHE_SIZE;
 	l[HAL_FL_INST] = inst;
 	l[HAL_FL_INST_SIZE] = top - HAL_CACHE_SIZE - inst;
+}
+
+/* Whether [addr, addr+len) is in the radio window (no table: small). */
+int hal_flash_radio_ok(uint32_t addr, uint32_t len)
+{
+	uint32_t sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
+	uint32_t lo = sfsa >= HAL_NOSTACK ? HAL_RADIO_FLOOR
+					  : sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
+
+	return len != 0 && addr >= lo && addr < sfsa && len <= sfsa - addr;
 }
 
 /* For the MEMORY task, whose stack has no room for the layout table. */
@@ -5056,6 +5082,7 @@ static int flash_ok(uint32_t addr, unsigned len)	/* cache, installed */
 {
 	uint32_t l[HAL_FL_N];
 
+	if (hal_flash_radio_ok(addr, len)) return 1;	/* the kernel asked */
 	hal_flash_layout(l);
 	if (addr >= l[HAL_FL_CACHE] && len <= l[HAL_FL_CACHE_SIZE]
 			&& addr - l[HAL_FL_CACHE] <= l[HAL_FL_CACHE_SIZE] - len)
