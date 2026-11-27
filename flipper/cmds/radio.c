@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include "radio.h"
 #include "modem.h"
@@ -62,7 +63,7 @@ static const char *path(char *buf, size_t bs, const char *a, const char *b,
 static int usage(void)
 {
 	fprintf(stderr, "usage: radio [list [-F X.Y.Z] | add [-F X.Y.Z] NAME |"
-		" rm NAME]\n");
+		" rm NAME |\n       install NAME]\n");
 	return 2;
 }
 
@@ -380,6 +381,189 @@ static int wclear(const char *a, const char *n)
 }
 #endif
 
+#ifndef HOST
+/* radio install NAME (T30b): the whole swap, across the resets FUS makes.
+ * The job is a line in FILE_TODO: the name, the step, the boots spent;
+ * /etc/rc runs "radio resume" while the file is there.  The steps, each
+ * decided from what CPU2 reports (/dev/power) and where its flash starts:
+ *	del	a stack runs: FUS_GetState twice (a reset into FUS); FUS with
+ *		a stack installed: FUS_FW_DELETE (a reset); else on to
+ *	wr	the image into the radio window, read back; a reboot
+ *	up	FUS_FW_UPGRADE (FUS resets the MCU, twice seen)
+ *	fin	CPU2 started so that FUS can go on; done once the stack runs
+ * The user must be there: a power cut in "up" or "fin" is FUS's to mend
+ * (AN5185 1.5). */
+#define FILE_TODO "/etc/radio.todo"
+#define FUS_BASE  0x080F4000UL
+
+static int pw(const char *cmd)
+{
+	int fd = open("/dev/power", O_WRONLY), r;
+
+	if (fd < 0) return -1;
+	r = write(fd, cmd, strlen(cmd));
+	close(fd);
+	return r < 0 ? -1 : 0;
+}
+
+/* CPU2 as /dev/power shows it: 0 a stack runs, 1 FUS, -1 not ready; st[]
+ * the last FUS_GetState answer (state, error) or 0x100s. */
+static int c2state(unsigned st[2])
+{
+	char b[240], *p;
+	int fd = open("/dev/power", O_RDONLY), n;
+
+	st[0] = st[1] = 0x100;
+	if (fd < 0) return -1;
+	n = read(fd, b, sizeof(b) - 1);
+	close(fd);
+	if (n <= 0) return -1;
+	b[n] = 0;
+	if ((p = strstr(b, " shci=fc52:")) != NULL) {
+		st[0] = (unsigned) strtoul(p + 11, &p, 16);
+		if (*p == '.') st[1] = (unsigned) strtoul(p + 1, NULL, 16);
+	}
+	if ((p = strstr(b, ",status")) == NULL) return -1;
+	return p[7] == '0' ? 0 : p[7] == '1' ? 1 : -1;
+}
+
+static unsigned long sfsa_now(void)
+{
+	struct fcinfo fi;
+	message m;
+
+	m.m1_p1 = (char *) &fi;
+	m.m1_i2 = MI_FCACHE;
+	if (_syscall(MM, MEMINFO, &m) < 0) return 0;
+	return fi.sfsa < RD_FLASH ? fi.sfsa + RD_FLASH : fi.sfsa;
+}
+
+static int todo_put(const char *name, const char *step, int boots)
+{
+	FILE *f = fopen(FILE_TODO, "w");
+
+	if (f == NULL) return -1;
+	fprintf(f, "%s %s %d\n", name, step, boots);
+	fclose(f);
+	sync();
+	return 0;
+}
+
+static int give_up(const char *why)
+{
+	fprintf(stderr, "radio: install stopped: %s\n", why);
+	unlink(FILE_TODO);
+	sync();
+	return 1;
+}
+
+static int resume(void)
+{
+	char name[40], step[8], msg[64];
+	unsigned st[2];
+	int boots = 0, c2 = -1, i;
+	FILE *f = fopen(FILE_TODO, "r");
+
+	if (f == NULL) return 0;			/* nothing to do */
+	/* A key on the console must not stop this half way (seen: ^C from
+	 * the bench script killed it in /etc/rc, during the write). */
+	signal(SIGINT, SIG_IGN);
+	signal(SIGQUIT, SIG_IGN);
+	signal(SIGHUP, SIG_IGN);
+	i = fscanf(f, "%39s %7s %d", name, step, &boots);
+	fclose(f);
+	if (i != 3) return give_up("a bad " FILE_TODO);
+	if (++boots > 8) return give_up("too many restarts");
+	todo_put(name, step, boots);
+	pw("cpu2");
+	for (i = 0; i < 10 && (c2 = c2state(st)) < 0; i++) sleep(1);
+	if (c2 < 0) return give_up("CPU2 does not answer");
+	printf("radio: install %s, step %s\n", name, step);
+
+	if (strcmp(step, "del") == 0) {
+		if (c2 == 0) {				/* stack -> FUS */
+			pw("fus?"); sleep(1); pw("fus?");
+			sleep(8);
+			return give_up("the stack did not give way to FUS");
+		}
+		if (sfsa_now() < FUS_BASE) {
+			pw("fusdel");
+			sleep(8);
+			return give_up("FUS did not delete the stack");
+		}
+		strcpy(step, "wr");
+	}
+	if (strcmp(step, "wr") == 0) {
+		if (c2 != 1 || sfsa_now() != FUS_BASE)
+			return give_up("not FUS alone before the write");
+		if (wr(name) != 0) return give_up("the image was not written");
+		todo_put(name, "up", boots);
+		fflush(stdout);
+		/* the command, not reboot(2): the call alone did not come
+		 * back and did not restart (seen on the device) */
+		execl("/bin/reboot", "reboot", (char *) NULL);
+		return give_up("cannot run /bin/reboot");
+	}
+	if (strcmp(step, "up") == 0) {
+		if (c2 != 1) return give_up("FUS does not run");
+		pw("fus?");
+		if (c2state(st) != 1 || st[0] != 0)
+			return give_up("FUS is not idle");
+		todo_put(name, "fin", boots);
+		pw("fusup");
+		sleep(15);				/* FUS resets the MCU */
+		pw("fus?");
+		c2state(st);
+		sprintf(msg, "FUS refused the image (state %02x, error %02x)",
+			st[0], st[1]);
+		return give_up(msg);
+	}
+	if (strcmp(step, "fin") == 0) {
+		for (i = 0; i < 20 && c2 != 0; i++) {	/* FUS at work: a reset */
+			sleep(1);
+			c2 = c2state(st);
+		}
+		if (c2 == 0) {
+			unlink(FILE_TODO);
+			sync();
+			printf("radio: %s installed, the stack runs\n", name);
+			return 0;
+		}
+		pw("fus?");
+		c2state(st);
+		if (st[0] == 0 && st[1] == 0 && sfsa_now() < FUS_BASE) {
+			pw("fusws");			/* installed: start it */
+			sleep(8);
+		}
+		sprintf(msg, "FUS state %02x, error %02x", st[0], st[1]);
+		return give_up(msg);
+	}
+	return give_up("an unknown step");
+}
+
+static int install(const char *name)
+{
+	struct rd_man m;
+	int r;
+
+	if (!*name || strlen(name) > 39 || strchr(name, '/') || name[0] == '.')
+		return usage();
+	if ((r = check(name, &m)) != 0) {
+		fprintf(stderr, "radio: %s: %s\n", name, r >= 100
+			? "no manifest or image" : rd_err(r));
+		return 1;
+	}
+	printf("%s %s: CPU2's stack will be replaced; the Flipper restarts "
+	       "several times.\nKeep it powered until \"installed\".\n",
+	       m.name, m.version);
+	if (todo_put(name, "del", 0) < 0) {
+		fprintf(stderr, "radio: %s: %s\n", FILE_TODO, strerror(errno));
+		return 1;
+	}
+	return resume();
+}
+#endif
+
 static int status(void)
 {
 	struct rd_layout l;
@@ -436,6 +620,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	if (strcmp(argv[1], "write") == 0 && argc == 3) return wr(argv[2]);
+	if (strcmp(argv[1], "install") == 0 && argc == 3)
+		return geteuid() == 0 ? install(argv[2]) : 1;
+	if (strcmp(argv[1], "resume") == 0 && argc == 2)
+		return geteuid() == 0 ? resume() : 1;
 	if (strcmp(argv[1], "wtest") == 0 && argc == 2) return wtest();
 	if (strcmp(argv[1], "wclear") == 0 && argc == 4)
 		return geteuid() == 0 ? wclear(argv[2], argv[3]) : 1;

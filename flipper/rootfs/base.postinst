@@ -2,7 +2,7 @@
 # lack the line in /etc/rc that binds the programs built into the firmware.
 grep 'pkg bind' /etc/rc >/dev/null || {
 	(echo '/^update/i'; echo '# Programs built into the firmware (make base-flash): bind them at boot.'
-	 echo 'pkg bind /bin/*'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
+	 echo 'pkg bind /bin'; echo '.'; echo 'w'; echo 'q') | ed /etc/rc >/dev/null
 	if grep 'pkg bind' /etc/rc >/dev/null
 	then echo "base: /etc/rc now runs pkg bind /bin/* at boot"
 	else echo "base: could not add pkg bind to /etc/rc; run pkg install again"
@@ -200,6 +200,31 @@ then
 	chgrp nfc /dev/nfc 2>/dev/null
 	chmod 660 /dev/nfc 2>/dev/null
 fi
+# Older cards have "pkg bind /bin/*" in /etc/rc.  With 128 files in /bin
+# sh ran "out of string space" on the star and /etc/rc ended there: no
+# swap, no update, no launcher (seen 2026-11-28, after ble and peek were
+# added).  pkg bind takes the directory.
+grep '^pkg bind /bin/\*' /etc/rc >/dev/null && {
+	sed 's/^pkg bind \/bin\/\*$/pkg bind \/bin/' /etc/rc >/etc/rc.new
+	if grep '^pkg bind /bin$' /etc/rc.new >/dev/null
+	then chmod 755 /etc/rc.new; mv /etc/rc.new /etc/rc
+	     echo "base: /etc/rc now runs pkg bind /bin (no star)"
+	else rm -f /etc/rc.new
+	fi
+}
+# Cards made before radio install (T30b) lack the line in /etc/rc that
+# goes on with a CPU2 stack install after each of its restarts.
+grep 'radio resume' /etc/rc >/dev/null || {
+	# sed, not ed: ed dies with a memory fault on the device (2026-11-28)
+	sed '/^pkg bind/a\
+test -f /etc/radio.todo \&\& radio resume' /etc/rc >/etc/rc.new
+	if grep 'radio resume' /etc/rc.new >/dev/null
+	then chmod 755 /etc/rc.new; mv /etc/rc.new /etc/rc
+	     echo "base: /etc/rc now runs radio resume at boot"
+	else rm -f /etc/rc.new
+	     echo "base: could not add radio resume to /etc/rc"
+	fi
+}
 # Cards made before the BLE transport (T30b, #390) lack /dev/ble.  Root
 # only for now: its commands set the radio.
 if test ! -r /dev/ble
