@@ -71,7 +71,10 @@
 # QEMU hook's reader to revive (2 B); the band table is const.  The issue allows <= 32 B;
 # the QEMU backend's state (frequency, hash, fake flag, a 60 B packet) is
 # not in the Flipper image.
-kernel    160    14724  14884
+# #490 (iButton, Cyfral and Metakom on the Flipper): kernel +20 B: the
+# capture's struct address (4), first level and polls (2), and the TIM1
+# playback's list pointer, length, index and level (HAL, 9 + padding 5).
+kernel    160    14744  14904
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows

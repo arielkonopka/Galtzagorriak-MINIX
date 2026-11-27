@@ -227,7 +227,11 @@ PRIVATE u8_t ir_paused;			/* bit 0: a frame went out meanwhile;
 					 * kernel's static RAM is at its budget */
 #define IR_PAUSED	0x01
 #define IR_GAP_OF(b)	(((b) >> 1) * 2)
-PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid */
+PRIVATE u8_t pu_input;			/* 0 /dev/ir, 1 /dev/subghzraw, 2 /dev/rfid,
+					 * 3 /dev/ibutton (Cyfral, Metakom) */
+#define RF_POLL_MS	20		/* (as below) the ms timer's poll of a capture */
+PRIVATE phys_bytes ib_q;		/* 3: the caller's struct ib_capt */
+PRIVATE u8_t ib_lv, ib_pl;		/* 3: the first level; polls to wait */
 PRIVATE u8_t rf_polls;			/* RFID: ms timer polls so far */
 PRIVATE u8_t tx_rfid;			/* the frame goes to the RFID antenna
 					 * (1) or the CC1101's data pin (2) */
@@ -392,6 +396,7 @@ FORWARD _PROTOTYPE( int pulse_read, (message *m_ptr, phys_bytes user,
 						int count, int input)	);
 FORWARD _PROTOTYPE( void ir_rx_end, (int r)				);
 FORWARD _PROTOTYPE( unsigned rf_durations, (unsigned n)			);
+FORWARD _PROTOTYPE( unsigned ib_durations, (unsigned n)			);
 FORWARD _PROTOTYPE( void rfid_tx_off, (void)				);
 FORWARD _PROTOTYPE( void rfid_field_off, (void)				);
 FORWARD _PROTOTYPE( int rfid_ioctl, (message *m_ptr)			);
@@ -449,6 +454,10 @@ PUBLIC void flipdev_task()
 	hal_backlight(HAL_BL_LEVEL(st));
   }
   rb_iku_start();		/* the splash is up: ikurrina; rc ends it */
+  if ((r = hal_ib_play_irq()) >= 0) {	/* #490: Cyfral and Metakom keys */
+	put_irq_handler(r, ir_tx_int);	/* the pulse engine's handler again */
+	enable_irq(r);
+  }
   if ((r = hal_rfid_emu_irq()) >= 0) {	/* R9.0.6, the same way */
 	put_irq_handler(r, ir_tx_int);
 	enable_irq(r);
@@ -1406,6 +1415,9 @@ message *m_ptr;
 		phys_copy(dur + (phys_bytes) i * 2, vir2phys(w), (phys_bytes) k * 2);
 		for (j = 0; j < k; j++) if (w[j] == 0) return(EINVAL);
 	}
+	if (ie.st == IE_OFF && hal_ib_play_irq() >= 0	/* the Flipper: TIM1 */
+	    && (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0
+				|| (sg_state & SG_ON))) return(EBUSY);
 	lock();
 	if (hal_ib_play((u32_t) dur, q.n, q.level != 0) < 0) {
 		unlock();
@@ -1452,6 +1464,39 @@ message *m_ptr;
   if (ie.st != IE_OFF && ie.st != IE_PLAY) return(EBUSY);
   dur = numap(m_ptr->PROC_NR, (vir_bytes) q.dur, (vir_bytes) q.n * 2);
   if (dur == 0) return(EFAULT);
+  if (hal_ib_capt_arm(0, 0) > 0) {
+	/* The Flipper (issue #490): the comparator's edges are timestamped
+	 * by DMA into the caller's buffer, a window of q.ms ms on the ms
+	 * timer, as /dev/rfid reads; the caller waits (SUSPEND) and is
+	 * revived by ir_rx_end, which makes durations of the timestamps. */
+	if (ie.st != IE_OFF) return(EBUSY);
+	if (ir_rd || tx_on || rs_on || rf_held || rf_emu != 0 || as_proc != 0
+				|| (sg_state & SG_ON)) return(EBUSY);
+	ir_caller = m_ptr->m_source;
+	ir_proc = m_ptr->PROC_NR;
+	ir_buf = dur;
+	ir_count = (int) (q.n / 2) * 4;		/* timestamps fill the room */
+	ir_started = ir_done = FALSE;
+	ir_paused &= ~IR_PAUSED;
+	pu_input = 3;
+	rf_polls = 0;
+	rf_settle = 0;
+	ib_q = user;
+	ib_pl = (u8_t) ((q.ms + RF_POLL_MS - 1) / RF_POLL_MS);
+	proc_addr(ir_proc)->p_physio = TRUE;	/* R4b.5: DMA into it */
+	ir_rd = TRUE;
+	if ((r = hal_ib_capt_arm(ir_buf, (unsigned) ir_count / 4)) < 0) {
+		ir_rd = FALSE;
+		proc_addr(ir_proc)->p_physio = FALSE;
+		return(ENXIO);
+	}
+	ib_lv = (u8_t) r;
+	lock();
+	pm_busy |= PM_PULSE;
+	mt_arm(MT_PULSE, RF_POLL_MS);
+	unlock();
+	return(SUSPEND);
+  }
   r = hal_ib_capt((u32_t) dur, q.n, q.ms, &level);
   if (r < 0) return(ENXIO);			/* not on this board yet */
   if (r == 0) return(ENODEV);			/* the line did not move */
@@ -3251,7 +3296,13 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
    * older transfer: never more than the buffer, and a cancelled read's
    * memory is not touched at all. */
   n = left > n ? 0 : n - left;
-  if (pu_input == 2) {			/* RFID: timestamps, made durations */
+  if (pu_input == 3) {			/* iButton: durations, 16 bit */
+	hal_ib_capt_stop();
+	if (r == OK) {
+		n = ib_durations(rf_durations(n));
+		if (n == 0) r = ENODEV;		/* the line did not move */
+	}
+  } else if (pu_input == 2) {		/* RFID: timestamps, made durations */
 	if (rf_held) hal_rfid_capture_stop();	/* the field stays up */
 	else hal_rfid_stop();		/* the DMA first, then the memory */
 	if (r == OK) n = rf_durations(n);
@@ -3262,7 +3313,8 @@ int r;			/* OK: the frame is in; 1: cancelled (no reply);
   unlock();
   proc_addr(ir_proc)->p_physio = FALSE;
   ir_rd = FALSE;
-  if (r != 1) reply(REVIVE, ir_caller, ir_proc, r == OK ? (int) n * 4 : r);
+  if (r != 1) reply(REVIVE, ir_caller, ir_proc, r != OK ? r
+				: pu_input == 3 ? OK : (int) n * 4);
 }
 
 
@@ -3341,7 +3393,7 @@ PUBLIC void flipdev_pulse_poll()
 /* The ms timer (interrupt): a held read's field is settling, or the read's
  * buffer is full, or its time is up, or look again. */
   if (!ir_rd || ir_done) return;
-  if (pu_input != 2) {			/* /dev/ir, /dev/subghzraw */
+  if (pu_input != 2 && pu_input != 3) {	/* /dev/ir, /dev/subghzraw */
 	if (hal_pulse_left() == 0) {	/* the buffer is full: no gap */
 		ir_done = TRUE;
 		interrupt(PRINTER);
@@ -3358,7 +3410,8 @@ PUBLIC void flipdev_pulse_poll()
 	mt_arm(MT_PULSE, RF_POLL_MS);
 	return;
   }
-  if (hal_pulse_left() == 0 || ++rf_polls >= RF_MS / RF_POLL_MS) {
+  if (hal_pulse_left() == 0 || ++rf_polls >= (pu_input == 3 ? ib_pl
+					: RF_MS / RF_POLL_MS)) {
 	ir_done = TRUE;
 	interrupt(PRINTER);
   } else mt_arm(MT_PULSE, RF_POLL_MS);
@@ -3774,6 +3827,36 @@ unsigned n;			/* timestamps in the reader's buffer */
 
 
 /*===========================================================================*
+ *				ib_durations				     *
+ *===========================================================================*/
+PRIVATE unsigned ib_durations(n)
+unsigned n;			/* 32-bit durations in the reader's buffer */
+{
+/* IBIOCCAPT on the Flipper: the durations rf_durations made, as 16-bit
+ * (65535 at most), in place (each is written before the next is read), and
+ * the caller's struct told how many there are and the first level. */
+  u32_t t[16];
+  u16_t w[16];
+  struct ib_capt q;
+  unsigned i, k, j;
+
+  for (i = 0; i < n; i += k) {
+	k = n - i < 16 ? n - i : 16;
+	phys_copy(ir_buf + (phys_bytes) i * 4, vir2phys(t), (phys_bytes) k * 4);
+	for (j = 0; j < k; j++) w[j] = t[j] > 65535UL ? 65535 : (u16_t) t[j];
+	phys_copy(vir2phys(w), ir_buf + (phys_bytes) i * 2, (phys_bytes) k * 2);
+  }
+  if (n > 0) {
+	phys_copy(ib_q, vir2phys(&q), (phys_bytes) sizeof(q));
+	q.got = n;
+	q.level = ib_lv;
+	phys_copy(vir2phys(&q), ib_q, (phys_bytes) sizeof(q));
+  }
+  return(n);
+}
+
+
+/*===========================================================================*
  *				ir_write				     *
  *===========================================================================*/
 PRIVATE int ir_write(m_ptr, user, count)
@@ -3883,6 +3966,10 @@ int irq;
  * stream's DMA vector (R9.0.5): one handler, one slot. */
   int update;
 
+  if (irq == hal_ib_play_irq()) {	/* Cyfral, Metakom: the next level */
+	hal_ib_play_step();
+	return(1);
+  }
   if (irq == hal_rfid_stream_irq()) return(rs_int(irq));
   if (irq == hal_rfid_emu_irq() && tx_on && tx_rfid == 2) {
 	/* Sub-GHz by DMA: the last duration is in; its end is the next

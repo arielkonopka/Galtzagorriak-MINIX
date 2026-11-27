@@ -69,9 +69,14 @@ contact. `ikey read` tries a Dallas key first, then records the contact's levels
 with an even number of 1 bits (readers check it); `ikey` refuses any other.
 `ikey write Cyfral A1B2` and `ikey write Metakom 0305090A` write a **TM01x** blank (the only kind
 that takes them), compare it and then **finalize** it: a finalized blank cannot be written again.
-**On the Flipper reading and emulating these is not working yet:** the capture and
-playback hardware part comes after the first version, and until then `ikey` says "not implemented
-on this board yet, Dallas only" (Dallas keys work as before). It works in QEMU. Programs use
+**On the Flipper** reading looks at the contact through the same comparator the 125 kHz RFID
+reader uses (as the stock firmware does): a window of 60 ms every try, the edges timed by DMA, so
+nothing waits busily and a key press is still answered at once. Emulating plays the levels from a
+timer interrupt, one segment at a time, a few percent of the CPU while it runs; the Flipper stays
+out of its deep sleep meanwhile. Both are new (issue #490, part 2) and **have not been tried on a
+real intercom key yet**: if `ikey read` finds nothing, switch the 5 V rail on first
+(`echo otg on > /dev/power`, as root; the stock firmware does it for every iButton read), and tell
+which way it worked. It works in QEMU. Programs use
 `ioctl(IBIOCCAPT)` and `ioctl(IBIOCPLAY)` (`<minix/ibutton.h>`) with the line code in
 `src/lib/ibkey`.
 

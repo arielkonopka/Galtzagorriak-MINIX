@@ -118,16 +118,9 @@ void hal_ib_clear(void)
 	EXTI->PR1 = EXTI_PR1_PIF14;
 }
 
-/* R6.7 part 3b, Cyfral and Metakom: not here yet.  The device side (the
- * comparator capture, the pulse playback on PB14 by a timer) comes after
- * the first version (issue #318); until then /dev/ibutton says ENXIO and
- * ikey says so. */
-int hal_ib_play(uint32_t src, unsigned n, int level)
-{
-	(void) src; (void) n; (void) level;
-	return n == 0 ? 0 : -1;
-}
-
+/* R6.7 part 3b, Cyfral and Metakom: the Flipper's own way, below with the
+ * LF RFID capture it shares (hal_ib_capt_arm, hal_ib_play).  The
+ * synchronous capture is for boards that have no DMA to do it (QEMU). */
 int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
 {
 	(void) dst; (void) n; (void) ms; (void) level;
@@ -4693,6 +4686,117 @@ int hal_rfid_capture(uint32_t dst, unsigned n)
 	TIM2->DIER = TIM_DIER_CC4DE;
 	TIM2->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
 	return 0;
+}
+
+/*===========================================================================*
+ *			iButton: Cyfral and Metakom (R6.7 part 3b)	     *
+ *===========================================================================*/
+/* Reading, as the stock firmware does it (protocol_group_misc.c, read):
+ * the pull pin PA2 low, the iButton pin released to analog, the key's
+ * signal sensed "through the analog part of the RFID schematic": COMP1 on
+ * PC5 against half of VREFINT, its output into TIM2 channel 4, both edges
+ * timestamped by DMA1 channel 4 (the same capture the LF RFID read uses,
+ * hal_rfid_capture, but with no 125 kHz field).  The kernel waits on the ms
+ * timer and makes durations of the timestamps.  The stock firmware also
+ * powers the 5 V rail for a read (power_enable_otg); here it is up to the
+ * user (`echo otg on > /dev/power`) until the hardware test says whether
+ * it is needed.  Returns the comparator's level when the capture began:
+ * the segment after the first edge has that level in the stock firmware's
+ * sense (stock hands the callback "output is low"). */
+int hal_ib_capt_arm(uint32_t dst, unsigned nwords)
+{
+	uint32_t t0;
+	int lv;
+
+	if (nwords == 0) return 1;
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	ir_ready = 0;
+	TIM1->CR1 = 0;				/* ours, not the IR LED's */
+	TIM1->BDTR = 0;
+	TIM1->CCER = 0;
+	gpio_set(GPIOA, 2, 0);			/* the pull pin low, as stock */
+	gpio_cfg(GPIOA, 2, MODE_OUT, PULL_NONE, 0);
+	gpio_set(GPIOB, 13, 0);			/* no field */
+	gpio_cfg(GPIOB, 13, MODE_OUT, PULL_NONE, 0);
+	gpio_cfg(GPIOB, 14, MODE_ANALOG, PULL_NONE, 0);	/* the contact: reset */
+	gpio_cfg(GPIOA, 15, MODE_ANALOG, PULL_NONE, 0);
+	gpio_cfg(GPIOC, 5, MODE_ANALOG, PULL_NONE, 0);	/* COMP1 IO1 */
+	COMP1->CSR = COMP_CSR_PWRMODE_0			/* medium speed */
+		| COMP_CSR_INMSEL_0 | COMP_CSR_SCALEN | COMP_CSR_BRGEN
+		| COMP_CSR_HYST_1 | COMP_CSR_HYST_0;	/* PC5, VREFINT/2 */
+	COMP1->CSR |= COMP_CSR_EN;
+	t0 = DWT->CYCCNT;
+	while (DWT->CYCCNT - t0 < hal_cpu_hz() / 5000) ;	/* scaler: 200 us */
+	lv = (COMP1->CSR & COMP_CSR_VALUE) != 0;
+	if (hal_rfid_capture(dst, nwords) < 0) return -1;
+	return lv;
+}
+
+void hal_ib_capt_stop(void)
+{
+	hal_rfid_stop();			/* the DMA, TIM2, COMP1 off; PA2
+						 * high, the contact released */
+}
+
+/* Playing a pulse list, as the stock firmware does it (furi_hal_ibutton
+ * emulate_start): TIM1 counts microseconds, its update interrupt starts
+ * the next segment (ARR = its length, the pin = its level) and the pin is
+ * the iButton contact, open drain: level 1 released (high), 0 pulled low.
+ * The list stays in the caller's memory (pinned by the kernel) and is
+ * read from there: no copy.  RAM: 12 B. */
+static const uint16_t *ib_ps;
+static uint16_t ib_pn, ib_pi;
+static uint8_t ib_plv;
+
+int hal_ib_play_irq(void)
+{
+	return TIM1_UP_TIM16_IRQn;
+}
+
+int hal_ib_play(uint32_t src, unsigned n, int level)
+{
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	(void) RCC->APB2ENR;
+	TIM1->DIER = 0;
+	TIM1->CR1 = 0;
+	TIM1->SR = 0;
+	if (n == 0) {				/* stop: the contact released */
+		hal_ow_line(0);
+		return 0;
+	}
+	ir_ready = 0;				/* TIM1 is the IR LED's too */
+	ib_ps = (const uint16_t *) src;
+	ib_pn = (uint16_t) n;
+	ib_pi = 0;
+	ib_plv = (uint8_t) (level != 0);
+	hal_ow_line(!ib_plv);
+	TIM1->BDTR = 0;				/* no outputs of its own */
+	TIM1->CCER = 0;
+	TIM1->PSC = hal_cpu_hz() / 1000000u - 1;	/* 1 us */
+	TIM1->ARR = ib_ps[0] - 1u;
+	TIM1->CNT = 0;
+	TIM1->EGR = TIM_EGR_UG;
+	TIM1->SR = 0;
+	TIM1->DIER = TIM_DIER_UIE;
+	TIM1->CR1 = TIM_CR1_URS | TIM_CR1_CEN;
+	return 0;
+}
+
+/* The update interrupt: the segment is over, the next starts. */
+void hal_ib_play_step(void)
+{
+	unsigned i = (unsigned) ib_pi + 1;
+
+	TIM1->SR = ~TIM_SR_UIF;
+	if (ib_pn == 0) return;
+	if (i >= ib_pn) i = 0;
+	ib_pi = (uint16_t) i;
+	ib_plv ^= 1;
+	TIM1->ARR = ib_ps[i] - 1u;
+	gpio_set(GPIOB, 14, ib_plv);		/* open drain: 1 released */
 }
 
 /*===========================================================================*

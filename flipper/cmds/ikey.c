@@ -64,7 +64,8 @@
 #include <unistd.h>
 #include "ibkey.h"
 
-#define CAPT	256			/* durations: 2-3 frames of either */
+#define CAPT	384			/* durations: 3-4 frames of either (the
+					 * Flipper takes 192 timestamps) */
 static unsigned short capt[CAPT];
 
 static void pause_ms(int ms)
@@ -104,9 +105,14 @@ static int read_misc(int fd, unsigned char *key, int *type)
 
 	q.dur = capt;
 	q.n = CAPT;
-	q.ms = 60;			/* 256 durations: ~32 ms of either */
+	q.ms = 60;			/* a window of 60 ms: 5 or 6 frames */
 	if (ioctl(fd, IBIOCCAPT, &q) < 0) return errno == ENXIO ? -1 : 0;
-	if ((t = ibk_decode(capt, (int) q.got, q.level, key)) == 0) return 0;
+	/* The first level is the comparator's, which the stock firmware
+	 * inverts; if the hardware has it the other way, the decoders find
+	 * the key with the opposite one. */
+	t = ibk_decode(capt, (int) q.got, q.level, key);
+	if (t == 0) t = ibk_decode(capt, (int) q.got, !q.level, key);
+	if (t == 0) return 0;
 	*type = t;
 	print_key(ibk_name(t), key, ibk_size(t));
 	return 1;

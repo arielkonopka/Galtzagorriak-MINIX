@@ -161,6 +161,20 @@ void hal_ib_clear(void);
  * -1: not on this board (the Flipper until the device side is done). */
 int hal_ib_play(uint32_t src, unsigned n, int level);
 int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level);
+/* The Flipper's own way (issue #490, part 2): the comparator timestamps
+ * edges by DMA while the kernel waits on the ms timer (no busy wait), and
+ * a pulse list is played by the TIM1 update interrupt, one segment a
+ * time.  hal_ib_capt_arm(dst, nwords): arm the capture of nwords 32-bit
+ * timestamps (us) into dst, returns the comparator's level at the start
+ * (0 or 1), or -1 on a board with no such capture (QEMU: hal_ib_capt does
+ * it at once); with nwords 0 it only says: 1 this board captures so, -1
+ * not.  hal_ib_capt_stop ends it.  hal_ib_play_irq: the interrupt of the
+ * playback (-1 on a board that plays it itself), hal_ib_play_step what
+ * that interrupt does. */
+int hal_ib_capt_arm(uint32_t dst, unsigned nwords);
+void hal_ib_capt_stop(void);
+int hal_ib_play_irq(void);
+void hal_ib_play_step(void);
 int hal_btn_pending(void);
 
 /* The fuel gauge (BQ27220, T15a): one 16-bit standard command (HAL_GAUGE_*,
