@@ -22,6 +22,7 @@ that brings them.
     the radio region, rolling codes and your own key file.
 14. [Files to a PC over USB](usb-files.md): MTP, Windows and Linux copy files with their own drivers (`mtpd`; the USB side planned).
 14b. [NFC](nfc.md): reading, saving and emulating contactless cards, the MIFARE Classic dictionary, `mfkey` (the radio parts planned, spec Phase 14).
+14c. [Card detect](carddet.md): `Card detect` in Tools: is it an RFID tag, an NFC card or a dual-frequency fob? Reads and saves both, writes the pair.
 15. [Desktop and modules](desktop.md): the desktop's pages (HOME, NOTES, RUNNING), notifications, writing a module in shell or C.
 16. [Radio stacks](radio.md): ST's CPU2 stacks on the SD card, `radio-fetch.py`, `radio list`/`add`/`rm`, the radio slot (`radio use` planned).
 17. [Infrared remotes](infrared.md): the `infrared` app (learn, saved and universal remotes, debug), stock `.ir` files, group `ir`.
