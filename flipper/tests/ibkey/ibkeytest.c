@@ -189,12 +189,81 @@ static void negatives(void)
 	check(ibk_decode(c2, 0, 0, got) == 0, "an empty capture: nothing");
 }
 
+/* Dallas families (issue #490) and the TM01x frames. */
+static void families(void)
+{
+	static const unsigned char cy[2] = { 0xA1, 0xB2 };
+	static const unsigned char mk[4] = { 0x03, 0x05, 0x09, 0x0A };
+	static const unsigned char odd[4] = { 0x01, 0x05, 0x09, 0x0A };
+	/* Unleashed's tm01x_make_image for these (computed apart, in Python,
+	 * from protocol_cyfral_encoder_encode and bit_lib_reverse_32) */
+	static const unsigned char cy_img[8] =
+		{ 0x1D, 0xE7, 0xDD, 0xD7, 0xB0, 0, 0, 0 };
+	static const unsigned char mk_img[8] =
+		{ 0x20, 0xA0, 0x90, 0x50, 0x30, 0, 0, 0 };
+	static const unsigned char rom[8] =
+		{ 0x01, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x8F };
+	unsigned char img[8], got[8];
+	const struct ibd_fam *f;
+	int i, t, k;
+
+	check(ibd_byname("DS1992") && ibd_byname("DS1992")->size == 128
+	      && ibd_byname("DS1992")->mem == IBD_SRAM
+	      && ibd_byname("DS1992")->page == 4, "DS1992: 128 B SRAM, pages of 4");
+	f = ibd_byname("DS1996");
+	check(f && f->code == 0x0C && f->size == 8192 && f->page == 32
+	      && f->abytes == 2, "DS1996: 8 KB, pages of 32, 2 address bytes");
+	f = ibd_byname("DS1971");
+	check(f && f->code == 0x14 && f->mem == IBD_EEPROM && f->size == 32
+	      && f->abytes == 1, "DS1971: 32 B EEPROM, 1 address byte");
+	check(ibd_byname("Dallas") == ibd_byname("DS1990"),
+		"the old name Dallas is DS1990");
+	check(ibd_byname("DSGeneric") == ibd_byname("(non-specific)")
+	      && ibd_byname("DSGeneric") == ibd_bycode(0x55),
+		"DSGeneric: any other family code");
+	check(ibd_bycode(0x81) == ibd_byname("DS1420")
+	      && ibd_bycode(0x08) == ibd_byname("DS1992"), "family by code");
+	check(ibd_byname("Cyfral") == NULL && ibd_byname("DS9999") == NULL,
+		"not a Dallas name");
+	check(strcmp(ibd_memkey(ibd_byname("DS1971")), "Eeprom Data") == 0
+	      && strcmp(ibd_memkey(ibd_byname("DS1996")), "Sram Data") == 0,
+		"the file keys of the memory");
+	check(ibd_crc8(rom, 7) == 0x8F, "CRC8 of 01 A1 B2 C3 D4 E5 F6 is 8F");
+	/* the stock DS1990A example: 01 00 00 00 00 00 00 + CRC 0x3D? is
+	 * not known here; CRC of 8 bytes with its CRC is 0 */
+	check(ibd_crc8(rom, 8) == 0, "CRC8 over a whole ROM is 0");
+
+	check(ibk_tm01x_image(IBK_CYFRAL, cy, img) == 0
+	      && memcmp(img, cy_img, 8) == 0, "TM01x image of Cyfral A1B2");
+	check(ibk_tm01x_image(IBK_METAKOM, mk, img) == 0
+	      && memcmp(img, mk_img, 8) == 0, "TM01x image of Metakom 0305090A");
+	check(ibk_tm01x_image(IBK_METAKOM, odd, img) == -1,
+		"TM01x: Metakom of odd parity is refused");
+	check(ibk_tm01x_image(0, cy, img) == -1, "TM01x: unknown type");
+	/* what READ ROM gives back from a blank: the 36 frame bits inverted,
+	 * the first one the least significant bit of byte 0; norm restores */
+	for (t = 0; t < 2; t++) {
+		(void) ibk_tm01x_image(t ? IBK_METAKOM : IBK_CYFRAL,
+					t ? mk : cy, img);
+		memset(got, 0, sizeof got);
+		for (i = 0; i < 64; i++) {
+			k = i < IBK_TM01X_BITS ? !(img[i >> 3] >> (7 - (i & 7)) & 1)
+							: 1;
+			got[i >> 3] |= (unsigned char) (k << (i & 7));
+		}
+		ibk_tm01x_norm(got);
+		check(memcmp(got, img, 8) == 0, t ? "TM01x read back: Metakom"
+						   : "TM01x read back: Cyfral");
+	}
+}
+
 int main(void)
 {
 	vectors();
 	every_cyfral();
 	many_metakom();
 	negatives();
+	families();
 	printf("ibkeytest: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

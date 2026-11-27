@@ -563,12 +563,28 @@ static void stockapp_tests(void)
 			"\nProtocol: Princeton\nBit: 24\nKey: 00 00 00 00 00 6A B2 34"),
 		"subghzui: Add manually: a stock .sub; Read RAW; Spectrum");
 	check(win_run("/bin/ibuttonui", (char *) NULL,
-		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=01a2b3c4d5e6f7a8\n"
+		"ok\tmain\tadd\nsubmit\tadd\tty=0\tkey=a1b2c3d4e5f6\n"
 		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
 		"ok\tmain\tsaved\nok\tlist\tf0000\n", out, sizeof out) == 0
-		&& file_has(ib, "DS1990\nRom Data: 01 A2 B3 C4 D5 E6 F7 A8")
-		&& strstr(out, "item\tty\tDallas\t01A2B3C4D5E6F7A8") != NULL,
-		"ibuttonui: Add manually, Saved: a stock .ibtn");
+		&& file_has(ib, "DS1990\nRom Data: 01 A1 B2 C3 D4 E5 F6 8F")
+		&& strstr(out, "item\tty\tDS1990\t01A1B2C3D4E5F68F") != NULL
+		&& strstr(out, "item\tdel\tDelete") != NULL,
+		"ibuttonui: Add manually (family code and CRC filled in), Saved");
+	/* a DS1992 has memory: the file carries 128 zero bytes, and Write
+	 * memory is offered; Info says what it is; Hookup is there */
+	unlink(ib);
+	check(win_run("/bin/ibuttonui", (char *) NULL,
+		"ok\tmain\tadd\nsubmit\tadd\tty=1\tkey=a1b2c3d4e5f6\n"
+		"ok\tadd\tok\nsubmit\tkey\tname=M2ib\nok\tkey\tsave\n"
+		"ok\tkey\tinfo\nback\tnote\nback\tkey\nok\tmain\thook\n",
+		out, sizeof out) == 0
+		&& file_has(ib, "DS1992\nRom Data: 08 A1 B2 C3 D4 E5 F6")
+		&& file_has(ib, "\nSram Data: 00 00 00 00 00 00 00 00")
+		&& strstr(out, "item\twm\tWrite memory") != NULL
+		&& strstr(out, "Family 08 CRC ok") != NULL
+		&& strstr(out, "SRAM 128 B") != NULL
+		&& strstr(out, "pin 17 = data") != NULL,
+		"ibuttonui: DS1992 with memory, Info, Hookup");
 	check(win_run("/bin/gpioui", (char *) NULL, "", out,
 		sizeof out) == 0 && strstr(out, "enum\tp7\tPC0 (16) =") != NULL
 		&& strstr(out, "item\tv5\t5V on GPIO") != NULL,

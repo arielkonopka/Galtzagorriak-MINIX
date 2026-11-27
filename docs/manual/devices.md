@@ -24,14 +24,26 @@ A read takes about 10 ms.
 The `ikey` command works like the stock firmware's:
 
 ```
-ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8"
+ikey read                    # wait (10 s) for a key, print "Dallas 01A2B3C4D5E6F7A8" and its family
+ikey read -o key.ibtn        # the same, and save it as a stock .ibtn file (with its memory)
 ikey write Dallas 01A2B3C4D5E6F7A8
+ikey write key.ibtn          # a .ibtn file instead of the key's hex
+ikey write -b tm01x Dallas 01A2B3C4D5E6F7A8
+ikey copy key.ibtn           # the memory of a DS1992, DS1996 or DS1971 file onto such a key
 ikey emulate Dallas 01A2B3C4D5E6F7A8
 ```
 
-`ikey write` copies a key onto an RW1990 blank held on the contacts (both kinds, RW1990.1 and .2,
-are tried) and reads it back; keep the blank on the contacts until it says "Write success" (a few
-seconds). The 16 hex digits are the whole ROM, the CRC byte last, as `ikey read` prints it.
+`ikey read` names the family from the ROM's first byte: DS1990, DS1992 (SRAM 128 B), DS1996 (SRAM
+8 KB), DS1971 (EEPROM 32 B), DS1420, or DSGeneric for any other. A key may be named by its family
+instead of `Dallas` (`ikey emulate DS1992 08A1B2C3D4E5F600`); the ROM is what is sent.
+
+`ikey write` copies a key onto a blank held on the contacts and reads it back; keep the blank on
+the contacts until it says "Write success" (a few seconds). The default tries the RW1990 (both
+kinds, RW1990.1 and .2), then the TM2004. `-b tm01x` tries a TM01x blank; `-b tm2004` or `-b rw1990`
+one family only; `-b all` all of them. The 16 hex digits are the whole ROM, the CRC byte last, as
+`ikey read` prints it. `ikey copy` writes the memory from the file's `Sram Data` or `Eeprom Data`
+a page at a time through the key's scratchpad and reads it all back; the ROM of such a key is not
+changed. Emulating sends the ROM only, not the memory.
 
 `ikey emulate` makes the Flipper the key: hold its iButton contacts to a reader (a door, an
 intercom, another Flipper) and the reader gets the ROM, as if from the key itself. It says
@@ -54,14 +66,16 @@ ikey emulate -t 30 Metakom 0305090A
 These keys are not 1-Wire: they send their number over and over as long and short levels on the
 contact. `ikey read` tries a Dallas key first, then records the contact's levels and decodes them.
 `ikey emulate` plays the key's levels on the contact in a loop. A Metakom number needs every byte
-with an even number of 1 bits (readers check it); `ikey` refuses any other. Writing Cyfral or
-Metakom blanks (TM01x) is not there. **On the Flipper this is not working yet:** the capture and
+with an even number of 1 bits (readers check it); `ikey` refuses any other.
+`ikey write Cyfral A1B2` and `ikey write Metakom 0305090A` write a **TM01x** blank (the only kind
+that takes them), compare it and then **finalize** it: a finalized blank cannot be written again.
+**On the Flipper reading and emulating these is not working yet:** the capture and
 playback hardware part comes after the first version, and until then `ikey` says "not implemented
 on this board yet, Dallas only" (Dallas keys work as before). It works in QEMU. Programs use
 `ioctl(IBIOCCAPT)` and `ioctl(IBIOCPLAY)` (`<minix/ibutton.h>`) with the line code in
 `src/lib/ibkey`.
 
-An iButton app in the launcher is **(planned)**.
+The iButton app in the launcher ([iButton](ibutton.md)) shows all of this on the screen.
 
 ## Voltages on the header pins (`/dev/adc`)
 

@@ -635,11 +635,12 @@ OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
 # the command's output on a pipe, live)
 $(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
 		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
-		gui/runwin.h $(GM_DIR)/gm.h
+		gui/runwin.h $(GM_DIR)/gm.h $(IBKEY_DIR)/ibkey.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
-OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o \
+	$(MB)/ibkey/ibkey.o	# the Dallas family table (libibkey)
 OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
 # issue #424: Snake (gui/snakeui.c over src/lib/snake) and the Sub-GHz
 # Remote (gui/subrem.c, maps a .sub to the pad's buttons and runs the

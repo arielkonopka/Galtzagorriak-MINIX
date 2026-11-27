@@ -416,3 +416,118 @@ unsigned char *key;
 	}
 	return 0;
 }
+
+
+/*==========================================================================*
+ *				Dallas families				    *
+ *==========================================================================*/
+static const struct ibd_fam fams[IBD_NFAM] = {
+	{ "DS1990", 0x01, IBD_NOMEM, 0, 0, 0 },
+	{ "DS1992", 0x08, IBD_SRAM, 2, 4, 128 },
+	{ "DS1996", 0x0C, IBD_SRAM, 2, 32, 8192 },
+	{ "DS1971", 0x14, IBD_EEPROM, 1, 32, 32 },
+	{ "DS1420", 0x81, IBD_NOMEM, 0, 0, 0 },
+	{ "DSGeneric", 0x00, IBD_NOMEM, 0, 0, 0 }
+};
+
+const struct ibd_fam *ibd_byname(name)
+const char *name;
+{
+	int i;
+
+	if (strcmp(name, "Dallas") == 0) return &fams[0];
+	if (strcmp(name, "(non-specific)") == 0) return &fams[IBD_GENERIC];
+	for (i = 0; i < IBD_NFAM; i++)
+		if (strcmp(name, fams[i].name) == 0) return &fams[i];
+	return NULL;
+}
+
+const struct ibd_fam *ibd_bycode(code)
+int code;
+{
+	int i;
+
+	for (i = 0; i < IBD_GENERIC; i++)
+		if (fams[i].code == (code & 0xFF)) return &fams[i];
+	return &fams[IBD_GENERIC];
+}
+
+const char *ibd_memkey(f)
+const struct ibd_fam *f;
+{
+	return f->mem == IBD_EEPROM ? "Eeprom Data" : "Sram Data";
+}
+
+int ibd_crc8(b, n)
+const unsigned char *b;
+int n;
+{
+	int crc = 0, i, j;
+
+	for (i = 0; i < n; i++) {
+		crc ^= b[i];
+		for (j = 0; j < 8; j++)
+			crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+	}
+	return crc;
+}
+
+/*==========================================================================*
+ *				TM01x frames				    *
+ *==========================================================================*/
+/* blanks/tm01x.c: tm01x_make_image; the code is Metakom's data, or
+ * Cyfral's encoded word reversed bit for bit; the prefix is 1 / 2. */
+static unsigned long rev32(v)
+unsigned long v;
+{
+	unsigned long r = 0;
+	int i;
+
+	for (i = 0; i < 32; i++) r |= (v >> i & 1UL) << (31 - i);
+	return r;
+}
+
+static unsigned rev8(v)
+unsigned v;
+{
+	unsigned r = 0;
+	int i;
+
+	for (i = 0; i < 8; i++) r |= (v >> i & 1u) << (7 - i);
+	return r;
+}
+
+int ibk_tm01x_image(type, key, rom)
+int type;
+const unsigned char *key;
+unsigned char *rom;
+{
+	unsigned long code;
+	unsigned prefix;
+
+	if (ibk_valid(type, key) != 1) return -1;
+	if (type == IBK_CYFRAL) {
+		code = rev32(cyfral_encode(key_value(type, key)));
+		prefix = 1;
+	} else {
+		code = key_value(type, key);
+		prefix = 2;
+	}
+	rom[0] = (unsigned char) (prefix << 4 | (code >> 28 & 0x0F));
+	rom[1] = (unsigned char) (code >> 20);
+	rom[2] = (unsigned char) (code >> 12);
+	rom[3] = (unsigned char) (code >> 4);
+	rom[4] = (unsigned char) (code << 4);
+	rom[5] = rom[6] = rom[7] = 0;
+	return 0;
+}
+
+void ibk_tm01x_norm(rom)
+unsigned char *rom;
+{
+	int i;
+
+	for (i = 0; i < 5; i++) rom[i] = (unsigned char) ~rev8(rom[i]);
+	rom[4] &= 0xF0;
+	rom[5] = rom[6] = rom[7] = 0;
+}

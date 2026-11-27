@@ -74,4 +74,45 @@ int ibk_feed(struct ibk_dec *d, int level, unsigned long us);
 int ibk_decode(const unsigned short *dur, int n, int level,
 	unsigned char *key);
 
+/*==========================================================================*
+ * Dallas families (spec R6.7 part 4, issue #490), Unleashed's
+ * lib/ibutton/protocols/dallas: DS1990, DS1992, DS1996, DS1971, DS1420 and
+ * "DSGeneric" (any other family code).  The table says what a family has:
+ * its name, its family code and its memory.  The .ibtn file calls the
+ * memory "Sram Data" or "Eeprom Data" (ibd_memkey).
+ *==========================================================================*/
+#define IBD_NFAM	6
+#define IBD_GENERIC	5	/* the last row: no family of its own */
+#define IBD_NOMEM	0
+#define IBD_SRAM	1
+#define IBD_EEPROM	2
+
+struct ibd_fam {
+	const char *name;
+	unsigned char code;	/* family code (ROM byte 0) */
+	unsigned char mem;	/* IBD_NOMEM, IBD_SRAM, IBD_EEPROM */
+	unsigned char abytes;	/* address bytes of READ MEMORY (1 or 2) */
+	unsigned char page;	/* bytes the scratchpad takes at a time */
+	unsigned short size;	/* memory bytes */
+};
+
+/* "DS1992" -> its row; the older "Dallas" is DS1990, "DSGeneric" and
+ * "(non-specific)" the generic row; NULL: not a Dallas name. */
+const struct ibd_fam *ibd_byname(const char *name);
+/* The row of a family code; an unknown code gets the generic row. */
+const struct ibd_fam *ibd_bycode(int code);
+const char *ibd_memkey(const struct ibd_fam *f);
+/* Maxim CRC8 (the ROM's last byte) of n bytes. */
+int ibd_crc8(const unsigned char *b, int n);
+
+/* A TM01x blank (spec R6.7 part 4) holds a Cyfral or Metakom key as the
+ * 36-bit frame Unleashed's blanks/tm01x.c writes: ibk_tm01x_image gives
+ * the 8 ROM bytes to shift in (most significant bit first, each bit
+ * inverted on the line), -1 for a key it cannot write (an unknown type,
+ * a Metakom byte of odd parity).  ibk_tm01x_norm turns what READ ROM gave
+ * back into the same form, to compare. */
+int ibk_tm01x_image(int type, const unsigned char *key, unsigned char *rom);
+void ibk_tm01x_norm(unsigned char *rom);
+#define IBK_TM01X_BITS	36
+
 #endif /* IBKEY_H */
