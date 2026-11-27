@@ -214,6 +214,7 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax);
 int hal_cpu2_evt(uint8_t *b, unsigned max);
+int hal_ble_open(void);
 /* The default speaker volume (0-100; 100 if never set), kept over resets
  * in a backup register (K.7 Sound). */
 int hal_vol_default(void);

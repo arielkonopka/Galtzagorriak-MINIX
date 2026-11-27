@@ -200,6 +200,13 @@ then
 	chgrp nfc /dev/nfc 2>/dev/null
 	chmod 660 /dev/nfc 2>/dev/null
 fi
+# Cards made before the BLE transport (T30b, #390) lack /dev/ble.  Root
+# only for now: its commands set the radio.
+if test ! -r /dev/ble
+then
+	mknod /dev/ble c 6 23 || echo "base: could not make /dev/ble"
+	chmod 600 /dev/ble 2>/dev/null
+fi
 # Cards made before R6.4 part 2 lack /dev/adcs (a pin sampled at a rate).
 if test ! -r /dev/adcs
 then

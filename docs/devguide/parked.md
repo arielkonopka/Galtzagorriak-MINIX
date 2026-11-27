@@ -66,3 +66,11 @@ Last updated: 2026-11-27 (evening).
 - **A Bluetooth mesh** was the first form of this idea. Not pursued: 2.4 GHz does not go
   through the walls between flats, ST's stacks have no Coded PHY, and SIG Mesh is not part of
   the CPU2 stack.
+
+## Size
+
+- **A size review of the whole system** ([#494](https://github.com/arielkonopka/Galtzagorriak-MINIX/issues/494),
+  the user, 2026-11-27; for the cloud lane). The kernel's, MM's and the launcher's static RAM
+  are exactly at their budgets, and the full BLE stack took 36 KB from the installed programs.
+  Wanted: a list of what can be cut or shared, with the bytes each change gives, and then
+  refactoring with no feature lost.

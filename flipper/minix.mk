@@ -313,7 +313,7 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
 	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc \
-	    peek
+	    peek ble
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -469,6 +469,7 @@ CHMEM_pgpenc   := 12288	# the file is read in 512 B pieces; RSA's five 512 B
 			# numbers, the 1.5 KB message context and the key
 			# block (3 KB, .bss) with stdio and stack
 CHMEM_blescan  := 4096	# issue #388: the table (16 x 40 B), one HCI packet
+CHMEM_ble  := 4096	# T30b: two 84 B packets, a 48 B command, no stdio
 			# (258 B), stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)

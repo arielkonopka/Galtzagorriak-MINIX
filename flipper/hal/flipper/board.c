@@ -4185,9 +4185,12 @@ struct cpu2_map {
 	struct cpu2_list sys_q, free_q, ble_q, traces_q;
 	uint32_t cmd[68];	/* TL_CmdPacket_t: 8 + 1 + 3 + 255, rounded */
 	uint32_t sys_spare[68];	/* the spare system event buffer */
-	uint32_t cs[20];	/* BLE: the answer to a command (command
-				 * complete or status event): node, type,
-				 * code, length and up to 69 bytes */
+	uint32_t cs[20];	/* BLE: the cs buffer of the BLE table.  The
+				 * stack 1.20.0 answers in the command
+				 * buffer, so this holds our copy of the
+				 * last answer for the reader: its length,
+				 * then code, length, parameters */
+	uint32_t ble_up;	/* SHCI_C2_BLE_Init was done (hal_ble_open) */
 };
 static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
 /* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
@@ -4463,6 +4466,15 @@ int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
 				if (rmax > 0) rsp[0] = b[3];
 				r = 1;
 			}
+			if (r != -2) {		/* the answer, for the reader */
+				volatile uint8_t *a = (volatile uint8_t *) m->cs;
+
+				len = 2u + b[2];
+				if (len > sizeof m->cs - 1) len = sizeof m->cs - 1;
+				for (i = 0; i < len; i++) a[1 + i] = b[1 + i];
+				a[2] = (uint8_t) (len - 2);
+				a[0] = (uint8_t) len;
+			}
 			c2_evt_done(C2_ADDR(e));
 		}
 		IPCC->C1SCR = 1u;			/* events taken */
@@ -4470,31 +4482,78 @@ int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
 	return r;
 }
 
-/* One event from the BLE queue, for a listener (bring-up: /dev/power's
- * evt=): code, length, parameters copied to b (at most max), the buffer
- * given back to CPU2.  Returns the bytes copied, 0 when none waits.  The
- * stack 1.20.0 puts the answer to a command in the command buffer itself,
- * so hal_cpu2_last shows that one. */
+/* One event for the reader of /dev/ble: the answer to its last command
+ * first, then the events on the BLE queue: code, length, parameters copied
+ * to b (cut to max, the length byte then says so), the buffer given back
+ * to CPU2.  Returns the bytes copied, 0 when none waits. */
 int hal_cpu2_evt(uint8_t *b, unsigned max)
 {
 	struct cpu2_map *m = &cpu2;
 	struct cpu2_list *q = &m->ble_q, *e;
+	volatile uint8_t *a = (volatile uint8_t *) m->cs;
 	const uint8_t *p;
 	unsigned i, len;
 
-	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
-	if (q->next == C2_ADDR(q)) {
-		if (IPCC->C2TOC1SR & 1u) IPCC->C1SCR = 1u;	/* all taken */
-		return 0;
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || max < 2) return 0;
+	if (a[0] != 0) {
+		len = a[0];
+		for (i = 0; i < len && i < max; i++) b[i] = a[1 + i];
+		a[0] = 0;
+	} else {
+		if (q->next == C2_ADDR(q)) {
+			if (IPCC->C2TOC1SR & 1u) IPCC->C1SCR = 1u;
+			return 0;
+		}
+		e = (struct cpu2_list *) q->next;
+		q->next = e->next;
+		((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
+		p = (const uint8_t *) e + 9;		/* code, length */
+		len = 2u + p[1];
+		for (i = 0; i < len && i < max; i++) b[i] = p[i];
+		c2_evt_done(C2_ADDR(e));
 	}
-	e = (struct cpu2_list *) q->next;
-	q->next = e->next;
-	((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
-	p = (const uint8_t *) e + 9;			/* code, length */
-	len = 2u + p[1];
-	for (i = 0; i < len && i < max; i++) b[i] = p[i];
-	c2_evt_done(C2_ADDR(e));
+	b[1] = (uint8_t) (i - 2);
 	return (int) i;
+}
+
+/* /dev/ble is opened: CPU2 started if it was not, and once it is ready
+ * and runs a stack, the stack's BLE part started (SHCI_C2_BLE_Init, ST's
+ * sizes for 2 links, ATT MTU 156, no extended advertising).  0 ready, -2
+ * CPU2 not ready yet (try again shortly), -1 no stack (FUS alone, or
+ * the start failed). */
+int hal_ble_open(void)
+{
+	static const uint8_t bi[46] = {
+		0, 0, 0, 0, 0, 0, 0, 0,	/* buffer, size: not used */
+		68, 0,			/* attribute records */
+		8, 0,			/* services */
+		0x40, 0x05,		/* attribute value array, 1344 */
+		2, 1,			/* links; data length extension */
+		12, 40,			/* prepare write list; memory blocks */
+		156, 0,			/* ATT MTU */
+		0xF4, 0x01, 0,		/* peripheral SCA 500 ppm; central */
+		1,			/* LSE, calibrated */
+		0xFF, 0xFF, 0xFF, 0xFF,	/* max connection event length */
+		0x48, 0x01,		/* HSE startup time */
+		1, 0, 0,		/* Viterbi; options; hw version */
+		32, 0, 0,		/* CoC initiators; min, max TX power */
+		1, 1,			/* RX model; advertising sets */
+		0x72, 0x06,		/* max advertising data, 1650 */
+		0, 0, 0, 0,		/* TX, RX path compensation */
+		13, 0			/* core 5.4; options extension */
+	};
+	uint32_t v[4];
+	uint8_t st = 0xFF;
+	int r;
+
+	if (hal_cpu2_start() < 0) return -1;
+	if ((r = hal_cpu2_info(v)) == 0) return -2;
+	if (r != 1 || v[3] != 0) return -1;
+	if (cpu2.ble_up) return 0;
+	if (hal_cpu2_shci(0xFC66, bi, sizeof bi, &st, 1) < 1 || st != 0)
+		return -1;
+	cpu2.ble_up = 1;
+	return 0;
 }
 
 /*===========================================================================*
