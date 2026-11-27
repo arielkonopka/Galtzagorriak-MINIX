@@ -12,7 +12,9 @@
 #define RD_FLASH	0x08000000UL	/* ST's flash base */
 #define RD_FLASH_END	0x08100000UL	/* 1 MB */
 #define RD_PAGE		4096UL
-#define RD_GUARD	(16 * RD_PAGE)	/* R2b.1: room for FUS below SFSA */
+#define RD_GUARD	(4 * RD_PAGE)	/* R2b.1: a margin below SFSA.  It was
+					 * 16 pages "for FUS"; with delete-first
+					 * FUS needs none (stock keeps none) */
 #define RD_INST		0x48000UL	/* installed region, from the base */
 #define RD_INST_RSV	(2 * RD_PAGE + 32 * 1024UL)	/* its directory
 					 * pages and /dev/rom (HAL_ROM_OFF,
@@ -58,7 +60,7 @@ int rd_check(const struct rd_man *m, const unsigned char *sha,
 /* The flash layout of R2b.1/R2b.1a, all as ST addresses. */
 struct rd_layout {
   unsigned long sfsa;		/* CPU2's flash */
-  unsigned long guard;		/* sfsa - 16 pages: nothing of ours above */
+  unsigned long guard;		/* sfsa - 4 pages: nothing of ours above */
   unsigned long slot;		/* lowest stack address on the card, or 0 */
   unsigned long inst, inst_end;	/* installed programs */
   unsigned long cache, cache_end;	/* run-time text cache, = guard */
@@ -77,7 +79,7 @@ int rd_dead(const struct rd_layout *l, unsigned long addr, unsigned long len);
 
 /* The slot an image at addr would need, checked against R2b.1a: the
  * stack installed there keeps the base system, libc, launcher and the
- * installed region's reserved pages below it, plus the 16-page guard and
+ * installed region's reserved pages below it, plus the 4-page guard and
  * the 32 KB minimum cache.  0 or RD_ESLOTLOW / RD_ESLOTHIGH. */
 int rd_slot_ok(unsigned long addr);
 

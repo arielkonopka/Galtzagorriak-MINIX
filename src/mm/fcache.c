@@ -67,6 +67,7 @@ struct fcrec {
 };
 
 #define STEP_TICKS	1		/* clock ticks between steps */
+#define RETRY_TICKS	(30 * HZ)	/* a refused format: again in 30 s */
 #define STEP_BYTES	256		/* programmed per step (~2.7 ms) */
 #define START_TICKS	(5 * HZ)	/* first step after boot */
 
@@ -353,7 +354,12 @@ PUBLIC void fc_step()
 		fc_unformatted = FALSE;
 		fc_dir = 0;
 	} else {
-		fc_base = fc_size = 0;		/* no cache, then */
+		/* Refused (today's erase budget is spent, R2b.11, or the
+		 * battery is low): no cache for now, and another try
+		 * later.  It used to give the cache up for the whole
+		 * boot, so `pkg budget` or the next day did not bring it
+		 * back, and a boot without it had no RAM for fsck. */
+		fc_alarm(RETRY_TICKS);
 		return;
 	}
 	if (job.state != J_IDLE) fc_alarm(STEP_TICKS);

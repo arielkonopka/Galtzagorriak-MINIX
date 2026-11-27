@@ -4249,6 +4249,55 @@ int hal_cpu2_info(uint32_t v[4])
 	return 1;
 }
 
+/* The answer in the command buffer, if one is there: its status (0-255)
+ * and v[0] the opcode; -1 none.  No state of our own: the buffer is it. */
+int hal_cpu2_last(uint32_t v[4])
+{
+	const volatile uint8_t *c = (const volatile uint8_t *) cpu2.cmd;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || (IPCC->C1TOC2SR & (1u << 1))
+	    || c[9] != 0x0E || c[10] < 4) return -1;
+	v[0] = c[12] | c[13] << 8;
+	return c[14];
+}
+
+/* A system command to CPU2 (ST's SHCI, shci_tl.c: the transport both the
+ * wireless stack and FUS take), R15.1 and T30b: the packet goes into the
+ * command buffer of the reference table (type 0x10, opcode, length,
+ * parameters), IPCC channel 2 is flagged, and CPU2 writes its answer over
+ * the command (event 0x0E "command complete": count, opcode, then the
+ * status and any data) and frees the channel.  Polled: an answer takes
+ * well under a tick, and nothing here may sleep.  Returns the bytes after
+ * the opcode copied to rsp (the first is the status), -1 when CPU2 is not
+ * ready, -2 when it did not answer, -3 when the answer is not for op. */
+int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax)
+{
+	struct cpu2_map *m = &cpu2;
+	volatile uint8_t *c = (volatile uint8_t *) m->cmd;
+	uint32_t v[4], n;
+	unsigned i, len;
+
+	if (hal_cpu2_info(v) != 1 || plen > 255) return -1;
+	if (IPCC->C1TOC2SR & (1u << 1)) return -2;	/* one still out */
+	for (i = 0; i < 8; i++) c[i] = 0;		/* the list node */
+	c[8] = 0x10;					/* a system command */
+	c[9] = (uint8_t) op;
+	c[10] = (uint8_t) (op >> 8);
+	c[11] = (uint8_t) plen;
+	for (i = 0; i < plen; i++) c[12 + i] = par[i];
+	__asm volatile ("dsb" ::: "memory");
+	IPCC->C1SCR = 1u << (16 + 1);			/* channel 2: go */
+	for (n = 0; IPCC->C1TOC2SR & (1u << 1); )
+		if (++n == 8000000u) return -2;		/* ~0.5 s */
+	/* the answer: type, event 0x0E, length, count, opcode, payload */
+	if (c[9] != 0x0E || c[10] < 3
+	    || (unsigned) (c[12] | c[13] << 8) != op) return -3;
+	len = c[10] - 3u;
+	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[14 + i];
+	return (int) len;
+}
+
 /*===========================================================================*
  *				Random numbers				     *
  *===========================================================================*/
@@ -4720,14 +4769,16 @@ void hal_tone(unsigned hz, unsigned vol)
  *	0x0803C000  shared libfuri + libapp (R2b.9)	  (both, 96 KB)
  *	0x08048000  installed programs (Phase 2b)	up to the cache
  *	...         run-time text cache			HAL_CACHE_SIZE
- *	SFSA - 16 pages: guard, room for FUS to upgrade the wireless stack
+ *	SFSA - 4 pages: a margin (it was 16 "for FUS": with a stack swap that
+ *		    deletes first FUS needs none below SFSA, AN5185; stock
+ *		    keeps none)
  *	SFSA ..     CPU2 wireless stack and FUS, never touched
  */
 #define HAL_SYS_IMAGE	0x30000u	/* 192 KB */
 #define HAL_LIBC_SIZE	0x18000u	/* 96 KB, SHLIBC_MAX + SHFURI_MAX;
 					 * both libraries are in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
-#define GUARD_PAGES	16u
+#define GUARD_PAGES	4u
 
 void hal_flash_layout(uint32_t *l)
 {

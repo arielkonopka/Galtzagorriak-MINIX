@@ -772,7 +772,7 @@ unsigned hal_disk_mhz;
 #define FAKE_SFSA	((volatile uint32_t *) 0x000CFFE0)
 #define QFL_INST	0x00048000u
 #define QFL_CACHE	0x00020000u
-#define QFL_GUARD	(16u * 4096u)
+#define QFL_GUARD	(4u * 4096u)	/* as the Flipper's GUARD_PAGES */
 #define QFL_MIN		(QFL_INST + QFL_GUARD + QFL_CACHE + 0xB000u)	/* dirs, /dev/rom, a page */
 
 void hal_flash_layout(uint32_t *l)	/* no CPU2: a made-up SFSA */
@@ -1103,3 +1103,10 @@ uint32_t hal_cycles(void)
 
 int hal_cpu2_start(void) { return -1; }
 int hal_cpu2_info(uint32_t v[4]) { (void) v; return -1; }
+int hal_cpu2_last(uint32_t v[4]) { (void) v; return -1; }
+int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax)
+{
+	(void) op; (void) par; (void) plen; (void) rsp; (void) rmax;
+	return -1;
+}

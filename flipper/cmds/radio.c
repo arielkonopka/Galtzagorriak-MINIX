@@ -2,12 +2,12 @@
  * task T30a, issue #388).
  *
  *	radio			flash layout: SFSA, programs, cache, slot
- *	radio list [-F X.Y.Z]	the images in /ext/radio, checked
+ *	radio list [-F X.Y.Z]	the images in /home/flipper/radio, checked
  *	radio add [-F X.Y.Z] NAME|DIR
- *				(root) check /ext/radio/NAME (manifest,
+ *				(root) check /home/flipper/radio/NAME (manifest,
  *				size, SHA-256, FUS, R2b.1a limits), then
  *				rewrite /etc/radio.slot
- *	radio rm NAME		(root) delete /ext/radio/NAME, rewrite the
+ *	radio rm NAME		(root) delete /home/flipper/radio/NAME, rewrite the
  *				slot
  *
  * /etc/radio.slot holds one number: the lowest ST install address of the
@@ -35,7 +35,9 @@
 #include <minix/type.h>
 #endif
 
-#define DIR_RD	"/ext/radio"
+/* The tree stock calls /ext is /home/flipper here (as rpcd, R15.5): the
+ * spec's /ext/radio.  It was "/ext/radio", which no card has. */
+#define DIR_RD	"/home/flipper/radio"
 #define FILE_SLOT "/etc/radio.slot"
 
 static char root[128];			/* HOST tests: RADIO_ROOT prefix */
@@ -70,7 +72,7 @@ static unsigned long slot_read(void)
 	return strtoul(b, NULL, 0);
 }
 
-/* Read and check /ext/radio/<name>: 0, RD_E* (+100: no manifest or
+/* Read and check /home/flipper/radio/<name>: 0, RD_E* (+100: no manifest or
  * image).  *m gets the manifest. */
 static int check(const char *name, struct rd_man *m)
 {

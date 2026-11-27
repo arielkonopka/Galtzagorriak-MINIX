@@ -85,12 +85,13 @@ int main(void)
   T(rd_check(&m, m2.sha, 100540, "1.2.0") == RD_EFUS);
   m.addr = 0x0806B000;			/* BLE + Thread static: fits */
   T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_OK);
-  m.addr = 0x08069000;			/* BLE + Thread dynamic: 28 KB of
-					 * cache only, refused */
+  m.addr = 0x08069000;			/* BLE + Thread dynamic: fits too
+					 * since the guard is 4 pages (it
+					 * left 28 KB of cache with 16) */
+  T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_OK);
+  m.addr = 0x08048000 + 0xA000 + 0x4000;	/* no 32 KB cache left */
   T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_ESLOTLOW);
-  m.addr = 0x08048000 + 0xA000 + 0x10000;	/* no 32 KB cache left */
-  T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_ESLOTLOW);
-  m.addr = 0x08048000 + 0xA000 + 0x10000 + 0x8000;	/* just enough */
+  m.addr = 0x08048000 + 0xA000 + 0x4000 + 0x8000;	/* just enough */
   T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_OK);
   m.addr = 0x08030000;			/* over libc */
   T(rd_check(&m, m2.sha, 100540, "2.0.0") == RD_ESLOTLOW);
@@ -102,26 +103,26 @@ int main(void)
 
   /* layout, no slot: as R2b.1 today (stock light stack) */
   T(rd_layout(0x080D7000, 0, &l) == 0);
-  T(l.guard == 0x080C7000 && l.cache_end == l.guard);
-  T(l.inst == 0x08048000 && l.inst_end == 0x080A7000 && l.cache == l.inst_end);
+  T(l.guard == 0x080D3000 && l.cache_end == l.guard);
+  T(l.inst == 0x08048000 && l.inst_end == 0x080B3000 && l.cache == l.inst_end);
   /* slot above the cache: no change */
-  T(rd_layout(0x080D7000, 0x080D0000, &l) == 0 && l.inst_end == 0x080A7000);
+  T(rd_layout(0x080D7000, 0x080D0000, &l) == 0 && l.inst_end == 0x080B3000);
   /* slot for BLE + Zigbee: installs stop there (pkg install --flash),
    * the cache fills the slot while the light stack runs */
   T(rd_layout(0x080D7000, 0x0807F000, &l) == 0);
   T(l.inst_end == 0x0807F000 && l.cache == 0x0807F000
-    && l.cache_end == 0x080C7000);
+    && l.cache_end == 0x080D3000);
   /* after the swap to BLE + Zigbee: the guard moves under the slot */
   T(rd_layout(0x0807F000, 0x0807F000, &l) == 0);
-  T(l.guard == 0x0806F000 && l.cache_end - l.cache == 0x1D000);
-  T(l.inst_end == 0x08052000);	/* only the reserved pages are left */
+  T(l.guard == 0x0807B000 && l.cache_end - l.cache == 0x20000);
+  T(l.inst_end == 0x0805B000);	/* 36 KB above the reserved pages */
   /* records above the new guard are dead; below, alive */
-  T(rd_dead(&l, 0x08070000, 0x1000) && rd_dead(&l, 0x0806E000, 0x2000));
-  T(!rd_dead(&l, 0x0806E000, 0x1000));
+  T(rd_dead(&l, 0x0807C000, 0x1000) && rd_dead(&l, 0x0807A000, 0x2000));
+  T(!rd_dead(&l, 0x0807A000, 0x1000));
   /* a big stack: the cache shrinks to what is left, down to 32 KB */
-  T(rd_layout(0x08048000 + 0xA000 + 0x10000 + 0x8000, 0, &l) == 0);
+  T(rd_layout(0x08048000 + 0xA000 + 0x4000 + 0x8000, 0, &l) == 0);
   T(l.inst_end == 0x08052000 && l.cache_end - l.cache == 0x8000);
-  T(rd_layout(0x08048000 + 0xA000 + 0x10000 + 0x7000, 0, &l) == -1);
+  T(rd_layout(0x08048000 + 0xA000 + 0x4000 + 0x7000, 0, &l) == -1);
   T(rd_layout(0x08200000, 0, &l) == -1);
   /* a slot below the reserved pages never gives them away */
   T(rd_layout(0x080D7000, 0x08049000, &l) == 0 && l.inst_end == 0x08052000);

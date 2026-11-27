@@ -1621,6 +1621,15 @@ int count;
 			if (i < 2 && j > 8) line[n++] = '.';
 		}
 	}
+	/* the last system command CPU2 answered: shci=OPCODE:STATUS (hex) */
+	if (v == 1 && (i = hal_cpu2_last(c2)) >= 0) {
+		for (k = " shci="; *k != 0; k++) line[n++] = *k;
+		for (j = 12; j >= 0; j -= 4)
+			line[n++] = "0123456789abcdef"[c2[0] >> j & 15];
+		line[n++] = ':';
+		line[n++] = "0123456789abcdef"[i >> 4 & 15];
+		line[n++] = "0123456789abcdef"[i & 15];
+	}
   }
   line[n++] = '\n';
   if (count > n) count = n;
@@ -1662,6 +1671,15 @@ int count;
   }
   if (strcmp(cmd, "cpu2") == 0)		/* R2b.10: start it, see read */
 	return(hal_cpu2_start() < 0 ? ENXIO : count);
+  if (strcmp(cmd, "c2sem7") == 0) {	/* R15.1: the first system command,
+					 * SHCI_C2_SetFlashActivityControl:
+					 * CPU2 honours HSEM 7 around its
+					 * radio activity (c2_flash_begin) */
+	u8_t one = 1, st = 0xFF;
+
+	i = hal_cpu2_shci(0xFC73, &one, 1, &st, 1);
+	return(i == -1 ? ENXIO : i < 1 || st != 0 ? EIO : count);
+  }
   return(EINVAL);
 }
 
