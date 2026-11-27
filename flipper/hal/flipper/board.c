@@ -1228,7 +1228,9 @@ static void spi2_init(void)
 
 /* Baud rate divider code: fPCLK / 2^(code+1).  The display and the SD card
  * share the bus and use different speeds; set it before each transaction. */
-#define SPI_DIV_DISPLAY	2	/* /8 = 8 MHz (stock: 4; the ST7567 takes 20) */
+#define SPI_DIV_DISPLAY	1	/* /4 = 16 MHz (stock: 4 = /32; the ST7567 takes 20).
+				 * 8 MHz (code 2) until 2026-11-28: one frame takes
+				 * about 0.55 ms of polled SPI instead of 1.1 ms (#498) */
 #define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
 #define SPI_DIV_SD_FAST	1	/* /4 = 16 MHz (the stock firmware's SD speed) */
 
