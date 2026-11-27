@@ -2378,7 +2378,9 @@ int hal_disk_init(void)
 			| ((uint32_t) csd[7] << 2) | (csd[8] >> 6);
 		sd_nsectors = (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9);
 	}
-	sd_ready = crc16_hw_init() ? 1 | SD_HWCRC : 1;
+	/* The CRC unit is CPU2's once CPU2 runs (see hal_cpu2_start) */
+	sd_ready = !(PWR->CR4 & PWR_CR4_C2BOOT) && crc16_hw_init()
+		 ? 1 | SD_HWCRC : 1;
 	if (sd_discard_probe(csd)) sd_ready |= SD_DISCARD;
 	sd_select(0);
 	spi2_speed(sd_fast);
@@ -4228,6 +4230,11 @@ int hal_cpu2_start(void)
 	m->traces[0] = C2_ADDR(&m->traces_q);
 	__asm volatile ("dsb" ::: "memory");
 	RCC->AHB3ENR |= RCC_AHB3ENR_IPCCEN | RCC_AHB3ENR_HSEMEN;
+	/* The crypto units CPU2 uses, clocked from CPU1's side as stock's
+	 * furi_hal_bt_init does (AES2, PKA, CRC) before it starts CPU2:
+	 * FUS checks an image's signature with them. */
+	RCC->AHB3ENR |= RCC_AHB3ENR_AES2EN | RCC_AHB3ENR_PKAEN;
+	RCC->AHB1ENR |= RCC_AHB1ENR_CRCEN;
 	(void) RCC->AHB3ENR;
 	if (RCC->BDCR & RCC_BDCR_LSERDY)		/* the RF wake-up clock */
 		RCC->CSR = (RCC->CSR & ~RCC_CSR_RFWKPSEL_Msk) | RCC_CSR_RFWKPSEL_0;
@@ -4238,6 +4245,17 @@ int hal_cpu2_start(void)
 	 * unless CPU1 holds HSEM 5 (AN5289; stock's furi_hal_usb): kept */
 	(void) (HSEM->RLR[5]);
 	__asm volatile ("sev; wfe; wfe" ::: "memory");	/* as ST, clears the event */
+	/* The CRC unit goes to CPU2: FUS checks an image with it (signature,
+	 * then integrity after its own resets) and does not set it up
+	 * (AN5185 table 7: CPU1 must reset it).  Ours was left at the SD
+	 * card's CRC-16 (POL 0x1021), so FUS found every image not authentic
+	 * (10.03), or corrupted (10.02) when only the command reset it.  The
+	 * card uses the software CRC from here until the next reset. */
+	sd_ready &= ~SD_HWCRC;
+	RCC->AHB1RSTR |= RCC_AHB1RSTR_CRCRST;
+	(void) RCC->AHB1RSTR;
+	RCC->AHB1RSTR &= ~RCC_AHB1RSTR_CRCRST;
+	(void) RCC->AHB1RSTR;
 	PWR->CR4 |= PWR_CR4_C2BOOT;
 	return 0;
 }
@@ -4418,10 +4436,12 @@ int hal_random(uint32_t *w)
 			sem_give(SEM_CLK48);
 	}
 	if (sem_take(SEM_RNG) < 0) return -1;
-	if (!on) {
-		RNG->CR |= RNG_CR_RNGEN;
-		on = 1;
-	}
+	on = 1;
+	/* On only while we hold the semaphore, as stock's furi_hal_random:
+	 * CPU2 shares the RNG (HSEM 0) and must find it off.  We left it
+	 * running for good, in our configuration (T30b: looked at when FUS
+	 * found every stack image not authentic). */
+	RNG->CR |= RNG_CR_RNGEN;
 	for (n = 0; !(RNG->SR & RNG_SR_DRDY); n++) {
 		if ((RNG->SR & (RNG_SR_SECS | RNG_SR_CECS)) || n == 1000000u) {
 			/* seed or clock error: restart it, the caller may
@@ -4434,6 +4454,7 @@ int hal_random(uint32_t *w)
 		}
 	}
 	if (r == 0) *w = RNG->DR;
+	RNG->CR &= ~RNG_CR_RNGEN;
 	sem_give(SEM_RNG);
 	return r;
 }
