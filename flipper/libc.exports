@@ -368,3 +368,11 @@ poll
 sys_swap		# R12.28 plain swap, 2026-11-17
 fstatfs			# spec O.5 statfs, 2026-11-20
 statfs
+_doscan			# scanf family shared, 2026-11-27: its tables moved to the stack
+scanf
+fscanf
+sscanf
+vscanf
+vsscanf
+__aeabi_d2f		# libgcc, pulled in by the shared _doscan (%e %f %g)
+__truncdfsf2

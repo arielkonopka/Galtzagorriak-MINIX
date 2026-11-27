@@ -7,7 +7,13 @@
 #include <time.h>
 #include <unistd.h>
 #include "gui.h"
+#ifdef GUI_FONT_SHARED		/* the shared libc has it (libc.exports: no entry, a variable) */
+#define FONT_W 4
+#define FONT_H 6
+extern const unsigned char font_4x6[95][6];
+#else
 #include "font4x6.c"
+#endif
 /* The stock fonts (u8g2, BSD-2): libfuri's copy, one source for both.
  * Only what a program calls is linked (--gc-sections). */
 #ifndef GUI_HOST_U8G2		/* the host test links libfuri's own */
