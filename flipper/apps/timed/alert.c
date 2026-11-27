@@ -632,8 +632,10 @@ int main(int argc, char **argv)
 	}
 	if (shown && gui_open() == 0) {
 		gui_title(title);
-		gui_text_big((GUI_W - 5 * 4 * 2) / 2, 10, now_s, 2);
-		wrap(text, 26, 4);
+		/* the time in segment digits (16x24, the user's wish), as
+		 * the desk clock; the text below it, three rows of it */
+		gui_text_seg((GUI_W - 5 * 16) / 2, 9, now_s);
+		wrap(text, 35, 3);
 		gui_text(0, GUI_H - 6, id != NULL ? "Back:off OK:done ^v:snooze"
 						  : "Back:off  OK:done", 1);
 		gui_flush();

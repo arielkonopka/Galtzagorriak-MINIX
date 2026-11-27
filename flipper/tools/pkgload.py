@@ -33,10 +33,10 @@ _spec.loader.exec_module(powercut)
 
 LOAD = ("(while test ! -f /tmp/stop; do cat /etc/passwd >/dev/null; "
 	"ls / >/dev/null; od /etc/rc >/dev/null; done) &")
-PKGS = ("timed_1.7", "remind_1.1", "alarm_1.6")
+PKGS = ("timed_1.8", "remind_1.1", "alarm_1.6")
 # What each postinst makes: a command that prints 1 if it is there.
 # timed's makes nothing a fresh card lacks: the line it prints.
-SAYS = {"timed_1.7": rb"timed: timers in /var/timers"}
+SAYS = {"timed_1.8": rb"timed: timers in /var/timers"}
 MADE = {
 	"remind_1.1": "grep -c '^remind:.:21:11:' /etc/passwd",
 	"alarm_1.6": "grep -c '^Ordua:alarm:@alarm:=/usr/bin/alarm$' /etc/apps",
