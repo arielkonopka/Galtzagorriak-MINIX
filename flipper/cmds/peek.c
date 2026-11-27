@@ -2,6 +2,8 @@
  * bring-up, e.g. CPU2's mailbox tables at 0x20030000: T30b).
  *
  * Usage:	peek ADDR [BYTES]	ADDR in hex, BYTES in decimal (64)
+ *		peek -s WORD START END	where the 32-bit WORD (hex) is, at
+ *					addresses that are multiples of 4
  *
  * Prints 32-bit little-endian words, 4 a line, with the address.  Root
  * only (the device file's mode); only where the board has memory: RAM,
@@ -36,6 +38,32 @@ int main(int argc, char **argv)
 	long n = 64, got, i;
 	int fd;
 
+	if (argc == 5 && strcmp(argv[1], "-s") == 0) {	/* search */
+		unsigned long w = strtoul(argv[2], (char **) 0, 16), v, end;
+		int hits = 0;
+
+		addr = strtoul(argv[3], (char **) 0, 16) & ~3UL;
+		end = strtoul(argv[4], (char **) 0, 16);
+		if ((fd = open("/dev/mem", O_RDONLY)) < 0
+		    || lseek(fd, (off_t) addr, SEEK_SET) == (off_t) -1) {
+			out("peek: cannot read there\n");
+			return 1;
+		}
+		while (addr < end && (got = read(fd, buf, sizeof buf)) >= 4) {
+			for (i = 0; i + 4 <= got; i += 4) {
+				v = buf[i] | buf[i + 1] << 8
+				    | (unsigned long) buf[i + 2] << 16
+				    | (unsigned long) buf[i + 3] << 24;
+				if (v == w && hits++ < 32) {
+					out(hex8(b, addr + (unsigned long) i));
+					out("\n");
+				}
+			}
+			addr += (unsigned long) got;
+		}
+		out(hits ? "" : "none\n");
+		return 0;
+	}
 	if (argc < 2 || argc > 3) {
 		out("usage: peek ADDR(hex) [BYTES]\n");
 		return 2;

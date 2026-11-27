@@ -208,6 +208,7 @@ int hal_cpu2_start(void);
 int hal_cpu2_info(uint32_t v[4]);
 int hal_cpu2_last(uint32_t v[4]);
 unsigned hal_cpu2_ipcc(void);
+void hal_cpu2_clk48(int hold);
 int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax);
 /* The default speaker volume (0-100; 100 if never set), kept over resets

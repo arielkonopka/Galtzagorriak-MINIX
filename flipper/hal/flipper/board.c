@@ -1122,6 +1122,17 @@ static void clock_init(void)
 	for (timeout = 200000; !(RCC->CR & RCC_CR_PLLRDY); )
 		if (--timeout == 0) return;
 
+	/* CPU2's clock is SYSCLK / 2: the Cortex-M0+ takes 32 MHz at most
+	 * (stock: LL_C2_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_2)).  Left at
+	 * /1 it ran at 64 MHz: the BLE stack and FUS still answered simple
+	 * commands, but FUS found every stack image "not authentic"
+	 * (FUS_GetState 10.03, 2026-11-27): its signature check read or
+	 * computed wrongly.  Set before the clock goes up. */
+	RCC->EXTCFGR = (RCC->EXTCFGR & ~RCC_EXTCFGR_C2HPRE)
+		     | (8u << RCC_EXTCFGR_C2HPRE_Pos);
+	for (timeout = 200000; !(RCC->EXTCFGR & RCC_EXTCFGR_C2HPREF); )
+		if (--timeout == 0) break;
+
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
 	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
 	SystemCoreClock = 64000000;
@@ -3280,6 +3291,15 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 	if ((n = span_in(addr, len, 0x1FFF0000u, 0x1FFF7400u)) != 0) \
 		return n; \
 	if ((n = span_in(addr, len, 0x1FFF7580u, 0x1FFF7588u)) != 0) \
+		return n; \
+	/* bring-up (T30b), read only: the option bytes, and RCC, PWR and \
+	 * FLASH's registers (no read there has a side effect; HSEM's \
+	 * read-lock registers and IPCC stay out) */ \
+	if ((n = span_in(addr, len, 0x1FFF8000u, 0x1FFF8080u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x58000000u, 0x58000800u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x58004000u, 0x58004100u)) != 0) \
 		return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
@@ -4265,8 +4285,23 @@ int hal_cpu2_info(uint32_t v[4])
  * in bits 0-5, CPU2's (events for us) in bits 8-13. */
 unsigned hal_cpu2_ipcc(void)
 {
+	unsigned i, h = 0;
+
 	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
-	return (IPCC->C1TOC2SR & 0x3F) | (IPCC->C2TOC1SR & 0x3F) << 8;
+	for (i = 0; i < 8; i++)		/* the hardware semaphores held, 0-7 */
+		if (HSEM->R[i] & HSEM_R_LOCK) h |= 1u << i;
+	return (IPCC->C1TOC2SR & 0x3F) | (IPCC->C2TOC1SR & 0x3F) << 8 | h << 16;
+}
+
+/* HSEM 5, the 48 MHz clock (AN5289): held by CPU1 since hal_cpu2_start so
+ * that CPU2 does not switch the clock USB runs on.  hold 0 gives it up
+ * (CPU2 may then run its RNG on HSI48: FUS, to check an image), 1 takes
+ * it again. */
+void hal_cpu2_clk48(int hold)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
+	if (hold) (void) (HSEM->RLR[5]);
+	else HSEM->R[5] = HSEM_CR_COREID_CURRENT;
 }
 
 /* The answer in the command buffer, if one is there: its status (0-255),

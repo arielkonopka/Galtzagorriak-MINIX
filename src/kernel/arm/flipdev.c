@@ -1669,7 +1669,7 @@ int count;
 	if (v == 1) {			/* the mailbox flags: ipcc=C2C1 (hex) */
 		u = hal_cpu2_ipcc();
 		for (k = " ipcc="; *k != 0; k++) line[n++] = *k;
-		for (j = 12; j >= 0; j -= 4)
+		for (j = 20; j >= 0; j -= 4)	/* HSEM held, C2's flags, C1's */
 			line[n++] = "0123456789abcdef"[u >> j & 15];
 	}
 	/* the last system command CPU2 answered: shci=OPCODE:STATUS (hex) */
@@ -1750,6 +1750,11 @@ int count;
    * the stack again (a reset), "fusdel" deletes the installed stack,
    * "fusup ADDR" installs the image written at ADDR (hex): those three
    * only while CPU2 says it runs FUS.  Read the answer in shci=. */
+  if (strcmp(cmd, "c2clk0") == 0 || strcmp(cmd, "c2clk1") == 0) {
+	hal_cpu2_clk48(cmd[5] == '1');	/* HSEM 5: let CPU2 have the 48 MHz
+					 * clock (0), or hold it for USB (1) */
+	return(count);
+  }
   if (strncmp(cmd, "fus", 3) == 0) {
 	u32_t c2[4], op = 0, a = 0;
 	u8_t par[4], rsp[2];
@@ -1758,6 +1763,7 @@ int count;
 	if (strcmp(cmd, "fus?") == 0) op = 0xFC52;
 	else if (strcmp(cmd, "fusws") == 0) op = 0xFC5A;
 	else if (strcmp(cmd, "fusdel") == 0) op = 0xFC55;
+	else if (strcmp(cmd, "fusup") == 0) op = 0xFC54;	/* FUS finds it */
 	else if (strncmp(cmd, "fusup ", 6) == 0 && cmd[6] != 0) {
 		for (i = 6; cmd[i] != 0; i++) {
 			int d = cmd[i] >= '0' && cmd[i] <= '9' ? cmd[i] - '0'

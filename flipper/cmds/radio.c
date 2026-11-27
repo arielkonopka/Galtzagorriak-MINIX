@@ -297,7 +297,12 @@ static int put(int fd, unsigned long addr, unsigned long size)
 				}
 			} else for (i = 0; i < n; i++)
 				b[i] = (unsigned char) ((done + i) * 7 + 3);
-			while (n % 8 != 0) b[n++] = 0xFF;	/* erased */
+			/* The tail of an image up to a double word is ZEROS, as
+			 * stock's furi_hal_flash_program_page and psdb write
+			 * it.  With 0xFF (left erased) FUS answered 10.03,
+			 * image not authentic: ST's signature covers the
+			 * padded length (found on the device, 2026-11-27). */
+			while (n % 8 != 0) b[n++] = 0x00;
 			if (pass == 0) {
 				if (piece(addr + done, b, n) < 0) {
 					fprintf(stderr, "radio: write at 0x%08lX: "
@@ -353,6 +358,25 @@ static int wtest(void)
 	m.m1_i2 = MI_FCACHE;
 	if (_syscall(MM, MEMINFO, &m) < 0) return 1;
 	return put(-1, fi.sfsa - 4 * RD_PAGE, 4 * RD_PAGE);
+}
+
+/* Erase pages of the radio window (a piece of ones at each page start):
+ * what a try of the writer, or an image FUS did not take, left there. */
+static int wclear(const char *a, const char *n)
+{
+	unsigned char b[8];
+	unsigned long addr = strtoul(a, NULL, 16);
+	int pages = atoi(n);
+
+	memset(b, 0xFF, sizeof(b));
+	if (addr % RD_PAGE != 0 || pages < 1 || pages > 64) return usage();
+	for (; pages > 0; pages--, addr += RD_PAGE)
+		if (piece(addr, b, 8) < 0) {
+			fprintf(stderr, "radio: erase at 0x%08lX: %s\n", addr,
+				strerror(errno));
+			return 1;
+		}
+	return 0;
 }
 #endif
 
@@ -413,6 +437,8 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "write") == 0 && argc == 3) return wr(argv[2]);
 	if (strcmp(argv[1], "wtest") == 0 && argc == 2) return wtest();
+	if (strcmp(argv[1], "wclear") == 0 && argc == 4)
+		return geteuid() == 0 ? wclear(argv[2], argv[3]) : 1;
 #endif
 	if (strcmp(argv[1], "add") == 0 && argc == i + 1) return add(argv[i]);
 	if (strcmp(argv[1], "rm") == 0 && argc == 3) return rm(argv[2]);
