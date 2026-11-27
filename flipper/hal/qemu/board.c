@@ -1112,6 +1112,7 @@ uint32_t hal_cycles(void)
 int hal_cpu2_start(void) { return -1; }
 int hal_cpu2_info(uint32_t v[4]) { (void) v; return -1; }
 int hal_cpu2_last(uint32_t v[4]) { (void) v; return -1; }
+unsigned hal_cpu2_ipcc(void) { return 0; }
 int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax)
 {

@@ -312,7 +312,8 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc
+	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc \
+	    peek
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.

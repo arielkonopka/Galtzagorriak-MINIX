@@ -1666,6 +1666,12 @@ int count;
 			if (i < 2 && j > 8) line[n++] = '.';
 		}
 	}
+	if (v == 1) {			/* the mailbox flags: ipcc=C2C1 (hex) */
+		u = hal_cpu2_ipcc();
+		for (k = " ipcc="; *k != 0; k++) line[n++] = *k;
+		for (j = 12; j >= 0; j -= 4)
+			line[n++] = "0123456789abcdef"[u >> j & 15];
+	}
 	/* the last system command CPU2 answered: shci=OPCODE:STATUS (hex) */
 	if (v == 1 && (i = hal_cpu2_last(c2)) >= 0) {
 		for (k = " shci="; *k != 0; k++) line[n++] = *k;
@@ -1674,6 +1680,18 @@ int count;
 		line[n++] = ':';
 		line[n++] = "0123456789abcdef"[i >> 4 & 15];
 		line[n++] = "0123456789abcdef"[i & 15];
+		if (c2[1] < 0x100) {		/* e.g. FUS_GetState's error */
+			line[n++] = '.';
+			line[n++] = "0123456789abcdef"[c2[1] >> 4 & 15];
+			line[n++] = "0123456789abcdef"[c2[1] & 15];
+		}
+	} else if (v == 1) {		/* not an answer: its bytes 8..15 */
+		for (k = " raw="; *k != 0; k++) line[n++] = *k;
+		for (i = 2; i < 4; i++)
+			for (j = 0; j < 32; j += 8) {
+				line[n++] = "0123456789abcdef"[c2[i] >> (j + 4) & 15];
+				line[n++] = "0123456789abcdef"[c2[i] >> j & 15];
+			}
 	}
   }
   line[n++] = '\n';
@@ -1724,6 +1742,42 @@ int count;
 
 	i = hal_cpu2_shci(0xFC73, &one, 1, &st, 1);
 	return(i == -1 ? ENXIO : i < 1 || st != 0 ? EIO : count);
+  }
+  /* T30b: ST's firmware upgrade services (FUS), AN5185.  Root only (the
+   * device file).  "fus?" FUS_GetState: asked twice of a running stack it
+   * makes CPU2 reset the MCU into FUS; in FUS its answer is the state
+   * (00 idle, 10-3f busy, ff error) and an error code.  "fusws" starts
+   * the stack again (a reset), "fusdel" deletes the installed stack,
+   * "fusup ADDR" installs the image written at ADDR (hex): those three
+   * only while CPU2 says it runs FUS.  Read the answer in shci=. */
+  if (strncmp(cmd, "fus", 3) == 0) {
+	u32_t c2[4], op = 0, a = 0;
+	u8_t par[4], rsp[2];
+	int np = 0;
+
+	if (strcmp(cmd, "fus?") == 0) op = 0xFC52;
+	else if (strcmp(cmd, "fusws") == 0) op = 0xFC5A;
+	else if (strcmp(cmd, "fusdel") == 0) op = 0xFC55;
+	else if (strncmp(cmd, "fusup ", 6) == 0 && cmd[6] != 0) {
+		for (i = 6; cmd[i] != 0; i++) {
+			int d = cmd[i] >= '0' && cmd[i] <= '9' ? cmd[i] - '0'
+			      : cmd[i] >= 'a' && cmd[i] <= 'f' ? cmd[i] - 'a' + 10
+			      : cmd[i] >= 'A' && cmd[i] <= 'F' ? cmd[i] - 'A' + 10
+			      : -1;
+			if (d < 0 || i > 13) return(EINVAL);
+			a = a << 4 | (u32_t) d;
+		}
+		if (a < 0x08048000UL || a >= 0x08100000UL || a % 4096 != 0)
+			return(EINVAL);
+		par[0] = (u8_t) a; par[1] = (u8_t) (a >> 8);
+		par[2] = (u8_t) (a >> 16); par[3] = (u8_t) (a >> 24);
+		np = 4;
+		op = 0xFC54;
+	} else return(EINVAL);
+	if (hal_cpu2_info(c2) != 1) return(ENXIO);
+	if (op != 0xFC52 && c2[3] != 1) return(EPERM);	/* not in FUS */
+	i = hal_cpu2_shci(op, par, np, rsp, 2);
+	return(i < 0 ? EIO : count);
   }
   return(EINVAL);
 }

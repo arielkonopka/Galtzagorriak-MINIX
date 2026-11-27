@@ -4144,8 +4144,17 @@ struct cpu2_list { uint32_t next, prev; };
 struct cpu2_map {
 	uint32_t ref[10];	/* MB_RefTable_t: devinfo, ble, thread, sys, mm,
 				 * traces, mac, zigbee, lld tests, ble lld */
-	uint32_t devinfo[8];	/* safe boot ver; FUS ver, mem, info;
-				 * stack ver, mem, InfoStack, reserved */
+	uint32_t devinfo[16];	/* a stack writes 8 words: safe boot ver; FUS
+				 * ver, mem, info; stack ver, mem, InfoStack,
+				 * reserved.  FUS writes 14 (ST's
+				 * MB_FUS_DeviceInfoTable_t): 0xA94656B9,
+				 * state bytes, safe boot ver, FUS ver, mem,
+				 * stack ver, mem, BLE info, Thread info,
+				 * reserved, UID64, device id.  With room
+				 * for 8 only, FUS's device id landed on
+				 * sys[0], the command buffer's address,
+				 * and no FUS command was answered
+				 * (2026-11-27) */
 	uint32_t ble[4];	/* cmd, cs, evt queue, acl */
 	uint32_t sys[2];	/* cmd buffer, event queue */
 	uint32_t mm[7];		/* spare ble, spare sys, ble pool, size,
@@ -4228,7 +4237,17 @@ int hal_cpu2_info(uint32_t v[4])
 		v[2] = m->ref[3];		/* sp */
 		return 2;
 	}
-	if (!(IPCC->C2TOC1SR & (1u << 1))) return 0;	/* channel 2: system */
+	/* the ready event: IPCC channel 2 flagged, or (once hal_cpu2_shci
+	 * has acknowledged the flag) still in the system event queue */
+	if (!(IPCC->C2TOC1SR & (1u << 1))
+	    && m->sys_q.next == C2_ADDR(&m->sys_q)) return 0;
+	if (m->devinfo[0] == 0xA94656B9u) {	/* FUS runs: its own table */
+		v[0] = m->devinfo[3];
+		v[1] = m->devinfo[5];
+		v[2] = m->devinfo[1] >> 24;	/* the installed stack's type */
+		v[3] = 1;
+		return 1;
+	}
 	v[0] = m->devinfo[1];
 	v[1] = m->devinfo[4];
 	v[2] = m->devinfo[6];
@@ -4242,16 +4261,34 @@ int hal_cpu2_info(uint32_t v[4])
 	return 1;
 }
 
-/* The answer in the command buffer, if one is there: its status (0-255)
- * and v[0] the opcode; -1 none.  No state of our own: the buffer is it. */
+/* The IPCC flags, for /dev/power: CPU1's channels in use (commands out)
+ * in bits 0-5, CPU2's (events for us) in bits 8-13. */
+unsigned hal_cpu2_ipcc(void)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	return (IPCC->C1TOC2SR & 0x3F) | (IPCC->C2TOC1SR & 0x3F) << 8;
+}
+
+/* The answer in the command buffer, if one is there: its status (0-255),
+ * v[0] the opcode and v[1] the byte after the status (FUS_GetState's
+ * error code; 0x100 when the answer has none); -1 none.  No state of our
+ * own: the buffer is it. */
 int hal_cpu2_last(uint32_t v[4])
 {
 	const volatile uint8_t *c = (const volatile uint8_t *) cpu2.cmd;
 
-	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || (IPCC->C1TOC2SR & (1u << 1))
-	    || c[9] != 0x0E || c[10] < 4) return -1;
-	v[0] = c[12] | c[13] << 8;
-	return c[14];
+	/* the raw start of the packet, for a look when it is not understood:
+	 * type, event, length, count / opcode (2), status, next byte */
+	v[2] = c[8] | c[9] << 8 | c[10] << 16 | (uint32_t) c[11] << 24;
+	v[3] = c[12] | c[13] << 8 | c[14] << 16 | (uint32_t) c[15] << 24;
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || (IPCC->C1TOC2SR & (1u << 1)))
+		return -1;
+	if (c[0] == 0x11 && c[1] == 0x0E && c[2] >= 4) ;	/* FUS: no header */
+	else if (c[9] == 0x0E && c[10] >= 4) c += 8;		/* a stack */
+	else return -1;
+	v[0] = c[4] | c[5] << 8;
+	v[1] = c[2] >= 5 ? c[7] : 0x100;
+	return c[6];
 }
 
 /* A system command to CPU2 (ST's SHCI, shci_tl.c: the transport both the
@@ -4273,6 +4310,11 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 
 	if (hal_cpu2_info(v) != 1 || plen > 255) return -1;
 	if (IPCC->C1TOC2SR & (1u << 1)) return -2;	/* one still out */
+	/* Tell CPU2 its event was taken (ST's HW_IPCC_SYS_EvtNot clears the
+	 * flag): the wireless stack answers without it, FUS does not (seen
+	 * 2026-11-27: FUS_GetState got no answer).  The event stays in the
+	 * queue, which hal_cpu2_info reads. */
+	if (IPCC->C2TOC1SR & (1u << 1)) IPCC->C1SCR = 1u << 1;
 	for (i = 0; i < 8; i++) c[i] = 0;		/* the list node */
 	c[8] = 0x10;					/* a system command */
 	c[9] = (uint8_t) op;
@@ -4283,11 +4325,18 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 	IPCC->C1SCR = 1u << (16 + 1);			/* channel 2: go */
 	for (n = 0; IPCC->C1TOC2SR & (1u << 1); )
 		if (++n == 8000000u) return -2;		/* ~0.5 s */
-	/* the answer: type, event 0x0E, length, count, opcode, payload */
-	if (c[9] != 0x0E || c[10] < 3
-	    || (unsigned) (c[12] | c[13] << 8) != op) return -3;
-	len = c[10] - 3u;
-	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[14 + i];
+	/* The answer: type, event 0x0E, length, count, opcode, payload.
+	 * FUS writes it at the start of the buffer (ST's shci_send: "the
+	 * command complete of a system command does not have the header");
+	 * the BLE light stack 1.20.0 wrote it after the 8-byte list node,
+	 * where the command was.  Seen on the device, both taken. */
+	if (c[0] == 0x11 && c[1] == 0x0E && c[2] >= 3
+	    && (unsigned) (c[4] | c[5] << 8) == op) ;
+	else if (c[9] == 0x0E && c[10] >= 3
+		 && (unsigned) (c[12] | c[13] << 8) == op) c += 8;
+	else return -3;
+	len = c[2] - 3u;
+	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[6 + i];
 	return (int) len;
 }
 
