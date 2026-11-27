@@ -127,11 +127,18 @@ $(SHL)/tab.S: libc.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
 $(SHL)/tab.o: $(SHL)/tab.S
 	$(CC) $(MCFLAGS) -c $< -o $@
 # No --gc-sections: every global function of the members is exported.
-$(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) ld/shlibc.ld
+# The 4x6 font (570 B of const data) once, here: every GUI program and
+# libfuri carried a copy; the variable is exported with the others (the
+# libc's variables are found in the ELF, see mkshlibc.py) and sits in flash.
+$(SHL)/font4x6.o: hal/common/font4x6.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+FONT_SHARED := $(if $(filter 1,$(SHLIBC)),-DGUI_FONT_SHARED)
+$(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) $(SHL)/font4x6.o ld/shlibc.ld
 	@echo "  LD $@"
 	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
 	   -Wl,-q -Wl,--defsym=SHLIBC_BASE=$(SHLIBC_BASE) -Tld/shlibc.ld \
-	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) \
+	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) $(SHL)/font4x6.o \
 	   $(SHLIBC_GCC:%=-Wl,-u,%) -lgcc -o $@
 $(SHL)/libc.bin $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld &: \
 		$(SHL)/libc.elf libc.exports tools/mkshlibc.py
@@ -854,7 +861,7 @@ OBJS_pgpenc = $(MB)/cmd/port/pgpenc.o $(MB)/pgpenc/pgpenc.o
 OBJS_blescan = $(MB)/cmd/port/blescan.o $(MB)/blescan/blescan.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) $(FONT_SHARED) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
 ifeq ($(SHLIBC),1)
@@ -908,7 +915,7 @@ FURI_HDR := $(wildcard $(FURI_DIR)/include/*.h $(FURI_DIR)/include/*/*.h \
 	    $(FURI_DIR)/src/*.h $(FURI_DIR)/src/gui/*.h $(FURI_DIR)/src/gui/*/*/*.h \
 	    $(FURI_DIR)/u8g2/*.h)
 FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
-FURI_GUI_CFLAGS = $(FURI_CFLAGS) -I$(FURI_DIR)/include/gui \
+FURI_GUI_CFLAGS = $(FURI_CFLAGS) $(FONT_SHARED) -I$(FURI_DIR)/include/gui \
 	    -I$(FURI_DIR)/include/gui/modules -I$(FURI_DIR)/u8g2 -I$(FURI_DIR)/src/gui
 $(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(FURI_HDR)
 	@mkdir -p $(dir $@)

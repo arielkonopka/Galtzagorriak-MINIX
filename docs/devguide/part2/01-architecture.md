@@ -133,6 +133,11 @@ build id, sizes) and the *entry table*, one word per exported function. `flipper
 fixes the order of that table for the ABI: append new functions at the end, never reorder or
 remove one without a new `GZ_ABI` (the build tells you what to append). A program calls slot *n*
 through a 12-byte stub in its own text (`ldr ip, =slot; ldr pc, [ip]`), so imports cost no RAM.
+Const data can be shared the same way: a global `const` object in a libc member is a *variable*
+of the library, found in the ELF (no line in `libc.exports`), and its flash address goes into
+`shlibc-syms.ld`: `__ctype`, and since 2026-11-27 `font_4x6` (`hal/common/font4x6.c`, built as
+`shlibc/font4x6.o`; `gui.c` and the furi `pine.c` declare it `extern` under `-DGUI_FONT_SHARED`).
+A program that defines the symbol itself wins over the library's.
 
 The library's writable data (its GOT, `errno`, stdio, `malloc` and `atexit` state; about 0.6 KB)
 is per process: the first bytes of every data segment, the *libc area*, at `r9` like the
