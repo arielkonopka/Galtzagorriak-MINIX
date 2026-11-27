@@ -86,3 +86,7 @@ here (a device file, a library call, a build target, a rule) updates the chapter
 **(planned)** mark when it brings the feature. New chapters arrive as the features they describe
 land: desktop modules with Phase 5 and the desktop, Berry with Phase 7c, timers and alerts with
 Phase 7b, user-space drivers with Phase 4b.
+
+## Set aside for later
+
+[Parked ideas and work](parked.md): what was discussed and put off, with the issue for each.
