@@ -4,7 +4,7 @@ Things the user and the local agent talked through and decided not to do now. Ea
 issue with the details; this page is the index, so that nothing is lost between sessions.
 When one is taken up, remove it here and link the PR in its issue.
 
-Last updated: 2026-11-27.
+Last updated: 2026-11-27 (evening).
 
 ## Infrared
 
@@ -34,6 +34,14 @@ Last updated: 2026-11-27.
     36 KB more flash and more of SRAM2a.
 - **A way to lift the cache's daily erase budget in dev mode.** A day of many DFU flashes
   spends the 32 pages; the day turns with the RTC's date, which is UTC.
+
+## Clock and calendar
+
+- **Today's holiday on the locked desk clock** ([#493](https://github.com/arielkonopka/Galtzagorriak-MINIX/issues/493)).
+  In place of the unlock hint on the bottom line, from the calendar app. There is no calendar
+  yet (holidays are planned as a `kutxa` file per country, spec section R); an interim text
+  file is sketched in the issue. Open: which holidays, the language (the small font is ASCII
+  only), and whether the unlock hint stays.
 
 ## The Flipper as a login key
 
