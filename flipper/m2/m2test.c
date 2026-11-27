@@ -647,6 +647,27 @@ static void nfc_tests(void)
 	unlink("/tmp/m2nfc.dic");
 }
 
+/* The scanf family lives in the shared libc with its tables on the stack
+ * (2026-11-27): numbers, a %[ set, a width cut at 63 characters (no %f: m2test has no float hook). */
+static void scanf_tests(void)
+{
+	int d1 = 0, d2 = 0, r;
+	unsigned u = 0;
+	char w[16], big[100], num[100];
+
+	r = sscanf("12 0x1f -7", "%d %i", &d1, &d2);
+	check(r == 2 && d1 == 12 && d2 == 31, "sscanf: %d %i");
+	r = sscanf("beta,gamma", "%[a-z],%s", w, big);
+	check(r == 2 && strcmp(w, "beta") == 0 && strcmp(big, "gamma") == 0,
+		"sscanf: %[a-z] set");
+	r = sscanf("ff 7", "%x %o", &u, &d2);
+	check(r == 2 && u == 255 && d2 == 7, "sscanf: %x %o");
+	memset(num, '1', 80);
+	num[80] = 0;
+	r = sscanf(num, "%d", &d1);
+	check(r == 1, "sscanf: an 80-digit number does not overrun the buffer");
+}
+
 /* R5.7: the FPU (lazy context switch, arm/mpx.S) is checked by its own
  * program, m2/fptest.c, built for the FPU; m2test itself stays soft-float. */
 static void fpu_tests(void)
@@ -3856,6 +3877,7 @@ int main(int argc, char **argv)
 	rpcd_test();
 #endif
 	time_tests();
+	scanf_tests();
 	fpu_tests();
 	finish();
 	return 0;

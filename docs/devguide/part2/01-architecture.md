@@ -144,9 +144,12 @@ kernel accepts the library's flash as the *source* of a copy (its strings passed
 calls), never as a destination.
 
 Members with big per-process data stay static, linked into the programs that use them
-(`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, `scanf`, the time
+(`SHLIBC_STATIC` in `minix.mk`: password and group files, `mtab`, `crypt`, the time
 zone code, the float tables, `regexp`, `getopt`, `termcap`, math, ...). `SHLIBC=0` builds every
-program static, as before.
+program static, as before. The `scanf` family left that list on 2026-11-27: its two tables
+(768 B) moved to the stack of `_doscan()` (a number is cut at 63 characters), so it sits in
+the shared libc once (+2.7 KB there, -2.7 KB in each program that used it) and costs no
+`.bss`. A member can follow it when it has no static data or its state fits on the caller's stack.
 
 **The shared libfuri + libapp** (the "furi" library; `ld/shfuri.ld`, `flipper/furi.exports`,
 `tools/mkshlibc.py image --dep`). `libfuri` (core, GUI, u8g2, fonts) and `libapp` are linked once

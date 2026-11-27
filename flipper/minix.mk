@@ -101,7 +101,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 # SHLIBC_BASE (after the 192 KB system image, in minix.bin), and programs
 # call them through 12-byte stubs and the entry table, whose order is
 # frozen in libc.exports (append only; spec J.3).  Members whose
-# per-process data is big (password and group files, mtab, crypt, scanf,
+# per-process data is big (password and group files, mtab, crypt,
 # the time zone code, the float conversion tables, regexp, math) stay
 # static, linked into the programs that use them, together with every
 # member that needs one of them.  SHLIBC=0: every program static, as before.
@@ -109,11 +109,10 @@ SHLIBC	?= 1
 SHL	:= $(MB)/shlibc
 SHF	:= $(MB)/shfuri
 SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
-SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
+SHLIBC_STATIC := getgrent getpwent mtab crypt misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
 	   setlocale localeconv regexp regsub printk difftime hypot \
 	   asctime ctime ecvt localtime mktime strftime tzset ttyslot \
-	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
 	   lrand getopt gmtime bread blk
@@ -1350,7 +1349,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 5.0
+BASE_VER := 5.1
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.
