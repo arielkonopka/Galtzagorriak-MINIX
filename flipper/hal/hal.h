@@ -211,6 +211,9 @@ unsigned hal_cpu2_ipcc(void);
 void hal_cpu2_clk48(int hold);
 int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax);
+int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax);
+int hal_cpu2_evt(uint8_t *b, unsigned max);
 /* The default speaker volume (0-100; 100 if never set), kept over resets
  * in a backup register (K.7 Sound). */
 int hal_vol_default(void);

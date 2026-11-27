@@ -4185,6 +4185,9 @@ struct cpu2_map {
 	struct cpu2_list sys_q, free_q, ble_q, traces_q;
 	uint32_t cmd[68];	/* TL_CmdPacket_t: 8 + 1 + 3 + 255, rounded */
 	uint32_t sys_spare[68];	/* the spare system event buffer */
+	uint32_t cs[20];	/* BLE: the answer to a command (command
+				 * complete or status event): node, type,
+				 * code, length and up to 69 bytes */
 };
 static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
 /* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
@@ -4219,7 +4222,7 @@ int hal_cpu2_start(void)
 	m->sys[0] = C2_ADDR(m->cmd);
 	m->sys[1] = C2_ADDR(&m->sys_q);
 	m->ble[0] = C2_ADDR(m->cmd);			/* no BLE yet: valid */
-	m->ble[1] = C2_ADDR(m->cmd);
+	m->ble[1] = C2_ADDR(m->cs);
 	m->ble[2] = C2_ADDR(&m->ble_q);
 	m->ble[3] = C2_ADDR(m->cmd);
 	m->mm[0] = C2_ADDR(cpu2b.ble_spare);
@@ -4391,6 +4394,107 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 	len = c[2] - 3u;
 	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[6 + i];
 	return (int) len;
+}
+
+/* An event CPU2 gave us goes back to it (ST's TL_MM_EvtDone): on the free
+ * queue, IPCC channel 4 flagged.  Only buffers of CPU2's pool and the spare
+ * one; the queue is CPU2's to read while the flag is up, so wait for it. */
+static void c2_evt_done(uint32_t e)
+{
+	struct cpu2_map *m = &cpu2;
+	struct cpu2_list *n = (struct cpu2_list *) e, *q = &m->free_q;
+	uint32_t t;
+
+	if (e < C2_ADDR(&cpu2b) || e >= C2_ADDR(&cpu2b + 1)) return;
+	for (t = 0; IPCC->C1TOC2SR & (1u << 3); )
+		if (++t == 2000000u) return;		/* lost: CPU2 stuck */
+	n->next = C2_ADDR(q);
+	n->prev = q->prev;
+	((struct cpu2_list *) q->prev)->next = e;
+	q->prev = e;
+	__asm volatile ("dsb" ::: "memory");
+	IPCC->C1SCR = 1u << (16 + 3);
+}
+
+/* A BLE command (HCI, or ST's ACI) to the wireless stack, T30b: type 0x01,
+ * opcode, length, parameters in the command buffer, IPCC channel 1
+ * flagged; the answer is an event on the BLE queue (0x0E command complete
+ * or 0x0F command status, in the cs buffer).  Polled, as hal_cpu2_shci.
+ * Other events met on the way go back to CPU2 unread (no listener yet).
+ * Returns the bytes after the opcode copied to rsp (the first is the
+ * status; for a command status event only it), -1 no stack running, -2 no
+ * answer. */
+int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax)
+{
+	struct cpu2_map *m = &cpu2;
+	volatile uint8_t *c = (volatile uint8_t *) m->cmd;
+	struct cpu2_list *q = &m->ble_q, *e;
+	const uint8_t *b;
+	uint32_t v[4], n;
+	unsigned i, len;
+	int r = -2;
+
+	if (hal_cpu2_info(v) != 1 || v[3] != 0 || plen > 255) return -1;
+	if (IPCC->C1TOC2SR & (1u << 1 | 1u << 0)) return -2;
+	for (i = 0; i < 8; i++) c[i] = 0;
+	c[8] = 0x01;
+	c[9] = (uint8_t) op;
+	c[10] = (uint8_t) (op >> 8);
+	c[11] = (uint8_t) plen;
+	for (i = 0; i < plen; i++) c[12 + i] = par[i];
+	__asm volatile ("dsb" ::: "memory");
+	IPCC->C1SCR = 1u << 16;				/* channel 1: go */
+	for (n = 0; r == -2 && n < 16000000u; n++) {	/* ~1 s */
+		if (!(IPCC->C2TOC1SR & 1u)) continue;
+		while (q->next != C2_ADDR(q)) {
+			e = (struct cpu2_list *) q->next;
+			q->next = e->next;		/* off the queue */
+			((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
+			b = (const uint8_t *) e + 8;	/* type, code, len */
+			if (b[1] == 0x0E && b[2] >= 3
+			    && (unsigned) (b[4] | b[5] << 8) == op) {
+				len = b[2] - 3u;
+				for (i = 0; i < len && i < rmax; i++)
+					rsp[i] = b[6 + i];
+				r = (int) len;
+			} else if (b[1] == 0x0F && b[2] >= 4
+				   && (unsigned) (b[5] | b[6] << 8) == op) {
+				if (rmax > 0) rsp[0] = b[3];
+				r = 1;
+			}
+			c2_evt_done(C2_ADDR(e));
+		}
+		IPCC->C1SCR = 1u;			/* events taken */
+	}
+	return r;
+}
+
+/* One event from the BLE queue, for a listener (bring-up: /dev/power's
+ * evt=): code, length, parameters copied to b (at most max), the buffer
+ * given back to CPU2.  Returns the bytes copied, 0 when none waits.  The
+ * stack 1.20.0 puts the answer to a command in the command buffer itself,
+ * so hal_cpu2_last shows that one. */
+int hal_cpu2_evt(uint8_t *b, unsigned max)
+{
+	struct cpu2_map *m = &cpu2;
+	struct cpu2_list *q = &m->ble_q, *e;
+	const uint8_t *p;
+	unsigned i, len;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	if (q->next == C2_ADDR(q)) {
+		if (IPCC->C2TOC1SR & 1u) IPCC->C1SCR = 1u;	/* all taken */
+		return 0;
+	}
+	e = (struct cpu2_list *) q->next;
+	q->next = e->next;
+	((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
+	p = (const uint8_t *) e + 9;			/* code, length */
+	len = 2u + p[1];
+	for (i = 0; i < len && i < max; i++) b[i] = p[i];
+	c2_evt_done(C2_ADDR(e));
+	return (int) i;
 }
 
 /*===========================================================================*
