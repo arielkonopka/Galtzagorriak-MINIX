@@ -832,6 +832,7 @@ static char *run_arg(struct app *ap, char *extra)
 /* ---- Auto lock (Settings > Auto off > Auto lock, spec K.7) ---- */
 #define POWER_CONF	"/etc/flipper/power.conf"
 static unsigned char lock_min;		/* idle minutes before the lock; 0: never */
+static unsigned char lock_big;		/* the locked screen is the desk clock */
 static long idle_t;			/* now_ticks() of the last key */
 static long now_ticks(void);
 
@@ -841,11 +842,13 @@ static void load_lock(void)
 	FILE *f = fopen(POWER_CONF, "r");
 	char line[40];
 
-	lock_min = 0;
+	lock_min = lock_big = 0;
 	if (f == NULL) return;
 	while (fgets(line, sizeof line, f) != NULL)
 		if (strncmp(line, "Auto lock:", 10) == 0)
 			lock_min = (unsigned char) atoi(line + 10);	/* "never": 0 */
+		else if (strncmp(line, "Lock clock:", 11) == 0)
+			lock_big = strstr(line + 11, "desk") != NULL;
 	fclose(f);
 }
 
@@ -981,6 +984,22 @@ static void lock_screen(struct gui_in *in)
 	int step = 0, k;
 	char b[8];
 
+	/* "Lock clock: desk clock" (the user's wish): Ordua's desk clock is
+	 * the lock screen, a window app run locked (winsrv: no key reaches
+	 * it, the unlock keys close it).  Without Ordua, or if it ends by
+	 * itself, the screen below stays, with the time in segment digits. */
+	if (lock_big) {
+		struct passwd *pw;
+
+		for (k = 0; k < napps; k++)
+			if (!ISDIR(k) && strcmp(apps[k].cmd, "=/usr/bin/alarm") == 0)
+				break;
+		if (k < napps && (pw = getpwnam(apps[k].user)) != NULL
+		    && win_run(apps[k].label, apps[k].cmd + 1, pw, WIN_LOCKED,
+			       "-c") == win_unlocked)
+			return;
+	}
+
 	for (;;) {
 		time_t now = time((time_t *) NULL);
 		struct tm *tm = localtime(&now);
@@ -993,7 +1012,8 @@ static void lock_screen(struct gui_in *in)
 		b[5] = 0;
 		gui_clear();
 		gui_title("LOCKED");
-		gui_center(26, b, 0);
+		if (lock_big) gui_text_seg(24, 16, b);	/* no Ordua: our own */
+		else gui_center(26, b, 0);
 		gui_center(52, "Back OK Back unlocks", 0);
 		gui_flush();
 		in->rep = 0;

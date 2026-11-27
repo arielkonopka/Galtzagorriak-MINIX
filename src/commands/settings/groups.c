@@ -36,7 +36,7 @@ const struct srow *sg_rows(int g, int *n)
 	case 1: *n = 3; return sound_rows;
 	case 2: *n = 3; return led_rows;
 	case 3: *n = 5; return time_rows;
-	case 4: *n = 2; return power_rows;
+	case 4: *n = 3; return power_rows;
 	case 5: *n = 3; return region_rows;
 	default: *n = 8; return about_rows;
 	}

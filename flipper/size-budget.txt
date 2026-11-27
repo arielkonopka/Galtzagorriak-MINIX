@@ -8,7 +8,9 @@
 subghz     152320
 berry      89856
 rfid       60672
-launcher   36352
+# 2026-11-27 (#492): 36352 -> 37120 (now 36932): the segment font (576 B of
+# flash, the user's wish) and the locked desk clock; the lock-screen code.
+launcher   37120
 nfc        29440
 infrared   28672
 sh         24064

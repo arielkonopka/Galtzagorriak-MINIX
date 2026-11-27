@@ -329,7 +329,8 @@ int main(void)
 		conf_parse(sg_find("power"), f);
 		check(sg_val[0] == 3 && sg_val[1] == 2
 			&& conf_format(sg_find("power"), f, sizeof f) > 0
-			&& strcmp(f, "Auto off: 1 h\nAuto lock: 5 min\n") == 0,
+			&& strcmp(f, "Auto off: 1 h\nAuto lock: 5 min\n"
+				     "Lock clock: small\n") == 0,
 			"power: read and write, an unknown option ignored");
 		for (i = 0; i < SG_ROWS; i++) sg_val[i] = -1;
 		strcpy(f, "Clock: 24 h\nDate fmt: Y-M-D\n");

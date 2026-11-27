@@ -1202,9 +1202,9 @@ $(MB)/cmd/app/%.o: apps/%.c
 
 # Packages (tools/mkpkg.py), shipped in /lib/pkg on the root file system.
 PKGDIR	:= $(MB)/pkgs
-PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.7.tar \
+PKGS	:= $(PKGDIR)/hello_1.0.tar $(PKGDIR)/tests_1.0.tar $(PKGDIR)/timed_1.8.tar \
 	   $(PKGDIR)/stest_1.0.tar $(PKGDIR)/gmdemo_1.1.tar \
-	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.5.tar \
+	   $(PKGDIR)/remind_1.1.tar $(PKGDIR)/alarm_1.6.tar \
 	   $(PKGDIR)/badusb_1.0.tar \
 	   $(PKGDIR)/usbrem_1.0.tar $(PKGDIR)/subghz_1.0.tar \
 	   $(PKGDIR)/music_1.0.tar $(PKGDIR)/utils_1.0.tar $(PKGDIR)/u2f_1.0.tar \
@@ -1223,9 +1223,9 @@ $(PKGDIR)/hello_1.0.tar: $(MB)/bin/hello tools/mkpkg.py
 	python3 -I tools/mkpkg.py -n hello -v 1.0 -o $(PKGDIR) \
 	   -D "Kaixo! The first Galtzagorriak app" /usr/bin/hello=$<
 # Timers and alerts (spec F.2, R7b.4): INIT runs /usr/lib/timed.
-$(PKGDIR)/timed_1.7.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
+$(PKGDIR)/timed_1.8.tar: $(TIMEDPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 		rootfs/timed.postinst
-	python3 -I tools/mkpkg.py -n timed -v 1.7 -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n timed -v 1.8 -o $(PKGDIR) \
 	   --postinst rootfs/timed.postinst \
 	   -D "Timers and alerts for apps (timed, alert)" \
 	   $(foreach p,$(TIMEDPROGS),/usr/lib/$(p)=$(MB)/bin/$(p)$(COMMA)755)
@@ -1239,9 +1239,9 @@ $(PKGDIR)/remind_1.1.tar: $(MB)/bin/remind tools/mkpkg.py rootfs/remind.postinst
 	   -D "Kanpaia: reminders (once, daily, every N minutes)" /usr/bin/remind=$<
 # Ordua: a window app (spec K.8, T25b), ended on Back (Background: exit).
 # set-gid gui (10): Ordua opens /dev/speaker for Try, then drops it (#480)
-$(PKGDIR)/alarm_1.5.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
+$(PKGDIR)/alarm_1.6.tar: $(MB)/bin/alarm tools/mkpkg.py rootfs/alarm.postinst \
 		rootfs/alarm.prerm
-	python3 -I tools/mkpkg.py -n alarm -v 1.5 -d timed -o $(PKGDIR) \
+	python3 -I tools/mkpkg.py -n alarm -v 1.6 -d timed -o $(PKGDIR) \
 	   --timers --notify alarm --flash --window --background exit \
 	   -i @alarm --postinst rootfs/alarm.postinst --prerm rootfs/alarm.prerm \
 	   -D "Ordua: alarm clock with a desk clock (window app)" /usr/bin/alarm=$<,2755:10
@@ -1350,7 +1350,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.99
+BASE_VER := 5.0
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.

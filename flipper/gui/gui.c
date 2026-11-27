@@ -254,6 +254,26 @@ int gui_text_big(int x, int y, const char *s, int k)
 	return x - x0;
 }
 
+#include "segfont.h"
+
+int gui_text_seg(int x, int y, const char *s)
+{
+	int x0 = x, gx, gy, i;
+	unsigned bits;
+
+	for (; *s != 0 && x < GUI_W; s++, x += SEG_W) {
+		i = *s >= '0' && *s <= '9' ? *s - '0' : *s == ':' ? 10
+						: *s == '-' ? 11 : -1;
+		if (i < 0) continue;
+		for (gy = 0; gy < SEG_H; gy++) {
+			bits = font_seg[i][gy];
+			for (gx = 0; gx < SEG_W; gx++)
+				if (bits & (0x8000u >> gx)) gui_pixel(x + gx, y + gy, 1);
+		}
+	}
+	return x - x0;
+}
+
 void gui_center(int y, const char *s, int inverse)
 {
 	gui_text((GUI_W - (int) strlen(s) * FONT_W) / 2, y, s, inverse);
