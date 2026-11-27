@@ -5,6 +5,7 @@
 # after RAM, and the slim-down of the base programs starts here).  Programs without a
 # line are only reported.
 
+# 2026-11-27: rpcd 23808 -> 20992 and pkg 15360 -> 12544 (scanf in the shared libc).
 subghz     152320
 berry      89856
 rfid       60672
@@ -14,7 +15,7 @@ launcher   37120
 nfc        29440
 infrared   28672
 sh         24064
-rpcd       23808
+rpcd       20992
 fsck       22528
 mined      19712
 remind     18944
@@ -24,7 +25,8 @@ blktest    16896
 blksecret  16896
 setgroup   15616
 settings   15616
-pkg        15360
-m2test     14848
+pkg        12544
+# 2026-11-27: 14848 -> 15360: scanf_tests (sscanf checks, 552 B).
+m2test     15360
 gzupdate   14592
 total      738560

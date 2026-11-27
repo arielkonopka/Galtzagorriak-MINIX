@@ -249,3 +249,25 @@ and a short count for missing or illegal data items.
 The success of literal matches and suppressed
 assignments is not directly
 determinable.
+.SH NOTES
+On the Flipper the whole family lives in the shared libc and keeps no
+static data: its buffers are on the caller's stack for the length of the
+call (about 330 bytes), where every program that used
+.B scanf
+carried 768 bytes of
+.B .bss
+before.
+A number (any of
+.BR %d ,
+.BR %i ,
+.BR %o ,
+.BR %u ,
+.BR %x ,
+.BR %p )
+is cut at 63 characters; the rest of a longer field stays in the input
+(before: 511).
+A %[ set takes any byte; a field width still applies to
+.BR %s ,
+.B %c
+and
+.BR %[ .

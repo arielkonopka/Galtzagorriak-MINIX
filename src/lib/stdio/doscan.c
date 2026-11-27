@@ -18,11 +18,13 @@
 #define set_pointer(flags)		/* compilation might continue */
 #endif
 
-#define	NUMLEN	512
+/* Longest number the scanner collects (a wider field is cut at this width).
+ * Both buffers live on the stack of _doscan(), so that the function carries no
+ * static data and can sit in the shared libc (it was 768 B of .bss in every
+ * program that calls scanf). */
+#define	NUMLEN	64
 #define	NR_CHARS	256
 
-static char	Xtable[NR_CHARS];
-static char	inp_buf[NUMLEN];
 
 /* Collect a number of characters which constitite an ordinal number.
  * When the type is 'i', the base can be 8, 10, or 16, depending on the
@@ -32,9 +34,9 @@ static char	inp_buf[NUMLEN];
  */
 static char *
 o_collect(register int c, register FILE *stream, char type,
-			unsigned int width, int *basep)
+			unsigned int width, int *basep, char *buf)
 {
-	register char *bufp = inp_buf;
+	register char *bufp = buf;
 	register int base;
 
 	switch (type) {
@@ -98,9 +100,10 @@ o_collect(register int c, register FILE *stream, char type,
  * numbers to be passed to strtod(). (e.g. 1.3e+)
  */
 static char *
-f_collect(register int c, register FILE *stream, register unsigned int width)
+f_collect(register int c, register FILE *stream, register unsigned int width,
+			char *buf)
 {
-	register char *bufp = inp_buf;
+	register char *bufp = buf;
 	int digit_seen = 0;
 
 	if (c == '-' || c == '+') {
@@ -129,7 +132,7 @@ f_collect(register int c, register FILE *stream, register unsigned int width)
 
 	if (!digit_seen) {
 		if (width && c != EOF) ungetc(c, stream);
-		return inp_buf - 1;
+		return buf - 1;
 	}
 	else digit_seen = 0;
 
@@ -150,7 +153,7 @@ f_collect(register int c, register FILE *stream, register unsigned int width)
 		}
 		if (!digit_seen) {
 			if (width && c != EOF) ungetc(c,stream);
-			return inp_buf - 1;
+			return buf - 1;
 		}
 	}
 
@@ -179,6 +182,8 @@ _doscan(register FILE *stream, const char *format, va_list ap)
 	int		flags;		/* some flags */
 	int		reverse;	/* reverse the checking in [...] */
 	int		kind;
+	char		inp_buf[NUMLEN + 1];	/* number being collected */
+	char		Xtable[NR_CHARS];	/* the set of a %[...] */
 	register int	ic = EOF;	/* the input character */
 #ifndef	NOFLOAT
 	long double	ld_val;
@@ -274,7 +279,7 @@ _doscan(register FILE *stream, const char *format, va_list ap)
 				width = NUMLEN;
 			if (!width) return done;
 
-			str = o_collect(ic, stream, kind, width, &base);
+			str = o_collect(ic, stream, kind, width, &base, inp_buf);
 			if (str < inp_buf
 			    || (str == inp_buf
 				    && (*str == '-'
@@ -415,7 +420,7 @@ _doscan(register FILE *stream, const char *format, va_list ap)
 				width = NUMLEN;
 
 			if (!width) return done;
-			str = f_collect(ic, stream, width);
+			str = f_collect(ic, stream, width, inp_buf);
 
 			if (str < inp_buf
 			    || (str == inp_buf

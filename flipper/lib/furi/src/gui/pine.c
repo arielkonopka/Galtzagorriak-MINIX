@@ -10,7 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef GUI_FONT_SHARED		/* the shared libc has it, once */
+#define FONT_W 4
+#define FONT_H 6
+extern const unsigned char font_4x6[95][6];
+#else
 #include "../../../../hal/common/font4x6.c"
+#endif
 
 /* in the order of PineStr */
 static const char pine_strs[] = "OK Select  Back Done\0Back Done\0<>Change  \0OK Select  \0"

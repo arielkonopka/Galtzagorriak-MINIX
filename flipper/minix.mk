@@ -101,7 +101,7 @@ $(MB)/user/crtso.o: $(MROOT)/src/lib/arm/rts/crtso.S
 # SHLIBC_BASE (after the 192 KB system image, in minix.bin), and programs
 # call them through 12-byte stubs and the entry table, whose order is
 # frozen in libc.exports (append only; spec J.3).  Members whose
-# per-process data is big (password and group files, mtab, crypt, scanf,
+# per-process data is big (password and group files, mtab, crypt,
 # the time zone code, the float conversion tables, regexp, math) stay
 # static, linked into the programs that use them, together with every
 # member that needs one of them.  SHLIBC=0: every program static, as before.
@@ -109,11 +109,10 @@ SHLIBC	?= 1
 SHL	:= $(MB)/shlibc
 SHF	:= $(MB)/shfuri
 SHLIBC_BASE := $(if $(filter flipper,$(BOARD)),0x08030000,0x00030000)
-SHLIBC_STATIC := getgrent getpwent mtab crypt doscan misc ext_comp \
+SHLIBC_STATIC := getgrent getpwent mtab crypt misc ext_comp \
 	   getttyent ctermid cuserid getlogin getpass popen fsversion \
 	   setlocale localeconv regexp regsub printk difftime hypot \
 	   asctime ctime ecvt localtime mktime strftime tzset ttyslot \
-	   scanf fscanf sscanf vscanf vsscanf \
 	   asynchio termcap lock tmpnam tmpfile ttyname system execlp itoa \
 	   peekpoke putenv freopen cfopen strtok qsort rand \
 	   lrand getopt gmtime bread blk
@@ -128,11 +127,18 @@ $(SHL)/tab.S: libc.exports tools/mkshlibc.py $(MROOT)/include/minix/gzversion.h
 $(SHL)/tab.o: $(SHL)/tab.S
 	$(CC) $(MCFLAGS) -c $< -o $@
 # No --gc-sections: every global function of the members is exported.
-$(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) ld/shlibc.ld
+# The 4x6 font (570 B of const data) once, here: every GUI program and
+# libfuri carried a copy; the variable is exported with the others (the
+# libc's variables are found in the ELF, see mkshlibc.py) and sits in flash.
+$(SHL)/font4x6.o: hal/common/font4x6.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+FONT_SHARED := $(if $(filter 1,$(SHLIBC)),-DGUI_FONT_SHARED)
+$(SHL)/libc.elf: $(SHL)/tab.o $(LIBCP_SHARED) $(SHL)/font4x6.o ld/shlibc.ld
 	@echo "  LD $@"
 	@$(CC) $(ARCH) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments \
 	   -Wl,-q -Wl,--defsym=SHLIBC_BASE=$(SHLIBC_BASE) -Tld/shlibc.ld \
-	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) \
+	   -Wl,-Map=$@.map $(SHL)/tab.o $(LIBCP_SHARED) $(SHL)/font4x6.o \
 	   $(SHLIBC_GCC:%=-Wl,-u,%) -lgcc -o $@
 $(SHL)/libc.bin $(SHL)/libc.json $(SHL)/stubs.S $(SHL)/shlibc-syms.ld &: \
 		$(SHL)/libc.elf libc.exports tools/mkshlibc.py
@@ -855,7 +861,7 @@ OBJS_pgpenc = $(MB)/cmd/port/pgpenc.o $(MB)/pgpenc/pgpenc.o
 OBJS_blescan = $(MB)/cmd/port/blescan.o $(MB)/blescan/blescan.o
 $(MB)/cmd/gui/%.o: gui/%.c gui/gui.h gui/appline.h gui/launcher_stock.h gui/ui.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) $(FONT_SHARED) -MMD -MP -c $< -o $@
 objs_of	 = $(if $(OBJS_$(1)),$(OBJS_$(1)),$(MB)/cmd/$(1).o)
 
 ifeq ($(SHLIBC),1)
@@ -909,7 +915,7 @@ FURI_HDR := $(wildcard $(FURI_DIR)/include/*.h $(FURI_DIR)/include/*/*.h \
 	    $(FURI_DIR)/src/*.h $(FURI_DIR)/src/gui/*.h $(FURI_DIR)/src/gui/*/*/*.h \
 	    $(FURI_DIR)/u8g2/*.h)
 FURI_CFLAGS = $(UCFLAGS) -std=gnu99 -I$(FURI_DIR)/include
-FURI_GUI_CFLAGS = $(FURI_CFLAGS) -I$(FURI_DIR)/include/gui \
+FURI_GUI_CFLAGS = $(FURI_CFLAGS) $(FONT_SHARED) -I$(FURI_DIR)/include/gui \
 	    -I$(FURI_DIR)/include/gui/modules -I$(FURI_DIR)/u8g2 -I$(FURI_DIR)/src/gui
 $(MB)/furi/%.o: $(FURI_DIR)/src/%.c $(FURI_HDR)
 	@mkdir -p $(dir $@)
@@ -1350,7 +1356,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 5.0
+BASE_VER := 5.1
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.
