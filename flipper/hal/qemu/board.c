@@ -239,6 +239,14 @@ int hal_ib_capt(uint32_t dst, unsigned n, unsigned ms, int *level)
 	}
 	return (int) n;
 }
+int hal_ib_capt_arm(uint32_t dst, unsigned nwords)
+{
+	(void) dst; (void) nwords;
+	return -1;			/* QEMU: hal_ib_capt does it at once */
+}
+void hal_ib_capt_stop(void) { }
+int hal_ib_play_irq(void) { return -1; }
+void hal_ib_play_step(void) { }
 int hal_btn_pending(void) { return 1; }
 
 /* Sub-GHz, the QEMU backend (issue #302): a radio that tunes the stock

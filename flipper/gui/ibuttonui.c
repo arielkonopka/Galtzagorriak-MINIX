@@ -2,15 +2,22 @@
  * ibuttonui - the stock iButton app on Galtzagorriak MINIX (spec R6.7;
  * issue #413, part 2 of the stock app ports), a window app (spec K.8).
  * A front end of the ikey command (/bin/ikey: /dev/ibutton, libibkey):
- * Read, Saved, Add manually, Write (RW1990 blanks, Dallas) and Emulate,
- * with ikey's own lines shown live (gui/runwin.c).
+ * Read, Saved, Add manually, Write (RW1990, TM2004 and TM01x blanks, also
+ * the memory of a DS1992, DS1996 or DS1971), Emulate and Info, with
+ * ikey's own lines shown live (gui/runwin.c).  Every stock protocol:
+ * DS1990, DS1992, DS1996, DS1971, DS1420, DSGeneric, Cyfral, Metakom
+ * (issue #490).
  *
  *	iButton:nobody:@ibutton:=/bin/ibuttonui	(/etc/apps)
  *	ibuttonui FILE				(a .ibtn file's window)
  *
  * Files are stock's .ibtn in /home/flipper/ibutton: version 2
- * ("Protocol: DS1990" + "Rom Data:", "Protocol: Cyfral|Metakom" +
- * "Data:") is written; version 1 ("Key type:" + "Data:") is read too.
+ * ("Protocol: DS1990" + "Rom Data:" [+ "Sram Data:" / "Eeprom Data:"],
+ * "Protocol: Cyfral|Metakom" + "Data:") is written; version 1 ("Key type:"
+ * + "Data:") is read too.  A key just read or added lives in a hidden
+ * file (.last.ibtn: ikey read -o writes it, memory and all) until Save
+ * renames it; so the memory of a DS1996 never passes through this
+ * program.
  *
  * RAM: no stdio, no malloc; opendir's 1 KB DIR while the list is read,
  * ikey's last lines (struct run, ~260 B), a path and the key in .bss.
@@ -24,6 +31,7 @@
 #include <unistd.h>
 #include "gm.h"
 #include "runwin.h"
+#include "ibkey.h"
 
 #define IKEY	"/bin/ikey"
 #define HOME	"/home/flipper"
@@ -33,15 +41,24 @@
 #define NAMEMAX	24
 #define KEYMAX	16			/* hex digits: Dallas 16, Cyfral 4, Metakom 8 */
 
-static const char *const types[] = { "Dallas", "Cyfral", "Metakom" };
-static const int digits[] = { 16, 4, 8 };
-static const char type_opts[] = "Dallas|Cyfral|Metakom";
+#define NTYPES	8
+#define NDS	6			/* types 0..5 are Dallas families */
+#define TMPF	DIRIB "/.last.ibtn"
+static const char *const types[NTYPES] = { "DS1990", "DS1992", "DS1996",
+	"DS1971", "DS1420", "DSGeneric", "Cyfral", "Metakom" };
+static const int digits[NTYPES] = { 16, 16, 16, 16, 16, 16, 4, 8 };
+/* Add manually: a Dallas key is its serial (12 digits); the family code
+ * and the CRC are filled in.  A generic key brings its family code too. */
+static const int addn[NTYPES] = { 12, 12, 12, 12, 12, 14, 4, 8 };
+static const char type_opts[] =
+	"DS1990|DS1992|DS1996|DS1971|DS1420|DSGeneric|Cyfral|Metakom";
 
 static struct run run;
 static char file[PATHMAX];
 static char name[NAMEMAX + 1] = "Key";
 static char key[KEYMAX + 1];		/* the current key, hex */
 static int type;			/* index in types[] */
+static char tmpf[] = TMPF;
 static int lfirst;
 static char nfrom = 'm';		/* the note window's parent */
 static char top = 'm';			/* m l f k(ey) a(dd) r(un) n(ote) */
@@ -60,6 +77,11 @@ static int ends(const char *s, const char *ext)
 	size_t a = strlen(s), b = strlen(ext);
 
 	return a > b && strcmp(s + a - b, ext) == 0;
+}
+
+static int hexval(int c)
+{
+	return c <= '9' ? c - '0' : c - 'A' + 10;
 }
 
 static int hexok(const char *s, int n)
@@ -126,9 +148,12 @@ static int load(void)
 		if (!strncmp(l, "Protocol: ", 10) || !strncmp(l, "Key type: ", 10)) {
 			const char *p = l + 10;
 
-			if (!strncmp(p, "DS", 2) || !strcmp(p, "Dallas")) type = 0;
-			else if (!strcmp(p, "Cyfral")) type = 1;
-			else if (!strcmp(p, "Metakom")) type = 2;
+			int t;
+
+			for (t = 0; t < NTYPES; t++)
+				if (!strcmp(p, types[t])) type = t;
+			if (!strcmp(p, "Dallas")) type = 0;
+			else if (!strcmp(p, "(non-specific)")) type = 5;
 		} else if (!strncmp(l, "Rom Data: ", 10)) take(l + 10);
 		else if (!strncmp(l, "Data: ", 6)) take(l + 6);
 	}
@@ -144,6 +169,7 @@ static void w_main(void)
 	gm_item("read", "Read", "");
 	gm_item("saved", "Saved", "");
 	gm_item("add", "Add manually", "");
+	gm_item("hook", "Hookup", "");
 	gm_show();
 	top = 'm';
 }
@@ -208,14 +234,35 @@ static void w_list(int first)
 	gm_show();
 }
 
+static int saved(void)
+{
+	return file[0] && strcmp(file, tmpf) != 0;
+}
+
+/* Is this a Dallas family with a memory to copy (DS1992, DS1996, DS1971)? */
+static int hasmem(void)
+{
+	const struct ibd_fam *f;
+
+	return type < NDS && (f = ibd_byname(types[type])) != NULL
+		&& f->mem != IBD_NOMEM;
+}
+
 /* The current key's actions (a saved file, a read or an added key). */
 static void w_key(void)
 {
-	gm_win("key", "list", file[0] ? base(file) : types[type], 0, 0);
+	gm_win("key", "list", saved() ? base(file) : types[type], 0, 0);
 	gm_item("ty", types[type], key);
+	gm_item("info", "Info", "");
 	gm_item("emu", "Emulate", "");
-	if (type == 0) gm_item("wr", "Write", "");
-	if (file[0]) gm_item("del", "Delete", "");
+	if (type < NDS) {
+		gm_item("wr", "Write", "");
+		gm_item("wt", "Write to TM01x", "");
+		if (hasmem()) gm_item("wm", "Write memory", "");
+	} else {
+		gm_item("wt", "Write to TM01x", "");
+	}
+	if (saved()) gm_item("del", "Delete", "");
 	else {
 		gm_input("name", "Name", name, NAMEMAX);
 		gm_action("save", "Save");
@@ -224,11 +271,59 @@ static void w_key(void)
 	top = 'k';
 }
 
+/* What the key is: family, memory, whether the CRC is right. */
+static void w_info(void)
+{
+	static char l1[24], l2[24];
+	const struct ibd_fam *f = type < NDS ? ibd_byname(types[type]) : NULL;
+	unsigned char rom[8];
+	int i;
+
+	strcpy(l1, "Family ");
+	if (f != NULL && type < NDS) {
+		for (i = 0; i < 8; i++)
+			rom[i] = (unsigned char) (hexval(key[2 * i]) << 4
+						| hexval(key[2 * i + 1]));
+		l1[7] = "0123456789ABCDEF"[rom[0] >> 4];
+		l1[8] = "0123456789ABCDEF"[rom[0] & 15];
+		strcpy(l1 + 9, ibd_crc8(rom, 7) == rom[7] ? " CRC ok" : " CRC BAD");
+		if (f->mem == IBD_NOMEM) strcpy(l2, "ROM only");
+		else {
+			char d[6];
+			int n = 0, v = f->size, j;
+
+			strcpy(l2, f->mem == IBD_SRAM ? "SRAM " : "EEPROM ");
+			for (j = 1000; j > 0; j /= 10)
+				if (v >= j || n) d[n++] = (char) ('0' + v / j % 10);
+			d[n] = 0;
+			strcat(l2, d);
+			strcat(l2, " B");
+		}
+	} else {
+		strcpy(l1, type == 6 ? "Cyfral, 2 bytes" : "Metakom, 4 bytes");
+		strcpy(l2, "Line code, no CRC");
+	}
+	w_note(types[type], l1, l2);
+}
+
+static void w_hook(void)
+{
+	gm_win("hook", "text", "iButton hookup", 0, 0);
+	gm_line("Touch the key to the");
+	gm_line("pad on the top edge.");
+	gm_line("Or wire to GPIO:");
+	gm_line("pin 17 = data");
+	gm_line("pin 18 = GND");
+	gm_show();
+	top = 'h';
+}
+
 static void w_add(void)
 {
 	gm_win("add", "list", "Add manually", 0, 0);
 	gm_enum("ty", "Protocol", type, type_opts);
-	gm_input("key", "Key (hex)", key, KEYMAX + 1);
+	gm_input("key", addn[type] == 12 ? "Serial (hex)" : "Key (hex)", key,
+		KEYMAX + 1);
 	gm_action("ok", "Next");
 	gm_show();
 	top = 'a';
@@ -240,6 +335,7 @@ static void redraw(void)
 	case 'l': w_list(lfirst); break;
 	case 'k': w_key(); break;
 	case 'a': w_add(); break;
+	case 'h': w_hook(); break;
 	case 'r': w_run(); break;
 	default: w_main();
 	}
@@ -255,19 +351,16 @@ static void start(const char *title, char *const *av)
 	w_run();
 }
 
-/* "Dallas 0123456789ABCDEF" (ikey read's last line) into type and key. */
+/* ikey read -o wrote TMPF (ROM, and the memory of a DS1992, DS1996 or
+ * DS1971): it is the current key. */
 static void keep(void)
 {
-	const char *l = run_last(&run), *sp = strchr(l, ' ');
-	int t;
-
-	for (t = 0; t < 3; t++)
-		if (sp && (size_t) (sp - l) == strlen(types[t])
-		    && !strncmp(l, types[t], sp - l)) break;
-	if (t == 3 || strlen(sp + 1) > KEYMAX) { gm_busy(0); return; }
-	type = t;
-	strcpy(key, sp + 1);
-	file[0] = 0;
+	strcpy(file, tmpf);
+	if (load() < 0) {
+		file[0] = 0;
+		w_note("Read", "Could not keep the key", "(SD card?)");
+		return;
+	}
 	w_key();
 }
 
@@ -276,35 +369,90 @@ static void put(int fd, const char *s)
 	(void) write(fd, s, strlen(s));
 }
 
-static void save(void)
-{
-	int fd, i;
-	char pair[4];
+#define Z4	" 00 00 00 00"
+#define Z32	Z4 Z4 Z4 Z4 Z4 Z4 Z4 Z4
 
-	if (!name[0] || strchr(name, '/') || name[0] == '.') {
-		w_note("Save", "Bad name", NULL);
-		return;
-	}
+/* TMPF for the current type and key: a key added by hand.  A family with
+ * memory gets it zeroed, as stock does.  0, or -1. */
+static int mk_tmp(void)
+{
+	const struct ibd_fam *f = type < NDS ? ibd_byname(types[type]) : NULL;
+	char pair[4];
+	int fd, i;
+
 	mkdir(HOME, 0755);
 	mkdir(DIRIB, 0755);
-	strcpy(file, DIRIB "/");
-	strcat(file, name);
-	strcat(file, ".ibtn");
-	if ((fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0644)) < 0) {
-		w_note("Save", "Cannot write (is there", "one of that name?)");
-		file[0] = 0;
-		return;
-	}
+	if ((fd = open(tmpf, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) return -1;
 	put(fd, "Filetype: Flipper iButton key\nVersion: 2\nProtocol: ");
-	put(fd, type == 0 ? "DS1990" : types[type]);
-	put(fd, type == 0 ? "\nRom Data:" : "\nData:");
+	put(fd, types[type]);
+	put(fd, type < NDS ? "\nRom Data:" : "\nData:");
 	for (i = 0; key[i] && key[i + 1]; i += 2) {
 		pair[0] = ' '; pair[1] = key[i]; pair[2] = key[i + 1]; pair[3] = 0;
 		put(fd, pair);
 	}
 	put(fd, "\n");
-	if (close(fd) < 0) w_note("Save", "Write failed", NULL);
-	else w_key();
+	if (f != NULL && f->mem != IBD_NOMEM) {
+		put(fd, f->mem == IBD_SRAM ? "Sram Data:" : "Eeprom Data:");
+		for (i = 0; i < f->size; i += 32) put(fd, Z32);
+		put(fd, "\n");
+	}
+	return close(fd);
+}
+
+/* The key from the Add manually page: the digits typed into a whole ROM
+ * (family code, serial, CRC).  0, or -1 (what to tell the user). */
+static const char *complete(void)
+{
+	unsigned char rom[8], k4[IBK_MAXKEY];
+	int i, n = type == 5 ? 7 : 6, o = type == 5 ? 0 : 1;
+
+	if (!hexok(key, addn[type]))
+		return type < NDS ? (type == 5 ? "needs 14 hex digits"
+			: "needs 12 hex digits") : type == 6 ?
+			"needs 4 hex digits" : "needs 8 hex digits";
+	if (type >= NDS) {
+		if (type == 7) {
+			for (i = 0; i < 4; i++)
+				k4[i] = (unsigned char) (hexval(key[2 * i]) << 4
+							| hexval(key[2 * i + 1]));
+			if (ibk_valid(IBK_METAKOM, k4) != 1)
+				return "bytes need even parity";
+		}
+		return NULL;
+	}
+	rom[0] = ibd_byname(types[type])->code;
+	for (i = 0; i < n; i++)
+		rom[o + i] = (unsigned char) (hexval(key[2 * i]) << 4
+						| hexval(key[2 * i + 1]));
+	rom[7] = (unsigned char) ibd_crc8(rom, 7);
+	for (i = 0; i < 8; i++) {
+		key[2 * i] = "0123456789ABCDEF"[rom[i] >> 4];
+		key[2 * i + 1] = "0123456789ABCDEF"[rom[i] & 15];
+	}
+	key[16] = 0;
+	return NULL;
+}
+
+/* Save: the hidden file gets its name (a link, then the old name goes: an
+ * existing file of that name is never overwritten). */
+static void save(void)
+{
+	char dst[PATHMAX];
+
+	if (!name[0] || strchr(name, '/') || name[0] == '.') {
+		w_note("Save", "Bad name", NULL);
+		return;
+	}
+	strcpy(dst, DIRIB "/");
+	strcat(dst, name);
+	strcat(dst, ".ibtn");
+	if (link(tmpf, dst) < 0) {
+		w_note("Save", "Cannot write (is there", "one of that name?)");
+		return;
+	}
+	(void) unlink(tmpf);
+	strcpy(file, dst);
+	w_key();
 }
 
 static void values(char **f)
@@ -315,7 +463,7 @@ static void values(char **f)
 	for (i = 2; i < GM_FIELDS && f[i] != NULL; i++) {
 		k = gm_kv(f[i], &v);
 		x = atoi(v);
-		if (!strcmp(k, "ty") && x >= 0 && x < 3) type = x;
+		if (!strcmp(k, "ty") && x >= 0 && x < NTYPES) type = x;
 		else if (!strcmp(k, "key")) {
 			strncpy(key, v, KEYMAX);
 			key[KEYMAX] = 0;
@@ -329,12 +477,17 @@ static void values(char **f)
 
 static void ok(const char *win, const char *k)
 {
-	static char *av_read[] = { "ikey", "read", NULL };
-	char *av[5];
+	static char *av_read[] = { "ikey", "read", "-o", TMPF, NULL };
+	char *av[8];
+	int n;
 
 	if (!strcmp(win, "main")) {
-		if (!strcmp(k, "read")) start("Read", av_read);
-		else if (!strcmp(k, "saved")) w_list(0);
+		if (!strcmp(k, "read")) {
+			mkdir(HOME, 0755);
+			mkdir(DIRIB, 0755);
+			start("Read", av_read);
+		} else if (!strcmp(k, "saved")) w_list(0);
+		else if (!strcmp(k, "hook")) w_hook();
 		else if (!strcmp(k, "add")) {
 			file[0] = 0;
 			type = 0;
@@ -354,20 +507,56 @@ static void ok(const char *win, const char *k)
 		if (load() < 0) w_note(nm, "Not an iButton key file", NULL);
 		else w_key();
 	} else if (!strcmp(win, "add") && !strcmp(k, "ok")) {
-		if (!hexok(key, digits[type])) {
-			w_note("Add manually", types[type], type == 0 ?
-				"needs 16 hex digits" : type == 1 ?
-				"needs 4 hex digits" : "needs 8 hex digits");
+		const char *bad = complete();
+
+		if (bad != NULL) {
+			w_note("Add manually", types[type], bad);
 			return;
 		}
+		if (mk_tmp() < 0) {
+			w_note("Add manually", "Cannot write", "(SD card?)");
+			return;
+		}
+		strcpy(file, tmpf);
 		w_key();
-	} else if (!strcmp(win, "key")) {
-		av[0] = "ikey";
-		av[2] = (char *) types[type];
-		av[3] = key;
-		av[4] = NULL;
-		if (!strcmp(k, "emu")) { av[1] = "emulate"; start("Emulate", av); }
-		else if (!strcmp(k, "wr")) { av[1] = "write"; start("Write", av); }
+	} else if (!strcmp(win, "key") || !strcmp(win, "wtq")) {
+		n = 0;
+		av[n++] = "ikey";
+		if (!strcmp(k, "emu")) {
+			av[n++] = "emulate";
+			av[n++] = (char *) types[type];
+			av[n++] = key;
+			av[n] = NULL;
+			start("Emulate", av);
+		} else if (!strcmp(k, "wr")) {
+			av[n++] = "write";
+			av[n++] = (char *) types[type];
+			av[n++] = key;
+			av[n] = NULL;
+			start("Write", av);
+		} else if (!strcmp(k, "wm")) {
+			av[n++] = "copy";
+			av[n++] = file;
+			av[n] = NULL;
+			start("Write memory", av);
+		} else if (!strcmp(k, "wt") && type >= NDS) {
+			gm_win("wtq", "confirm", "Write to TM01x", 0, 0);
+			gm_line("A TM01x blank is");
+			gm_line("finalized: it cannot");
+			gm_line("be written again.");
+			gm_action("yes", "Write");
+			gm_show();
+		} else if (!strcmp(k, "wt") || !strcmp(k, "yes")) {
+			av[n++] = "write";
+			if (type < NDS) {
+				av[n++] = "-b";
+				av[n++] = "tm01x";
+			}
+			av[n++] = (char *) types[type];
+			av[n++] = key;
+			av[n] = NULL;
+			start("Write", av);
+		} else if (!strcmp(k, "info")) w_info();
 		else if (!strcmp(k, "save")) save();
 		else if (!strcmp(k, "del")) {
 			gm_win("delq", "confirm", "Delete", 0, 0);
@@ -389,8 +578,8 @@ static void back(const char *win)
 	if (!strcmp(win, "run")) {
 		run_stop(&run);
 		top = from;
-	} else if (!strcmp(win, "key")) top = file[0] ? 'l' : 'm';
-	else if (!strcmp(win, "delq")) top = 'k';
+	} else if (!strcmp(win, "key")) top = saved() ? 'l' : 'm';
+	else if (!strcmp(win, "delq") || !strcmp(win, "wtq")) top = 'k';
 	else top = 'm';
 }
 

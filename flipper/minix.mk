@@ -635,11 +635,12 @@ OBJS_archive = $(MB)/cmd/gui/archive.o $(MB)/gm/gm.o
 # the command's output on a pipe, live)
 $(MB)/cmd/gui/runwin.o $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/ibuttonui.o \
 		$(MB)/cmd/gui/gpioui.o: $(MB)/cmd/gui/%.o: gui/%.c \
-		gui/runwin.h $(GM_DIR)/gm.h
+		gui/runwin.h $(GM_DIR)/gm.h $(IBKEY_DIR)/ibkey.h
 	@mkdir -p $(dir $@)
-	@$(CC) $(UCFLAGS) -I$(GM_DIR) -MMD -MP -c $< -o $@
+	@$(CC) $(UCFLAGS) -I$(GM_DIR) -I$(IBKEY_DIR) -MMD -MP -c $< -o $@
 OBJS_subghzui = $(MB)/cmd/gui/subghzui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
-OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o
+OBJS_ibuttonui = $(MB)/cmd/gui/ibuttonui.o $(MB)/cmd/gui/runwin.o $(MB)/gm/gm.o \
+	$(MB)/ibkey/ibkey.o	# the Dallas family table (libibkey)
 OBJS_gpioui = $(MB)/cmd/gui/gpioui.o $(MB)/gm/gm.o
 # issue #424: Snake (gui/snakeui.c over src/lib/snake) and the Sub-GHz
 # Remote (gui/subrem.c, maps a .sub to the pad's buttons and runs the
@@ -1349,7 +1350,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 4.98
+BASE_VER := 4.99
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.
