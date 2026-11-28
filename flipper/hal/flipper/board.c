@@ -1107,6 +1107,23 @@ static void clock_init(void)
 		   | FLASH_ACR_PRFTEN | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
 	while ((FLASH->ACR & FLASH_ACR_LATENCY) != FLASH_ACR_LATENCY_3WS) ;
 
+	/* The crystal's load capacitors, as stock (furi_hal_clock.c:
+	 * LL_RCC_HSE_SetCapacitorTuning(0x26)): without it the 32 MHz HSE,
+	 * and with it the BLE carrier, sits off its frequency (DS11929 tab.
+	 * 56, AN5165; the ST-docs review, #110).  Only with the HSE off, so
+	 * the PLLs that hang on it go first; we run on MSI here. */
+	RCC->CR &= ~(RCC_CR_PLLON | RCC_CR_PLLSAI1ON);
+	for (timeout = 200000; RCC->CR & (RCC_CR_PLLRDY | RCC_CR_PLLSAI1RDY); )
+		if (--timeout == 0) break;
+	RCC->CR &= ~RCC_CR_HSEON;
+	for (timeout = 200000; RCC->CR & RCC_CR_HSERDY; )
+		if (--timeout == 0) break;
+	if (!(RCC->CR & RCC_CR_HSERDY)) {
+		RCC->HSECR = 0xCAFECAFEu;		/* the unlock key */
+		RCC->HSECR = (RCC->HSECR & ~RCC_HSECR_HSETUNE)
+			   | (0x26u << RCC_HSECR_HSETUNE_Pos);
+	}
+
 	RCC->CR |= RCC_CR_HSEON;
 	for (timeout = 200000; !(RCC->CR & RCC_CR_HSERDY); )
 		if (--timeout == 0) return;		/* stay on MSI */
@@ -1133,7 +1150,11 @@ static void clock_init(void)
 	for (timeout = 200000; !(RCC->EXTCFGR & RCC_EXTCFGR_C2HPREF); )
 		if (--timeout == 0) break;
 
-	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
+	/* Out of Stop modes on HSI16, always (DS11929 3.7.5: with the RF
+	 * subsystem or the SMPS in use the exit must be HSI16); hal_stop2
+	 * set it only on its own path. */
+	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_STOPWUCK
+		  | (3u << RCC_CFGR_SW_Pos);
 	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
 	SystemCoreClock = 64000000;
 
@@ -3018,6 +3039,15 @@ int hal_stop2(void)
 	w = (EXTI->PR1 & BTN_LINES) ? HAL_WAKE_BTN : 0;
 	if (LPTIM1->ISR & (LPTIM_ISR_CMPM | LPTIM_ISR_CMPOK)) w |= HAL_WAKE_TIMER;
 
+	/* The HSE starts before the RCC semaphore is taken (AN5289 fig. 16:
+	 * HSEM 3 is to be held 500 us at most with the radio in use, and the
+	 * crystal needs about 250 us, DS11929 tab. 56), and no wait here is
+	 * without an end: on HSI16 a loop turn is a quarter of a microsecond
+	 * or more, so 40000 turns are over 10 ms.  If the HSE or the PLL does
+	 * not come, we stay on HSI16: slow and with wrong baud rates, but
+	 * alive, and hal_stop2 refuses from then on (its first test). */
+	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos))
+		RCC->CR |= RCC_CR_HSEON;
 	if (c2) {
 		HSEM->R[C2_SEM_STOP] = C2_COREID;	/* if ours */
 		/* bounded: a CPU2 that died holding it must not hang us; the
@@ -3026,16 +3056,21 @@ int hal_stop2(void)
 			if (++n == 1000000u) break;
 	}
 	if ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) {
-		RCC->CR |= RCC_CR_HSEON;
-		while (!(RCC->CR & RCC_CR_HSERDY)) ;
-		RCC->CR |= RCC_CR_PLLON;
-		while (!(RCC->CR & RCC_CR_PLLRDY)) ;
-		if (sai) {
-			RCC->CR |= RCC_CR_PLLSAI1ON;
-			while (!(RCC->CR & RCC_CR_PLLSAI1RDY)) ;
+		for (n = 0; !(RCC->CR & RCC_CR_HSERDY) && n < 40000u; n++) ;
+		if (RCC->CR & RCC_CR_HSERDY) {
+			RCC->CR |= RCC_CR_PLLON;
+			for (n = 0; !(RCC->CR & RCC_CR_PLLRDY) && n < 40000u; n++) ;
 		}
-		RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
-		while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
+		if (sai && (RCC->CR & RCC_CR_HSERDY)) {
+			RCC->CR |= RCC_CR_PLLSAI1ON;
+			for (n = 0; !(RCC->CR & RCC_CR_PLLSAI1RDY) && n < 40000u; n++) ;
+		}
+		if (RCC->CR & RCC_CR_PLLRDY) {
+			RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW)
+				  | (3u << RCC_CFGR_SW_Pos);
+			for (n = 0; (RCC->CFGR & RCC_CFGR_SWS)
+				!= (3u << RCC_CFGR_SWS_Pos) && n < 40000u; n++) ;
+		}
 	}
 	if (c2) HSEM->R[C2_SEM_RCC] = C2_COREID;
 	return w;
@@ -4300,7 +4335,9 @@ struct cpu2_map {
 				 * buffer, so this holds our copy of the
 				 * last answer for the reader: its length,
 				 * then code, length, parameters */
-	uint32_t ble_up;	/* SHCI_C2_BLE_Init was done (hal_ble_open) */
+	uint32_t ble_up;	/* bit 0: SHCI_C2_BLE_Init was done (hal_ble_open);
+				 * bit 1: the flash activity control was
+				 * set (c2_flash_ctl) */
 };
 static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
 /* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
@@ -4315,12 +4352,34 @@ static struct cpu2_mem2 cpu2b __attribute__((section(".cpu2mem2"), used));
 
 #define C2_ADDR(x)	((uint32_t) (x))
 
+/* How much of SRAM2a and SRAM2b is ours, in KB: CPU2's secure part starts
+ * where the option bytes say (FLASH->SRRVR: SBRSA and SNBRSA in 1 KB
+ * units, or no secure part at all with BRSD / NBRSD; RM0434, DS11929
+ * 3.3.4), and FUS moves that when it installs a stack.  The linker script
+ * gives us 10 KB of each (FS buffers, CPU2's shared tables): -1 when a
+ * stack's secure RAM reaches below that, and CPU2 is not started then
+ * (the ST-docs review, #110). */
+#define SRAM2_OURS_KB	10u
+int hal_sram2_free(unsigned *a_kb, unsigned *b_kb)
+{
+	uint32_t r = FLASH->SRRVR;
+	unsigned a = (r & FLASH_SRRVR_BRSD) ? 32u
+		: (unsigned) ((r & FLASH_SRRVR_SBRSA) >> FLASH_SRRVR_SBRSA_Pos);
+	unsigned b = (r & FLASH_SRRVR_NBRSD) ? 32u
+		: (unsigned) ((r & FLASH_SRRVR_SNBRSA) >> FLASH_SRRVR_SNBRSA_Pos);
+
+	*a_kb = a;
+	*b_kb = b;
+	return a >= SRAM2_OURS_KB && b >= SRAM2_OURS_KB ? 0 : -1;
+}
+
 int hal_cpu2_start(void)
 {
 	struct cpu2_map *m = &cpu2;
 	unsigned i;
 
 	if (PWR->CR4 & PWR_CR4_C2BOOT) return 1;	/* started already */
+	if (hal_sram2_free(&i, &i) < 0) return -1;	/* its RAM is in ours */
 	for (i = 0; i < sizeof *m / 4; i++) ((volatile uint32_t *) m)[i] = 0;
 	for (i = 0; i < sizeof cpu2b / 4; i++) ((volatile uint32_t *) &cpu2b)[i] = 0;
 	m->ref[0] = C2_ADDR(m->devinfo);
@@ -4659,10 +4718,10 @@ int hal_ble_open(void)
 	if (hal_cpu2_start() < 0) return -1;
 	if ((r = hal_cpu2_info(v)) == 0) return -2;
 	if (r != 1 || v[3] != 0) return -1;
-	if (cpu2.ble_up) return 0;
+	if (cpu2.ble_up & 1) return 0;
 	if (hal_cpu2_shci(0xFC66, bi, sizeof bi, &st, 1) < 1 || st != 0)
 		return -1;
-	cpu2.ble_up = 1;
+	cpu2.ble_up |= 1;
 	return 0;
 }
 
@@ -5393,6 +5452,49 @@ unsigned hal_flash_ecc(uint32_t *addr)
 				| (r & FLASH_ECCR_ECCC ? HAL_ECC_FIXED : 0);
 }
 
+/* A double ECC error that is CPU2's to mend (AN5289 4.11, fig. 13; the
+ * ST-docs review, #110).  The NMI goes to both CPUs.  CPU2 reads ECCR (who
+ * read, where) and either erases its NVM or goes back to FUS, so CPU1 must
+ * not clear ECCR and must not reset at once.  1 when the error is CPU2's
+ * (it did the read, or the address is in its flash) and CPU2 runs; ECCR is
+ * left as it is then. */
+int hal_flash_ecc_cpu2(uint32_t *addr)
+{
+	uint32_t r = FLASH->ECCR;
+	uint32_t sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
+
+	if (!(r & FLASH_ECCR_ECCD) || !(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	*addr = FLASH_BASE + (r & FLASH_ECCR_ADDR_ECC) * 8;
+	return ((r & FLASH_ECCR_CPUID) >> FLASH_ECCR_CPUID_Pos) == 1
+		|| *addr >= sfsa;
+}
+
+/* ... and the wait for CPU2's recovery, from the NMI handler; it does not
+ * return (a reset ends it: CPU2's, or ours after about half a second).
+ * Fig. 13 as read here: CPU2 writes a keyword at the start of SRAM2a,
+ * waits 500 us and goes on only if the keyword is still there (CPU1 could
+ * hold it by changing it: we do not).  For the NVM case it erases, writes
+ * the keyword again and resets only once CPU1 has answered with the reset
+ * keyword within 500 us.  So: leave the first one alone for a millisecond,
+ * put a zero there, and answer the next one at once.  Not tested on the
+ * device (the error cannot be made safely); ST's own handler was not at
+ * hand to compare. */
+void hal_cpu2_ecc_recover(void)
+{
+	volatile uint32_t *k = (volatile uint32_t *) 0x20030000u;
+	uint32_t n, seen = 0;
+
+	for (n = 0; n < 8000000u; n++) {		/* about 0.5 s */
+		if (*k != 0xAFB449C9u) continue;	/* NVM recovery */
+		if (seen == 0) {			/* the first: not ours */
+			for (seen = 0; seen < 16000u; seen++) (void) *k;
+			*k = 0;
+			seen = 1;
+		} else *k = 0x8518C6F2u;		/* the second: reset */
+	}
+	NVIC_SystemReset();
+}
+
 /* The flash caches may hold the old contents of a page just changed. */
 static void flash_done(void)
 {
@@ -5442,16 +5544,72 @@ static void c2_sem_give(unsigned n)
 	HSEM->R[n] = C2_COREID;
 }
 
+/* Two system commands ST asks for around CPU1's flash work (AN5289 4.7.1
+ * and 4.7.3; the ST-docs review, #110), both only while the wireless stack
+ * runs (FUS takes neither), both best effort: a CPU2 that does not answer
+ * leaves things as they were.
+ * - SHCI_C2_SetFlashActivityControl (0xFC73, 1): CPU2 protects its radio
+ *   timing with HSEM 7 instead of PESD; once per start of CPU2 (the mark is
+ *   bit 1 of cpu2.ble_up, in SRAM2: no RAM of ours).
+ * - SHCI_C2_FLASH_EraseActivity (0xFC69, 1 / 0): an erase is about to
+ *   start / has ended, so the stack plans around the 22 ms. */
+static int c2_stack_runs(void)
+{
+	uint32_t v[4];
+
+	return hal_cpu2_info(v) == 1 && v[3] == 0;
+}
+
+static void c2_flash_ctl(void)
+{
+	uint8_t one = 1, st = 0xFF;
+
+	if ((cpu2.ble_up & 2) || !c2_stack_runs()) return;
+	if (hal_cpu2_shci(0xFC73, &one, 1, &st, 1) >= 1 && st == 0)
+		cpu2.ble_up |= 2;
+}
+
+static void c2_erase_activity(int on)
+{
+	uint8_t p = (uint8_t) on, st;
+
+	if ((PWR->CR4 & PWR_CR4_C2BOOT) && c2_stack_runs())
+		(void) hal_cpu2_shci(0xFC69, &p, 1, &st, 1);
+}
+
+/* HSEM 2 for the whole call; HSEM 7 only around one operation (c2_gate),
+ * as AN5289 4.7.1 fig. 10 has it: held over a whole page of double words
+ * (about 43 ms) CPU2 could not protect its radio events for that long
+ * (the ST-docs review, #110). */
 static int c2_flash_begin(void)
+{
+	uint32_t n;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	c2_flash_ctl();
+	for (n = 0; c2_sem_take(C2_SEM_FLASH) < 0; )
+		if (++n == 4000000u) return -1;
+	return 0;
+}
+
+static void c2_flash_end(void)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
+	c2_sem_give(C2_SEM_FLASH);
+}
+
+/* Before one flash operation (a double word, or the start of an erase):
+ * the controller not suspended by CPU2 (PESD), CPU2 not asking for the
+ * flash itself (HSEM 6), and HSEM 7 ours, which tells CPU2 not to make a
+ * time-critical request now.  c2_ungate gives it back right after the
+ * operation was started. */
+static int c2_gate(void)
 {
 	uint32_t n, pm;
 
 	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
-	for (n = 0; c2_sem_take(C2_SEM_FLASH) < 0; )
-		if (++n == 4000000u) return -1;
 	for (n = 0; ; ) {
 		if (++n == 4000000u) {
-			c2_sem_give(C2_SEM_FLASH);
 			hal_flash_sr = 0x10000000u;	/* CPU2 kept it */
 			return -1;
 		}
@@ -5468,11 +5626,9 @@ static int c2_flash_begin(void)
 	}
 }
 
-static void c2_flash_end(void)
+static void c2_ungate(void)
 {
-	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
-	c2_sem_give(C2_SEM_CPU2);
-	c2_sem_give(C2_SEM_FLASH);
+	if (PWR->CR4 & PWR_CR4_C2BOOT) c2_sem_give(C2_SEM_CPU2);
 }
 
 int hal_flash_erase(uint32_t page_addr)
@@ -5483,12 +5639,18 @@ int hal_flash_erase(uint32_t page_addr)
 			|| !flash_ok(page_addr, HAL_FLASH_PAGE)) return -1;
 	if (c2_flash_begin() < 0) return -1;
 	if (flash_unlock() < 0) { flash_done(); c2_flash_end(); return -1; }
-	FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
-		| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
+	c2_erase_activity(1);
+	if (c2_gate() < 0) r = -1;
+	else {
+		FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB) | FLASH_CR_PER
+			| (((page_addr - FLASH_BASE) / HAL_FLASH_PAGE)
 							<< FLASH_CR_PNB_Pos);
-	FLASH->CR |= FLASH_CR_STRT;
-	r = flash_wait();
+		FLASH->CR |= FLASH_CR_STRT;
+		c2_ungate();
+		r = flash_wait();
+	}
 	FLASH->CR &= ~(FLASH_CR_PER | FLASH_CR_PNB);
+	c2_erase_activity(0);
 	flash_done();
 	c2_flash_end();
 	return r;
@@ -5508,6 +5670,7 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 		w0 = s[0] | s[1] << 8 | s[2] << 16 | (uint32_t) s[3] << 24;
 		w1 = s[4] | s[5] << 8 | s[6] << 16 | (uint32_t) s[7] << 24;
 		if (w0 == 0xFFFFFFFFu && w1 == 0xFFFFFFFFu) continue;
+		if (c2_gate() < 0) { r = -1; break; }
 		{	/* both words, in order, nothing in between */
 			uint32_t pm = __get_PRIMASK();
 
@@ -5516,6 +5679,7 @@ int hal_flash_write(uint32_t dst, const void *src, unsigned len)
 			*(volatile uint32_t *) (dst + 4) = w1;
 			__set_PRIMASK(pm);
 		}
+		c2_ungate();
 		if ((r = flash_wait()) < 0) break;
 	}
 	FLASH->CR &= ~FLASH_CR_PG;
