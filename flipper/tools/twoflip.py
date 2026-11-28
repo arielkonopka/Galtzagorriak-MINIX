@@ -864,9 +864,24 @@ def subghz_raw_u2m(ul, mx, opt):
 UL_DECODES_INVERTED = {"Linear": 10}
 
 
+# What the reference's "subghz rx" calls a protocol when it is not the name
+# in the key file (seen on unlshd-093, 2026-11-28: these two rows said
+# "decoded nothing" while the reference had printed the right key).
+UL_RX_NAMES = {"Intertechno_V3": "Intertechno", "Phoenix_V2": "V2 Phoenix"}
+# The reference prints nothing for these whoever sends them (and reboots
+# when it sends them itself, UL_TX_CRASH): it cannot judge MINIX's signal.
+UL_RX_DEAF = ("Proteco", "Freezer")
+
+
 def judge_sub(f, out, who, nothing):
 	"""Decoded text (either side's rx) against the .sub file."""
-	if f["proto"] not in out:
+	name = UL_RX_NAMES.get(f["proto"], f["proto"]) if who == "Unleashed" \
+		else f["proto"]
+	if name not in out:
+		if who == "Unleashed" and f["proto"] in UL_RX_DEAF:
+			return "BLOCKED", ("Unleashed unlshd-093 decodes no %s at all "
+				"(and reboots sending it): no judge for MINIX's signal"
+				% f["proto"])
 		return nothing
 	if who == "Unleashed" and f["proto"] in UL_DECODES_INVERTED:
 		bits = UL_DECODES_INVERTED[f["proto"]]
@@ -947,11 +962,17 @@ def subghz_decode_m2u(ul, mx, opt, f):
 		return "FAIL", "could not write %s on MINIX" % path
 	if not ul.start("subghz rx %d 0" % f["freq"]):
 		return "BLOCKED", "Unleashed rx did not start: " + last(ul.stop())
-	rc, out = mx.run("subghz tx_from_file %s %d" % (path, SUB_REPEAT), 30)
-	if missing(rc, out):
-		ul.stop()
-		return "MISSING", "subghz tx_from_file: " + last(out)
-	ul.wait(re.escape(f["proto"]).encode(), 3)
+	# As in the other direction (SUB_SENDS): one burst can fall where the
+	# reference is deaf for a moment.  Doitrand, Phoenix_V2 and Security+
+	# 2.0 failed one run in three with a single send (2026-11-28).
+	name = UL_RX_NAMES.get(f["proto"], f["proto"])
+	for _ in range(SUB_SENDS):
+		rc, out = mx.run("subghz tx_from_file %s %d" % (path, SUB_REPEAT), 30)
+		if missing(rc, out):
+			ul.stop()
+			return "MISSING", "subghz tx_from_file: " + last(out)
+		if ul.wait(re.escape(name).encode(), 2):
+			break
 	time.sleep(0.5)
 	uo = ul.stop()
 	return judge_sub(f, uo, "Unleashed", ("FAIL", "Unleashed decoded "
