@@ -93,12 +93,68 @@ radio                  the flash layout: where CPU2 starts, programs, cache, the
 radio list [-F 2.0.0]  the images in /home/flipper/radio and whether they pass the checks
 radio add [-F 2.0.0] NAME    (root) check /home/flipper/radio/NAME, then update the slot
 radio rm NAME          (root) delete /home/flipper/radio/NAME, then update the slot
+radio install NAME     (root) replace CPU2's stack with /home/flipper/radio/NAME
 ```
 
 `radio add` checks the manifest, the image's size and SHA-256, the FUS
-version (with `-F`), and whether the stack fits (below). Until the FUS
-client exists, MINIX cannot read the FUS version itself. Give it with `-F`.
-`radio` will print it in a later version.
+version (with `-F`), and whether the stack fits (below). `radio` does not
+print the FUS version yet: give it with `-F` (as root,
+`echo cpu2 >/dev/power; cat /dev/power` shows it in `cpu2=fus...`).
+
+### Changing the stack: `radio install`
+
+```
+# radio install ble-full
+ble-full 1.20.0: CPU2's stack will be replaced; the Flipper restarts several times.
+Keep it powered until "installed".
+```
+
+One command does the whole change, about ten minutes: the running stack gives way to ST's
+update service (FUS), FUS deletes it, MINIX writes the new image into flash and reads it back,
+and FUS checks and installs it. The Flipper restarts five or six times on the way; after each
+restart it goes on by itself (the job is the file `/etc/radio.todo`) and the console ends with
+`radio: ble-full installed, the stack runs`. Then `radio` shows where CPU2's flash starts now.
+
+- **Keep it on the cable or with a full battery, and stay near.** FUS mends an install cut by
+  a power loss in most cases, not in all.
+- A key pressed on the console does not stop it. If it gives up it says why
+  (`radio: install stopped: ...`), removes the job and leaves what FUS reports; run it again.
+- A larger stack leaves less room for installed programs: BLE full takes 36 KB more than BLE
+  light.
+- While CPU2 runs, the SD card's checksums are computed in software (the chip's CRC unit
+  belongs to CPU2 then): a little slower, nothing else changes.
+
+### Bluetooth LE: `ble`
+
+```
+ble up [NAME]      (root) start the stack and advertise under NAME
+ble down           stop advertising
+ble scan [SECS]    listen for SECS seconds (10) and write the reports as HCI events
+```
+
+`ble up` makes the Flipper visible to phones and computers. The name is the argument, else
+the line `name=...` in `/etc/ble.conf`, else `Galtzagorriak MINIX`; at most 26 characters.
+It lasts until the next restart. Nothing can connect yet: this is advertising and scanning.
+
+```
+# ble up
+# ble scan 10 | blescan
+ADDRESS            RSSI BARS       KIND       NAME
+C0:11:22:33:44:55  -38 [########]            iTAG
+DE:AD:BE:EF:00:01  -83 [##      ] Apple
+```
+
+It needs a BLE stack on CPU2 (`ble: no BLE stack on CPU2` otherwise: see `radio install`),
+and BLE full to scan; BLE light can only advertise.
+
+### Looking at memory: `peek`
+
+```
+peek ADDR [BYTES]          (root) BYTES (64) from the hex address ADDR, as 32-bit words
+peek -s WORD START END     where the 32-bit WORD is between START and END
+```
+
+A tool for bring-up: flash, RAM, and the read-only registers `/dev/mem` allows.
 
 ### The radio slot
 
@@ -199,9 +255,8 @@ does not push out a stronger one.
 
 **Status.** The command and its library (`src/lib/blescan`, tested on the PC with recorded
 HCI frames) are ready. The source is a stream of HCI events (H4, LE Advertising Report): a file,
-a pipe, or an external controller. The Flipper's own radio feeds it when CPU2 scanning exists
-(`radio use` and the FUS client, a task for the device lane); until then the command works only
-on a recording. It needs about 4 KB of memory and writes nothing to flash.
+a pipe, or the Flipper's own radio: `ble scan 10 | blescan` (above; it needs the BLE full
+stack). It needs about 4 KB of memory and writes nothing to flash.
 
 **Not possible: the Flipper as a Bluetooth speaker.** The Flipper's chip has Bluetooth Low
 Energy only, not the Classic profile (A2DP) that MP3 players and phones use for music, so it

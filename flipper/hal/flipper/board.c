@@ -1122,6 +1122,17 @@ static void clock_init(void)
 	for (timeout = 200000; !(RCC->CR & RCC_CR_PLLRDY); )
 		if (--timeout == 0) return;
 
+	/* CPU2's clock is SYSCLK / 2: the Cortex-M0+ takes 32 MHz at most
+	 * (stock: LL_C2_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_2)).  Left at
+	 * /1 it ran at 64 MHz: the BLE stack and FUS still answered simple
+	 * commands, but FUS found every stack image "not authentic"
+	 * (FUS_GetState 10.03, 2026-11-27): its signature check read or
+	 * computed wrongly.  Set before the clock goes up. */
+	RCC->EXTCFGR = (RCC->EXTCFGR & ~RCC_EXTCFGR_C2HPRE)
+		     | (8u << RCC_EXTCFGR_C2HPRE_Pos);
+	for (timeout = 200000; !(RCC->EXTCFGR & RCC_EXTCFGR_C2HPREF); )
+		if (--timeout == 0) break;
+
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (3u << RCC_CFGR_SW_Pos);
 	while ((RCC->CFGR & RCC_CFGR_SWS) != (3u << RCC_CFGR_SWS_Pos)) ;
 	SystemCoreClock = 64000000;
@@ -2367,7 +2378,9 @@ int hal_disk_init(void)
 			| ((uint32_t) csd[7] << 2) | (csd[8] >> 6);
 		sd_nsectors = (c_size + 1) << (c_size_mult + 2 + read_bl_len - 9);
 	}
-	sd_ready = crc16_hw_init() ? 1 | SD_HWCRC : 1;
+	/* The CRC unit is CPU2's once CPU2 runs (see hal_cpu2_start) */
+	sd_ready = !(PWR->CR4 & PWR_CR4_C2BOOT) && crc16_hw_init()
+		 ? 1 | SD_HWCRC : 1;
 	if (sd_discard_probe(csd)) sd_ready |= SD_DISCARD;
 	sd_select(0);
 	spi2_speed(sd_fast);
@@ -3280,6 +3293,15 @@ void hal_fc_budget(unsigned pages, unsigned upday)
 	if ((n = span_in(addr, len, 0x1FFF0000u, 0x1FFF7400u)) != 0) \
 		return n; \
 	if ((n = span_in(addr, len, 0x1FFF7580u, 0x1FFF7588u)) != 0) \
+		return n; \
+	/* bring-up (T30b), read only: the option bytes, and RCC, PWR and \
+	 * FLASH's registers (no read there has a side effect; HSEM's \
+	 * read-lock registers and IPCC stay out) */ \
+	if ((n = span_in(addr, len, 0x1FFF8000u, 0x1FFF8080u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x58000000u, 0x58000800u)) != 0) \
+		return n; \
+	if ((n = span_in(addr, len, 0x58004000u, 0x58004100u)) != 0) \
 		return n;
 
 static uint32_t span_in(uint32_t addr, uint32_t len, uint32_t lo, uint32_t hi)
@@ -4144,8 +4166,17 @@ struct cpu2_list { uint32_t next, prev; };
 struct cpu2_map {
 	uint32_t ref[10];	/* MB_RefTable_t: devinfo, ble, thread, sys, mm,
 				 * traces, mac, zigbee, lld tests, ble lld */
-	uint32_t devinfo[8];	/* safe boot ver; FUS ver, mem, info;
-				 * stack ver, mem, InfoStack, reserved */
+	uint32_t devinfo[16];	/* a stack writes 8 words: safe boot ver; FUS
+				 * ver, mem, info; stack ver, mem, InfoStack,
+				 * reserved.  FUS writes 14 (ST's
+				 * MB_FUS_DeviceInfoTable_t): 0xA94656B9,
+				 * state bytes, safe boot ver, FUS ver, mem,
+				 * stack ver, mem, BLE info, Thread info,
+				 * reserved, UID64, device id.  With room
+				 * for 8 only, FUS's device id landed on
+				 * sys[0], the command buffer's address,
+				 * and no FUS command was answered
+				 * (2026-11-27) */
 	uint32_t ble[4];	/* cmd, cs, evt queue, acl */
 	uint32_t sys[2];	/* cmd buffer, event queue */
 	uint32_t mm[7];		/* spare ble, spare sys, ble pool, size,
@@ -4154,6 +4185,12 @@ struct cpu2_map {
 	struct cpu2_list sys_q, free_q, ble_q, traces_q;
 	uint32_t cmd[68];	/* TL_CmdPacket_t: 8 + 1 + 3 + 255, rounded */
 	uint32_t sys_spare[68];	/* the spare system event buffer */
+	uint32_t cs[20];	/* BLE: the cs buffer of the BLE table.  The
+				 * stack 1.20.0 answers in the command
+				 * buffer, so this holds our copy of the
+				 * last answer for the reader: its length,
+				 * then code, length, parameters */
+	uint32_t ble_up;	/* SHCI_C2_BLE_Init was done (hal_ble_open) */
 };
 static struct cpu2_map cpu2 __attribute__((section(".cpu2map"), used));
 /* SRAM2b, after the FS buffers there (.cpu2mem2, the last 832 bytes): the
@@ -4188,7 +4225,7 @@ int hal_cpu2_start(void)
 	m->sys[0] = C2_ADDR(m->cmd);
 	m->sys[1] = C2_ADDR(&m->sys_q);
 	m->ble[0] = C2_ADDR(m->cmd);			/* no BLE yet: valid */
-	m->ble[1] = C2_ADDR(m->cmd);
+	m->ble[1] = C2_ADDR(m->cs);
 	m->ble[2] = C2_ADDR(&m->ble_q);
 	m->ble[3] = C2_ADDR(m->cmd);
 	m->mm[0] = C2_ADDR(cpu2b.ble_spare);
@@ -4199,6 +4236,11 @@ int hal_cpu2_start(void)
 	m->traces[0] = C2_ADDR(&m->traces_q);
 	__asm volatile ("dsb" ::: "memory");
 	RCC->AHB3ENR |= RCC_AHB3ENR_IPCCEN | RCC_AHB3ENR_HSEMEN;
+	/* The crypto units CPU2 uses, clocked from CPU1's side as stock's
+	 * furi_hal_bt_init does (AES2, PKA, CRC) before it starts CPU2:
+	 * FUS checks an image's signature with them. */
+	RCC->AHB3ENR |= RCC_AHB3ENR_AES2EN | RCC_AHB3ENR_PKAEN;
+	RCC->AHB1ENR |= RCC_AHB1ENR_CRCEN;
 	(void) RCC->AHB3ENR;
 	if (RCC->BDCR & RCC_BDCR_LSERDY)		/* the RF wake-up clock */
 		RCC->CSR = (RCC->CSR & ~RCC_CSR_RFWKPSEL_Msk) | RCC_CSR_RFWKPSEL_0;
@@ -4209,6 +4251,17 @@ int hal_cpu2_start(void)
 	 * unless CPU1 holds HSEM 5 (AN5289; stock's furi_hal_usb): kept */
 	(void) (HSEM->RLR[5]);
 	__asm volatile ("sev; wfe; wfe" ::: "memory");	/* as ST, clears the event */
+	/* The CRC unit goes to CPU2: FUS checks an image with it (signature,
+	 * then integrity after its own resets) and does not set it up
+	 * (AN5185 table 7: CPU1 must reset it).  Ours was left at the SD
+	 * card's CRC-16 (POL 0x1021), so FUS found every image not authentic
+	 * (10.03), or corrupted (10.02) when only the command reset it.  The
+	 * card uses the software CRC from here until the next reset. */
+	sd_ready &= ~SD_HWCRC;
+	RCC->AHB1RSTR |= RCC_AHB1RSTR_CRCRST;
+	(void) RCC->AHB1RSTR;
+	RCC->AHB1RSTR &= ~RCC_AHB1RSTR_CRCRST;
+	(void) RCC->AHB1RSTR;
 	PWR->CR4 |= PWR_CR4_C2BOOT;
 	return 0;
 }
@@ -4228,7 +4281,17 @@ int hal_cpu2_info(uint32_t v[4])
 		v[2] = m->ref[3];		/* sp */
 		return 2;
 	}
-	if (!(IPCC->C2TOC1SR & (1u << 1))) return 0;	/* channel 2: system */
+	/* the ready event: IPCC channel 2 flagged, or (once hal_cpu2_shci
+	 * has acknowledged the flag) still in the system event queue */
+	if (!(IPCC->C2TOC1SR & (1u << 1))
+	    && m->sys_q.next == C2_ADDR(&m->sys_q)) return 0;
+	if (m->devinfo[0] == 0xA94656B9u) {	/* FUS runs: its own table */
+		v[0] = m->devinfo[3];
+		v[1] = m->devinfo[5];
+		v[2] = m->devinfo[1] >> 24;	/* the installed stack's type */
+		v[3] = 1;
+		return 1;
+	}
 	v[0] = m->devinfo[1];
 	v[1] = m->devinfo[4];
 	v[2] = m->devinfo[6];
@@ -4242,16 +4305,49 @@ int hal_cpu2_info(uint32_t v[4])
 	return 1;
 }
 
-/* The answer in the command buffer, if one is there: its status (0-255)
- * and v[0] the opcode; -1 none.  No state of our own: the buffer is it. */
+/* The IPCC flags, for /dev/power: CPU1's channels in use (commands out)
+ * in bits 0-5, CPU2's (events for us) in bits 8-13. */
+unsigned hal_cpu2_ipcc(void)
+{
+	unsigned i, h = 0;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return 0;
+	for (i = 0; i < 8; i++)		/* the hardware semaphores held, 0-7 */
+		if (HSEM->R[i] & HSEM_R_LOCK) h |= 1u << i;
+	return (IPCC->C1TOC2SR & 0x3F) | (IPCC->C2TOC1SR & 0x3F) << 8 | h << 16;
+}
+
+/* HSEM 5, the 48 MHz clock (AN5289): held by CPU1 since hal_cpu2_start so
+ * that CPU2 does not switch the clock USB runs on.  hold 0 gives it up
+ * (CPU2 may then run its RNG on HSI48: FUS, to check an image), 1 takes
+ * it again. */
+void hal_cpu2_clk48(int hold)
+{
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT)) return;
+	if (hold) (void) (HSEM->RLR[5]);
+	else HSEM->R[5] = HSEM_CR_COREID_CURRENT;
+}
+
+/* The answer in the command buffer, if one is there: its status (0-255),
+ * v[0] the opcode and v[1] the byte after the status (FUS_GetState's
+ * error code; 0x100 when the answer has none); -1 none.  No state of our
+ * own: the buffer is it. */
 int hal_cpu2_last(uint32_t v[4])
 {
 	const volatile uint8_t *c = (const volatile uint8_t *) cpu2.cmd;
 
-	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || (IPCC->C1TOC2SR & (1u << 1))
-	    || c[9] != 0x0E || c[10] < 4) return -1;
-	v[0] = c[12] | c[13] << 8;
-	return c[14];
+	/* the raw start of the packet, for a look when it is not understood:
+	 * type, event, length, count / opcode (2), status, next byte */
+	v[2] = c[8] | c[9] << 8 | c[10] << 16 | (uint32_t) c[11] << 24;
+	v[3] = c[12] | c[13] << 8 | c[14] << 16 | (uint32_t) c[15] << 24;
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || (IPCC->C1TOC2SR & (1u << 1)))
+		return -1;
+	if (c[0] == 0x11 && c[1] == 0x0E && c[2] >= 4) ;	/* FUS: no header */
+	else if (c[9] == 0x0E && c[10] >= 4) c += 8;		/* a stack */
+	else return -1;
+	v[0] = c[4] | c[5] << 8;
+	v[1] = c[2] >= 5 ? c[7] : 0x100;
+	return c[6];
 }
 
 /* A system command to CPU2 (ST's SHCI, shci_tl.c: the transport both the
@@ -4273,6 +4369,11 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 
 	if (hal_cpu2_info(v) != 1 || plen > 255) return -1;
 	if (IPCC->C1TOC2SR & (1u << 1)) return -2;	/* one still out */
+	/* Tell CPU2 its event was taken (ST's HW_IPCC_SYS_EvtNot clears the
+	 * flag): the wireless stack answers without it, FUS does not (seen
+	 * 2026-11-27: FUS_GetState got no answer).  The event stays in the
+	 * queue, which hal_cpu2_info reads. */
+	if (IPCC->C2TOC1SR & (1u << 1)) IPCC->C1SCR = 1u << 1;
 	for (i = 0; i < 8; i++) c[i] = 0;		/* the list node */
 	c[8] = 0x10;					/* a system command */
 	c[9] = (uint8_t) op;
@@ -4283,12 +4384,176 @@ int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 	IPCC->C1SCR = 1u << (16 + 1);			/* channel 2: go */
 	for (n = 0; IPCC->C1TOC2SR & (1u << 1); )
 		if (++n == 8000000u) return -2;		/* ~0.5 s */
-	/* the answer: type, event 0x0E, length, count, opcode, payload */
-	if (c[9] != 0x0E || c[10] < 3
-	    || (unsigned) (c[12] | c[13] << 8) != op) return -3;
-	len = c[10] - 3u;
-	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[14 + i];
+	/* The answer: type, event 0x0E, length, count, opcode, payload.
+	 * FUS writes it at the start of the buffer (ST's shci_send: "the
+	 * command complete of a system command does not have the header");
+	 * the BLE light stack 1.20.0 wrote it after the 8-byte list node,
+	 * where the command was.  Seen on the device, both taken. */
+	if (c[0] == 0x11 && c[1] == 0x0E && c[2] >= 3
+	    && (unsigned) (c[4] | c[5] << 8) == op) ;
+	else if (c[9] == 0x0E && c[10] >= 3
+		 && (unsigned) (c[12] | c[13] << 8) == op) c += 8;
+	else return -3;
+	len = c[2] - 3u;
+	for (i = 0; i < len && i < rmax; i++) rsp[i] = c[6 + i];
 	return (int) len;
+}
+
+/* An event CPU2 gave us goes back to it (ST's TL_MM_EvtDone): on the free
+ * queue, IPCC channel 4 flagged.  Only buffers of CPU2's pool and the spare
+ * one; the queue is CPU2's to read while the flag is up, so wait for it. */
+static void c2_evt_done(uint32_t e)
+{
+	struct cpu2_map *m = &cpu2;
+	struct cpu2_list *n = (struct cpu2_list *) e, *q = &m->free_q;
+	uint32_t t;
+
+	if (e < C2_ADDR(&cpu2b) || e >= C2_ADDR(&cpu2b + 1)) return;
+	for (t = 0; IPCC->C1TOC2SR & (1u << 3); )
+		if (++t == 2000000u) return;		/* lost: CPU2 stuck */
+	n->next = C2_ADDR(q);
+	n->prev = q->prev;
+	((struct cpu2_list *) q->prev)->next = e;
+	q->prev = e;
+	__asm volatile ("dsb" ::: "memory");
+	IPCC->C1SCR = 1u << (16 + 3);
+}
+
+/* A BLE command (HCI, or ST's ACI) to the wireless stack, T30b: type 0x01,
+ * opcode, length, parameters in the command buffer, IPCC channel 1
+ * flagged; the answer is an event on the BLE queue (0x0E command complete
+ * or 0x0F command status, in the cs buffer).  Polled, as hal_cpu2_shci.
+ * Other events met on the way go back to CPU2 unread (no listener yet).
+ * Returns the bytes after the opcode copied to rsp (the first is the
+ * status; for a command status event only it), -1 no stack running, -2 no
+ * answer. */
+int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax)
+{
+	struct cpu2_map *m = &cpu2;
+	volatile uint8_t *c = (volatile uint8_t *) m->cmd;
+	struct cpu2_list *q = &m->ble_q, *e;
+	const uint8_t *b;
+	uint32_t v[4], n;
+	unsigned i, len;
+	int r = -2;
+
+	if (hal_cpu2_info(v) != 1 || v[3] != 0 || plen > 255) return -1;
+	if (IPCC->C1TOC2SR & (1u << 1 | 1u << 0)) return -2;
+	for (i = 0; i < 8; i++) c[i] = 0;
+	c[8] = 0x01;
+	c[9] = (uint8_t) op;
+	c[10] = (uint8_t) (op >> 8);
+	c[11] = (uint8_t) plen;
+	for (i = 0; i < plen; i++) c[12 + i] = par[i];
+	__asm volatile ("dsb" ::: "memory");
+	IPCC->C1SCR = 1u << 16;				/* channel 1: go */
+	for (n = 0; r == -2 && n < 16000000u; n++) {	/* ~1 s */
+		if (!(IPCC->C2TOC1SR & 1u)) continue;
+		while (q->next != C2_ADDR(q)) {
+			e = (struct cpu2_list *) q->next;
+			q->next = e->next;		/* off the queue */
+			((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
+			b = (const uint8_t *) e + 8;	/* type, code, len */
+			if (b[1] == 0x0E && b[2] >= 3
+			    && (unsigned) (b[4] | b[5] << 8) == op) {
+				len = b[2] - 3u;
+				for (i = 0; i < len && i < rmax; i++)
+					rsp[i] = b[6 + i];
+				r = (int) len;
+			} else if (b[1] == 0x0F && b[2] >= 4
+				   && (unsigned) (b[5] | b[6] << 8) == op) {
+				if (rmax > 0) rsp[0] = b[3];
+				r = 1;
+			}
+			if (r != -2) {		/* the answer, for the reader */
+				volatile uint8_t *a = (volatile uint8_t *) m->cs;
+
+				len = 2u + b[2];
+				if (len > sizeof m->cs - 1) len = sizeof m->cs - 1;
+				for (i = 0; i < len; i++) a[1 + i] = b[1 + i];
+				a[2] = (uint8_t) (len - 2);
+				a[0] = (uint8_t) len;
+			}
+			c2_evt_done(C2_ADDR(e));
+		}
+		IPCC->C1SCR = 1u;			/* events taken */
+	}
+	return r;
+}
+
+/* One event for the reader of /dev/ble: the answer to its last command
+ * first, then the events on the BLE queue: code, length, parameters copied
+ * to b (cut to max, the length byte then says so), the buffer given back
+ * to CPU2.  Returns the bytes copied, 0 when none waits. */
+int hal_cpu2_evt(uint8_t *b, unsigned max)
+{
+	struct cpu2_map *m = &cpu2;
+	struct cpu2_list *q = &m->ble_q, *e;
+	volatile uint8_t *a = (volatile uint8_t *) m->cs;
+	const uint8_t *p;
+	unsigned i, len;
+
+	if (!(PWR->CR4 & PWR_CR4_C2BOOT) || max < 2) return 0;
+	if (a[0] != 0) {
+		len = a[0];
+		for (i = 0; i < len && i < max; i++) b[i] = a[1 + i];
+		a[0] = 0;
+	} else {
+		if (q->next == C2_ADDR(q)) {
+			if (IPCC->C2TOC1SR & 1u) IPCC->C1SCR = 1u;
+			return 0;
+		}
+		e = (struct cpu2_list *) q->next;
+		q->next = e->next;
+		((struct cpu2_list *) e->next)->prev = C2_ADDR(q);
+		p = (const uint8_t *) e + 9;		/* code, length */
+		len = 2u + p[1];
+		for (i = 0; i < len && i < max; i++) b[i] = p[i];
+		c2_evt_done(C2_ADDR(e));
+	}
+	b[1] = (uint8_t) (i - 2);
+	return (int) i;
+}
+
+/* /dev/ble is opened: CPU2 started if it was not, and once it is ready
+ * and runs a stack, the stack's BLE part started (SHCI_C2_BLE_Init, ST's
+ * sizes for 2 links, ATT MTU 156, no extended advertising).  0 ready, -2
+ * CPU2 not ready yet (try again shortly), -1 no stack (FUS alone, or
+ * the start failed). */
+int hal_ble_open(void)
+{
+	static const uint8_t bi[46] = {
+		0, 0, 0, 0, 0, 0, 0, 0,	/* buffer, size: not used */
+		68, 0,			/* attribute records */
+		8, 0,			/* services */
+		0x40, 0x05,		/* attribute value array, 1344 */
+		2, 1,			/* links; data length extension */
+		12, 40,			/* prepare write list; memory blocks */
+		156, 0,			/* ATT MTU */
+		0xF4, 0x01, 0,		/* peripheral SCA 500 ppm; central */
+		1,			/* LSE, calibrated */
+		0xFF, 0xFF, 0xFF, 0xFF,	/* max connection event length */
+		0x48, 0x01,		/* HSE startup time */
+		1, 0, 0,		/* Viterbi; options; hw version */
+		32, 0, 0,		/* CoC initiators; min, max TX power */
+		1, 1,			/* RX model; advertising sets */
+		0x72, 0x06,		/* max advertising data, 1650 */
+		0, 0, 0, 0,		/* TX, RX path compensation */
+		13, 0			/* core 5.4; options extension */
+	};
+	uint32_t v[4];
+	uint8_t st = 0xFF;
+	int r;
+
+	if (hal_cpu2_start() < 0) return -1;
+	if ((r = hal_cpu2_info(v)) == 0) return -2;
+	if (r != 1 || v[3] != 0) return -1;
+	if (cpu2.ble_up) return 0;
+	if (hal_cpu2_shci(0xFC66, bi, sizeof bi, &st, 1) < 1 || st != 0)
+		return -1;
+	cpu2.ble_up = 1;
+	return 0;
 }
 
 /*===========================================================================*
@@ -4334,10 +4599,12 @@ int hal_random(uint32_t *w)
 			sem_give(SEM_CLK48);
 	}
 	if (sem_take(SEM_RNG) < 0) return -1;
-	if (!on) {
-		RNG->CR |= RNG_CR_RNGEN;
-		on = 1;
-	}
+	on = 1;
+	/* On only while we hold the semaphore, as stock's furi_hal_random:
+	 * CPU2 shares the RNG (HSEM 0) and must find it off.  We left it
+	 * running for good, in our configuration (T30b: looked at when FUS
+	 * found every stack image not authentic). */
+	RNG->CR |= RNG_CR_RNGEN;
 	for (n = 0; !(RNG->SR & RNG_SR_DRDY); n++) {
 		if ((RNG->SR & (RNG_SR_SECS | RNG_SR_CECS)) || n == 1000000u) {
 			/* seed or clock error: restart it, the caller may
@@ -4350,6 +4617,7 @@ int hal_random(uint32_t *w)
 		}
 	}
 	if (r == 0) *w = RNG->DR;
+	RNG->CR &= ~RNG_CR_RNGEN;
 	sem_give(SEM_RNG);
 	return r;
 }
@@ -4883,6 +5151,16 @@ void hal_tone(unsigned hz, unsigned vol)
 					 * both libraries are in minix.bin */
 #define HAL_CACHE_SIZE	0x20000u	/* 128 KB */
 #define GUARD_PAGES	4u
+/* T30b, changing CPU2's stack.  With FUS alone in CPU2's flash (the old
+ * stack deleted) SFSA is FUS's own start, above every stack's install
+ * address: seen from HAL_NOSTACK up.  Then there is no cache (it would be
+ * laid where the new image goes) and the installed region is the one of
+ * the BLE light stack, so MM sees no change; the image is written into
+ * the radio window, HAL_RADIO_FLOOR .. SFSA.  With a stack installed the
+ * window is the guard, which nothing of ours uses: a place to try the
+ * writer. */
+#define HAL_NOSTACK	(FLASH_BASE + 0xF0000u)
+#define HAL_RADIO_FLOOR	(FLASH_BASE + 0xB3000u)
 
 void hal_flash_layout(uint32_t *l)
 {
@@ -4900,10 +5178,26 @@ void hal_flash_layout(uint32_t *l)
 	}
 	l[HAL_FL_ROM] = inst + HAL_ROM_OFF;
 	l[HAL_FL_ROM_SIZE] = HAL_ROM_SIZE;
+	if (sfsa >= HAL_NOSTACK) {		/* FUS alone: see above */
+		l[HAL_FL_CACHE] = l[HAL_FL_CACHE_SIZE] = 0;
+		l[HAL_FL_INST] = inst;
+		l[HAL_FL_INST_SIZE] = HAL_RADIO_FLOOR - inst;
+		return;
+	}
 	l[HAL_FL_CACHE] = top - HAL_CACHE_SIZE;
 	l[HAL_FL_CACHE_SIZE] = HAL_CACHE_SIZE;
 	l[HAL_FL_INST] = inst;
 	l[HAL_FL_INST_SIZE] = top - HAL_CACHE_SIZE - inst;
+}
+
+/* Whether [addr, addr+len) is in the radio window (no table: small). */
+int hal_flash_radio_ok(uint32_t addr, uint32_t len)
+{
+	uint32_t sfsa = FLASH_BASE + (FLASH->SFR & FLASH_SFR_SFSA) * HAL_FLASH_PAGE;
+	uint32_t lo = sfsa >= HAL_NOSTACK ? HAL_RADIO_FLOOR
+					  : sfsa - GUARD_PAGES * HAL_FLASH_PAGE;
+
+	return len != 0 && addr >= lo && addr < sfsa && len <= sfsa - addr;
 }
 
 /* For the MEMORY task, whose stack has no room for the layout table. */
@@ -5007,6 +5301,7 @@ static int flash_ok(uint32_t addr, unsigned len)	/* cache, installed */
 {
 	uint32_t l[HAL_FL_N];
 
+	if (hal_flash_radio_ok(addr, len)) return 1;	/* the kernel asked */
 	hal_flash_layout(l);
 	if (addr >= l[HAL_FL_CACHE] && len <= l[HAL_FL_CACHE_SIZE]
 			&& addr - l[HAL_FL_CACHE] <= l[HAL_FL_CACHE_SIZE] - len)

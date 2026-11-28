@@ -318,7 +318,8 @@ CMDS	:= basename cat chmod chown cksum clr cmp comm cp cut date dd df \
 	   wc which whoami yes
 # Commands written for the port (flipper/cmds).
 PORTCMDS := mkpart erase pkg free gpio beep lat ver ir backlight cfcat settings rtc rfid ikey \
-	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc
+	    swapon gmodem guimod jiggle region gzupdate gztree radio blescan pgpenc \
+	    peek ble
 # setgroup: the settings groups' window app (spec K.7, K.8), below.
 SETCMDS	:= setgroup
 # The editor (src/commands/mined, T8): EDITOR and VISUAL in /etc/profile.
@@ -474,6 +475,7 @@ CHMEM_pgpenc   := 12288	# the file is read in 512 B pieces; RSA's five 512 B
 			# numbers, the 1.5 KB message context and the key
 			# block (3 KB, .bss) with stdio and stack
 CHMEM_blescan  := 4096	# issue #388: the table (16 x 40 B), one HCI packet
+CHMEM_ble  := 4096	# T30b: two 84 B packets, a 48 B command, no stdio
 			# (258 B), stdio, stack
 CHMEM_jiggle   := 768	# R11.3.6: <= 1 KB with data + bss (188 B); all
 			# stack: argv, environment and calls (nattest memuse)
@@ -1356,7 +1358,7 @@ $(PKGDIR)/stest_1.0.tar: $(STPROGS:%=$(MB)/bin/%) tools/mkpkg.py \
 # The system programs as a package, to update a running Flipper over the
 # cable (tools/flsend build/flipper/minix/pkgs/base_$(BASE_VER).tar) instead
 # of rewriting the card.  Raise BASE_VER for every update sent.
-BASE_VER := 5.1
+BASE_VER := 5.2
 BASEPKG	:= $(PKGDIR)/base_$(BASE_VER).tar
 # The nfc service scanner's example AID dictionary (#451): public AIDs
 # only (D.3); the user's own copy goes to /home/flipper/nfc/assets.

@@ -103,6 +103,7 @@
 			/* (15 is /dev/lat, include/minix/lat.h) */
 #define LAST_MINOR	16	/* (17-19: USB HID, hiddev.c) */
 #define SGPKT_MINOR	20	/* Sub-GHz packets, <minix/subghz.h> */
+#define BLE_MINOR	23	/* CPU2's BLE stack: HCI packets (T30b, #390) */
 #define NFC_MINOR	22	/* the ST25R3916 (#390, <minix/nfc.h>; 21: mtpline) */
 /* 21: /dev/mtpline, QEMU only (mtpline.c) */
 #define NNOTES		64
@@ -526,6 +527,10 @@ PUBLIC void flipdev_task()
 		r = (unsigned) fm.DEVICE <= LAST_MINOR
 				|| fm.DEVICE == SGPKT_MINOR
 				|| fm.DEVICE == NFC_MINOR ? OK : ENXIO;
+		if (fm.DEVICE == BLE_MINOR) {	/* an open starts the stack */
+			r = fm.m_type != DEV_OPEN ? OK : hal_ble_open();
+			r = r == 0 ? OK : r == -2 ? EAGAIN : ENXIO;
+		}
 #if LATTRACE
 		if (fm.DEVICE == LAT_MINOR) r = OK;
 #endif
@@ -1666,6 +1671,12 @@ int count;
 			if (i < 2 && j > 8) line[n++] = '.';
 		}
 	}
+	if (v == 1) {			/* the mailbox flags: ipcc=C2C1 (hex) */
+		u = hal_cpu2_ipcc();
+		for (k = " ipcc="; *k != 0; k++) line[n++] = *k;
+		for (j = 20; j >= 0; j -= 4)	/* HSEM held, C2's flags, C1's */
+			line[n++] = "0123456789abcdef"[u >> j & 15];
+	}
 	/* the last system command CPU2 answered: shci=OPCODE:STATUS (hex) */
 	if (v == 1 && (i = hal_cpu2_last(c2)) >= 0) {
 		for (k = " shci="; *k != 0; k++) line[n++] = *k;
@@ -1674,6 +1685,18 @@ int count;
 		line[n++] = ':';
 		line[n++] = "0123456789abcdef"[i >> 4 & 15];
 		line[n++] = "0123456789abcdef"[i & 15];
+		if (c2[1] < 0x100) {		/* e.g. FUS_GetState's error */
+			line[n++] = '.';
+			line[n++] = "0123456789abcdef"[c2[1] >> 4 & 15];
+			line[n++] = "0123456789abcdef"[c2[1] & 15];
+		}
+	} else if (v == 1) {		/* not an answer: its bytes 8..15 */
+		for (k = " raw="; *k != 0; k++) line[n++] = *k;
+		for (i = 2; i < 4; i++)
+			for (j = 0; j < 32; j += 8) {
+				line[n++] = "0123456789abcdef"[c2[i] >> (j + 4) & 15];
+				line[n++] = "0123456789abcdef"[c2[i] >> j & 15];
+			}
 	}
   }
   line[n++] = '\n';
@@ -1724,6 +1747,48 @@ int count;
 
 	i = hal_cpu2_shci(0xFC73, &one, 1, &st, 1);
 	return(i == -1 ? ENXIO : i < 1 || st != 0 ? EIO : count);
+  }
+  /* T30b: ST's firmware upgrade services (FUS), AN5185.  Root only (the
+   * device file).  "fus?" FUS_GetState: asked twice of a running stack it
+   * makes CPU2 reset the MCU into FUS; in FUS its answer is the state
+   * (00 idle, 10-3f busy, ff error) and an error code.  "fusws" starts
+   * the stack again (a reset), "fusdel" deletes the installed stack,
+   * "fusup ADDR" installs the image written at ADDR (hex): those three
+   * only while CPU2 says it runs FUS.  Read the answer in shci=. */
+  if (strcmp(cmd, "c2clk0") == 0 || strcmp(cmd, "c2clk1") == 0) {
+	hal_cpu2_clk48(cmd[5] == '1');	/* HSEM 5: let CPU2 have the 48 MHz
+					 * clock (0), or hold it for USB (1) */
+	return(count);
+  }
+  if (strncmp(cmd, "fus", 3) == 0) {
+	u32_t c2[4], op = 0, a = 0;
+	u8_t par[4], rsp[2];
+	int np = 0;
+
+	if (strcmp(cmd, "fus?") == 0) op = 0xFC52;
+	else if (strcmp(cmd, "fusws") == 0) op = 0xFC5A;
+	else if (strcmp(cmd, "fusdel") == 0) op = 0xFC55;
+	else if (strcmp(cmd, "fusup") == 0) op = 0xFC54;	/* FUS finds it */
+	else if (strncmp(cmd, "fusup ", 6) == 0 && cmd[6] != 0) {
+		for (i = 6; cmd[i] != 0; i++) {
+			int d = cmd[i] >= '0' && cmd[i] <= '9' ? cmd[i] - '0'
+			      : cmd[i] >= 'a' && cmd[i] <= 'f' ? cmd[i] - 'a' + 10
+			      : cmd[i] >= 'A' && cmd[i] <= 'F' ? cmd[i] - 'A' + 10
+			      : -1;
+			if (d < 0 || i > 13) return(EINVAL);
+			a = a << 4 | (u32_t) d;
+		}
+		if (a < 0x08048000UL || a >= 0x08100000UL || a % 4096 != 0)
+			return(EINVAL);
+		par[0] = (u8_t) a; par[1] = (u8_t) (a >> 8);
+		par[2] = (u8_t) (a >> 16); par[3] = (u8_t) (a >> 24);
+		np = 4;
+		op = 0xFC54;
+	} else return(EINVAL);
+	if (hal_cpu2_info(c2) != 1) return(ENXIO);
+	if (op != 0xFC52 && c2[3] != 1) return(EPERM);	/* not in FUS */
+	i = hal_cpu2_shci(op, par, np, rsp, 2);
+	return(i < 0 ? EIO : count);
   }
   return(EINVAL);
 }
@@ -1959,6 +2024,31 @@ message *m_ptr;
 	if (count < 8) return(EINVAL);
 	if (ie.st != IE_OFF) return(EBUSY);	/* the contact is a key now */
 	return(ow_read_rom(user));
+
+  case BLE_MINOR: {
+	/* T30b: HCI packets as on a UART (H4).  A write is one command
+	 * (0x01, opcode, length, parameters; ST's ACI commands too), sent
+	 * and answered before the write returns; a read gives one event
+	 * (0x04, code, length, parameters): the answer first, then what the
+	 * stack reports (advertising reports while it scans).  EAGAIN when
+	 * none waits: nothing here blocks, and no state is kept in the
+	 * kernel's RAM (the buffers are CPU2's shared ones, in SRAM2). */
+	u8_t pk[84];
+	int n;
+
+	if (m_ptr->m_type == DEV_WRITE) {
+		if (count < 4 || count > (int) sizeof(pk)) return(EINVAL);
+		phys_copy(user, vir2phys(pk), (phys_bytes) count);
+		if (pk[0] != 0x01 || pk[3] != count - 4) return(EINVAL);
+		n = hal_cpu2_hci(pk[1] | pk[2] << 8, pk + 4, pk[3], pk, 1);
+		return(n == -1 ? ENXIO : n < 1 ? EIO : count);
+	}
+	if (count < (int) sizeof(pk)) return(EINVAL);
+	if ((n = hal_cpu2_evt(pk + 1, sizeof(pk) - 1)) <= 0) return(EAGAIN);
+	pk[0] = 0x04;
+	phys_copy(vir2phys(pk), user, (phys_bytes) (n + 1));
+	return(n + 1);
+  }
 
   case NFC_MINOR:			/* #390 bring-up: one report line */
 	if (m_ptr->m_type != DEV_READ) return(EINVAL);

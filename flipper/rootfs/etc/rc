@@ -79,6 +79,9 @@ if test -n "$fsck_err"; then >/etc/.fsck-errors; else rm -f /etc/.fsck-errors; f
 # Programs built into the firmware's flash (make base-flash): bind them to
 # their files the first time (one hash each), then exec finds them directly.
 pkg bind /bin
+# A CPU2 stack is being installed (radio install, T30b): the next step.
+# FUS resets the MCU on the way, so this may not come back.
+test -f /etc/radio.todo && radio resume
 # After an update (spec RS.15): the staged copies left over by gztree go.
 test -f /etc/gz-tree && gzupdate finish
 
