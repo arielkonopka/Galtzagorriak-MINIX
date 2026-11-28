@@ -165,7 +165,8 @@
 #define MT_ADC             3	/* an ADC stream: done? (flipdev.c, R6.4) */
 #define MT_LED             4	/* the rainbow's next colour (flipdev.c, R7b.5) */
 #define MT_PULSE           5	/* an RFID read: done? (flipdev.c, R6.5) */
-#define MT_N               6
+#define MT_LCD             6	/* the next page of an LCD frame by DMA (flipdev.c, #498) */
+#define MT_N               7
 
 /* Sleep blockers (pm_busy, T14b): a driver sets its bit while it needs the
  * fast clocks; Stop2 only with none set.  The speaker, IR, the LCD console

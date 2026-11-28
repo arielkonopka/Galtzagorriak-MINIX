@@ -1801,7 +1801,7 @@ PRIVATE int do_rw(m_ptr)
 message *m_ptr;
 {
   phys_bytes user;
-  int count = m_ptr->COUNT;
+  int count = m_ptr->COUNT, r;
   u8_t buf[4];
 
   if (count <= 0) return(EINVAL);
@@ -1833,12 +1833,14 @@ message *m_ptr;
 	} else if (count == 1) {
 		phys_copy(user, vir2phys(buf), (phys_bytes) 1);
 		if (buf[0] != 'C') return(EINVAL);
+		hal_lcd_wait();
 		memset(fbuf, 0, sizeof(fbuf));	/* the console from now on */
 		lc_x = lc_y = lc_esc = 0;
 		lc_on = TRUE;
 		lc_frame();
 		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
 	} else {
+		hal_lcd_wait();	/* the last frame is out (#498) */
 		if (lc_on) {	/* a short frame must not leave console text
 				 * behind in fbuf for a later read */
 			memset(fbuf, 0, sizeof(fbuf));
@@ -1847,7 +1849,9 @@ message *m_ptr;
 		phys_copy(user, vir2phys(fbuf), (phys_bytes) count);
 		LAT_EVENT(LE_LCD, m_ptr->PROC_NR);
 		if (nt_st & NT_KIND) nt_over();		/* N.6 */
-		if (hal_lcd_flush(fbuf) < 0) lc_dirty = TRUE;	/* SD: later */
+		r = hal_lcd_flush_async(fbuf);	/* the pages go from the ms timer */
+		if (r < 0) lc_dirty = TRUE;	/* SD: later */
+		else if (r > 0) { lock(); mt_arm(MT_LCD, 1); unlock(); }
 	}
 	return(count);
 
@@ -3028,6 +3032,12 @@ unsigned now;
 /*===========================================================================*
  *				flipdev_vibro_off			     *
  *===========================================================================*/
+PUBLIC void flipdev_lcd_tick()
+{
+/* The ms timer: the next page of the frame that goes out by DMA (#498). */
+  if (hal_lcd_pump()) mt_arm(MT_LCD, 1);
+}
+
 PUBLIC void flipdev_vibro_off()
 {
 /* The ms timer: a timed buzz is over (R6.3). */

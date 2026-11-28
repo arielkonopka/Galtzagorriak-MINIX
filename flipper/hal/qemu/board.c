@@ -166,6 +166,12 @@ static int fb_get(const uint8_t *fb, int x, int y)
 /* Render the 128x64 framebuffer at full resolution, 128x32 characters,
  * using UTF-8 half blocks (upper pixel, lower pixel per character cell). */
 int hal_lcd_save(int on) { (void) on; return 0; }
+int hal_lcd_pump(void) { return 0; }
+void hal_lcd_wait(void) { }
+
+
+int hal_lcd_flush(const uint8_t *fb);
+int hal_lcd_flush_async(const uint8_t *fb) { return hal_lcd_flush(fb) < 0 ? -1 : 0; }
 
 int hal_lcd_flush(const uint8_t *fb)
 {

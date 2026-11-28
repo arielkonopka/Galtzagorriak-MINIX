@@ -111,6 +111,31 @@ cache in SRAM2), INIT 0.8 KB. About 105 KB is free for user processes after boot
 Bluetooth (Phase 15) needs part of SRAM2 and the IPCC mailbox; the buffer cache will have to
 share.
 
+## 1.5a DMA channels and the LCD frame
+
+| Controller | Channel | Use |
+|---|---|---|
+| DMA1 | 1, 2 | SD card: SPI2 RX, SPI2 TX (`spi2_dma`) |
+| DMA1 | 3 | ADC1 stream (`/dev/adc`) |
+| DMA1 | 4 | TIM2 capture, RFID/IR receive |
+| DMA1 | 5 | TIM2 update, IR transmit |
+| DMA1 | 6 | TIM2 CCR3, RFID pulses |
+| DMA1 | 7 | **LCD frame** (SPI2 TX, DMAMUX1 channel 6, request 9) (#498) |
+| DMA2 | 1-7 | free, clock off |
+
+The LCD frame goes out page by page (the ST7567 needs a page address command
+before each of the 8 pages, and A0 is a GPIO). `hal_lcd_flush_async()` sends
+the first page and returns; the kernel's ms timer (`MT_LCD`, no interrupt
+slot) calls `hal_lcd_pump()` every millisecond, which ends the page, sends
+the next command phase and starts the next DMA. A frame therefore reaches the
+panel in about 8 ms and the device task never spins for it. SPI2 is shared
+with the SD card: `lcd_finish()` (called from `SD_CS(1)`, a speed change and
+`lcd_cmds`) sends the remaining pages by polling first, so the two never
+share the bus, and `hal_lcd_wait()` precedes every change of the frame buffer
+(`/dev/lcd` writes, console). Only application frames go this way; the
+console, splash and charging screens keep the polled `hal_lcd_flush()`.
+Kernel RAM +8 B.
+
 ## 1.6 Flash
 
 | Region | Written by | Contents |
