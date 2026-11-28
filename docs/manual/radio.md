@@ -130,11 +130,13 @@ restart it goes on by itself (the job is the file `/etc/radio.todo`) and the con
 ble up [NAME]      (root) start the stack and advertise under NAME
 ble down           stop advertising
 ble scan [SECS]    listen for SECS seconds (10) and write the reports as HCI events
+ble beep [NAME [SECS]]   make a key finder beep: NAME is what it advertises (iTAG)
 ```
 
 `ble up` makes the Flipper visible to phones and computers. The name is the argument, else
 the line `name=...` in `/etc/ble.conf`, else `Galtzagorriak MINIX`; at most 26 characters.
-It lasts until the next restart. Nothing can connect yet: this is advertising and scanning.
+It lasts until the next restart. Nothing can connect to the Flipper yet; the Flipper itself
+can connect to a key finder (`ble beep`).
 
 ```
 # ble up
@@ -144,8 +146,22 @@ C0:11:22:33:44:55  -38 [########]            iTAG
 DE:AD:BE:EF:00:01  -83 [##      ] Apple
 ```
 
-It needs a BLE stack on CPU2 (`ble: no BLE stack on CPU2` otherwise: see `radio install`),
-and BLE full to scan; BLE light can only advertise.
+`ble beep` finds a lost key finder (the cheap "iTAG" tags and others with the standard
+*Immediate Alert* service): it looks for the device that advertises the name, connects, sets
+its alert to "high" for SECS seconds (3; at most 60) and then to "off", and disconnects.
+
+```
+# ble beep
+# ble beep iTAG 10
+ble: no such device near (is it on?)
+```
+
+Nothing is paired and nothing is kept. Many of these tags also beep once when the connection
+ends; that is the tag, not the Flipper. To walk towards a tag instead, use `blescan -F`.
+
+It all needs a BLE stack on CPU2 (`ble: no BLE stack on CPU2` otherwise: see `radio install`),
+and BLE full to scan or to beep; BLE light can only advertise. Run `ble up` once after a
+restart first.
 
 ### Looking at memory: `peek`
 
