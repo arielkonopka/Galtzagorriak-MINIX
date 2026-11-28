@@ -2141,9 +2141,22 @@ message *m_ptr;
 			if (buf[3] > 2) return(EINVAL);
 			st = (st & ~HAL_BL_MODES) | (u32_t) buf[3] << 14;
 		}
-		hal_bl_state_set((u32_t) buf[0] << 16 | st);	/* on */
-		hal_backlight(buf[0]);
 		k_input = get_uptime();		/* the timeout starts now */
+		if (bl_state(old) == BL_SAVE) {
+			/* The LCD sleeps (T14d, on battery): it must come
+			 * back first.  This path lit the light and called
+			 * the state "on" over a sleeping LCD: an alarm in
+			 * the morning rang on a lit, blank screen (the user,
+			 * 2026-11-28).  Keep the "asleep" mark and let
+			 * bl_apply wake it and light up (again at the next
+			 * tick if the SD card has the bus). */
+			hal_bl_state_set((u32_t) buf[0] << 16 | st
+				| (old & (HAL_BL_OFF | HAL_BL_STEPS)));
+			bl_apply();
+		} else {
+			hal_bl_state_set((u32_t) buf[0] << 16 | st);	/* on */
+			hal_backlight(buf[0]);
+		}
 	}
 	else if (count == 3) {
 		if (last_buttons & GE_SAVED) {	/* a gesture blinks: later */
