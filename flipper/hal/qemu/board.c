@@ -1133,6 +1133,9 @@ int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
 }
 int hal_cpu2_evt(uint8_t *b, unsigned max) { (void) b; (void) max; return 0; }
 int hal_ble_open(void) { return -1; }
+int hal_sram2_free(unsigned *a_kb, unsigned *b_kb) { *a_kb = *b_kb = 32; return 0; }
+int hal_flash_ecc_cpu2(uint32_t *addr) { (void) addr; return 0; }
+void hal_cpu2_ecc_recover(void) { }
 void hal_cpu2_clk48(int hold) { (void) hold; }
 int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax)

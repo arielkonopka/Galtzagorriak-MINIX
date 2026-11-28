@@ -800,8 +800,16 @@ PUBLIC void NMI_Handler()
  * finer rule, kill only the users of a text-cache entry and drop the
  * entry, needs MM: later.) */
   u32_t a;
-  unsigned f = hal_flash_ecc(&a);
+  unsigned f;
 
+  /* CPU2's own flash (its code or its NVM), CPU2 running: it mends that
+   * itself and needs ECCR untouched (AN5289 4.11); wait for its reset. */
+  if (hal_flash_ecc_cpu2(&a)) {
+	printf("\nflash ECC: uncorrectable error at %08lx, CPU2's: its recovery\n",
+		(unsigned long) a);
+	hal_cpu2_ecc_recover();
+  }
+  f = hal_flash_ecc(&a);
   if (f & HAL_ECC_DOUBLE) {
 	printf("\nflash ECC: uncorrectable error at %08lx (%s)\n",
 		(unsigned long) a, k_booted ? proc_ptr->p_name : "boot");
