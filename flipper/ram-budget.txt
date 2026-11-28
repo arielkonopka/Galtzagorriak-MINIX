@@ -74,7 +74,10 @@
 # #490 (iButton, Cyfral and Metakom on the Flipper): kernel +20 B: the
 # capture's struct address (4), first level and polls (2), and the TIM1
 # playback's list pointer, length, index and level (HAL, 9 + padding 5).
-kernel    160    14744  14904
+kernel    160    14744  14912
+# LCD frame by DMA (#498): kernel +8 B (the frame in flight: pointer, page,
+# busy = 8 B in the HAL; the ms timer table has a seventh client, MT_LCD).
+# No interrupt slot taken.
 # T2 (flash writes as idle work): MM +68 B (runs[] + job), accepted by the owner 2026-11-14
 # (responsiveness first: L6 1.26 s -> 35 ms, L4 40 ms -> 2 us); to be won back (next-tasks).
 # R12.28 plain swap (#180): MM +56 B, the whole swap state (R12.26 allows

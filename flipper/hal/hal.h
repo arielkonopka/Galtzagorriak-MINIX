@@ -43,6 +43,11 @@ void hal_uart_rx_irq(int on);		/* receive interrupt on/off */
 void hal_lcd_init(void);
 int hal_lcd_flush(const uint8_t *fb);	/* LCD_W * LCD_H / 8 bytes; -1: the SD
 					 * card has SPI2 now, draw again later */
+int hal_lcd_flush_async(const uint8_t *fb);	/* the frame by DMA, page by page
+					 * from the ms timer: 1 started (call
+					 * hal_lcd_pump() in 1 ms), -1 as above */
+int hal_lcd_pump(void);			/* 1: again in 1 ms; 0: done */
+void hal_lcd_wait(void);		/* the frame is out; fb may change */
 void hal_backlight(unsigned level);	/* 0 (off) .. 255; on after lcd_init */
 void hal_backlight_fade(unsigned from, unsigned to, unsigned ms);	/* down,
 					 * by the LED driver on its own */

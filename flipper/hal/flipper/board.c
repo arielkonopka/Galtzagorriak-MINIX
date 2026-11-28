@@ -1245,11 +1245,15 @@ static void spi2_init(void)
 #define SPI_DIV_SD_INIT	7	/* /256 = 250 kHz, card identification */
 #define SPI_DIV_SD_FAST	1	/* /4 = 16 MHz (the stock firmware's SD speed) */
 
+static void lcd_finish(void);
+
 static void spi2_speed(unsigned code)
 {
 	uint32_t cr1 = SPI2->CR1;
 
 	if (((cr1 & SPI_CR1_BR) >> SPI_CR1_BR_Pos) == code) return;
+	lcd_finish();			/* a frame in flight runs at its speed */
+	cr1 = SPI2->CR1;
 	SPI2->CR1 = cr1 & ~SPI_CR1_SPE;
 	SPI2->CR1 = (cr1 & ~SPI_CR1_BR) | (code << SPI_CR1_BR_Pos);
 }
@@ -1348,7 +1352,7 @@ static void spi2_wait_idle(void)
 #define LCD_CS(on)	gpio_set(GPIOC, 11, !(on))	/* active low */
 #define LCD_DATA(on)	gpio_set(GPIOB, 1, (on))	/* A0: 0 cmd, 1 data */
 #define LCD_RST(on)	gpio_set(GPIOB, 0, !(on))	/* active low */
-#define SD_CS(on)	gpio_set(GPIOC, 12, !(on))
+#define SD_CS(on)	do { if (on) lcd_finish(); gpio_set(GPIOC, 12, !(on)); } while (0)	/* the card takes SPI2: a frame by DMA ends first (#498) */
 
 #define OTP_DISPLAY_MGG	2	/* FuriHalVersionDisplayMgg */
 
@@ -1363,7 +1367,15 @@ static void rtc_alarm_out(int on);
 static void rtc_boot(void);
 static void rtc_off(void);
 
+static void lcd_cmds_raw(const uint8_t *cmd, unsigned n);
+
 static void lcd_cmds(const uint8_t *cmd, unsigned n)
+{
+	lcd_finish();			/* never between two pages of a frame */
+	lcd_cmds_raw(cmd, n);
+}
+
+static void lcd_cmds_raw(const uint8_t *cmd, unsigned n)
 {
 	spi2_speed(SPI_DIV_DISPLAY);
 	LCD_DATA(0);
@@ -1425,6 +1437,94 @@ int hal_lcd_flush(const uint8_t *fb)
 		LCD_CS(0);
 	}
 	return 0;
+}
+
+/* A frame by DMA (#498).  DMA1 channel 7 (DMAMUX1 channel 6, request 9 =
+ * SPI2_TX; the SD card has channels 1 and 2) sends one page of 128 B; the
+ * page's command phase and the next page are started from the ms timer
+ * (MT_LCD in the kernel, 1 ms apart: no new interrupt slot, 0 B of RAM
+ * but the 6 bytes below), so the device task does not spin for the
+ * frame.  A frame takes about 8 ms to reach the panel.  Everything else
+ * that touches SPI2 (the SD card's CS and speed, lcd_cmds, the polled
+ * hal_lcd_flush) first calls lcd_finish(), which sends the pages that are
+ * left by polling, so the two never share the bus.  The caller must not
+ * change the frame before hal_lcd_wait(). */
+static struct {
+	const uint8_t *fb;
+	uint8_t page;			/* the page on the bus now */
+	uint8_t busy;
+} lcdd;
+
+static void lcd_dma_page(void)
+{
+	uint8_t addr[3];
+
+	addr[0] = 0xB0 | lcdd.page;
+	addr[1] = 0x10;
+	addr[2] = 0x00;
+	lcd_cmds_raw(addr, sizeof addr);
+	LCD_DATA(1);
+	LCD_CS(1);
+	DMA1_Channel7->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF7;
+	DMA1_Channel7->CPAR = (uint32_t) &SPI2->DR;
+	DMA1_Channel7->CMAR = (uint32_t) &lcdd.fb[lcdd.page * LCD_W];
+	DMA1_Channel7->CNDTR = LCD_W;
+	DMA1_Channel7->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_EN;
+	SPI2->CR2 |= SPI_CR2_TXDMAEN;
+}
+
+/* One step; 1: call again in a millisecond, 0: nothing (more) to do.  The
+ * ms timer's interrupt and lcd_finish() (interrupts off) call it. */
+int hal_lcd_pump(void)
+{
+	if (!lcdd.busy) return 0;
+	if (!(DMA1->ISR & DMA_ISR_TCIF7)) return 1;	/* a page on its way */
+	DMA1_Channel7->CCR = 0;
+	DMA1->IFCR = DMA_IFCR_CGIF7;
+	SPI2->CR2 &= ~SPI_CR2_TXDMAEN;
+	spi2_wait_idle();
+	LCD_CS(0);
+	while (SPI2->SR & SPI_SR_FRLVL) (void) *(volatile uint8_t *) &SPI2->DR;
+	if (++lcdd.page >= LCD_H / 8) {
+		lcdd.busy = 0;
+		return 0;
+	}
+	lcd_dma_page();
+	return 1;
+}
+
+static void lcd_finish(void)
+{
+	uint32_t pm;
+
+	if (!lcdd.busy) return;
+	pm = __get_PRIMASK();
+	__disable_irq();
+	while (hal_lcd_pump()) ;
+	if (!pm) __enable_irq();
+}
+
+void hal_lcd_wait(void)
+{
+	lcd_finish();
+}
+
+/* -1: the SD card has SPI2 (draw again later); 1: started, call
+ * hal_lcd_pump() from the ms timer in 1 ms (interrupts off here) */
+int hal_lcd_flush_async(const uint8_t *fb)
+{
+	if (!(GPIOC->ODR & (1u << 12))) return -1;
+	lcd_finish();
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
+	(void) RCC->AHB1ENR;
+	DMAMUX1_Channel6->CCR = 9;		/* DMA1 ch 7: SPI2_TX */
+	spi2_speed(SPI_DIV_DISPLAY);
+	lcdd.fb = fb;
+	lcdd.page = 0;
+	lcdd.busy = 1;
+	lcd_dma_page();
+	return 1;
 }
 
 /*===========================================================================*
