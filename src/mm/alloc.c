@@ -408,6 +408,21 @@ PUBLIC int do_meminfo()
 	return(sys_copy(MM_PROC_NR, D, (phys_bytes) &fi, who, D,
 		(phys_bytes) mm_in.m1_p1, (phys_bytes) sizeof(fi)));
   }
+  if (mm_in.m1_i2 == MI_RADIOWR) {	/* T30b: a piece of a CPU2 image */
+	unsigned n = (unsigned) mm_in.m1_i1;
+	unsigned long a = (unsigned long) mm_in.m1_i3;
+	extern char mbuf[];		/* exec.c's, free between execs */
+	int r;
+
+	if (mp->mp_effuid != SUPER_USER) return(EPERM);
+	if (n < 8 || n > 256 || n % 8 != 0) return(EINVAL);
+	if (sys_copy(who, D, (phys_bytes) mm_in.m1_p1, MM_PROC_NR, D,
+			(phys_bytes) mbuf, (phys_bytes) n) != OK) return(EFAULT);
+	/* the kernel checks the window (hal_flash_radio_ok) */
+	if (a % 4096 == 0 && (r = sys_flash(FL_ERASE | FL_RADIO, a, NULL, 0,
+						NULL, NULL)) != OK) return(r);
+	return(sys_flash(FL_WRITE | FL_RADIO, a, mbuf, n, NULL, NULL));
+  }
   if (mm_in.m1_i2 == MI_FCBUDGET) {	/* R2b.11 */
 	struct fccount fc;
 	unsigned long b, z;

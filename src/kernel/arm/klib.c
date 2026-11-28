@@ -49,6 +49,15 @@ u32_t *basep, *sizep;		/* region (all ops) */
   u32_t rbar7, rasr7;
   int r;
 
+  if (op & FL_RADIO) {		/* T30b: a CPU2 image, into the radio window */
+	op &= ~FL_RADIO;
+	if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
+	if (!hal_flash_radio_ok(addr, op == FL_ERASE ? 4096 : len))
+		return(EPERM);
+	if (op == FL_WRITE && (len % 8 != 0 || addr % 8 != 0)) return(EINVAL);
+	if (pm_busy & PM_LOWBAT) return(ENOSPC);
+	goto doit;
+  }
   if (op == FL_INFO && (addr == FL_LAYOUT_INST || addr == FL_LAYOUT_SFSA
 						|| addr == FL_LAYOUT_ROM)) {
 	u32_t l[HAL_FL_N];		/* Phase 2b */
@@ -96,6 +105,7 @@ u32_t *basep, *sizep;		/* region (all ops) */
   }
   if (op != FL_ERASE && op != FL_WRITE) return(EINVAL);
 
+doit: ;
 #if LATTRACE
   lat_flash(0);
 #endif

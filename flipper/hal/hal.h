@@ -207,8 +207,14 @@ int hal_charger_set(int what, int on);
 int hal_cpu2_start(void);
 int hal_cpu2_info(uint32_t v[4]);
 int hal_cpu2_last(uint32_t v[4]);
+unsigned hal_cpu2_ipcc(void);
+void hal_cpu2_clk48(int hold);
 int hal_cpu2_shci(unsigned op, const uint8_t *par, unsigned plen,
 					uint8_t *rsp, unsigned rmax);
+int hal_cpu2_hci(unsigned op, const uint8_t *par, unsigned plen,
+					uint8_t *rsp, unsigned rmax);
+int hal_cpu2_evt(uint8_t *b, unsigned max);
+int hal_ble_open(void);
 /* The default speaker volume (0-100; 100 if never set), kept over resets
  * in a backup register (K.7 Sound). */
 int hal_vol_default(void);
@@ -446,6 +452,7 @@ enum { HAL_FL_SFSA, HAL_FL_INST, HAL_FL_INST_SIZE, HAL_FL_CACHE,
 #define HAL_ROM_SIZE	(32 * 1024u)
 uint32_t hal_rom_base(void);	/* the same, without the layout table */
 void hal_flash_layout(uint32_t *l);
+int hal_flash_radio_ok(uint32_t addr, uint32_t len);	/* T30b */
 /* /dev/mem and /dev/kmem: how many of the len bytes from addr can be read
  * (write: written) without a bus fault; 0: none (outside every range). */
 uint32_t hal_mem_span(uint32_t addr, uint32_t len, int write);

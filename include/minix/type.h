@@ -176,6 +176,11 @@ struct kstack {
 #define MI_BUILD	13	/* the system image's version and build id
 			 * ("0.1.1+12.g1a2b3c4", '\0'-ended) to m1_p1, at
 			 * most m1_i1 bytes (settings about, spec K.7) */
+#define MI_RADIOWR	15	/* root (radio write, T30b): program m1_i1
+				 * bytes (8-256, a multiple of 8) from m1_p1
+				 * at flash address m1_i3 in the radio
+				 * window; an address at a page start
+				 * erases that page first */
 #define MI_BLK		14	/* swappable blocks (12h): m1_p1 a struct
 			 * blkreq in the caller's memory, <minix/blk.h> */
 #define MT_PASS		0	/* free: March C- passed (left zeroed) */
@@ -200,6 +205,9 @@ struct kstack {
 				 *   budget + 1 sets it (R2b.11) */
 #define FL_ERASE	1	/* erase the page at addr */
 #define FL_WRITE	2	/* program len bytes at addr */
+#define FL_RADIO	0x20	/* or'ed into FL_ERASE / FL_WRITE: in the
+				 * radio window (T30b, hal_flash_radio_ok),
+				 * not in MM's regions */
 #define FL_BG		0x10	/* or'ed in: background work, EAGAIN while a
 				 * user process waits for the CPU or a key or
 				 * button came in the last second (T4) */
