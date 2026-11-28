@@ -8,6 +8,10 @@
  *	ble scan [SECS]	listen for SECS seconds (10) and write what the
  *			stack reports, as HCI events, to standard output:
  *				ble scan 10 | blescan -t
+ *	ble beep [NAME [SECS]]	make a key finder beep: look for the device
+ *			that advertises NAME ("iTAG"), connect, and set its
+ *			Immediate Alert (service 1802, characteristic 2A06)
+ *			to "high" for SECS seconds (3), then to "off"
  *
  * /dev/ble takes one HCI command a write and gives one event a read (H4
  * packets), EAGAIN when none waits: this waits in poll().  Root only (the
@@ -169,15 +173,117 @@ static int scan(int secs)
 	return 0;
 }
 
+/* One event (not an answer) within ms; its length, 0 when none came. */
+static int event(unsigned char *pk, int max, int ms)
+{
+	int r;
+
+	for (;;) {
+		if ((r = read(fd, pk, max)) >= 3) return r;
+		if (r < 0 && errno != EAGAIN) return 0;
+		if (ms <= 0) return 0;
+		nap(20);
+		ms -= 20;
+	}
+}
+
+/* ble beep: a key finder's alarm, over a connection.  The full stack has
+ * the host on CPU2, so ST's GAP and GATT commands do it all: no data
+ * channel of ours.  Nothing is paired or kept. */
+static int beep(const char *name, int secs)
+{
+	static const unsigned char go[6] = { 0x10, 0, 0x10, 0, 0, 0 };
+	unsigned char pk[84], p[24], two = 2;
+	unsigned conn = 0, vh = 0;
+	int r, i, n, found = 0, l = strlen(name);
+	time_t end;
+
+	/* 1: its address, from what it advertises (10 s at most) */
+	if (step("scan (run \"ble up\" first)", 0xFC97, go, 6) < 0) return 1;
+	end = time((time_t *) 0) + 10;
+	while (!found && time((time_t *) 0) < end) {
+		if ((r = event(pk, sizeof pk, 200)) < 15 || pk[1] != 0x3E
+		    || pk[3] != 0x02) continue;
+		n = pk[13];				/* the data's length */
+		if (14 + n > r) continue;
+		for (i = 14; i + 1 < 14 + n && pk[i] != 0; i += pk[i] + 1)
+			if ((pk[i + 1] == 0x09 || pk[i + 1] == 0x08)
+			    && pk[i] - 1 == l && i + 2 + l <= 14 + n
+			    && memcmp(pk + i + 2, name, l) == 0) found = 1;
+		if (found) memcpy(p + 4, pk + 6, 7);	/* type, address */
+	}
+	(void) cmd(0xFC9D, &two, 1, (unsigned char *) 0, 0);
+	for (i = 0; i < 20; i++)		/* until the procedure has ended */
+		if ((r = event(pk, sizeof pk, 100)) >= 5 && pk[1] == 0xFF
+		    && pk[3] == 0x07 && pk[4] == 0x04) break;
+	if (!found) {
+		say("no such device near (is it on?)");
+		return 1;
+	}
+	/* 2: connect: scan 10 ms of 10, our public address, interval
+	 * 50-75 ms, no latency, timeout 4 s */
+	p[0] = 0x10; p[1] = 0; p[2] = 0x10; p[3] = 0;
+	p[11] = 0;
+	p[12] = 0x28; p[13] = 0; p[14] = 0x3C; p[15] = 0;
+	p[16] = 0; p[17] = 0; p[18] = 0x90; p[19] = 0x01;
+	p[20] = 0; p[21] = 0; p[22] = 0; p[23] = 0;
+	if (step("connect", 0xFC9C, p, 24) < 0) return 1;
+	for (i = 0; i < 50 && conn == 0; i++)
+		if ((r = event(pk, sizeof pk, 200)) >= 7 && pk[1] == 0x3E
+		    && (pk[3] == 0x01 || pk[3] == 0x0A)) {
+			if (pk[4] != 0) break;
+			conn = (pk[5] | pk[6] << 8) + 1u;
+		}
+	if (conn == 0) {
+		(void) cmd(0xFC9D, (const unsigned char *) "\100", 1,
+			   (unsigned char *) 0, 0);	/* stop connecting */
+		say("it did not answer the connection");
+		return 1;
+	}
+	conn--;
+	/* 3: where its alert level is: the characteristic 2A06 */
+	p[0] = (unsigned char) conn; p[1] = (unsigned char) (conn >> 8);
+	p[2] = 1; p[3] = 0; p[4] = 0xFF; p[5] = 0xFF;
+	p[6] = 1; p[7] = 0x06; p[8] = 0x2A;
+	r = 1;
+	if (step("find the alert", 0xFD16, p, 9) == 0) {
+		for (i = 0; i < 50; i++) {
+			if ((n = event(pk, sizeof pk, 200)) < 5 || pk[1] != 0xFF)
+				continue;
+			if (pk[3] == 0x12 && pk[4] == 0x0C && n >= 13)
+				vh = pk[11] | pk[12] << 8;  /* its value's handle */
+			if (pk[3] == 0x10 && pk[4] == 0x0C) break;
+		}
+		if (vh == 0) say("it has no Immediate Alert");
+	}
+	/* 4: high for a while, then off */
+	if (vh != 0) {
+		p[2] = (unsigned char) vh; p[3] = (unsigned char) (vh >> 8);
+		p[4] = 1; p[5] = 2;
+		if (step("alert", 0xFD23, p, 6) == 0) {
+			r = 0;
+			sleep(secs);
+			p[5] = 0;
+			(void) step("alert off", 0xFD23, p, 6);
+			nap(300);
+		}
+	}
+	p[2] = 0x13;				/* the user ended it */
+	(void) cmd(0xFC93, p, 3, (unsigned char *) 0, 0);
+	(void) event(pk, sizeof pk, 500);	/* its disconnection */
+	return r;
+}
+
 int main(int argc, char **argv)
 {
 	int t;
 
-	if (argc < 2 || argc > 3
+	if (argc < 2 || argc > 4
 	    || (strcmp(argv[1], "up") != 0 && strcmp(argv[1], "down") != 0
-		&& strcmp(argv[1], "scan") != 0)
-	    || (argc == 3 && argv[1][0] == 'd')) {
-		write(2, "Usage: ble up [NAME] | down | scan [SECS]\n", 42);
+		&& strcmp(argv[1], "scan") != 0 && strcmp(argv[1], "beep") != 0)
+	    || (argc == 3 && argv[1][0] == 'd')
+	    || (argc == 4 && argv[1][0] != 'b')) {
+		say("usage: ble up [NAME] | down | scan [SECS] | beep [NAME [SECS]]");
 		return 2;
 	}
 	for (t = 0; (fd = open("/dev/ble", O_RDWR)) < 0; t++) {
@@ -190,6 +296,11 @@ int main(int argc, char **argv)
 		nap(50);
 	}
 	if (argv[1][0] == 'u') return up(argc == 3 ? argv[2] : (char *) 0);
+	if (argv[1][0] == 'b') {
+		t = argc == 4 ? atoi(argv[3]) : 3;
+		return beep(argc >= 3 ? argv[2] : "iTAG",
+			    t < 1 ? 1 : t > 60 ? 60 : t);
+	}
 	if (argv[1][0] == 'd')
 		return step("advertising off", 0xFC81, (unsigned char *) 0, 0) < 0;
 	t = argc == 3 ? atoi(argv[2]) : 10;
