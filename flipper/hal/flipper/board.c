@@ -1496,12 +1496,20 @@ int hal_lcd_pump(void)
 
 static void lcd_finish(void)
 {
-	uint32_t pm;
+	uint32_t pm, n = 0;
 
 	if (!lcdd.busy) return;
 	pm = __get_PRIMASK();
 	__disable_irq();
-	while (hal_lcd_pump()) ;
+	while (hal_lcd_pump())
+		if (++n > 100000u) {		/* ~30 ms: a page that never ends
+						 * must not hang with IRQs off */
+			DMA1_Channel7->CCR = 0;
+			SPI2->CR2 &= ~SPI_CR2_TXDMAEN;
+			LCD_CS(0);
+			lcdd.busy = 0;
+			break;
+		}
 	if (!pm) __enable_irq();
 }
 
